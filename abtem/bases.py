@@ -74,42 +74,49 @@ class Observer(object):
         raise NotImplementedError()
 
 
-class BuildableArray(Observer):
+def cached_method(func):
+    def new_func(*args):
+        self = args[0]
+        try:
+            return self._cached[func.__name__]
+        except:
+            self._cached[func.__name__] = func(*args)
+            return self._cached[func.__name__]
 
-    def __init__(self, save_array=True):
+    return new_func
+
+
+def cached_method_with_args(func):
+    def new_func(*args):
+        self = args[0]
+        try:
+            return self._cached[func.__name__][args[1:]]
+        except:
+            value = func(*args)
+
+            try:
+                self._cached[func.__name__][args[1:]] = value
+            except:
+                self._cached[func.__name__] = {}
+                self._cached[func.__name__][args[1:]] = value
+
+            return self._cached[func.__name__][args[1:]]
+
+    return new_func
+
+
+class HasCache(Observer):
+
+    def __init__(self):
         Observer.__init__(self)
-        self._array = None
-        self._save_array = save_array
-
-    @property
-    def save_array(self):
-        return self._save_array
+        self._cached = {}
 
     def notify(self, observable, message):
         if message['change']:
-            self._array = None
+            self.clear_cache()
 
-    def check_is_defined(self):
-        raise NotImplementedError()
-
-    def _build(self):
-        raise NotImplementedError()
-
-    def get_array(self):
-
-        if self._array is None:
-            self.check_is_defined()
-
-            array = self._build()
-            if self._save_array:
-                self._array = array
-        else:
-            array = self._array
-
-        return array
-
-    def clear(self):
-        self._array = None
+    def clear_cache(self):
+        self._cached = {}
 
 
 class GridProperty(object):
@@ -283,11 +290,11 @@ class Grid(Observable):
     def _adjusted_sampling(self):
         return self.extent / np.float32(self.gpts)
 
-    def linspace(self):
-        return tuple([np.linspace(0., self.extent[i], self.gpts[i], endpoint=False) for i in range(self._dimensions)])
-
-    def fftfreq(self):
-        return np.fft.fftfreq(self.gpts[0], self.sampling[0]), np.fft.fftfreq(self.gpts[1], self.sampling[1])
+    # def linspace(self):
+    #     return tuple([np.linspace(0., self.extent[i], self.gpts[i], endpoint=False) for i in range(self._dimensions)])
+    #
+    # def fftfreq(self):
+    #     return np.fft.fftfreq(self.gpts[0], self.sampling[0]), np.fft.fftfreq(self.gpts[1], self.sampling[1])
 
     def check_is_grid_defined(self):
         if (self.extent is None) | (self.gpts is None) | (self.sampling is None):
@@ -330,15 +337,6 @@ class Grid(Observable):
     def copy(self):
         return self.__class__(extent=self._extent.copy(), gpts=self._gpts.copy(), sampling=self._sampling.copy(),
                               dimensions=self._dimensions)
-
-    x_extent = xy_property(0, 'extent')
-    y_extent = xy_property(1, 'extent')
-
-    x_gpts = xy_property(0, 'gpts')
-    y_gpts = xy_property(1, 'gpts')
-
-    x_sampling = xy_property(0, 'sampling')
-    y_sampling = xy_property(1, 'sampling')
 
 
 def energy2mass(energy):
@@ -439,23 +437,5 @@ class ArrayWithGrid(Grid):
         return self._array
 
     def copy(self):
-        new = self.__class__(tensor=self.array.copy(), extent=self.extent.copy(), space=self.space)
+        new = self.__class__(array=self.array.copy(), extent=self.extent.copy(), space=self.space)
         return new
-
-
-class WavesBase(ArrayWithGrid, Energy):
-
-    def __init__(self, array, extent=None, sampling=None, energy=None, space='direct'):
-        ArrayWithGrid.__init__(self, array=array, array_dimensions=3, spatial_dimensions=2, extent=extent,
-                               sampling=sampling, space=space)
-        Grid.__init__(self, extent=extent, gpts=None, sampling=sampling)
-        Energy.__init__(self, energy=energy)
-
-    def check_is_defined(self):
-        self.check_is_grid_defined()
-        self.check_is_energy_defined()
-
-    def get_semiangles(self):
-        kx, ky = self.fftfreq()
-        wavelength = self.wavelength
-        return kx * wavelength, ky * wavelength
