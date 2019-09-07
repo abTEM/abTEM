@@ -171,130 +171,141 @@ class GridProperty(object):
 
 class Grid(Observable):
 
-    def __init__(self, extent=None, gpts=None, sampling=None, dimensions=2):
+    def __init__(self, extent=None, gpts=None, sampling=None, dimensions=2, endpoint=False):
 
         Observable.__init__(self)
 
         self._dimensions = dimensions
+        self._endpoint = endpoint
 
         if isinstance(extent, GridProperty):
             self._extent = extent
         else:
-            self._extent = GridProperty(extent, np.float32, locked=False, dimensions=dimensions)
+            self._extent = GridProperty(extent, np.float64, locked=False, dimensions=dimensions)
 
         if isinstance(gpts, GridProperty):
             self._gpts = gpts
         else:
-            self._gpts = GridProperty(gpts, np.int32, locked=False, dimensions=dimensions)
+            self._gpts = GridProperty(gpts, np.int, locked=False, dimensions=dimensions)
 
         if isinstance(sampling, GridProperty):
             self._sampling = sampling
         else:
-            self._sampling = GridProperty(sampling, np.float32, locked=False, dimensions=dimensions)
+            self._sampling = GridProperty(sampling, np.float64, locked=False, dimensions=dimensions)
 
         if self.extent is None:
             if not ((self.gpts is None) | (self.sampling is None)):
-                self._extent.value = self._adjusted_extent()
+                self._extent.value = self._adjusted_extent(self.gpts, self.sampling)
 
         if self.gpts is None:
             if not ((self.extent is None) | (self.sampling is None)):
-                self._gpts.value = self._adjusted_gpts()
+                self._gpts.value = self._adjusted_gpts(self.extent, self.sampling)
 
         if self.sampling is None:
             if not ((self.extent is None) | (self.gpts is None)):
-                self._sampling.value = self._adjusted_sampling()
+                self._sampling.value = self._adjusted_sampling(self.extent, self.gpts)
 
         if (extent is not None) & (self.gpts is not None):
-            self._sampling.value = self._adjusted_sampling()
+            self._sampling.value = self._adjusted_sampling(self.extent, self.gpts)
 
         if (gpts is not None) & (self.extent is not None):
-            self._sampling.value = self._adjusted_sampling()
+            self._sampling.value = self._adjusted_sampling(self.extent, self.gpts)
+
+    @property
+    def dimensions(self):
+        return self._dimensions
 
     @property
     def extent(self):
         if self._gpts.locked & self._sampling.locked:
-            return self._adjusted_extent()
+            return self._adjusted_extent(self.gpts, self.sampling)
 
         return self._extent.value
 
     @extent.setter
     def extent(self, value):
         old = self._extent.value
-        self._extent.value = value
 
         if self._gpts.locked & self._sampling.locked:
             raise RuntimeError()
 
-        if not (self._gpts.locked | (self.extent is None) | (self.sampling is None)):
-            self._gpts.value = self._adjusted_gpts()
-            self._sampling.value = self._adjusted_sampling()
+        if not (self._sampling.locked | (value is None) | (self.gpts is None)):
+            self._sampling.value = self._adjusted_sampling(value, self.gpts)
 
-        elif not (self._sampling.locked | (self.extent is None) | (self.gpts is None)):
-            self._sampling.value = self._adjusted_sampling()
+        elif not (self._gpts.locked | (value is None) | (self.sampling is None)):
+            self._gpts.value = self._adjusted_gpts(value, self.sampling)
+            self._sampling.value = self._adjusted_sampling(value, self.gpts)
+
+        self._extent.value = value
 
         self.notify_observers({'name': 'extent', 'old': old, 'new': value, 'change': np.any(old != value)})
 
     @property
     def gpts(self):
         if self._extent.locked & self._sampling.locked:
-            return self._adjusted_sampling()
+            return self._adjusted_sampling(self.extent, self.sampling)
 
         return self._gpts.value
 
     @gpts.setter
     def gpts(self, value):
         old = self._gpts.value
-        self._gpts.value = value
 
         if self._extent.locked & self._sampling.locked:
             raise RuntimeError()
 
-        if not (self._sampling.locked | (self.extent is None) | (self.gpts is None)):
-            self._sampling.value = self._adjusted_sampling()
+        if not (self._sampling.locked | (self.extent is None) | (value is None)):
+            self._sampling.value = self._adjusted_sampling(self.extent, value)
 
-        elif not (self._extent.locked | (self.gpts is None) | (self.sampling is None)):
-            self._extent.value = self._adjusted_extent()
+        elif not (self._extent.locked | (value is None) | (self.sampling is None)):
+            self._extent.value = self._adjusted_extent(value, self.sampling)
+
+        self._gpts.value = value
 
         self.notify_observers({'name': 'gpts', 'old': old, 'new': value, 'change': np.any(old != value)})
 
     @property
     def sampling(self):
-        if self._gpts.locked & self._extent.locked:
-            return self._adjusted_sampling()
+        if self._extent.locked & self._gpts.locked:
+            return self._adjusted_sampling(self.extent, self.gpts)
 
         return self._sampling.value
 
     @sampling.setter
     def sampling(self, value):
         old = self._sampling.value
-        self._sampling.value = value
 
         if self._gpts.locked & self._extent.locked:
             raise RuntimeError()
 
-        if not (self._gpts.locked | (self.extent is None) | (self.sampling is None)):
-            self._gpts.value = self._adjusted_gpts()
-            self._extent.value = self._adjusted_extent()
+        if not (self._gpts.locked | (self.extent is None) | (value is None)):
+            self._gpts.value = self._adjusted_gpts(self.extent, value)
+            value = self._adjusted_sampling(self.extent, self.gpts)
 
-        elif not (self._extent.locked | (self.gpts is None) | (self.sampling is None)):
-            self._extent.value = self._adjusted_extent()
+        elif not (self._extent.locked | (self.gpts is None) | (value is None)):
+            self._extent.value = self._adjusted_extent(self.gpts, value)
+
+        self._sampling.value = value
 
         self.notify_observers({'name': 'sampling', 'old': old, 'new': value, 'change': np.any(old != value)})
 
-    def _adjusted_extent(self):
-        return np.float32(self.gpts) * self.sampling
+    def _adjusted_extent(self, gpts, sampling):
+        if self._endpoint:
+            return np.float64(gpts - 1) * sampling
+        else:
+            return np.float64(gpts) * sampling
 
-    def _adjusted_gpts(self):
-        return np.ceil(self.extent / self.sampling).astype(np.int32)
+    def _adjusted_gpts(self, extent, sampling):
+        if self._endpoint:
+            return np.ceil(extent / sampling).astype(np.int32) + 1
+        else:
+            return np.ceil(extent / sampling).astype(np.int32)
 
-    def _adjusted_sampling(self):
-        return self.extent / np.float32(self.gpts)
-
-    # def linspace(self):
-    #     return tuple([np.linspace(0., self.extent[i], self.gpts[i], endpoint=False) for i in range(self._dimensions)])
-    #
-    # def fftfreq(self):
-    #     return np.fft.fftfreq(self.gpts[0], self.sampling[0]), np.fft.fftfreq(self.gpts[1], self.sampling[1])
+    def _adjusted_sampling(self, extent, gpts):
+        if self._endpoint:
+            return extent / np.float64(gpts - 1)
+        else:
+            return extent / np.float64(gpts)
 
     def check_is_grid_defined(self):
         if (self.extent is None) | (self.gpts is None) | (self.sampling is None):
@@ -418,7 +429,7 @@ class ArrayWithGrid(Grid):
             raise RuntimeError()
 
         if len(array.shape) != array_dimensions:
-            raise RuntimeError('tensor shape {} not {}d'.format(array.shape, array_dimensions))
+            raise RuntimeError('array shape {} not {}d'.format(array.shape, array_dimensions))
 
         self._array = array
 

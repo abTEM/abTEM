@@ -62,8 +62,9 @@ def test_grid():
     assert np.all(grid.sampling == np.array([0.08, 0.06], dtype=np.float32))
 
     grid.extent = (16, 12)
-    assert np.all(grid.sampling == np.array([0.08, 0.06], dtype=np.float32))
-    assert np.all(grid.gpts == np.array([200, 200], dtype=np.int32))
+    assert np.all(grid.gpts == np.array([100, 100], dtype=np.int32))
+    assert np.all(grid.extent == np.array([16, 12], dtype=np.float32))
+    assert np.all(grid.sampling == np.array([16 / 100, 12 / 100], dtype=np.float32))
 
     grid.extent = (10, 10)
     assert np.all(grid.sampling == grid.extent / np.float32(grid.gpts))
@@ -93,8 +94,20 @@ def test_grid():
     with pytest.raises(RuntimeError):
         grid.check_is_grid_defined()
 
-    kwargs_list = [{'gpts': 100, 'extent': 10}, {'gpts': 100, 'sampling': .1}, {'extent': 10, 'sampling': .1}]
+    grid = Grid(extent=10, sampling=.1, dimensions=1, endpoint=True)
+    assert grid.gpts == 101
+    assert grid.sampling == .1
 
+    grid = Grid(extent=9.9, sampling=.1, dimensions=1, endpoint=True)
+    assert grid.gpts == 100
+
+    grid = Grid(extent=10, gpts=100, dimensions=1, endpoint=True)
+    assert grid.sampling == 10 / 99.
+
+    grid = Grid(gpts=101, sampling=.1, dimensions=1, endpoint=True)
+    assert grid.extent == 10.
+
+    kwargs_list = [{'gpts': 100, 'extent': 10}, {'gpts': 100, 'sampling': .1}, {'extent': 10, 'sampling': .1}]
     for kwargs in kwargs_list:
         grid1 = Grid(**kwargs)
         grid2 = Grid()
