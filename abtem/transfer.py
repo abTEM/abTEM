@@ -1,7 +1,7 @@
 import numpy as np
 
-from .bases import Energy, HasCache, notifying_property, Grid, Observable, cached_method
-from .utils import complex_exponential, squared_norm, semiangles
+from abtem.bases import Energy, HasCache, notifying_property, Grid, Observable, cached_method
+from abtem.utils import complex_exponential, squared_norm, semiangles
 
 polar_symbols = ('C10', 'C12', 'phi12',
                  'C21', 'phi21', 'C23', 'phi23',

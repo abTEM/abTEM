@@ -5,11 +5,11 @@ import pyfftw as fftw
 from ase import Atoms
 from tqdm.auto import tqdm
 
-from .bases import cached_method, HasCache, ArrayWithGrid, Grid, Energy, notifying_property
-from .potentials import Potential
-from .scan import GridScan, LineScan
-from .transfer import CTF
-from .utils import complex_exponential, fourier_propagator, fftfreq
+from abtem.bases import cached_method, HasCache, ArrayWithGrid, Grid, Energy, notifying_property
+from abtem.potentials import Potential
+from abtem.scan import GridScan, LineScan
+from abtem.transfer import CTF
+from abtem.utils import complex_exponential, fourier_propagator, fftfreq
 
 
 class WavesBase(object):

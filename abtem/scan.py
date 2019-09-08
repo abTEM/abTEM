@@ -1,7 +1,7 @@
 import numpy as np
 
-from .bases import Grid
-from .utils import BatchGenerator
+from abtem.bases import Grid
+from abtem.utils import BatchGenerator
 
 
 def split_integer(n, m):

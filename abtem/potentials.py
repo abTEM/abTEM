@@ -4,10 +4,10 @@ import numpy as np
 from ase import units
 from scipy.optimize import brentq
 
-from .bases import Grid, HasCache, cached_method, ArrayWithGrid
-from .interpolation import interpolation_kernel, thread_safe_coloring
-from .parametrizations import convert_kirkland, kirkland, kirkland_projected_finite, dvdr_kirkland, load_parameters
-from .parametrizations import convert_lobato, lobato, lobato_projected_finite, dvdr_lobato
+from abtem.bases import Grid, HasCache, cached_method, ArrayWithGrid
+from abtem.interpolation import interpolation_kernel, thread_safe_coloring
+from abtem.parametrizations import convert_kirkland, kirkland, kirkland_projected_finite, dvdr_kirkland, load_parameters
+from abtem.parametrizations import convert_lobato, lobato, lobato_projected_finite, dvdr_lobato
 from tqdm.auto import tqdm
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)

@@ -2,9 +2,9 @@ import numpy as np
 from ase import units
 from scipy.interpolate import interp1d
 
-from .bases import cached_method, HasCache
-from .transform import make_orthogonal_atoms, make_orthogonal_array
-from .potentials import PotentialBase
+from abtem.bases import cached_method, HasCache
+from abtem.transform import make_orthogonal_atoms, make_orthogonal_array
+from abtem.potentials import PotentialBase
 
 
 def gaussian(radial_grid, alpha):
@@ -77,7 +77,8 @@ class GPAWPotential(PotentialBase, HasCache):
         else:
             self._num_slices = num_slices
 
-        assert calc.hamiltonian.finegd.N_c[2] % self._num_slices == 0
+        if not (calc.hamiltonian.finegd.N_c[2] % self._num_slices == 0):
+            raise RuntimeError('{} {}'.format(calc.hamiltonian.finegd.N_c[2], self._num_slices))
 
         PotentialBase.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
         HasCache.__init__(self)

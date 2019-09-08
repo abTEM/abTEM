@@ -1,7 +1,7 @@
 import numpy as np
 
-from .bases import Grid, Energy, HasCache, Observable, notifying_property, cached_method
-from .utils import squared_norm, semiangles
+from abtem.bases import Grid, Energy, HasCache, Observable, notifying_property, cached_method
+from abtem.utils import squared_norm, semiangles
 from skimage.transform import resize
 
 
