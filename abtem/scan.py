@@ -165,6 +165,6 @@ class GridScan(Scan, Grid):
         return np.linspace(self.start[1], self.end[1], self.gpts[1], endpoint=self._endpoint)
 
     def get_positions(self):
-        x, y = np.meshgrid(self.get_x_positions(), self.get_y_positions())
+        x, y = np.meshgrid(self.get_x_positions(), self.get_y_positions(), indexing='ij')
         return np.stack((np.reshape(x, (-1,)),
                          np.reshape(y, (-1,))), axis=1)

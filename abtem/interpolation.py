@@ -54,16 +54,16 @@ def interpolation_kernel(v, r, vr, r_cut, corner_positions, block_positions, x, 
                 vr_i = vr[i]
                 diff_vr_r = np.diff(vr_i) / diff_r
 
-                for j in range(len(y)):
-                    for k in range(len(x)):
-                        r_interp = np.sqrt((x[k] - block_positions[i, 0]) ** np.float32(2.)
-                                           + (y[j] - block_positions[i, 1]) ** np.float32(2.))
+                for j in range(len(x)):
+                    for k in range(len(y)):
+                        r_interp = np.sqrt((x[j] - block_positions[i, 0]) ** np.float32(2.)
+                                           + (y[k] - block_positions[i, 1]) ** np.float32(2.))
 
                         if r_interp < r_cut:
                             l = int(np.floor((r_interp - r[0]) / (r[-1] - r[0]) * (len(r) - 1)))
 
                             if l < 0:
-                                v[corner_positions[i, 1] + j, corner_positions[i, 0] + k] += vr_i[0]
+                                v[corner_positions[i, 0] + j, corner_positions[i, 1] + k] += vr_i[0]
                             elif l < (len(r) - 1):
                                 value = vr_i[l] + (r_interp - r[l]) * diff_vr_r[l]
-                                v[corner_positions[i, 1] + j, corner_positions[i, 0] + k] += value
+                                v[corner_positions[i, 0] + j, corner_positions[i, 1] + k] += value

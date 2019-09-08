@@ -13,19 +13,19 @@ for f in os.listdir(folder):
 n = max([key[0] for key in partitions.keys()]) + 1
 m = max([key[1] for key in partitions.keys()]) + 1
 
-N = sum([partition.shape[0] for key, partition in partitions.items() if key[0] == 0])
-M = sum([partition.shape[1] for key, partition in partitions.items() if key[1] == 0])
+N = sum([partition.shape[0] for key, partition in partitions.items() if key[1] == 0])
+M = sum([partition.shape[1] for key, partition in partitions.items() if key[0] == 0])
 
 array = np.zeros((N, M))
 
-k = 0
+l = 0
 for i in range(n):
-    l = 0
+    k = 0
     for j in range(m):
         partition = partitions[(i, j)]
         array[l:l + partition.shape[0], k:k + partition.shape[1]] = partition
-        l += partition.shape[0]
-    k += partition.shape[1]
+        k += partition.shape[1]
+    l += partition.shape[0]
 
-plt.imshow(array)
+plt.imshow(np.tile(array, (2, 2)))
 plt.show()

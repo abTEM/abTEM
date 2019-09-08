@@ -12,7 +12,7 @@ def fourier_propagator(k, dz, wavelength):
 
 
 def squared_norm(x, y):
-    return x.reshape((1, -1)) ** 2 + y.reshape((-1, 1)) ** 2
+    return x.reshape((-1, 1)) ** 2 + y.reshape((1, -1)) ** 2
 
 
 def fftfreq(grid):

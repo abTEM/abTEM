@@ -39,18 +39,13 @@ class Waves(Energy, ArrayWithGrid, HasCache, WavesBase):
                                sampling=sampling, space='direct')
         Energy.__init__(self, energy=energy)
 
-    @property
-    def gpts(self):
-        shape = self.array.shape
-        return np.array([shape[2], shape[1]])
-
     @cached_method
     def get_fourier_propagator(self, dz):
         self.check_is_grid_defined()
         self.check_is_energy_defined()
         kx = np.fft.fftfreq(self.gpts[0], self.sampling[0])
         ky = np.fft.fftfreq(self.gpts[1], self.sampling[1])
-        return fourier_propagator((kx ** 2)[None] + (ky ** 2)[:, None], dz, self.wavelength)[None]
+        return fourier_propagator((kx ** 2)[:, None] + (ky ** 2)[None], dz, self.wavelength)[None]
 
     def apply_ctf(self, ctf=None, in_place=False, **kwargs):
         if ctf is None:
@@ -87,15 +82,16 @@ class Waves(Energy, ArrayWithGrid, HasCache, WavesBase):
 
         propagator = self.get_fourier_propagator(potential.slice_thickness)
 
-        temp = fftw.empty_aligned(wave._array.shape, dtype='complex64')
-        fft_object_forward = fftw.FFTW(wave._array, temp, axes=(1, 2), threads=4)
-        fft_object_backward = fftw.FFTW(temp, temp, axes=(1, 2), threads=4, direction='FFTW_BACKWARD')
+        temp_1 = fftw.empty_aligned(wave._array.shape, dtype='complex64')
+        temp_2 = fftw.empty_aligned(wave._array.shape, dtype='complex64')
+        fft_object_forward = fftw.FFTW(temp_1, temp_2, axes=(1, 2), threads=4)
+        fft_object_backward = fftw.FFTW(temp_2, temp_1, axes=(1, 2), threads=4, direction='FFTW_BACKWARD')
 
         for i in tqdm(range(potential.num_slices), disable=not show_progress):
             potential_slice = potential.get_slice(i)
 
-            wave._array[:] = wave._array * complex_exponential(wave.sigma * potential_slice)
-            temp[:] = fft_object_forward() * propagator
+            temp_1[:] = wave._array * complex_exponential(wave.sigma * potential_slice)
+            temp_2[:] = fft_object_forward() * propagator
             wave._array[:] = fft_object_backward()
 
             # wave._array[:] = np.fft.ifft2(
@@ -129,7 +125,7 @@ class PlaneWaves(Grid, Energy, HasCache, WavesBase):
 
     @cached_method
     def build(self):
-        array = np.ones((self.num_waves, self.gpts[1], self.gpts[0]), dtype=np.complex64)
+        array = np.ones((self.num_waves, self.gpts[0], self.gpts[1]), dtype=np.complex64)
         return Waves(array, extent=self.extent, energy=self.energy)
 
 
@@ -149,8 +145,8 @@ class ProbeBase(object):
 
 
 def translate(positions, kx, ky):
-    kx = kx.reshape((1, 1, -1))
-    ky = ky.reshape((1, -1, 1))
+    kx = kx.reshape((1, -1, 1))
+    ky = ky.reshape((1, 1, -1))
     x = positions[:, 0].reshape((-1,) + (1, 1))
     y = positions[:, 1].reshape((-1,) + (1, 1))
     return complex_exponential(2 * np.pi * (kx * x + ky * y))
@@ -169,8 +165,8 @@ class ProbeWaves(CTF, WavesBase):
             positions = np.expand_dims(positions, axis=0)
 
         kx, ky = fftfreq(self)
-        a = fftw.empty_aligned((len(positions), self.gpts[1], self.gpts[0]), dtype='complex64')
-        b = fftw.empty_aligned((len(positions), self.gpts[1], self.gpts[0]), dtype='complex64')
+        a = fftw.empty_aligned((len(positions), self.gpts[0], self.gpts[1]), dtype='complex64')
+        b = fftw.empty_aligned((len(positions), self.gpts[0], self.gpts[1]), dtype='complex64')
 
         fft_object = fftw.FFTW(a, b, axes=(1, 2), threads=4)
 
@@ -224,7 +220,8 @@ class ProbeWaves(CTF, WavesBase):
         measurements = {}
         for detector in detectors:
             detector.match_grid(self)
-            measurements[detector] = np.zeros(np.prod(scan.gpts) * np.prod(detector.out_shape))
+            measurements[detector] = np.zeros((int(np.prod(scan.gpts)),) + detector.out_shape)
+            measurements[detector] = np.squeeze(measurements[detector])
 
         for start, stop, positions in scan.generate_positions(max_batch, show_progress=show_progress):
 
@@ -236,9 +233,8 @@ class ProbeWaves(CTF, WavesBase):
                 measurement[start:start + stop] = detector.detect(new_waves)
 
         for detector in detectors:
-            measurements[detector] = measurements[detector].reshape((scan.gpts[1], scan.gpts[0]) + detector.out_shape)
+            measurements[detector] = measurements[detector].reshape((scan.gpts[0], scan.gpts[1]) + detector.out_shape)
             measurements[detector] = np.squeeze(measurements[detector])
-            detector.match_grid(self)
 
         return measurements
 

@@ -167,7 +167,7 @@ class CTF(Energy, Grid, HasCache, Observable):
     @cached_method
     def get_phi(self):
         alpha_x, alpha_y = semiangles(self)
-        phi = np.arctan2(alpha_y.reshape((-1, 1)), alpha_x.reshape((1, -1)))
+        phi = np.arctan2(alpha_x.reshape((-1, 1)), alpha_y.reshape((1, -1)))
         return phi
 
     @cached_method

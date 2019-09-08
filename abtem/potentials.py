@@ -8,13 +8,18 @@ from .bases import Grid, HasCache, cached_method, ArrayWithGrid
 from .interpolation import interpolation_kernel, thread_safe_coloring
 from .parametrizations import convert_kirkland, kirkland, kirkland_projected_finite, dvdr_kirkland, load_parameters
 from .parametrizations import convert_lobato, lobato, lobato_projected_finite, dvdr_lobato
+from tqdm.auto import tqdm
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
 kappa = 4 * np.pi * eps0 / (2 * np.pi * units.Bohr * units._e * units.C)
 
 
-class PotentialBase(object):
+class PotentialBase(Grid):
+
+    def __init__(self, extent=None, gpts=None, sampling=None):
+        Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
+
     @property
     def num_slices(self):
         raise NotImplementedError()
@@ -30,11 +35,25 @@ class PotentialBase(object):
     def get_slice(self, i):
         raise NotImplementedError
 
+    def slice_entrance(self, i):
+        return i * self.slice_thickness
 
-class Potential(Grid, HasCache, PotentialBase):
+    def slice_exit(self, i):
+        return (i + 1) * self.slice_thickness
+
+    def precalculate(self):
+        array = np.zeros((self.num_slices,) + (self.gpts[0], self.gpts[1]))
+
+        for i in tqdm(range(self.num_slices)):
+            array[i] = self.get_slice(i)
+
+        return PrecalculatedPotential(array, self.thickness, self.extent)
+
+
+class Potential(HasCache, PotentialBase):
 
     def __init__(self, atoms, origin=None, extent=None, gpts=None, sampling=None, slice_thickness=.5, num_slices=None,
-                 parametrization='lobato', periodic=True, method='interpolation', tolerance=1e-2,
+                 parametrization='lobato', periodic=True, method='interpolation', tolerance=1e-3,
                  truncation='derivative'):
 
         if np.abs(atoms.cell[0, 0]) < 1e-12:
@@ -51,7 +70,6 @@ class Potential(Grid, HasCache, PotentialBase):
 
         self._atoms = atoms.copy()
         self._atoms.wrap()
-
         self._origin = None
 
         if num_slices is None:
@@ -87,8 +105,8 @@ class Potential(Grid, HasCache, PotentialBase):
         if extent is None:
             extent = np.diag(atoms.cell)[:2]
 
-        Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling, dimensions=2)
         HasCache.__init__(self)
+        PotentialBase.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
 
     @property
     def tolerance(self):
@@ -109,12 +127,6 @@ class Potential(Grid, HasCache, PotentialBase):
     @property
     def parameters(self):
         return self._parameters
-
-    def slice_entrance(self, i):
-        return i * self.slice_thickness
-
-    def slice_exit(self, i):
-        return (i + 1) * self.slice_thickness
 
     @cached_method
     def _prepare_interpolation(self):
@@ -140,7 +152,7 @@ class Potential(Grid, HasCache, PotentialBase):
 
         margin = int(np.ceil(max_cutoff / min(self.sampling)))
         padded_gpts = self.gpts + 2 * margin
-        v = np.zeros((padded_gpts[1], padded_gpts[0]), dtype=np.float32)
+        v = np.zeros((padded_gpts[0], padded_gpts[1]), dtype=np.float32)
         return v, margin, data
 
     def _evaluate_interpolation(self, i, num_spline_nodes=200, num_integration_samples=100):
@@ -195,32 +207,18 @@ class Potential(Grid, HasCache, PotentialBase):
         else:
             raise NotImplementedError('method {} not implemented')
 
-    def precalculate(self):
-
-        array = np.zeros((self.num_slices,) + (self.gpts[1], self.gpts[0]))
-
-        for i in range(self.num_slices):
-            array[i] = self.get_slice(i)
-
-        return PrecalculatedPotential(array, self.thickness, self.extent)
-
 
 def import_potential(path):
     npzfile = np.load(path)
     return PrecalculatedPotential(npzfile['array'], npzfile['thickness'], npzfile['extent'])
 
 
-class PrecalculatedPotential(PotentialBase, ArrayWithGrid):
+class PrecalculatedPotential(ArrayWithGrid):
 
     def __init__(self, array, thickness, extent=None, sampling=None):
         ArrayWithGrid.__init__(self, array, 3, 2, extent=extent, sampling=sampling, space='direct')
 
         self._thickness = thickness
-
-    @property
-    def gpts(self):
-        shape = self.array.shape
-        return np.array([shape[2], shape[1]])
 
     @property
     def thickness(self):
@@ -229,6 +227,15 @@ class PrecalculatedPotential(PotentialBase, ArrayWithGrid):
     @property
     def num_slices(self):
         return self._array.shape[0]
+
+    @property
+    def slice_thickness(self):
+        return self.thickness / self.num_slices
+
+    def repeat(self, multiples):
+        self._array = np.tile(self._array, multiples)
+        self.extent = multiples[:2] * self.extent
+        self._thickness = multiples[2] * self._thickness
 
     def get_slice(self, i):
         return self._array[i]

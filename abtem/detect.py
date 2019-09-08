@@ -2,6 +2,7 @@ import numpy as np
 
 from .bases import Grid, Energy, HasCache, Observable, notifying_property, cached_method
 from .utils import squared_norm, semiangles
+from skimage.transform import resize
 
 
 class DetectorBase(object):
@@ -18,15 +19,29 @@ class DetectorBase(object):
 
 class PtychographyDetector(DetectorBase, Grid):
 
-    def __init__(self, extent=None, gpts=None, sampling=None):
+    def __init__(self, extent=None, gpts=None, sampling=None, resize_isotropic=False):
+        self._resize_isotropic = resize_isotropic
         Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
 
+    @property
     def out_shape(self):
-        return tuple(self.gpts)
+        if self._resize_isotropic:
+            return (np.min(self.gpts), np.min(self.gpts))
+        else:
+            return tuple(self.gpts)
 
     def detect(self, wave):
-        return
+        self.match_grid(wave)
 
+        intensity = np.fft.fftshift(np.abs(np.fft.fft2(wave.array)) ** 2, axes=(1, 2))
+
+        if self._resize_isotropic:
+            resized_intensity = np.zeros((intensity.shape[0],) + self.out_shape)
+            for i in range(intensity.shape[0]):
+                resized_intensity[i] = resize(intensity[i], self.out_shape)
+            return resized_intensity
+        else:
+            return intensity
 
 
 class RingDetector(DetectorBase, Energy, Grid, HasCache, Observable):
