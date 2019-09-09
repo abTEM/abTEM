@@ -63,7 +63,7 @@ class Potential(HasCache, PotentialBase):
         if (np.abs(atoms.cell[0, 0]) < 1e-12) | (np.abs(atoms.cell[1, 1]) < 1e-12):
             raise RuntimeError('atoms has no width')
 
-        #if np.any(np.abs(atoms.cell[~np.eye(3, dtype=bool)]) > 1e-12):
+        # if np.any(np.abs(atoms.cell[~np.eye(3, dtype=bool)]) > 1e-12):
         #    raise RuntimeError('non-diagonal unit cell not supported')
 
         if periodic is False:
@@ -240,9 +240,20 @@ class PrecalculatedPotential(ArrayWithGrid):
         return self.thickness / self.num_slices
 
     def repeat(self, multiples):
-        self._array = np.tile(self._array, multiples)
-        self.extent = multiples[:2] * self.extent
-        self._thickness = multiples[2] * self._thickness
+        assert len(multiples) == 2
+        self._array = np.tile(self._array, (1,) + multiples)
+        self.extent = multiples * self.extent
+
+    def downsample(self):
+        N, M = self.gpts
+
+        X = np.fft.fft(self._array, axis=1)
+        self._array = np.fft.ifft((X[:, :(N // 2), :] + X[:, -(N // 2):, :]) / 2., axis=1).real
+
+        X = np.fft.fft(self._array, axis=2)
+        self._array = np.fft.ifft((X[:, :, :(M // 2)] + X[:, :, -(M // 2):]) / 2., axis=2).real
+
+        self.extent = self.extent
 
     def get_slice(self, i):
         return self._array[i]
