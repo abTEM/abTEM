@@ -220,6 +220,7 @@ class ProbeWaves(CTF, WavesBase):
         measurements = {}
         for detector in detectors:
             detector.match_grid(self)
+            detector.match_energy(self)
             measurements[detector] = np.zeros((int(np.prod(scan.gpts)),) + detector.out_shape)
             measurements[detector] = np.squeeze(measurements[detector])
 

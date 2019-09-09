@@ -17,16 +17,21 @@ class DetectorBase(object):
         raise NotImplementedError()
 
 
-class PtychographyDetector(DetectorBase, Grid):
+class PtychographyDetector(DetectorBase, Energy, Grid):
 
-    def __init__(self, extent=None, gpts=None, sampling=None, resize_isotropic=False):
-        self._resize_isotropic = resize_isotropic
+    def __init__(self, max_angle=None, extent=None, gpts=None, sampling=None, energy=None):
+        self._resize_isotropic = False
+        self._crop_to_angle = max_angle
+        Energy.__init__(self, energy=energy)
         Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
 
     @property
     def out_shape(self):
-        if self._resize_isotropic:
-            return (np.min(self.gpts), np.min(self.gpts))
+        if self._crop_to_angle:
+            angular_extent = self.gpts / self.extent * self.wavelength / 2
+            return tuple(np.ceil(self._crop_to_angle / angular_extent * self.gpts / 2.).astype(int) * 2)
+        # if self._resize_isotropic:
+        #     return (np.min(self.gpts), np.min(self.gpts))
         else:
             return tuple(self.gpts)
 
@@ -35,13 +40,18 @@ class PtychographyDetector(DetectorBase, Grid):
 
         intensity = np.fft.fftshift(np.abs(np.fft.fft2(wave.array)) ** 2, axes=(1, 2))
 
-        if self._resize_isotropic:
-            resized_intensity = np.zeros((intensity.shape[0],) + self.out_shape)
-            for i in range(intensity.shape[0]):
-                resized_intensity[i] = resize(intensity[i], self.out_shape)
-            return resized_intensity
-        else:
-            return intensity
+        out_shape = self.out_shape
+        crop = ((self.gpts[0] - out_shape[0]) // 2, (self.gpts[1] - out_shape[1]) // 2)
+
+        intensity = intensity[:, crop[0]:-crop[0], crop[1]:-crop[1]]
+
+        # if self._resize_isotropic:
+        #     resized_intensity = np.zeros((intensity.shape[0],) + self.out_shape)
+        #     for i in range(intensity.shape[0]):
+        #         resized_intensity[i] = resize(intensity[i], self.out_shape)
+        #     return resized_intensity
+        # else:
+        return intensity
 
 
 class RingDetector(DetectorBase, Energy, Grid, HasCache, Observable):
