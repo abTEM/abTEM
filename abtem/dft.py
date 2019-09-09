@@ -91,10 +91,13 @@ class GPAWPotential(PotentialBase, HasCache):
     def thickness(self):
         return self._atoms.cell[2, 2]
 
+    def get_orthogonal_atoms(self, return_equivalent=False):
+        return make_orthogonal_atoms(self._atoms, self._origin, self.extent, return_equivalent=return_equivalent)
+
     @cached_method
     def _prepare_paw_corrections(self):
         paw_corrections = get_paw_corrections(self._calc)
-        atoms, equivalent = make_orthogonal_atoms(self._atoms, self._origin, self.extent, return_equivalent=True)
+        atoms, equivalent = self.get_orthogonal_atoms(return_equivalent=True)
         max_cutoff = max([spline.get_cutoff() for spline in paw_corrections.values()]) / units.Bohr
         return paw_corrections, atoms, equivalent, max_cutoff
 
@@ -145,7 +148,7 @@ class GPAWPotential(PotentialBase, HasCache):
             a = slice_entrance - position[2]
             b = slice_exit - position[2]
 
-            nodes = np.linspace(0., rc, 1000)
+            nodes = np.linspace(0., rc, 500)
 
             radial = project_spherical_function(func.map, nodes, a / units.Bohr, b / units.Bohr) * units.Bohr
 
