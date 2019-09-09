@@ -10,6 +10,10 @@ class DetectorBase(object):
     # def __init__(self, extent=None, gpts=None, sampling=None):
     #    Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
 
+    @property
+    def export(self):
+        return False
+
     def out_shape(self):
         raise NotImplementedError()
 
@@ -19,11 +23,16 @@ class DetectorBase(object):
 
 class PtychographyDetector(DetectorBase, Energy, Grid):
 
-    def __init__(self, max_angle=None, extent=None, gpts=None, sampling=None, energy=None):
+    def __init__(self, max_angle=None, extent=None, gpts=None, sampling=None, energy=None, export=False):
         self._resize_isotropic = False
         self._crop_to_angle = max_angle
+        self._export = export
         Energy.__init__(self, energy=energy)
         Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
+
+    @property
+    def export(self):
+        return self._export
 
     @property
     def out_shape(self):

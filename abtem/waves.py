@@ -221,8 +221,10 @@ class ProbeWaves(CTF, WavesBase):
         for detector in detectors:
             detector.match_grid(self)
             detector.match_energy(self)
-            measurements[detector] = np.zeros((int(np.prod(scan.gpts)),) + detector.out_shape)
-            measurements[detector] = np.squeeze(measurements[detector])
+
+            if not detector.export:
+                measurements[detector] = np.zeros((int(np.prod(scan.gpts)),) + detector.out_shape)
+                measurements[detector] = np.squeeze(measurements[detector])
 
         for start, stop, positions in scan.generate_positions(max_batch, show_progress=show_progress):
 
@@ -230,12 +232,19 @@ class ProbeWaves(CTF, WavesBase):
 
             new_waves = waves.multislice(potential, show_progress=False)
 
-            for detector, measurement in measurements.items():
-                measurement[start:start + stop] = detector.detect(new_waves)
+            for detector in detectors:
+                if detector.export:
+                    np.save(
+                        detector.export + '_{}-{}in{}x{}.npy'.format(start, start + stop, scan.gpts[0], scan.gpts[1]),
+                        detector.detect(new_waves))
+                else:
+                    measurements[detector][start:start + stop] = detector.detect(new_waves)
 
         for detector in detectors:
-            measurements[detector] = measurements[detector].reshape((scan.gpts[0], scan.gpts[1]) + detector.out_shape)
-            measurements[detector] = np.squeeze(measurements[detector])
+            if not detector.export:
+                measurements[detector] = measurements[detector].reshape(
+                    (scan.gpts[0], scan.gpts[1]) + detector.out_shape)
+                measurements[detector] = np.squeeze(measurements[detector])
 
         return measurements
 
