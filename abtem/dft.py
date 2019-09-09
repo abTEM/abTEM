@@ -56,10 +56,28 @@ def project_spherical_function(f, r, a, b, num_samples=200):
     return np.sum(f(rxy) * wkab.reshape(1, -1), axis=-1)
 
 
+def is_hexagonal(atoms):
+    cell = atoms.get_cell()
+    a = cell[0]
+    b = cell[1]
+    c = cell[2]
+
+    A = np.linalg.norm(a, axis=0)
+    B = np.linalg.norm(b, axis=0)
+    C = np.linalg.norm(c, axis=0)
+    angle = np.arccos(np.dot(a, b) / (A * B))
+
+    return (np.isclose(A, B) & (np.isclose(angle, np.pi / 3) | np.isclose(angle, 2 * np.pi / 3)) & (C == cell[2, 2]))
+
+
+def is_orthogonal(atoms):
+    return not np.any(np.abs(atoms.cell[~np.eye(3, dtype=bool)]) > 1e-12)
+
+
 class GPAWPotential(PotentialBase, HasCache):
 
     def __init__(self, calc, origin=None, extent=None, gpts=None, sampling=None, slice_thickness=.5, num_slices=None):
-        self._atoms = calc.atoms
+        self._atoms = calc.atoms.copy()
         self._calc = calc
 
         if origin is None:
@@ -82,6 +100,7 @@ class GPAWPotential(PotentialBase, HasCache):
 
         PotentialBase.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
         HasCache.__init__(self)
+        self.register_observer(self)
 
     @property
     def num_slices(self):
@@ -91,19 +110,19 @@ class GPAWPotential(PotentialBase, HasCache):
     def thickness(self):
         return self._atoms.cell[2, 2]
 
-    def get_orthogonal_atoms(self, return_equivalent=False):
-        return make_orthogonal_atoms(self._atoms, self._origin, self.extent, return_equivalent=return_equivalent)
-
     @cached_method
     def _prepare_paw_corrections(self):
         paw_corrections = get_paw_corrections(self._calc)
-        atoms, equivalent = self.get_orthogonal_atoms(return_equivalent=True)
         max_cutoff = max([spline.get_cutoff() for spline in paw_corrections.values()]) / units.Bohr
-        return paw_corrections, atoms, equivalent, max_cutoff
+        return paw_corrections, max_cutoff
 
     @cached_method
     def _prepare_electrostatic_potential(self):
         return self._calc.get_electrostatic_potential()
+
+    @cached_method
+    def get_atoms(self):
+        return make_orthogonal_atoms(self._atoms, self._origin, self.extent, return_equivalent=True)
 
     def get_slice(self, i):
         array = self._prepare_electrostatic_potential()
@@ -118,13 +137,14 @@ class GPAWPotential(PotentialBase, HasCache):
 
         array = array[..., start:stop].sum(axis=-1) * dz
 
-        array = make_orthogonal_array(array, self._atoms.cell[:2, :2], self._origin, self.extent, self.gpts)
+        array = make_orthogonal_array(array, self._calc.atoms.cell[:2, :2], self._origin, self.extent, self.gpts)
         array = self._get_projected_paw_corrections(slice_entrance, slice_exit) - array
         return array
 
     def _get_projected_paw_corrections(self, slice_entrance, slice_exit):
-        paw_corrections, atoms, equivalent, max_cutoff = self._prepare_paw_corrections()
+        paw_corrections, max_cutoff = self._prepare_paw_corrections()
 
+        atoms, equivalent = self.get_atoms()
         positions = atoms.get_positions()
 
         margin = int(np.ceil(max_cutoff / min(self.sampling)))
@@ -148,7 +168,7 @@ class GPAWPotential(PotentialBase, HasCache):
             a = slice_entrance - position[2]
             b = slice_exit - position[2]
 
-            nodes = np.linspace(0., rc, 500)
+            nodes = np.linspace(0., rc, 100)
 
             radial = project_spherical_function(func.map, nodes, a / units.Bohr, b / units.Bohr) * units.Bohr
 

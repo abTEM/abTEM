@@ -8,6 +8,7 @@ from abtem.bases import Grid, HasCache, cached_method, ArrayWithGrid
 from abtem.interpolation import interpolation_kernel, thread_safe_coloring
 from abtem.parametrizations import convert_kirkland, kirkland, kirkland_projected_finite, dvdr_kirkland, load_parameters
 from abtem.parametrizations import convert_lobato, lobato, lobato_projected_finite, dvdr_lobato
+from abtem.transform import make_orthogonal_atoms
 from tqdm.auto import tqdm
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
@@ -62,15 +63,19 @@ class Potential(HasCache, PotentialBase):
         if (np.abs(atoms.cell[0, 0]) < 1e-12) | (np.abs(atoms.cell[1, 1]) < 1e-12):
             raise RuntimeError('atoms has no width')
 
-        if np.any(np.abs(atoms.cell[~np.eye(3, dtype=bool)]) > 1e-12):
-            raise RuntimeError('non-diagonal unit cell not supported')
+        #if np.any(np.abs(atoms.cell[~np.eye(3, dtype=bool)]) > 1e-12):
+        #    raise RuntimeError('non-diagonal unit cell not supported')
 
         if periodic is False:
             raise NotImplementedError()
 
         self._atoms = atoms.copy()
         self._atoms.wrap()
-        self._origin = None
+
+        if origin is None:
+            self._origin = np.array([0., 0.])
+        else:
+            self._origin = origin
 
         if num_slices is None:
             if slice_thickness is None:
@@ -130,9 +135,11 @@ class Potential(HasCache, PotentialBase):
 
     @cached_method
     def _prepare_interpolation(self):
-        positions = self.atoms.get_positions()
-        atomic_numbers = self.atoms.get_atomic_numbers()
-        unique_atomic_numbers = np.unique(self._atoms.get_atomic_numbers())
+        atoms = make_orthogonal_atoms(self.atoms, self._origin, self.extent)
+
+        positions = atoms.get_positions()
+        atomic_numbers = atoms.get_atomic_numbers()
+        unique_atomic_numbers = np.unique(atomic_numbers)
 
         data = {}
         max_cutoff = 0.
