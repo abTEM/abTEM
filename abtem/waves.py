@@ -67,7 +67,7 @@ class Waves(Energy, ArrayWithGrid, HasCache, WavesBase):
 
         return self.__class__(array, extent=self.extent, energy=self.energy)
 
-    def multislice(self, potential, in_place=False, show_progress=True):
+    def multislice(self, potential, in_place=False, show_progress=False):
         if isinstance(potential, Atoms):
             potential = Potential(atoms=potential)
 
