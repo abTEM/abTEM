@@ -9,7 +9,6 @@ from abtem.interpolation import interpolation_kernel, thread_safe_coloring
 from abtem.parametrizations import convert_kirkland, kirkland, kirkland_projected_finite, dvdr_kirkland, load_parameters
 from abtem.parametrizations import convert_lobato, lobato, lobato_projected_finite, dvdr_lobato
 from abtem.transform import make_orthogonal_atoms
-from tqdm.auto import tqdm
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
@@ -45,7 +44,7 @@ class PotentialBase(Grid):
     def precalculate(self):
         array = np.zeros((self.num_slices,) + (self.gpts[0], self.gpts[1]))
 
-        for i in tqdm(range(self.num_slices)):
+        for i in range(self.num_slices):
             array[i] = self.get_slice(i)
 
         return PrecalculatedPotential(array, self.thickness, self.extent)

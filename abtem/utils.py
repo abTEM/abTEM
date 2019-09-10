@@ -1,6 +1,5 @@
 import numexpr as ne
 import numpy as np
-from tqdm.auto import tqdm
 
 
 def complex_exponential(x):
@@ -57,7 +56,7 @@ class BatchGenerator(object):
 
     def generate(self, show_progress):
         batch_start = 0
-        for i in tqdm(range(self.n_batches), disable=not show_progress):
+        for i in range(self.n_batches):
             batch_end = batch_start + self.batch_size
             if i == self.n_batches - 1:
                 yield batch_start, self.n_items - batch_end + self.batch_size

@@ -3,7 +3,6 @@ from collections import Iterable
 import numpy as np
 import pyfftw as fftw
 from ase import Atoms
-from tqdm.auto import tqdm
 
 from abtem.bases import cached_method, HasCache, ArrayWithGrid, Grid, Energy, notifying_property
 from abtem.potentials import Potential
@@ -87,7 +86,7 @@ class Waves(Energy, ArrayWithGrid, HasCache, WavesBase):
         fft_object_forward = fftw.FFTW(temp_1, temp_2, axes=(1, 2))
         fft_object_backward = fftw.FFTW(temp_2, temp_1, axes=(1, 2), direction='FFTW_BACKWARD')
 
-        for i in tqdm(range(potential.num_slices), disable=not show_progress):
+        for i in range(potential.num_slices):
             potential_slice = potential.get_slice(i)
 
             temp_1[:] = wave._array * complex_exponential(wave.sigma * potential_slice)
