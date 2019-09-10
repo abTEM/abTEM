@@ -172,7 +172,7 @@ class Potential(HasCache, PotentialBase):
             v_cut = data['v_cut']
             dvdr_cut = data['dvdr_cut']
 
-            r = np.linspace(min(self.sampling), r_cut, num_spline_nodes, dtype=np.float32)
+            r = np.linspace(min(self.sampling) / 2., r_cut, num_spline_nodes, dtype=np.float32)
 
             block_margin = int(r_cut / min(self.sampling))
             block_size = 2 * block_margin + 1

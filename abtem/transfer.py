@@ -121,9 +121,7 @@ class CTF(Energy, Grid, HasCache, Observable):
         Energy.__init__(self, energy=energy)
         Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
         HasCache.__init__(self)
-        Observable.__init__(self)
-
-        self.register_observer(self)
+        Observable.__init__(self, self_observe=True)
 
     cutoff = notifying_property('_cutoff')
     rolloff = notifying_property('_rolloff')

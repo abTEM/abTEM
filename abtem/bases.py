@@ -48,8 +48,9 @@ def xy_property(component, name):
 
 
 class Observable(object):
-    def __init__(self):
+    def __init__(self, self_observe=False):
         self._observers = []
+        self.self_observe = self_observe
 
     def register_observer(self, observer):
         if observer not in self._observers:
@@ -58,6 +59,9 @@ class Observable(object):
     def notify_observers(self, message):
         for observer in self._observers:
             observer.notify(self, message)
+
+        if self.self_observe:
+            return self
 
 
 class Observer(object):
@@ -134,7 +138,7 @@ class GridProperty(object):
     @property
     def value(self):
         if self._locked:
-            return self._validate(self._value())
+            return self._validate(self._value(self))
         else:
             return self._value
 
@@ -422,6 +426,10 @@ class Energy(Observable):
         return self.__class__(self.energy)
 
 
+def get_gpts(obj):
+    return obj.gpts
+
+
 class ArrayWithGrid(Grid):
     def __init__(self, array, array_dimensions, spatial_dimensions, extent=None, sampling=None, space='direct'):
 
@@ -433,7 +441,7 @@ class ArrayWithGrid(Grid):
 
         self._array = array
 
-        gpts = GridProperty(lambda: self.gpts, dtype=np.int32, locked=True, dimensions=spatial_dimensions)
+        gpts = GridProperty(get_gpts, dtype=np.int32, locked=True, dimensions=spatial_dimensions)
         Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling, dimensions=spatial_dimensions)
 
         self.space = space

@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 
-from ..potentials import Potential
+from abtem.potentials import Potential
 
 
 @pytest.fixture

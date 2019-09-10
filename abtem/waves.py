@@ -2,7 +2,7 @@ from collections import Iterable
 
 import numpy as np
 from ase import Atoms
-
+import sys
 from abtem.bases import cached_method, HasCache, ArrayWithGrid, Grid, Energy, notifying_property
 from abtem.potentials import Potential
 from abtem.scan import GridScan, LineScan
@@ -158,6 +158,12 @@ def translate(positions, kx, ky):
     return complex_exponential(2 * np.pi * (kx * x + ky * y))
 
 
+class A(object):
+
+    def __init__(self):
+        pass
+
+
 class ProbeWaves(CTF, WavesBase):
 
     def __init__(self, cutoff=np.inf, rolloff=0., focal_spread=0., normalize=False, extent=None, gpts=None,
@@ -184,17 +190,14 @@ class ProbeWaves(CTF, WavesBase):
         else:
             array = np.fft.fft2(self.get_array() * translate(positions, kx, ky))
 
-        # print(array)
-
-        # fft_object = pyfftw.builders.fft(a)
-        # array = pyfftw.interfaces.numpy_fft.fft2(a)
-        # a[:] = self.get_array() * translate(positions, kx, ky)
-
         if wrap:
             return Waves(array, extent=self.extent, energy=self.energy)
 
         else:
             return array
+
+    def get_a(self):
+        return A()
 
     @property
     def array(self):
@@ -219,7 +222,6 @@ class ProbeWaves(CTF, WavesBase):
         return (right - left) * self.sampling[0]
 
     def scan(self, scan, potential, detectors, max_batch, show_progress=True):
-
         if isinstance(potential, Atoms):
             potential = Potential(potential)
 
@@ -283,9 +285,3 @@ class ProbeWaves(CTF, WavesBase):
 
         return self.scan(scan=scan, potential=potential, max_batch=max_batch, detectors=detectors,
                          show_progress=show_progress)
-
-    # def custom_scan(self, potential, max_batch, positions, detectors=None, progress_bar=True):
-    #     scan = CustomScan(positions=positions)
-    #     return self.scan(scan=scan, potential=potential, max_batch=max_batch, detectors=detectors,
-    #                      progress_bar=progress_bar)
-    #

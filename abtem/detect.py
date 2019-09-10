@@ -48,10 +48,13 @@ class PtychographyDetector(DetectorBase, Energy, Grid):
 
         intensity = np.fft.fftshift(np.abs(np.fft.fft2(wave.array)) ** 2, axes=(1, 2))
 
-        out_shape = self.out_shape
-        crop = ((self.gpts[0] - out_shape[0]) // 2, (self.gpts[1] - out_shape[1]) // 2)
+        if self._crop_to_angle:
+            out_shape = self.out_shape
+            crop = ((self.gpts[0] - out_shape[0]) // 2, (self.gpts[1] - out_shape[1]) // 2)
+            intensity = intensity[:, crop[0]:-crop[0], crop[1]:-crop[1]]
 
-        intensity = intensity[:, crop[0]:-crop[0], crop[1]:-crop[1]]
+
+
 
         # if self._resize_isotropic:
         #     resized_intensity = np.zeros((intensity.shape[0],) + self.out_shape)
@@ -74,10 +77,8 @@ class RingDetector(DetectorBase, Energy, Grid, HasCache, Observable):
         Energy.__init__(self, energy=energy)
         Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
         HasCache.__init__(self)
-        Observable.__init__(self)
+        Observable.__init__(self, self_observe=True)
         DetectorBase.__init__(self)
-
-        self.register_observer(self)
 
     inner = notifying_property('_inner')
     outer = notifying_property('_outer')

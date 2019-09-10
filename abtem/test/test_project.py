@@ -1,7 +1,8 @@
 import numpy as np
 from scipy.special import kn
 
-from abtem.parametrizations import kirkland_projected_finite, load_parameters, convert_kirkland, interpolation_kernel
+from abtem.parametrizations import kirkland_projected_finite, load_parameters, convert_kirkland, kirkland, dvdr_kirkland
+from abtem.interpolation import interpolation_kernel
 
 
 def kirkland_project_infinite(r, a, b, c, d):
@@ -23,7 +24,11 @@ def test_project():
     samples = 100000
 
     inifite = kirkland_project_infinite(r, a, b, c, d)
-    finite = kirkland_projected_finite(r, r_cut, z0, z1, samples, a, b, c, d)[0]
+
+    v_cut = kirkland(r_cut, a, b, c, d)
+    dvdr_cut = dvdr_kirkland(r_cut, a, b, c, d)
+
+    finite = kirkland_projected_finite(r, r_cut, v_cut, dvdr_cut, z0, z1, samples, a, b, c, d)[0]
 
     assert np.all(np.isclose(inifite, finite))
 
@@ -39,7 +44,10 @@ def test_interpolation():
     z1 = np.array([20.])
     samples = 10000
 
-    vr = kirkland_projected_finite(r, r_cut, z0, z1, samples, a, b, c, d)
+    v_cut = kirkland(r_cut, a, b, c, d)
+    dvdr_cut = dvdr_kirkland(r_cut, a, b, c, d)
+
+    vr = kirkland_projected_finite(r, r_cut, v_cut, dvdr_cut, z0, z1, samples, a, b, c, d)
 
     extent = r_cut * 2
     m = 2 * n + 1
