@@ -26,7 +26,8 @@ def make_orthogonal_atoms(atoms, origin, extent, return_equivalent=False):
     positions = repeated_atoms.get_positions()
     positions[:, :2] -= displacement.sum(axis=0)
 
-    inside = ((positions[:, 0] > lower_corner[0]) & (positions[:, 1] > lower_corner[1]) &
+    eps = 1e-16
+    inside = ((positions[:, 0] > lower_corner[0] - eps) & (positions[:, 1] > lower_corner[1] - eps) &
               (positions[:, 0] < upper_corner[0]) & (positions[:, 1] < upper_corner[1]))
 
     atomic_numbers = repeated_atoms.get_atomic_numbers()[inside]
