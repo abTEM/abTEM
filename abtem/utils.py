@@ -1,9 +1,18 @@
-import numexpr as ne
+# import numexpr as ne
 import numpy as np
 
 
+# def complex_exponential(x):
+#    return ne.evaluate('exp(1.j * x)')
+
+
 def complex_exponential(x):
-    return ne.evaluate('exp(1.j * x)')
+    df_exp = np.empty(x.shape, dtype=np.complex64)
+    trig_buf = np.cos(x)
+    df_exp.real[:] = trig_buf
+    np.sin(x, out=trig_buf)
+    df_exp.imag[:] = trig_buf
+    return df_exp
 
 
 def fourier_propagator(k, dz, wavelength):

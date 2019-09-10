@@ -229,15 +229,15 @@ class ProbeWaves(CTF, WavesBase):
 
             waves = self.build_at(positions)
 
-            new_waves = waves.multislice(potential, show_progress=False)
+            waves = waves.multislice(potential, show_progress=False)
 
             for detector in detectors:
                 if detector.export:
                     np.save(
                         detector.export + '_{}-{}in{}x{}.npy'.format(start, start + stop, scan.gpts[0], scan.gpts[1]),
-                        detector.detect(new_waves))
+                        detector.detect(waves))
                 else:
-                    measurements[detector][start:start + stop] = detector.detect(new_waves)
+                    measurements[detector][start:start + stop] = detector.detect(waves)
 
         for detector in detectors:
             if not detector.export:
