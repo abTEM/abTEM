@@ -9,7 +9,7 @@ from abtem.scan import GridScan, LineScan
 from abtem.transfer import CTF
 from abtem.utils import complex_exponential, fourier_propagator, fftfreq
 
-USE_FFTW = False
+USE_FFTW = True
 
 if USE_FFTW:
     import pyfftw as fftw

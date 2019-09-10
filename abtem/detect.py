@@ -53,9 +53,6 @@ class PtychographyDetector(DetectorBase, Energy, Grid):
             crop = ((self.gpts[0] - out_shape[0]) // 2, (self.gpts[1] - out_shape[1]) // 2)
             intensity = intensity[:, crop[0]:-crop[0], crop[1]:-crop[1]]
 
-
-
-
         # if self._resize_isotropic:
         #     resized_intensity = np.zeros((intensity.shape[0],) + self.out_shape)
         #     for i in range(intensity.shape[0]):
