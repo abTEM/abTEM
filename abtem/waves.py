@@ -84,8 +84,8 @@ class Waves(Energy, ArrayWithGrid, HasCache, WavesBase):
 
         temp_1 = fftw.empty_aligned(wave._array.shape, dtype='complex64')
         temp_2 = fftw.empty_aligned(wave._array.shape, dtype='complex64')
-        fft_object_forward = fftw.FFTW(temp_1, temp_2, axes=(1, 2), threads=4)
-        fft_object_backward = fftw.FFTW(temp_2, temp_1, axes=(1, 2), threads=4, direction='FFTW_BACKWARD')
+        fft_object_forward = fftw.FFTW(temp_1, temp_2, axes=(1, 2))
+        fft_object_backward = fftw.FFTW(temp_2, temp_1, axes=(1, 2), direction='FFTW_BACKWARD')
 
         for i in tqdm(range(potential.num_slices), disable=not show_progress):
             potential_slice = potential.get_slice(i)
@@ -168,7 +168,7 @@ class ProbeWaves(CTF, WavesBase):
         a = fftw.empty_aligned((len(positions), self.gpts[0], self.gpts[1]), dtype='complex64')
         b = fftw.empty_aligned((len(positions), self.gpts[0], self.gpts[1]), dtype='complex64')
 
-        fft_object = fftw.FFTW(a, b, axes=(1, 2), threads=4)
+        fft_object = fftw.FFTW(a, b, axes=(1, 2))
 
         a[:] = self.get_array() * translate(positions, kx, ky)
         array = fft_object()
