@@ -2,7 +2,6 @@ import numpy as np
 
 from abtem.bases import Grid, Energy, HasCache, Observable, notifying_property, cached_method
 from abtem.utils import squared_norm, semiangles
-from skimage.transform import resize
 
 
 class DetectorBase(object):

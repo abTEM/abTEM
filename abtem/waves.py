@@ -1,7 +1,6 @@
 from collections import Iterable
 
 import numpy as np
-import pyfftw as fftw
 from ase import Atoms
 
 from abtem.bases import cached_method, HasCache, ArrayWithGrid, Grid, Energy, notifying_property
@@ -9,6 +8,11 @@ from abtem.potentials import Potential
 from abtem.scan import GridScan, LineScan
 from abtem.transfer import CTF
 from abtem.utils import complex_exponential, fourier_propagator, fftfreq
+
+USE_FFTW = False
+
+if USE_FFTW:
+    import pyfftw as fftw
 
 
 class WavesBase(object):
@@ -81,20 +85,23 @@ class Waves(Energy, ArrayWithGrid, HasCache, WavesBase):
 
         propagator = self.get_fourier_propagator(potential.slice_thickness)
 
-        temp_1 = fftw.empty_aligned(wave._array.shape, dtype='complex64')
-        temp_2 = fftw.empty_aligned(wave._array.shape, dtype='complex64')
-        fft_object_forward = fftw.FFTW(temp_1, temp_2, axes=(1, 2))
-        fft_object_backward = fftw.FFTW(temp_2, temp_1, axes=(1, 2), direction='FFTW_BACKWARD')
+        if USE_FFTW:
+            temp_1 = fftw.empty_aligned(wave._array.shape, dtype='complex64')
+            temp_2 = fftw.empty_aligned(wave._array.shape, dtype='complex64')
+            fft_object_forward = fftw.FFTW(temp_1, temp_2, axes=(1, 2))
+            fft_object_backward = fftw.FFTW(temp_2, temp_1, axes=(1, 2), direction='FFTW_BACKWARD')
 
         for i in range(potential.num_slices):
             potential_slice = potential.get_slice(i)
 
-            temp_1[:] = wave._array * complex_exponential(wave.sigma * potential_slice)
-            temp_2[:] = fft_object_forward() * propagator
-            wave._array[:] = fft_object_backward()
+            if USE_FFTW:
+                temp_1[:] = wave._array * complex_exponential(wave.sigma * potential_slice)
+                temp_2[:] = fft_object_forward() * propagator
+                wave._array[:] = fft_object_backward()
 
-            # wave._array[:] = np.fft.ifft2(
-            #    np.fft.fft2(wave._array * complex_exponential(wave.sigma * potential_slice)) * propagator)
+            else:
+                wave._array[:] = np.fft.ifft2(
+                    np.fft.fft2(wave._array * complex_exponential(wave.sigma * potential_slice)) * propagator)
 
         return wave
 
@@ -164,13 +171,18 @@ class ProbeWaves(CTF, WavesBase):
             positions = np.expand_dims(positions, axis=0)
 
         kx, ky = fftfreq(self)
-        a = fftw.empty_aligned((len(positions), self.gpts[0], self.gpts[1]), dtype='complex64')
-        b = fftw.empty_aligned((len(positions), self.gpts[0], self.gpts[1]), dtype='complex64')
 
-        fft_object = fftw.FFTW(a, b, axes=(1, 2))
+        if USE_FFTW:
+            a = fftw.empty_aligned((len(positions), self.gpts[0], self.gpts[1]), dtype='complex64')
+            b = fftw.empty_aligned((len(positions), self.gpts[0], self.gpts[1]), dtype='complex64')
 
-        a[:] = self.get_array() * translate(positions, kx, ky)
-        array = fft_object()
+            fft_object = fftw.FFTW(a, b, axes=(1, 2))
+
+            a[:] = self.get_array() * translate(positions, kx, ky)
+            array = fft_object()
+
+        else:
+            array = np.fft.fft2(self.get_array() * translate(positions, kx, ky))
 
         # print(array)
 
@@ -229,7 +241,7 @@ class ProbeWaves(CTF, WavesBase):
 
             waves = self.build_at(positions)
 
-            waves = waves.multislice(potential, show_progress=False)
+            waves = waves.multislice(potential, in_place=True, show_progress=False)
 
             for detector in detectors:
                 if detector.export:
