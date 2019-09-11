@@ -1,8 +1,8 @@
-
 import numpy as np
 
 from abtem.bases import Grid, Energy, HasCache, Observable, notifying_property, cached_method
 from abtem.utils import squared_norm, semiangles
+from skimage.transform import resize
 
 
 class DetectorBase(object):
@@ -10,9 +10,19 @@ class DetectorBase(object):
     # def __init__(self, extent=None, gpts=None, sampling=None):
     #    Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
 
+    def __init__(self, export=None):
+        if export is not None:
+            if not export.endswith('.hdf5'):
+                self._export = export + '.hdf5'
+            else:
+                self._export = export
+
+        else:
+            self._export = None
+
     @property
     def export(self):
-        return False
+        return self._export
 
     def out_shape(self):
         raise NotImplementedError()
@@ -23,12 +33,14 @@ class DetectorBase(object):
 
 class PtychographyDetector(DetectorBase, Energy, Grid):
 
-    def __init__(self, max_angle=None, extent=None, gpts=None, sampling=None, energy=None, export=False):
-        self._resize_isotropic = False
+    def __init__(self, max_angle=None, resize_isotropic=False, extent=None, gpts=None, sampling=None, energy=None,
+                 export=None):
+        self._resize_isotropic = resize_isotropic
         self._crop_to_angle = max_angle
-        self._export = export
+
         Energy.__init__(self, energy=energy)
         Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
+        DetectorBase.__init__(self, export=export)
 
     @property
     def export(self):
@@ -38,9 +50,13 @@ class PtychographyDetector(DetectorBase, Energy, Grid):
     def out_shape(self):
         if self._crop_to_angle:
             angular_extent = self.gpts / self.extent * self.wavelength / 2
-            return tuple(np.ceil(self._crop_to_angle / angular_extent * self.gpts / 2.).astype(int) * 2)
-        # if self._resize_isotropic:
-        #     return (np.min(self.gpts), np.min(self.gpts))
+            out_shape = tuple(np.ceil(self._crop_to_angle / angular_extent * self.gpts / 2.).astype(int) * 2)
+            if self._resize_isotropic:
+                return (min(out_shape), min(out_shape))
+            else:
+                return out_shape
+        elif self._resize_isotropic:
+            return (np.min(self.gpts), np.min(self.gpts))
         else:
             return tuple(self.gpts)
 
@@ -49,12 +65,18 @@ class PtychographyDetector(DetectorBase, Energy, Grid):
 
         intensity = np.fft.fftshift(np.abs(np.fft.fft2(wave.array)) ** 2, axes=(1, 2))
 
+        if self._resize_isotropic:
+            new_size = (np.min(self.gpts), np.min(self.gpts))
+            resized_intensity = np.zeros((intensity.shape[0],) + new_size)
+            for i in range(intensity.shape[0]):
+                resized_intensity[i] = resize(intensity[i], new_size)
+            intensity = resized_intensity
+
         if self._crop_to_angle:
             out_shape = self.out_shape
-            crop = ((self.gpts[0] - out_shape[0]) // 2, (self.gpts[1] - out_shape[1]) // 2)
+            crop = ((intensity.shape[1] - out_shape[0]) // 2, (intensity.shape[2] - out_shape[1]) // 2)
             intensity = intensity[:, crop[0]:-crop[0], crop[1]:-crop[1]]
 
-        # if self._resize_isotropic:
         #     resized_intensity = np.zeros((intensity.shape[0],) + self.out_shape)
         #     for i in range(intensity.shape[0]):
         #         resized_intensity[i] = resize(intensity[i], self.out_shape)
@@ -65,7 +87,8 @@ class PtychographyDetector(DetectorBase, Energy, Grid):
 
 class RingDetector(DetectorBase, Energy, Grid, HasCache, Observable):
 
-    def __init__(self, inner, outer, rolloff=0., integrate=True, extent=None, gpts=None, sampling=None, energy=None):
+    def __init__(self, inner, outer, rolloff=0., integrate=True, extent=None, gpts=None, sampling=None, energy=None,
+                 export=None):
 
         self._inner = inner
         self._outer = outer
@@ -76,7 +99,7 @@ class RingDetector(DetectorBase, Energy, Grid, HasCache, Observable):
         Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
         HasCache.__init__(self)
         Observable.__init__(self, self_observe=True)
-        DetectorBase.__init__(self)
+        DetectorBase.__init__(self, export=export)
 
     inner = notifying_property('_inner')
     outer = notifying_property('_outer')
@@ -119,4 +142,3 @@ class RingDetector(DetectorBase, Energy, Grid, HasCache, Observable):
 
         return np.sum(intensity * efficiency.reshape((1,) + efficiency.shape), axis=(1, 2)) / np.sum(intensity,
                                                                                                      axis=(1, 2))
-

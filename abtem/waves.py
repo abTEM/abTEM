@@ -9,6 +9,8 @@ from abtem.scan import GridScan, LineScan
 from abtem.transfer import CTF
 from abtem.utils import complex_exponential, fourier_propagator, fftfreq
 
+import h5py
+
 USE_FFTW = True
 
 if USE_FFTW:
@@ -235,9 +237,23 @@ class ProbeWaves(CTF, WavesBase):
             detector.match_grid(self)
             detector.match_energy(self)
 
-            if not detector.export:
-                measurements[detector] = np.zeros((int(np.prod(scan.gpts)),) + detector.out_shape)
-                measurements[detector] = np.squeeze(measurements[detector])
+            data_shape = (int(np.prod(scan.gpts)),) + tuple(n for n in detector.out_shape if n > 1)
+
+            if detector.export is not None:
+                f = h5py.File(detector.export, 'w')
+
+                measurement_gpts = f.create_dataset('gpts', (2,), dtype=np.int)
+                measurement_extent = f.create_dataset('extent', (2,), dtype=np.float)
+                measurement_endpoint = f.create_dataset('endpoint', (1,), dtype=np.bool)
+
+                measurement_gpts[:] = scan.gpts
+                measurement_extent[:] = scan.extent
+                measurement_endpoint[:] = scan.endpoint
+
+                f.create_dataset('data', data_shape, dtype=np.float32)
+                f.close()
+            else:
+                measurements[detector] = np.zeros(data_shape)
 
         for start, stop, positions in scan.generate_positions(max_batch, show_progress=show_progress):
 
@@ -246,17 +262,16 @@ class ProbeWaves(CTF, WavesBase):
             waves = waves.multislice(potential, in_place=True, show_progress=False)
 
             for detector in detectors:
-                if detector.export:
-                    np.save(
-                        detector.export + '_{}-{}in{}x{}.npy'.format(start, start + stop, scan.gpts[0], scan.gpts[1]),
-                        detector.detect(waves))
+                if detector.export is not None:
+                    with h5py.File(detector.export, 'a') as f:
+                        f['data'][start:start + stop] = detector.detect(waves)
+
                 else:
                     measurements[detector][start:start + stop] = detector.detect(waves)
 
         for detector in detectors:
             if not detector.export:
-                measurements[detector] = measurements[detector].reshape(
-                    (scan.gpts[0], scan.gpts[1]) + detector.out_shape)
+                measurements[detector] = measurements[detector].reshape(tuple(scan.gpts) + detector.out_shape)
                 measurements[detector] = np.squeeze(measurements[detector])
 
         return measurements

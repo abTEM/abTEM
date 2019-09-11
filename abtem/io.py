@@ -1,6 +1,14 @@
 import os
 from glob import glob
 import numpy as np
+import h5py
+
+
+def import_measurement(file_name):
+    with h5py.File(file_name, 'r') as f:
+        data = f['data'][:].reshape(tuple(f['gpts'][:]) + f['data'].shape[1:])
+
+    return data
 
 
 def decode_partition(f):

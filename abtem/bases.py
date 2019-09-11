@@ -216,6 +216,10 @@ class Grid(Observable):
             self._sampling.value = self._adjusted_sampling(self.extent, self.gpts)
 
     @property
+    def endpoint(self):
+        return self._endpoint
+
+    @property
     def dimensions(self):
         return self._dimensions
 

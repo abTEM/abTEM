@@ -257,6 +257,16 @@ class PrecalculatedPotential(ArrayWithGrid):
     def get_slice(self, i):
         return self._array[i]
 
+    def extract(self, first, last):
+        if last < 0:
+            last = self.num_slices + last
+
+        if first <= last:
+            raise RuntimeError()
+
+        thickness = self.slice_thickness * (last - first)
+        return self.__class__(array=self.array[first:last], thickness=thickness, extent=self.extent)
+
     def export(self, path, overwrite=False):
         if (os.path.isfile(path) | os.path.isfile(path + '.npz')) & (not overwrite):
             raise RuntimeError('file {} already exists')
