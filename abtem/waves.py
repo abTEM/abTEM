@@ -2,7 +2,7 @@ from collections import Iterable
 
 import numpy as np
 from ase import Atoms
-import sys
+
 from abtem.bases import cached_method, HasCache, ArrayWithGrid, Grid, Energy, notifying_property
 from abtem.potentials import Potential
 from abtem.scan import GridScan, LineScan

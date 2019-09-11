@@ -1,3 +1,4 @@
+
 import numpy as np
 
 from abtem.bases import Grid, Energy, HasCache, Observable, notifying_property, cached_method
@@ -118,3 +119,4 @@ class RingDetector(DetectorBase, Energy, Grid, HasCache, Observable):
 
         return np.sum(intensity * efficiency.reshape((1,) + efficiency.shape), axis=(1, 2)) / np.sum(intensity,
                                                                                                      axis=(1, 2))
+
