@@ -261,7 +261,7 @@ class PrecalculatedPotential(ArrayWithGrid):
         if last < 0:
             last = self.num_slices + last
 
-        if first <= last:
+        if first >= last:
             raise RuntimeError()
 
         thickness = self.slice_thickness * (last - first)
