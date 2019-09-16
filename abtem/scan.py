@@ -112,8 +112,9 @@ class LineScan(Scan, Grid):
         return scans
 
     def get_positions(self):
-        return np.ascontiguousarray(
-            np.linspace(self.start, self.extent * self.direction, self.gpts, endpoint=self._endpoint))
+        x = np.linspace(self.start[0], self.extent * self.direction[0], self.gpts, endpoint=self._endpoint)
+        y = np.linspace(self.start[1], self.extent * self.direction[1], self.gpts, endpoint=self._endpoint)
+        return np.stack((x, y), axis=1)
 
 
 class GridScan(Scan, Grid):
