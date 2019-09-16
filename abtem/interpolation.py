@@ -45,25 +45,80 @@ def thread_safe_coloring(corners, size):
 
 
 @jit(nopython=True, nogil=True, parallel=True)
-def interpolation_kernel(v, r, vr, r_cut, corner_positions, block_positions, x, y, colors):
+def interpolation_kernel(v, r, vr, corner_positions, block_positions, x, y):
     diff_r = np.diff(r)
+
+    diff_vr_r = np.diff(vr) / diff_r
+
+    if corner_positions[0] < 0:
+        rJa = abs(corner_positions[0])
+    else:
+        rJa = 0
+
+    if corner_positions[0] + len(x) > v.shape[0]:
+        rJb = v.shape[0] - corner_positions[0]
+    else:
+        rJb = len(x)
+
+    rJ = range(rJa, rJb)
+    rj = range(max(corner_positions[0], 0), min(corner_positions[0] + len(x), v.shape[0]))
+
+    if corner_positions[1] < 0:
+        rKa = abs(corner_positions[1])
+    else:
+        rKa = 0
+
+    if corner_positions[0] + len(y) > v.shape[1]:
+        rKb = v.shape[1] - corner_positions[1]
+    else:
+        rKb = len(y)
+
+    rK = range(rKa, rKb)
+    rk = range(max(corner_positions[1], 0), min(corner_positions[1] + len(y), v.shape[1]))
+
+    # for j in range(len(x)):
+    for j, J in zip(rj, rJ):
+        # if ((corner_positions[i, 0] + j >= 0) & (corner_positions[i, 0] + j < v.shape[0])):
+        # for k in range(len(y)):
+        for k, K in zip(rk, rK):
+            # if ((corner_positions[i, 1] + k >= 0) & (corner_positions[i, 1] + k < v.shape[1])):
+
+            r_interp = np.sqrt((x[J] - block_positions[0]) ** np.float32(2.)
+                               + (y[K] - block_positions[1]) ** np.float32(2.))
+
+            if r_interp < r[-1]:
+                l = int(np.floor((r_interp - r[0]) / (r[-1] - r[0]) * (len(r) - 1)))
+
+                if l < 0:
+                    # v[corner_positions[i, 0] + j, corner_positions[i, 1] + k] += vr_i[0]
+                    v[j, k] += vr[0]
+                elif l < (len(vr) - 1):
+                    value = vr[l] + (r_interp - r[l]) * diff_vr_r[l]
+                    # v[corner_positions[i, 0] + j, corner_positions[i, 1] + k] += value
+                    v[j, k] += value
+
+
+@jit(nopython=True, nogil=True, parallel=True)
+def interpolation_kernel_parallel(v, r, vr, corner_positions, block_positions, x, y):
+    colors = thread_safe_coloring(corner_positions, len(x))
 
     for color in np.unique(colors):
         for i in prange(len(corner_positions)):
             if colors[i] == color:
-                vr_i = vr[i]
-                diff_vr_r = np.diff(vr_i) / diff_r
+                interpolation_kernel(v, r, vr[i], corner_positions[i], block_positions[i], x, y)
 
-                for j in range(len(x)):
-                    for k in range(len(y)):
-                        r_interp = np.sqrt((x[j] - block_positions[i, 0]) ** np.float32(2.)
-                                           + (y[k] - block_positions[i, 1]) ** np.float32(2.))
 
-                        if r_interp < r_cut:
-                            l = int(np.floor((r_interp - r[0]) / (r[-1] - r[0]) * (len(r) - 1)))
+def interpolate_radial_functions(array, r, values, positions, sampling):
+    block_margin = int(r[-1] / min(sampling))
+    block_size = 2 * block_margin + 1
 
-                            if l < 0:
-                                v[corner_positions[i, 0] + j, corner_positions[i, 1] + k] += vr_i[0]
-                            elif l < (len(r) - 1):
-                                value = vr_i[l] + (r_interp - r[l]) * diff_vr_r[l]
-                                v[corner_positions[i, 0] + j, corner_positions[i, 1] + k] += value
+    corner_positions = np.round(positions[:, :2] / sampling).astype(np.int) - block_margin
+    block_positions = positions[:, :2] - sampling * corner_positions
+
+    x = np.linspace(0., block_size * sampling[0], block_size, endpoint=False)
+    y = np.linspace(0., block_size * sampling[1], block_size, endpoint=False)
+
+    if values.shape == (len(r),):
+        values = np.tile(values, (len(corner_positions), 1))
+
+    interpolation_kernel_parallel(array, r, values, corner_positions, block_positions, x, y)

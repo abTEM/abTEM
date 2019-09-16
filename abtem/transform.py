@@ -3,7 +3,25 @@ from ase import Atoms
 from scipy.interpolate import RegularGridInterpolator
 
 
-def make_orthogonal_atoms(atoms, origin, extent, return_equivalent=False):
+def is_hexagonal(atoms):
+    cell = atoms.get_cell()
+    a = cell[0]
+    b = cell[1]
+    c = cell[2]
+
+    A = np.linalg.norm(a, axis=0)
+    B = np.linalg.norm(b, axis=0)
+    C = np.linalg.norm(c, axis=0)
+    angle = np.arccos(np.dot(a, b) / (A * B))
+
+    return (np.isclose(A, B) & (np.isclose(angle, np.pi / 3) | np.isclose(angle, 2 * np.pi / 3)) & (C == cell[2, 2]))
+
+
+def is_orthogonal(atoms):
+    return not np.any(np.abs(atoms.cell[~np.eye(3, dtype=bool)]) > 1e-12)
+
+
+def make_orthogonal_atoms(atoms, origin, extent, cutoff=0., return_equivalent=False, eps=1e-16):
     origin = np.array(origin)
     extent = np.array(extent)
 
@@ -16,19 +34,20 @@ def make_orthogonal_atoms(atoms, origin, extent, return_equivalent=False):
     lower_corner = np.dot(origin_t, P)
     upper_corner = lower_corner + extent
 
-    n, m = np.ceil(np.dot(upper_corner, P_inv)).astype(np.int)
+    n, m = np.ceil(np.dot(upper_corner + 2 * cutoff, P_inv)).astype(np.int)
 
     repeated_atoms = atoms.copy()
     displacement = atoms.cell[:2, :2].copy()
 
-    repeated_atoms *= (n + 2, m + 2, 1)
+    repeated_atoms *= (n+2, m+2, 1)
 
     positions = repeated_atoms.get_positions()
     positions[:, :2] -= displacement.sum(axis=0)
 
-    eps = 1e-16
-    inside = ((positions[:, 0] > lower_corner[0] - eps) & (positions[:, 1] > lower_corner[1] - eps) &
-              (positions[:, 0] < upper_corner[0]) & (positions[:, 1] < upper_corner[1]))
+    inside = ((positions[:, 0] > lower_corner[0] - eps - cutoff) &
+              (positions[:, 1] > lower_corner[1] - eps - cutoff) &
+              (positions[:, 0] < upper_corner[0] + cutoff) &
+              (positions[:, 1] < upper_corner[1] + cutoff))
 
     atomic_numbers = repeated_atoms.get_atomic_numbers()[inside]
     positions = positions[inside]

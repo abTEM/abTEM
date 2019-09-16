@@ -26,7 +26,11 @@ def split_integer(n, m):
 class Scan(object):
 
     def __init__(self):
-        pass
+        self._measurements = {}
+
+    @property
+    def measurements(self):
+        return self._measurements
 
     def get_positions(self):
         raise NotImplementedError('')
@@ -108,8 +112,9 @@ class LineScan(Scan, Grid):
         return scans
 
     def get_positions(self):
-        return (np.linspace(0., self.extent, self.gpts, endpoint=self._endpoint) * np.expand_dims(self.direction,
-                                                                                                  axis=0) + self.start)
+        return np.ascontiguousarray(
+            np.linspace(0., self.extent, self.gpts, endpoint=self._endpoint) *
+            np.expand_dims(self.direction, axis=0) + self.start)
 
 
 class GridScan(Scan, Grid):

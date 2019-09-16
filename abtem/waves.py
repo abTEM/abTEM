@@ -1,5 +1,6 @@
 from collections import Iterable
 
+import h5py
 import numpy as np
 from ase import Atoms
 
@@ -8,8 +9,6 @@ from abtem.potentials import Potential
 from abtem.scan import GridScan, LineScan
 from abtem.transfer import CTF
 from abtem.utils import complex_exponential, fourier_propagator, fftfreq
-
-import h5py
 
 USE_FFTW = True
 
@@ -223,7 +222,7 @@ class ProbeWaves(CTF, WavesBase):
         right = peak_idx + np.argmin(np.abs(profile[peak_idx:] - peak_value / 2))
         return (right - left) * self.sampling[0]
 
-    def scan(self, scan, potential, detectors, max_batch, show_progress=True):
+    def scan(self, scan, potential, detectors, max_batch, return_scan=False, show_progress=True):
         if isinstance(potential, Atoms):
             potential = Potential(potential)
 
@@ -232,7 +231,6 @@ class ProbeWaves(CTF, WavesBase):
         if not isinstance(detectors, Iterable):
             detectors = [detectors]
 
-        measurements = {}
         for detector in detectors:
             detector.match_grid(self)
             detector.match_energy(self)
@@ -253,7 +251,7 @@ class ProbeWaves(CTF, WavesBase):
                 f.create_dataset('data', data_shape, dtype=np.float32)
                 f.close()
             else:
-                measurements[detector] = np.zeros(data_shape)
+                scan.measurements[detector] = np.zeros(data_shape)
 
         for start, stop, positions in scan.generate_positions(max_batch, show_progress=show_progress):
 
@@ -267,25 +265,25 @@ class ProbeWaves(CTF, WavesBase):
                         f['data'][start:start + stop] = detector.detect(waves)
 
                 else:
-                    measurements[detector][start:start + stop] = detector.detect(waves)
+                    scan.measurements[detector][start:start + stop] = detector.detect(waves)
 
         for detector in detectors:
             if not detector.export:
-                measurements[detector] = measurements[detector].reshape(tuple(scan.gpts) + detector.out_shape)
-                measurements[detector] = np.squeeze(measurements[detector])
+                scan.measurements[detector] = scan.measurements[detector].reshape(tuple(scan.gpts) + detector.out_shape)
+                scan.measurements[detector] = np.squeeze(scan.measurements[detector])
 
-        return measurements
+        return scan
 
     def linescan(self, potential, detectors, start, end, gpts=None, sampling=None, endpoint=True, max_batch=1,
-                 show_progress=True):
+                 return_scan=False, show_progress=True):
 
         scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint)
 
         return self.scan(scan=scan, potential=potential, detectors=detectors, max_batch=max_batch,
-                         show_progress=show_progress)
+                         return_scan=return_scan, show_progress=show_progress)
 
     def gridscan(self, potential, detectors, start=None, end=None, gpts=None, sampling=None, endpoint=False,
-                 max_batch=1, show_progress=True):
+                 max_batch=1, return_scan=False, show_progress=True):
 
         if isinstance(potential, Atoms):
             potential = Potential(potential)
@@ -299,4 +297,4 @@ class ProbeWaves(CTF, WavesBase):
         scan = GridScan(start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint)
 
         return self.scan(scan=scan, potential=potential, max_batch=max_batch, detectors=detectors,
-                         show_progress=show_progress)
+                         return_scan=return_scan, show_progress=show_progress)

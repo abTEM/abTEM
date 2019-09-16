@@ -69,13 +69,13 @@ class PtychographyDetector(DetectorBase, Energy, Grid):
             new_size = (np.min(self.gpts), np.min(self.gpts))
             resized_intensity = np.zeros((intensity.shape[0],) + new_size)
             for i in range(intensity.shape[0]):
-                resized_intensity[i] = resize(intensity[i], new_size)
+                resized_intensity[i] = resize(intensity[i], new_size, order=0)
             intensity = resized_intensity
 
         if self._crop_to_angle:
             out_shape = self.out_shape
             crop = ((intensity.shape[1] - out_shape[0]) // 2, (intensity.shape[2] - out_shape[1]) // 2)
-            intensity = intensity[:, crop[0]:-crop[0], crop[1]:-crop[1]]
+            intensity = intensity[:, crop[0]:crop[0] + out_shape[0], crop[1]:crop[1] + out_shape[1]]
 
         #     resized_intensity = np.zeros((intensity.shape[0],) + self.out_shape)
         #     for i in range(intensity.shape[0]):
