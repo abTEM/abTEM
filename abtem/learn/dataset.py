@@ -1,5 +1,4 @@
 import numpy as np
-import torch
 from skimage.morphology import watershed
 
 from abtem.interpolation import interpolate_radial_functions
@@ -88,12 +87,10 @@ def data_generator(images, markers, classes=None, batch_size=32, augmentations=N
             batch_images = np.array(batch_images)
             batch_images = batch_images.reshape((batch_images.shape[0], 1,) +
                                                 batch_images.shape[1:]).astype(np.float32)
-            batch_images = torch.from_numpy(batch_images)
 
             batch_markers = np.array(batch_markers)
             batch_markers = batch_markers.reshape((batch_markers.shape[0], 1,) +
                                                   batch_markers.shape[1:]).astype(np.float32)
-            batch_markers = torch.from_numpy(batch_markers)
 
             if batch_classes is None:
                 yield batch_images, batch_markers
