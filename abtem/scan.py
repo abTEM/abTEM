@@ -119,7 +119,8 @@ class LineScan(Scan, Grid):
     def get_positions(self):
         x = np.linspace(self.start[0], self.extent * self.direction[0], self.gpts, endpoint=self._endpoint)
         y = np.linspace(self.start[1], self.extent * self.direction[1], self.gpts, endpoint=self._endpoint)
-        return np.hstack((x, y))
+        return np.stack((np.reshape(x, (-1,)),
+                         np.reshape(y, (-1,))), axis=1)
 
 
 class GridScan(Scan, Grid):
