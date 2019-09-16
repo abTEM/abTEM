@@ -26,7 +26,7 @@ def voronoi_labels(points, gpts):
     indices = (scaled_positions[inside] * gpts).astype(int)
     markers[indices[:, 0], indices[:, 1]] = 1 + points.labels[inside]
     labels = watershed(np.zeros_like(markers), markers, compactness=1000)
-    return labels
+    return labels - 1
 
 
 def generate_indices(labels):
@@ -96,5 +96,6 @@ def data_generator(images, markers, classes=None, batch_size=32, augmentations=N
                 yield batch_images, batch_markers
 
             else:
-                batch_classes = np.array(batch_classes)
+                batch_classes = np.array(batch_classes).astype(np.int)
+                # batch_classes = np.rollaxis(batch_classes, 3, 1).astype(np.int)
                 yield batch_images, batch_markers, batch_classes
