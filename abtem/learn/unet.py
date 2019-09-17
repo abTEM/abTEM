@@ -122,15 +122,15 @@ class UNet(nn.Module):
 
         self.encoder2 = UNet._block(features, features * 2, name="enc2")
         self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.downdrop1 = nn.Dropout(p=p)
+        self.downdrop2 = nn.Dropout(p=p)
 
         self.encoder3 = UNet._block(features * 2, features * 4, name="enc3")
         self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.downdrop1 = nn.Dropout(p=p)
+        self.downdrop3 = nn.Dropout(p=p)
 
         self.encoder4 = UNet._block(features * 4, features * 8, name="enc4")
         self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.downdrop1 = nn.Dropout(p=p)
+        self.downdrop4 = nn.Dropout(p=p)
 
         self.bottleneck = UNet._block(features * 8, features * 16, name="bottleneck")
 
