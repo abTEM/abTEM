@@ -1,5 +1,6 @@
 import numexpr as ne
 import numpy as np
+from numba import njit
 
 
 def complex_exponential(x):
@@ -34,10 +35,12 @@ def semiangles(grid_and_energy):
             zip(grid_and_energy.gpts, grid_and_energy.sampling))
 
 
+@njit
 def sub2ind(rows, cols, array_shape):
     return rows * array_shape[1] + cols
 
 
+@njit
 def ind2sub(array_shape, ind):
     rows = ind // array_shape[1]
     cols = ind % array_shape[1]
