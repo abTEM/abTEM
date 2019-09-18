@@ -3,7 +3,6 @@ from abtem.utils import ind2sub, sub2ind
 from numba import njit
 
 
-# @njit
 def index_disc(distance):
     x_disc = np.zeros((2 * distance + 1, 2 * distance + 1), dtype=np.int32)
 
@@ -17,6 +16,7 @@ def index_disc(distance):
     y_disc = y_disc[r2 < distance ** 2]
 
     return x_disc, y_disc
+
 
 
 def non_maximum_suppresion(markers, distance, threshold=None):

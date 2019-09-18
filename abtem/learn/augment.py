@@ -230,6 +230,24 @@ class ScanNoise(Augmentation):
         return image
 
 
+class LineFlicker(Augmentation):
+    apply_to_label = False
+
+    def __init__(self, scale, amount):
+        self.scale = scale
+        self.amount = amount
+
+    def randomize(self):
+        self._random_scale = np.random.uniform(*self.scale)
+        self._random_amount = np.random.uniform(*self.amount)
+
+    def __call__(self, image):
+        x = np.linspace(0, image.shape[0], image.shape[0], endpoint=True)
+        p = np.array([np.random.rand() * image.shape[0]])
+        y = np.exp(-(x[:, None] - p[None, :]) ** 2 / (2 * self._random_scale ** 2)).sum(axis=1)
+        return image * (1 - self._random_amount * y[:, None])
+
+
 class Border(Augmentation):
     apply_to_label = False
 

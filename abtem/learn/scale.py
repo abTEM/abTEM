@@ -65,10 +65,10 @@ def make_circular_template(angles, nbins_angular=64, gauss_width=1., margin=1):
     return template
 
 
-def find_circular_spots(power_spec, angles):
+def find_circular_spots(power_spec, angles, inner=3):
     template = make_circular_template(angles)
 
-    unrolled = unroll_powerspec(power_spec)
+    unrolled = unroll_powerspec(power_spec, inner)
     unrolled /= unrolled.max()
 
     unrolled = np.pad(unrolled, [(unrolled.shape[0] // 2, unrolled.shape[0] // 2), (0, 0)], mode='wrap').astype(
@@ -78,7 +78,7 @@ def find_circular_spots(power_spec, angles):
     rows, cols = ind2sub(h.shape, h.argmax())
 
     angles = angles + (rows + .5) / 64 * 2 * np.pi
-    radial = cols + 1 + 1 + .5
+    radial = cols + inner + 1 + .5
     return radial, angles
 
 
