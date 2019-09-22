@@ -25,8 +25,9 @@ def split_integer(n, m):
 
 class Scan(object):
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         self._measurements = {}
+        super().__init__(**kwargs)
 
     @property
     def measurements(self):
@@ -60,7 +61,8 @@ class LineScan(Scan, Grid):
 
         self._start = start
         self._direction, extent = self._direction_and_extent(start, end)
-        Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling, dimensions=1, endpoint=endpoint)
+
+        super().__init__(extent=extent, gpts=gpts, sampling=sampling, dimensions=1, endpoint=endpoint)
 
     def _direction_and_extent(self, start, end):
         extent = np.linalg.norm((end - start), axis=0)
@@ -117,8 +119,10 @@ class LineScan(Scan, Grid):
     #         np.expand_dims(self.direction, axis=0) + self.start)
 
     def get_positions(self):
-        x = np.linspace(self.start[0], self.extent * self.direction[0], self.gpts, endpoint=self._endpoint)
-        y = np.linspace(self.start[1], self.extent * self.direction[1], self.gpts, endpoint=self._endpoint)
+        x = np.linspace(self.start[0], self.start[0] + self.extent * self.direction[0], self.gpts,
+                        endpoint=self._endpoint)
+        y = np.linspace(self.start[1], self.start[1] + self.extent * self.direction[1], self.gpts,
+                        endpoint=self._endpoint)
         return np.stack((np.reshape(x, (-1,)),
                          np.reshape(y, (-1,))), axis=1)
 
@@ -129,7 +133,7 @@ class GridScan(Scan, Grid):
         Scan.__init__(self)
 
         self._start = np.array(start)
-        Grid.__init__(self, extent=np.array(end) - start, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint)
+        super().__init__(extent=np.array(end) - start, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint)
 
     @property
     def start(self):

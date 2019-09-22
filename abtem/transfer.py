@@ -1,6 +1,6 @@
 import numpy as np
 
-from abtem.bases import Energy, HasCache, notifying_property, Grid, Observable, cached_method
+from abtem.bases import Energy, HasCache, notifying_property, Grid, SelfObservable, cached_method
 from abtem.utils import complex_exponential, squared_norm, semiangles
 
 polar_symbols = ('C10', 'C12', 'phi12',
@@ -78,32 +78,23 @@ def parametrization_property(key):
 
     def setter(self, value):
         old = getattr(self, key)
-        self._parameters[key] = np.float32(value)
+        self._parameters[key] = value
         change = old != value
         self.notify_observers({'name': key, 'old': old, 'new': value, 'change': change})
 
     return property(getter, setter)
 
 
-class CTF(Energy, Grid, HasCache, Observable):
+class CTF(Energy, Grid, HasCache, SelfObservable):
 
     def __init__(self, cutoff=np.inf, rolloff=0., focal_spread=0., extent=None, gpts=None, sampling=None, energy=None,
-                 parametrization='polar', parameters=None, **kwargs):
+                 parameters=None, **kwargs):
 
-        self._cutoff = np.float32(cutoff)
-        self._rolloff = np.float32(rolloff)
-        self._focal_spread = np.float32(focal_spread)
+        self._cutoff = cutoff
+        self._rolloff = rolloff
+        self._focal_spread = focal_spread
 
-        if parametrization == 'polar':
-
-            self._symbols = polar_symbols
-            self._aliases = polar_aliases
-
-        else:
-            raise RuntimeError('parametrization {} not recognized')
-
-        self._parametrization = parametrization
-        self._parameters = dict(zip(self._symbols, [0.] * len(self._symbols)))
+        self._parameters = dict(zip(polar_symbols, [0.] * len(polar_symbols)))
 
         if parameters is None:
             parameters = {}
@@ -112,93 +103,65 @@ class CTF(Energy, Grid, HasCache, Observable):
 
         self.set_parameters(parameters)
 
-        for symbol in self._symbols:
+        for symbol in polar_symbols:
             setattr(self.__class__, symbol, parametrization_property(symbol))
 
-        for key, value in self._aliases.items():
+        for key, value in polar_aliases.items():
             setattr(self.__class__, key, parametrization_property(value))
 
-        Energy.__init__(self, energy=energy)
-        Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
-        HasCache.__init__(self)
-        Observable.__init__(self, self_observe=True)
+        super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy)
 
     cutoff = notifying_property('_cutoff')
     rolloff = notifying_property('_rolloff')
     focal_spread = notifying_property('_focal_spread')
 
-    def set_parameters(self, parameters):
+    def set_parameters(self, parameters, parametrization='polar'):
+        if parametrization != 'polar':
+            raise NotImplementedError()
+
         for symbol, value in parameters.items():
             if symbol in self._parameters.keys():
-                self._parameters[symbol] = np.float32(value)
+                self._parameters[symbol] = value
 
-            elif symbol in self._aliases.keys():
-                self._parameters[self._aliases[symbol]] = np.float32(value)
+            elif symbol in polar_aliases.keys():
+                self._parameters[polar_aliases[symbol]] = value
 
             else:
                 raise RuntimeError('{}'.format(symbol))
 
         return parameters
 
-    def notify(self, observable, message):
-        if message['change']:
-            if message['name'] in ('extent', 'gpts', 'sampling', 'energy'):
-                self.clear_cache()
-
-            if message['name'] in ('_cutoff', '_rolloff'):
-                self._cached.pop('get_aperture', None)
-                # self._cached.pop('get_normalization_constant', None)
-
-            if message['name'] in ('_focal_spread'):
-                self._cached.pop('get_temporal_envelope', None)
-                # self._cached.pop('get_normalization_constant', None)
-
-            if message['name'] in self._symbols:
-                self._cached.pop('get_aberrations', None)
-
-            self._cached.pop('get_ctf', None)
-
-    @cached_method
+    @cached_method(('extent', 'gpts', 'sampling', 'energy'))
     def get_alpha(self):
+        self.check_is_grid_defined()
+        self.check_is_energy_defined()
         return np.sqrt(squared_norm(*semiangles(self)))
 
-    @cached_method
+    @cached_method(('extent', 'gpts', 'sampling', 'energy'))
     def get_phi(self):
+        self.check_is_grid_defined()
+        self.check_is_energy_defined()
         alpha_x, alpha_y = semiangles(self)
         phi = np.arctan2(alpha_x.reshape((-1, 1)), alpha_y.reshape((1, -1)))
         return phi
 
-    @cached_method
+    @cached_method(('extent', 'gpts', 'sampling', 'energy', '_cutoff', '_rolloff'))
     def get_aperture(self):
-        self.check_is_grid_defined()
-        self.check_is_energy_defined()
         alpha = self.get_alpha()
         return calculate_aperture(alpha, self.cutoff, self.rolloff)
 
-    @cached_method
+    @cached_method(('extent', 'gpts', 'sampling', 'energy', '_focal_spread'))
     def get_temporal_envelope(self):
-        self.check_is_grid_defined()
-        self.check_is_energy_defined()
         alpha = self.get_alpha()
         return calculate_temporal_envelope(alpha, self.wavelength, self.focal_spread)
 
-    @cached_method
+    @cached_method(('extent', 'gpts', 'sampling', 'energy') + polar_symbols)
     def get_aberrations(self):
-        self.check_is_grid_defined()
-        self.check_is_energy_defined()
-        if self._parametrization == 'polar':
-            alpha = self.get_alpha()
-            phi = self.get_phi()
-            return calculate_polar_aberrations(alpha, phi, self.wavelength, self._parameters)
+        alpha = self.get_alpha()
+        phi = self.get_phi()
+        return calculate_polar_aberrations(alpha, phi, self.wavelength, self._parameters)
 
-        else:
-            raise RuntimeError('parametrization {} not recognized')
-
-    # @cached_method
-    # def get_normalization_constant(self):
-    #     return np.sum(np.abs(self.get_ctf()))
-
-    @cached_method
+    @cached_method('any')
     def get_ctf(self):
         array = self.get_aberrations()
 

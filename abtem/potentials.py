@@ -44,7 +44,7 @@ class PotentialBase(Grid):
         else:
             self._num_slices = num_slices
 
-        Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
+        super().__init__(extent=extent, gpts=gpts, sampling=sampling)
 
     @property
     def origin(self):
@@ -80,7 +80,7 @@ class PotentialBase(Grid):
         return PrecalculatedPotential(array, self.thickness, self.extent)
 
 
-class Potential(HasCache, PotentialBase):
+class Potential(PotentialBase, HasCache):
 
     def __init__(self, atoms, origin=None, extent=None, gpts=None, sampling=None, slice_thickness=.5, num_slices=None,
                  parametrization='lobato', method='interpolation', tolerance=1e-3):
@@ -106,9 +106,8 @@ class Potential(HasCache, PotentialBase):
             else:
                 raise RuntimeError()
 
-        PotentialBase.__init__(self, atoms=atoms.copy(), origin=origin, extent=extent, gpts=gpts, sampling=sampling,
-                               num_slices=num_slices, slice_thickness=slice_thickness)
-        HasCache.__init__(self)
+        super().__init__(atoms=atoms.copy(), origin=origin, extent=extent, gpts=gpts, sampling=sampling,
+                         num_slices=num_slices, slice_thickness=slice_thickness)
 
     @property
     def tolerance(self):
@@ -133,7 +132,7 @@ class Potential(HasCache, PotentialBase):
     def get_atoms(self, cutoff=0.):
         return make_orthogonal_atoms(self.atoms, self._origin, self.extent, cutoff=cutoff)
 
-    @cached_method
+    @cached_method()
     def _prepare_interpolation(self):
         unique_atomic_numbers = np.unique(self._atoms.get_atomic_numbers())
 
@@ -213,9 +212,9 @@ def import_potential(path):
 class PrecalculatedPotential(ArrayWithGrid):
 
     def __init__(self, array, thickness, extent=None, sampling=None):
-        ArrayWithGrid.__init__(self, array, 3, 2, extent=extent, sampling=sampling, space='direct')
-
         self._thickness = thickness
+        super().__init__(array=array, array_dimensions=3, spatial_dimensions=2, extent=extent, sampling=sampling,
+                         space='direct')
 
     @property
     def thickness(self):

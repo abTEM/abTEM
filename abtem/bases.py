@@ -47,10 +47,11 @@ def xy_property(component, name):
     return property(getter, setter)
 
 
-class Observable(object):
-    def __init__(self, self_observe=False):
+class Observable:
+
+    def __init__(self, **kwargs):
         self._observers = []
-        self.self_observe = self_observe
+        super().__init__()
 
     def register_observer(self, observer):
         if observer not in self._observers:
@@ -60,16 +61,11 @@ class Observable(object):
         for observer in self._observers:
             observer.notify(self, message)
 
-        if self.self_observe:
-            return self
 
+class Observer:
 
-class Observer(object):
-    def __init__(self, observable=None):
-        self._observing = []
-
-        if observable:
-            self.observe(observable)
+    def __init__(self, **kwargs):
+        super().__init__()
 
     def observe(self, observable):
         observable.register_observer(self)
@@ -78,52 +74,86 @@ class Observer(object):
         raise NotImplementedError()
 
 
-def cached_method(func):
-    def new_func(*args):
-        self = args[0]
-        try:
-            return self._cached[func.__name__]
-        except:
-            self._cached[func.__name__] = func(*args)
-            return self._cached[func.__name__]
+class SelfObservable(Observable, Observer):
 
-    return new_func
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def notify_observers(self, message):
+        super().notify_observers(message)
+        self.notify(self, message)
 
 
-def cached_method_with_args(func):
-    def new_func(*args):
-        self = args[0]
-        try:
-            return self._cached[func.__name__][args[1:]]
-        except:
-            value = func(*args)
+# def cached_method(func):
+#     def new_func(*args):
+#         self = args[0]
+#         try:
+#             return self._cached[func.__name__]
+#         except:
+#             self._cached[func.__name__] = func(*args)
+#             return self._cached[func.__name__]
+#
+#     return new_func
 
+
+def cached_method(clear_conditions='any'):
+    def wrapper(func):
+        def new_func(*args):
+            self = args[0]
             try:
-                self._cached[func.__name__][args[1:]] = value
+                return self._cached[func.__name__]
             except:
-                self._cached[func.__name__] = {}
-                self._cached[func.__name__][args[1:]] = value
+                self._cached[func.__name__] = func(*args)
+                self._clear_conditions[func.__name__] = clear_conditions
+                return self._cached[func.__name__]
 
-            return self._cached[func.__name__][args[1:]]
+        return new_func
 
-    return new_func
+    return wrapper
+
+
+# def cached_method_with_args(func):
+#     def new_func(*args):
+#         self = args[0]
+#         try:
+#             return self._cached[func.__name__][args[1:]]
+#         except:
+#             value = func(*args)
+#
+#             try:
+#                 self._cached[func.__name__][args[1:]] = value
+#             except:
+#                 self._cached[func.__name__] = {}
+#                 self._cached[func.__name__][args[1:]] = value
+#
+#             return self._cached[func.__name__][args[1:]]
+#
+#     return new_func
 
 
 class HasCache(Observer):
 
-    def __init__(self):
-        Observer.__init__(self)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         self._cached = {}
+        self._clear_conditions = {}
 
     def notify(self, observable, message):
+        pop = []
         if message['change']:
-            self.clear_cache()
+            for name, conditions in self._clear_conditions.items():
+                if (conditions == 'any') | (message['name'] in conditions):
+                    pop.append(name)
+
+        for name in pop:
+            self._cached.pop(name, None)
+            self._clear_conditions.pop(name, None)
 
     def clear_cache(self):
         self._cached = {}
 
 
-class GridProperty(object):
+class GridProperty:
 
     def __init__(self, value, dtype, locked=False, dimensions=2):
         self._dtype = dtype
@@ -175,10 +205,7 @@ class GridProperty(object):
 
 class Grid(Observable):
 
-    def __init__(self, extent=None, gpts=None, sampling=None, dimensions=2, endpoint=False):
-
-        Observable.__init__(self)
-
+    def __init__(self, extent=None, gpts=None, sampling=None, dimensions=2, endpoint=False, **kwargs):
         self._dimensions = dimensions
         self._endpoint = endpoint
 
@@ -214,6 +241,8 @@ class Grid(Observable):
 
         if (gpts is not None) & (self.extent is not None):
             self._sampling.value = self._adjusted_sampling(self.extent, self.gpts)
+
+        super().__init__(**kwargs)
 
     @property
     def endpoint(self):
@@ -395,10 +424,9 @@ def energy2sigma(energy):
 
 class Energy(Observable):
 
-    def __init__(self, energy=None):
-        Observable.__init__(self)
-
+    def __init__(self, energy=None, **kwargs):
         self._energy = energy
+        super().__init__(**kwargs)
 
     energy = notifying_property('_energy')
 
@@ -430,12 +458,9 @@ class Energy(Observable):
         return self.__class__(self.energy)
 
 
-def get_gpts(obj):
-    return obj.gpts
-
-
 class ArrayWithGrid(Grid):
-    def __init__(self, array, array_dimensions, spatial_dimensions, extent=None, sampling=None, space='direct'):
+    def __init__(self, array, array_dimensions, spatial_dimensions, extent=None, sampling=None, space='direct',
+                 **kwargs):
 
         if array_dimensions < spatial_dimensions:
             raise RuntimeError()
@@ -444,11 +469,10 @@ class ArrayWithGrid(Grid):
             raise RuntimeError('array shape {} not {}d'.format(array.shape, array_dimensions))
 
         self._array = array
-
-        gpts = GridProperty(get_gpts, dtype=np.int32, locked=True, dimensions=spatial_dimensions)
-        Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling, dimensions=spatial_dimensions)
-
         self.space = space
+
+        gpts = GridProperty(value=lambda obj: obj.gpts, dtype=np.int, locked=True, dimensions=spatial_dimensions)
+        super().__init__(extent=extent, gpts=gpts, sampling=sampling, dimensions=spatial_dimensions, **kwargs)
 
     @property
     def gpts(self):

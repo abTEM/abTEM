@@ -18,7 +18,6 @@ def index_disc(distance):
     return x_disc, y_disc
 
 
-
 def non_maximum_suppresion(markers, distance, threshold=None):
     shape = markers.shape
 

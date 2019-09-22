@@ -1,16 +1,13 @@
 import numpy as np
 
-from abtem.bases import Grid, Energy, HasCache, Observable, notifying_property, cached_method
+from abtem.bases import Grid, Energy, HasCache, SelfObservable, notifying_property, cached_method
 from abtem.utils import squared_norm, semiangles
 from skimage.transform import resize
 
 
-class DetectorBase(object):
+class DetectorBase:
 
-    # def __init__(self, extent=None, gpts=None, sampling=None):
-    #    Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
-
-    def __init__(self, export=None):
+    def __init__(self, export=None, **kwargs):
         if export is not None:
             if not export.endswith('.hdf5'):
                 self._export = export + '.hdf5'
@@ -19,6 +16,8 @@ class DetectorBase(object):
 
         else:
             self._export = None
+
+        super().__init__(**kwargs)
 
     @property
     def export(self):
@@ -31,16 +30,14 @@ class DetectorBase(object):
         raise NotImplementedError()
 
 
-class PtychographyDetector(DetectorBase, Energy, Grid):
+class PtychographyDetector(Energy, Grid, DetectorBase):
 
     def __init__(self, max_angle=None, resize_isotropic=False, extent=None, gpts=None, sampling=None, energy=None,
                  export=None):
         self._resize_isotropic = resize_isotropic
         self._crop_to_angle = max_angle
 
-        Energy.__init__(self, energy=energy)
-        Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
-        DetectorBase.__init__(self, export=export)
+        super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy, export=export)
 
     @property
     def export(self):
@@ -85,7 +82,7 @@ class PtychographyDetector(DetectorBase, Energy, Grid):
         return intensity
 
 
-class RingDetector(DetectorBase, Energy, Grid, HasCache, Observable):
+class RingDetector(DetectorBase, Energy, Grid, HasCache, SelfObservable):
 
     def __init__(self, inner, outer, rolloff=0., integrate=True, extent=None, gpts=None, sampling=None, energy=None,
                  export=None):
@@ -95,11 +92,7 @@ class RingDetector(DetectorBase, Energy, Grid, HasCache, Observable):
         self._rolloff = rolloff
         self._integrate = integrate
 
-        Energy.__init__(self, energy=energy)
-        Grid.__init__(self, extent=extent, gpts=gpts, sampling=sampling)
-        HasCache.__init__(self)
-        Observable.__init__(self, self_observe=True)
-        DetectorBase.__init__(self, export=export)
+        super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy, export=export)
 
     inner = notifying_property('_inner')
     outer = notifying_property('_outer')
@@ -109,7 +102,7 @@ class RingDetector(DetectorBase, Energy, Grid, HasCache, Observable):
     def out_shape(self):
         return (1,)
 
-    @cached_method
+    @cached_method()
     def get_efficiency(self):
 
         self.check_is_grid_defined()
