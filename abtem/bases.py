@@ -112,23 +112,27 @@ def cached_method(clear_conditions='any'):
     return wrapper
 
 
-# def cached_method_with_args(func):
-#     def new_func(*args):
-#         self = args[0]
-#         try:
-#             return self._cached[func.__name__][args[1:]]
-#         except:
-#             value = func(*args)
-#
-#             try:
-#                 self._cached[func.__name__][args[1:]] = value
-#             except:
-#                 self._cached[func.__name__] = {}
-#                 self._cached[func.__name__][args[1:]] = value
-#
-#             return self._cached[func.__name__][args[1:]]
-#
-#     return new_func
+def cached_method_with_args(clear_conditions='any'):
+    def wrapper(func):
+        def new_func(*args):
+            self = args[0]
+            try:
+                return self._cached[func.__name__][args[1:]]
+            except:
+                value = func(*args)
+
+                try:
+                    self._cached[func.__name__][args[1:]] = value
+                except:
+                    self._cached[func.__name__] = {}
+                    self._cached[func.__name__][args[1:]] = value
+                    self._clear_conditions[func.__name__] = clear_conditions
+
+                return self._cached[func.__name__][args[1:]]
+
+        return new_func
+
+    return wrapper
 
 
 class HasCache(Observer):

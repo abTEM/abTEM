@@ -1,6 +1,7 @@
 import numexpr as ne
 import numpy as np
 from numba import njit
+from tqdm.auto import tqdm
 
 
 def complex_exponential(x):
@@ -47,7 +48,26 @@ def ind2sub(array_shape, ind):
     return (rows, cols)
 
 
-class BatchGenerator(object):
+def split_integer(n, m):
+    if n < m:
+        raise RuntimeError()
+
+    elif n % m == 0:
+        return [n // m] * m
+    else:
+        v = []
+        zp = m - (n % m)
+        pp = n // m
+        for i in range(m):
+            if i >= zp:
+                v.append(pp + 1)
+            else:
+                v.append(pp)
+
+        return v
+
+
+class BatchGenerator:
 
     def __init__(self, n_items, max_batch_size):
         self._n_items = n_items
@@ -66,9 +86,9 @@ class BatchGenerator(object):
     def n_items(self):
         return self._n_items
 
-    def generate(self, show_progress):
+    def generate(self, show_progress=False):
         batch_start = 0
-        for i in range(self.n_batches):
+        for i in tqdm(range(self.n_batches), disable=not show_progress):
             batch_end = batch_start + self.batch_size
             if i == self.n_batches - 1:
                 yield batch_start, self.n_items - batch_end + self.batch_size

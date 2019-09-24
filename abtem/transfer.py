@@ -61,9 +61,9 @@ def calculate_aperture(alpha, cutoff, rolloff):
     if rolloff > 0.:
         array = .5 * (1 + np.cos(np.pi * (alpha - cutoff) / rolloff))
         array *= alpha < (cutoff + rolloff)
-        array = np.where(alpha > cutoff, array, np.ones(alpha.shape, dtype=np.float32))
+        array = np.where(alpha > cutoff, array, np.ones_like(alpha))
     else:
-        array = np.float32(alpha < cutoff)
+        array = np.array(alpha < cutoff).astype(np.float)
     return array
 
 

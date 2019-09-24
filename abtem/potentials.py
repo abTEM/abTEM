@@ -17,7 +17,8 @@ kappa = 4 * np.pi * eps0 / (2 * np.pi * units.Bohr * units._e * units.C)
 
 class PotentialBase(Grid):
 
-    def __init__(self, atoms, origin=None, extent=None, gpts=None, sampling=None, num_slices=None, slice_thickness=.5):
+    def __init__(self, atoms, origin=None, extent=None, gpts=None, sampling=None, num_slices=None,
+                 slice_thickness=None):
 
         if np.abs(atoms.cell[0, 0]) < 1e-12:
             raise RuntimeError('atoms has no thickness')
@@ -41,6 +42,7 @@ class PotentialBase(Grid):
                 raise RuntimeError()
 
             self._num_slices = int(np.floor(atoms.cell[2, 2] / slice_thickness))
+
         else:
             self._num_slices = num_slices
 
@@ -58,18 +60,12 @@ class PotentialBase(Grid):
     def thickness(self):
         return self._atoms.cell[2, 2]
 
-    @property
-    def slice_thickness(self):
-        return self.thickness / self.num_slices
-
     def get_slice(self, i):
-        raise NotImplementedError
+        if i >= self.num_slices:
+            raise RuntimeError()
 
-    def slice_entrance(self, i):
-        return i * self.slice_thickness
-
-    def slice_exit(self, i):
-        return (i + 1) * self.slice_thickness
+    def slice_thickness(self, i):
+        raise NotImplementedError()
 
     def precalculate(self):
         array = np.zeros((self.num_slices,) + (self.gpts[0], self.gpts[1]))
@@ -108,6 +104,9 @@ class Potential(PotentialBase, HasCache):
 
         super().__init__(atoms=atoms.copy(), origin=origin, extent=extent, gpts=gpts, sampling=sampling,
                          num_slices=num_slices, slice_thickness=slice_thickness)
+
+    def slice_thickness(self, i):
+        return self.thickness / self.num_slices
 
     @property
     def tolerance(self):
@@ -177,8 +176,8 @@ class Potential(PotentialBase, HasCache):
             block_margin = int(r_cut / min(self.sampling))
             block_size = 2 * block_margin + 1
 
-            positions = positions[np.abs(self.slice_entrance(i) + self.slice_thickness / 2 - positions[:, 2]) <
-                                  (r_cut + self.slice_thickness / 2)]
+            positions = positions[np.abs(i * self.slice_thickness(i) + self.slice_thickness(i) / 2 - positions[:, 2]) <
+                                  (r_cut + self.slice_thickness(i) / 2)]
 
             corner_positions = np.round(positions[:, :2] / self.sampling).astype(np.int) - block_margin
             block_positions = positions[:, :2] - self.sampling * corner_positions
@@ -186,8 +185,8 @@ class Potential(PotentialBase, HasCache):
             x = np.linspace(0., block_size * self.sampling[0] - self.sampling[0], block_size)
             y = np.linspace(0., block_size * self.sampling[1] - self.sampling[1], block_size)
 
-            z0 = self.slice_entrance(i) - positions[:, 2]
-            z1 = self.slice_exit(i) - positions[:, 2]
+            z0 = i * self.slice_thickness(i) - positions[:, 2]
+            z1 = (i + 1) * self.slice_thickness(i) - positions[:, 2]
 
             vr = self._projected_func(r, r_cut, v_cut, dvdr_cut, z0, z1, num_integration_samples, *parameters)
 
@@ -230,8 +229,9 @@ class PrecalculatedPotential(ArrayWithGrid):
 
     def repeat(self, multiples):
         assert len(multiples) == 2
-        self._array = np.tile(self._array, (1,) + multiples)
-        self.extent = multiples * self.extent
+        new_array = np.tile(self._array, (1,) + multiples)
+        new_extent = multiples * self.extent
+        return self.__class__(array=new_array, thickness=self.thickness, extent=new_extent)
 
     def downsample(self):
         N, M = self.gpts

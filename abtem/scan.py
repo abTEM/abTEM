@@ -1,26 +1,7 @@
 import numpy as np
 
 from abtem.bases import Grid
-from abtem.utils import BatchGenerator
-
-
-def split_integer(n, m):
-    if n < m:
-        raise RuntimeError()
-
-    elif n % m == 0:
-        return [n // m] * m
-    else:
-        v = []
-        zp = m - (n % m)
-        pp = n // m
-        for i in range(m):
-            if i >= zp:
-                v.append(pp + 1)
-            else:
-                v.append(pp)
-
-        return v
+from abtem.utils import BatchGenerator, split_integer
 
 
 class Scan(object):

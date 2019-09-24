@@ -6,6 +6,7 @@ from abtem.bases import cached_method, HasCache
 from abtem.transform import make_orthogonal_atoms, make_orthogonal_array
 from abtem.potentials import PotentialBase
 from abtem.interpolation import interpolation_kernel
+from abtem.utils import split_integer
 
 
 def gaussian(radial_grid, alpha):
@@ -61,23 +62,25 @@ class GPAWPotential(PotentialBase, HasCache):
 
     def __init__(self, calc, origin=None, extent=None, gpts=None, sampling=None, num_slices=None, slice_thickness=.5,
                  sigma=.01):
-
         self._calc = calc
         self._sigma = sigma
 
-        PotentialBase.__init__(self, atoms=calc.atoms.copy(), origin=origin, extent=extent, gpts=gpts,
-                               sampling=sampling, num_slices=num_slices, slice_thickness=slice_thickness)
-        HasCache.__init__(self)
+        super().__init__(atoms=calc.atoms.copy(), origin=origin, extent=extent, gpts=gpts,
+                         sampling=sampling, num_slices=num_slices, slice_thickness=slice_thickness)
 
-        if not (calc.hamiltonian.finegd.N_c[2] % self.num_slices == 0):
-            raise RuntimeError('{} {}'.format(calc.hamiltonian.finegd.N_c[2], self.num_slices))
+        self._Nz = calc.hamiltonian.finegd.N_c[2]
+        self._nz = split_integer(self._Nz, self.num_slices)
+        self._dz = self.thickness / self._Nz
+
+        # if not (calc.hamiltonian.finegd.N_c[2] % self.num_slices == 0):
+        #    raise RuntimeError('{} {}'.format(calc.hamiltonian.finegd.N_c[2], self.num_slices))
 
     def _prepare_paw_corrections(self):
         paw_corrections = get_paw_corrections(self._calc, rcgauss=self._sigma)
         max_cutoff = max([spline.get_cutoff() for spline in paw_corrections.values()]) * units.Bohr
         return paw_corrections, max_cutoff
 
-    @cached_method
+    @cached_method()
     def _prepare_electrostatic_potential(self):
         return self._calc.get_electrostatic_potential()
 
@@ -85,18 +88,19 @@ class GPAWPotential(PotentialBase, HasCache):
     def get_atoms(self, cutoff=0.):
         return make_orthogonal_atoms(self._atoms, self._origin, self.extent, cutoff=cutoff, return_equivalent=True)
 
+    def slice_thickness(self, i):
+        return self._nz[i] * self._dz
+
     def get_slice(self, i):
+        super().get_slice(i)
+
+        start = np.sum(self._nz[:i], dtype=np.int)
+        stop = np.sum(self._nz[:i + 1], dtype=np.int)
+        slice_entrance = start * self._dz
+        slice_exit = stop * self._dz
+
         array = self._prepare_electrostatic_potential()
-
-        nz = array.shape[-1] // self.num_slices
-        dz = self._atoms.cell[2, 2] / array.shape[-1]
-
-        start = i * nz
-        stop = (i + 1) * nz
-        slice_entrance = start * dz
-        slice_exit = stop * dz
-
-        array = array[..., start:stop].sum(axis=-1) * dz
+        array = array[..., start:stop].sum(axis=-1) * self._dz
 
         array = make_orthogonal_array(array, self._calc.atoms.cell[:2, :2], self._origin, self.extent, self.gpts)
         array = self._get_projected_paw_corrections(slice_entrance, slice_exit) - array
@@ -138,7 +142,7 @@ class GPAWPotential(PotentialBase, HasCache):
             x = np.linspace(0., block_size * self.sampling[0] - self.sampling[0], block_size)
             y = np.linspace(0., block_size * self.sampling[1] - self.sampling[1], block_size)
 
-            interpolation_kernel(v, r, vr, r_cut, corner_positions, block_positions, x, y)
+            interpolation_kernel(v, r, vr, corner_positions, block_positions, x, y)
 
         return - v / np.sqrt(4 * np.pi) * units.Ha
 

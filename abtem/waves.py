@@ -4,11 +4,12 @@ import h5py
 import numpy as np
 from ase import Atoms
 
-from abtem.bases import cached_method, HasCache, ArrayWithGrid, Grid, Energy, notifying_property
+from abtem.bases import cached_method, HasCache, ArrayWithGrid, Grid, Energy, notifying_property, \
+    cached_method_with_args
 from abtem.potentials import Potential
 from abtem.scan import GridScan, LineScan
 from abtem.transfer import CTF
-from abtem.utils import complex_exponential, fourier_propagator, fftfreq
+from abtem.utils import complex_exponential, fourier_propagator, fftfreq, squared_norm, BatchGenerator
 
 USE_FFTW = True
 
@@ -16,28 +17,34 @@ if USE_FFTW:
     import pyfftw as fftw
 
 
+class FourierPropagator(Energy, Grid, HasCache):
+
+    def __init__(self, extent=None, gpts=None, sampling=None, energy=None):
+        super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy)
+
+    @cached_method_with_args()
+    def get_array(self, dz):
+        self.check_is_grid_defined()
+        self.check_is_energy_defined()
+        kx = np.fft.fftfreq(self.gpts[0], self.sampling[0])
+        ky = np.fft.fftfreq(self.gpts[1], self.sampling[1])
+        k = (kx ** 2)[:, None] + (ky ** 2)[None]
+        return complex_exponential(-k * np.pi * self.wavelength * dz)[None]
+
+
 class Waves(ArrayWithGrid, Energy, HasCache):
 
     def __init__(self, array, extent=None, sampling=None, energy=None):
-        array = np.array(array, dtype=np.complex64)
+        array = np.array(array, dtype=np.complex)
 
         if len(array.shape) == 2:
             array = array[None]
 
         if len(array.shape) != 3:
             raise RuntimeError('array must be 2d or 3d')
+
         super().__init__(array=array, array_dimensions=3, spatial_dimensions=2, extent=extent, sampling=sampling,
                          space='direct', energy=energy)
-        # super().__init__(array=array, array_dimensions=3, spatial_dimensions=2, extent=extent, sampling=sampling,
-        #                  space='direct', energy=energy)
-
-    @cached_method()
-    def get_fourier_propagator(self, dz):
-        self.check_is_grid_defined()
-        self.check_is_energy_defined()
-        kx = np.fft.fftfreq(self.gpts[0], self.sampling[0])
-        ky = np.fft.fftfreq(self.gpts[1], self.sampling[1])
-        return fourier_propagator((kx ** 2)[:, None] + (ky ** 2)[None], dz, self.wavelength)[None]
 
     def apply_ctf(self, ctf=None, in_place=False, **kwargs):
         if ctf is None:
@@ -54,12 +61,11 @@ class Waves(ArrayWithGrid, Energy, HasCache):
         self.check_is_energy_defined()
 
         ctf_array = np.expand_dims(ctf.get_array(), axis=0)
-
         array = np.fft.ifft2(np.fft.fft2(self.array) * ctf_array)
 
         return self.__class__(array, extent=self.extent, energy=self.energy)
 
-    def multislice(self, potential, in_place=False, show_progress=False):
+    def multislice(self, potential, propagator=None, in_place=False, show_progress=False):
         if isinstance(potential, Atoms):
             potential = Potential(atoms=potential)
 
@@ -72,7 +78,8 @@ class Waves(ArrayWithGrid, Energy, HasCache):
         wave.check_is_grid_defined()
         wave.check_is_energy_defined()
 
-        propagator = self.get_fourier_propagator(potential.slice_thickness)
+        if propagator is None:
+            propagator = FourierPropagator(extent=self.extent, gpts=self.gpts, energy=self.energy)
 
         if USE_FFTW:
             temp_1 = fftw.empty_aligned(wave._array.shape, dtype='complex64')
@@ -85,12 +92,13 @@ class Waves(ArrayWithGrid, Energy, HasCache):
 
             if USE_FFTW:
                 temp_1[:] = wave._array * complex_exponential(wave.sigma * potential_slice)
-                temp_2[:] = fft_object_forward() * propagator
+                temp_2[:] = fft_object_forward() * propagator.get_array(potential.slice_thickness)
                 wave._array[:] = fft_object_backward()
 
             else:
                 wave._array[:] = np.fft.ifft2(
-                    np.fft.fft2(wave._array * complex_exponential(wave.sigma * potential_slice)) * propagator)
+                    np.fft.fft2(wave._array * complex_exponential(wave.sigma * potential_slice)) *
+                    propagator.get_array(potential.slice_thickness))
 
         return wave
 
@@ -116,9 +124,7 @@ class PlaneWaves(Grid, Energy, HasCache):
     def multislice(self, potential):
         if isinstance(potential, Atoms):
             potential = Potential(atoms=potential)
-
         self.match_grid(potential)
-
         return self.build().multislice(potential, in_place=True)
 
     @cached_method()
@@ -179,11 +185,10 @@ def translate(positions, kx, ky):
 class ProbeWaves(CTF, Probebase):
 
     def __init__(self, cutoff=np.inf, rolloff=0., focal_spread=0., extent=None, gpts=None, sampling=None, energy=None,
-                 parametrization='polar', parameters=None, **kwargs):
+                 parameters=None, **kwargs):
 
         super().__init__(cutoff=cutoff, rolloff=rolloff, focal_spread=focal_spread, extent=extent, gpts=gpts,
-                         sampling=sampling, energy=energy, parametrization=parametrization, parameters=parameters,
-                         **kwargs)
+                         sampling=sampling, energy=energy, parameters=parameters, **kwargs)
 
     def build_at(self, positions, wrap=True):
         positions = np.array(positions)
@@ -263,11 +268,11 @@ class ProbeWaves(CTF, Probebase):
             else:
                 scan.measurements[detector] = np.zeros(data_shape)
 
+        propagator = FourierPropagator(extent=self.extent, gpts=self.gpts, energy=self.energy)
+
         for start, stop, positions in scan.generate_positions(max_batch, show_progress=show_progress):
-
             waves = self.build_at(positions)
-
-            waves = waves.multislice(potential, in_place=True, show_progress=False)
+            waves = waves.multislice(potential, propagator=propagator, in_place=True, show_progress=False)
 
             for detector in detectors:
                 if detector.export is not None:
@@ -287,16 +292,20 @@ class ProbeWaves(CTF, Probebase):
 
 class PrismWaves(CTF):
 
-    def __init__(self, interpolation=1., **kwargs):
+    def __init__(self, interpolation=1., cutoff=.03, rolloff=0., focal_spread=0., extent=None, gpts=None, sampling=None,
+                 energy=None, parameters=None, **kwargs):
         self._interpolation = interpolation
 
-        super().__init__(cutoff=np.inf, rolloff=0., focal_spread=0., extent=None, gpts=None, sampling=None, energy=None,
-                         parametrization='polar', parameters=None, **kwargs)
+        super().__init__(cutoff=cutoff, rolloff=rolloff, focal_spread=focal_spread, extent=extent, gpts=gpts,
+                         sampling=sampling, energy=energy, parameters=parameters, **kwargs)
 
     interpolation = notifying_property('_interpolation')
 
     @cached_method()
     def get_spatial_frequencies(self):
+        self.check_is_grid_defined()
+        self.check_is_energy_defined()
+
         n_max = np.ceil(self.cutoff / (self.wavelength / self.extent[0] * self.interpolation))
         m_max = np.ceil(self.cutoff / (self.wavelength / self.extent[1] * self.interpolation))
 
@@ -308,3 +317,34 @@ class PrismWaves(CTF):
 
         return kx[mask], ky[mask]
 
+    @cached_method(('extent', 'gpts', 'sampling', 'energy'))
+    def get_alpha(self):
+        kx, ky = self.get_spatial_frequencies()
+        return np.sqrt(kx ** 2 + ky ** 2)
+
+    @cached_method(('extent', 'gpts', 'sampling', 'energy'))
+    def get_phi(self):
+        kx, ky = self.get_spatial_frequencies()
+        phi = np.arctan2(kx, ky)
+        return phi
+
+    def generate_expansion(self, max_batch_size=None):
+        x = np.linspace(0, self.extent[0], self.gpts[0], endpoint=self.endpoint)
+        y = np.linspace(0, self.extent[1], self.gpts[1], endpoint=self.endpoint)
+        kx, ky = self.get_spatial_frequencies()
+
+        if max_batch_size is None:
+            max_batch_size = len(kx)
+
+        batch_generator = BatchGenerator(len(kx), max_batch_size)
+
+        for start, length in batch_generator.generate():
+            yield complex_exponential(-2 * np.pi * (kx[start:start + length, None, None] * x[None, :, None] +
+                                                    ky[start:start + length, None, None] * y[None, None, :]))
+
+    def multislice(self):
+
+        propagator = FourierPropagator(extent=self.extent, gpts=self.gpts, energy=self.energy)
+
+        for waves in self.generate_expansion():
+            pass
