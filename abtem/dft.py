@@ -130,7 +130,7 @@ class GPAWPotential(PotentialBase, HasCache):
             z0 = slice_entrance - position[2]
             z1 = slice_exit - position[2]
 
-            r = np.linspace(min(self.sampling) / 2 / units.Bohr, r_cut, num_spline_nodes)
+            r = np.linspace(min(self.sampling) / 2. / units.Bohr, r_cut, num_spline_nodes)
             vr = project_spherical_function(func.map, r, z0 / units.Bohr, z1 / units.Bohr,
                                             num_samples=num_integration_samples) * units.Bohr
 
