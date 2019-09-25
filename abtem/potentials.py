@@ -224,8 +224,7 @@ class PrecalculatedPotential(ArrayWithGrid):
     def num_slices(self):
         return self._array.shape[0]
 
-    @property
-    def slice_thickness(self):
+    def slice_thickness(self, i):
         return self.thickness / self.num_slices
 
     def repeat(self, multiples):

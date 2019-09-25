@@ -98,7 +98,7 @@ class Waves(ArrayWithGrid, Energy, HasCache):
             else:
                 wave._array[:] = np.fft.ifft2(
                     np.fft.fft2(wave._array * complex_exponential(wave.sigma * potential_slice)) *
-                    propagator.get_array(potential.slice_thickness))
+                    propagator.get_array(potential.slice_thickness(i)))
 
         return wave
 
@@ -251,8 +251,6 @@ class ProbeWaves(CTF, Probebase):
             detector.match_energy(self)
 
             data_shape = (int(np.prod(scan.gpts)),) + tuple(n for n in detector.out_shape if n > 1)
-
-            print(detector.export)
 
             if detector.export is not None:
                 f = h5py.File(detector.export, 'w')

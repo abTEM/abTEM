@@ -51,7 +51,7 @@ class Observable:
 
     def __init__(self, **kwargs):
         self._observers = []
-        super().__init__()
+        super().__init__(**kwargs)
 
     def register_observer(self, observer):
         if observer not in self._observers:
@@ -65,7 +65,7 @@ class Observable:
 class Observer:
 
     def __init__(self, **kwargs):
-        super().__init__()
+        super().__init__(**kwargs)
 
     def observe(self, observable):
         observable.register_observer(self)
