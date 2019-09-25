@@ -8,6 +8,7 @@ from skimage.transform import resize
 class DetectorBase:
 
     def __init__(self, export=None, **kwargs):
+
         if export is not None:
             if not export.endswith('.hdf5'):
                 self._export = export + '.hdf5'
@@ -30,7 +31,7 @@ class DetectorBase:
         raise NotImplementedError()
 
 
-class PtychographyDetector(Energy, Grid, DetectorBase):
+class PtychographyDetector(DetectorBase, Energy, Grid):
 
     def __init__(self, max_angle=None, resize_isotropic=False, extent=None, gpts=None, sampling=None, energy=None,
                  export=None):
@@ -38,10 +39,6 @@ class PtychographyDetector(Energy, Grid, DetectorBase):
         self._crop_to_angle = max_angle
 
         super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy, export=export)
-
-    @property
-    def export(self):
-        return self._export
 
     @property
     def out_shape(self):
