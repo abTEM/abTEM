@@ -254,7 +254,7 @@ class PrecalculatedPotential(ArrayWithGrid):
         if first >= last:
             raise RuntimeError()
 
-        thickness = self.slice_thickness * (last - first)
+        thickness = self.slice_thickness(0) * (last - first)
         return self.__class__(array=self.array[first:last], thickness=thickness, extent=self.extent)
 
     def export(self, path, overwrite=False):
