@@ -261,8 +261,8 @@ class PrecalculatedPotential(ArrayWithGrid):
         if first >= last:
             raise RuntimeError()
 
-        thickness = self._slice_thicknesses[first:last]
-        return self.__class__(array=self.array[first:last], thickness=thickness, extent=self.extent)
+        slice_thicknesses = self._slice_thicknesses[first:last]
+        return self.__class__(array=self.array[first:last], slice_thicknesses=slice_thicknesses, extent=self.extent)
 
     def export(self, path, overwrite=False):
         if (os.path.isfile(path) | os.path.isfile(path + '.npz')) & (not overwrite):
