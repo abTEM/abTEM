@@ -18,14 +18,15 @@ def gaussian_marker_labels(points, width, gpts):
 
 
 def voronoi_labels(points, gpts):
-    markers = np.zeros(gpts, dtype=np.int)
-    scaled_positions = points.scaled_positions
-    inside = ((scaled_positions[:, 0] > 0) & (scaled_positions[:, 1] > 0) &
-              (scaled_positions[:, 0] < 1) & (scaled_positions[:, 1] < 1))
-
-    indices = (scaled_positions[inside] * gpts).astype(int)
-    markers[indices[:, 0], indices[:, 1]] = 1 + points.labels[inside]
+    gpts = np.array(gpts)
+    margin = np.ceil(
+        np.max((np.abs(np.min(points.scaled_positions * gpts)),
+                np.max(points.scaled_positions * gpts - gpts)))).astype(np.int)
+    markers = np.zeros(gpts + 2 * margin, dtype=np.int)
+    indices = (points.scaled_positions * gpts + margin).astype(int)
+    markers[indices[:, 0], indices[:, 1]] = 1 + points.labels
     labels = watershed(np.zeros_like(markers), markers, compactness=1000)
+    labels = labels[margin:-margin, margin:-margin]
     return labels - 1
 
 
@@ -50,7 +51,7 @@ def labels_to_masks(labels, n_classes):
     return masks.reshape(labels.shape + (-1,))
 
 
-def data_generator(images, markers, classes=None, batch_size=32, augmentations=None):
+def data_generator(images, markers, classes, batch_size=32, augmentations=None):
     if augmentations is None:
         augmentations = []
 
@@ -63,16 +64,12 @@ def data_generator(images, markers, classes=None, batch_size=32, augmentations=N
 
             batch_images = []
             batch_markers = []
-            if classes is not None:
-                batch_classes = []
-            else:
-                batch_classes = None
+            batch_classes = []
 
             for j, k in enumerate(indices[i * batch_size:(i + 1) * batch_size]):
                 batch_images.append(images[k])
                 batch_markers.append(markers[k])
-                if batch_classes is not None:
-                    batch_classes.append(classes[k])
+                batch_classes.append(classes[k])
 
                 for augmentation in augmentations:
                     augmentation.randomize()
@@ -80,9 +77,7 @@ def data_generator(images, markers, classes=None, batch_size=32, augmentations=N
 
                     if augmentation.apply_to_label:
                         batch_markers[j] = augmentation(batch_markers[j])
-
-                        if batch_classes is not None:
-                            batch_classes[j] = augmentation(batch_classes[j])
+                        batch_classes[j] = augmentation(batch_classes[j])
 
             batch_images = np.array(batch_images)
             batch_images = batch_images.reshape((batch_images.shape[0], 1,) +
@@ -92,10 +87,6 @@ def data_generator(images, markers, classes=None, batch_size=32, augmentations=N
             batch_markers = batch_markers.reshape((batch_markers.shape[0], 1,) +
                                                   batch_markers.shape[1:]).astype(np.float32)
 
-            if batch_classes is None:
-                yield batch_images, batch_markers
+            batch_classes = np.array(batch_classes).astype(np.int)
 
-            else:
-                batch_classes = np.array(batch_classes).astype(np.int)
-                # batch_classes = np.rollaxis(batch_classes, 3, 1).astype(np.int)
-                yield batch_images, batch_markers, batch_classes
+            yield batch_images, batch_markers, batch_classes

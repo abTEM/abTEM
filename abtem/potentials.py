@@ -1,15 +1,15 @@
 import os
-
+import numbers
 import numpy as np
 from ase import units
 from scipy.optimize import brentq
+from tqdm.auto import tqdm
 
 from abtem.bases import Grid, HasCache, cached_method, ArrayWithGrid
-from abtem.interpolation import interpolation_kernel_parallel, thread_safe_coloring
+from abtem.interpolation import interpolation_kernel_parallel
 from abtem.parametrizations import convert_kirkland, kirkland, kirkland_projected_finite, dvdr_kirkland, load_parameters
 from abtem.parametrizations import convert_lobato, lobato, lobato_projected_finite, dvdr_lobato
 from abtem.transform import make_orthogonal_atoms
-from tqdm.auto import tqdm
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
@@ -70,11 +70,13 @@ class PotentialBase(Grid):
 
     def precalculate(self):
         array = np.zeros((self.num_slices,) + (self.gpts[0], self.gpts[1]))
+        thickness = np.zeros(self.num_slices)
 
         for i in tqdm(range(self.num_slices)):
             array[i] = self.get_slice(i)
+            thickness[i] = self.slice_thickness(i)
 
-        return PrecalculatedPotential(array, self.thickness, self.extent)
+        return PrecalculatedPotential(array, thickness, self.extent)
 
 
 class Potential(PotentialBase, HasCache):
@@ -212,20 +214,25 @@ def import_potential(path):
 class PrecalculatedPotential(ArrayWithGrid):
 
     def __init__(self, array, thickness, extent=None, sampling=None):
+
+        if isinstance(thickness, numbers.Number):
+            thickness = np.full(array.shape[0], thickness, dtype=np.float)
+
         self._thickness = thickness
+
         super().__init__(array=array, array_dimensions=3, spatial_dimensions=2, extent=extent, sampling=sampling,
                          space='direct')
 
     @property
     def thickness(self):
-        return self._thickness
+        return self._thickness.sum()
 
     @property
     def num_slices(self):
         return self._array.shape[0]
 
     def slice_thickness(self, i):
-        return self.thickness / self.num_slices
+        return self._thickness[i]
 
     def repeat(self, multiples):
         assert len(multiples) == 2
@@ -254,7 +261,7 @@ class PrecalculatedPotential(ArrayWithGrid):
         if first >= last:
             raise RuntimeError()
 
-        thickness = self.slice_thickness(0) * (last - first)
+        thickness = self.slice_thickness[first:last]
         return self.__class__(array=self.array[first:last], thickness=thickness, extent=self.extent)
 
     def export(self, path, overwrite=False):

@@ -1,7 +1,6 @@
-from numbers import Number
-
 import numpy as np
-from scipy.ndimage import gaussian_filter, zoom
+from scipy.interpolate import RegularGridInterpolator
+from scipy.ndimage import gaussian_filter
 from skimage.transform import rescale
 
 
@@ -16,16 +15,20 @@ class Augmentation(object):
 
 
 class Sometimes(Augmentation):
-    def __init__(self, probability, augmentation):
+    apply_to_label = None
+
+    def __init__(self, augmentation, probability):
         self.probability = probability
-        self.augmentation = augmentation
+        self._augmentation = augmentation
+        self.apply_to_label = augmentation.apply_to_label
 
     def randomize(self):
         self._apply_augmentation = np.random.rand() < self.probability
+        self._augmentation.randomize()
 
     def __call__(self, image):
         if self._apply_augmentation:
-            return self.augmentation(image)
+            return self._augmentation(image)
         else:
             return image
 
@@ -226,26 +229,64 @@ class ScanNoise(Augmentation):
             return view_as_windows(a_ext, (1, n))[np.arange(len(r)), (n - r) % n, 0]
 
         image = strided_indexing_roll(np.ascontiguousarray(image), n)
-
         return image
 
 
-class LineFlicker(Augmentation):
-    apply_to_label = False
+class LineWarp(Augmentation):
+    apply_to_label = True
 
-    def __init__(self, scale, amount):
+    def __init__(self, scale, amount, axis=0):
         self.scale = scale
         self.amount = amount
+        self.axis = axis
 
     def randomize(self):
         self._random_scale = np.random.uniform(*self.scale)
         self._random_amount = np.random.uniform(*self.amount)
 
     def __call__(self, image):
-        x = np.linspace(0, image.shape[0], image.shape[0], endpoint=True)
-        p = np.array([np.random.rand() * image.shape[0]])
-        y = np.exp(-(x[:, None] - p[None, :]) ** 2 / (2 * self._random_scale ** 2)).sum(axis=1)
-        return image * (1 - self._random_amount * y[:, None])
+        noise = bandpass_noise(0, self._random_scale, (image.shape[self.axis],), (1 / image.shape[self.axis],))
+
+        x = np.arange(0, image.shape[0])
+        y = np.arange(0, image.shape[1])
+
+        indices = [x, y]
+
+        interpolating_function = RegularGridInterpolator(indices, image)
+
+        indices[self.axis] = indices[self.axis] + self._random_amount * noise
+        indices[self.axis][indices[self.axis] < 0] = 0
+        indices[self.axis][indices[self.axis] > image.shape[self.axis] - 1] = image.shape[self.axis] - 1
+
+        x, y = np.meshgrid(indices[0], indices[1], indexing='ij')
+
+        p = np.array([x.ravel(), y.ravel()]).T
+
+        warped = interpolating_function(p)
+        warped = warped.reshape(image.shape)
+        return warped
+
+
+class LineDarkening(Augmentation):
+    apply_to_label = False
+
+    def __init__(self, scale, amount, axis=0):
+        self.scale = scale
+        self.amount = amount
+        self.axis = axis
+
+    def randomize(self):
+        self._random_scale = np.random.uniform(*self.scale)
+        self._random_amount = np.random.uniform(*self.amount)
+
+    def __call__(self, image):
+        noise = bandpass_noise(0, self._random_scale, (image.shape[self.axis],), (1 / image.shape[self.axis],))
+
+        noise = noise / noise.max()
+        if self.axis == 0:
+            return image * (1 - self._random_amount * noise[:, None])
+        else:
+            return image * (1 - self._random_amount * noise[None, :])
 
 
 class Border(Augmentation):
