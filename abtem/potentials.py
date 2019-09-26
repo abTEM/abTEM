@@ -70,13 +70,13 @@ class PotentialBase(Grid):
 
     def precalculate(self):
         array = np.zeros((self.num_slices,) + (self.gpts[0], self.gpts[1]))
-        thickness = np.zeros(self.num_slices)
+        slice_thicknesses = np.zeros(self.num_slices)
 
         for i in tqdm(range(self.num_slices)):
             array[i] = self.get_slice(i)
-            thickness[i] = self.slice_thickness(i)
+            slice_thicknesses[i] = self.slice_thickness(i)
 
-        return PrecalculatedPotential(array, thickness, self.extent)
+        return PrecalculatedPotential(array, slice_thicknesses, self.extent)
 
 
 class Potential(PotentialBase, HasCache):
@@ -208,31 +208,31 @@ class Potential(PotentialBase, HasCache):
 
 def import_potential(path):
     npzfile = np.load(path)
-    return PrecalculatedPotential(npzfile['array'], npzfile['thickness'], npzfile['extent'])
+    return PrecalculatedPotential(npzfile['array'], npzfile['slice_thicknesses'], npzfile['extent'])
 
 
 class PrecalculatedPotential(ArrayWithGrid):
 
-    def __init__(self, array, thickness, extent=None, sampling=None):
+    def __init__(self, array, slice_thicknesses, extent=None, sampling=None):
 
-        if isinstance(thickness, numbers.Number):
-            thickness = np.full(array.shape[0], thickness, dtype=np.float)
+        if isinstance(slice_thicknesses, numbers.Number):
+            slice_thicknesses = np.full(array.shape[0], slice_thicknesses, dtype=np.float)
 
-        self._thickness = thickness
+        self._slice_thicknesses = slice_thicknesses
 
         super().__init__(array=array, array_dimensions=3, spatial_dimensions=2, extent=extent, sampling=sampling,
                          space='direct')
 
     @property
     def thickness(self):
-        return self._thickness.sum()
+        return self._slice_thicknesses.sum()
 
     @property
     def num_slices(self):
         return self._array.shape[0]
 
     def slice_thickness(self, i):
-        return self._thickness[i]
+        return self._slice_thicknesses[i]
 
     def repeat(self, multiples):
         assert len(multiples) == 2
@@ -261,11 +261,11 @@ class PrecalculatedPotential(ArrayWithGrid):
         if first >= last:
             raise RuntimeError()
 
-        thickness = self._thickness[first:last]
+        thickness = self._slice_thicknesses[first:last]
         return self.__class__(array=self.array[first:last], thickness=thickness, extent=self.extent)
 
     def export(self, path, overwrite=False):
         if (os.path.isfile(path) | os.path.isfile(path + '.npz')) & (not overwrite):
             raise RuntimeError('file {} already exists')
 
-        np.savez(path, array=self.array, thickness=self.thickness, extent=self.extent)
+        np.savez(path, array=self.array, slice_thicknesses=self._slice_thicknesses, extent=self.extent)
