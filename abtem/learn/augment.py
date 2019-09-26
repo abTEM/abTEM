@@ -58,13 +58,14 @@ class RandomCrop(Augmentation):
         self.out_shape = out_shape
 
     def randomize(self):
-        self._shift_x = np.random.rand()  # np.random.randint(0, old_size[0] - self.size[0])
+        self._shift_x = np.random.rand()
+        self._shift_y = np.random.rand()
 
     def __call__(self, image):
         old_size = image.shape[:2]
 
         shift_x = np.round(self._shift_x * (old_size[0] - self.out_shape[0])).astype(np.int)
-        shift_y = np.round(self._shift_x * (old_size[0] - self.out_shape[0])).astype(np.int)
+        shift_y = np.round(self._shift_y * (old_size[1] - self.out_shape[1])).astype(np.int)
 
         image = image[shift_x:shift_x + self.out_shape[0], shift_y:shift_y + self.out_shape[1]]
 

@@ -186,3 +186,6 @@ class LabelledPoints(object):
 
         self._positions = self._positions[mask]
         self._labels = self._labels[mask]
+
+    def copy(self):
+        return self.__class__(self.positions.copy(), self.cell.copy(), self.labels.copy())

@@ -47,10 +47,9 @@ def make_blob():
     return np.array([x, y]).T
 
 
-def random_paint_blob(points, new_label, size):
+def paint_blob(points, new_label, position, size):
     blob = size * (make_blob() - .5)
 
-    position = np.random.rand() * points.cell[0] + np.random.rand() * points.cell[1]
     path = Path(blob + position)
 
     inside = path.contains_points(points.positions)
@@ -58,3 +57,8 @@ def random_paint_blob(points, new_label, size):
     points.labels[inside] = new_label
 
     return points
+
+
+def random_paint_blob(points, new_label, size):
+    position = np.random.rand() * points.cell[0] + np.random.rand() * points.cell[1]
+    return paint_blob(points, new_label, position, size)
