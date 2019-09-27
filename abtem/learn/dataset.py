@@ -61,7 +61,7 @@ def safe_assign(assignee, assignment, index):
     return assignee
 
 
-def data_generator(images, markers, classes, batch_size=32, augmentations=None):
+def data_generator(images, labels, batch_size=32, augmentations=None):
     if augmentations is None:
         augmentations = []
 
@@ -73,13 +73,13 @@ def data_generator(images, markers, classes, batch_size=32, augmentations=None):
                 np.random.shuffle(indices)
 
             batch_images = []
-            batch_density = []
-            batch_classes = []
+            batch_labels = [[] for _ in range(len(labels))]
 
             for j, k in enumerate(indices[i * batch_size:(i + 1) * batch_size]):
                 batch_images.append(images[k].copy())
-                batch_density.append(markers[k].copy())
-                batch_classes.append(classes[k].copy())
+
+                for l in range(len(labels)):
+                    batch_labels[l].append(labels[l][k].copy())
 
                 for augmentation in augmentations:
                     augmentation.randomize()
@@ -96,13 +96,12 @@ def data_generator(images, markers, classes, batch_size=32, augmentations=None):
                         batch_images[j] = safe_assign(batch_images[j], augmented, channel)
 
                     if augmentation.apply_to_label:
-                        batch_density[j] = augmentation(batch_density[j])
-                        batch_classes[j] = augmentation(batch_classes[j])
+                        for l in range(len(labels)):
+                            batch_labels[l][j] = augmentation(batch_labels[l][j])
 
             batch_images = np.array(batch_images).astype(np.float32)
 
-            batch_density = np.array(batch_density).astype(np.float32)
+            for j in range(len(labels)):
+                batch_labels[j] = np.array(batch_labels[j]).astype(np.float32)
 
-            batch_classes = np.array(batch_classes).astype(np.int)
-
-            yield batch_images, batch_density, batch_classes
+            yield batch_images, batch_labels

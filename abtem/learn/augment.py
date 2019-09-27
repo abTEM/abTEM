@@ -303,12 +303,10 @@ class LineDarkening(Augmentation):
     def randomize(self):
         self._random_scale = np.random.uniform(*self.scale)
         self._random_amount = np.random.uniform(*self.amount)
-        self._noise = None
 
     def __call__(self, image):
-        if self._noise is None:
-            self._noise = bandpass_noise(0, self._random_scale, (image.shape[self.axis],),
-                                         (1 / image.shape[self.axis],))
+        self._noise = bandpass_noise(0, self._random_scale, (image.shape[self.axis],),
+                                     (1 / image.shape[self.axis],))
 
         self._noise = self._noise / self._noise.max()
         if self.axis == 0:
