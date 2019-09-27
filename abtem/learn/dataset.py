@@ -51,6 +51,14 @@ def labels_to_masks(labels, n_classes):
     return masks.reshape(labels.shape + (-1,))
 
 
+def safe_assign(assignee, assignment, index):
+    try:
+        assignee[index] = assignment
+    except:
+        assignee = np.zeros((assignee.shape[0],) + assignment.shape)
+        assignee[index] = assignment
+
+
 def data_generator(images, markers, classes, batch_size=32, augmentations=None):
     if augmentations is None:
         augmentations = []
@@ -63,30 +71,36 @@ def data_generator(images, markers, classes, batch_size=32, augmentations=None):
                 np.random.shuffle(indices)
 
             batch_images = []
-            batch_markers = []
+            batch_density = []
             batch_classes = []
 
             for j, k in enumerate(indices[i * batch_size:(i + 1) * batch_size]):
-                batch_images.append(images[k])
-                batch_markers.append(markers[k])
-                batch_classes.append(classes[k])
+                batch_images.append(images[k].copy())
+                batch_density.append(markers[k].copy())
+                batch_classes.append(classes[k].copy())
 
                 for augmentation in augmentations:
                     augmentation.randomize()
-                    batch_images[j] = augmentation(batch_images[j])
+
+                    original = batch_images[j].copy()
+
+                    if augmentation.channels is None:
+                        channels = range(batch_images[j].shape[0])
+                    else:
+                        channels = augmentation.channels
+
+                    for channel in channels:
+                        augmented = augmentation(original[channel])
+                        safe_assign(batch_images[j], augmented, channel)
 
                     if augmentation.apply_to_label:
-                        batch_markers[j] = augmentation(batch_markers[j])
+                        batch_density[j] = augmentation(batch_density[j])
                         batch_classes[j] = augmentation(batch_classes[j])
 
-            batch_images = np.array(batch_images)
-            batch_images = batch_images.reshape((batch_images.shape[0], 1,) +
-                                                batch_images.shape[1:]).astype(np.float32)
+                batch_images = np.array(batch_images).astype(np.float32)
 
-            batch_markers = np.array(batch_markers)
-            batch_markers = batch_markers.reshape((batch_markers.shape[0], 1,) +
-                                                  batch_markers.shape[1:]).astype(np.float32)
+                batch_density = np.array(batch_density).astype(np.float32)
 
-            batch_classes = np.array(batch_classes).astype(np.int)
+                batch_classes = np.array(batch_classes).astype(np.int)
 
-            yield batch_images, batch_markers, batch_classes
+                yield batch_images, batch_density, batch_classes

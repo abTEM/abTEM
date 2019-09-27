@@ -5,7 +5,14 @@ from skimage.transform import rescale
 
 
 class Augmentation(object):
-    apply_to_label = True
+
+    def __init__(self, apply_to_label=True, channels=None):
+        self.apply_to_label = apply_to_label
+
+        if channels is not None:
+            channels = np.array(channels).reshape((1,))
+
+        self.channels = channels
 
     def __call__(self, image):
         raise NotImplementedError()
@@ -15,12 +22,12 @@ class Augmentation(object):
 
 
 class Sometimes(Augmentation):
-    apply_to_label = None
 
     def __init__(self, augmentation, probability):
         self.probability = probability
         self._augmentation = augmentation
-        self.apply_to_label = augmentation.apply_to_label
+
+        super().__init__(apply_to_label=augmentation.apply_to_label, channels=augmentation.channels)
 
     def randomize(self):
         self._apply_augmentation = np.random.rand() < self.probability
@@ -34,6 +41,10 @@ class Sometimes(Augmentation):
 
 
 class FlipAndRotate90(Augmentation):
+
+    def __init__(self):
+        super().__init__(apply_to_label=True, channels=None)
+
     def randomize(self):
         self._fliplr = np.random.rand() < .5
         self._flipud = np.random.rand() < .5
@@ -56,6 +67,7 @@ class RandomCrop(Augmentation):
 
     def __init__(self, out_shape):
         self.out_shape = out_shape
+        super().__init__(apply_to_label=False, channels=None)
 
     def randomize(self):
         self._shift_x = np.random.rand()
@@ -76,6 +88,7 @@ class Zoom(Augmentation):
 
     def __init__(self, zoom):
         self.zoom = zoom
+        super().__init__(apply_to_label=False, channels=None)
 
     def randomize(self):
         self._random_zoom = np.random.uniform(*self.zoom)
@@ -87,10 +100,10 @@ class Zoom(Augmentation):
 
 
 class ShiftValues(Augmentation):
-    apply_to_label = False
 
     def __init__(self, shift):
         self.shift = shift
+        super().__init__(apply_to_label=False, channels=None)
 
     def randomize(self):
         self._random_shift = np.random.uniform(*self.shift)
@@ -100,10 +113,10 @@ class ShiftValues(Augmentation):
 
 
 class ScaleValues(Augmentation):
-    apply_to_label = False
 
     def __init__(self, scale):
         self.scale = scale
+        super().__init__(apply_to_label=False, channels=None)
 
     def randomize(self):
         self._random_scale = np.random.uniform(*self.scale)
@@ -113,24 +126,27 @@ class ScaleValues(Augmentation):
 
 
 class NormalizeRange(Augmentation):
-    apply_to_label = False
+
+    def __init__(self):
+        super().__init__(apply_to_label=False, channels=None)
 
     def __call__(self, image):
         return (image - image.min()) / (image.max() - image.min())
 
 
 class NormalizeVariance(Augmentation):
-    apply_to_label = False
+    def __init__(self):
+        super().__init__(apply_to_label=False, channels=None)
 
     def __call__(self, image):
         return (image - np.mean(image)) / np.std(image)
 
 
 class NormalizeLocal(Augmentation):
-    apply_to_label = False
 
     def __init__(self, sigma):
         self.sigma = sigma
+        super().__init__(apply_to_label=False, channels=None)
 
     def __call__(self, image):
         mean = gaussian_filter(image, self.sigma)
@@ -144,6 +160,7 @@ class GaussianBlur(Augmentation):
 
     def __init__(self, sigma):
         self.sigma = sigma
+        super().__init__(apply_to_label=False, channels=None)
 
     def randomize(self):
         self._random_sigma = np.random.uniform(*self.sigma)
@@ -157,6 +174,7 @@ class Gamma(Augmentation):
 
     def __init__(self, gamma):
         self.gamma = gamma
+        super().__init__(apply_to_label=False, channels=None)
 
     def randomize(self):
         self._random_gamma = np.random.uniform(*self.gamma)
@@ -166,11 +184,11 @@ class Gamma(Augmentation):
 
 
 class PoissonNoise(Augmentation):
-    apply_to_label = False
 
     def __init__(self, mean, background):
         self.mean = mean
         self.background = background
+        super().__init__(apply_to_label=False, channels=None)
 
     def randomize(self):
         self._random_mean = np.random.uniform(*self.mean)
@@ -184,10 +202,10 @@ class PoissonNoise(Augmentation):
 
 
 class GaussianNoise(Augmentation):
-    apply_to_label = False
 
     def __init__(self, sigma):
         self.sigma = sigma
+        super().__init__(apply_to_label=False, channels=None)
 
     def randomize(self):
         self._random_sigma = np.random.uniform(*self.sigma)
@@ -207,11 +225,11 @@ def bandpass_noise(inner, outer, shape, sampling):
 
 
 class ScanNoise(Augmentation):
-    apply_to_label = False
 
     def __init__(self, scale, amount):
         self.scale = scale
         self.amount = amount
+        super().__init__(apply_to_label=False, channels=None)
 
     def randomize(self):
         self._random_scale = np.random.uniform(*self.scale)
@@ -234,19 +252,22 @@ class ScanNoise(Augmentation):
 
 
 class LineWarp(Augmentation):
-    apply_to_label = True
 
-    def __init__(self, scale, amount, axis=0):
+    def __init__(self, scale, amount, axis=0, channels=None, apply_to_label=False):
         self.scale = scale
         self.amount = amount
         self.axis = axis
+        super().__init__(apply_to_label=apply_to_label, channels=channels)
 
     def randomize(self):
         self._random_scale = np.random.uniform(*self.scale)
         self._random_amount = np.random.uniform(*self.amount)
+        self._noise = None
 
     def __call__(self, image):
-        noise = bandpass_noise(0, self._random_scale, (image.shape[self.axis],), (1 / image.shape[self.axis],))
+        if self._noise is None:
+            self._noise = bandpass_noise(0, self._random_scale, (image.shape[self.axis],),
+                                         (1 / image.shape[self.axis],))
 
         x = np.arange(0, image.shape[0])
         y = np.arange(0, image.shape[1])
@@ -255,7 +276,7 @@ class LineWarp(Augmentation):
 
         interpolating_function = RegularGridInterpolator(indices, image)
 
-        indices[self.axis] = indices[self.axis] + self._random_amount * noise
+        indices[self.axis] = indices[self.axis] + self._random_amount * self._noise
         indices[self.axis][indices[self.axis] < 0] = 0
         indices[self.axis][indices[self.axis] > image.shape[self.axis] - 1] = image.shape[self.axis] - 1
 
@@ -269,25 +290,28 @@ class LineWarp(Augmentation):
 
 
 class LineDarkening(Augmentation):
-    apply_to_label = False
 
-    def __init__(self, scale, amount, axis=0):
+    def __init__(self, scale, amount, axis=0, channels=None):
         self.scale = scale
         self.amount = amount
         self.axis = axis
+        super().__init__(apply_to_label=False, channels=channels)
 
     def randomize(self):
         self._random_scale = np.random.uniform(*self.scale)
         self._random_amount = np.random.uniform(*self.amount)
+        self._noise = None
 
     def __call__(self, image):
-        noise = bandpass_noise(0, self._random_scale, (image.shape[self.axis],), (1 / image.shape[self.axis],))
+        if self._noise is None:
+            self._noise = bandpass_noise(0, self._random_scale, (image.shape[self.axis],),
+                                         (1 / image.shape[self.axis],))
 
-        noise = noise / noise.max()
+        self._noise = self._noise / self._noise.max()
         if self.axis == 0:
-            return image * (1 - self._random_amount * noise[:, None])
+            return image * (1 - self._random_amount * self._noise[:, None])
         else:
-            return image * (1 - self._random_amount * noise[None, :])
+            return image * (1 - self._random_amount * self._noise[None, :])
 
 
 class Border(Augmentation):
@@ -295,6 +319,7 @@ class Border(Augmentation):
 
     def __init__(self, amount):
         self.amount = amount
+        super().__init__(apply_to_label=False, channels=None)
 
     def randomize(self):
         self._random_amount = int(np.random.uniform(*self.amount))
