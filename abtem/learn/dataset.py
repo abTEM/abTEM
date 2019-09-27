@@ -58,6 +58,8 @@ def safe_assign(assignee, assignment, index):
         assignee = np.zeros((assignee.shape[0],) + assignment.shape)
         assignee[index] = assignment
 
+    return assignee
+
 
 def data_generator(images, markers, classes, batch_size=32, augmentations=None):
     if augmentations is None:
@@ -91,7 +93,7 @@ def data_generator(images, markers, classes, batch_size=32, augmentations=None):
 
                     for channel in channels:
                         augmented = augmentation(original[channel])
-                        safe_assign(batch_images[j], augmented, channel)
+                        batch_images[j] = safe_assign(batch_images[j], augmented, channel)
 
                     if augmentation.apply_to_label:
                         batch_density[j] = augmentation(batch_density[j])

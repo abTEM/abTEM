@@ -67,7 +67,7 @@ class RandomCrop(Augmentation):
 
     def __init__(self, out_shape):
         self.out_shape = out_shape
-        super().__init__(apply_to_label=False, channels=None)
+        super().__init__(apply_to_label=True, channels=None)
 
     def randomize(self):
         self._shift_x = np.random.rand()
@@ -75,6 +75,9 @@ class RandomCrop(Augmentation):
 
     def __call__(self, image):
         old_size = image.shape[:2]
+
+        if (old_size[0] < self.out_shape[0]) | (old_size[1] < self.out_shape[1]):
+            raise RuntimeError()
 
         shift_x = np.round(self._shift_x * (old_size[0] - self.out_shape[0])).astype(np.int)
         shift_y = np.round(self._shift_y * (old_size[1] - self.out_shape[1])).astype(np.int)
@@ -88,7 +91,7 @@ class Zoom(Augmentation):
 
     def __init__(self, zoom):
         self.zoom = zoom
-        super().__init__(apply_to_label=False, channels=None)
+        super().__init__(apply_to_label=True, channels=None)
 
     def randomize(self):
         self._random_zoom = np.random.uniform(*self.zoom)
