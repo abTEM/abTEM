@@ -99,10 +99,10 @@ def data_generator(images, markers, classes, batch_size=32, augmentations=None):
                         batch_density[j] = augmentation(batch_density[j])
                         batch_classes[j] = augmentation(batch_classes[j])
 
-                batch_images = np.array(batch_images).astype(np.float32)
+            batch_images = np.array(batch_images).astype(np.float32)
 
-                batch_density = np.array(batch_density).astype(np.float32)
+            batch_density = np.array(batch_density).astype(np.float32)
 
-                batch_classes = np.array(batch_classes).astype(np.int)
+            batch_classes = np.array(batch_classes).astype(np.int)
 
-                yield batch_images, batch_density, batch_classes
+            yield batch_images, batch_density, batch_classes
