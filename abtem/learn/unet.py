@@ -6,7 +6,7 @@ import torch.nn as nn
 
 class Head:
 
-    def build(self, features):
+    def build(self, unet, features):
         raise NotImplementedError()
 
     def forward(self, x):
@@ -15,11 +15,12 @@ class Head:
 
 class DensityMap(Head):
 
-    def build(self, features):
-        self.conv = nn.Conv2d(in_channels=features, out_channels=1, kernel_size=1)
+    def build(self, unet, features):
+        unet.conv = nn.Conv2d(in_channels=features, out_channels=1, kernel_size=1)
+        self.unet = unet
 
     def forward(self, x):
-        return torch.sigmoid(self.conv(x))
+        return torch.sigmoid(self.unet.conv(x))
 
     __call__ = forward
 
@@ -29,11 +30,12 @@ class ClassificationMap(Head):
     def __init__(self, nclasses):
         self._nclasses = nclasses
 
-    def build(self, features):
-        self.conv = nn.Conv2d(in_channels=features, out_channels=self._nclasses, kernel_size=1)
+    def build(self, unet, features):
+        unet.conv = nn.Conv2d(in_channels=features, out_channels=self._nclasses, kernel_size=1)
+        self.unet = unet
 
     def forward(self, x):
-        return nn.Softmax2d()(self.conv(x))
+        return nn.Softmax2d()(self.unet.conv(x))
 
     __call__ = forward
 
