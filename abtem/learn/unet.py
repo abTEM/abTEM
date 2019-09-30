@@ -104,7 +104,7 @@ class UNet(nn.Module):
         self.decoder1 = UNet._block(features * 2, features, name="dec1")
 
         for mapper in mappers:
-            mapper.build(features)
+            mapper.build(self, features)
         self.mappers = mappers
 
         # for classifier in classifiers:
