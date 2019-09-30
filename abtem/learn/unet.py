@@ -4,10 +4,7 @@ import torch
 import torch.nn as nn
 
 
-class Head(nn.Module):
-
-    def __init__(self):
-        super().__init__()
+class Head:
 
     def build(self, features):
         raise NotImplementedError()
@@ -18,20 +15,18 @@ class Head(nn.Module):
 
 class DensityMap(Head):
 
-    def __init__(self):
-        super().__init__()
-
     def build(self, features):
         self.conv = nn.Conv2d(in_channels=features, out_channels=1, kernel_size=1)
 
     def forward(self, x):
         return torch.sigmoid(self.conv(x))
 
+    __call__ = forward
+
 
 class ClassificationMap(Head):
 
     def __init__(self, nclasses):
-        super().__init__()
         self._nclasses = nclasses
 
     def build(self, features):
@@ -39,6 +34,8 @@ class ClassificationMap(Head):
 
     def forward(self, x):
         return nn.Softmax2d()(self.conv(x))
+
+    __call__ = forward
 
 
 # class Classifier(Head):
@@ -141,7 +138,7 @@ class UNet(nn.Module):
         dec1 = self.updrop1(dec1)
         dec1 = self.decoder1(dec1)
 
-        return [mapper(dec1) for mapper in self.mappers] #, [classifier(bottleneck) for classifier in self.classifiers]
+        return [mapper(dec1) for mapper in self.mappers]  # [classifier(bottleneck) for classifier in self.classifiers]
 
     @staticmethod
     def _block(in_channels, features, name):
