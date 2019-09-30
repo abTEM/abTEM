@@ -4,40 +4,47 @@ import torch
 import torch.nn as nn
 
 
-class Head:
+class Head(nn.Module):
 
-    def build(self, unet, features):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
         raise NotImplementedError()
 
-    def forward(self, x):
-        raise NotImplementedError()
+
+def DensityMap():
+    def build_density_map(features):
+        return DensityMapModule(features)
+
+    return build_density_map
 
 
-class DensityMap(Head):
+class DensityMapModule(Head):
 
-    def build(self, unet, features):
-        unet.conv = nn.Conv2d(in_channels=features, out_channels=1, kernel_size=1)
-        self.unet = unet
-
-    def forward(self, x):
-        return torch.sigmoid(self.unet.conv(x))
-
-    __call__ = forward
-
-
-class ClassificationMap(Head):
-
-    def __init__(self, nclasses):
-        self._nclasses = nclasses
-
-    def build(self, unet, features):
-        unet.conv = nn.Conv2d(in_channels=features, out_channels=self._nclasses, kernel_size=1)
-        self.unet = unet
+    def __init__(self, features):
+        super().__init__()
+        self.conv = nn.Conv2d(in_channels=features, out_channels=1, kernel_size=1)
 
     def forward(self, x):
-        return nn.Softmax2d()(self.unet.conv(x))
+        return torch.sigmoid(self.conv(x))
 
-    __call__ = forward
+
+def ClassificationMap(nclasses):
+    def build(features):
+        return ClassificationMapModule(features, nclasses=nclasses)
+
+    return build
+
+
+class ClassificationMapModule(Head):
+
+    def __init__(self, features, nclasses):
+        super().__init__()
+        self.conv = nn.Conv2d(in_channels=features, out_channels=nclasses, kernel_size=1)
+
+    def forward(self, x):
+        return nn.Softmax2d()(self.conv(x))
 
 
 # class Classifier(Head):
@@ -103,9 +110,10 @@ class UNet(nn.Module):
         self.updrop1 = nn.Dropout(p=p)
         self.decoder1 = UNet._block(features * 2, features, name="dec1")
 
-        for mapper in mappers:
-            mapper.build(self, features)
-        self.mappers = mappers
+        self.mappers = [mapper(features) for mapper in mappers]
+
+        for i, mapper in enumerate(self.mappers):
+            setattr(self, 'mapper' + str(i), mapper)
 
         # for classifier in classifiers:
         #     classifier.build(16 * features)
