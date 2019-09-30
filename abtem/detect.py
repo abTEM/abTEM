@@ -31,7 +31,7 @@ class DetectorBase:
         raise NotImplementedError()
 
 
-class PtychographyDetector(Energy, Grid, DetectorBase):
+class FourierSpaceDetector(Energy, Grid, DetectorBase):
 
     def __init__(self, max_angle=None, resize_isotropic=False, extent=None, gpts=None, sampling=None, energy=None,
                  export=None):
