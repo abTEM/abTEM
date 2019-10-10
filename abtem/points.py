@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.spatial import Voronoi
 
 
 def repeat(points, n, m):
@@ -23,6 +24,50 @@ def repeat(points, n, m):
     cell = points.cell.copy() * (n, m)
 
     return LabelledPoints(new_positions, cell=cell, labels=labels)
+
+
+def inside_cell(points, margin=0):
+    scaled_positions = points.scaled_positions
+    return ((scaled_positions[:, 0] >= -margin) & (scaled_positions[:, 1] >= -margin) &
+            (scaled_positions[:, 0] <= 1 + margin) & (scaled_positions[:, 1] <= 1 + margin))
+
+
+def paint_outside(points, new_label):
+    mask = inside_cell(points) == 0
+    points.labels[mask] = new_label
+
+
+def lloyds_relaxation(points, n, mask=None):
+    def voronoi_centroids(positions):
+
+        def area_centroid(positions):
+            positions = np.vstack((positions, positions[0]))
+            A = 0
+            C = np.zeros(2)
+            for i in range(0, len(positions) - 1):
+                s = positions[i, 0] * positions[i + 1, 1] - positions[i + 1, 0] * positions[i, 1]
+                A = A + s
+                C = C + (positions[i, :] + positions[i + 1, :]) * s
+            return (1 / (3. * A)) * C
+
+        vor = Voronoi(positions)
+
+        for i, region in enumerate(vor.point_region):
+            if all(np.array(vor.regions[region]) > -1):
+                vertices = vor.vertices[vor.regions[region]]
+                positions[i] = area_centroid(vertices)
+
+        return positions
+
+    original_positions = points.positions.copy()
+    for i in range(n):
+        centroids = voronoi_centroids(points.positions)
+        if mask is not None:
+            centroids[mask] = original_positions[mask]
+
+        points.positions = centroids
+
+    return points
 
 
 def fill_rectangle(points, extent, origin=None, margin=0., eps=1e-12):
@@ -68,9 +113,6 @@ def fill_rectangle(points, extent, origin=None, margin=0., eps=1e-12):
               (positions[:, 1] < upper_corner[1] + margin))
     new_positions = positions[inside] - lower_corner
     new_labels = repeated.labels[inside]
-    #
-    # new_positions = positions - lower_corner
-    # new_labels = repeated.labels
 
     return LabelledPoints(new_positions, cell=extent, labels=new_labels)
 
@@ -128,7 +170,7 @@ class LabelledPoints(object):
             self.cell = cell
 
         if labels is None:
-            labels = np.zeros((0,), dtype=np.int)
+            labels = np.zeros(len(positions), dtype=np.int)
 
         labels = np.array(labels, dtype=np.int)
 
@@ -175,6 +217,13 @@ class LabelledPoints(object):
     def labels(self, labels):
         labels = np.array(labels, dtype=np.int)
         self._labels[:] = labels
+
+    def extend(self, points):
+        self._positions = np.vstack((self._positions, points.positions))
+        self._labels = np.hstack((self._labels, points.labels))
+
+    def __getitem__(self, i):
+        return self.__class__(positions=self.positions[i].copy(), labels=self.labels[i].copy(), cell=self.cell.copy())
 
     def __delitem__(self, i):
 

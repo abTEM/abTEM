@@ -463,8 +463,7 @@ class Energy(Observable):
 
 
 class ArrayWithGrid(Grid):
-    def __init__(self, array, array_dimensions, spatial_dimensions, extent=None, sampling=None, space='direct',
-                 **kwargs):
+    def __init__(self, array, array_dimensions, spatial_dimensions, extent=None, sampling=None, **kwargs):
 
         if array_dimensions < spatial_dimensions:
             raise RuntimeError()
@@ -473,7 +472,6 @@ class ArrayWithGrid(Grid):
             raise RuntimeError('array shape {} not {}d'.format(array.shape, array_dimensions))
 
         self._array = array
-        self.space = space
 
         gpts = GridProperty(value=lambda obj: obj.gpts, dtype=np.int, locked=True, dimensions=spatial_dimensions)
         super().__init__(extent=extent, gpts=gpts, sampling=sampling, dimensions=spatial_dimensions, **kwargs)
@@ -488,5 +486,4 @@ class ArrayWithGrid(Grid):
         return self._array
 
     def copy(self):
-        new = self.__class__(array=self.array.copy(), extent=self.extent.copy(), space=self.space)
-        return new
+        return self.__class__(array=self.array.copy(), extent=self.extent.copy())

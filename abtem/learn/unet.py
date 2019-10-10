@@ -115,11 +115,6 @@ class UNet(nn.Module):
         for i, mapper in enumerate(self.mappers):
             setattr(self, 'mapper' + str(i), mapper)
 
-        # for classifier in classifiers:
-        #     classifier.build(16 * features)
-        #
-        # self.classifiers = classifiers
-
     def forward(self, x):
         enc1 = self.encoder1(x)
         enc2 = self.encoder2(self.downdrop1(self.pool1(enc1)))

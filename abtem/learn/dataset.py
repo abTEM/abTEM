@@ -18,6 +18,9 @@ def gaussian_marker_labels(points, width, gpts):
 
 
 def voronoi_labels(points, gpts):
+    if len(points) == 0:
+        return np.zeros(gpts, dtype=np.int)
+
     gpts = np.array(gpts)
     margin = np.ceil(
         np.max((np.abs(np.min(points.scaled_positions * gpts)),
@@ -66,6 +69,7 @@ def data_generator(images, labels, batch_size=32, augmentations=None):
         augmentations = []
 
     num_iter = len(images) // batch_size
+
     while True:
         for i in range(num_iter):
             if i == 0:
@@ -96,8 +100,12 @@ def data_generator(images, labels, batch_size=32, augmentations=None):
                         batch_images[j] = safe_assign(batch_images[j], augmented, channel)
 
                     if augmentation.apply_to_label:
-                        for l in range(len(labels)):
-                            batch_labels[l][j] = augmentation(batch_labels[l][j])
+                        try:
+                            for l in augmentation.apply_to_label:
+                                batch_labels[l][j] = augmentation(batch_labels[l][j])
+                        except:
+                            for l in range(len(labels)):
+                                batch_labels[l][j] = augmentation(batch_labels[l][j])
 
             batch_images = np.array(batch_images).astype(np.float32)
 

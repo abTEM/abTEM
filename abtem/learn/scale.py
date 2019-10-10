@@ -90,5 +90,5 @@ def find_hexagonal_spots(power_spec):
 def find_hexagonal_scale(image, a):
     power_spec = np.abs(np.fft.fftshift(np.fft.fft2(image))) ** 2
     radial, _ = find_hexagonal_spots(power_spec)
-    scale = radial * a / float(min(power_spec.shape)) * np.sqrt(3.) / 2.
+    scale = radial * a / float(min(power_spec.shape)) * (np.sqrt(3.) / 2.)
     return scale

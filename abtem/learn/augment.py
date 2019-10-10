@@ -2,6 +2,7 @@ import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import gaussian_filter
 from skimage.transform import rescale
+from abtem.noise import add_scan_noise
 
 
 class Augmentation(object):
@@ -229,28 +230,52 @@ def bandpass_noise(inner, outer, shape, sampling):
 
 class ScanNoise(Augmentation):
 
-    def __init__(self, scale, amount):
-        self.scale = scale
-        self.amount = amount
+    def __init__(self, rms_power):
+        self.rms_power = rms_power
         super().__init__(apply_to_label=False, channels=None)
 
     def randomize(self):
-        self._random_scale = np.random.uniform(*self.scale)
-        self._random_amount = np.random.uniform(*self.amount)
+        self._random_rms_power = np.random.uniform(*self.rms_power)
 
     def __call__(self, image):
-        n = bandpass_noise(0, self._random_scale, (image.shape[1],), (1. / image.shape[1],))
-        n *= bandpass_noise(0, np.max(image.shape), (image.shape[1],), (1. / image.shape[1],))
-        n = n / np.std(n) * self._random_amount
-        n = n.astype(np.int)
+        flyback_time = 361e-6  # Flyback time [s]
+        dwell_time = 8e-6  # Dwell time [s]
+        max_frequency = 50  # [Hz]
 
-        def strided_indexing_roll(a, r):
-            from skimage.util.shape import view_as_windows
-            a_ext = np.concatenate((a, a[:, :-1]), axis=1)
-            n = a.shape[1]
-            return view_as_windows(a_ext, (1, n))[np.arange(len(r)), (n - r) % n, 0]
+        return add_scan_noise(image, dwell_time, flyback_time, max_frequency, self._random_rms_power, num_components=25)
 
-        image = strided_indexing_roll(np.ascontiguousarray(image), n)
+    # def __call__(self, image):
+    #     n = bandpass_noise(0, self._random_scale, (image.shape[1],), (1. / image.shape[1],))
+    #     n *= bandpass_noise(0, np.max(image.shape), (image.shape[1],), (1. / image.shape[1],))
+    #     n = n / np.std(n) * self._random_amount
+    #     n = n.astype(np.int)
+    #
+    #     def strided_indexing_roll(a, r):
+    #         from skimage.util.shape import view_as_windows
+    #         a_ext = np.concatenate((a, a[:, :-1]), axis=1)
+    #         n = a.shape[1]
+    #         return view_as_windows(a_ext, (1, n))[np.arange(len(r)), (n - r) % n, 0]
+    #
+    #     image = strided_indexing_roll(np.ascontiguousarray(image), n)
+    #     return image
+
+
+class Blanking(Augmentation):
+
+    def __init__(self, width):
+        self.width = width
+        super().__init__(apply_to_label=True)
+
+    def randomize(self):
+        self._random_width = np.random.randint(*self.width)
+        self._random_position = None
+
+    def __call__(self, image):
+        if self._random_position is None:
+            self._random_position = np.random.randint(0, image.shape[0])
+
+        image[self._random_position:self._random_position + self._random_width] = 0
+
         return image
 
 
