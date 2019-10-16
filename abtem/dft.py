@@ -61,19 +61,27 @@ def project_spherical_function(f, r, a, b, num_samples=200):
 class GPAWPotential(PotentialBase, HasCache):
 
     def __init__(self, calc, origin=None, extent=None, gpts=None, sampling=None, num_slices=None, slice_thickness=.5,
-                 sigma=.01):
+                 sigma=.01, assert_equal_thickness=False):
         self._calc = calc
         self._sigma = sigma
 
+        thickness = calc.atoms.cell[2, 2]
+        Nz = calc.hamiltonian.finegd.N_c[2]
+
+        if num_slices is None:
+            if slice_thickness is None:
+                raise RuntimeError()
+            num_slices = int(np.ceil(Nz / np.floor(slice_thickness / (thickness / Nz))))
+
+        if (not (calc.hamiltonian.finegd.N_c[2] % num_slices == 0)) & assert_equal_thickness:
+            raise RuntimeError('{} {}'.format(calc.hamiltonian.finegd.N_c[2], self.num_slices))
+
+        self._Nz = Nz
+        self._nz = split_integer(Nz, num_slices)
+        self._dz = thickness / Nz
+
         super().__init__(atoms=calc.atoms.copy(), origin=origin, extent=extent, gpts=gpts,
-                         sampling=sampling, num_slices=num_slices, slice_thickness=slice_thickness)
-
-        self._Nz = calc.hamiltonian.finegd.N_c[2]
-        self._nz = split_integer(self._Nz, self.num_slices)
-        self._dz = self.thickness / self._Nz
-
-        # if not (calc.hamiltonian.finegd.N_c[2] % self.num_slices == 0):
-        #    raise RuntimeError('{} {}'.format(calc.hamiltonian.finegd.N_c[2], self.num_slices))
+                         sampling=sampling, num_slices=num_slices)
 
     def _prepare_paw_corrections(self):
         paw_corrections = get_paw_corrections(self._calc, rcgauss=self._sigma)

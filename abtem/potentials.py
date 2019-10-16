@@ -18,8 +18,7 @@ kappa = 4 * np.pi * eps0 / (2 * np.pi * units.Bohr * units._e * units.C)
 
 class PotentialBase(Grid):
 
-    def __init__(self, atoms, origin=None, extent=None, gpts=None, sampling=None, num_slices=None,
-                 slice_thickness=None):
+    def __init__(self, atoms, origin=None, extent=None, gpts=None, sampling=None, num_slices=None):
 
         if np.abs(atoms.cell[0, 0]) < 1e-12:
             raise RuntimeError('atoms has no thickness')
@@ -38,14 +37,7 @@ class PotentialBase(Grid):
         if extent is None:
             extent = np.diag(atoms.cell)[:2]
 
-        if num_slices is None:
-            if slice_thickness is None:
-                raise RuntimeError()
-
-            self._num_slices = int(np.floor(atoms.cell[2, 2] / slice_thickness))
-
-        else:
-            self._num_slices = num_slices
+        self._num_slices = num_slices
 
         super().__init__(extent=extent, gpts=gpts, sampling=sampling)
 
@@ -105,8 +97,14 @@ class Potential(PotentialBase, HasCache):
             else:
                 raise RuntimeError()
 
+        if num_slices is None:
+            if slice_thickness is None:
+                raise RuntimeError()
+
+            num_slices = int(np.floor(atoms.cell[2, 2] / slice_thickness))
+
         super().__init__(atoms=atoms.copy(), origin=origin, extent=extent, gpts=gpts, sampling=sampling,
-                         num_slices=num_slices, slice_thickness=slice_thickness)
+                         num_slices=num_slices)
 
     def slice_thickness(self, i):
         return self.thickness / self.num_slices

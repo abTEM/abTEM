@@ -50,17 +50,17 @@ from numba import njit
 #     return accepted
 
 
-def non_maximum_suppresion(markers, class_indicators, distance, threshold):
-    shape = markers.shape[2:]
+def non_maximum_suppresion(density, classes, distance, threshold):
+    shape = density.shape[2:]
 
-    markers = markers.reshape((markers.shape[0], -1))
+    density = density.reshape((density.shape[0], -1))
 
     # if class_indicators is not None:
-    class_indicators = class_indicators.reshape(class_indicators.shape[:2] + (-1,))
-    class_probabilities = np.zeros(class_indicators.shape, dtype=class_indicators.dtype)
+    classes = classes.reshape(classes.shape[:2] + (-1,))
+    probabilities = np.zeros(classes.shape, dtype=classes.dtype)
 
-    accepted = np.zeros(markers.shape, dtype=np.bool_)
-    suppressed = np.zeros(markers.shape, dtype=np.bool_)
+    accepted = np.zeros(density.shape, dtype=np.bool_)
+    suppressed = np.zeros(density.shape, dtype=np.bool_)
 
     x_disc = np.zeros((2 * distance + 1, 2 * distance + 1), dtype=np.int32)
 
@@ -79,9 +79,9 @@ def non_maximum_suppresion(markers, class_indicators, distance, threshold):
     weights = np.exp(-r2 / (2 * (distance / 3) ** 2))
     weights = np.reshape(weights[r2 < distance ** 2], (-1, 1))
 
-    for i in range(markers.shape[0]):
-        suppressed[i][markers[i] < threshold] = True
-        for j in np.argsort(-markers[i].ravel()):
+    for i in range(density.shape[0]):
+        suppressed[i][density[i] < threshold] = True
+        for j in np.argsort(-density[i].ravel()):
             if not suppressed[i, j]:
                 accepted[i, j] = True
 
@@ -98,11 +98,11 @@ def non_maximum_suppresion(markers, class_indicators, distance, threshold):
                 k = sub2ind(neighbors_x, neighbors_y, shape)
                 suppressed[i][k] = True
 
-                tmp = np.sum(class_indicators[i, :, k] * weights[valid], axis=0)
-                class_probabilities[i, :, j] = tmp / np.sum(tmp)
+                tmp = np.sum(classes[i, :, k] * weights[valid], axis=0)
+                probabilities[i, :, j] = tmp / np.sum(tmp)
 
-    accepted = accepted.reshape((markers.shape[0],) + shape)
+    accepted = accepted.reshape((classes.shape[0],) + shape)
 
-    class_probabilities = class_probabilities.reshape(class_indicators.shape[:2] + shape)
+    probabilities = probabilities.reshape(classes.shape[:2] + shape)
 
-    return accepted, class_probabilities
+    return accepted, probabilities
