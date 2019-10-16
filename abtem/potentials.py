@@ -18,7 +18,7 @@ kappa = 4 * np.pi * eps0 / (2 * np.pi * units.Bohr * units._e * units.C)
 
 class PotentialBase(Grid):
 
-    def __init__(self, atoms, origin=None, extent=None, gpts=None, sampling=None, num_slices=None):
+    def __init__(self, atoms, origin=None, extent=None, gpts=None, sampling=None, num_slices=None, **kwargs):
 
         if np.abs(atoms.cell[0, 0]) < 1e-12:
             raise RuntimeError('atoms has no thickness')
@@ -39,7 +39,7 @@ class PotentialBase(Grid):
 
         self._num_slices = num_slices
 
-        super().__init__(extent=extent, gpts=gpts, sampling=sampling)
+        super().__init__(extent=extent, gpts=gpts, sampling=sampling, **kwargs)
 
     @property
     def origin(self):
@@ -218,8 +218,7 @@ class PrecalculatedPotential(ArrayWithGrid):
 
         self._slice_thicknesses = slice_thicknesses
 
-        super().__init__(array=array, array_dimensions=3, spatial_dimensions=2, extent=extent, sampling=sampling,
-                         space='direct')
+        super().__init__(array=array, array_dimensions=3, spatial_dimensions=2, extent=extent, sampling=sampling)
 
     @property
     def thickness(self):
