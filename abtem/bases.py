@@ -1,50 +1,8 @@
+from typing import Optional, Union
+
 import numpy as np
 from ase import units
-
-
-def named_property(name):
-    def getter(self):
-        return getattr(self, name)
-
-    def setter(self, value):
-        setattr(self, name, value)
-
-    return property(getter, setter)
-
-
-def referenced_property(reference_name, property_name):
-    def getter(self):
-        return getattr(getattr(self, reference_name), property_name)
-
-    def setter(self, value):
-        setattr(getattr(self, reference_name), property_name, value)
-
-    return property(getter, setter)
-
-
-def notifying_property(name):
-    def getter(self):
-        return getattr(self, name)
-
-    def setter(self, value):
-        old = getattr(self, name)
-        setattr(self, name, value)
-        change = np.any(old != value)
-        self.notify_observers({'name': name, 'old': old, 'new': value, 'change': change})
-
-    return property(getter, setter)
-
-
-def xy_property(component, name):
-    def getter(self):
-        return getattr(self, name)[component]
-
-    def setter(self, value):
-        new = getattr(self, name).copy()
-        new[component] = value
-        setattr(self, name, new)
-
-    return property(getter, setter)
+from operator import attrgetter
 
 
 class Observable:
@@ -57,7 +15,6 @@ class Observable:
 
         :param kwargs: dummy
         """
-
         self._observers = []
         super().__init__(**kwargs)
 
@@ -80,7 +37,6 @@ class Observer:
 
         :param kwargs: dummy
         """
-
         super().__init__(**kwargs)
 
     def observe(self, observable):
@@ -93,6 +49,13 @@ class Observer:
 class SelfObservable(Observable):
 
     def __init__(self, **kwargs):
+        """
+        SelfObserver base class.
+
+        Base class for creating an observable class in the classic observer design pattern.
+
+        :param kwargs: dummy
+        """
         super().__init__(**kwargs)
 
     def notify(self, observable, message):
@@ -103,16 +66,27 @@ class SelfObservable(Observable):
         super().notify_observers(message)
 
 
-# def cached_method(func):
-#     def new_func(*args):
-#         self = args[0]
-#         try:
-#             return self._cached[func.__name__]
-#         except:
-#             self._cached[func.__name__] = func(*args)
-#             return self._cached[func.__name__]
-#
-#     return new_func
+class HasCache(Observer):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        self._cached = {}
+        self._clear_conditions = {}
+
+    def notify(self, observable, message):
+        pop = []
+        if message['change']:
+            for name, conditions in self._clear_conditions.items():
+                if (conditions == 'any') | (message['name'] in conditions):
+                    pop.append(name)
+
+        for name in pop:
+            self._cached.pop(name, None)
+            self._clear_conditions.pop(name, None)
+
+    def clear_cache(self):
+        self._cached = {}
 
 
 def cached_method(clear_conditions='any'):
@@ -152,28 +126,6 @@ def cached_method_with_args(clear_conditions='any'):
         return new_func
 
     return wrapper
-
-
-class HasCache(Observer):
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._cached = {}
-        self._clear_conditions = {}
-
-    def notify(self, observable, message):
-        pop = []
-        if message['change']:
-            for name, conditions in self._clear_conditions.items():
-                if (conditions == 'any') | (message['name'] in conditions):
-                    pop.append(name)
-
-        for name in pop:
-            self._cached.pop(name, None)
-            self._clear_conditions.pop(name, None)
-
-    def clear_cache(self):
-        self._cached = {}
 
 
 class GridProperty:
@@ -232,7 +184,12 @@ def fourier_extent(extent, n):
 
 class Grid(Observable):
 
-    def __init__(self, extent=None, gpts=None, sampling=None, dimensions=2, endpoint=False, **kwargs):
+    def __init__(self,
+                 extent: Optional[Union[np.ndarray, float, GridProperty]] = None,
+                 gpts: Optional[Union[np.ndarray, int, GridProperty]] = None,
+                 sampling: Optional[Union[np.ndarray, int, GridProperty]] = None,
+                 dimensions: int = 2, endpoint: bool = False,
+                 **kwargs):
 
         self._dimensions = dimensions
         self._endpoint = endpoint
@@ -240,7 +197,7 @@ class Grid(Observable):
         if isinstance(extent, GridProperty):
             self._extent = extent
         else:
-            self._extent = GridProperty(extent, np.float64, locked=False, dimensions=dimensions)
+            self._extent = GridProperty(extent, np.float, locked=False, dimensions=dimensions)
 
         if isinstance(gpts, GridProperty):
             self._gpts = gpts
@@ -250,7 +207,7 @@ class Grid(Observable):
         if isinstance(sampling, GridProperty):
             self._sampling = sampling
         else:
-            self._sampling = GridProperty(sampling, np.float64, locked=False, dimensions=dimensions)
+            self._sampling = GridProperty(sampling, np.float, locked=False, dimensions=dimensions)
 
         if self.extent is None:
             if not ((self.gpts is None) | (self.sampling is None)):
@@ -273,15 +230,15 @@ class Grid(Observable):
         super().__init__(**kwargs)
 
     @property
-    def endpoint(self):
+    def endpoint(self) -> bool:
         return self._endpoint
 
     @property
-    def dimensions(self):
+    def dimensions(self) -> int:
         return self._dimensions
 
     @property
-    def extent(self):
+    def extent(self) -> np.ndarray:
         if self._gpts.locked & self._sampling.locked:
             return self._adjusted_extent(self.gpts, self.sampling)
 
@@ -356,23 +313,24 @@ class Grid(Observable):
 
     def _adjusted_extent(self, gpts, sampling):
         if self._endpoint:
-            return np.float64(gpts - 1) * sampling
+            return (gpts - 1) * sampling
         else:
-            return np.float64(gpts) * sampling
+            return gpts * sampling
 
     def _adjusted_gpts(self, extent, sampling):
         if self._endpoint:
-            return np.ceil(extent / sampling).astype(np.int32) + 1
+            return np.ceil(extent / sampling).astype(np.int) + 1
         else:
-            return np.ceil(extent / sampling).astype(np.int32)
+            return np.ceil(extent / sampling).astype(np.int)
 
     def _adjusted_sampling(self, extent, gpts):
         if self._endpoint:
-            return extent / np.float64(gpts - 1)
+            return extent / (gpts - 1)
         else:
-            return extent / np.float64(gpts)
+            return extent / gpts
 
     def check_is_grid_defined(self):
+        """ Throw error if the grid is not defined. """
         if (self.extent is None) | (self.gpts is None) | (self.sampling is None):
             raise RuntimeError('grid is not defined')
 
@@ -380,36 +338,13 @@ class Grid(Observable):
     def fourier_extent(self):
         return fourier_extent(self.extent, self.gpts)
 
-    def clear_grid(self):
-        self._extent.value = None
-        self._gpts.value = None
-        self._sampling.value = None
-        self.notify_observers({'change': True})
-
     def match_grid(self, other):
-        if self.extent is None:
-            self.extent = other.extent
-
-        elif other.extent is None:
-            other.extent = self.extent
-
-        elif np.any(self.extent != other.extent):
+        """ Throw error if the grid of another object is different from this object. """
+        if np.any(self.extent != other.extent):
             raise RuntimeError('inconsistent grids')
-
-        if self.gpts is None:
-            self.gpts = other.gpts
-
-        elif other.gpts is None:
-            other.gpts = self.gpts
 
         elif np.any(self.gpts != other.gpts):
             raise RuntimeError('inconsistent grids')
-
-        if self.sampling is None:
-            self.sampling = other.sampling
-
-        elif other.sampling is None:
-            other.sampling = self.sampling
 
         elif np.any(self.sampling != other.sampling):
             raise RuntimeError('inconsistent grids')
@@ -454,39 +389,89 @@ def energy2sigma(energy):
             units._hplanck * units.s * units.J) ** 2)
 
 
+def notifying_property(name):
+    def getter(self):
+        return getattr(self, name)
+
+    def setter(self, value):
+        old = getattr(self, name)
+        setattr(self, name, value)
+        change = np.any(old != value)
+        self.notify_observers({'name': name, 'old': old, 'new': value, 'change': change})
+
+    return property(getter, setter)
+
+
+def notify(func):
+    name = func.__name__
+
+    def wrapper(*args):
+        obj, value = args
+        old = getattr(obj, name)
+        change = np.any(old != value)
+        obj.notify_observers({'name': name, 'old': old, 'new': value, 'change': change})
+
+    return wrapper
+
+
 class Energy(Observable):
 
-    def __init__(self, energy=None, **kwargs):
+    def __init__(self, energy=Optional[float], lock_energy=False, **kwargs):
+        """
+        Energy base class
+
+        Base class for describing the energy of wavefunctions and transfer functions.
+
+        :param energy: energy
+        :type energy: optional, float
+        """
         self._energy = energy
+        self._lock_energy = lock_energy
+
         super().__init__(**kwargs)
 
-    energy = notifying_property('_energy')
+    @property
+    def energy(self) -> float:
+        return self._energy
+
+    @energy.setter
+    @notify
+    def energy(self, value):
+        self._energy = value
 
     @property
-    def wavelength(self):
+    def wavelength(self) -> float:
+        """
+        Relativistic wavelength from energy.
+        :return: wavelength
+        :rtype: float
+        """
         self.check_is_energy_defined()
         return energy2wavelength(self.energy)
 
     @property
-    def sigma(self):
+    def sigma(self) -> float:
+        """
+        Interaction parameter from energy.
+        """
         self.check_is_energy_defined()
         return energy2sigma(self.energy)
 
     def check_is_energy_defined(self):
+        """ Throw error if the energy is not defined. """
         if self.energy is None:
             raise RuntimeError('energy is not defined')
 
-    def match_energy(self, other):
-        if other.energy is None:
-            other.energy = self.energy
-
-        elif self.energy is None:
-            self.energy = other.energy
-
-        elif self.energy != other.energy:
+    def check_match_energy(self, other: 'Energy'):
+        """ Throw error if the energy of another object is different from this object. """
+        if self.energy != other.energy:
             raise RuntimeError('inconsistent energies')
 
-    def copy(self):
+    def copy(self) -> 'Energy':
+        """
+        :return: A copy of itself
+        :rtype: Energy
+        """
         return self.__class__(self.energy)
 
 

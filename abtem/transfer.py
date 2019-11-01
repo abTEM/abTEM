@@ -86,9 +86,9 @@ def parametrization_property(key):
     return property(getter, setter)
 
 
-class CTFBase(HasCache):
+class CTFBase(Energy):
 
-    def __init__(self, cutoff=np.inf, rolloff=0., focal_spread=0., parameters=None, **kwargs):
+    def __init__(self, cutoff=np.inf, rolloff=0., focal_spread=0., energy=None, parameters=None, **kwargs):
 
         self._cutoff = cutoff
         self._rolloff = rolloff
@@ -105,11 +105,13 @@ class CTFBase(HasCache):
 
         for symbol in polar_symbols:
             setattr(self.__class__, symbol, parametrization_property(symbol))
+            kwargs.pop(symbol, None)
 
         for key, value in polar_aliases.items():
             setattr(self.__class__, key, parametrization_property(value))
+            kwargs.pop(key, None)
 
-        super().__init__(**kwargs)
+        super().__init__(energy=energy, **kwargs)
 
     cutoff = notifying_property('_cutoff')
     rolloff = notifying_property('_rolloff')
@@ -127,17 +129,9 @@ class CTFBase(HasCache):
                 self._parameters[polar_aliases[symbol]] = value
 
             else:
-                raise RuntimeError('{}'.format(symbol))
+                raise RuntimeError('{} not a recognized parameter'.format(symbol))
 
         return parameters
-
-    @property
-    def energy(self):
-        raise NotImplementedError()
-
-    @property
-    def wavelength(self):
-        raise NotImplementedError()
 
     def get_alpha(self):
         raise NotImplementedError()
@@ -145,23 +139,15 @@ class CTFBase(HasCache):
     def get_phi(self):
         raise NotImplementedError()
 
-    @cached_method(('extent', 'gpts', 'sampling', 'energy', '_cutoff', '_rolloff'))
     def get_aperture(self):
-        alpha = self.get_alpha()
-        return calculate_aperture(alpha, self.cutoff, self.rolloff)
+        return calculate_aperture(self.get_alpha(), self.cutoff, self.rolloff)
 
-    @cached_method(('extent', 'gpts', 'sampling', 'energy', '_focal_spread'))
     def get_temporal_envelope(self):
-        alpha = self.get_alpha()
-        return calculate_temporal_envelope(alpha, self.wavelength, self.focal_spread)
+        return calculate_temporal_envelope(self.get_alpha(), self.wavelength, self.focal_spread)
 
-    @cached_method(('extent', 'gpts', 'sampling', 'energy') + polar_symbols)
     def get_aberrations(self):
-        alpha = self.get_alpha()
-        phi = self.get_phi()
-        return calculate_polar_aberrations(alpha, phi, self.wavelength, self._parameters)
+        return calculate_polar_aberrations(self.get_alpha(), self.get_phi(), self.wavelength, self._parameters)
 
-    @cached_method('any')
     def get_array(self):
         array = self.get_aberrations()
 
@@ -185,10 +171,11 @@ class CTFArray(ArrayWithGridAndEnergy):
         return Image(convert_complex(self._array[i], convert), extent=self.extent, space='fourier')
 
 
-class CTF(Grid, Energy, CTFBase):
+class CTF(Grid, HasCache, CTFBase):
 
     def __init__(self, cutoff=np.inf, rolloff=0., focal_spread=0., extent=None, gpts=None, sampling=None, energy=None,
                  parameters=None, **kwargs):
+
         super().__init__(cutoff=cutoff, rolloff=rolloff, focal_spread=focal_spread, extent=extent, gpts=gpts,
                          sampling=sampling, energy=energy, parameters=parameters, **kwargs)
 
@@ -205,6 +192,22 @@ class CTF(Grid, Energy, CTFBase):
         alpha_x, alpha_y = semiangles(self)
         phi = np.arctan2(alpha_x.reshape((-1, 1)), alpha_y.reshape((1, -1)))
         return phi
+
+    @cached_method(('extent', 'gpts', 'sampling', 'energy', '_cutoff', '_rolloff'))
+    def get_aperture(self):
+        return super().get_aperture()
+
+    @cached_method(('extent', 'gpts', 'sampling', 'energy', '_focal_spread'))
+    def get_temporal_envelope(self):
+        return super().get_temporal_envelope()
+
+    @cached_method(('extent', 'gpts', 'sampling', 'energy') + polar_symbols)
+    def get_aberrations(self):
+        return super().get_aberrations()
+
+    @cached_method('any')
+    def get_array(self):
+        return super().get_array()
 
     def build(self):
         return CTFArray(np.fft.fftshift(self.get_array(), axes=(1, 2)), extent=self.extent, energy=self.energy)
