@@ -53,42 +53,76 @@ def unroll_powerspec(f, inner=1, outer=None, nbins_angular=64, nbins_radial=None
     return unrolled
 
 
-def make_circular_template(angles, nbins_angular=64, gauss_width=1., margin=1):
-    angles = np.array(angles) * nbins_angular / (2 * np.pi) + margin
-    x, y = np.mgrid[:nbins_angular + 2 * margin, -margin:margin + 1]
-    r2 = (x[None] - angles[:, None, None]) ** 2 + y ** 2
-    template = np.exp(-r2 / (2 * gauss_width ** 2)).sum(axis=0)
+def top_n_2d(array, n, margin=0):
+    top = np.argsort(array.ravel())[::-1]
+    accepted = np.zeros((n, 2), dtype=np.int)
+    values = np.zeros(n, dtype=np.int)
+    marked = np.zeros((array.shape[0] + 2 * margin, array.shape[1] + 2 * margin), dtype=np.bool_)
+    i = 0
+    j = 0
+    while j < n:
+        idx = ind2sub(array.shape, top[i])
 
-    template[margin:2 * margin] += template[-margin:]
-    template[-2 * margin:-margin] += template[:margin]
-    template = template[margin:-margin]
-    return template
+        if marked[idx[0] + margin, idx[1] + margin] == False:
+            marked[idx[0]:idx[0] + 2 * margin, idx[1]:idx[1] + 2 * margin] = True
+            marked[margin:2 * margin] += marked[-margin:]
+            marked[-2 * margin:-margin] += marked[:margin]
 
+            accepted[j] = idx
+            values[j] = array[idx[0], idx[1]]
+            j += 1
 
-def find_circular_spots(power_spec, angles, inner=3):
-    template = make_circular_template(angles)
+        i += 1
+        if i >= array.size - 1:
+            break
 
-    unrolled = unroll_powerspec(power_spec, inner)
-    unrolled /= unrolled.max()
-
-    unrolled = np.pad(unrolled, [(unrolled.shape[0] // 2, unrolled.shape[0] // 2), (0, 0)], mode='wrap').astype(
-        np.float32)
-    h = cv2.matchTemplate(unrolled, template.astype(np.float32), method=2)
-
-    rows, cols = ind2sub(h.shape, h.argmax())
-
-    angles = angles + (rows + .5) / 64 * 2 * np.pi
-    radial = cols + inner + 1 + .5
-    return radial, angles
+    return accepted, values
 
 
-def find_hexagonal_spots(power_spec):
-    angles = np.linspace(0, 2 * np.pi, 6, endpoint=False)
-    return find_circular_spots(power_spec, angles)
+def moving_average(x, w):
+    return np.convolve(x, np.ones(1 + 2 * w), 'valid') / w
 
 
-def find_hexagonal_scale(image, a):
-    power_spec = np.abs(np.fft.fftshift(np.fft.fft2(image))) ** 2
-    radial, _ = find_hexagonal_spots(power_spec)
-    scale = radial * a / float(min(power_spec.shape)) * (np.sqrt(3.) / 2.)
+def find_circular_spots(power_spec, n, m=1, inner=1, w=1, bins_per_spot=40):
+    nbins_angular = n * bins_per_spot
+
+    unrolled = unroll_powerspec(power_spec, inner, nbins_angular=nbins_angular)
+    unrolled = unrolled.reshape((n, bins_per_spot, unrolled.shape[1])).sum(0)
+    #unrolled = unrolled[:, w:-w] / moving_average(unrolled.mean(axis=0), w)
+    peaks, intensities = top_n_2d(unrolled, m, bins_per_spot // 4)
+
+    #import matplotlib.pyplot as plt
+    #plt.figure(figsize=(12,12))
+    #plt.imshow(np.log(1+10*power_spec))
+    #plt.imshow(unrolled)
+    #plt.show()
+
+    radials, angles = peaks[:, 1], peaks[:, 0]
+
+    angles = (angles + .5) / nbins_angular * 2 * np.pi
+    radials = radials + inner + w + .5
+
+    return radials, angles, intensities
+
+
+def find_hexagonal_scale(image, a=.246, ratio_tol=.1, angle_tol=5., limiting_regime='high'):
+    angle_tol = angle_tol / 180. * np.pi
+
+    power_spec = np.fft.fftshift(np.abs(np.fft.fft2(image)) ** 2)
+    radials, angles, intensities = find_circular_spots(power_spec, 6, m=2)
+
+    ordered_angles = np.sort(angles)
+    ordered_radials = np.sort(radials)
+    ratio = ordered_radials[0] / ordered_radials[1]
+    angle_diff = np.diff(ordered_angles)[0]
+
+    if np.isclose(ratio, 1 / np.sqrt(3), atol=ratio_tol) & np.isclose(angle_diff, np.pi / 6, atol=angle_tol):
+        scale = np.max(radials) * a / float(min(power_spec.shape)) / 2.
+    elif limiting_regime == 'low':
+        scale = radials[np.argmax(intensities)] * a / float(min(power_spec.shape)) / 2.
+    elif limiting_regime == 'high':
+        scale = radials[np.argmax(intensities)] * a / float(min(power_spec.shape)) * (np.sqrt(3.) / 2.)
+    else:
+        raise RuntimeError()
+
     return scale

@@ -31,6 +31,13 @@ class CustomScan(Scan):
         Scan.__init__(self)
         self._positions = positions
 
+    @property
+    def gpts(self):
+        return np.array([len(self._positions)])
+
+    def get_positions(self):
+        return self._positions
+
 
 class LineScan(Scan, Grid):
 

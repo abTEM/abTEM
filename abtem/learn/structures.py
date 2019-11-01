@@ -73,10 +73,10 @@ def add_contamination(points, new_label, position, size, n):
     contamination = contamination[path.contains_points(contamination.positions)]
     contamination.labels[:] = new_label
     points.extend(contamination)
-    return points
+    return points.copy()
 
 
 def random_add_contamination(points, new_label, size):
-    n = int(1.2 * size ** 2)
+    n = int(.25 * size ** 2)
     position = np.random.rand() * points.cell[0] + np.random.rand() * points.cell[1]
     return add_contamination(points, new_label, position, size, n)

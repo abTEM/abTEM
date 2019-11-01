@@ -47,7 +47,6 @@ def thread_safe_coloring(corners, size):
 @jit(nopython=True, nogil=True, parallel=True)
 def interpolation_kernel(v, r, vr, corner_positions, block_positions, x, y):
     diff_r = np.diff(r)
-
     diff_vr_r = np.diff(vr) / diff_r
 
     if corner_positions[0] < 0:
@@ -90,25 +89,28 @@ def interpolation_kernel(v, r, vr, corner_positions, block_positions, x, y):
                 l = int(np.floor((r_interp - r[0]) / (r[-1] - r[0]) * (len(r) - 1)))
 
                 if l < 0:
-                    # v[corner_positions[i, 0] + j, corner_positions[i, 1] + k] += vr_i[0]
                     v[j, k] += vr[0]
                 elif l < (len(vr) - 1):
                     value = vr[l] + (r_interp - r[l]) * diff_vr_r[l]
-                    # v[corner_positions[i, 0] + j, corner_positions[i, 1] + k] += value
                     v[j, k] += value
 
 
 @jit(nopython=True, nogil=True, parallel=True)
-def interpolation_kernel_parallel(v, r, vr, corner_positions, block_positions, x, y):
-    colors = thread_safe_coloring(corner_positions, len(x))
+def interpolation_kernel_parallel(v, r, vr, corner_positions, block_positions, x, y, thread_safe=True):
+    if thread_safe:
+        colors = thread_safe_coloring(corner_positions, len(x))
 
-    for color in np.unique(colors):
+        for color in np.unique(colors):
+            for i in prange(len(corner_positions)):
+                if colors[i] == color:
+                    interpolation_kernel(v, r, vr[i], corner_positions[i], block_positions[i], x, y)
+
+    else:
         for i in prange(len(corner_positions)):
-            if colors[i] == color:
-                interpolation_kernel(v, r, vr[i], corner_positions[i], block_positions[i], x, y)
+            interpolation_kernel(v, r, vr[i], corner_positions[i], block_positions[i], x, y)
 
 
-def interpolate_radial_functions(array, r, values, positions, sampling):
+def interpolate_radial_functions(array, r, values, positions, sampling, thread_safe=True):
     block_margin = int(r[-1] / min(sampling))
     block_size = 2 * block_margin + 1
 
@@ -121,4 +123,4 @@ def interpolate_radial_functions(array, r, values, positions, sampling):
     if values.shape == (len(r),):
         values = np.tile(values, (len(corner_positions), 1))
 
-    interpolation_kernel_parallel(array, r, values, corner_positions, block_positions, x, y)
+    interpolation_kernel_parallel(array, r, values, corner_positions, block_positions, x, y, thread_safe)

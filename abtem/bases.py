@@ -29,7 +29,7 @@ def notifying_property(name):
     def setter(self, value):
         old = getattr(self, name)
         setattr(self, name, value)
-        change = np.all(old != value)
+        change = np.any(old != value)
         self.notify_observers({'name': name, 'old': old, 'new': value, 'change': change})
 
     return property(getter, setter)
@@ -50,6 +50,14 @@ def xy_property(component, name):
 class Observable:
 
     def __init__(self, **kwargs):
+        """
+        Observable base class.
+
+        Base class for creating an observable class in the classic observer design pattern.
+
+        :param kwargs: dummy
+        """
+
         self._observers = []
         super().__init__(**kwargs)
 
@@ -65,6 +73,14 @@ class Observable:
 class Observer:
 
     def __init__(self, **kwargs):
+        """
+        Observer base class.
+
+        Base class for creating an observer class in the classic observer design pattern.
+
+        :param kwargs: dummy
+        """
+
         super().__init__(**kwargs)
 
     def observe(self, observable):
@@ -74,14 +90,17 @@ class Observer:
         raise NotImplementedError()
 
 
-class SelfObservable(Observable, Observer):
+class SelfObservable(Observable):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
+    def notify(self, observable, message):
+        raise NotImplementedError()
+
     def notify_observers(self, message):
-        super().notify_observers(message)
         self.notify(self, message)
+        super().notify_observers(message)
 
 
 # def cached_method(func):
@@ -207,9 +226,14 @@ class GridProperty:
         return self.__class__(value=self._value, dtype=self._dtype, locked=self._locked, dimensions=self._dimensions)
 
 
+def fourier_extent(extent, n):
+    return np.array([-n[0] / extent[0], n[1] / extent[1]]) / 2.
+
+
 class Grid(Observable):
 
     def __init__(self, extent=None, gpts=None, sampling=None, dimensions=2, endpoint=False, **kwargs):
+
         self._dimensions = dimensions
         self._endpoint = endpoint
 
@@ -352,6 +376,10 @@ class Grid(Observable):
         if (self.extent is None) | (self.gpts is None) | (self.sampling is None):
             raise RuntimeError('grid is not defined')
 
+    @property
+    def fourier_extent(self):
+        return fourier_extent(self.extent, self.gpts)
+
     def clear_grid(self):
         self._extent.value = None
         self._gpts.value = None
@@ -463,18 +491,40 @@ class Energy(Observable):
 
 
 class ArrayWithGrid(Grid):
-    def __init__(self, array, array_dimensions, spatial_dimensions, extent=None, sampling=None, **kwargs):
+    def __init__(self, array, spatial_dimensions, extent=None, sampling=None, space=None, **kwargs):
+        array_dimensions = len(array.shape)
 
         if array_dimensions < spatial_dimensions:
             raise RuntimeError()
 
-        if len(array.shape) != array_dimensions:
-            raise RuntimeError('array shape {} not {}d'.format(array.shape, array_dimensions))
-
         self._array = array
+        self._spatial_dimensions = spatial_dimensions
+        self._space = space
 
         gpts = GridProperty(value=lambda obj: obj.gpts, dtype=np.int, locked=True, dimensions=spatial_dimensions)
         super().__init__(extent=extent, gpts=gpts, sampling=sampling, dimensions=spatial_dimensions, **kwargs)
+
+    def fourier_transform(self, shift=True, in_place=True):
+        axes = tuple(range(len(self.array.shape)))[-self.spatial_dimensions:]
+
+        if (self.space is None) | (self.space == 'direct'):
+            self._array = np.fft.fftn(self._array, axes=axes)
+            self._array = np.fft.fftshift(self._array, axes=axes)
+
+        elif self.space == 'fourier':
+            if shift:
+                self._array = np.fft.fftshift(self._array, axes=axes)
+            self._array = np.fft.ifftn(self._array, axes=axes)
+
+        return self
+
+    @property
+    def space(self):
+        return self._space
+
+    @property
+    def spatial_dimensions(self):
+        return self._spatial_dimensions
 
     @property
     def gpts(self):
@@ -487,3 +537,36 @@ class ArrayWithGrid(Grid):
 
     def copy(self):
         return self.__class__(array=self.array.copy(), extent=self.extent.copy())
+
+
+class ArrayWithGridAndEnergy(ArrayWithGrid, Energy):
+
+    def __init__(self, array, spatial_dimensions, extent=None, sampling=None, energy=None, **kwargs):
+        super().__init__(array=array, spatial_dimensions=spatial_dimensions, extent=extent, sampling=sampling,
+                         energy=energy, **kwargs)
+
+    def copy(self):
+        return self.__class__(array=self.array.copy(), spatial_dimensions=self.spatial_dimensions,
+                              extent=self.extent.copy(), energy=self.energy)
+
+
+class LineProfile(ArrayWithGrid):
+
+    def __init__(self, array, extent=None, sampling=None, space='direct'):
+        super().__init__(array, 1, extent=extent, sampling=sampling, space=space)
+
+    # def __getitem__(self, i):
+    #    new_array = self._array[i]
+    #    return self.__class__(new_array, extent=self.sampling * new_array.shape)
+
+
+class Image(ArrayWithGrid):
+    def __init__(self, array, extent=None, sampling=None, space='direct'):
+        super().__init__(array, 2, extent=extent, sampling=sampling, space=space)
+
+    def get_profile(self, slice_position=None, axis=0):
+        if slice_position is None:
+            slice_position = self.gpts[int(not axis)] // 2
+
+        array = np.take(self.array, slice_position, int(not axis))
+        return LineProfile(array, extent=self.extent[axis], space=self.space)

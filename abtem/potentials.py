@@ -161,7 +161,7 @@ class Potential(PotentialBase, HasCache):
         v = np.zeros(self.gpts)
         return v, data
 
-    def _evaluate_interpolation(self, i, num_spline_nodes=200, num_integration_samples=100):
+    def _evaluate_interpolation(self, i, num_spline_nodes=100, num_integration_samples=100):
         v, data_dict = self._prepare_interpolation()
         v[:, :] = 0.
 
@@ -218,7 +218,7 @@ class PrecalculatedPotential(ArrayWithGrid):
 
         self._slice_thicknesses = slice_thicknesses
 
-        super().__init__(array=array, array_dimensions=3, spatial_dimensions=2, extent=extent, sampling=sampling)
+        super().__init__(array=array, spatial_dimensions=2, extent=extent, sampling=sampling)
 
     @property
     def thickness(self):

@@ -241,8 +241,8 @@ class ScanNoise(Augmentation):
         flyback_time = 361e-6  # Flyback time [s]
         dwell_time = 8e-6  # Dwell time [s]
         max_frequency = 50  # [Hz]
-
-        return add_scan_noise(image, dwell_time, flyback_time, max_frequency, self._random_rms_power, num_components=25)
+        print(self._random_rms_power)
+        return add_scan_noise(image, dwell_time, flyback_time, max_frequency, self._random_rms_power, num_components=300)
 
     # def __call__(self, image):
     #     n = bandpass_noise(0, self._random_scale, (image.shape[1],), (1. / image.shape[1],))

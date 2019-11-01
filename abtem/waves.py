@@ -2,25 +2,34 @@ from collections import Iterable
 
 import h5py
 import numpy as np
-from ase import Atoms
-
-from abtem.bases import cached_method, HasCache, ArrayWithGrid, Grid, Energy, notifying_property, \
-    cached_method_with_args
-from abtem.potentials import Potential
-from abtem.scan import GridScan, LineScan
-from abtem.transfer import CTF
-from abtem.utils import complex_exponential, fftfreq, BatchGenerator
-
 import pyfftw as fftw
+from ase import Atoms
+from numba import jit, prange
+
+from abtem.bases import cached_method, HasCache, Grid, Energy, notifying_property, cached_method_with_args, \
+    SelfObservable, Image, ArrayWithGridAndEnergy
+from abtem.potentials import Potential
+from abtem.scan import GridScan, LineScan, CustomScan
+from abtem.transfer import CTF, CTFBase
+from abtem.utils import complex_exponential, fftfreq, BatchGenerator, convert_complex
 
 
-class Propagator(Energy, Grid, HasCache):
+class Propagates(ArrayWithGridAndEnergy, HasCache):
 
-    def __init__(self, extent=None, gpts=None, sampling=None, energy=None):
-        super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy)
 
-    @cached_method_with_args()
-    def get_array(self, dz):
+    def __init__(self, array, extent=None, sampling=None, energy=None, **kwargs):
+        super().__init__(array=array, spatial_dimensions=2, extent=extent, sampling=sampling, energy=energy, **kwargs)
+
+    @cached_method(('gpts', 'extent', 'sampling'))
+    def get_fft_plans(self, threads=16):
+        temp_1 = fftw.empty_aligned(self.array.shape, dtype='complex128')
+        temp_2 = fftw.empty_aligned(self.array.shape, dtype='complex128')
+        fft_object_forward = fftw.FFTW(temp_1, temp_2, axes=(1, 2), threads=threads)
+        fft_object_backward = fftw.FFTW(temp_2, temp_1, axes=(1, 2), direction='FFTW_BACKWARD', threads=threads)
+        return temp_1, temp_2, fft_object_forward, fft_object_backward
+
+    @cached_method_with_args(('gpts', 'extent', 'sampling', 'energy'))
+    def get_propagator(self, dz):
         self.check_is_grid_defined()
         self.check_is_energy_defined()
         kx = np.fft.fftfreq(self.gpts[0], self.sampling[0])
@@ -28,90 +37,63 @@ class Propagator(Energy, Grid, HasCache):
         k = (kx ** 2)[:, None] + (ky ** 2)[None]
         return complex_exponential(-k * np.pi * self.wavelength * dz)[None]
 
+    def multislice(self, potential, in_place=False, show_progress=False):
+        if not in_place:
+            waves = self.copy()
+        else:
+            waves = self
 
-def multislice(waves, potential, propagator=None, in_place=False, show_progress=False):
-    if not in_place:
-        waves = waves.copy()
+        if isinstance(potential, Atoms):
+            potential = Potential(atoms=potential)
 
-    waves.match_grid(potential)
-    waves.check_is_grid_defined()
-    waves.check_is_energy_defined()
+        waves.match_grid(potential)
+        waves.check_is_grid_defined()
+        waves.check_is_energy_defined()
 
-    if isinstance(potential, Atoms):
-        potential = Potential(atoms=potential)
+        temp_1, temp_2, fft_object_forward, fft_object_backward = waves.get_fft_plans()
 
-    if propagator is None:
-        propagator = Propagator(extent=waves.extent, gpts=waves.gpts, energy=waves.energy)
+        for i in range(potential.num_slices):
+            temp_1[:] = waves.array * complex_exponential(waves.sigma * potential.get_slice(i))
+            temp_2[:] = fft_object_forward() * self.get_propagator(potential.slice_thickness(i))
+            waves.array[:] = fft_object_backward()
 
-    temp_1 = fftw.empty_aligned(waves.array.shape, dtype='complex64')
-    temp_2 = fftw.empty_aligned(waves.array.shape, dtype='complex64')
-    fft_object_forward = fftw.FFTW(temp_1, temp_2, axes=(1, 2))
-    fft_object_backward = fftw.FFTW(temp_2, temp_1, axes=(1, 2), direction='FFTW_BACKWARD')
-
-    for i in range(potential.num_slices):
-        temp_1[:] = waves.array * complex_exponential(waves.sigma * potential.get_slice(i))
-        temp_2[:] = fft_object_forward() * propagator.get_array(potential.slice_thickness(i))
-        waves.array[:] = fft_object_backward()
-
-    return waves
+        return waves
 
 
-class Waves(ArrayWithGrid, Energy):
+class Waves(Propagates):
 
     def __init__(self, array, extent=None, sampling=None, energy=None):
         array = np.array(array, dtype=np.complex)
-
-        if len(array.shape) == 2:
-            array = array[None]
-
-        if len(array.shape) != 3:
-            raise RuntimeError('array must be 2d or 3d')
-
-        super().__init__(array=array, array_dimensions=3, spatial_dimensions=2, extent=extent, sampling=sampling,
-                         energy=energy)
+        super().__init__(array=array, extent=extent, sampling=sampling, energy=energy)
 
     def apply_ctf(self, ctf=None, in_place=False, **kwargs):
+        if not in_place:
+            waves = self.copy()
+        else:
+            waves = self
+
         if ctf is None:
             ctf = CTF(**kwargs)
 
-        ctf.match_grid(self)
-        ctf.match_energy(self)
+        ctf.match_grid(waves)
+        ctf.match_energy(waves)
 
-        self.check_is_grid_defined()
-        self.check_is_energy_defined()
+        waves.check_is_grid_defined()
+        waves.check_is_energy_defined()
 
-        ctf_array = np.expand_dims(ctf.get_array(), axis=0)
-        array = np.fft.ifft2(np.fft.fft2(self.array) * ctf_array)
+        temp_1, temp_2, fft_object_forward, fft_object_backward = waves.get_fft_plans()
+        temp_1[:] = waves.array
+        temp_2[:] = fft_object_forward() * ctf.get_array()
+        array = fft_object_backward()
 
         return self.__class__(array, extent=self.extent, energy=self.energy)
 
-    def multislice(self, potential, in_place=False, show_progress=False):
-        return multislice(self, potential, in_place=in_place, show_progress=show_progress)
-
-    def get_intensity(self):
-        return np.abs(self.array) ** 2
-
-    def get_diffractogram(self):
-        return np.abs(np.fft.fftshift(np.fft.fft2(self.array))) ** 2
+    def get_image(self, i=0, convert='intensity'):
+        return Image(convert_complex(self._array[i], convert), extent=self.extent, space='direct')
 
     def copy(self):
         new = self.__class__(array=self.array.copy(), extent=self.extent.copy(), energy=self.energy)
         return new
-
-
-class ScatteringMatrix(ArrayWithGrid, Energy):
-
-    def __init__(self, array, extent=None, sampling=None, energy=None):
-        array = np.array(array, dtype=np.complex)
-
-        if len(array.shape) == 2:
-            array = array[None]
-
-        if len(array.shape) != 3:
-            raise RuntimeError('array must be 2d or 3d')
-
-        super().__init__(array=array, array_dimensions=3, spatial_dimensions=2, extent=extent, sampling=sampling,
-                         energy=energy)
 
 
 class PlaneWaves(Grid, Energy, HasCache):
@@ -138,102 +120,17 @@ class PlaneWaves(Grid, Energy, HasCache):
         return new
 
 
-class Probebase:
+class Scanable:
 
     def __init__(self):
         super().__init__()
 
-    def get_profile(self):
+    def generate_scan_waves(self, scan, potential, max_batch, show_progress):
         raise NotImplementedError()
 
-    def scan(self, *args, **kwargs):
-        raise RuntimeError()
-
-    def linescan(self, potential, detectors, start, end, gpts=None, sampling=None, endpoint=True, max_batch=1,
-                 return_scan=False, show_progress=True):
-
-        scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint)
-
-        return self.scan(scan=scan, potential=potential, detectors=detectors, max_batch=max_batch,
-                         return_scan=return_scan, show_progress=show_progress)
-
-    def gridscan(self, potential, detectors, start=None, end=None, gpts=None, sampling=None, endpoint=False,
-                 max_batch=1, return_scan=False, show_progress=True):
-
+    def scan(self, scan, potential, detectors, max_batch, show_progress=True):
         if isinstance(potential, Atoms):
             potential = Potential(potential)
-
-        if start is None:
-            start = potential.origin
-
-        if end is None:
-            end = potential.extent
-
-        scan = GridScan(start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint)
-
-        return self.scan(scan=scan, potential=potential, max_batch=max_batch, detectors=detectors,
-                         return_scan=return_scan, show_progress=show_progress)
-
-
-def translate(positions, kx, ky):
-    kx = kx.reshape((1, -1, 1))
-    ky = ky.reshape((1, 1, -1))
-    x = positions[:, 0].reshape((-1,) + (1, 1))
-    y = positions[:, 1].reshape((-1,) + (1, 1))
-    return complex_exponential(2 * np.pi * (kx * x + ky * y))
-
-
-class ProbeWaves(CTF, Probebase):
-
-    def __init__(self, cutoff=np.inf, rolloff=0., focal_spread=0., extent=None, gpts=None, sampling=None, energy=None,
-                 parameters=None, **kwargs):
-
-        super().__init__(cutoff=cutoff, rolloff=rolloff, focal_spread=focal_spread, extent=extent, gpts=gpts,
-                         sampling=sampling, energy=energy, parameters=parameters, **kwargs)
-
-    def build_at(self, positions):
-        positions = np.array(positions)
-
-        if len(positions.shape) == 1:
-            positions = np.expand_dims(positions, axis=0)
-
-        kx, ky = fftfreq(self)
-
-        temp_1 = fftw.empty_aligned((len(positions), self.gpts[0], self.gpts[1]), dtype='complex64')
-        temp_2 = fftw.empty_aligned((len(positions), self.gpts[0], self.gpts[1]), dtype='complex64')
-
-        fft_object = fftw.FFTW(temp_1, temp_2, axes=(1, 2))
-
-        temp_1[:] = self.get_array() * translate(positions, kx, ky)
-        fft_object()
-
-        return Waves(temp_2, extent=self.extent, energy=self.energy)
-
-    @property
-    def array(self):
-        return self.build().array
-
-    def build(self):
-        array = np.fft.fftshift(np.fft.fft2(self.get_array()))
-
-        return Waves(array, extent=self.extent, energy=self.energy)
-
-    # def get_intensity_profile(self):
-    #    return np.abs(self.build(wrap=False)[self.gpts[0] // 2]) ** 2
-
-    def get_fwhm(self):
-        profile = np.abs(self.build().array[self.gpts[0] // 2]) ** 2
-        peak_idx = np.argmax(profile)
-        peak_value = profile[peak_idx]
-        left = np.argmin(np.abs(profile[:peak_idx] - peak_value / 2))
-        right = peak_idx + np.argmin(np.abs(profile[peak_idx:] - peak_value / 2))
-        return (right - left) * self.sampling[0]
-
-    def scan(self, scan, potential, detectors, max_batch, return_scan=False, show_progress=True):
-        if isinstance(potential, Atoms):
-            potential = Potential(potential)
-
-        self.match_grid(potential)
 
         if not isinstance(detectors, Iterable):
             detectors = [detectors]
@@ -260,12 +157,7 @@ class ProbeWaves(CTF, Probebase):
             else:
                 scan.measurements[detector] = np.zeros(data_shape)
 
-        propagator = Propagator(extent=self.extent, gpts=self.gpts, energy=self.energy)
-
-        for start, stop, positions in scan.generate_positions(max_batch, show_progress=show_progress):
-            waves = self.build_at(positions)
-
-            multislice(waves, potential=potential, propagator=propagator, in_place=True, show_progress=False)
+        for start, stop, waves in self.generate_scan_waves(scan, potential, max_batch, show_progress):
 
             for detector in detectors:
                 if detector.export is not None:
@@ -282,16 +174,110 @@ class ProbeWaves(CTF, Probebase):
 
         return scan
 
+    def custom_scan(self, potential, detectors, positions, max_batch=1, show_progress=True):
+        scan = CustomScan(positions=positions)
+        return self.scan(scan=scan, potential=potential, detectors=detectors, max_batch=max_batch,
+                         show_progress=show_progress)
 
-class PrismWaves(CTF):
+    def linescan(self, potential, detectors, start, end, gpts=None, sampling=None, endpoint=True, max_batch=1,
+                 show_progress=True):
 
-    def __init__(self, interpolation=1., cutoff=.03, rolloff=0., focal_spread=0., extent=None, gpts=None, sampling=None,
-                 energy=None, parameters=None, **kwargs):
-        self._interpolation = interpolation
+        scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint)
+
+        return self.scan(scan=scan, potential=potential, detectors=detectors, max_batch=max_batch,
+                         show_progress=show_progress)
+
+    def gridscan(self, potential, detectors, start=None, end=None, gpts=None, sampling=None, endpoint=False,
+                 max_batch=1, show_progress=True):
+
+        if isinstance(potential, Atoms):
+            potential = Potential(potential)
+
+        if start is None:
+            start = potential.origin
+
+        if end is None:
+            end = potential.extent
+
+        scan = GridScan(start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint)
+
+        return self.scan(scan=scan, potential=potential, max_batch=max_batch, detectors=detectors,
+                         show_progress=show_progress)
+
+
+def translate(positions, kx, ky):
+    kx = kx.reshape((1, -1, 1))
+    ky = ky.reshape((1, 1, -1))
+    x = positions[:, 0].reshape((-1,) + (1, 1))
+    y = positions[:, 1].reshape((-1,) + (1, 1))
+    return complex_exponential(2 * np.pi * (kx * x + ky * y))
+
+
+class ProbeWaves(CTF, Scanable):
+
+    def __init__(self, cutoff=np.inf, rolloff=0., focal_spread=0., extent=None, gpts=None, sampling=None, energy=None,
+                 parameters=None, normalize=False, **kwargs):
+
+        self._normalize = normalize
 
         super().__init__(cutoff=cutoff, rolloff=rolloff, focal_spread=focal_spread, extent=extent, gpts=gpts,
                          sampling=sampling, energy=energy, parameters=parameters, **kwargs)
 
+    normalize = notifying_property('_normalize')
+
+    def build_at(self, positions):
+        positions = np.array(positions)
+
+        if len(positions.shape) == 1:
+            positions = np.expand_dims(positions, axis=0)
+
+        kx, ky = fftfreq(self)
+
+        temp_1 = fftw.empty_aligned((len(positions), self.gpts[0], self.gpts[1]), dtype='complex64')
+        temp_2 = fftw.empty_aligned((len(positions), self.gpts[0], self.gpts[1]), dtype='complex64')
+
+        fft_object = fftw.FFTW(temp_1, temp_2, axes=(1, 2))
+
+        temp_1[:] = self.get_array() * translate(positions, kx, ky)
+        fft_object()
+
+        return Waves(temp_2, extent=self.extent, energy=self.energy)
+
+    def generate_scan_waves(self, scan, potential, max_batch, show_progress=True):
+        self.match_grid(potential)
+
+        for start, stop, positions in scan.generate_positions(max_batch, show_progress=show_progress):
+            waves = self.build_at(positions)
+
+            waves.multislice(potential=potential, in_place=True, show_progress=False)
+
+            yield start, stop, waves
+
+    @property
+    def array(self):
+        return self.build().array
+
+    def build_ctf(self):
+        return super().build()
+
+    def build(self):
+        array = np.fft.fftshift(np.fft.fft2(self.get_array()))
+
+        if self.normalize:
+            array[:] = array / np.sum(np.abs(array) ** 2, axis=(1, 2)) * np.prod(array.shape[1:])[None]
+
+        return Waves(array, extent=self.extent, energy=self.energy)
+
+
+class PrismWaves(Grid, Energy, HasCache, SelfObservable):
+
+    def __init__(self, interpolation=1., cutoff=.03, extent=None, gpts=None, sampling=None, energy=None):
+        self._interpolation = interpolation
+        self._cutoff = cutoff
+
+        super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy)
+
+    cutoff = notifying_property('_cutoff')
     interpolation = notifying_property('_interpolation')
 
     @cached_method()
@@ -310,21 +296,10 @@ class PrismWaves(CTF):
 
         return kx[mask], ky[mask]
 
-    @cached_method(('extent', 'gpts', 'sampling', 'energy'))
-    def get_alpha(self):
-        kx, ky = self.get_spatial_frequencies()
-        return np.sqrt(kx ** 2 + ky ** 2)
-
-    @cached_method(('extent', 'gpts', 'sampling', 'energy'))
-    def get_phi(self):
-        kx, ky = self.get_spatial_frequencies()
-        phi = np.arctan2(kx, ky)
-        return phi
-
     def generate_expansion(self, max_batch_size=None):
+        kx, ky = self.get_spatial_frequencies()
         x = np.linspace(0, self.extent[0], self.gpts[0], endpoint=self.endpoint)
         y = np.linspace(0, self.extent[1], self.gpts[1], endpoint=self.endpoint)
-        kx, ky = self.get_spatial_frequencies()
 
         if max_batch_size is None:
             max_batch_size = len(kx)
@@ -332,12 +307,123 @@ class PrismWaves(CTF):
         batch_generator = BatchGenerator(len(kx), max_batch_size)
 
         for start, length in batch_generator.generate():
-            yield complex_exponential(-2 * np.pi * (kx[start:start + length, None, None] * x[None, :, None] +
-                                                    ky[start:start + length, None, None] * y[None, None, :]))
+            kx_batch = kx[start:start + length]
+            ky_batch = ky[start:start + length]
+            yield ScatteringMatrix(complex_exponential(-2 * np.pi *
+                                                       (kx_batch[:, None, None] * x[None, :, None] +
+                                                        ky_batch[:, None, None] * y[None, None, :])),
+                                   interpolation=self.interpolation, cutoff=self.cutoff, extent=self.extent,
+                                   energy=self.energy, kx=kx_batch, ky=ky_batch)
+
+    def build(self):
+        return next(self.generate_expansion())
 
     def multislice(self, potential):
+        if isinstance(potential, Atoms):
+            potential = Potential(atoms=potential)
+        self.match_grid(potential)
 
-        propagator = Propagator(extent=self.extent, gpts=self.gpts, energy=self.energy)
+        for S in self.generate_expansion():
+            S.multislice(potential, in_place=True)
 
-        for waves in self.generate_expansion():
-            pass
+        return S
+
+
+@jit(nopython=True, parallel=True, nogil=True)
+def window_and_collapse(S, window, corners, coefficients):
+    N, M = S.shape[1:]
+    n, m = window.shape[1:]
+    for k in prange(len(corners)):
+        i, j = corners[k]
+        ti = n - (N - i)
+        tj = m - (M - j)
+
+        if (i + n <= N) & (j + m <= M):
+            for l in range(len(coefficients[k])):
+                window[k, :] = S[l, i:i + n, j:j + m] * coefficients[k][l]
+
+        elif (i + n <= N) & (j + m > M):
+            for l in range(len(coefficients[k])):
+                window[k, :, :-tj] += S[l, i:i + n, j:] * coefficients[k][l]
+                window[k, :, -tj:] += S[l, i:i + n, :tj] * coefficients[k][l]
+
+        if (i + n > N) & (j + m <= M):
+            for l in range(len(coefficients[k])):
+                window[k, :-ti, :] += S[l, i:, j:j + m] * coefficients[k][l]
+                window[k, -ti:, :] += S[l, :ti, j:j + m] * coefficients[k][l]
+
+        elif (i + n > N) & (j + m > M):
+            for l in range(len(coefficients[k])):
+                window[k, :-ti, :-tj] += S[l, i:, j:] * coefficients[k][l]
+                window[k, :-ti, -tj:] += S[l, i:, :tj] * coefficients[k][l]
+                window[k, -ti:, -tj:] += S[l, :ti, :tj] * coefficients[k][l]
+                window[k, -ti:, :-tj] += S[l, :ti, j:] * coefficients[k][l]
+
+
+def prism_translate(positions, kx, ky):
+    return complex_exponential(2 * np.pi * (kx[None] * positions[:, 0, None] + ky[None] * positions[:, 1, None]))
+
+
+class ScatteringMatrix(Propagates, CTFBase, Scanable):
+
+    def __init__(self, array, interpolation, cutoff, kx, ky, extent=None, sampling=None, energy=None):
+        self._interpolation = interpolation
+        self._cutoff = cutoff
+        self._kx = kx
+        self._ky = ky
+        self._positions = np.array([[0., 0.]])
+        super().__init__(array=array, extent=extent, sampling=sampling, energy=energy)
+
+    @property
+    def kx(self):
+        return self._kx
+
+    @property
+    def ky(self):
+        return self._ky
+
+    @property
+    def interpolation(self):
+        return self._interpolation
+
+    @property
+    def positions(self):
+        return self._positions
+
+    @positions.setter
+    def positions(self, value):
+        value = np.array(value)
+        assert value.shape[1] == 2
+        change = np.any(self.positions != value)
+        self._positions = np.array(value)
+        self.notify_observers({'name': 'position', 'old': self.positions, 'new': value, 'change': change})
+
+    # @cached_method('any')
+    def get_array(self):
+        coefficients = super().get_array()[0] * prism_translate(self.positions, self.kx, self.ky)
+
+        window_shape = (len(self.positions), self.gpts[0] // self.interpolation, self.gpts[1] // self.interpolation)
+        window = np.zeros(window_shape, dtype=np.complex)
+
+        corners = np.round(self.positions / self.sampling - np.floor_divide(window.shape[1:], 2)).astype(np.int)
+        corners = np.remainder(corners, self.gpts)
+
+        window_and_collapse(self.array, window, corners, coefficients)
+
+        return window
+
+    def generate_scan_waves(self, scan, potential=None, max_batch=1, show_progress=True):
+        for start, stop, positions in scan.generate_positions(max_batch, show_progress=show_progress):
+            self.positions = positions
+            yield start, stop, self.build()
+
+    def build(self):
+        return Waves(self.get_array(), extent=self.extent, energy=self.energy)
+
+    @cached_method(('extent', 'gpts', 'sampling', 'energy'))
+    def get_alpha(self):
+        return np.sqrt(self._kx ** 2 + self._ky ** 2) * self.wavelength
+
+    @cached_method(('extent', 'gpts', 'sampling', 'energy'))
+    def get_phi(self):
+        return np.arctan2(self._kx, self._ky)

@@ -14,5 +14,5 @@ def pad_to_size(image, height, width):
     return image
 
 
-def normalize_local(image):
+def normalize_global(image):
     return (image - np.mean(image)) / np.std(image)

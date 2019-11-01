@@ -121,14 +121,14 @@ class RingDetector(DetectorBase, Energy, Grid, HasCache, SelfObservable):
         else:
             array = (alpha >= self._inner) & (alpha <= self._outer)
 
-        return array
+        return array[None]
 
     def detect(self, wave):
-        self.match_grid(wave)
+        self.extent = wave.extent
+        self.gpts = wave.array.shape[1:]
+
         self.match_energy(wave)
 
         intensity = np.abs(np.fft.fft2(wave.array)) ** 2
-        efficiency = self.get_efficiency()
 
-        return np.sum(intensity * efficiency.reshape((1,) + efficiency.shape), axis=(1, 2)) / np.sum(intensity,
-                                                                                                     axis=(1, 2))
+        return np.sum(intensity * self.get_efficiency(), axis=(1, 2)) / np.sum(intensity, axis=(1, 2))

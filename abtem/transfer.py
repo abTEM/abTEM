@@ -1,7 +1,8 @@
 import numpy as np
 
-from abtem.bases import Energy, HasCache, notifying_property, Grid, SelfObservable, cached_method
-from abtem.utils import complex_exponential, squared_norm, semiangles
+from abtem.bases import Energy, HasCache, notifying_property, Grid, SelfObservable, cached_method, \
+    ArrayWithGridAndEnergy, Image
+from abtem.utils import complex_exponential, squared_norm, semiangles, convert_complex
 
 polar_symbols = ('C10', 'C12', 'phi12',
                  'C21', 'phi21', 'C23', 'phi23',
@@ -85,10 +86,9 @@ def parametrization_property(key):
     return property(getter, setter)
 
 
-class CTF(Energy, Grid, HasCache, SelfObservable):
+class CTFBase(HasCache):
 
-    def __init__(self, cutoff=np.inf, rolloff=0., focal_spread=0., extent=None, gpts=None, sampling=None, energy=None,
-                 parameters=None, **kwargs):
+    def __init__(self, cutoff=np.inf, rolloff=0., focal_spread=0., parameters=None, **kwargs):
 
         self._cutoff = cutoff
         self._rolloff = rolloff
@@ -109,7 +109,7 @@ class CTF(Energy, Grid, HasCache, SelfObservable):
         for key, value in polar_aliases.items():
             setattr(self.__class__, key, parametrization_property(value))
 
-        super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy)
+        super().__init__(**kwargs)
 
     cutoff = notifying_property('_cutoff')
     rolloff = notifying_property('_rolloff')
@@ -131,19 +131,19 @@ class CTF(Energy, Grid, HasCache, SelfObservable):
 
         return parameters
 
-    @cached_method(('extent', 'gpts', 'sampling', 'energy'))
-    def get_alpha(self):
-        self.check_is_grid_defined()
-        self.check_is_energy_defined()
-        return np.sqrt(squared_norm(*semiangles(self)))
+    @property
+    def energy(self):
+        raise NotImplementedError()
 
-    @cached_method(('extent', 'gpts', 'sampling', 'energy'))
+    @property
+    def wavelength(self):
+        raise NotImplementedError()
+
+    def get_alpha(self):
+        raise NotImplementedError()
+
     def get_phi(self):
-        self.check_is_grid_defined()
-        self.check_is_energy_defined()
-        alpha_x, alpha_y = semiangles(self)
-        phi = np.arctan2(alpha_x.reshape((-1, 1)), alpha_y.reshape((1, -1)))
-        return phi
+        raise NotImplementedError()
 
     @cached_method(('extent', 'gpts', 'sampling', 'energy', '_cutoff', '_rolloff'))
     def get_aperture(self):
@@ -162,7 +162,7 @@ class CTF(Energy, Grid, HasCache, SelfObservable):
         return calculate_polar_aberrations(alpha, phi, self.wavelength, self._parameters)
 
     @cached_method('any')
-    def get_ctf(self):
+    def get_array(self):
         array = self.get_aberrations()
 
         if self.cutoff < np.inf:
@@ -171,7 +171,40 @@ class CTF(Energy, Grid, HasCache, SelfObservable):
         if self.focal_spread > 0.:
             array = array * self.get_temporal_envelope()
 
-        return array
+        return array[None]
 
-    def get_array(self):
-        return self.get_ctf()
+
+class CTFArray(ArrayWithGridAndEnergy):
+
+    def __init__(self, array, extent=None, sampling=None, energy=None):
+        array = np.array(array, dtype=np.complex)
+        super().__init__(array=array, spatial_dimensions=2, extent=extent, sampling=sampling, energy=energy,
+                         space='fourier')
+
+    def get_image(self, i=0, convert='intensity'):
+        return Image(convert_complex(self._array[i], convert), extent=self.extent, space='fourier')
+
+
+class CTF(Grid, Energy, CTFBase):
+
+    def __init__(self, cutoff=np.inf, rolloff=0., focal_spread=0., extent=None, gpts=None, sampling=None, energy=None,
+                 parameters=None, **kwargs):
+        super().__init__(cutoff=cutoff, rolloff=rolloff, focal_spread=focal_spread, extent=extent, gpts=gpts,
+                         sampling=sampling, energy=energy, parameters=parameters, **kwargs)
+
+    @cached_method(('extent', 'gpts', 'sampling', 'energy'))
+    def get_alpha(self):
+        self.check_is_grid_defined()
+        self.check_is_energy_defined()
+        return np.sqrt(squared_norm(*semiangles(self)))
+
+    @cached_method(('extent', 'gpts', 'sampling', 'energy'))
+    def get_phi(self):
+        self.check_is_grid_defined()
+        self.check_is_energy_defined()
+        alpha_x, alpha_y = semiangles(self)
+        phi = np.arctan2(alpha_x.reshape((-1, 1)), alpha_y.reshape((1, -1)))
+        return phi
+
+    def build(self):
+        return CTFArray(np.fft.fftshift(self.get_array(), axes=(1, 2)), extent=self.extent, energy=self.energy)

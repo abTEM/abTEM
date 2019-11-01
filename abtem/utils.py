@@ -30,6 +30,11 @@ def fftfreq(grid):
     return tuple(np.fft.fftfreq(gpts, sampling) for gpts, sampling in zip(grid.gpts, grid.sampling))
 
 
+def linspace(grid):
+    grid.check_is_grid_defined()
+    return tuple(np.linspace(0, extent, gpts, endpoint=grid.endpoint) for gpts, extent in zip(grid.gpts, grid.extent))
+
+
 def semiangles(grid_and_energy):
     wavelength = grid_and_energy.wavelength
     return (np.fft.fftfreq(gpts, sampling) * wavelength for gpts, sampling in
@@ -67,6 +72,23 @@ def split_integer(n, m):
         return v
 
 
+def convert_complex(array, output):
+    if output == 'intensity':
+        array = np.abs(array) ** 2
+    elif output == 'abs':
+        array = np.abs(array)
+    elif output == 'real':
+        array = array.real
+    elif output == 'imag':
+        array = array.imag
+    elif output == 'phase':
+        array = np.angle(array)
+    else:
+        raise RuntimeError()
+
+    return array
+
+
 class BatchGenerator:
 
     def __init__(self, n_items, max_batch_size):
@@ -88,7 +110,7 @@ class BatchGenerator:
 
     def generate(self, show_progress=False):
         batch_start = 0
-        for i in tqdm(range(self.n_batches), disable=not show_progress):
+        for i in tqdm(range(self.n_batches)):
             batch_end = batch_start + self.batch_size
             if i == self.n_batches - 1:
                 yield batch_start, self.n_items - batch_end + self.batch_size
