@@ -2,7 +2,6 @@ from typing import Optional, Union
 
 import numpy as np
 from ase import units
-from operator import attrgetter
 
 
 class Observable:
@@ -18,7 +17,11 @@ class Observable:
         self._observers = []
         super().__init__(**kwargs)
 
-    def register_observer(self, observer):
+    @property
+    def observers(self) -> list:
+        return self._observers
+
+    def register_observer(self, observer: 'Observer'):
         if observer not in self._observers:
             self._observers.append(observer)
 
@@ -46,20 +49,18 @@ class Observer:
         raise NotImplementedError()
 
 
-class SelfObservable(Observable):
+class SelfObservable(Observable, Observer):
 
     def __init__(self, **kwargs):
         """
         SelfObserver base class.
 
-        Base class for creating an observable class in the classic observer design pattern.
+        Base class for creating an observable observer that observes itself.
+        The object notifies itself before other registered observers.
 
         :param kwargs: dummy
         """
         super().__init__(**kwargs)
-
-    def notify(self, observable, message):
-        raise NotImplementedError()
 
     def notify_observers(self, message):
         self.notify(self, message)
@@ -95,7 +96,7 @@ def cached_method(clear_conditions='any'):
             self = args[0]
             try:
                 return self._cached[func.__name__]
-            except:
+            except KeyError:
                 self._cached[func.__name__] = func(*args)
                 self._clear_conditions[func.__name__] = clear_conditions
                 return self._cached[func.__name__]
@@ -111,12 +112,12 @@ def cached_method_with_args(clear_conditions='any'):
             self = args[0]
             try:
                 return self._cached[func.__name__][args[1:]]
-            except:
+            except KeyError:
                 value = func(*args)
 
                 try:
                     self._cached[func.__name__][args[1:]] = value
-                except:
+                except KeyError:
                     self._cached[func.__name__] = {}
                     self._cached[func.__name__][args[1:]] = value
                     self._clear_conditions[func.__name__] = clear_conditions
@@ -408,6 +409,7 @@ def notify(func):
     def wrapper(*args):
         obj, value = args
         old = getattr(obj, name)
+        func(*args)
         change = np.any(old != value)
         obj.notify_observers({'name': name, 'old': old, 'new': value, 'change': change})
 
@@ -416,7 +418,7 @@ def notify(func):
 
 class Energy(Observable):
 
-    def __init__(self, energy=Optional[float], lock_energy=False, **kwargs):
+    def __init__(self, energy: Optional[float] = None, **kwargs):
         """
         Energy base class
 
@@ -426,7 +428,6 @@ class Energy(Observable):
         :type energy: optional, float
         """
         self._energy = energy
-        self._lock_energy = lock_energy
 
         super().__init__(**kwargs)
 
@@ -436,7 +437,7 @@ class Energy(Observable):
 
     @energy.setter
     @notify
-    def energy(self, value):
+    def energy(self, value: float):
         self._energy = value
 
     @property
@@ -462,7 +463,7 @@ class Energy(Observable):
         if self.energy is None:
             raise RuntimeError('energy is not defined')
 
-    def check_match_energy(self, other: 'Energy'):
+    def check_same_energy(self, other: 'Energy'):
         """ Throw error if the energy of another object is different from this object. """
         if self.energy != other.energy:
             raise RuntimeError('inconsistent energies')

@@ -19,13 +19,10 @@ def test_grid_property():
     assert np.all(grid_property.value == 5)
     assert grid_property.value.dtype == np.int64
 
-    def get_gpts(obj):
-        return np.array([5, 5])
-
     with pytest.raises(RuntimeError):
-        GridProperty(value=get_gpts, dtype=np.int64, locked=False)
+        GridProperty(value=lambda _: np.array([5, 5]), dtype=np.int64, locked=False)
 
-    grid_property = GridProperty(value=get_gpts, dtype=np.int64, locked=True)
+    grid_property = GridProperty(value=lambda _: np.array([5, 5]), dtype=np.int64, locked=True)
 
     assert np.all(grid_property.value == 5)
     assert grid_property.value.dtype == np.int64
@@ -42,7 +39,7 @@ def test_grid_property():
     assert np.all(grid_property.value == 2.)
 
 
-def test_grid():
+def test_create_grid():
     grid = Grid(extent=5, sampling=.2)
 
     assert np.all(grid.extent == 5.)
@@ -57,6 +54,8 @@ def test_grid():
     grid = Grid(extent=(8, 6), gpts=10)
     assert np.all(grid.sampling == np.array([0.8, 0.6]))
 
+
+def test_change_grid():
     grid.sampling = .2
     assert np.all(grid.extent == np.array([8., 6.]))
     assert np.all(grid.gpts == np.array([40, 30]))

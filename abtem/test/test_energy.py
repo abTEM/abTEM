@@ -1,5 +1,7 @@
 import numpy as np
-
+import pytest
+from mock import Mock
+import mock
 from ..bases import energy2mass, energy2wavelength, energy2sigma, Energy
 
 
@@ -22,18 +24,28 @@ def test_energy():
     assert energy.wavelength == energy2wavelength(300e3)
 
     energy.energy = 200e3
+
     assert energy.wavelength == energy2wavelength(200e3)
 
+
+def test_energy_raises():
     energy1 = Energy(300e3)
     energy2 = Energy()
 
-    energy1.match_energy(energy2)
+    with pytest.raises(RuntimeError):
+        energy2.check_is_energy_defined()
 
-    assert np.all(energy1.energy == energy2.energy)
+    energy2.energy = 200e3
+    with pytest.raises(RuntimeError):
+        energy1.check_same_energy(energy2)
 
-    energy1.energy = 200e3
-    energy2 = Energy()
+    energy2.energy = energy1.energy
+    energy1.check_same_energy(energy2)
 
-    energy2.match_energy(energy1)
 
-    assert np.all(energy1.energy == energy2.energy)
+def test_energy_notifies():
+    with mock.patch.object(Energy, 'notify_observers') as mock_notify:
+        energy = Energy()
+        assert mock_notify.call_count == 0
+        energy.energy = 200e3
+        assert mock_notify.call_count == 1
