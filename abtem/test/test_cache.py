@@ -1,165 +1,178 @@
-from ..bases import HasCache, Observable, notifying_property, cached_method, cached_method_with_args
+import numpy as np
+import pytest
+
+from ..bases import Cache, Observable, cached_method, cached_method_with_args
 
 
-def test_has_cache():
-    class Dummy(HasCache):
+def test_cache():
+    cache = Cache()
+    key = 'key'
+    data = np.zeros((2, 2))
 
-        def __init__(self):
-            HasCache.__init__(self)
-            self.num_calculate1_calls = 0
-            self.num_calculate2_calls = 0
+    with pytest.raises(KeyError):
+        cache.retrieve_from_cache(key)
 
-        @cached_method
-        def calculate1(self):
-            self.num_calculate1_calls += 1
-            return 1
+    cache.update_cache(key, data)
 
-        @cached_method
-        def calculate2(self):
-            self.num_calculate2_calls += 1
-            return 2
+    assert (cache.retrieve_from_cache(key) == data).all()
+
+    cache.update_cache(key, data, ('extent',))
+
+    assert (cache.retrieve_from_cache(key) == data).all()
+
+    cache.clear_cache()
+    with pytest.raises(KeyError):
+        cache.retrieve_from_cache(key)
+
+
+def test_notify_cache():
+    cache = Cache()
+    observable = Observable()
+    key = 'key'
+    condition = 'condition'
+    data = np.zeros((2, 2))
+
+    cache.update_cache(key, data, (condition,))
+
+    cache.notify(observable, {'notifier': 'not_condition', 'change': True})
+    assert (cache.retrieve_from_cache(key) == data).all()
+
+    cache.notify(observable, {'notifier': condition, 'change': False})
+    assert (cache.retrieve_from_cache(key) == data).all()
+
+    cache.notify(observable, {'notifier': condition, 'change': True})
+    with pytest.raises(KeyError):
+        cache.retrieve_from_cache(key)
+
+
+def test_cached_method():
+    class Dummy(Cache):
+        call_count = 0
+
+        @cached_method()
+        def get_data(self):
+            self.call_count += 1
+            return np.zeros((2, 2))
 
     dummy = Dummy()
 
-    result = dummy.calculate1()
+    assert (dummy.get_data() == np.zeros((2, 2))).all()
+    assert dummy.call_count == 1
 
-    assert dummy._cached['calculate1'] == 1
-    assert result == 1
+    dummy.get_data()
+    dummy.retrieve_from_cache('get_data')
+    assert dummy.call_count == 1
 
-    result = dummy.calculate1()
+    dummy.notify(Observable(), {'notifier': 'condition', 'change': True})
+    with pytest.raises(KeyError):
+        dummy.retrieve_from_cache('get_data')
 
-    assert result == 1
-
-    dummy.calculate2()
-    dummy.calculate2()
-
-    assert dummy.num_calculate1_calls == 1
-    assert dummy.num_calculate2_calls == 1
-
-    dummy.clear_cache()
-
-    dummy.calculate1()
-
-    assert dummy.num_calculate1_calls == 2
+    dummy.get_data()
+    assert dummy.call_count == 2
 
 
-def test_has_cache_with_args():
-    class Dummy(HasCache):
+def test_multiple_cached_methods():
+    class Dummy(Cache):
+        call_count1 = 0
+        call_count2 = 0
+        call_count3 = 0
 
-        def __init__(self):
-            HasCache.__init__(self)
-            self.num_calculate_calls = 0
+        @cached_method()
+        def get_data1(self):
+            self.call_count1 += 1
+            return np.zeros((2, 2))
 
-        @cached_method_with_args
-        def calculate(self, x):
-            self.num_calculate_calls += 1
-            return 2 * x
+        @cached_method()
+        def get_data2(self):
+            self.call_count2 += 1
+            return np.ones((2, 2))
+
+        @cached_method()
+        def get_data3(self):
+            self.call_count3 += 1
+            return self.get_data1() + self.get_data2()
 
     dummy = Dummy()
-    result = dummy.calculate(2)
+    dummy.get_data1()
+    assert dummy.cache.keys() == {'get_data1'}
 
-    assert dummy._cached['calculate'][(2,)] == 4
-    assert result == 4
+    dummy.get_data3()
+    assert dummy.cache.keys() == {'get_data1', 'get_data2', 'get_data3'}
 
-    result = dummy.calculate(2)
-
-    assert result == 4
-    assert dummy.num_calculate_calls == 1
-
-    result = dummy.calculate(4)
-
-    assert result == 8
-    assert dummy.num_calculate_calls == 2
-
-    assert dummy._cached['calculate'][(2,)] == 4
-    assert dummy._cached['calculate'][(4,)] == 8
-
-    dummy.calculate(2)
-    dummy.clear_cache()
-    dummy.calculate(2)
-
-    assert dummy.num_calculate_calls == 3
+    assert dummy.call_count1 == dummy.call_count2 == dummy.call_count3 == 1
 
 
-def test_observe_other():
-    class DummyObserveable(Observable):
-        def __init__(self, value):
-            Observable.__init__(self)
+def test_conditional_cached_method():
+    class Dummy(Cache):
+        call_count = 0
 
-            self._value = value
+        @cached_method('condition')
+        def get_data(self):
+            self.call_count += 1
+            return np.zeros((2, 2))
 
-        value = notifying_property('_value')
+    dummy = Dummy()
+    dummy.get_data()
 
-    class Dummy(HasCache):
+    dummy.notify(Observable(), {'notifier': 'not_condition', 'change': True})
+    dummy.get_data()
+    assert dummy.call_count == 1
 
-        def __init__(self, value):
-            HasCache.__init__(self)
-
-            self.dummy_observeable = DummyObserveable(value)
-
-            self.dummy_observeable.register_observer(self)
-
-            self.num_calculate_calls = 0
-
-        @cached_method
-        def calculate(self):
-            self.num_calculate_calls += 1
-            return self.dummy_observeable.value
-
-    has_cache = Dummy(2)
-
-    result = has_cache.calculate()
-
-    assert result == 2
-
-    has_cache.calculate()
-
-    assert has_cache.num_calculate_calls == 1
-
-    assert has_cache._cached['calculate'] == 2
-
-    has_cache.dummy_observeable.value = 3
-
-    assert has_cache._cached == {}
-
-    result = has_cache.calculate()
-
-    assert result == 3
-    assert has_cache.num_calculate_calls == 2
+    dummy.notify(Observable(), {'notifier': 'condition', 'change': True})
+    dummy.get_data()
+    assert dummy.call_count == 2
 
 
-def test_observe_self():
-    class Dummy(HasCache, Observable):
+def test_multiple_conditional_cached_methods():
+    class Dummy(Cache):
+        call_count1 = 0
+        call_count2 = 0
+        call_count3 = 0
 
-        def __init__(self, value):
-            HasCache.__init__(self)
-            Observable.__init__(self)
+        @cached_method('condition1')
+        def get_data1(self):
+            self.call_count1 += 1
+            return np.zeros((2, 2))
 
-            self._value = value
-            self.register_observer(self)
+        @cached_method('condition2')
+        def get_data2(self):
+            self.call_count2 += 1
+            return np.ones((2, 2))
 
-            self.num_build_calls = 0
+        @cached_method('condition3')
+        def get_data3(self):
+            self.call_count3 += 1
+            return self.get_data1() + self.get_data2()
 
-        value = notifying_property('_value')
+    dummy = Dummy()
+    dummy.get_data3()
+    assert dummy.cache.keys() == {'get_data1', 'get_data2', 'get_data3'}
 
-        @cached_method
-        def calculate(self):
-            self.num_build_calls += 1
-            return self._value
+    dummy.notify(Observable(), {'notifier': 'condition2', 'change': True})
 
-    dummy = Dummy(2)
+    assert dummy.cache.keys() == {'get_data1', 'get_data3'}
 
-    result = dummy.calculate()
 
-    assert result == 2
+def test_cached_method_with_args():
+    class Dummy(Cache):
+        call_count = 0
 
-    dummy.calculate()
+        @cached_method_with_args()
+        def get_data(self, value):
+            self.call_count += 1
+            return np.full((2, 2), value)
 
-    assert dummy.num_build_calls == 1
+    dummy = Dummy()
 
-    dummy.value = 3
+    assert (dummy.get_data(2) == np.full((2, 2), 2)).all()
+    assert dummy.call_count == 1
 
-    result = dummy.calculate()
+    dummy.get_data(2)
+    assert dummy.call_count == 1
 
-    assert result == 3
-    assert dummy.num_build_calls == 2
+    dummy.get_data(3)
+    assert dummy.call_count == 2
+
+    dummy.notify(Observable(), {'notifier': 'condition', 'change': True})
+    with pytest.raises(KeyError):
+        dummy.retrieve_from_cache('get_data')

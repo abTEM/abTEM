@@ -5,7 +5,7 @@ from ase import units
 from scipy.optimize import brentq
 from tqdm.auto import tqdm
 
-from abtem.bases import Grid, HasCache, cached_method, ArrayWithGrid
+from abtem.bases import Grid, cached_method, ArrayWithGrid, Cache
 from abtem.interpolation import interpolation_kernel_parallel
 from abtem.parametrizations import convert_kirkland, kirkland, kirkland_projected_finite, dvdr_kirkland, load_parameters
 from abtem.parametrizations import convert_lobato, lobato, lobato_projected_finite, dvdr_lobato
@@ -71,7 +71,7 @@ class PotentialBase(Grid):
         return PrecalculatedPotential(array, slice_thicknesses, self.extent)
 
 
-class Potential(PotentialBase, HasCache):
+class Potential(PotentialBase, Cache):
 
     def __init__(self, atoms, origin=None, extent=None, gpts=None, sampling=None, slice_thickness=.5, num_slices=None,
                  parametrization='lobato', method='interpolation', tolerance=1e-3):
@@ -202,6 +202,12 @@ class Potential(PotentialBase, HasCache):
             raise RuntimeError()
         else:
             raise NotImplementedError('method {} not implemented')
+
+    def copy(self, copy_atoms=False):
+        if copy_atoms:
+            return self.__class__(self.atoms.copy())
+        else:
+            return self.__class__(self.atoms)
 
 
 def import_potential(path):

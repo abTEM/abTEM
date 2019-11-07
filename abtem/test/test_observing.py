@@ -1,7 +1,6 @@
-import pytest
-import numpy as np
 import mock
-from ..bases import Observable, Observer, SelfObservable
+
+from ..bases import Observable, Observer
 
 
 def test_register_observer():
@@ -49,8 +48,8 @@ def test_notified(mock_notify):
 def test_self_observe(mock_notify):
     class Dummy(Observable, Observer):
         def __init__(self):
-            self.register_observer(self)
             super().__init__()
+            self.register_observer(self)
 
     dummy = Dummy()
 

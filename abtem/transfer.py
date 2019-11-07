@@ -1,7 +1,8 @@
+from collections import defaultdict
+
 import numpy as np
 
-from abtem.bases import Energy, HasCache, notifying_property, Grid, SelfObservable, cached_method, \
-    ArrayWithGridAndEnergy, Image
+from abtem.bases import Energy, Cache, Grid, cached_method, ArrayWithGridAndEnergy, Image, notify
 from abtem.utils import complex_exponential, squared_norm, semiangles, convert_complex
 
 polar_symbols = ('C10', 'C12', 'phi12',
@@ -14,6 +15,16 @@ polar_aliases = {'defocus': 'C10', 'astigmatism': 'C12', 'astigmatism_angle': 'p
                  'coma': 'C21', 'coma_angle': 'phi21',
                  'Cs': 'C30',
                  'C5': 'C50'}
+
+
+
+
+
+def calculate_symmetric_chi(alpha, parameters):
+    alpha2 = alpha ** 2
+    return (1 / 2. * alpha2 * parameters['C10'] +
+            1 / 4. * alpha2 ** 2 * parameters['C30'] +
+            1 / 6. * alpha2 ** 3 * parameters['C50'])
 
 
 def calculate_polar_chi(alpha, phi, parameters):
@@ -53,16 +64,20 @@ def calculate_polar_chi(alpha, phi, parameters):
     return array
 
 
+def calculate_symmetric_aberrations(alpha, wavelength, parameters):
+    return complex_exponential(2 * np.pi / wavelength * calculate_symmetric_chi(alpha, parameters))
+
+
 def calculate_polar_aberrations(alpha, phi, wavelength, parameters):
-    tensor = complex_exponential(2 * np.pi / wavelength * calculate_polar_chi(alpha, phi, parameters))
-    return tensor
+    return complex_exponential(2 * np.pi / wavelength * calculate_polar_chi(alpha, phi, parameters))
 
 
 def calculate_aperture(alpha, cutoff, rolloff):
     if rolloff > 0.:
-        array = .5 * (1 + np.cos(np.pi * (alpha - cutoff) / rolloff))
-        array *= alpha < (cutoff + rolloff)
-        array = np.where(alpha > cutoff, array, np.ones_like(alpha))
+        rolloff *= cutoff
+        array = .5 * (1 + np.cos(np.pi * (alpha - cutoff + rolloff) / rolloff))
+        array[alpha > cutoff] = 0.
+        array = np.where(alpha > cutoff - rolloff, array, np.ones_like(alpha))
     else:
         array = np.array(alpha < cutoff).astype(np.float)
     return array
@@ -93,7 +108,6 @@ class CTFBase(Energy):
         self._cutoff = cutoff
         self._rolloff = rolloff
         self._focal_spread = focal_spread
-
         self._parameters = dict(zip(polar_symbols, [0.] * len(polar_symbols)))
 
         if parameters is None:
@@ -113,14 +127,34 @@ class CTFBase(Energy):
 
         super().__init__(energy=energy, **kwargs)
 
-    cutoff = notifying_property('_cutoff')
-    rolloff = notifying_property('_rolloff')
-    focal_spread = notifying_property('_focal_spread')
+    @property
+    def cutoff(self) -> float:
+        return self._cutoff
 
-    def set_parameters(self, parameters, parametrization='polar'):
-        if parametrization != 'polar':
-            raise NotImplementedError()
+    @cutoff.setter
+    @notify
+    def cutoff(self, value: float):
+        self._cutoff = value
 
+    @property
+    def rolloff(self) -> float:
+        return self._rolloff
+
+    @rolloff.setter
+    @notify
+    def rolloff(self, value: float):
+        self._rolloff = value
+
+    @property
+    def focal_spread(self) -> float:
+        return self._focal_spread
+
+    @focal_spread.setter
+    @notify
+    def focal_spread(self, value: float):
+        self._focal_spread = value
+
+    def set_parameters(self, parameters):
         for symbol, value in parameters.items():
             if symbol in self._parameters.keys():
                 self._parameters[symbol] = value
@@ -129,7 +163,7 @@ class CTFBase(Energy):
                 self._parameters[polar_aliases[symbol]] = value
 
             else:
-                raise RuntimeError('{} not a recognized parameter'.format(symbol))
+                raise ValueError('{} not a recognized parameter'.format(symbol))
 
         return parameters
 
@@ -160,24 +194,13 @@ class CTFBase(Energy):
         return array[None]
 
 
-class CTFArray(ArrayWithGridAndEnergy):
-
-    def __init__(self, array, extent=None, sampling=None, energy=None):
-        array = np.array(array, dtype=np.complex)
-        super().__init__(array=array, spatial_dimensions=2, extent=extent, sampling=sampling, energy=energy,
-                         space='fourier')
-
-    def get_image(self, i=0, convert='intensity'):
-        return Image(convert_complex(self._array[i], convert), extent=self.extent, space='fourier')
-
-
-class CTF(Grid, HasCache, CTFBase):
+class CTF(Grid, Cache, CTFBase):
 
     def __init__(self, cutoff=np.inf, rolloff=0., focal_spread=0., extent=None, gpts=None, sampling=None, energy=None,
                  parameters=None, **kwargs):
-
         super().__init__(cutoff=cutoff, rolloff=rolloff, focal_spread=focal_spread, extent=extent, gpts=gpts,
                          sampling=sampling, energy=energy, parameters=parameters, **kwargs)
+        self.register_observer(self)
 
     @cached_method(('extent', 'gpts', 'sampling', 'energy'))
     def get_alpha(self):
@@ -193,11 +216,11 @@ class CTF(Grid, HasCache, CTFBase):
         phi = np.arctan2(alpha_x.reshape((-1, 1)), alpha_y.reshape((1, -1)))
         return phi
 
-    @cached_method(('extent', 'gpts', 'sampling', 'energy', '_cutoff', '_rolloff'))
+    @cached_method(('extent', 'gpts', 'sampling', 'energy', 'cutoff', 'rolloff'))
     def get_aperture(self):
         return super().get_aperture()
 
-    @cached_method(('extent', 'gpts', 'sampling', 'energy', '_focal_spread'))
+    @cached_method(('extent', 'gpts', 'sampling', 'energy', 'focal_spread'))
     def get_temporal_envelope(self):
         return super().get_temporal_envelope()
 
@@ -205,9 +228,10 @@ class CTF(Grid, HasCache, CTFBase):
     def get_aberrations(self):
         return super().get_aberrations()
 
-    @cached_method('any')
+    @cached_method()
     def get_array(self):
         return super().get_array()
 
     def build(self):
-        return CTFArray(np.fft.fftshift(self.get_array(), axes=(1, 2)), extent=self.extent, energy=self.energy)
+        return ArrayWithGridAndEnergy(np.fft.fftshift(self.get_array(), axes=(1, 2)), spatial_dimensions=2,
+                                      extent=self.extent, energy=self.energy)

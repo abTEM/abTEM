@@ -1,8 +1,9 @@
 import numpy as np
 
-from abtem.bases import Grid, Energy, HasCache, SelfObservable, notifying_property, cached_method
+from abtem.bases import Grid, Energy, cached_method, Cache
 from abtem.utils import squared_norm, semiangles
 from skimage.transform import resize
+from typing import Tuple
 
 
 class DetectorBase:
@@ -24,7 +25,8 @@ class DetectorBase:
     def export(self):
         return self._export
 
-    def out_shape(self):
+    @property
+    def out_shape(self) -> tuple:
         raise NotImplementedError()
 
     def detect(self, wave):
@@ -79,7 +81,7 @@ class FourierSpaceDetector(DetectorBase, Energy, Grid):
         return intensity
 
 
-class RingDetector(DetectorBase, Energy, Grid, HasCache, SelfObservable):
+class RingDetector(DetectorBase, Energy, Grid, Cache):
 
     def __init__(self, inner, outer, rolloff=0., integrate=True, extent=None, gpts=None, sampling=None, energy=None,
                  export=None):
@@ -91,9 +93,9 @@ class RingDetector(DetectorBase, Energy, Grid, HasCache, SelfObservable):
 
         super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy, export=export)
 
-    inner = notifying_property('_inner')
-    outer = notifying_property('_outer')
-    rolloff = notifying_property('_rolloff')
+    # inner = notifying_property('_inner')
+    # outer = notifying_property('_outer')
+    # rolloff = notifying_property('_rolloff')
 
     @property
     def out_shape(self):

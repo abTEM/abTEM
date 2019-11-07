@@ -19,7 +19,7 @@ def window_and_collapse(S, window, corners, coefficients):
                 window[k, :, :-tj] += S[l, i:i + n, j:] * coefficients[k][l]
                 window[k, :, -tj:] += S[l, i:i + n, :tj] * coefficients[k][l]
 
-        if (i + n > N) & (j + m <= M):
+        elif (i + n > N) & (j + m <= M):
             for l in range(len(coefficients[k])):
                 window[k, :-ti, :] += S[l, i:, j:j + m] * coefficients[k][l]
                 window[k, -ti:, :] += S[l, :ti, j:j + m] * coefficients[k][l]

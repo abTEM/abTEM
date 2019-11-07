@@ -1,42 +1,8 @@
-import pytest
+import mock
 import numpy as np
-from ..bases import GridProperty, Grid, ArrayWithGrid
+import pytest
 
-
-def test_grid_property():
-    grid_property = GridProperty(value=5, dtype=np.float64)
-
-    assert np.all(grid_property.value == 5.)
-    assert grid_property.value.dtype == np.float64
-
-    grid_property.value = 2
-
-    assert np.all(grid_property.value == np.array([2, 2], dtype=np.float64))
-    assert grid_property.value.dtype == np.float64
-
-    grid_property = GridProperty(value=[5, 5], dtype=np.int64)
-
-    assert np.all(grid_property.value == 5)
-    assert grid_property.value.dtype == np.int64
-
-    with pytest.raises(RuntimeError):
-        GridProperty(value=lambda _: np.array([5, 5]), dtype=np.int64, locked=False)
-
-    grid_property = GridProperty(value=lambda _: np.array([5, 5]), dtype=np.int64, locked=True)
-
-    assert np.all(grid_property.value == 5)
-    assert grid_property.value.dtype == np.int64
-
-    with pytest.raises(RuntimeError):
-        grid_property.value = 2
-
-    with pytest.raises(RuntimeError):
-        GridProperty(value=[5, 5, 5], dtype=np.float32)
-
-    grid_property = GridProperty(value=None, dtype=np.float64)
-    grid_property.value = 2
-
-    assert np.all(grid_property.value == 2.)
+from ..bases import Grid, Observable, GridProperty
 
 
 def test_create_grid():
@@ -54,8 +20,14 @@ def test_create_grid():
     grid = Grid(extent=(8, 6), gpts=10)
     assert np.all(grid.sampling == np.array([0.8, 0.6]))
 
+    grid = Grid()
+    with pytest.raises(RuntimeError):
+        grid.check_is_grid_defined()
 
-def test_change_grid():
+
+def test_change_free_grid():
+    grid = Grid(extent=(8, 6), gpts=10)
+
     grid.sampling = .2
     assert np.all(grid.extent == np.array([8., 6.]))
     assert np.all(grid.gpts == np.array([40, 30]))
@@ -78,83 +50,53 @@ def test_change_grid():
     grid.gpts = 30
     assert np.all(grid.sampling == grid.extent / grid.gpts)
 
-    def get_gpts(obj):
-        return np.array([20, 20], dtype=np.int32)
 
-    gpts = GridProperty(value=get_gpts, dtype=np.int32, locked=True)
-    grid = Grid(gpts=gpts)
+def test_grid_raises():
+    with pytest.raises(RuntimeError) as e:
+        Grid(extent=[5, 5, 5])
 
-    grid.sampling = .1
+    assert str(e.value) == 'grid value length of 3 != 2'
 
-    assert np.all(grid.extent == np.array([2., 2.], dtype=np.float32))
 
-    grid.sampling = .01
-    assert np.all(grid.gpts == np.array([20, 20], dtype=np.int32))
-    assert np.all(grid.extent == grid.sampling * np.float32(grid.gpts))
-
-    with pytest.raises(RuntimeError):
-        grid.gpts = 10
-
+@mock.patch.object(Observable, 'notify_observers')
+def test_grid_notify(mock_notify_observers):
     grid = Grid()
 
-    with pytest.raises(RuntimeError):
-        grid.check_is_grid_defined()
+    grid.extent = 5
+    assert mock_notify_observers.call_count == 1
 
-    grid = Grid(extent=10, sampling=.1, dimensions=1, endpoint=True)
-    assert grid.gpts == 101
-    assert grid.sampling == .1
+    grid.gpts = 100
+    assert mock_notify_observers.call_count == 2
 
-    grid = Grid(extent=9.9, sampling=.1, dimensions=1, endpoint=True)
-    assert grid.gpts == 100
-
-    grid = Grid(extent=10, gpts=100, dimensions=1, endpoint=True)
-    assert grid.sampling == 10 / 99.
-
-    grid = Grid(gpts=101, sampling=.1, dimensions=1, endpoint=True)
-    assert grid.extent == 10.
-
-    kwargs_list = [{'gpts': 100, 'extent': 10}, {'gpts': 100, 'sampling': .1}, {'extent': 10, 'sampling': .1}]
-    for kwargs in kwargs_list:
-        grid1 = Grid(**kwargs)
-        grid2 = Grid()
-
-        grid1.match_grid(grid2)
-
-        assert np.all(grid1.gpts == grid2.gpts)
-        assert np.all(grid1.sampling == grid2.sampling)
-        assert np.all(grid1.extent == grid2.extent)
-
-        grid2 = Grid()
-        grid2.match_grid(grid1)
-
-        assert np.all(grid1.gpts == grid2.gpts)
-        assert np.all(grid1.sampling == grid2.sampling)
-        assert np.all(grid1.extent == grid2.extent)
-
-        grid2 = Grid(gpts=101)
-
-        with pytest.raises(RuntimeError):
-            grid1.match_grid(grid2)
-
-        with pytest.raises(RuntimeError):
-            grid2.match_grid(grid1)
+    grid.sampling = .1
+    assert mock_notify_observers.call_count == 3
 
 
-def test_array_with_grid():
-    array = np.zeros((100, 100), dtype=np.float32)
+def test_locked_grid():
+    gpts = GridProperty(value=lambda _: 5, dtype=np.int)
 
-    array_with_grid = ArrayWithGrid(array, 2, 2, extent=10)
+    grid = Grid(gpts=gpts)
 
-    assert np.all(array_with_grid.gpts == np.array(array.shape))
-    assert np.all(array_with_grid.extent == 10.)
-    assert np.all(array_with_grid.sampling == .1)
+    grid.extent = 10
+    assert np.all(grid.sampling == 2)
+    grid.extent = 20
+    assert np.all(grid.sampling == 4)
 
-    array_with_grid.extent = 20
+    with pytest.raises(RuntimeError) as e:
+        grid.gpts = 6
 
-    assert np.all(array_with_grid.sampling == .2)
+    assert str(e.value) == 'grid property locked'
 
-    with pytest.raises(RuntimeError):
-        ArrayWithGrid(array, 1, 1)
 
-    with pytest.raises(RuntimeError):
-        ArrayWithGrid(array, 2, 3)
+def test_check_grid_matches():
+    grid1 = Grid(extent=10, gpts=10)
+    grid2 = Grid(extent=10, gpts=10)
+
+    grid1.check_same_grid(grid2)
+
+    grid2.sampling = .2
+
+    with pytest.raises(RuntimeError) as e:
+        grid1.check_same_grid(grid2)
+
+    assert str(e.value) == 'inconsistent sampling'
