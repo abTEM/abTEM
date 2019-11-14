@@ -1,4 +1,5 @@
 import io
+import numbers
 
 import PIL.Image
 import bqplot
@@ -6,9 +7,8 @@ import ipywidgets
 import numpy as np
 from bqplot import LinearScale, Axis, Figure, PanZoom
 
-from abtem.bases import SelfObservable, notifying_property
 from abtem.utils import linspace, fftfreq
-import numbers
+from abtem.bases import Observable, Observer
 
 
 def link_widget(widget, o, property_name):
@@ -50,15 +50,21 @@ def property_slider(o, property_name, description=None, components=None, **kwarg
     return slider
 
 
-class UpdatingMark(SelfObservable):
+class UpdatingMark(Observable, Observer):
 
     def __init__(self, observables, auto_update=True, **kwargs):
+
+
         self._observables = observables
         self._auto_update = auto_update
+
+        super().__init__(**kwargs)
+
         for observable in observables:
             observable.register_observer(self)
 
-        super().__init__(**kwargs)
+        self.register_observer(self)
+
 
     def update(self):
         raise NotImplementedError()
@@ -78,12 +84,12 @@ class UpdatingLine(UpdatingMark):
 
     def update(self):
         lineprofile = self._func()
-        if lineprofile.space == 'direct':
-            x = linspace(lineprofile)
-        elif lineprofile.space == 'fourier':
-            x = np.fft.fftshift(fftfreq(lineprofile))
-        else:
-            raise RuntimeError()
+        #if lineprofile.space == 'direct':
+        x = linspace(lineprofile)
+        #elif lineprofile.space == 'fourier':
+        #    x = np.fft.fftshift(fftfreq(lineprofile))
+        #else:
+        #    raise RuntimeError()
         y = lineprofile.array
         self._mark.x = x
         self._mark.y = y
@@ -111,16 +117,16 @@ class UpdatingImage(UpdatingMark):
     def update(self):
         array = self._func().array
 
-        if self.color_scale == 'log':
-            sign = np.sign(array)
-            array = sign * np.log(1 + .005 * np.abs(array))
-
-        elif self.color_scale != 'linear':
-            raise RuntimeError()
+        # if self.color_scale == 'log':
+        #     sign = np.sign(array)
+        #     array = sign * np.log(1 + .005 * np.abs(array))
+        #
+        # elif self.color_scale != 'linear':
+        #     raise RuntimeError()
 
         self._mark.image = array_to_png(array)
 
-    color_scale = notifying_property('_color_scale')
+    #color_scale = notifying_property('_color_scale')
 
 
 class InteractiveFigure:

@@ -105,7 +105,7 @@ def fill_rectangle(points, extent, origin=None, margin=0., eps=1e-12):
     repeated = repeat(points, 1 + n0 - n1, 1 + m0 - m1)
 
     positions = repeated.positions.copy()
-    positions = positions + original_cell[0] * n1 + original_cell[1] * m1  # * [n // 2, m // 2]
+    positions = positions + original_cell[0] * n1 + original_cell[1] * m1
 
     inside = ((positions[:, 0] > lower_corner[0] - eps - margin) &
               (positions[:, 1] > lower_corner[1] - eps - margin) &
@@ -152,19 +152,19 @@ def rotate(points, angle, center=None, rotate_cell=False):
 
 class LabelledPoints(object):
 
-    def __init__(self, positions=None, cell=None, labels=None):
+    def __init__(self, positions=None, cell=None, labels=None, dimensions=2):
 
         if positions is None:
-            positions = np.zeros((0, 2), dtype=np.float)
+            positions = np.zeros((0, dimensions), dtype=np.float)
 
         positions = np.array(positions, dtype=np.float)
 
-        if (len(positions.shape) != 2) | (positions.shape[1] != 2):
+        if (len(positions.shape) != dimensions) | (positions.shape[1] != dimensions):
             raise RuntimeError()
 
         self._positions = positions
 
-        self._cell = np.zeros((2, 2), np.float)
+        self._cell = np.zeros((dimensions, dimensions), np.float)
 
         if cell is not None:
             self.cell = cell

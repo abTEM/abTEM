@@ -1,22 +1,30 @@
-import pytest
 import numpy as np
-from ..waves import Waves, PlaneWaves, ProbeWaves
-from ..bases import Grid
-from ..detect import DetectorBase
-import mock
+
+from ..detect import RingDetector, FourierSpaceDetector
+from ..waves import ProbeWaves
 
 
+def test_ring_detector():
+    ring_detector = RingDetector(None, None, extent=10, gpts=200, energy=100e3)
+    ring_detector.inner = (ring_detector.fourier_extent * ring_detector.wavelength / 4)[0]
+    ring_detector.outer = (ring_detector.fourier_extent * ring_detector.wavelength / 2)[0]
+    assert np.round(np.sum(ring_detector.get_efficiency()) / np.prod(ring_detector.gpts), 2) == .58
+
+
+# def test_ring_detector_detect():
+#     probe_waves = ProbeWaves(energy=60e3, extent=10, cutoff=.03, gpts=200).build()
 #
-# @pytest.fixture(scope='session')
-# def mocked_detector_base():
-#     with mock.patch.object(DetectorBase, 'detect') as detect:
-#         with mock.patch.object(DetectorBase, 'out_shape') as out_shape:
-#             out_shape.side_effect = lambda: (1,)
-#             yield DetectorBase
+#     ring_detector = RingDetector(0.05, .2)
 #
+#     assert np.isclose(ring_detector.detect(probe_waves), 0)
 #
-# def test_probe_waves_linescan(potential, mocked_detector_base):
-#     array = np.zeros()
-#     probe_waves = Waves(extent=10, energy=60e3)
+#     probe_waves = ProbeWaves(energy=60e3, extent=10, cutoff=.06, gpts=200).build()
 #
-#     detector = mocked_detector_base()
+#     assert not np.isclose(ring_detector.detect(probe_waves), 0)
+#
+
+def test_fourier_space_detector():
+    fourier_space_detector = FourierSpaceDetector(gpts=200)
+    assert fourier_space_detector.out_shape == (200, 200)
+
+    #fourier_space_detector = FourierSpaceDetector(gpts=200, extent=)

@@ -17,6 +17,7 @@ def load_parameters(filename):
             parameters[int(row[0])] = dict(zip(keys, values))
     return parameters
 
+lobato_parameters = load_parameters('data/lobato.txt')
 
 def convert_lobato(parameters):
     a = np.array([parameters[key] for key in ('a1', 'a2', 'a3', 'a4', 'a5')]).astype(np.float32)

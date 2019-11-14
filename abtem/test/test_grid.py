@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from ..bases import Grid, Observable, GridProperty
-
+from ..utils import fftfreq
 
 def test_create_grid():
     grid = Grid(extent=5, sampling=.2)
@@ -100,3 +100,14 @@ def test_check_grid_matches():
         grid1.check_same_grid(grid2)
 
     assert str(e.value) == 'inconsistent sampling'
+
+
+def test_fourier_limits():
+    grid = Grid(extent=(3,3), gpts=(12,13))
+    assert np.isclose(fftfreq(grid)[0][5], grid.fourier_limits[0][1])
+    assert np.isclose(fftfreq(grid)[0][6], grid.fourier_limits[0][0])
+    assert np.isclose(fftfreq(grid)[1][6], grid.fourier_limits[1][1])
+    assert np.isclose(fftfreq(grid)[1][7], grid.fourier_limits[1][0])
+
+
+

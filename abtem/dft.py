@@ -2,8 +2,8 @@ import numpy as np
 from ase import units
 from scipy.interpolate import interp1d
 
-from abtem.bases import cached_method, HasCache
-from abtem.transform import make_orthogonal_atoms, make_orthogonal_array
+from abtem.bases import cached_method, Cache
+from abtem.transform import fill_rectangle_with_atoms, orthogonalize_array
 from abtem.potentials import PotentialBase
 from abtem.interpolation import interpolation_kernel
 from abtem.utils import split_integer
@@ -58,7 +58,7 @@ def project_spherical_function(f, r, a, b, num_samples=200):
     return np.sum(f(rxy) * wkab.reshape(1, -1), axis=-1)
 
 
-class GPAWPotential(PotentialBase, HasCache):
+class GPAWPotential(PotentialBase, Cache):
 
     def __init__(self, calc, origin=None, extent=None, gpts=None, sampling=None, num_slices=None, slice_thickness=.5,
                  sigma=.01, assert_equal_thickness=False):
@@ -94,7 +94,7 @@ class GPAWPotential(PotentialBase, HasCache):
 
     # @cached_method
     def get_atoms(self, cutoff=0.):
-        return make_orthogonal_atoms(self._atoms, self._origin, self.extent, cutoff=cutoff, return_equivalent=True)
+        return fill_rectangle_with_atoms(self._atoms, self._origin, self.extent, margin=cutoff)
 
     def slice_thickness(self, i):
         return self._nz[i] * self._dz
@@ -110,7 +110,7 @@ class GPAWPotential(PotentialBase, HasCache):
         array = self._prepare_electrostatic_potential()
         array = array[..., start:stop].sum(axis=-1) * self._dz
 
-        array = make_orthogonal_array(array, self._calc.atoms.cell[:2, :2], self._origin, self.extent, self.gpts)
+        array = orthogonalize_array(array, self._calc.atoms.cell[:2, :2], self._origin, self.extent, self.gpts)
         array = self._get_projected_paw_corrections(slice_entrance, slice_exit) - array
         return array
 

@@ -1,5 +1,6 @@
-import os
 import numbers
+import os
+
 import numpy as np
 from ase import units
 from scipy.optimize import brentq
@@ -9,7 +10,7 @@ from abtem.bases import Grid, cached_method, ArrayWithGrid, Cache
 from abtem.interpolation import interpolation_kernel_parallel
 from abtem.parametrizations import convert_kirkland, kirkland, kirkland_projected_finite, dvdr_kirkland, load_parameters
 from abtem.parametrizations import convert_lobato, lobato, lobato_projected_finite, dvdr_lobato
-from abtem.transform import make_orthogonal_atoms
+from abtem.transform import fill_rectangle_with_atoms
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
@@ -60,11 +61,11 @@ class PotentialBase(Grid):
     def slice_thickness(self, i):
         raise NotImplementedError()
 
-    def precalculate(self):
+    def precalculate(self, show_progress=False):
         array = np.zeros((self.num_slices,) + (self.gpts[0], self.gpts[1]))
         slice_thicknesses = np.zeros(self.num_slices)
 
-        for i in tqdm(range(self.num_slices)):
+        for i in tqdm(range(self.num_slices), disable=not show_progress):
             array[i] = self.get_slice(i)
             slice_thicknesses[i] = self.slice_thickness(i)
 
@@ -130,10 +131,19 @@ class Potential(PotentialBase, Cache):
         return self._parameters
 
     def get_atoms(self, cutoff=0.):
-        return make_orthogonal_atoms(self.atoms, self._origin, self.extent, cutoff=cutoff)
+        atoms, _ = fill_rectangle_with_atoms(self.atoms, self._origin, self.extent, margin=cutoff)
+        return atoms
+
+    def slice_entrance(self, i):
+        return np.sum([self.slice_thickness(j) for j in range(i)])
+
+    def slice_exit(self, i):
+        return np.sum([self.slice_thickness(j) for j in range(i + 1)])
 
     @cached_method()
     def _prepare_interpolation(self):
+        self.check_is_grid_defined()
+
         unique_atomic_numbers = np.unique(self._atoms.get_atomic_numbers())
 
         data = {}
@@ -161,7 +171,7 @@ class Potential(PotentialBase, Cache):
         v = np.zeros(self.gpts)
         return v, data
 
-    def _evaluate_interpolation(self, i, num_spline_nodes=100, num_integration_samples=100):
+    def _evaluate_interpolation(self, i, num_spline_nodes=200, num_integration_samples=100):
         v, data_dict = self._prepare_interpolation()
         v[:, :] = 0.
 

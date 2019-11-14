@@ -6,7 +6,7 @@ def pixel_times(dwell_time, flyback_time, shape):
     line_time = (dwell_time * shape[1]) + flyback_time
     slow_time = np.tile(np.linspace(line_time, shape[0] * line_time, shape[0])[:, None], (1, shape[1]))
     fast_time = np.tile(np.linspace((line_time - flyback_time) / shape[1],
-                                     line_time - flyback_time, shape[1]), (shape[0], 1))
+                                    line_time - flyback_time, shape[1]), (shape[0], 1))
     return slow_time + fast_time
 
 
@@ -49,7 +49,24 @@ def apply_displacement_field(image, distortion_x, distortion_y):
     return warped.reshape(image.shape)
 
 
-def add_scan_noise(image, dwell_time, flyback_time, max_frequency, rms_power, num_components=100):
-    time = pixel_times(dwell_time, flyback_time, image.shape)
+def add_scan_noise(image, dwell_time, flyback_time, max_frequency, rms_power, num_components=200):
+    image = image.copy()
+
+    time = pixel_times(dwell_time, flyback_time, image.array.T.shape)
     displacement_x, displacement_y = make_displacement_field(time, max_frequency, num_components, rms_power)
-    return apply_displacement_field(image, displacement_x, displacement_y)
+    array = apply_displacement_field(image.array[:].T, displacement_x, displacement_y)
+    image.array[:] = array.T
+
+    return image
+
+
+def add_poisson_noise(image, dose, background=0):
+    image = image.copy()
+
+    image.array[:] += np.mean(image.array) * background
+
+    image.array[:] = image.array / np.sum(image.array) * dose * np.product(image.sampling) * np.prod(image.gpts)
+
+    image.array[:] = np.random.poisson(image.array).astype(np.float)
+
+    return image

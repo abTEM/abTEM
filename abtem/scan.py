@@ -1,8 +1,9 @@
+from typing import Union, Sequence, Tuple
+
 import numpy as np
 
-from abtem.bases import Grid
+from abtem.bases import Grid, Image
 from abtem.utils import BatchGenerator, split_integer
-from typing import Union, Sequence, Tuple
 
 
 class ScanBase:
@@ -171,6 +172,9 @@ class GridScan(Grid, ScanBase):
 
             start_n = start_n + self.sampling[0] * n
         return scans
+
+    def get_image(self, detector):
+        return Image(self.measurements[detector], extent=self.extent)
 
     def get_x_positions(self) -> np.ndarray:
         return np.linspace(self.start[0], self.end[0], self.gpts[0], endpoint=self._endpoint)

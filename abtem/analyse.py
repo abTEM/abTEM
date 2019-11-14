@@ -81,7 +81,8 @@ def fit_powerlaw(ratios):
 
 
 def center_of_mass(data):
-    center = np.array(data.shape[2:]) / 2
+    shape = data.shape[2:]
+    center = np.array(shape) / 2 - [.5 * (shape[0] % 2), .5 * (shape[1] % 2)]
     com = np.zeros(data.shape[:2] + (2,))
     for i in range(data.shape[0]):
         for j in range(data.shape[1]):

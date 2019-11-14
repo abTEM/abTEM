@@ -1,7 +1,8 @@
 from typing import Optional, Union, Any, Sequence
 
 import numpy as np
-from ase import units
+
+from abtem.utils import convert_complex, energy2wavelength, energy2sigma, linspace
 
 
 def notify(func):
@@ -339,8 +340,15 @@ class Grid(Observable):
             raise RuntimeError('gpts is not defined')
 
     @property
+    def fourier_limits(self):
+        return np.array([(-1 / (2 * d), 1 / (2 * d) - 1 / (d * p)) if (p % 2 == 0) else
+                         (-1 / (2 * d) + 1 / (2 * d * p), 1 / (2 * d) - 1 / (2 * d * p)) for d, p in
+                         zip(self.sampling, self.gpts)])
+
+    @property
     def fourier_extent(self):
-        return fourier_extent(self.extent, self.gpts)
+        fourier_limits = self.fourier_limits
+        return fourier_limits[:, 1] - fourier_limits[:, 0]
 
     def check_same_grid(self, other):
         """ Throw error if the grid of another object is different from this object. """
@@ -351,44 +359,12 @@ class Grid(Observable):
         elif (self.gpts is not None) & (self.gpts is not None) & np.any(self.sampling != other.sampling):
             raise RuntimeError('inconsistent sampling')
 
+    def linspace(self):
+        return linspace(self)
+
     def copy(self):
         return self.__class__(extent=self._extent.copy(), gpts=self._gpts.copy(), sampling=self._sampling.copy(),
                               dimensions=self._dimensions)
-
-
-def energy2mass(energy):
-    """
-    Calculate relativistic mass from energy.
-    :param energy: Energy in electron volt
-    :type energy: float
-    :return: Relativistic mass in kg
-    :rtype: float
-    """
-    return (1 + units._e * energy / (units._me * units._c ** 2)) * units._me
-
-
-def energy2wavelength(energy):
-    """
-    Calculate relativistic de Broglie wavelength from energy.
-    :param energy: Energy in electron volt
-    :type energy: float
-    :return: Relativistic de Broglie wavelength in Angstrom.
-    :rtype: float
-    """
-    return units._hplanck * units._c / np.sqrt(
-        energy * (2 * units._me * units._c ** 2 / units._e + energy)) / units._e * 1.e10
-
-
-def energy2sigma(energy):
-    """
-    Calculate interaction parameter from energy.
-    :param energy: Energy in electron volt.
-    :type energy: float
-    :return: Interaction parameter in 1 / (Angstrom * eV).
-    :rtype: float
-    """
-    return (2 * np.pi * energy2mass(energy) * units.kg * units._e * units.C * energy2wavelength(energy) / (
-            units._hplanck * units.s * units.J) ** 2)
 
 
 class Energy(Observable):
@@ -477,6 +453,9 @@ class ArrayWithGrid(Grid):
     def array(self):
         return self._array
 
+    def get_image(self, i=0, convert='intensity'):
+        return Image(convert_complex(self._array[i], convert), extent=self.extent)
+
     def copy(self):
         return self.__class__(array=self.array.copy(), extent=self.extent.copy())
 
@@ -508,3 +487,12 @@ class Image(ArrayWithGrid):
 
         array = np.take(self.array, slice_position, int(not axis))
         return LineProfile(array, extent=self.extent[axis])
+
+    def repeat(self, multiples):
+        assert len(multiples) == 2
+        new_array = np.tile(self._array, multiples)
+        new_extent = multiples * self.extent
+        return self.__class__(array=new_array, extent=new_extent)
+
+    def copy(self):
+        return self.__class__(array=self.array.copy(), extent=self.extent.copy())

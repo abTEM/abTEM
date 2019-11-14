@@ -1,8 +1,48 @@
+from collections import defaultdict
+
 import numexpr as ne
 import numpy as np
+from ase import units
 from numba import njit
-from tqdm.auto import tqdm
-from collections import defaultdict
+
+
+def energy2mass(energy):
+    """
+    Calculate relativistic mass from energy.
+    :param energy: Energy in electron volt
+    :type energy: float
+    :return: Relativistic mass in kg
+    :rtype: float
+    """
+    return (1 + units._e * energy / (units._me * units._c ** 2)) * units._me
+
+
+def energy2wavelength(energy):
+    """
+    Calculate relativistic de Broglie wavelength from energy.
+    :param energy: Energy in electron volt
+    :type energy: float
+    :return: Relativistic de Broglie wavelength in Angstrom.
+    :rtype: float
+    """
+    return units._hplanck * units._c / np.sqrt(
+        energy * (2 * units._me * units._c ** 2 / units._e + energy)) / units._e * 1.e10
+
+
+def energy2sigma(energy):
+    """
+    Calculate interaction parameter from energy.
+    :param energy: Energy in electron volt.
+    :type energy: float
+    :return: Interaction parameter in 1 / (Angstrom * eV).
+    :rtype: float
+    """
+    return (2 * np.pi * energy2mass(energy) * units.kg * units._e * units.C * energy2wavelength(energy) / (
+            units._hplanck * units.s * units.J) ** 2)
+
+
+def scherzer_defocus(Cs, energy):
+    return 1.2 * np.sign(Cs) * np.sqrt(np.abs(Cs) * energy2wavelength(energy))
 
 
 def polar2cartesian(polar):

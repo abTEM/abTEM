@@ -188,3 +188,7 @@ def test_ctf_cache(ctf):
 
     assert alpha is ctf.get_alpha()
     assert aperture is not ctf.get_aperture()
+
+    ctf.C10 = 10
+
+    assert set(ctf.cache.keys()) == {'get_alpha', 'get_phi', 'get_aperture', 'get_temporal_envelope'}

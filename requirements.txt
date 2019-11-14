@@ -1,2 +1,9 @@
 numpy
-ase
+h5py
+pyfftw
+numba
+numexpr
+bqplot
+scipy
+pillow
+matplotlib

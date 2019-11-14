@@ -1,9 +1,18 @@
-import pytest
+import mock
 import numpy as np
-from ..waves import Waves, PlaneWaves, ProbeWaves, PrismWaves
+import pytest
+
 from ..bases import Grid
 from ..detect import DetectorBase
-import mock
+from ..waves import ProbeWaves, PrismWaves
+
+
+@pytest.fixture
+def mocked_detector_base():
+    with mock.patch.object(DetectorBase, 'detect') as detect:
+        with mock.patch.object(DetectorBase, 'out_shape', (1,)):
+            detect.side_effect = lambda x: np.array([1])
+            yield DetectorBase
 
 
 class DummyPotential(Grid):
@@ -90,3 +99,38 @@ def test_prism_multislice():
     probe_waves = probe.build_at(np.array([[2.5, 2.5]])).multislice(potential)
 
     assert np.allclose(probe_waves.array, prism_waves.array)
+
+
+def test_prism_custom_scan(mocked_detector_base):
+    S = PrismWaves(.01, energy=60e3, sampling=.05).multislice(DummyPotential(extent=5))
+    detectors = mocked_detector_base()
+    positions = np.array([[1.25, 1.25], [3.75, 3.75]])
+    scan = S.custom_scan(detectors, positions=positions, show_progress=False)
+    assert mocked_detector_base.detect.call_count == 2
+    assert np.all(scan.measurements[detectors] == [1., 1.])
+
+
+def test_probe_waves_line_scan(mocked_detector_base):
+    S = PrismWaves(.01, energy=60e3, sampling=.05).multislice(DummyPotential(extent=5))
+    detectors = mocked_detector_base()
+
+    start = [0, 0]
+    end = [1, 1]
+    gpts = 2
+
+    scan = S.linescan(detectors, start=start, end=end, gpts=gpts, show_progress=False)
+    assert mocked_detector_base.detect.call_count == 2
+    assert np.all(scan.measurements[detectors] == [1., 1.])
+
+
+def test_probe_waves_grid_scan(mocked_detector_base):
+    S = PrismWaves(.01, energy=60e3, sampling=.05).multislice(DummyPotential(extent=5))
+    detectors = mocked_detector_base()
+
+    start = [0, 0]
+    end = [1, 1]
+    gpts = 2
+
+    scan = S.gridscan(detectors, start=start, end=end, gpts=gpts, show_progress=False)
+    assert mocked_detector_base.detect.call_count == 4
+    assert np.all(scan.measurements[detectors] == [[1., 1.], [1., 1.]])

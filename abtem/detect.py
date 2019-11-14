@@ -1,8 +1,8 @@
 import numpy as np
 
-from abtem.bases import Grid, Energy, cached_method, Cache
+from abtem.bases import Grid, Energy, cached_method, Cache, notify, ArrayWithGridAndEnergy
 from abtem.utils import squared_norm, semiangles
-from skimage.transform import resize
+from scipy.ndimage import zoom
 from typing import Tuple
 
 
@@ -33,69 +33,83 @@ class DetectorBase:
         raise NotImplementedError()
 
 
-class FourierSpaceDetector(DetectorBase, Energy, Grid):
+class RealSpaceDetector:
+    pass
+
+
+class FourierSpaceDetector(Energy, Grid, DetectorBase):
 
     def __init__(self, max_angle=None, resize_isotropic=False, extent=None, gpts=None, sampling=None, energy=None,
                  export=None):
-        self._resize_isotropic = resize_isotropic
-        self._crop_to_angle = max_angle
+        self.resize_isotropic = resize_isotropic
+        self.max_angle = max_angle
 
         super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy, export=export)
 
     @property
     def out_shape(self):
-        if self._crop_to_angle:
+        if self.max_angle:
+            self.check_is_grid_defined()
+            self.check_is_energy_defined()
+
             angular_extent = self.gpts / self.extent * self.wavelength / 2
-            out_shape = tuple(np.ceil(self._crop_to_angle / angular_extent * self.gpts / 2.).astype(int) * 2)
-            if self._resize_isotropic:
-                return (min(out_shape), min(out_shape))
-            else:
-                return out_shape
-        elif self._resize_isotropic:
-            return (np.min(self.gpts), np.min(self.gpts))
+            out_shape = tuple(np.ceil(self.max_angle / angular_extent * self.gpts / 2.).astype(int) * 2)
+
+            return out_shape
         else:
             return tuple(self.gpts)
 
-    def detect(self, wave):
-        self.match_grid(wave)
+    def detect(self, waves):
+        intensity = np.fft.fftshift(np.abs(np.fft.fft2(waves.array)) ** 2, axes=(1, 2))
 
-        intensity = np.fft.fftshift(np.abs(np.fft.fft2(wave.array)) ** 2, axes=(1, 2))
+        if self.max_angle:
+            self.check_is_grid_defined()
+            self.check_is_energy_defined()
 
-        if self._resize_isotropic:
-            new_size = (np.min(self.gpts), np.min(self.gpts))
-            resized_intensity = np.zeros((intensity.shape[0],) + new_size)
-            for i in range(intensity.shape[0]):
-                resized_intensity[i] = resize(intensity[i], new_size, order=0)
-            intensity = resized_intensity
-
-        if self._crop_to_angle:
             out_shape = self.out_shape
             crop = ((intensity.shape[1] - out_shape[0]) // 2, (intensity.shape[2] - out_shape[1]) // 2)
             intensity = intensity[:, crop[0]:crop[0] + out_shape[0], crop[1]:crop[1] + out_shape[1]]
 
-        #     resized_intensity = np.zeros((intensity.shape[0],) + self.out_shape)
-        #     for i in range(intensity.shape[0]):
-        #         resized_intensity[i] = resize(intensity[i], self.out_shape)
-        #     return resized_intensity
-        # else:
         return intensity
 
 
 class RingDetector(DetectorBase, Energy, Grid, Cache):
 
-    def __init__(self, inner, outer, rolloff=0., integrate=True, extent=None, gpts=None, sampling=None, energy=None,
+    def __init__(self, inner, outer, rolloff=0., extent=None, gpts=None, sampling=None, energy=None,
                  export=None):
 
         self._inner = inner
         self._outer = outer
         self._rolloff = rolloff
-        self._integrate = integrate
 
         super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy, export=export)
 
-    # inner = notifying_property('_inner')
-    # outer = notifying_property('_outer')
-    # rolloff = notifying_property('_rolloff')
+    @property
+    def inner(self) -> float:
+        return self._inner
+
+    @inner.setter
+    @notify
+    def inner(self, value: float):
+        self._inner = value
+
+    @property
+    def outer(self) -> float:
+        return self._outer
+
+    @outer.setter
+    @notify
+    def outer(self, value: float):
+        self._outer = value
+
+    @property
+    def rolloff(self) -> float:
+        return self._rolloff
+
+    @rolloff.setter
+    @notify
+    def rolloff(self, value: float):
+        self._rolloff = value
 
     @property
     def out_shape(self):
@@ -103,7 +117,6 @@ class RingDetector(DetectorBase, Energy, Grid, Cache):
 
     @cached_method()
     def get_efficiency(self):
-
         self.check_is_grid_defined()
         self.check_is_energy_defined()
 
@@ -123,14 +136,17 @@ class RingDetector(DetectorBase, Energy, Grid, Cache):
         else:
             array = (alpha >= self._inner) & (alpha <= self._outer)
 
-        return array[None]
+        return ArrayWithGridAndEnergy(array, spatial_dimensions=2, extent=self.extent, energy=self.energy)
 
-    def detect(self, wave):
-        self.extent = wave.extent
-        self.gpts = wave.array.shape[1:]
+    def detect(self, waves):
+        self.extent = waves.extent
+        self.gpts = waves.gpts
+        self.energy = waves.energy
 
-        self.match_energy(wave)
+        intensity = np.abs(np.fft.fft2(waves.array)) ** 2
 
-        intensity = np.abs(np.fft.fft2(wave.array)) ** 2
+        return np.sum(intensity * self.get_efficiency().array, axis=(1, 2)) / np.sum(intensity, axis=(1, 2))
 
-        return np.sum(intensity * self.get_efficiency(), axis=(1, 2)) / np.sum(intensity, axis=(1, 2))
+    def copy(self) -> 'RingDetector':
+        return self.__class__(self.inner, self.outer, rolloff=self.rolloff, extent=self.extent, gpts=self.gpts,
+                              energy=self.energy, export=self.export)

@@ -1,6 +1,10 @@
 import numpy as np
 from ase import Atoms
+from ase.build import niggli_reduce
+from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.interpolate import RegularGridInterpolator
+
+from abtem.points import LabelledPoints, fill_rectangle
 
 
 def is_hexagonal(atoms):
@@ -17,55 +21,73 @@ def is_hexagonal(atoms):
     return (np.isclose(A, B) & (np.isclose(angle, np.pi / 3) | np.isclose(angle, 2 * np.pi / 3)) & (C == cell[2, 2]))
 
 
-def is_orthogonal(atoms):
-    return not np.any(np.abs(atoms.cell[~np.eye(3, dtype=bool)]) > 1e-12)
+def is_orthogonal(atoms, tol=1e-12):
+    return not np.any(np.abs(atoms.cell[~np.eye(3, dtype=bool)]) > tol)
 
 
-def make_orthogonal_atoms(atoms, origin, extent, cutoff=0., return_equivalent=False, eps=1e-16):
-    origin = np.array(origin)
-    extent = np.array(extent)
+def merge_close(atoms, tol=1e-12):
+    labels = fcluster(linkage(atoms.positions), tol, criterion='distance')
 
-    P = np.array(atoms.cell[:2, :2])
-    P_inv = np.linalg.inv(P)
+    _, idx = np.unique(labels, return_index=True)
 
-    origin_t = np.dot(origin, P_inv)
-    origin_t = origin_t % 1.0
-
-    lower_corner = np.dot(origin_t, P)
-    upper_corner = lower_corner + extent
-
-    n, m = np.ceil(np.dot(upper_corner + 2 * cutoff, P_inv)).astype(np.int)
-
-    repeated_atoms = atoms.copy()
-    displacement = atoms.cell[:2, :2].copy()
-
-    repeated_atoms *= (n+2, m+2, 1)
-
-    positions = repeated_atoms.get_positions()
-    positions[:, :2] -= displacement.sum(axis=0)
-
-    inside = ((positions[:, 0] > lower_corner[0] - eps - cutoff) &
-              (positions[:, 1] > lower_corner[1] - eps - cutoff) &
-              (positions[:, 0] < upper_corner[0] + cutoff) &
-              (positions[:, 1] < upper_corner[1] + cutoff))
-
-    atomic_numbers = repeated_atoms.get_atomic_numbers()[inside]
-    positions = positions[inside]
-
-    positions[:, :2] -= lower_corner
-
-    new_atoms = Atoms(atomic_numbers, positions=positions, cell=[extent[0], extent[1], atoms.cell[2, 2]])
-
-    if return_equivalent:
-        equivalent = np.arange(0, len(atoms))
-        equivalent = np.tile(equivalent, (n + 2) * (m + 2))
-        equivalent = equivalent[inside]
-        return new_atoms, equivalent
-    else:
-        return new_atoms
+    return atoms[idx]
 
 
-def make_orthogonal_array(array, original_cell, origin, extent, new_gpts=None):
+def fill_rectangle_with_atoms(atoms, origin, extent, margin=0.):
+    non_zero = np.abs(atoms.cell) > 1e-12
+
+    if not (np.all(np.array([[1, 0, 0], [1, 1, 0], [0, 0, 1]], dtype=np.bool) == non_zero) |
+            np.all(np.identity(3) == non_zero)):
+        atoms.cell.pbc[:] = True
+        niggli_reduce(atoms)
+
+    if not np.isclose(atoms.cell[2].sum(), atoms.cell[2, 2]):
+        raise RuntimeError()
+
+    positions = atoms.positions[:, :2]
+    cell = atoms.cell[:2, :2]
+
+    points = LabelledPoints(positions, cell=cell, labels=np.arange(len(positions)))
+
+    points = fill_rectangle(points, extent=extent, origin=origin, margin=margin)
+
+    positions = np.hstack((points.positions, atoms.positions[points.labels, 2][:, None]))
+    cell = [points.cell[0, 0], points.cell[1, 1], atoms.cell[2, 2]]
+
+    new_atoms = Atoms(atoms.numbers[points.labels], positions=positions, cell=cell)
+
+    return new_atoms, points.labels
+
+
+def orthogonalize_atoms(atoms, n=1, m=None, tol=1e-12):
+    non_zero = np.abs(atoms.cell) > 1e-12
+
+    if not (np.all(np.array([[1, 0, 0], [1, 1, 0], [0, 0, 1]], dtype=np.bool) == non_zero) |
+            np.all(np.identity(3) == non_zero)):
+        atoms.cell.pbc[:] = True
+        niggli_reduce(atoms)
+
+    if m is None:
+        m = np.abs(np.round(atoms.cell[0, 0] / atoms.cell[1, 0]))
+
+    origin = [0, 0]
+    extent = [atoms.cell[0, 0] * n, atoms.cell[1, 1] * m]
+
+    atoms, _ = fill_rectangle_with_atoms(atoms, origin=origin, extent=extent, margin=0.)
+
+    positions = atoms.positions
+    cell = np.diag(atoms.cell)
+
+    for i in range(3):
+        close = (cell[i] - positions[:, i]) < tol
+        positions[close, i] = positions[close, i] - cell[i]
+
+    new_atoms = Atoms(atoms.numbers, positions=positions, cell=cell)
+
+    return merge_close(new_atoms)
+
+
+def orthogonalize_array(array, original_cell, origin, extent, new_gpts=None):
     if new_gpts is None:
         new_gpts = array.shape
 
