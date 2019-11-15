@@ -1,6 +1,6 @@
 from collections import defaultdict
 
-import numexpr as ne
+#import numexpr as ne
 import numpy as np
 from ase import units
 from numba import njit
@@ -87,17 +87,17 @@ def cartesian2polar(cartesian):
     return polar
 
 
+#def complex_exponential(x):
+#    return ne.evaluate('exp(1.j * x)')
+
+
 def complex_exponential(x):
-    return ne.evaluate('exp(1.j * x)')
-
-
-# def complex_exponential(x):
-#     df_exp = np.empty(x.shape, dtype=np.complex64)
-#     trig_buf = np.cos(x)
-#     df_exp.real[:] = trig_buf
-#     np.sin(x, out=trig_buf)
-#     df_exp.imag[:] = trig_buf
-#     return df_exp
+    df_exp = np.empty(x.shape, dtype=np.complex64)
+    trig_buf = np.cos(x)
+    df_exp.real[:] = trig_buf
+    np.sin(x, out=trig_buf)
+    df_exp.imag[:] = trig_buf
+    return df_exp
 
 
 def squared_norm(x, y):
