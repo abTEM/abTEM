@@ -176,7 +176,7 @@ class PlaneWaves(Grid, Energy, Cache):
     def num_waves(self, value: int):
         self._num_waves = value
 
-    def multislice(self, potential):
+    def multislice(self, potential, show_progress=True):
         if isinstance(potential, Atoms):
             potential = Potential(atoms=potential)
 
@@ -186,7 +186,7 @@ class PlaneWaves(Grid, Energy, Cache):
         if self.gpts is None:
             self.gpts = potential.gpts
 
-        return self.build().multislice(potential, in_place=True)
+        return self.build().multislice(potential, in_place=True, show_progress=show_progress)
 
     @cached_method()
     def build(self):
@@ -503,7 +503,7 @@ class ScatteringMatrix(ArrayWithGrid, CTFBase, Cache):
         return do_scan(self, self._get_scan_waves_maker(), scan=scan, detectors=detectors, max_batch=1,
                        show_progress=show_progress)
 
-    def linescan(self, detectors: Union[Sequence[DetectorBase], DetectorBase],
+    def line_scan(self, detectors: Union[Sequence[DetectorBase], DetectorBase],
                  start: Sequence[float], end: Sequence[float], gpts: int = None, sampling: float = None,
                  endpoint: bool = True, max_batch: int = 1, show_progress: bool = True):
 
@@ -511,7 +511,7 @@ class ScatteringMatrix(ArrayWithGrid, CTFBase, Cache):
         return do_scan(self, self._get_scan_waves_maker(), scan=scan, detectors=detectors, max_batch=max_batch,
                        show_progress=show_progress)
 
-    def gridscan(self, detectors: Union[Sequence[DetectorBase], DetectorBase],
+    def grid_scan(self, detectors: Union[Sequence[DetectorBase], DetectorBase],
                  start: Sequence[float], end: Sequence[float], gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None, endpoint: bool = True, max_batch: int = 1,
                  show_progress: bool = True):

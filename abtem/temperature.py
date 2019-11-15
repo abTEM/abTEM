@@ -2,7 +2,7 @@ import numpy as np
 from ase.data import atomic_numbers
 
 
-class TDS(object):
+class TDS:
 
     def __init__(self, atoms, sigmas, n):
         self._n = n
@@ -15,6 +15,10 @@ class TDS(object):
 
         self._sigmas = new_sigmas
         self._atoms = atoms
+
+    @property
+    def n(self):
+        return self._n
 
     def get_displaced_atoms(self):
         atoms = self._atoms.copy()
@@ -31,6 +35,7 @@ class TDS(object):
             positions[indices] += self._sigmas[number] * np.random.randn(len(indices), 3)
 
         atoms.set_positions(positions)
+        atoms.wrap()
         return atoms
 
     def generate(self):

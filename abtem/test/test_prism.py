@@ -118,7 +118,7 @@ def test_probe_waves_line_scan(mocked_detector_base):
     end = [1, 1]
     gpts = 2
 
-    scan = S.linescan(detectors, start=start, end=end, gpts=gpts, show_progress=False)
+    scan = S.line_scan(detectors, start=start, end=end, gpts=gpts, show_progress=False)
     assert mocked_detector_base.detect.call_count == 2
     assert np.all(scan.measurements[detectors] == [1., 1.])
 
@@ -131,6 +131,6 @@ def test_probe_waves_grid_scan(mocked_detector_base):
     end = [1, 1]
     gpts = 2
 
-    scan = S.gridscan(detectors, start=start, end=end, gpts=gpts, show_progress=False)
+    scan = S.grid_scan(detectors, start=start, end=end, gpts=gpts, show_progress=False)
     assert mocked_detector_base.detect.call_count == 4
     assert np.all(scan.measurements[detectors] == [[1., 1.], [1., 1.]])

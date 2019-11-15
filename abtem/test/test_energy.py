@@ -1,8 +1,9 @@
+import mock
 import numpy as np
 import pytest
-from mock import Mock
-import mock
-from ..bases import energy2mass, energy2wavelength, energy2sigma, Energy
+
+from ..bases import Energy
+from ..utils import energy2mass, energy2wavelength, energy2sigma
 
 
 def test_energy2mass():

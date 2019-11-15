@@ -1,14 +1,13 @@
 import numpy as np
 
 from ..detect import RingDetector, FourierSpaceDetector
-from ..waves import ProbeWaves
 
 
 def test_ring_detector():
     ring_detector = RingDetector(None, None, extent=10, gpts=200, energy=100e3)
     ring_detector.inner = (ring_detector.fourier_extent * ring_detector.wavelength / 4)[0]
     ring_detector.outer = (ring_detector.fourier_extent * ring_detector.wavelength / 2)[0]
-    assert np.round(np.sum(ring_detector.get_efficiency()) / np.prod(ring_detector.gpts), 2) == .58
+    assert np.round(np.sum(ring_detector.get_efficiency().array) / np.prod(ring_detector.gpts), 2) == .58
 
 
 # def test_ring_detector_detect():
