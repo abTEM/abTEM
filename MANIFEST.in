@@ -1,1 +1,2 @@
 recursive-include abtem *.txt
+recursive-include abtem *.traj
