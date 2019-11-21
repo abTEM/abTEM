@@ -1,9 +1,8 @@
+import h5py
 import numpy as np
 
 from abtem.bases import Grid, Energy, cached_method, Cache, notify, ArrayWithGridAndEnergy
 from abtem.utils import squared_norm, semiangles
-from scipy.ndimage import zoom
-from typing import Tuple
 
 
 class DetectorBase:
@@ -39,11 +38,8 @@ class RealSpaceDetector:
 
 class FourierSpaceDetector(Energy, Grid, DetectorBase):
 
-    def __init__(self, max_angle=None, resize_isotropic=False, extent=None, gpts=None, sampling=None, energy=None,
-                 export=None):
-        self.resize_isotropic = resize_isotropic
+    def __init__(self, max_angle=None, extent=None, gpts=None, sampling=None, energy=None, export=None):
         self.max_angle = max_angle
-
         super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy, export=export)
 
     @property

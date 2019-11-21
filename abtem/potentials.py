@@ -1,31 +1,32 @@
 import numbers
 import os
+from typing import Union, Sequence
 
 import numpy as np
 from ase import units
 from scipy.optimize import brentq
 from tqdm.auto import tqdm
 
-from abtem.bases import Grid, cached_method, ArrayWithGrid, Cache
+from abtem.bases import Grid, cached_method, ArrayWithGrid, Cache, cached_method_with_args
 from abtem.interpolation import interpolation_kernel_parallel
-from abtem.parametrizations import convert_kirkland, kirkland, kirkland_projected_finite, dvdr_kirkland, load_parameters
-from abtem.parametrizations import convert_lobato, lobato, lobato_projected_finite, dvdr_lobato
+from abtem.parametrizations import convert_kirkland, kirkland, kirkland_projected_finite_tanh_sinh, dvdr_kirkland, \
+    load_parameters
+from abtem.parametrizations import convert_lobato, lobato, lobato_projected_finite_tanh_sinh, dvdr_lobato
 from abtem.transform import fill_rectangle_with_atoms
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
 kappa = 4 * np.pi * eps0 / (2 * np.pi * units.Bohr * units._e * units.C)
 
+QUADRATURE_PARAMETER_RATIO = 4
+
 
 class PotentialBase(Grid):
 
     def __init__(self, atoms, origin=None, extent=None, gpts=None, sampling=None, num_slices=None, **kwargs):
 
-        if np.abs(atoms.cell[0, 0]) < 1e-12:
+        if np.abs(atoms.cell[2, 2]) < 1e-12:
             raise RuntimeError('atoms has no thickness')
-
-        if (np.abs(atoms.cell[0, 0]) < 1e-12) | (np.abs(atoms.cell[1, 1]) < 1e-12):
-            raise RuntimeError('atoms has no width')
 
         self._atoms = atoms.copy()
         self._atoms.wrap()
@@ -55,8 +56,17 @@ class PotentialBase(Grid):
         return self._atoms.cell[2, 2]
 
     def get_slice(self, i):
+        raise NotImplementedError()
+
+    def check_slice_idx(self, i):
         if i >= self.num_slices:
-            raise RuntimeError()
+            raise RuntimeError('slice index {} too large'.format(i))
+
+    def __getitem__(self, i):
+        if i >= self.num_slices:
+            raise StopIteration
+
+        return self.get_slice(i)
 
     def slice_thickness(self, i):
         raise NotImplementedError()
@@ -72,10 +82,23 @@ class PotentialBase(Grid):
         return PrecalculatedPotential(array, slice_thicknesses, self.extent)
 
 
+def tanh_sinh_quadrature(m, h):
+    xk = np.zeros(2 * m)
+    wk = np.zeros(2 * m)
+    for i in range(0, 2 * m):
+        k = i - m
+        xk[i] = np.tanh(np.pi / 2 * np.sinh(k * h))
+        numerator = h / 2 * np.pi * np.cosh(k * h)
+        denominator = np.cosh(np.pi / 2 * np.sinh(k * h)) ** 2
+        wk[i] = numerator / denominator
+    return xk, wk
+
+
 class Potential(PotentialBase, Cache):
 
     def __init__(self, atoms, origin=None, extent=None, gpts=None, sampling=None, slice_thickness=.5, num_slices=None,
-                 parametrization='lobato', method='interpolation', tolerance=1e-3):
+                 parametrization='lobato', method='interpolation', tolerance=1e-3, quadrature_order=40,
+                 interpolation_sampling=.001):
 
         self._tolerance = tolerance
         self._method = method
@@ -83,26 +106,29 @@ class Potential(PotentialBase, Cache):
         if isinstance(parametrization, str):
             if parametrization == 'lobato':
                 self._potential_func = lobato
-                self._projected_func = lobato_projected_finite
+                self._projected_func = lobato_projected_finite_tanh_sinh
                 self._diff_func = dvdr_lobato
                 self._convert_param_func = convert_lobato
                 self._parameters = load_parameters('data/lobato.txt')
 
             elif parametrization == 'kirkland':
                 self._potential_func = kirkland
-                self._projected_func = kirkland_projected_finite
+                self._projected_func = kirkland_projected_finite_tanh_sinh
                 self._diff_func = dvdr_kirkland
                 self._convert_param_func = convert_kirkland
                 self._parameters = load_parameters('data/kirkland.txt')
 
             else:
-                raise RuntimeError()
+                raise RuntimeError('parametrization {} not recognized'.format(parametrization))
 
         if num_slices is None:
             if slice_thickness is None:
                 raise RuntimeError()
 
-            num_slices = int(np.floor(atoms.cell[2, 2] / slice_thickness))
+            num_slices = int(np.ceil(atoms.cell[2, 2] / slice_thickness))
+
+        self._quadrature_order = quadrature_order
+        self._interpolation_sampling = interpolation_sampling
 
         super().__init__(atoms=atoms.copy(), origin=origin, extent=extent, gpts=gpts, sampling=sampling,
                          num_slices=num_slices)
@@ -130,76 +156,102 @@ class Potential(PotentialBase, Cache):
     def parameters(self):
         return self._parameters
 
-    def get_atoms(self, cutoff=0.):
-        atoms, _ = fill_rectangle_with_atoms(self.atoms, self._origin, self.extent, margin=cutoff)
-        return atoms
-
     def slice_entrance(self, i):
+        self.check_slice_idx(i)
         return np.sum([self.slice_thickness(j) for j in range(i)])
 
     def slice_exit(self, i):
+        self.check_slice_idx(i)
         return np.sum([self.slice_thickness(j) for j in range(i + 1)])
 
-    @cached_method()
-    def _prepare_interpolation(self):
+    @cached_method_with_args(('parametrization',))
+    def _get_adjusted_parameters(self, atomic_number):
+        return self._convert_param_func(self.parameters[atomic_number])
+
+    def get_potential_func(self, atomic_number):
+        return lambda r: self._potential_func(r, *self._get_adjusted_parameters(atomic_number))
+
+    @cached_method_with_args(('tolerance', 'parametrization'))
+    def get_cutoff(self, atomic_number):
+        func = lambda r: self.get_potential_func(atomic_number)(r) - self.tolerance
+        return brentq(func, 1e-7, 1000)
+
+    @cached_method(())
+    def _get_unique_atomic_numbers(self):
+        return np.unique(self._atoms.get_atomic_numbers())
+
+    @cached_method(('tolerance',))
+    def max_cutoff(self):
+        return max([self.get_cutoff(number) for number in self._get_unique_atomic_numbers()])
+
+    @cached_method(('tolerance', 'origin', 'extent'))
+    def get_padded_atoms(self):
+        cutoff = self.max_cutoff()
+        return fill_rectangle_with_atoms(self.atoms, self._origin, self.extent, margin=cutoff, )
+
+    @cached_method(('gpts',))
+    def _allocate(self):
         self.check_is_grid_defined()
+        return np.zeros(self.gpts)
 
-        unique_atomic_numbers = np.unique(self._atoms.get_atomic_numbers())
+    @cached_method_with_args(('tolerance',))
+    def _get_cutoff_value(self, atomic_number):
+        return self.get_potential_func(atomic_number)(self.get_cutoff(atomic_number))
 
-        data = {}
-        max_cutoff = 0.
-        for atomic_number in unique_atomic_numbers:
-            data[atomic_number] = {}
-            data[atomic_number]['parameters'] = self._convert_param_func(self.parameters[atomic_number])
+    @cached_method_with_args(('tolerance',))
+    def _get_derivative_cutoff_value(self, atomic_number):
+        return self.get_potential_func(atomic_number)(self.get_cutoff(atomic_number))
 
-            func = lambda x: self._potential_func(x, *data[atomic_number]['parameters']) - self.tolerance
-            data[atomic_number]['r_cut'] = brentq(func, 1e-7, 1000)
-            max_cutoff = max(data[atomic_number]['r_cut'], max_cutoff)
+    @cached_method_with_args(('tolerance', 'origin', 'extent'))
+    def _get_atomic_positions(self, atomic_number):
+        atoms = self.get_padded_atoms()
+        return atoms.get_positions()[np.where(atoms.numbers == atomic_number)]
 
-            data[atomic_number]['v_cut'] = self._potential_func(data[atomic_number]['r_cut'],
-                                                                *data[atomic_number]['parameters'])
-            data[atomic_number]['dvdr_cut'] = self._diff_func(data[atomic_number]['r_cut'],
-                                                              *data[atomic_number]['parameters'])
+    @cached_method_with_args(('tolerance',))
+    def _get_radial_coordinates(self, atomic_number):
+        n = int(np.ceil(self.get_cutoff(atomic_number) / self._interpolation_sampling))
+        start = min(self.sampling) / 2.
+        stop = self.get_cutoff(atomic_number)
+        dt = np.log(stop / start) / (n - 1)
+        return start * np.exp(dt * np.linspace(0., n - 1, n))
 
-        atoms = self.get_atoms(cutoff=max_cutoff)
-        atomic_numbers = atoms.get_atomic_numbers()
-        positions = atoms.get_positions()
+    @cached_method(('sampling',))
+    def _get_quadrature(self):
+        m = self._quadrature_order
+        h = QUADRATURE_PARAMETER_RATIO / self._quadrature_order
+        return tanh_sinh_quadrature(m, h)
 
-        for atomic_number in unique_atomic_numbers:
-            data[atomic_number]['positions'] = positions[np.where(atomic_numbers == atomic_number)]
-
-        v = np.zeros(self.gpts)
-        return v, data
-
-    def _evaluate_interpolation(self, i, num_spline_nodes=200, num_integration_samples=100):
-        v, data_dict = self._prepare_interpolation()
+    def _evaluate_interpolation(self, i):
+        v = self._allocate()
         v[:, :] = 0.
 
-        for atomic_number, data in data_dict.items():
-            positions = data['positions']
-            parameters = data['parameters']
-            r_cut = data['r_cut']
-            v_cut = data['v_cut']
-            dvdr_cut = data['dvdr_cut']
+        slice_thickness = self.slice_thickness(i)
 
-            r = np.linspace(min(self.sampling) / 2., r_cut, num_spline_nodes)
+        for atomic_number in self._get_unique_atomic_numbers():
+            positions = self._get_atomic_positions(atomic_number)
+            parameters = self._get_adjusted_parameters(atomic_number)
+            cutoff = self.get_cutoff(atomic_number)
+            cutoff_value = self._get_cutoff_value(atomic_number)
+            derivative_cutoff_value = self._get_derivative_cutoff_value(atomic_number)
+            r = self._get_radial_coordinates(atomic_number)
 
-            block_margin = int(r_cut / min(self.sampling))
-            block_size = 2 * block_margin + 1
+            positions = positions[np.abs((i + .5) * slice_thickness - positions[:, 2]) < (cutoff + slice_thickness / 2)]
 
-            positions = positions[np.abs(i * self.slice_thickness(i) + self.slice_thickness(i) / 2 - positions[:, 2]) <
-                                  (r_cut + self.slice_thickness(i) / 2)]
+            z0 = i * slice_thickness - positions[:, 2]
+            z1 = (i + 1) * slice_thickness - positions[:, 2]
+
+            xk, wk = self._get_quadrature()
+            vr = self._projected_func(r, cutoff, cutoff_value, derivative_cutoff_value, z0, z1, xk, wk, *parameters)
+
+            block_margin = int(cutoff / min(self.sampling))
 
             corner_positions = np.round(positions[:, :2] / self.sampling).astype(np.int) - block_margin
             block_positions = positions[:, :2] - self.sampling * corner_positions
 
+            block_size = 2 * block_margin + 1
+
             x = np.linspace(0., block_size * self.sampling[0] - self.sampling[0], block_size)
             y = np.linspace(0., block_size * self.sampling[1] - self.sampling[1], block_size)
-
-            z0 = i * self.slice_thickness(i) - positions[:, 2]
-            z1 = (i + 1) * self.slice_thickness(i) - positions[:, 2]
-
-            vr = self._projected_func(r, r_cut, v_cut, dvdr_cut, z0, z1, num_integration_samples, *parameters)
 
             interpolation_kernel_parallel(v, r, vr, corner_positions, block_positions, x, y)
 
@@ -209,7 +261,7 @@ class Potential(PotentialBase, Cache):
         if self._method == 'interpolation':
             return self._evaluate_interpolation(i)
         elif self._method == 'fourier':
-            raise RuntimeError()
+            raise NotImplementedError()
         else:
             raise NotImplementedError('method {} not implemented')
 
@@ -227,10 +279,15 @@ def import_potential(path):
 
 class PrecalculatedPotential(ArrayWithGrid):
 
-    def __init__(self, array, slice_thicknesses, extent=None, sampling=None):
+    def __init__(self, array: np.ndarray, slice_thicknesses: Union[float, Sequence], extent: np.ndarray = None,
+                 sampling: np.ndarray = None):
 
-        if isinstance(slice_thicknesses, numbers.Number):
-            slice_thicknesses = np.full(array.shape[0], slice_thicknesses, dtype=np.float)
+        slice_thicknesses = np.array(slice_thicknesses)
+
+        if slice_thicknesses.shape == ():
+            slice_thicknesses = np.tile(slice_thicknesses, array.shape[0])
+        elif slice_thicknesses.shape != (array.shape[0],):
+            raise ValueError()
 
         self._slice_thicknesses = slice_thicknesses
 

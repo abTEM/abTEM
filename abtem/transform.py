@@ -33,7 +33,7 @@ def merge_close(atoms, tol=1e-12):
     return atoms[idx]
 
 
-def fill_rectangle_with_atoms(atoms, origin, extent, margin=0.):
+def fill_rectangle_with_atoms(atoms, origin, extent, margin=0., return_atom_labels=False):
     non_zero = np.abs(atoms.cell) > 1e-12
 
     if not (np.all(np.array([[1, 0, 0], [1, 1, 0], [0, 0, 1]], dtype=np.bool) == non_zero) |
@@ -56,7 +56,10 @@ def fill_rectangle_with_atoms(atoms, origin, extent, margin=0.):
 
     new_atoms = Atoms(atoms.numbers[points.labels], positions=positions, cell=cell)
 
-    return new_atoms, points.labels
+    if return_atom_labels:
+        return new_atoms, points.labels
+    else:
+        return new_atoms
 
 
 def orthogonalize_atoms(atoms, n=1, m=None, tol=1e-12):
@@ -73,7 +76,7 @@ def orthogonalize_atoms(atoms, n=1, m=None, tol=1e-12):
     origin = [0, 0]
     extent = [atoms.cell[0, 0] * n, atoms.cell[1, 1] * m]
 
-    atoms, _ = fill_rectangle_with_atoms(atoms, origin=origin, extent=extent, margin=0.)
+    atoms = fill_rectangle_with_atoms(atoms, origin=origin, extent=extent, margin=0., return_atom_labels=False)
 
     positions = atoms.positions
     cell = np.diag(atoms.cell)

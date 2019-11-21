@@ -44,7 +44,7 @@ def thread_safe_coloring(corners, size):
     return colors
 
 
-@jit(nopython=True, nogil=True, parallel=True)
+@jit(nopython=True, nogil=True)
 def interpolation_kernel(v, r, vr, corner_positions, block_positions, x, y):
     diff_r = np.diff(r)
     diff_vr_r = np.diff(vr) / diff_r
@@ -73,26 +73,30 @@ def interpolation_kernel(v, r, vr, corner_positions, block_positions, x, y):
         rKb = len(y)
 
     rK = range(rKa, rKb)
-    rk = range(max(corner_positions[1], 0), min(corner_positions[1] + len(y), v.shape[1]))
+    rk = range(max(corner_positions[1], 0), min(corner_positions[1] + len(y), v.shape[1]))  #
 
-    # for j in range(len(x)):
     for j, J in zip(rj, rJ):
-        # if ((corner_positions[i, 0] + j >= 0) & (corner_positions[i, 0] + j < v.shape[0])):
-        # for k in range(len(y)):
         for k, K in zip(rk, rK):
-            # if ((corner_positions[i, 1] + k >= 0) & (corner_positions[i, 1] + k < v.shape[1])):
-
-            r_interp = np.sqrt((x[J] - block_positions[0]) ** np.float32(2.)
-                               + (y[K] - block_positions[1]) ** np.float32(2.))
+            r_interp = np.sqrt((x[J] - block_positions[0]) ** 2. + (y[K] - block_positions[1]) ** 2.)
 
             if r_interp < r[-1]:
-                l = int(np.floor((r_interp - r[0]) / (r[-1] - r[0]) * (len(r) - 1)))
-
+                # a = r > r_interp
+                l = np.searchsorted(r, r_interp) - 1  # np.argmax(r > r_interp) - 1
+                # print(l, r_interp, r[l], r[l-1])
                 if l < 0:
                     v[j, k] += vr[0]
                 elif l < (len(vr) - 1):
                     value = vr[l] + (r_interp - r[l]) * diff_vr_r[l]
                     v[j, k] += value
+
+            # if r_interp < r[-1]:
+            #     l = int(np.floor((r_interp - r[0]) / (r[-1] - r[0]) * (len(r) - 1)))
+            #
+            #     if l < 0:
+            #         v[j, k] += vr[0]
+            #     elif l < (len(vr) - 1):
+            #         value = vr[l] + (r_interp - r[l]) * diff_vr_r[l]
+            #         v[j, k] += value
 
 
 @jit(nopython=True, nogil=True, parallel=True)

@@ -64,7 +64,7 @@ def calculate_symmetric_aberrations(alpha, wavelength, parameters):
 
 
 def calculate_polar_aberrations(alpha, phi, wavelength, parameters):
-    return complex_exponential(2 * np.pi / wavelength * calculate_polar_chi(alpha, phi, parameters))
+    return complex_exponential(-2 * np.pi / wavelength * calculate_polar_chi(alpha, phi, parameters))
 
 
 def calculate_aperture(alpha, cutoff, rolloff):
@@ -81,6 +81,7 @@ def calculate_aperture(alpha, cutoff, rolloff):
 def calculate_temporal_envelope(alpha, wavelength, focal_spread):
     array = np.exp(- (.5 * np.pi / wavelength * focal_spread * alpha ** 2) ** 2)
     return array
+
 
 def calculate_blur(alpha, wavelength, focal_spread):
     array = np.exp(- (.5 * np.pi / wavelength * focal_spread * alpha ** 2) ** 2)

@@ -206,30 +206,10 @@ def do_scan(probe, scan_waves_maker: callable, scan: ScanBase, detectors: Union[
         detectors = [detectors]
 
     for detector in detectors:
-
-        # if detector.extent is None:
         detector.extent = probe.probe_extent
-        # if detector.gpts is None:
         detector.gpts = probe.probe_shape
-        # if detector.energy is None:
         detector.energy = probe.energy
-
-        data_shape = (int(np.prod(scan.gpts)),) + tuple(n for n in detector.out_shape if n > 1)
-        if detector.export is not None:
-            f = h5py.File(detector.export, 'w')
-
-            measurement_gpts = f.create_dataset('gpts', (2,), dtype=np.int)
-            measurement_extent = f.create_dataset('extent', (2,), dtype=np.float)
-            measurement_endpoint = f.create_dataset('endpoint', (1,), dtype=np.bool)
-
-            measurement_gpts[:] = scan.gpts
-            measurement_extent[:] = scan.extent
-            measurement_endpoint[:] = scan.endpoint
-
-            f.create_dataset('data', data_shape, dtype=np.float32)
-            f.close()
-        else:
-            scan.measurements[detector] = np.zeros(data_shape)
+        scan.open_measurements(detector)
 
     for start, stop, positions in tqdm(scan.generate_positions(max_batch),
                                        total=int(np.ceil(np.prod(scan.gpts) / max_batch)),
@@ -246,9 +226,7 @@ def do_scan(probe, scan_waves_maker: callable, scan: ScanBase, detectors: Union[
                 scan.measurements[detector][start:start + stop] = detector.detect(waves)
 
     for detector in detectors:
-        if not detector.export:
-            scan.measurements[detector] = scan.measurements[detector].reshape(tuple(scan.gpts) + detector.out_shape)
-            scan.measurements[detector] = np.squeeze(scan.measurements[detector])
+        scan.finalize_measurements(detector)
 
     return scan
 
@@ -504,17 +482,17 @@ class ScatteringMatrix(ArrayWithGrid, CTFBase, Cache):
                        show_progress=show_progress)
 
     def line_scan(self, detectors: Union[Sequence[DetectorBase], DetectorBase],
-                 start: Sequence[float], end: Sequence[float], gpts: int = None, sampling: float = None,
-                 endpoint: bool = True, max_batch: int = 1, show_progress: bool = True):
+                  start: Sequence[float], end: Sequence[float], gpts: int = None, sampling: float = None,
+                  endpoint: bool = True, max_batch: int = 1, show_progress: bool = True):
 
         scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint)
         return do_scan(self, self._get_scan_waves_maker(), scan=scan, detectors=detectors, max_batch=max_batch,
                        show_progress=show_progress)
 
     def grid_scan(self, detectors: Union[Sequence[DetectorBase], DetectorBase],
-                 start: Sequence[float], end: Sequence[float], gpts: Union[int, Sequence[int]] = None,
-                 sampling: Union[float, Sequence[float]] = None, endpoint: bool = True, max_batch: int = 1,
-                 show_progress: bool = True):
+                  start: Sequence[float], end: Sequence[float], gpts: Union[int, Sequence[int]] = None,
+                  sampling: Union[float, Sequence[float]] = None, endpoint: bool = True, max_batch: int = 1,
+                  show_progress: bool = True):
 
         if start is None:
             start = (0., 0.)

@@ -2,8 +2,18 @@ from typing import Union, Sequence, Tuple
 
 import numpy as np
 
-from abtem.bases import Grid, Image
+from abtem.bases import Grid, Image, ArrayWithGrid
 from abtem.utils import BatchGenerator, split_integer
+import h5py
+
+
+def load_measurements(path):
+    with h5py.File(path, 'r') as f:
+
+        measurements = f['data'][:]#.reshape(tuple(f['data'].attrs['shape']))
+        measurements = measurements.reshape(tuple(f['data'].attrs['shape']) + measurements.shape[1:])
+        measurements = np.squeeze(measurements)
+    return measurements
 
 
 class ScanBase:
@@ -30,6 +40,25 @@ class ScanBase:
     @property
     def endpoint(self) -> bool:
         return True
+
+    def create_file(self, name, shape):
+        raise NotImplementedError()
+
+    def open_measurements(self, detector):
+        shape = (int(np.prod(self.gpts)),) + tuple(n for n in detector.out_shape if n > 1)
+
+        if detector.export is not None:
+            with h5py.File(detector.export, 'w') as f:
+                dset = f.create_dataset('data', shape, dtype=np.float32)
+                dset.attrs['shape'] = self.gpts
+                self.measurements[detector] = f
+        else:
+            self.measurements[detector] = np.zeros(shape)
+
+    def finalize_measurements(self, detector):
+        if detector.export is None:
+            self.measurements[detector] = self.measurements[detector].reshape(tuple(self.gpts) + detector.out_shape)
+            self.measurements[detector] = np.squeeze(self.measurements[detector])
 
     def generate_positions(self, max_batch):
         positions = self.get_positions()
