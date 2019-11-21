@@ -80,23 +80,13 @@ def interpolation_kernel(v, r, vr, corner_positions, block_positions, x, y):
             r_interp = np.sqrt((x[J] - block_positions[0]) ** 2. + (y[K] - block_positions[1]) ** 2.)
 
             if r_interp < r[-1]:
-                # a = r > r_interp
-                l = np.searchsorted(r, r_interp) - 1  # np.argmax(r > r_interp) - 1
-                # print(l, r_interp, r[l], r[l-1])
+                l = np.searchsorted(r, r_interp) - 1
+
                 if l < 0:
                     v[j, k] += vr[0]
                 elif l < (len(vr) - 1):
                     value = vr[l] + (r_interp - r[l]) * diff_vr_r[l]
                     v[j, k] += value
-
-            # if r_interp < r[-1]:
-            #     l = int(np.floor((r_interp - r[0]) / (r[-1] - r[0]) * (len(r) - 1)))
-            #
-            #     if l < 0:
-            #         v[j, k] += vr[0]
-            #     elif l < (len(vr) - 1):
-            #         value = vr[l] + (r_interp - r[l]) * diff_vr_r[l]
-            #         v[j, k] += value
 
 
 @jit(nopython=True, nogil=True, parallel=True)

@@ -69,54 +69,14 @@ def lobato_soft(r, r_cut, v_cut, dvdr_cut, a, b):
     return v - v_cut - (r - r_cut) * dvdr_cut
 
 
-@jit(nopython=True, nogil=True)
-def assign_projected_lobato(i, projected, r, r_cut, v_cut, dvdr_cut, xk, wk, a, b):
-    for j in range(len(r)):
-        rxy = np.sqrt(r[j] ** 2. + xk ** 2.)
-        rxy[rxy > r_cut] = r_cut
-        projected[i, j] = np.sum(lobato_soft(rxy, r_cut, v_cut, dvdr_cut, a, b) * wk)
-
-
-# @jit(nopython=True, nogil=True, parallel=True)
-# def lobato_projected_finite_tanh_sinh(r, r_cut, v_cut, dvdr_cut, z0, z1, xk, wk, a, b):
-#     projected = np.zeros((len(z0), len(r)))
-#
-#     for i in prange(z0.shape[0]):
-#         if (z0[i] < 0.) & (z1[i] > 0.):
-#             for j in range(len(r)):
-#                 for k in
-#                 rxy = np.sqrt(r[j] ** 2. + xk ** 2.)
-#
-#                 c = - z0[i] / 2.
-#                 xkz = (xk - 1) * c
-#                 wkz = wk * c
-#
-#                 projected[i, j] = lobato_soft(rxy, r_cut, v_cut, dvdr_cut, a, b) * k[]
-#
-#                 c = z1[i] / 2.
-#                 xkz = (xk + 1) * c
-#                 wkz = wk * c
-#
-#             #assign_projected_lobato(i, projected, r, r_cut, v_cut, dvdr_cut, xkz2, wkz2, a, b)
-#
-#         else:
-#             c = (z1[i] - z0[i]) / 2.
-#             d = (z0[i] + z1[i]) / 2.
-#             xkz = xk * c + d
-#             wkz = wk * c
-#
-#             assign_projected_lobato(i, projected, r, r_cut, v_cut, dvdr_cut, xkz, wkz, a, b)
-#
-#     return projected
-
 @jit(nopython=True, nogil=True, parallel=True)
-def lobato_projected_finite_tanh_sinh(r, r_cut, v_cut, dvdr_cut, z0, z1, xk, wk, a, b):
+def lobato_projected_finite_tanh_sinh(r, r_cut, v_cut, dvdr_cut, z0, z1, xk, wk, f, a, b):
     projected = np.zeros((len(z0), len(r)))
 
     for i in prange(z0.shape[0]):
         inside = (z0[i] < 0.) & (z1[i] > 0.)
-        c = (z1[i] - z0[i]) / 2.
-        d = (z0[i] + z1[i]) / 2.
+        zm = (z1[i] - z0[i]) / 2.
+        zp = (z0[i] + z1[i]) / 2.
         for j in range(r.shape[0]):
             for k in range(xk.shape[0]):
                 if inside:
@@ -129,12 +89,41 @@ def lobato_projected_finite_tanh_sinh(r, r_cut, v_cut, dvdr_cut, z0, z1, xk, wk,
                         projected[i, j] += lobato_soft(rxy, r_cut, v_cut, dvdr_cut, a, b) * wk[k] * z1[i] / 2.
 
                 else:
-                    rxy = np.sqrt(r[j] ** 2. + (xk[k] * c + d) ** 2.)
+                    rxy = np.sqrt(r[j] ** 2. + (xk[k] * zm + zp) ** 2.)
 
                     if rxy < r_cut:
-                        projected[i, j] += lobato_soft(rxy, r_cut, v_cut, dvdr_cut, a, b) * wk[k] * c
+                        projected[i, j] += lobato_soft(rxy, r_cut, v_cut, dvdr_cut, a, b) * wk[k] * zm
 
     return projected
+
+
+@jit(nopython=True, nogil=True, parallel=True)
+def project_tanh_sinh(r, r_cut, v_cut, dvdr_cut, z0, z1, xk, wk, f, a, b):
+    projected = np.zeros((len(z0), len(r)))
+
+    for i in prange(z0.shape[0]):
+        inside = (z0[i] < 0.) & (z1[i] > 0.)
+        zm = (z1[i] - z0[i]) / 2.
+        zp = (z0[i] + z1[i]) / 2.
+        for j in range(r.shape[0]):
+            for k in range(xk.shape[0]):
+                if inside:
+                    rxy = np.sqrt(r[j] ** 2. + ((xk[k] - 1) * z0[i] / 2.) ** 2.)
+                    if rxy < r_cut:
+                        projected[i, j] -= lobato_soft(rxy, r_cut, v_cut, dvdr_cut, a, b) * wk[k] * z0[i] / 2.
+
+                    rxy = np.sqrt(r[j] ** 2. + ((xk[k] + 1) * z1[i] / 2.) ** 2.)
+                    if rxy < r_cut:
+                        projected[i, j] += lobato_soft(rxy, r_cut, v_cut, dvdr_cut, a, b) * wk[k] * z1[i] / 2.
+
+                else:
+                    rxy = np.sqrt(r[j] ** 2. + (xk[k] * zm + zp) ** 2.)
+
+                    if rxy < r_cut:
+                        projected[i, j] += lobato_soft(rxy, r_cut, v_cut, dvdr_cut, a, b) * wk[k] * zm
+
+    return projected
+
 
 
 @jit(nopython=True, nogil=True, parallel=True)
@@ -144,7 +133,11 @@ def lobato_projected_finite_riemann(r, r_cut, v_cut, dvdr_cut, z0, z1, num_sampl
     for i in prange(z0.shape[0]):
         wk = (z1[i] - z0[i]) / num_samples
         xk = np.linspace(z0[i] + wk / 2, z1[i] - wk / 2, num_samples)
-        assign_projected_lobato(i, projected, r, r_cut, v_cut, dvdr_cut, xk, wk, a, b)
+        for j in range(r.shape[0]):
+            for k in range(xk.shape[0]):
+                rxy = np.sqrt(r[j] ** 2. + xk[k] ** 2.)
+                if rxy < r_cut:
+                    projected[i, j] += lobato_soft(rxy, r_cut, v_cut, dvdr_cut, a, b) * wk
 
     return projected
 
@@ -191,14 +184,6 @@ def kirkland_soft(r, r_cut, v_cut, dvdr_cut, a, b, c, d):
     return v - v_cut - (r - r_cut) * dvdr_cut
 
 
-@jit(nopython=True, nogil=True)
-def assign_projected_kirkland(i, projected, r, r_cut, v_cut, dvdr_cut, xk, wk, a, b, c, d):
-    for j in range(len(r)):
-        rxy = np.sqrt(r[j] ** 2. + xk ** 2.)
-        rxy[rxy > r_cut] = r_cut
-        projected[i, j] = np.sum(kirkland_soft(rxy, r_cut, v_cut, dvdr_cut, a, b, c, d) * wk)
-
-
 @jit(nopython=True, nogil=True, parallel=True)
 def kirkland_projected_finite_riemann(r, r_cut, v_cut, dvdr_cut, z0, z1, num_samples, a, b, c, d):
     projected = np.zeros((len(z0), len(r)))
@@ -206,8 +191,11 @@ def kirkland_projected_finite_riemann(r, r_cut, v_cut, dvdr_cut, z0, z1, num_sam
     for i in prange(z0.shape[0]):
         wk = (z1[i] - z0[i]) / num_samples
         xk = np.linspace(z0[i] + wk / 2, z1[i] - wk / 2, num_samples)
-
-        assign_projected_kirkland(i, projected, r, r_cut, v_cut, dvdr_cut, xk, wk, a, b, c, d)
+        for j in range(r.shape[0]):
+            for k in range(xk.shape[0]):
+                rxy = np.sqrt(r[j] ** 2. + xk[k] ** 2.)
+                if rxy < r_cut:
+                    projected[i, j] += kirkland_soft(rxy, r_cut, v_cut, dvdr_cut, a, b, c, d) * wk
 
     return projected
 
@@ -216,24 +204,25 @@ def kirkland_projected_finite_riemann(r, r_cut, v_cut, dvdr_cut, z0, z1, num_sam
 def kirkland_projected_finite_tanh_sinh(r, r_cut, v_cut, dvdr_cut, z0, z1, xk, wk, a, b, c, d):
     projected = np.zeros((len(z0), len(r)))
 
-    xkz = np.zeros(xk.shape[0])
-    wkz = np.zeros(wk.shape[0])
-    xkz2 = np.zeros(xk.shape[0] * 2)
-    wkz2 = np.zeros(wk.shape[0] * 2)
-
     for i in prange(z0.shape[0]):
-        if (z0[i] < 0.) & (z1[i] > 0.):
-            xkz2[:xk.shape[0]] = - (xk - 1) * z0[i] / 2.
-            wkz2[:wk.shape[0]] = - wk * z0[i] / 2.
-            xkz2[xk.shape[0]:] = (xk + 1) * z1[i] / 2.
-            wkz2[wk.shape[0]:] = wk * z1[i] / 2.
+        inside = (z0[i] < 0.) & (z1[i] > 0.)
+        zm = (z1[i] - z0[i]) / 2.
+        zp = (z0[i] + z1[i]) / 2.
+        for j in range(r.shape[0]):
+            for k in range(xk.shape[0]):
+                if inside:
+                    rxy = np.sqrt(r[j] ** 2. + ((xk[k] - 1) * z0[i] / 2.) ** 2.)
+                    if rxy < r_cut:
+                        projected[i, j] -= kirkland_soft(rxy, r_cut, v_cut, dvdr_cut, a, b, c, d) * wk[k] * z0[i] / 2.
 
-            assign_projected_kirkland(i, projected, r, r_cut, v_cut, dvdr_cut, xkz2, wkz2, a, b, c, d)
+                    rxy = np.sqrt(r[j] ** 2. + ((xk[k] + 1) * z1[i] / 2.) ** 2.)
+                    if rxy < r_cut:
+                        projected[i, j] += kirkland_soft(rxy, r_cut, v_cut, dvdr_cut, a, b, c, d) * wk[k] * z1[i] / 2.
 
-        else:
-            xkz[:] = xk * (z1[i] - z0[i]) / 2. + (z0[i] + z1[i]) / 2.
-            wkz[:] = wk * (z1[i] - z0[i]) / 2.
+                else:
+                    rxy = np.sqrt(r[j] ** 2. + (xk[k] * zm + zp) ** 2.)
 
-            assign_projected_kirkland(i, projected, r, r_cut, v_cut, dvdr_cut, xkz, wkz, a, b, c, d)
+                    if rxy < r_cut:
+                        projected[i, j] += kirkland_soft(rxy, r_cut, v_cut, dvdr_cut, a, b, c, d) * wk[k] * zm
 
     return projected

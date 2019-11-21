@@ -9,9 +9,9 @@ from tqdm.auto import tqdm
 
 from abtem.bases import Grid, cached_method, ArrayWithGrid, Cache, cached_method_with_args
 from abtem.interpolation import interpolation_kernel_parallel
-from abtem.parametrizations import convert_kirkland, kirkland, kirkland_projected_finite_tanh_sinh, dvdr_kirkland, \
-    load_parameters
-from abtem.parametrizations import convert_lobato, lobato, lobato_projected_finite_tanh_sinh, dvdr_lobato
+from abtem.parametrizations import convert_kirkland, kirkland, dvdr_kirkland, \
+    load_parameters, lobato_soft, kirkland_soft, project_tanh_sinh
+from abtem.parametrizations import convert_lobato, lobato, dvdr_lobato
 from abtem.transform import fill_rectangle_with_atoms
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
@@ -106,14 +106,14 @@ class Potential(PotentialBase, Cache):
         if isinstance(parametrization, str):
             if parametrization == 'lobato':
                 self._potential_func = lobato
-                self._projected_func = lobato_projected_finite_tanh_sinh
+                self._projected_func = lobato_soft
                 self._diff_func = dvdr_lobato
                 self._convert_param_func = convert_lobato
                 self._parameters = load_parameters('data/lobato.txt')
 
             elif parametrization == 'kirkland':
                 self._potential_func = kirkland
-                self._projected_func = kirkland_projected_finite_tanh_sinh
+                self._projected_func = kirkland_soft
                 self._diff_func = dvdr_kirkland
                 self._convert_param_func = convert_kirkland
                 self._parameters = load_parameters('data/kirkland.txt')
@@ -210,10 +210,7 @@ class Potential(PotentialBase, Cache):
     @cached_method_with_args(('tolerance',))
     def _get_radial_coordinates(self, atomic_number):
         n = int(np.ceil(self.get_cutoff(atomic_number) / self._interpolation_sampling))
-        start = min(self.sampling) / 2.
-        stop = self.get_cutoff(atomic_number)
-        dt = np.log(stop / start) / (n - 1)
-        return start * np.exp(dt * np.linspace(0., n - 1, n))
+        return np.geomspace(min(self.sampling), self.get_cutoff(atomic_number), n)
 
     @cached_method(('sampling',))
     def _get_quadrature(self):
@@ -241,7 +238,8 @@ class Potential(PotentialBase, Cache):
             z1 = (i + 1) * slice_thickness - positions[:, 2]
 
             xk, wk = self._get_quadrature()
-            vr = self._projected_func(r, cutoff, cutoff_value, derivative_cutoff_value, z0, z1, xk, wk, *parameters)
+            vr = project_tanh_sinh(r, cutoff, cutoff_value, derivative_cutoff_value, z0, z1, xk, wk,
+                                   self._projected_func, *parameters)
 
             block_margin = int(cutoff / min(self.sampling))
 

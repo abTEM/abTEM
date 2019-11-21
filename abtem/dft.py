@@ -2,18 +2,19 @@ import numpy as np
 from ase import units
 from scipy.interpolate import interp1d
 
-from abtem.bases import cached_method, Cache
+from abtem.bases import cached_method, Cache, cached_method_with_args
 from abtem.transform import fill_rectangle_with_atoms, orthogonalize_array
 from abtem.potentials import PotentialBase
 from abtem.interpolation import interpolation_kernel
 from abtem.utils import split_integer
+from scipy.interpolate import interp1d
 
 
 def gaussian(radial_grid, alpha):
     return 4 / np.sqrt(np.pi) * alpha ** 1.5 * np.exp(-alpha * radial_grid.r_g ** 2)
 
 
-def get_paw_corrections(calculator, rcgauss=0.01, spline_pts=200):
+def get_paw_corrections(calculator, rcgauss=0.005, spline_pts=500):
     density = calculator.density
     density.D_asp.redistribute(density.atom_partition.as_serial())
     density.Q_aL.redistribute(density.atom_partition.as_serial())
@@ -61,7 +62,7 @@ def project_spherical_function(f, r, a, b, num_samples=200):
 class GPAWPotential(PotentialBase, Cache):
 
     def __init__(self, calc, origin=None, extent=None, gpts=None, sampling=None, num_slices=None, slice_thickness=.5,
-                 sigma=.01, assert_equal_thickness=False):
+                 quadrature_order=40, interpolation_sampling=.001, sigma=.005, assert_equal_thickness=False):
         self._calc = calc
         self._sigma = sigma
 
@@ -80,45 +81,51 @@ class GPAWPotential(PotentialBase, Cache):
         self._nz = split_integer(Nz, num_slices)
         self._dz = thickness / Nz
 
+        self._interpolation_sampling = interpolation_sampling
+        self._quadrature_order = quadrature_order
+
         super().__init__(atoms=calc.atoms.copy(), origin=origin, extent=extent, gpts=gpts,
                          sampling=sampling, num_slices=num_slices)
 
-    def _prepare_paw_corrections(self):
+    @cached_method()
+    def _get_paw_corrections(self):
         paw_corrections = get_paw_corrections(self._calc, rcgauss=self._sigma)
-        max_cutoff = max([spline.get_cutoff() for spline in paw_corrections.values()]) * units.Bohr
-        return paw_corrections, max_cutoff
+        return paw_corrections
 
     @cached_method()
-    def _prepare_electrostatic_potential(self):
+    def max_cutoff(self):
+        return max([spline.get_cutoff() for spline in self._get_paw_corrections().values()]) * units.Bohr
+
+    @cached_method()
+    def _get_electrostatic_potential(self):
         return self._calc.get_electrostatic_potential()
 
-    # @cached_method
-    def get_atoms(self, cutoff=0.):
-        return fill_rectangle_with_atoms(self._atoms, self._origin, self.extent, margin=cutoff)
+    @cached_method()
+    def get_atoms(self):
+        return fill_rectangle_with_atoms(self._atoms, self._origin, self.extent, margin=self.max_cutoff(),
+                                         return_atom_labels=True)
 
     def slice_thickness(self, i):
         return self._nz[i] * self._dz
 
     def get_slice(self, i):
-        super().get_slice(i)
-
         start = np.sum(self._nz[:i], dtype=np.int)
         stop = np.sum(self._nz[:i + 1], dtype=np.int)
         slice_entrance = start * self._dz
         slice_exit = stop * self._dz
 
-        array = self._prepare_electrostatic_potential()
+        array = self._get_electrostatic_potential()
         array = array[..., start:stop].sum(axis=-1) * self._dz
 
         array = orthogonalize_array(array, self._calc.atoms.cell[:2, :2], self._origin, self.extent, self.gpts)
         array = self._get_projected_paw_corrections(slice_entrance, slice_exit) - array
         return array
 
-    def _get_projected_paw_corrections(self, slice_entrance, slice_exit, num_spline_nodes=200,
-                                       num_integration_samples=100):
-        paw_corrections, max_cutoff = self._prepare_paw_corrections()
+    def _get_projected_paw_corrections(self, slice_entrance, slice_exit, num_integration_samples=400):
+        paw_corrections = self._get_paw_corrections()
+        max_cutoff = self.max_cutoff()
 
-        atoms, equivalent = self.get_atoms(cutoff=max_cutoff)
+        atoms, equivalent = self.get_atoms()
         positions = atoms.get_positions()
 
         v = np.zeros(self.gpts)
@@ -129,20 +136,18 @@ class GPAWPotential(PotentialBase, Cache):
         for idx in idx_in_slice:
             func = paw_corrections[equivalent[idx]]
             position = positions[idx]
-
-            r_cut = func.get_cutoff()
-
-            block_margin = np.int(r_cut / min(self.sampling) * units.Bohr)
-            block_size = 2 * block_margin + 1
-
+            cutoff = func.get_cutoff()
             z0 = slice_entrance - position[2]
             z1 = slice_exit - position[2]
 
-            r = np.linspace(min(self.sampling) / 2. / units.Bohr, r_cut, num_spline_nodes)
+            r = np.geomspace(min(self.sampling) / units.Bohr, cutoff, int(np.ceil(cutoff / self._interpolation_sampling)))
+
             vr = project_spherical_function(func.map, r, z0 / units.Bohr, z1 / units.Bohr,
                                             num_samples=num_integration_samples) * units.Bohr
 
             r = r * units.Bohr
+            block_margin = np.int(cutoff / min(self.sampling) * units.Bohr)
+            block_size = 2 * block_margin + 1
 
             corner_positions = (np.round(position[:2] / self.sampling)).astype(np.int) - block_margin
             block_positions = position[:2] - self.sampling * corner_positions
