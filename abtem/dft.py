@@ -4,44 +4,50 @@ from scipy.interpolate import interp1d
 
 from abtem.bases import cached_method, Cache, cached_method_with_args
 from abtem.transform import fill_rectangle_with_atoms, orthogonalize_array
-from abtem.potentials import PotentialBase
-from abtem.interpolation import interpolation_kernel
+from abtem.potentials import PotentialBase, tanh_sinh_quadrature, QUADRATURE_PARAMETER_RATIO
+from abtem.interpolation import interpolation_kernel, interpolate_single
+from abtem.parametrizations import project_tanh_sinh
 from abtem.utils import split_integer
 from scipy.interpolate import interp1d
+from numba import jit
 
 
 def gaussian(radial_grid, alpha):
     return 4 / np.sqrt(np.pi) * alpha ** 1.5 * np.exp(-alpha * radial_grid.r_g ** 2)
 
 
-def get_paw_corrections(calculator, rcgauss=0.005, spline_pts=500):
+def get_paw_corrections(a, calculator, rcgauss=0.005, spline_pts=500):
     density = calculator.density
     density.D_asp.redistribute(density.atom_partition.as_serial())
     density.Q_aL.redistribute(density.atom_partition.as_serial())
 
     alpha = 1 / (rcgauss / units.Bohr) ** 2
-    corrections = {}
-    for a, D_sp in density.D_asp.items():
-        setup = density.setups[a]
+    # corrections = {}
+    # for a, D_sp in density.D_asp.items():
+    D_sp = density.D_asp[a]
 
-        radial_grid = setup.xc_correction.rgd
-        ghat_g = gaussian(radial_grid, 1 / setup.rcgauss ** 2)
+    setup = density.setups[a]
 
-        Z_g = gaussian(radial_grid, alpha) * setup.Z
-        D_q = np.dot(D_sp.sum(0), setup.xc_correction.B_pqL[:, :, 0])
+    radial_grid = setup.xc_correction.rgd
+    ghat_g = gaussian(radial_grid, 1 / setup.rcgauss ** 2)
 
-        dn_g = np.dot(D_q, (setup.xc_correction.n_qg - setup.xc_correction.nt_qg)) * np.sqrt(4 * np.pi)
-        dn_g += 4 * np.pi * (setup.xc_correction.nc_g - setup.xc_correction.nct_g)
-        dn_g -= Z_g
-        dn_g -= density.Q_aL[a][0] * ghat_g * np.sqrt(4 * np.pi)
+    Z_g = gaussian(radial_grid, alpha) * setup.Z
+    D_q = np.dot(D_sp.sum(0), setup.xc_correction.B_pqL[:, :, 0])
 
-        dv_g = radial_grid.poisson(dn_g) / np.sqrt(4 * np.pi)
-        dv_g[1:] /= radial_grid.r_g[1:]
-        dv_g[0] = dv_g[1]
-        dv_g[-1] = 0.0
+    dn_g = np.dot(D_q, (setup.xc_correction.n_qg - setup.xc_correction.nt_qg)) * np.sqrt(4 * np.pi)
+    dn_g += 4 * np.pi * (setup.xc_correction.nc_g - setup.xc_correction.nct_g)
+    dn_g -= Z_g
+    dn_g -= density.Q_aL[a][0] * ghat_g * np.sqrt(4 * np.pi)
 
-        corrections[a] = radial_grid.spline(dv_g, points=spline_pts)
-    return corrections
+    dv_g = radial_grid.poisson(dn_g) / np.sqrt(4 * np.pi)
+    dv_g[1:] /= radial_grid.r_g[1:]
+    dv_g[0] = dv_g[1]
+    dv_g[-1] = 0.0
+
+    # corrections[a] = radial_grid.spline(dv_g, points=spline_pts)
+    # corrections[a] = {'f': dv_g, 'r': radial_grid.r_g, 's': radial_grid.spline(dv_g,
+    # points=spline_pts)}  # radial_grid.spline(dv_g, points=spline_pts)
+    return radial_grid.r_g, dv_g
 
 
 def riemann_quadrature(num_samples):
@@ -61,21 +67,22 @@ def project_spherical_function(f, r, a, b, num_samples=200):
 
 class GPAWPotential(PotentialBase, Cache):
 
-    def __init__(self, calc, origin=None, extent=None, gpts=None, sampling=None, num_slices=None, slice_thickness=.5,
+    def __init__(self, calculator, origin=None, extent=None, gpts=None, sampling=None, num_slices=None,
+                 slice_thickness=.5,
                  quadrature_order=40, interpolation_sampling=.001, sigma=.005, assert_equal_thickness=False):
-        self._calc = calc
+        self._calculator = calculator
         self._sigma = sigma
 
-        thickness = calc.atoms.cell[2, 2]
-        Nz = calc.hamiltonian.finegd.N_c[2]
+        thickness = calculator.atoms.cell[2, 2]
+        Nz = calculator.hamiltonian.finegd.N_c[2]
 
         if num_slices is None:
             if slice_thickness is None:
                 raise RuntimeError()
             num_slices = int(np.ceil(Nz / np.floor(slice_thickness / (thickness / Nz))))
 
-        if (not (calc.hamiltonian.finegd.N_c[2] % num_slices == 0)) & assert_equal_thickness:
-            raise RuntimeError('{} {}'.format(calc.hamiltonian.finegd.N_c[2], self.num_slices))
+        if (not (calculator.hamiltonian.finegd.N_c[2] % num_slices == 0)) & assert_equal_thickness:
+            raise RuntimeError('{} {}'.format(calculator.hamiltonian.finegd.N_c[2], self.num_slices))
 
         self._Nz = Nz
         self._nz = split_integer(Nz, num_slices)
@@ -84,21 +91,41 @@ class GPAWPotential(PotentialBase, Cache):
         self._interpolation_sampling = interpolation_sampling
         self._quadrature_order = quadrature_order
 
-        super().__init__(atoms=calc.atoms.copy(), origin=origin, extent=extent, gpts=gpts,
+        super().__init__(atoms=calculator.atoms.copy(), origin=origin, extent=extent, gpts=gpts,
                          sampling=sampling, num_slices=num_slices)
 
     @cached_method()
-    def _get_paw_corrections(self):
-        paw_corrections = get_paw_corrections(self._calc, rcgauss=self._sigma)
-        return paw_corrections
+    def _get_paw_correction(self, i):
+        r, v = get_paw_corrections(i, self._calculator, rcgauss=self._sigma)
+        r = r * units.Bohr
+        dvdr = np.diff(v) / np.diff(r)
+
+        @jit(nopython=True, nogil=True)
+        def interpolator(x_interp):
+            return interpolate_single(r, v, dvdr, x_interp)
+
+        return interpolator
+
+    def get_cutoff(self, atom):
+        return self._calculator.density.setups[atom].xc_correction.rgd.r_g[-1] * units.Bohr
 
     @cached_method()
     def max_cutoff(self):
-        return max([spline.get_cutoff() for spline in self._get_paw_corrections().values()]) * units.Bohr
+        density = self._calculator.density
+        max_cutoff = 0.
+        for atom in density.D_asp.keys():
+            max_cutoff = max(self.get_cutoff(atom), max_cutoff)
+        return max_cutoff
 
     @cached_method()
     def _get_electrostatic_potential(self):
-        return self._calc.get_electrostatic_potential()
+        return self._calculator.get_electrostatic_potential()
+
+    @cached_method(('sampling',))
+    def _get_quadrature(self):
+        m = self._quadrature_order
+        h = QUADRATURE_PARAMETER_RATIO / self._quadrature_order
+        return tanh_sinh_quadrature(m, h)
 
     @cached_method()
     def get_atoms(self):
@@ -117,12 +144,12 @@ class GPAWPotential(PotentialBase, Cache):
         array = self._get_electrostatic_potential()
         array = array[..., start:stop].sum(axis=-1) * self._dz
 
-        array = orthogonalize_array(array, self._calc.atoms.cell[:2, :2], self._origin, self.extent, self.gpts)
+        array = orthogonalize_array(array, self._calculator.atoms.cell[:2, :2], self._origin, self.extent, self.gpts)
         array = self._get_projected_paw_corrections(slice_entrance, slice_exit) - array
         return array
 
     def _get_projected_paw_corrections(self, slice_entrance, slice_exit, num_integration_samples=400):
-        paw_corrections = self._get_paw_corrections()
+
         max_cutoff = self.max_cutoff()
 
         atoms, equivalent = self.get_atoms()
@@ -134,19 +161,26 @@ class GPAWPotential(PotentialBase, Cache):
                                 ((slice_exit + max_cutoff) > positions[:, 2]))[0]
 
         for idx in idx_in_slice:
-            func = paw_corrections[equivalent[idx]]
+            paw_correction = self._get_paw_correction(equivalent[idx])
             position = positions[idx]
-            cutoff = func.get_cutoff()
+            cutoff = self.get_cutoff(equivalent[idx])
+
             z0 = slice_entrance - position[2]
             z1 = slice_exit - position[2]
 
-            r = np.geomspace(min(self.sampling) / units.Bohr, cutoff, int(np.ceil(cutoff / self._interpolation_sampling)))
+            r = np.geomspace(min(self.sampling) / 2, cutoff, int(np.ceil(cutoff / self._interpolation_sampling)))
 
-            vr = project_spherical_function(func.map, r, z0 / units.Bohr, z1 / units.Bohr,
-                                            num_samples=num_integration_samples) * units.Bohr
+            xk, wk = self._get_quadrature()
 
-            r = r * units.Bohr
-            block_margin = np.int(cutoff / min(self.sampling) * units.Bohr)
+            vr = project_tanh_sinh(r, np.array([z0]), np.array([z1]), xk, wk, paw_correction)
+
+            # print(vr[0,0])
+
+            # vr = project_spherical_function(func.map, r, z0 / units.Bohr, z1 / units.Bohr,
+            #                                 num_samples=num_integration_samples) * units.Bohr
+
+            # r = r * units.Bohr
+            block_margin = np.int(cutoff / min(self.sampling))
             block_size = 2 * block_margin + 1
 
             corner_positions = (np.round(position[:2] / self.sampling)).astype(np.int) - block_margin
@@ -155,7 +189,9 @@ class GPAWPotential(PotentialBase, Cache):
             x = np.linspace(0., block_size * self.sampling[0] - self.sampling[0], block_size)
             y = np.linspace(0., block_size * self.sampling[1] - self.sampling[1], block_size)
 
-            interpolation_kernel(v, r, vr, corner_positions, block_positions, x, y)
+            # print(vr.shape)
+
+            interpolation_kernel(v, r, vr[0], corner_positions, block_positions, x, y)
 
         return - v / np.sqrt(4 * np.pi) * units.Ha
 

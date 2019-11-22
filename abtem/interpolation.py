@@ -45,9 +45,35 @@ def thread_safe_coloring(corners, size):
 
 
 @jit(nopython=True, nogil=True)
+def interpolate_single(x, y, dydx, x_interp):
+
+    idx = np.searchsorted(x, x_interp) - 1
+
+    if idx < 0:
+        return y[0]
+
+    if idx > len(x) - 2:
+        if idx > len(x) - 1:
+            return y[-1]
+        else:
+            return y[-2]
+
+    return y[idx] + (x_interp - x[idx]) * dydx[idx]
+
+
+@jit(nopython=True, nogil=True)
+def interpolate(x, y, x_interp):
+    y_interp = np.zeros(x_interp.shape[0])
+    dydx = np.diff(y) / np.diff(x)
+    for i in range(x_interp.shape[0]):
+        y_interp[i] = interpolate_single(x, y, dydx, x_interp[i])
+
+    return y_interp
+
+
+@jit(nopython=True, nogil=True)
 def interpolation_kernel(v, r, vr, corner_positions, block_positions, x, y):
-    diff_r = np.diff(r)
-    diff_vr_r = np.diff(vr) / diff_r
+    dvrdr = np.diff(vr) / np.diff(r)
 
     if corner_positions[0] < 0:
         rJa = abs(corner_positions[0])
@@ -79,14 +105,21 @@ def interpolation_kernel(v, r, vr, corner_positions, block_positions, x, y):
         for k, K in zip(rk, rK):
             r_interp = np.sqrt((x[J] - block_positions[0]) ** 2. + (y[K] - block_positions[1]) ** 2.)
 
-            if r_interp < r[-1]:
-                l = np.searchsorted(r, r_interp) - 1
+            # if r_interp < r[-1]:
+            #     l = int(np.floor((r_interp - r[0]) / (r[-1] - r[0]) * (len(r) - 1)))
+            #
+            #     #idx = np.searchsorted(r, r_interp)
+            #
+            #     #print(l, idx)
+            #
+            #     if l < 0:
+            #         v[j, k] += vr[0]
+            #     elif l < (len(vr) - 1):
+            #         value = vr[l] + (r_interp - r[l]) * dvrdr[l]
+            #         v[j, k] += value
 
-                if l < 0:
-                    v[j, k] += vr[0]
-                elif l < (len(vr) - 1):
-                    value = vr[l] + (r_interp - r[l]) * diff_vr_r[l]
-                    v[j, k] += value
+
+            v[j, k] += interpolate_single(r, vr, dvrdr, r_interp)
 
 
 @jit(nopython=True, nogil=True, parallel=True)

@@ -1,17 +1,17 @@
-import numbers
 import os
 from typing import Union, Sequence
 
 import numpy as np
 from ase import units
+from numba import jit
 from scipy.optimize import brentq
 from tqdm.auto import tqdm
 
 from abtem.bases import Grid, cached_method, ArrayWithGrid, Cache, cached_method_with_args
 from abtem.interpolation import interpolation_kernel_parallel
-from abtem.parametrizations import convert_kirkland, kirkland, dvdr_kirkland, \
-    load_parameters, lobato_soft, kirkland_soft, project_tanh_sinh
-from abtem.parametrizations import convert_lobato, lobato, dvdr_lobato
+from abtem.parametrizations import load_lobato_parameters, load_kirkland_parameters, kirkland, dvdr_kirkland, \
+    project_tanh_sinh
+from abtem.parametrizations import lobato, dvdr_lobato
 from abtem.transform import fill_rectangle_with_atoms
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
@@ -105,18 +105,14 @@ class Potential(PotentialBase, Cache):
 
         if isinstance(parametrization, str):
             if parametrization == 'lobato':
-                self._potential_func = lobato
-                self._projected_func = lobato_soft
-                self._diff_func = dvdr_lobato
-                self._convert_param_func = convert_lobato
-                self._parameters = load_parameters('data/lobato.txt')
+                self._potential_function = lobato
+                self._potential_derivative = dvdr_lobato
+                self._parameters = load_lobato_parameters()
 
             elif parametrization == 'kirkland':
-                self._potential_func = kirkland
-                self._projected_func = kirkland_soft
-                self._diff_func = dvdr_kirkland
-                self._convert_param_func = convert_kirkland
-                self._parameters = load_parameters('data/kirkland.txt')
+                self._potential_function = kirkland
+                self._potential_derivative = dvdr_kirkland
+                self._parameters = load_kirkland_parameters()
 
             else:
                 raise RuntimeError('parametrization {} not recognized'.format(parametrization))
@@ -164,16 +160,15 @@ class Potential(PotentialBase, Cache):
         self.check_slice_idx(i)
         return np.sum([self.slice_thickness(j) for j in range(i + 1)])
 
-    @cached_method_with_args(('parametrization',))
-    def _get_adjusted_parameters(self, atomic_number):
-        return self._convert_param_func(self.parameters[atomic_number])
+    def evaluate_potential(self, r, atomic_number):
+        return self._potential_function(r, self.parameters[atomic_number])
 
-    def get_potential_func(self, atomic_number):
-        return lambda r: self._potential_func(r, *self._get_adjusted_parameters(atomic_number))
+    def evaluate_potential_derivative(self, r, atomic_number):
+        return self._potential_derivative(r, self.parameters[atomic_number])
 
     @cached_method_with_args(('tolerance', 'parametrization'))
     def get_cutoff(self, atomic_number):
-        func = lambda r: self.get_potential_func(atomic_number)(r) - self.tolerance
+        func = lambda r: self.evaluate_potential(r, atomic_number) - self.tolerance
         return brentq(func, 1e-7, 1000)
 
     @cached_method(())
@@ -195,12 +190,19 @@ class Potential(PotentialBase, Cache):
         return np.zeros(self.gpts)
 
     @cached_method_with_args(('tolerance',))
-    def _get_cutoff_value(self, atomic_number):
-        return self.get_potential_func(atomic_number)(self.get_cutoff(atomic_number))
+    def get_soft_potential_function(self, atomic_number):
+        cutoff = self.get_cutoff(atomic_number)
+        cutoff_value = self.evaluate_potential(cutoff, atomic_number)
+        cutoff_derivative = self.evaluate_potential_derivative(cutoff, atomic_number)
+        parameters = self.parameters[atomic_number]
+        potential_function = self._potential_function
 
-    @cached_method_with_args(('tolerance',))
-    def _get_derivative_cutoff_value(self, atomic_number):
-        return self.get_potential_func(atomic_number)(self.get_cutoff(atomic_number))
+        @jit(nopython=True)
+        def soft_potential(r):
+            v = potential_function(r, parameters)
+            return v - cutoff_value - (r - cutoff) * cutoff_derivative
+
+        return soft_potential
 
     @cached_method_with_args(('tolerance', 'origin', 'extent'))
     def _get_atomic_positions(self, atomic_number):
@@ -210,7 +212,7 @@ class Potential(PotentialBase, Cache):
     @cached_method_with_args(('tolerance',))
     def _get_radial_coordinates(self, atomic_number):
         n = int(np.ceil(self.get_cutoff(atomic_number) / self._interpolation_sampling))
-        return np.geomspace(min(self.sampling), self.get_cutoff(atomic_number), n)
+        return np.geomspace(min(self.sampling) / 2, self.get_cutoff(atomic_number), n)
 
     @cached_method(('sampling',))
     def _get_quadrature(self):
@@ -223,13 +225,11 @@ class Potential(PotentialBase, Cache):
         v[:, :] = 0.
 
         slice_thickness = self.slice_thickness(i)
+        xk, wk = self._get_quadrature()
 
         for atomic_number in self._get_unique_atomic_numbers():
             positions = self._get_atomic_positions(atomic_number)
-            parameters = self._get_adjusted_parameters(atomic_number)
             cutoff = self.get_cutoff(atomic_number)
-            cutoff_value = self._get_cutoff_value(atomic_number)
-            derivative_cutoff_value = self._get_derivative_cutoff_value(atomic_number)
             r = self._get_radial_coordinates(atomic_number)
 
             positions = positions[np.abs((i + .5) * slice_thickness - positions[:, 2]) < (cutoff + slice_thickness / 2)]
@@ -237,9 +237,9 @@ class Potential(PotentialBase, Cache):
             z0 = i * slice_thickness - positions[:, 2]
             z1 = (i + 1) * slice_thickness - positions[:, 2]
 
-            xk, wk = self._get_quadrature()
-            vr = project_tanh_sinh(r, cutoff, cutoff_value, derivative_cutoff_value, z0, z1, xk, wk,
-                                   self._projected_func, *parameters)
+            vr = project_tanh_sinh(r, z0, z1, xk, wk, self.get_soft_potential_function(atomic_number))
+
+            # print(vr[0,0])
 
             block_margin = int(cutoff / min(self.sampling))
 
