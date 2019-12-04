@@ -62,11 +62,7 @@ def add_scan_noise(image, dwell_time, flyback_time, max_frequency, rms_power, nu
 
 def add_poisson_noise(image, dose, background=0):
     image = image.copy()
-
     image.array[:] += np.mean(image.array) * background
-
     image.array[:] = image.array / np.sum(image.array) * dose * np.product(image.sampling) * np.prod(image.gpts)
-
     image.array[:] = np.random.poisson(image.array).astype(np.float)
-
     return image

@@ -160,7 +160,6 @@ class NormalizeLocal(Augmentation):
 
 
 class GaussianBlur(Augmentation):
-    apply_to_label = False
 
     def __init__(self, sigma):
         self.sigma = sigma
@@ -174,7 +173,6 @@ class GaussianBlur(Augmentation):
 
 
 class Gamma(Augmentation):
-    apply_to_label = False
 
     def __init__(self, gamma):
         self.gamma = gamma
@@ -230,37 +228,50 @@ def bandpass_noise(inner, outer, shape, sampling):
 
 class ScanNoise(Augmentation):
 
-    def __init__(self, rms_power):
-        self.rms_power = rms_power
+    def __init__(self, scale, amount):
+        self.scale = scale
+        self.amount = amount
         super().__init__(apply_to_label=False, channels=None)
 
     def randomize(self):
-        self._random_rms_power = np.random.uniform(*self.rms_power)
+        self._random_scale = np.random.uniform(*self.scale)
+        self._random_amount = np.random.uniform(*self.amount)
 
     def __call__(self, image):
-        flyback_time = 361e-6  # Flyback time [s]
-        dwell_time = 8e-6  # Dwell time [s]
-        max_frequency = 50  # [Hz]
-        print(self._random_rms_power)
-        return add_scan_noise(image, dwell_time, flyback_time, max_frequency, self._random_rms_power, num_components=300)
+        n = bandpass_noise(0, self._random_scale, (image.shape[1],), (1. / image.shape[1],))
+        n *= bandpass_noise(0, np.max(image.shape), (image.shape[1],), (1. / image.shape[1],))
+        n = n / np.std(n) * self._random_amount
+        n = n.astype(np.int)
 
-    # def __call__(self, image):
-    #     n = bandpass_noise(0, self._random_scale, (image.shape[1],), (1. / image.shape[1],))
-    #     n *= bandpass_noise(0, np.max(image.shape), (image.shape[1],), (1. / image.shape[1],))
-    #     n = n / np.std(n) * self._random_amount
-    #     n = n.astype(np.int)
-    #
-    #     def strided_indexing_roll(a, r):
-    #         from skimage.util.shape import view_as_windows
-    #         a_ext = np.concatenate((a, a[:, :-1]), axis=1)
-    #         n = a.shape[1]
-    #         return view_as_windows(a_ext, (1, n))[np.arange(len(r)), (n - r) % n, 0]
-    #
-    #     image = strided_indexing_roll(np.ascontiguousarray(image), n)
-    #     return image
+        def strided_indexing_roll(a, r):
+            from skimage.util.shape import view_as_windows
+            a_ext = np.concatenate((a, a[:, :-1]), axis=1)
+            n = a.shape[1]
+            return view_as_windows(a_ext, (1, n))[np.arange(len(r)), (n - r) % n, 0]
+
+        image = strided_indexing_roll(np.ascontiguousarray(image), n)
+        return image
 
 
-class Blanking(Augmentation):
+# def __init__(self, rms_power):
+#     self.rms_power = rms_power
+#     super().__init__(apply_to_label=False, channels=None)
+
+# def randomize(self):
+#     self._random_rms_power = np.random.uniform(*self.rms_power)
+#
+#     def __call__(self, image):
+#         flyback_time = 361e-6  # Flyback time [s]
+#         dwell_time = 8e-6  # Dwell time [s]
+#         max_frequency = 50  # [Hz]
+#         print(self._random_rms_power)
+#         return add_scan_noise(image, dwell_time, flyback_time, max_frequency, self._random_rms_power, num_components=300)
+
+# def randomize(self):
+#     self._random_rms_power = np.random.uniform(*self.rms_power)
+
+
+class Glitch(Augmentation):
 
     def __init__(self, width):
         self.width = width
@@ -341,7 +352,6 @@ class LineDarkening(Augmentation):
 
 
 class Border(Augmentation):
-    apply_to_label = False
 
     def __init__(self, amount):
         self.amount = amount

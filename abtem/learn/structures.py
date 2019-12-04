@@ -2,9 +2,10 @@ import numpy as np
 from matplotlib.path import Path
 from scipy.signal import resample
 from scipy.spatial import ConvexHull
+from sklearn.neighbors import NearestNeighbors
 
-from abtem.points import LabelledPoints, repeat
 from abtem.learn.augment import bandpass_noise
+from abtem.points import LabelledPoints, repeat
 
 
 def graphene_like(a=2.46, n=1, m=1, labels=None):
@@ -56,27 +57,50 @@ def paint_blob(points, new_label, blob):
     return points
 
 
+def splash_label(points, label, distance):
+    points = points.copy()
+
+    if (points.labels == label).sum() == 0:
+        return points
+
+    nbrs = NearestNeighbors(n_neighbors=1, algorithm='ball_tree').fit(points.positions[points.labels == label])
+
+    distances, indices = nbrs.kneighbors(points.positions)
+    distances = distances.ravel()
+
+    indices = np.where(distances < distance)[0]
+    points.labels[indices] = label
+    return points
+
+
 def random_paint_blob(points, new_label, size):
     blob = size * (make_blob() - .5)
     position = np.random.rand() * points.cell[0] + np.random.rand() * points.cell[1]
     return paint_blob(points, new_label, position + blob)
 
 
-def add_contamination(points, new_label, position, size, n):
+def add_contamination(points, new_label, position, size, density):
     blob = position + size * (make_blob() - .5)
 
     path = Path(blob)
-    positions = np.array([np.random.uniform(blob[:, 0].min(), blob[:, 0].max(), n),
-                          np.random.uniform(blob[:, 1].min(), blob[:, 1].max(), n)]).T
+    x = np.arange(blob[:, 0].min(), blob[:, 0].max(), density)
+    y = np.arange(blob[:, 1].min(), blob[:, 1].max(), density)
 
-    contamination = LabelledPoints(positions, labels=np.full(n, 0, dtype=np.int))
+    x, y = np.meshgrid(x, y)
+    positions = np.array([x.ravel(), y.ravel()]).T
+    positions += density / 2. * np.random.randn(len(positions), 2)
+
+    #print(positions)
+    # positions = np.array([np.random.uniform(blob[:, 0].min(), blob[:, 0].max(), n),
+    #                       np.random.uniform(blob[:, 1].min(), blob[:, 1].max(), n)]).T
+
+    contamination = LabelledPoints(positions, labels=np.full(len(positions), 0, dtype=np.int))
     contamination = contamination[path.contains_points(contamination.positions)]
     contamination.labels[:] = new_label
     points.extend(contamination)
     return points.copy()
 
 
-def random_add_contamination(points, new_label, size):
-    n = int(.25 * size ** 2)
+def random_add_contamination(points, new_label, size, density):
     position = np.random.rand() * points.cell[0] + np.random.rand() * points.cell[1]
-    return add_contamination(points, new_label, position, size, n)
+    return add_contamination(points, new_label, position, size, density)

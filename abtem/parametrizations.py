@@ -103,12 +103,12 @@ def kirkland_soft(r, r_cut, v_cut, dvdr_cut, p):
 
     return v - v_cut - (r - r_cut) * dvdr_cut
 
-
-@jit(nopython=True, nogil=True, parallel=True)
+# TODO : implement threads
+@jit(nopython=True, nogil=True)
 def project_tanh_sinh(r, z0, z1, xk, wk, f):
     projected = np.zeros((len(z0), len(r)))
 
-    for i in prange(z0.shape[0]):
+    for i in range(z0.shape[0]):
         inside = (z0[i] < 0.) & (z1[i] > 0.)
         zm = (z1[i] - z0[i]) / 2.
         zp = (z0[i] + z1[i]) / 2.
@@ -131,11 +131,11 @@ def project_tanh_sinh(r, z0, z1, xk, wk, f):
     return projected
 
 
-@jit(nopython=True, nogil=True, parallel=True)
+@jit(nopython=True, nogil=True)
 def project_riemann(r, r_cut, v_cut, dvdr_cut, z0, z1, num_samples, f, parameters):
     projected = np.zeros((len(z0), len(r)))
 
-    for i in prange(z0.shape[0]):
+    for i in range(z0.shape[0]):
         wk = (z1[i] - z0[i]) / num_samples
         xk = np.linspace(z0[i] + wk / 2, z1[i] - wk / 2, num_samples)
         for j in range(r.shape[0]):

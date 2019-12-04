@@ -30,19 +30,19 @@ def test_cutoff():
     potential = Potential(Atoms(cell=(1, 1, 1)))
 
     cutoff = potential.get_cutoff(6)
-    assert np.isclose(potential.evaluate_potential(cutoff, 6), potential.tolerance)
+    assert np.isclose(potential.evaluate_potential(cutoff, 6), potential.cutoff_tolerance)
 
     cutoff = potential.get_cutoff(47)
-    assert np.isclose(potential.evaluate_potential(cutoff, 47), potential.tolerance)
+    assert np.isclose(potential.evaluate_potential(cutoff, 47), potential.cutoff_tolerance)
 
 
 def test_padded_atoms():
     atoms = Atoms('C', positions=[(1, 1, 1)], cell=(2, 2, 2))
-    potential = Potential(atoms, tolerance=1e-3)
+    potential = Potential(atoms, cutoff_tolerance=1e-3)
     padded_atoms = potential.get_padded_atoms()
     assert len(padded_atoms) == 9
 
-    potential = Potential(atoms, tolerance=1e-5)
+    potential = Potential(atoms, cutoff_tolerance=1e-5)
     padded_atoms = potential.get_padded_atoms()
     assert len(padded_atoms) == 25
 

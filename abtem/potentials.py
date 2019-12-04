@@ -2,17 +2,17 @@ import os
 from typing import Union, Sequence
 
 import numpy as np
-from ase import units
-from numba import jit
-from scipy.optimize import brentq
-from tqdm.auto import tqdm
-
 from abtem.bases import Grid, cached_method, ArrayWithGrid, Cache, cached_method_with_args
 from abtem.interpolation import interpolation_kernel_parallel
 from abtem.parametrizations import load_lobato_parameters, load_kirkland_parameters, kirkland, dvdr_kirkland, \
     project_tanh_sinh
 from abtem.parametrizations import lobato, dvdr_lobato
 from abtem.transform import fill_rectangle_with_atoms
+from ase import Atoms
+from ase import units
+from numba import jit
+from scipy.optimize import brentq
+from tqdm.auto import tqdm
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
@@ -82,25 +82,72 @@ class PotentialBase(Grid):
         return PrecalculatedPotential(array, slice_thicknesses, self.extent)
 
 
-def tanh_sinh_quadrature(m, h):
-    xk = np.zeros(2 * m)
-    wk = np.zeros(2 * m)
-    for i in range(0, 2 * m):
-        k = i - m
-        xk[i] = np.tanh(np.pi / 2 * np.sinh(k * h))
-        numerator = h / 2 * np.pi * np.cosh(k * h)
-        denominator = np.cosh(np.pi / 2 * np.sinh(k * h)) ** 2
+def tanh_sinh_quadrature(order, parameter):
+    xk = np.zeros(2 * order)
+    wk = np.zeros(2 * order)
+    for i in range(0, 2 * order):
+        k = i - order
+        xk[i] = np.tanh(np.pi / 2 * np.sinh(k * parameter))
+        numerator = parameter / 2 * np.pi * np.cosh(k * parameter)
+        denominator = np.cosh(np.pi / 2 * np.sinh(k * parameter)) ** 2
         wk[i] = numerator / denominator
     return xk, wk
 
 
 class Potential(PotentialBase, Cache):
+    """
+    Potential object
 
-    def __init__(self, atoms, origin=None, extent=None, gpts=None, sampling=None, slice_thickness=.5, num_slices=None,
-                 parametrization='lobato', method='interpolation', tolerance=1e-3, quadrature_order=40,
-                 interpolation_sampling=.001):
+    The potential object is used to calculate electrostatic potential of a set of atoms represented by an ASE atoms
+    object. The potential is calculated in the Independent Atom Model (IAM) with a user-defined parametrization
+    of the atomic potentials.
 
-        self._tolerance = tolerance
+    Parameters
+    ----------
+    atoms : Atoms object
+        Atoms object defining the atomic configuration used in the IAM of the electrostatic potential.
+    origin : two floats, float, optional
+        xy-origin of the electrostatic potential relative to the xy-origin of the Atoms object. Units of Angstrom.
+    extent : two floats, float, optional
+        Lateral extent of potential, if the unit cell of the atoms is too small it will be repeated. Units of Angstrom.
+    gpts : two ints, int, optional
+        Number of grid points describing each slice of the potential.
+    sampling : two floats, float, optional
+        Lateral sampling of the potential. Units of 1 / Angstrom.
+    slice_thickness : float, optional
+        Thickness of the potential slices in Angstrom for calculating the number of slices used by the multislice
+        algorithm. Default is 0.5 Angstrom.
+    num_slices : int, optional
+        Number of slices used by the multislice algorithm. If `num_slices` is set, then `slice_thickness` is disabled.
+    parametrization : 'lobato' or 'kirkland'
+        The potential parametrization describes the radial dependence of the potential for each element. Two of the most
+        accurate parametrizations are available by Lobato et. al. and EJ Kirkland.
+        See the citation guide for references.
+    method : 'interpolation'
+        The method for calculating the potential, currently the only implemented method is 'interpolation'.
+    cutoff_tolerance : float
+        The error tolerance used for deciding the radial cutoff distance of the potential in units of eV / e.
+        Default is 1e-3.
+    quadrature_order : int, optional
+        Order of the Tanh-Sinh quadrature for numerical integration the potential along the optical axis. Default is 40.
+    interpolation_sampling : float, optional
+        The average sampling used when calculating the radial dependence of the atomic potentials.
+    """
+
+    def __init__(self, atoms: Atoms,
+                 origin: Union[float, Sequence[float]] = None,
+                 extent: Union[float, Sequence[float]] = None,
+                 gpts: Union[int, Sequence[int]] = None,
+                 sampling: Union[float, Sequence[float]] = None,
+                 slice_thickness: float = .5,
+                 num_slices: int = None,
+                 parametrization: str = 'lobato',
+                 method: str = 'interpolation',
+                 cutoff_tolerance: float = 1e-3,
+                 quadrature_order: int = 40,
+                 interpolation_sampling: float = .001):
+
+        self._cutoff_tolerance = cutoff_tolerance
         self._method = method
 
         if isinstance(parametrization, str):
@@ -133,8 +180,8 @@ class Potential(PotentialBase, Cache):
         return self.thickness / self.num_slices
 
     @property
-    def tolerance(self):
-        return self._tolerance
+    def cutoff_tolerance(self):
+        return self._cutoff_tolerance
 
     @property
     def num_slices(self):
@@ -168,7 +215,7 @@ class Potential(PotentialBase, Cache):
 
     @cached_method_with_args(('tolerance', 'parametrization'))
     def get_cutoff(self, atomic_number):
-        func = lambda r: self.evaluate_potential(r, atomic_number) - self.tolerance
+        func = lambda r: self.evaluate_potential(r, atomic_number) - self.cutoff_tolerance
         return brentq(func, 1e-7, 1000)
 
     @cached_method(())
@@ -214,13 +261,15 @@ class Potential(PotentialBase, Cache):
         n = int(np.ceil(self.get_cutoff(atomic_number) / self._interpolation_sampling))
         return np.geomspace(min(self.sampling) / 2, self.get_cutoff(atomic_number), n)
 
-    @cached_method(('sampling',))
+    @cached_method(())
     def _get_quadrature(self):
         m = self._quadrature_order
         h = QUADRATURE_PARAMETER_RATIO / self._quadrature_order
         return tanh_sinh_quadrature(m, h)
 
     def _evaluate_interpolation(self, i):
+        #print(self.cache,'sss')
+
         v = self._allocate()
         v[:, :] = 0.
 
@@ -238,8 +287,6 @@ class Potential(PotentialBase, Cache):
             z1 = (i + 1) * slice_thickness - positions[:, 2]
 
             vr = project_tanh_sinh(r, z0, z1, xk, wk, self.get_soft_potential_function(atomic_number))
-
-            # print(vr[0,0])
 
             block_margin = int(cutoff / min(self.sampling))
 

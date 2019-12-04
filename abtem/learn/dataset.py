@@ -1,7 +1,23 @@
 import numpy as np
 from skimage.morphology import watershed
 
-from abtem.interpolation import interpolate_radial_functions
+from abtem.interpolation import interpolation_kernel_parallel
+
+
+def interpolate_radial_functions(array, r, values, positions, sampling, thread_safe=True):
+    block_margin = int(r[-1] / min(sampling))
+    block_size = 2 * block_margin + 1
+
+    corner_positions = np.round(positions[:, :2] / sampling).astype(np.int) - block_margin
+    block_positions = positions[:, :2] - sampling * corner_positions
+
+    x = np.linspace(0., block_size * sampling[0], block_size, endpoint=False)
+    y = np.linspace(0., block_size * sampling[1], block_size, endpoint=False)
+
+    if values.shape == (len(r),):
+        values = np.tile(values, (len(corner_positions), 1))
+
+    interpolation_kernel_parallel(array, r, values, corner_positions, block_positions, x, y, thread_safe)
 
 
 def gaussian_marker_labels(points, width, gpts):
@@ -65,6 +81,13 @@ def safe_assign(assignee, assignment, index):
 
 
 def data_generator(images, labels, batch_size=32, augmentations=None):
+    images_dtype = images.dtype
+    labels_dtypes = [label.dtype for label in labels]
+
+    assert len(images.shape) == 4
+    # for label in labels:
+    #    assert len(label.shape) == 4
+
     if augmentations is None:
         augmentations = []
 
@@ -81,7 +104,6 @@ def data_generator(images, labels, batch_size=32, augmentations=None):
 
             for j, k in enumerate(indices[i * batch_size:(i + 1) * batch_size]):
                 batch_images.append(images[k].copy())
-
                 for l in range(len(labels)):
                     batch_labels[l].append(labels[l][k].copy())
 
@@ -107,9 +129,9 @@ def data_generator(images, labels, batch_size=32, augmentations=None):
                             for l in range(len(labels)):
                                 batch_labels[l][j] = augmentation(batch_labels[l][j])
 
-            batch_images = np.array(batch_images).astype(np.float32)
+            batch_images = np.array(batch_images).astype(images_dtype)
 
             for j in range(len(labels)):
-                batch_labels[j] = np.array(batch_labels[j]).astype(np.float32)
+                batch_labels[j] = np.array(batch_labels[j]).astype(labels_dtypes[j])
 
             yield batch_images, batch_labels

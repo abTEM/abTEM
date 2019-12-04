@@ -50,14 +50,14 @@ from numba import njit
 #     return accepted
 
 
-def non_maximum_suppresion(density, classes, distance, threshold):
+def non_maximum_suppresion(density, distance, threshold, classes=None):
     shape = density.shape[2:]
 
     density = density.reshape((density.shape[0], -1))
 
-    # if class_indicators is not None:
-    classes = classes.reshape(classes.shape[:2] + (-1,))
-    probabilities = np.zeros(classes.shape, dtype=classes.dtype)
+    if classes is not None:
+        classes = classes.reshape(classes.shape[:2] + (-1,))
+        probabilities = np.zeros(classes.shape, dtype=classes.dtype)
 
     accepted = np.zeros(density.shape, dtype=np.bool_)
     suppressed = np.zeros(density.shape, dtype=np.bool_)
@@ -98,11 +98,15 @@ def non_maximum_suppresion(density, classes, distance, threshold):
                 k = sub2ind(neighbors_x, neighbors_y, shape)
                 suppressed[i][k] = True
 
-                tmp = np.sum(classes[i, :, k] * weights[valid], axis=0)
-                probabilities[i, :, j] = tmp / np.sum(tmp)
+                if classes is not None:
+                    tmp = np.sum(classes[i, :, k] * weights[valid], axis=0)
+                    probabilities[i, :, j] = tmp / np.sum(tmp)
 
-    accepted = accepted.reshape((classes.shape[0],) + shape)
+    accepted = accepted.reshape((density.shape[0],) + shape)
 
-    probabilities = probabilities.reshape(classes.shape[:2] + shape)
+    if classes is not None:
+        probabilities = probabilities.reshape(classes.shape[:2] + shape)
+        return accepted, probabilities
 
-    return accepted, probabilities
+    else:
+        return accepted

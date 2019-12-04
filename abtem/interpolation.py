@@ -46,7 +46,6 @@ def thread_safe_coloring(corners, size):
 
 @jit(nopython=True, nogil=True)
 def interpolate_single(x, y, dydx, x_interp):
-
     idx = np.searchsorted(x, x_interp) - 1
 
     if idx < 0:
@@ -59,16 +58,6 @@ def interpolate_single(x, y, dydx, x_interp):
             return y[-2]
 
     return y[idx] + (x_interp - x[idx]) * dydx[idx]
-
-
-@jit(nopython=True, nogil=True)
-def interpolate(x, y, x_interp):
-    y_interp = np.zeros(x_interp.shape[0])
-    dydx = np.diff(y) / np.diff(x)
-    for i in range(x_interp.shape[0]):
-        y_interp[i] = interpolate_single(x, y, dydx, x_interp[i])
-
-    return y_interp
 
 
 @jit(nopython=True, nogil=True)
@@ -104,21 +93,6 @@ def interpolation_kernel(v, r, vr, corner_positions, block_positions, x, y):
     for j, J in zip(rj, rJ):
         for k, K in zip(rk, rK):
             r_interp = np.sqrt((x[J] - block_positions[0]) ** 2. + (y[K] - block_positions[1]) ** 2.)
-
-            # if r_interp < r[-1]:
-            #     l = int(np.floor((r_interp - r[0]) / (r[-1] - r[0]) * (len(r) - 1)))
-            #
-            #     #idx = np.searchsorted(r, r_interp)
-            #
-            #     #print(l, idx)
-            #
-            #     if l < 0:
-            #         v[j, k] += vr[0]
-            #     elif l < (len(vr) - 1):
-            #         value = vr[l] + (r_interp - r[l]) * dvrdr[l]
-            #         v[j, k] += value
-
-
             v[j, k] += interpolate_single(r, vr, dvrdr, r_interp)
 
 
@@ -137,17 +111,15 @@ def interpolation_kernel_parallel(v, r, vr, corner_positions, block_positions, x
             interpolation_kernel(v, r, vr[i], corner_positions[i], block_positions[i], x, y)
 
 
-def interpolate_radial_functions(array, r, values, positions, sampling, thread_safe=True):
+def interpolate_radial_functions(image, r, values, positions, sampling):
     block_margin = int(r[-1] / min(sampling))
-    block_size = 2 * block_margin + 1
 
     corner_positions = np.round(positions[:, :2] / sampling).astype(np.int) - block_margin
     block_positions = positions[:, :2] - sampling * corner_positions
 
-    x = np.linspace(0., block_size * sampling[0], block_size, endpoint=False)
-    y = np.linspace(0., block_size * sampling[1], block_size, endpoint=False)
+    block_size = 2 * block_margin + 1
 
-    if values.shape == (len(r),):
-        values = np.tile(values, (len(corner_positions), 1))
+    x = np.linspace(0., block_size * sampling[0] - sampling[0], block_size)
+    y = np.linspace(0., block_size * sampling[1] - sampling[1], block_size)
 
-    interpolation_kernel_parallel(array, r, values, corner_positions, block_positions, x, y, thread_safe)
+    interpolation_kernel_parallel(image, r, values, corner_positions, block_positions, x, y)

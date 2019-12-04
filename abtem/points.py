@@ -222,6 +222,11 @@ class LabelledPoints(object):
         self._positions = np.vstack((self._positions, points.positions))
         self._labels = np.hstack((self._labels, points.labels))
 
+    def __add__(self, other):
+        new = self.copy()
+        new.extend(other)
+        return new
+
     def __getitem__(self, i):
         return self.__class__(positions=self.positions[i].copy(), labels=self.labels[i].copy(), cell=self.cell.copy())
 

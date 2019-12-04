@@ -25,6 +25,19 @@ def get_fft_plans(shape, threads=16):
 
 
 class Propagator(Grid, Energy, Cache):
+    """
+    Propagator object
+
+    The propagator object represents a
+
+
+    Parameters
+    ----------
+    extent :
+    gpts :
+    sampling :
+    energy :
+    """
 
     def __init__(self, extent=None, gpts=None, sampling=None, energy=None):
         super().__init__(gpts=gpts, extent=extent, sampling=sampling, energy=energy)
@@ -40,21 +53,31 @@ class Propagator(Grid, Energy, Cache):
 
 
 def multislice(waves, potential, in_place=False, show_progress=False):
-    if isinstance(potential, Atoms):
-        potential = Potential(atoms=potential)
+    """
+    The multislice algorithm
+
+
+    Parameters
+    ----------
+    waves : waves object
+
+    potential : potential object
+        A potential object representing
+    in_place : bool
+        If true modify the array representing the wave in place, otherwise create a copy.
+    show_progress : bool
+        If true create a progress bar.
+
+    Returns
+    -------
+
+    """
 
     if not in_place:
         waves = waves.copy()
 
     if (waves.extent is not None) & np.all(potential.extent != waves.extent):
         raise RuntimeError('inconsistent extent')
-
-    if potential.gpts is None:
-        potential = potential.copy(copy_atoms=False)
-        potential.gpts = waves.gpts
-
-    elif np.all(potential.gpts != waves.gpts):
-        raise RuntimeError('inconsistent grid points')
 
     temp_1, temp_2, fft_object_forward, fft_object_backward = get_fft_plans(waves.array.shape)
 
@@ -343,15 +366,6 @@ class ProbeWaves(CTF):
 
     def _get_scan_waves_maker(self, potential):
 
-        if isinstance(potential, Atoms):
-            potential = Potential(atoms=potential)
-
-        if self.extent is None:
-            self.extent = potential.extent
-
-        if self.gpts is None:
-            self.gpts = potential.gpts
-
         def scan_waves_func(waves, positions):
             waves = waves.build_at(positions)
             waves.multislice(potential=potential, in_place=True, show_progress=False)
@@ -372,6 +386,23 @@ class ProbeWaves(CTF):
                   detectors: Union[Sequence[DetectorBase], DetectorBase],
                   start: Sequence[float], end: Sequence[float], gpts: int = None, sampling: float = None,
                   endpoint: bool = True, max_batch: int = 1, show_progress: bool = True):
+
+        if isinstance(potential, Atoms):
+            potential = Potential(atoms=potential)
+
+        if self.extent is None:
+            self.extent = potential.extent
+
+        if self.gpts is None:
+            self.gpts = potential.gpts
+
+        if potential.gpts is None:
+            potential.gpts = self.gpts
+
+        elif np.any(potential.gpts != self.gpts):
+            raise RuntimeError('inconsistent grid points')
+
+
 
         scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint)
         return do_scan(self, self._get_scan_waves_maker(potential), scan=scan, detectors=detectors, max_batch=max_batch,
@@ -403,9 +434,33 @@ def prism_translate(positions, kx, ky):
 
 
 class ScatteringMatrix(ArrayWithGrid, CTFBase, Cache):
+    """
+    Scattering matrix object
+
+    The scattering matrix object represents a plane wave expansion of a scanning transmission electron microscopy probe.
+
+    Parameters
+    ----------
+    array : 3d numpy array
+        The array representation of the scattering matrix.
+    interpolation : int
+
+    cutoff : float
+        The angular cutoff of the plane wave expansion.
+    kx : sequence of floats
+        The
+    ky : sequence of floats
+    extent : two floats, float, optional
+        Lateral extent of the scattering matrix, if the unit cell of the atoms is too small it will be repeated. Units of Angstrom.
+    sampling : two floats, float, optional
+        Lateral sampling of the scattering matrix. Units of 1 / Angstrom.
+    energy :
+    always_recenter :
+    """
 
     def __init__(self, array, interpolation, cutoff, kx, ky, extent=None, sampling=None, energy=None,
                  always_recenter: bool = False):
+
         self._interpolation = interpolation
         self._cutoff = cutoff
         self._kx = kx

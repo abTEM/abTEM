@@ -36,10 +36,10 @@ def merge_close(atoms, tol=1e-12):
 def fill_rectangle_with_atoms(atoms, origin, extent, margin=0., return_atom_labels=False):
     non_zero = np.abs(atoms.cell) > 1e-12
 
-    if not (np.all(np.array([[1, 0, 0], [1, 1, 0], [0, 0, 1]], dtype=np.bool) == non_zero) |
-            np.all(np.identity(3) == non_zero)):
-        atoms.cell.pbc[:] = True
-        niggli_reduce(atoms)
+    # if not (np.all(np.array([[1, 0, 0], [1, 1, 0], [0, 0, 1]], dtype=np.bool) == non_zero) |
+    #         np.all(np.identity(3) == non_zero)):
+    #     atoms.cell.pbc[:] = True
+    #     niggli_reduce(atoms)
 
     if not np.isclose(atoms.cell[2].sum(), atoms.cell[2, 2]):
         raise RuntimeError()
@@ -65,10 +65,10 @@ def fill_rectangle_with_atoms(atoms, origin, extent, margin=0., return_atom_labe
 def orthogonalize_atoms(atoms, n=1, m=None, tol=1e-12):
     non_zero = np.abs(atoms.cell) > 1e-12
 
-    if not (np.all(np.array([[1, 0, 0], [1, 1, 0], [0, 0, 1]], dtype=np.bool) == non_zero) |
-            np.all(np.identity(3) == non_zero)):
-        atoms.cell.pbc[:] = True
-        niggli_reduce(atoms)
+    # if not (np.all(np.array([[1, 0, 0], [1, 1, 0], [0, 0, 1]], dtype=np.bool) == non_zero) |
+    #         np.all(np.identity(3) == non_zero)):
+    #     atoms.cell.pbc[:] = True
+    #     #niggli_reduce(atoms)
 
     if m is None:
         m = np.abs(np.round(atoms.cell[0, 0] / atoms.cell[1, 0]))

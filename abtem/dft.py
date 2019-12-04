@@ -1,14 +1,11 @@
 import numpy as np
-from ase import units
-from scipy.interpolate import interp1d
-
-from abtem.bases import cached_method, Cache, cached_method_with_args
-from abtem.transform import fill_rectangle_with_atoms, orthogonalize_array
-from abtem.potentials import PotentialBase, tanh_sinh_quadrature, QUADRATURE_PARAMETER_RATIO
+from abtem.bases import cached_method, Cache
 from abtem.interpolation import interpolation_kernel, interpolate_single
 from abtem.parametrizations import project_tanh_sinh
+from abtem.potentials import PotentialBase, tanh_sinh_quadrature, QUADRATURE_PARAMETER_RATIO
+from abtem.transform import fill_rectangle_with_atoms, orthogonalize_array
 from abtem.utils import split_integer
-from scipy.interpolate import interp1d
+from ase import units
 from numba import jit
 
 
@@ -16,14 +13,12 @@ def gaussian(radial_grid, alpha):
     return 4 / np.sqrt(np.pi) * alpha ** 1.5 * np.exp(-alpha * radial_grid.r_g ** 2)
 
 
-def get_paw_corrections(a, calculator, rcgauss=0.005, spline_pts=500):
+def get_paw_corrections(a, calculator, rcgauss=0.005):
     density = calculator.density
     density.D_asp.redistribute(density.atom_partition.as_serial())
     density.Q_aL.redistribute(density.atom_partition.as_serial())
 
     alpha = 1 / (rcgauss / units.Bohr) ** 2
-    # corrections = {}
-    # for a, D_sp in density.D_asp.items():
     D_sp = density.D_asp[a]
 
     setup = density.setups[a]
@@ -44,34 +39,46 @@ def get_paw_corrections(a, calculator, rcgauss=0.005, spline_pts=500):
     dv_g[0] = dv_g[1]
     dv_g[-1] = 0.0
 
-    # corrections[a] = radial_grid.spline(dv_g, points=spline_pts)
-    # corrections[a] = {'f': dv_g, 'r': radial_grid.r_g, 's': radial_grid.spline(dv_g,
-    # points=spline_pts)}  # radial_grid.spline(dv_g, points=spline_pts)
     return radial_grid.r_g, dv_g
 
 
-def riemann_quadrature(num_samples):
-    xk = np.linspace(-1., 1., num_samples + 1).astype(np.float32)
-    return xk[:-1], xk[1:] - xk[:-1]
-
-
-def project_spherical_function(f, r, a, b, num_samples=200):
-    c = np.reshape(((b - a) / 2.), (-1, 1))
-    d = np.reshape(((b + a) / 2.), (-1, 1))
-    xk, wk = riemann_quadrature(num_samples)
-    xkab = xk * c + d
-    wkab = wk * c
-    rxy = np.sqrt((r ** 2.).reshape((-1, 1)) + (xkab ** 2.).reshape((1, -1)))
-    return np.sum(f(rxy) * wkab.reshape(1, -1), axis=-1)
-
-
 class GPAWPotential(PotentialBase, Cache):
+    """
+    GPAW DFT potential object
 
-    def __init__(self, calculator, origin=None, extent=None, gpts=None, sampling=None, num_slices=None,
-                 slice_thickness=.5,
-                 quadrature_order=40, interpolation_sampling=.001, sigma=.005, assert_equal_thickness=False):
+    The GPAW potential object is used to calculate electrostatic potential of a converged GPAW calculator object.
+
+    Parameters
+    ----------
+    calculator : GPAW calculator object
+        A converged GPAW calculator.
+    origin : two floats, float, optional
+        xy-origin of the electrostatic potential relative to the xy-origin of the Atoms object. Units of Angstrom.
+    extent : two floats, float, optional
+        Lateral extent of potential, if the unit cell of the atoms is too small it will be repeated. Units of Angstrom.
+    gpts : two ints, int, optional
+        Number of grid points describing each slice of the potential.
+    sampling : two floats, float, optional
+        Lateral sampling of the potential. Units of 1 / Angstrom.
+    slice_thickness : float, optional
+        Thickness of the potential slices in Angstrom for calculating the number of slices used by the multislice
+        algorithm. Default is 0.5 Angstrom.
+    num_slices : int, optional
+        Number of slices used by the multislice algorithm. If `num_slices` is set, then `slice_thickness` is disabled.
+    quadrature_order : int, optional
+        Order of the Tanh-Sinh quadrature for numerical integration the potential along the optical axis. Default is 40.
+    interpolation_sampling : float, optional
+        The average sampling used when calculating the radial dependence of the atomic potentials.
+    core_size : float
+        The standard deviation of the Gaussian function representing the atomic core.
+    """
+
+    def __init__(self, calculator, origin=None, extent=None, gpts=None, sampling=None, slice_thickness=.5,
+                 num_slices=None, quadrature_order=40, interpolation_sampling=.001, core_size=.005,
+                 assert_equal_thickness=False):
+
         self._calculator = calculator
-        self._sigma = sigma
+        self._core_size = core_size
 
         thickness = calculator.atoms.cell[2, 2]
         Nz = calculator.hamiltonian.finegd.N_c[2]
@@ -81,8 +88,8 @@ class GPAWPotential(PotentialBase, Cache):
                 raise RuntimeError()
             num_slices = int(np.ceil(Nz / np.floor(slice_thickness / (thickness / Nz))))
 
-        if (not (calculator.hamiltonian.finegd.N_c[2] % num_slices == 0)) & assert_equal_thickness:
-            raise RuntimeError('{} {}'.format(calculator.hamiltonian.finegd.N_c[2], self.num_slices))
+        # if (not (calculator.hamiltonian.finegd.N_c[2] % num_slices == 0)) & assert_equal_thickness:
+        #     raise RuntimeError('{} {}'.format(calculator.hamiltonian.finegd.N_c[2], self.num_slices))
 
         self._Nz = Nz
         self._nz = split_integer(Nz, num_slices)
@@ -96,8 +103,9 @@ class GPAWPotential(PotentialBase, Cache):
 
     @cached_method()
     def _get_paw_correction(self, i):
-        r, v = get_paw_corrections(i, self._calculator, rcgauss=self._sigma)
+        r, v = get_paw_corrections(i, self._calculator, rcgauss=self._core_size)
         r = r * units.Bohr
+
         dvdr = np.diff(v) / np.diff(r)
 
         @jit(nopython=True, nogil=True)
@@ -174,12 +182,6 @@ class GPAWPotential(PotentialBase, Cache):
 
             vr = project_tanh_sinh(r, np.array([z0]), np.array([z1]), xk, wk, paw_correction)
 
-            # print(vr[0,0])
-
-            # vr = project_spherical_function(func.map, r, z0 / units.Bohr, z1 / units.Bohr,
-            #                                 num_samples=num_integration_samples) * units.Bohr
-
-            # r = r * units.Bohr
             block_margin = np.int(cutoff / min(self.sampling))
             block_size = 2 * block_margin + 1
 
@@ -189,66 +191,6 @@ class GPAWPotential(PotentialBase, Cache):
             x = np.linspace(0., block_size * self.sampling[0] - self.sampling[0], block_size)
             y = np.linspace(0., block_size * self.sampling[1] - self.sampling[1], block_size)
 
-            # print(vr.shape)
-
             interpolation_kernel(v, r, vr[0], corner_positions, block_positions, x, y)
 
         return - v / np.sqrt(4 * np.pi) * units.Ha
-
-
-def calculate_3d_potential(calc, h=.05, rcgauss=0.02, spline_pts=200, add_corrections=True):
-    from gpaw.lfc import LFC
-    from gpaw.utilities import h2gpts
-    from gpaw.fftw import get_efficient_fft_size
-    from gpaw.grid_descriptor import GridDescriptor
-    from gpaw.mpi import serial_comm
-    from gpaw.wavefunctions.pw import PWDescriptor
-
-    v_r = calc.get_electrostatic_potential() / units.Ha
-
-    old_gd = GridDescriptor(calc.hamiltonian.finegd.N_c, calc.hamiltonian.finegd.cell_cv, comm=serial_comm)
-
-    N_c = h2gpts(h / units.Bohr, calc.wfs.gd.cell_cv)
-    N_c = np.array([get_efficient_fft_size(N, 2) for N in N_c])
-    new_gd = GridDescriptor(N_c, calc.wfs.gd.cell_cv, comm=serial_comm)
-
-    pd1 = PWDescriptor(0.0, old_gd, float)
-    pd2 = PWDescriptor(0.0, new_gd, float)
-
-    v_r = pd1.interpolate(v_r, pd2)[0]
-
-    if add_corrections:
-        dens = calc.density
-        dens.D_asp.redistribute(dens.atom_partition.as_serial())
-        dens.Q_aL.redistribute(dens.atom_partition.as_serial())
-
-        alpha = 1 / (rcgauss / units.Bohr) ** 2
-        dv_a1 = []
-        for a, D_sp in dens.D_asp.items():
-            setup = dens.setups[a]
-            c = setup.xc_correction
-            rgd = c.rgd
-            ghat_g = gaussian(rgd, 1 / setup.rcgauss ** 2)
-            Z_g = gaussian(rgd, alpha) * setup.Z
-            D_q = np.dot(D_sp.sum(0), c.B_pqL[:, :, 0])
-            dn_g = np.dot(D_q, (c.n_qg - c.nt_qg)) * np.sqrt(4 * np.pi)
-            dn_g += 4 * np.pi * (c.nc_g - c.nct_g)
-            dn_g -= Z_g
-            dn_g -= dens.Q_aL[a][0] * ghat_g * np.sqrt(4 * np.pi)
-            dv_g = rgd.poisson(dn_g) / np.sqrt(4 * np.pi)
-            dv_g[1:] /= rgd.r_g[1:]
-            dv_g[0] = dv_g[1]
-            dv_g[-1] = 0.0
-            dv_a1.append([rgd.spline(dv_g, points=spline_pts)])
-
-        dens.D_asp.redistribute(dens.atom_partition)
-        dens.Q_aL.redistribute(dens.atom_partition)
-
-        if dv_a1:
-            dv = LFC(new_gd, dv_a1)
-            dv.set_positions(calc.spos_ac)
-            dv.add(v_r)
-
-        dens.gd.comm.broadcast(v_r, 0)
-
-    return - v_r * units.Ha

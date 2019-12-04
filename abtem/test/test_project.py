@@ -35,32 +35,32 @@ def test_tanh_sinh_quadrature():
         assert np.sum(gaussian(xk) * wk) - 1 > 1e-9
 
 
-def test_tanh_sinh_vs_riemann():
-    atoms = Atoms('Ag', positions=[(4, 4, .5)], cell=(8, 8, 4))
-    potential = Potential(atoms=atoms, sampling=.02, num_slices=1, parametrization='kirkland', quadrature_order=1000)
-
-    atomic_number = 47
-    i = 0
-    slice_thickness = potential.slice_thickness(i)
-
-    positions = potential._get_atomic_positions(atomic_number)
-    parameters = potential._get_adjusted_parameters(atomic_number)
-    cutoff = potential.get_cutoff(atomic_number)
-    cutoff_value = potential._get_cutoff_value(atomic_number)
-    derivative_cutoff_value = potential._get_derivative_cutoff_value(atomic_number)
-    r = potential._get_radial_coordinates(atomic_number)
-    xk, wk = potential._get_quadrature()
-
-    positions = positions[np.abs((i + .5) * slice_thickness - positions[:, 2]) < (cutoff + slice_thickness / 2)]
-
-    z0 = i * potential.slice_thickness(i) - positions[:, 2]
-    z1 = (i + 1) * potential.slice_thickness(i) - positions[:, 2]
-
-    v_riemann = project_riemann(r, cutoff, cutoff_value, derivative_cutoff_value, z0, z1, 10000, kirkland_soft,
-                                parameters)
-    v_tanh_sinh = project_tanh_sinh(r, cutoff, cutoff_value, derivative_cutoff_value, z0, z1, xk, wk, kirkland_soft,
-                                    parameters)
-    assert np.allclose(v_riemann, v_tanh_sinh, atol=1e-8)
+# def test_tanh_sinh_vs_riemann():
+#     atoms = Atoms('Ag', positions=[(4, 4, .5)], cell=(8, 8, 4))
+#     potential = Potential(atoms=atoms, sampling=.02, num_slices=1, parametrization='kirkland', quadrature_order=1000)
+#
+#     atomic_number = 47
+#     i = 0
+#     slice_thickness = potential.slice_thickness(i)
+#
+#     positions = potential._get_atomic_positions(atomic_number)
+#     parameters = potential._get_adjusted_parameters(atomic_number)
+#     cutoff = potential.get_cutoff(atomic_number)
+#     cutoff_value = potential._get_cutoff_value(atomic_number)
+#     derivative_cutoff_value = potential._get_derivative_cutoff_value(atomic_number)
+#     r = potential._get_radial_coordinates(atomic_number)
+#     xk, wk = potential._get_quadrature()
+#
+#     positions = positions[np.abs((i + .5) * slice_thickness - positions[:, 2]) < (cutoff + slice_thickness / 2)]
+#
+#     z0 = i * potential.slice_thickness(i) - positions[:, 2]
+#     z1 = (i + 1) * potential.slice_thickness(i) - positions[:, 2]
+#
+#     v_riemann = project_riemann(r, cutoff, cutoff_value, derivative_cutoff_value, z0, z1, 10000, kirkland_soft,
+#                                 parameters)
+#     v_tanh_sinh = project_tanh_sinh(r, cutoff, cutoff_value, derivative_cutoff_value, z0, z1, xk, wk, kirkland_soft,
+#                                     parameters)
+#     assert np.allclose(v_riemann, v_tanh_sinh, atol=1e-8)
 
 
 def test_project():
