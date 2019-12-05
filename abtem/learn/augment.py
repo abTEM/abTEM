@@ -271,6 +271,25 @@ class ScanNoise(Augmentation):
 #     self._random_rms_power = np.random.uniform(*self.rms_power)
 
 
+class Blank(Augmentation):
+
+    def __init__(self, width):
+        self.width = width
+        super().__init__(apply_to_label=False)
+
+    def randomize(self):
+        self._random_width = np.random.randint(*self.width)
+        self._random_position = None
+
+    def __call__(self, image):
+        if self._random_position is None:
+            self._random_position = np.random.randint(0, image.shape[0])
+
+        image[self._random_position:self._random_position + self._random_width] = 0
+
+        return image
+
+
 class Glitch(Augmentation):
 
     def __init__(self, width):
@@ -283,9 +302,10 @@ class Glitch(Augmentation):
 
     def __call__(self, image):
         if self._random_position is None:
-            self._random_position = np.random.randint(0, image.shape[0])
+            self._random_position = np.random.randint(self._random_width, image.shape[0])
 
-        image[self._random_position:self._random_position + self._random_width] = 0
+        image[self._random_position:] = image[-(image.shape[0] - self._random_position +
+                                                self._random_width):-self._random_width]
 
         return image
 
