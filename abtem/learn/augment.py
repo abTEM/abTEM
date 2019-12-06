@@ -228,20 +228,33 @@ def bandpass_noise(inner, outer, shape, sampling):
 
 class ScanNoise(Augmentation):
 
-    def __init__(self, scale, amount):
-        self.scale = scale
+    def __init__(self, slow_scale, amount, fast_scale=None, apply_to_label=False):
+        self.slow_scale = slow_scale
         self.amount = amount
-        super().__init__(apply_to_label=False, channels=None)
+        self.fast_scale = fast_scale
+        super().__init__(apply_to_label=apply_to_label, channels=None)
 
     def randomize(self):
-        self._random_scale = np.random.uniform(*self.scale)
+        self._random_slow_scale = np.random.uniform(*self.slow_scale)
         self._random_amount = np.random.uniform(*self.amount)
+        if self.fast_scale is None:
+            self._random_fast_scale = None
+        else:
+            self._random_fast_scale = np.random.uniform(*self.fast_scale)
+        self._noise = None
+
 
     def __call__(self, image):
-        n = bandpass_noise(0, self._random_scale, (image.shape[1],), (1. / image.shape[1],))
-        n *= bandpass_noise(0, np.max(image.shape), (image.shape[1],), (1. / image.shape[1],))
-        n = n / np.std(n) * self._random_amount
-        n = n.astype(np.int)
+        if self._random_fast_scale is None:
+            fast_scale = np.max(image.shape)
+        else:
+            fast_scale = self._random_fast_scale
+
+        if self._noise is None:
+            self._noise = bandpass_noise(0, self._random_slow_scale, (image.shape[1],), (1. / image.shape[1],))
+            self._noise = self._noise * bandpass_noise(0, fast_scale, (image.shape[1],), (1. / image.shape[1],))
+            self._noise = self._noise / np.std(self._noise) * self._random_amount
+            self._noise = self._noise.astype(np.int)
 
         def strided_indexing_roll(a, r):
             from skimage.util.shape import view_as_windows
@@ -249,7 +262,7 @@ class ScanNoise(Augmentation):
             n = a.shape[1]
             return view_as_windows(a_ext, (1, n))[np.arange(len(r)), (n - r) % n, 0]
 
-        image = strided_indexing_roll(np.ascontiguousarray(image), n)
+        image = strided_indexing_roll(np.ascontiguousarray(image), self._noise)
         return image
 
 
