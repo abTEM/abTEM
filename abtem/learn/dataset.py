@@ -62,12 +62,13 @@ def generate_indices(labels):
 
 
 def labels_to_masks(labels, n_classes):
-    masks = np.zeros((n_classes,) + (np.prod(labels.shape),), dtype=bool)
+    masks = np.zeros((labels.shape[0], n_classes,) + (np.prod(labels.shape[1:]),), dtype=bool)
 
-    for i, indices in enumerate(generate_indices(labels)):
-        masks[i, indices] = True
+    for i in range(labels.shape[0]):
+        for j, indices in enumerate(generate_indices(labels[i])):
+            masks[i, j, indices] = True
 
-    return masks.reshape((-1,) + labels.shape)
+    return masks.reshape((labels.shape[0], n_classes,) + labels.shape[1:])
 
 
 def safe_assign(assignee, assignment, index):
