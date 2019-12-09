@@ -3,6 +3,8 @@ import io
 import PIL
 import ipywidgets as widgets
 import numpy as np
+import cv2
+import numpy as np
 
 
 def array_as_image(array):
@@ -18,7 +20,34 @@ class ArrayImage(widgets.Image):
         super().__init__(*args, **kwargs)
 
     def set_array(self, array):
-        self.value = array_as_image((array * 255).astype(np.uint8))
+        self.value = array_as_image((array).astype(np.uint8))
+
+
+def add_faces(points, faces, image, colors):
+    points = np.round(points).astype(int)
+
+    for face, color in zip(faces, colors):
+        cv2.fillConvexPoly(image, points[face], color)
+
+    return image
+
+
+def add_edges(points, edges, image, color, thickness=1):
+    points = np.round(points).astype(int)
+    for edge in edges:
+        cv2.line(image, tuple(points[edge[0]][::-1]), tuple(points[edge[1]][::-1]), color=color,
+                 thickness=thickness)
+
+    return image
+
+
+def add_points(points, image, size, color):
+    points = np.round(points).astype(np.int)
+
+    for points in points:
+        cv2.circle(image, (points[1], points[0]), size, color, -1)
+
+    return image
 
 
 class Playback(widgets.VBox):

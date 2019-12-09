@@ -50,6 +50,7 @@ from numba import njit
 #     return accepted
 
 
+
 def non_maximum_suppresion(density, distance, threshold, classes=None):
     shape = density.shape[2:]
 

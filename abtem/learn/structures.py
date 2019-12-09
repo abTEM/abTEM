@@ -79,16 +79,18 @@ def random_paint_blob(points, new_label, size):
     return paint_blob(points, new_label, position + blob)
 
 
-def add_contamination(points, new_label, position, size, density):
+def add_contamination(points, new_label, position, size, mean_spacing):
     blob = position + size * (make_blob() - .5)
 
     path = Path(blob)
-    x = np.arange(blob[:, 0].min(), blob[:, 0].max(), density)
-    y = np.arange(blob[:, 1].min(), blob[:, 1].max(), density)
+    x = np.arange(blob[:, 0].min(), blob[:, 0].max(), mean_spacing)
+    y = np.arange(blob[:, 1].min(), blob[:, 1].max(), mean_spacing)
+
+    print(x)
 
     x, y = np.meshgrid(x, y)
     positions = np.array([x.ravel(), y.ravel()]).T
-    positions += density / 2. * np.random.randn(len(positions), 2)
+    positions += mean_spacing / 2 * np.random.randn(len(positions), 2)
 
     #print(positions)
     # positions = np.array([np.random.uniform(blob[:, 0].min(), blob[:, 0].max(), n),
