@@ -141,7 +141,7 @@ class UNet(nn.Module):
         for i in range(n):
             outputs = self.forward(images)
             for j in range(len(mc_outputs)):
-                mc_outputs[j][i] = outputs[j].detach().numpy()
+                mc_outputs[j][i] = outputs[j].cpu().detach().numpy()
 
         return [(np.mean(mc_output, 0), np.std(mc_output, 0)) for mc_output in mc_outputs]
 
