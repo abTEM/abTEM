@@ -2,6 +2,7 @@ from collections import OrderedDict
 
 import torch
 import torch.nn as nn
+import numpy as np
 
 
 class Head(nn.Module):
@@ -26,6 +27,10 @@ class DensityMapModule(Head):
         super().__init__()
         self.conv = nn.Conv2d(in_channels=features, out_channels=1, kernel_size=1)
 
+    @property
+    def out_channels(self):
+        return 1
+
     def forward(self, x):
         return torch.sigmoid(self.conv(x))
 
@@ -42,6 +47,11 @@ class ClassificationMapModule(Head):
     def __init__(self, features, nclasses):
         super().__init__()
         self.conv = nn.Conv2d(in_channels=features, out_channels=nclasses, kernel_size=1)
+        self._nclasses = nclasses
+
+    @property
+    def out_channels(self):
+        return self._nclasses
 
     def forward(self, x):
         return nn.Softmax2d()(self.conv(x))
@@ -121,7 +131,19 @@ class UNet(nn.Module):
         dec1 = self.updrop1(dec1)
         dec1 = self.decoder1(dec1)
 
-        return [mapper(dec1) for mapper in self.mappers]  # [classifier(bottleneck) for classifier in self.classifiers]
+        return [mapper(dec1) for mapper in self.mappers]
+
+    def mc_predict(self, images, n):
+
+        mc_outputs = [np.zeros((n,) + (images.shape[0],) + (mapper.out_channels,) + images.shape[2:]) for mapper in
+                      self.mappers]
+
+        for i in range(n):
+            outputs = self.forward(torch.from_numpy(images))
+            for j in range(len(mc_outputs)):
+                mc_outputs[j][i] = outputs[j].detach().numpy()
+
+        return [(np.mean(mc_output, 0), np.std(mc_output, 0)) for mc_output in mc_outputs]
 
     @staticmethod
     def _block(in_channels, features, name):

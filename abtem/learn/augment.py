@@ -298,7 +298,7 @@ class Blank(Augmentation):
         if self._random_position is None:
             self._random_position = np.random.randint(0, image.shape[0])
 
-        image[self._random_position:self._random_position + self._random_width] = 0
+        image[self._random_position:self._random_position + self._random_width] = image.min()
 
         return image
 
