@@ -139,7 +139,7 @@ class UNet(nn.Module):
                       self.mappers]
 
         for i in range(n):
-            outputs = self.forward(torch.from_numpy(images))
+            outputs = self.forward(images)
             for j in range(len(mc_outputs)):
                 mc_outputs[j][i] = outputs[j].detach().numpy()
 
