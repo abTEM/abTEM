@@ -1,179 +1,221 @@
-from collections import OrderedDict
-
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
+import torch.nn.functional as F
+from torch import Tensor
 
 
-class Head(nn.Module):
-
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x):
-        raise NotImplementedError()
-
-
-def DensityMap():
-    def build_density_map(features):
-        return DensityMapModule(features)
-
-    return build_density_map
-
-
-class DensityMapModule(Head):
+class DensityMap(nn.Module):
 
     def __init__(self, features):
         super().__init__()
-        self.conv = nn.Conv2d(in_channels=features, out_channels=1, kernel_size=1)
+        self.conv = PartialConv2d(in_channels=features, out_channels=1, kernel_size=1)
 
     @property
     def out_channels(self):
         return 1
 
-    def forward(self, x):
-        return torch.sigmoid(self.conv(x))
+    def forward(self, x, mask):
+        x, _ = self.conv(x, mask)
+        return torch.sigmoid(x)
 
 
-def ClassificationMap(nclasses):
-    def build(features):
-        return ClassificationMapModule(features, nclasses=nclasses)
-
-    return build
-
-
-class ClassificationMapModule(Head):
+class ClassificationMap(nn.Module):
 
     def __init__(self, features, nclasses):
         super().__init__()
-        self.conv = nn.Conv2d(in_channels=features, out_channels=nclasses, kernel_size=1)
+        self.conv = PartialConv2d(in_channels=features, out_channels=nclasses, kernel_size=1)
         self._nclasses = nclasses
 
     @property
     def out_channels(self):
         return self._nclasses
 
-    def forward(self, x):
-        return nn.Softmax2d()(self.conv(x))
+    def forward(self, x, mask):
+        x, _ = self.conv(x, mask)
+        return nn.Softmax2d()(x)
+
+
+class PartialConv2d(nn.Conv2d):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, bias=True, multi_channel=True,
+                 return_mask=True):
+
+        super().__init__(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size,
+                         stride=stride, padding=padding, bias=bias)
+
+        self.return_mask = return_mask
+        self.multi_channel = multi_channel
+
+        if self.multi_channel:
+            self.mask_conv_kernel = torch.ones(self.out_channels, self.in_channels, self.kernel_size[0],
+                                               self.kernel_size[1])
+        else:
+            self.mask_conv_kernel = torch.ones(1, 1, self.kernel_size[0], self.kernel_size[1])
+
+        self.slide_window_size = np.prod(list(self.mask_conv_kernel.shape[1:]))
+
+        self.last_size = (None, None, None, None)
+        self.update_mask = None
+        self.mask_ratio = None
+
+    def forward(self, input: Tensor, mask_in=None):
+        assert len(input.shape) == 4
+
+        if mask_in is not None or self.last_size != tuple(input.shape):
+            self.last_size = tuple(input.shape)
+
+            with torch.no_grad():
+                if self.mask_conv_kernel.type() != input.type():
+                    self.mask_conv_kernel = self.mask_conv_kernel.to(input)
+
+                if mask_in is None:
+                    if self.multi_channel:
+                        mask = torch.ones(input.shape).to(input)
+                    else:
+                        mask = torch.ones(1, 1, input.shape[2], input.shape[3]).to(input)
+                else:
+                    mask = mask_in
+
+                self.update_mask = F.conv2d(mask, self.mask_conv_kernel, bias=None, stride=self.stride,
+                                            padding=self.padding)
+
+                self.mask_ratio = self.slide_window_size / (self.update_mask + 1e-8)
+                self.update_mask = torch.clamp(self.update_mask, 0, 1)
+                self.mask_ratio = torch.mul(self.mask_ratio, self.update_mask)
+
+        raw_out = super().forward(torch.mul(input, mask) if mask_in is not None else input)
+
+        if self.bias is not None:
+            bias_view = self.bias.view(1, self.out_channels, 1, 1)
+            output = torch.mul(raw_out - bias_view, self.mask_ratio) + bias_view
+            output = torch.mul(output, self.update_mask)
+        else:
+            output = torch.mul(raw_out, self.mask_ratio)
+
+        if self.return_mask:
+            return output, self.update_mask
+        else:
+            return output
+
+
+class PartialConvUNetDown(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3, normalize=True, dropout=0.0, bias=None):
+        super().__init__()
+
+        padding = kernel_size // 2
+        self.conv = PartialConv2d(in_channels, out_channels, kernel_size, stride=2, padding=padding, bias=bias)
+
+        nn.init.kaiming_normal_(self.conv.weight, a=0, mode='fan_in')
+
+        if normalize:
+            self.norm = nn.BatchNorm2d(out_channels)
+        else:
+            self.norm = None
+
+        self.activation = nn.LeakyReLU(0.2)
+
+        if dropout:
+            self.dropout = nn.Dropout(dropout)
+        else:
+            self.dropout = None
+
+    def forward(self, x, mask):
+        x, mask = self.conv(x, mask)
+        if self.norm:
+            x = self.norm(x)
+        x = self.activation(x)
+        if self.dropout:
+            x = self.dropout(x)
+        return x, mask
+
+
+class PartialConvUNetUp(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3, normalize=True, dropout=0.0, bias=None):
+        super().__init__()
+
+        padding = kernel_size // 2
+        self.conv = PartialConv2d(in_channels, out_channels, kernel_size, 1, padding, bias=bias)
+
+        nn.init.kaiming_normal_(self.conv.weight, a=0, mode='fan_in')
+
+        if normalize:
+            self.norm = nn.BatchNorm2d(out_channels)
+        else:
+            self.norm = None
+
+        self.activation = nn.ReLU()
+
+        if dropout:
+            self.dropout = nn.Dropout(dropout)
+        else:
+            self.dropout = None
+
+    def forward(self, x, skip_input, mask=None, skip_mask=None):
+
+        if mask is None:
+            assert skip_mask is None
+
+        x = F.interpolate(x, scale_factor=2)
+        if mask is not None:
+            mask = F.interpolate(mask, scale_factor=2, mode='nearest')
+
+        x = torch.cat((x, skip_input), dim=1)
+        if mask is not None:
+            mask = torch.cat((mask, skip_mask), dim=1)
+
+        x, mask = self.conv(x, mask)
+        if self.norm:
+            x = self.norm(x)
+        x = self.activation(x)
+        if self.dropout:
+            x = self.dropout(x)
+        return x, mask
 
 
 class UNet(nn.Module):
 
-    def __init__(self, mappers, in_channels=1, init_features=16, p=.3):
-        super(UNet, self).__init__()
+    def __init__(self, mappers, in_channels=1, init_features=16, dropout=.5):
+        super().__init__()
 
         features = init_features
 
-        self.encoder1 = UNet._block(in_channels, features, name="enc1")
-        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.downdrop1 = nn.Dropout(p=p)
+        self.encoder1 = PartialConvUNetDown(in_channels, features, 3)
+        self.encoder2 = PartialConvUNetDown(features, features * 2, dropout=dropout)
+        self.encoder3 = PartialConvUNetDown(features * 2, features * 4, dropout=dropout)
+        self.encoder4 = PartialConvUNetDown(features * 4, features * 8, dropout=dropout)
 
-        self.encoder2 = UNet._block(features, features * 2, name="enc2")
-        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.downdrop2 = nn.Dropout(p=p)
+        self.bottleneck = PartialConvUNetDown(features * 8, features * 16, dropout=dropout)
 
-        self.encoder3 = UNet._block(features * 2, features * 4, name="enc3")
-        self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.downdrop3 = nn.Dropout(p=p)
+        self.decoder4 = PartialConvUNetUp(features * (16 + 8), features * 8, dropout=dropout)
+        self.decoder3 = PartialConvUNetUp(features * (8 + 4), features * 4, dropout=dropout)
+        self.decoder2 = PartialConvUNetUp(features * (4 + 2), features * 2, dropout=dropout)
+        self.decoder1 = PartialConvUNetUp(features * (2 + 1), features)
 
-        self.encoder4 = UNet._block(features * 4, features * 8, name="enc4")
-        self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.downdrop4 = nn.Dropout(p=p)
+        self.mappers = mappers
 
-        self.bottleneck = UNet._block(features * 8, features * 16, name="bottleneck")
+    def all_parameters(self):
+        parameters = list(self.parameters())
+        for model in self.mappers.values():
+            parameters += list(model.parameters())
+        return parameters
 
-        self.upconv4 = nn.ConvTranspose2d(features * 16, features * 8, kernel_size=2, stride=2)
-        self.updrop4 = nn.Dropout(p=p)
-        self.decoder4 = UNet._block((features * 8) * 2, features * 8, name="dec4")
+    def save_all(self, path):
+        state_dicts = {'unet':self.state_dict()}
+        for key, model in self.mappers.items():
+            state_dicts[key] = model.state_dict()
+        torch.save(state_dicts, path)
+    
+    def forward(self, x, mask):
+        d1, d1_mask = self.encoder1(x, mask)
+        d2, d2_mask = self.encoder2(d1, d1_mask)
+        d3, d3_mask = self.encoder3(d2, d2_mask)
+        d4, d4_mask = self.encoder4(d3, d3_mask)
 
-        self.upconv3 = nn.ConvTranspose2d(features * 8, features * 4, kernel_size=2, stride=2)
-        self.updrop3 = nn.Dropout(p=p)
-        self.decoder3 = UNet._block((features * 4) * 2, features * 4, name="dec3")
+        bottleneck, bottleneck_mask = self.bottleneck(d4, d4_mask)
 
-        self.upconv2 = nn.ConvTranspose2d(features * 4, features * 2, kernel_size=2, stride=2)
-        self.updrop2 = nn.Dropout(p=p)
-        self.decoder2 = UNet._block((features * 2) * 2, features * 2, name="dec2")
+        u4, u4_mask = self.decoder4(bottleneck, d4, bottleneck_mask, d4_mask)
+        u3, u3_mask = self.decoder3(u4, d3, u4_mask, d3_mask)
+        u2, u2_mask = self.decoder2(u3, d2, u3_mask, d2_mask)
+        u1, u1_mask = self.decoder1(u2, d1, u2_mask, d1_mask)
 
-        self.upconv1 = nn.ConvTranspose2d(features * 2, features, kernel_size=2, stride=2)
-        self.updrop1 = nn.Dropout(p=p)
-        self.decoder1 = UNet._block(features * 2, features, name="dec1")
-
-        self.mappers = [mapper(features) for mapper in mappers]
-
-        for i, mapper in enumerate(self.mappers):
-            setattr(self, 'mapper' + str(i), mapper)
-
-    def forward(self, x):
-        enc1 = self.encoder1(x)
-        enc2 = self.encoder2(self.downdrop1(self.pool1(enc1)))
-        enc3 = self.encoder3(self.downdrop2(self.pool2(enc2)))
-        enc4 = self.encoder4(self.downdrop3(self.pool3(enc3)))
-
-        bottleneck = self.bottleneck(self.downdrop4(self.pool4(enc4)))
-
-        dec4 = self.upconv4(bottleneck)
-        dec4 = torch.cat((dec4, enc4), dim=1)
-        dec4 = self.updrop4(dec4)
-        dec4 = self.decoder4(dec4)
-
-        dec3 = self.upconv3(dec4)
-        dec3 = torch.cat((dec3, enc3), dim=1)
-        dec3 = self.updrop3(dec3)
-        dec3 = self.decoder3(dec3)
-
-        dec2 = self.upconv2(dec3)
-        dec2 = torch.cat((dec2, enc2), dim=1)
-        dec2 = self.updrop2(dec2)
-        dec2 = self.decoder2(dec2)
-
-        dec1 = self.upconv1(dec2)
-        dec1 = torch.cat((dec1, enc1), dim=1)
-        dec1 = self.updrop1(dec1)
-        dec1 = self.decoder1(dec1)
-
-        return [mapper(dec1) for mapper in self.mappers]
-
-    def mc_predict(self, images, n):
-
-        mc_outputs = [np.zeros((n,) + (images.shape[0],) + (mapper.out_channels,) + images.shape[2:]) for mapper in
-                      self.mappers]
-
-        for i in range(n):
-            outputs = self.forward(images)
-            for j in range(len(mc_outputs)):
-                mc_outputs[j][i] = outputs[j].cpu().detach().numpy()
-
-        return [(np.mean(mc_output, 0), np.std(mc_output, 0)) for mc_output in mc_outputs]
-
-    @staticmethod
-    def _block(in_channels, features, name):
-        return nn.Sequential(
-            OrderedDict(
-                [
-                    (
-                        name + "conv1",
-                        nn.Conv2d(
-                            in_channels=in_channels,
-                            out_channels=features,
-                            kernel_size=3,
-                            padding=1,
-                            bias=False,
-                        ),
-                    ),
-                    (name + "norm1", nn.BatchNorm2d(num_features=features)),
-                    (name + "relu1", nn.ReLU(inplace=True)),
-                    (
-                        name + "conv2",
-                        nn.Conv2d(
-                            in_channels=features,
-                            out_channels=features,
-                            kernel_size=3,
-                            padding=1,
-                            bias=False,
-                        ),
-                    ),
-                    (name + "norm2", nn.BatchNorm2d(num_features=features)),
-                    (name + "relu2", nn.ReLU(inplace=True)),
-                ]
-            )
-        )
+        return {key: mapper(u1, u1_mask) for key, mapper in self.mappers.items()}, u3_mask

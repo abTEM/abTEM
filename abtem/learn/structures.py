@@ -5,19 +5,16 @@ from scipy.spatial import ConvexHull
 from sklearn.neighbors import NearestNeighbors
 
 from abtem.learn.augment import bandpass_noise
-from abtem.points import LabelledPoints, repeat
+from abtem.points import LabelledPoints
 
 
 def graphene_like(a=2.46, n=1, m=1, labels=None):
-    if labels is None:
-        labels = np.zeros(2, dtype=np.int)
-
     basis = [(0, 0), (2 / 3., 1 / 3.)]
     cell = [[a, 0], [-a / 2., a * 3 ** 0.5 / 2.]]
     positions = np.dot(np.array(basis), np.array(cell))
 
     points = LabelledPoints(positions, cell=cell, labels=labels)
-    points = repeat(points, n, m)
+    points.repeat(n, m)
     return points
 
 
@@ -50,55 +47,39 @@ def make_blob():
     return blob
 
 
-def paint_blob(points, new_label, blob):
+def select_blob(points, blob):
     path = Path(blob)
-    inside = path.contains_points(points.positions)
-    points.labels[inside] = new_label
-    return points
+    return path.contains_points(points.positions)
 
 
-def splash_label(points, label, distance):
-    points = points.copy()
+def random_select_blob(points, size):
+    blob = size * (make_blob() - .5)
+    position = np.random.rand() * points.cell[0] + np.random.rand() * points.cell[1]
+    return select_blob(points, position + blob)
 
-    if (points.labels == label).sum() == 0:
-        return points
 
-    nbrs = NearestNeighbors(n_neighbors=1, algorithm='ball_tree').fit(points.positions[points.labels == label])
+def select_close(points, mask, distance):
+    nbrs = NearestNeighbors(n_neighbors=1, algorithm='ball_tree').fit(points.positions[mask])
 
     distances, indices = nbrs.kneighbors(points.positions)
     distances = distances.ravel()
 
-    indices = np.where(distances < distance)[0]
-    points.labels[indices] = label
-    return points
+    return (distances < distance) * (mask == 0)
 
 
-def random_paint_blob(points, new_label, size):
-    blob = size * (make_blob() - .5)
-    position = np.random.rand() * points.cell[0] + np.random.rand() * points.cell[1]
-    return paint_blob(points, new_label, position + blob)
-
-
-def add_contamination(points, new_label, position, size, mean_spacing):
+def add_contamination(points, label, position, size, mean_spacing):
     blob = position + size * (make_blob() - .5)
 
     path = Path(blob)
     x = np.arange(blob[:, 0].min(), blob[:, 0].max(), mean_spacing)
     y = np.arange(blob[:, 1].min(), blob[:, 1].max(), mean_spacing)
-
-    print(x)
-
     x, y = np.meshgrid(x, y)
     positions = np.array([x.ravel(), y.ravel()]).T
     positions += mean_spacing / 2 * np.random.randn(len(positions), 2)
 
-    #print(positions)
-    # positions = np.array([np.random.uniform(blob[:, 0].min(), blob[:, 0].max(), n),
-    #                       np.random.uniform(blob[:, 1].min(), blob[:, 1].max(), n)]).T
-
     contamination = LabelledPoints(positions, labels=np.full(len(positions), 0, dtype=np.int))
     contamination = contamination[path.contains_points(contamination.positions)]
-    contamination.labels[:] = new_label
+    contamination.labels[:] = label
     points.extend(contamination)
     return points.copy()
 

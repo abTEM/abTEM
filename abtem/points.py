@@ -1,29 +1,7 @@
 import numpy as np
 from scipy.spatial import Voronoi
-
-
-def repeat(points, n, m):
-    N = len(points)
-
-    n0, n1 = 0, n
-    m0, m1 = 0, m
-    new_positions = np.zeros((n * m * len(points), 2), dtype=np.float)
-
-    positions = points.positions.copy()
-    new_positions[:N] = points.positions
-
-    k = N
-    for i in range(n0, n1):
-        for j in range(m0, m1):
-            if i + j != 0:
-                l = k + N
-                new_positions[k:l] = positions + np.dot((i, j), points.cell)
-                k = l
-
-    labels = np.tile(points.labels, (n * m,))
-    cell = points.cell.copy() * (n, m)
-
-    return LabelledPoints(new_positions, cell=cell, labels=labels)
+from typing import Union
+import numbers
 
 
 def inside_cell(points, margin=0):
@@ -102,9 +80,10 @@ def fill_rectangle(points, extent, origin=None, margin=0., eps=1e-12):
         n1 = min(n1, new_n)
         m1 = min(m1, new_m)
 
-    repeated = repeat(points, 1 + n0 - n1, 1 + m0 - m1)
+    repeated = points.repeat(1 + n0 - n1, 1 + m0 - m1)
 
     positions = repeated.positions.copy()
+
     positions = positions + original_cell[0] * n1 + original_cell[1] * m1
 
     inside = ((positions[:, 0] > lower_corner[0] - eps - margin) &
@@ -112,9 +91,17 @@ def fill_rectangle(points, extent, origin=None, margin=0., eps=1e-12):
               (positions[:, 0] < upper_corner[0] + margin) &
               (positions[:, 1] < upper_corner[1] + margin))
     new_positions = positions[inside] - lower_corner
-    new_labels = repeated.labels[inside]
 
-    return LabelledPoints(new_positions, cell=extent, labels=new_labels)
+    arrays = {}
+    for name, array in repeated._arrays.items():
+        if name != 'positions':
+            arrays[name] = array[inside]
+
+    masks = {}
+    for name, mask in repeated._masks.items():
+        masks[name] = mask[inside]
+
+    return LabelledPoints(new_positions, cell=extent, arrays=arrays, masks=masks)
 
 
 def wrap(points, center=(0.5, 0.5), eps=1e-7):
@@ -150,9 +137,11 @@ def rotate(points, angle, center=None, rotate_cell=False):
     return points
 
 
-class LabelledPoints(object):
+class LabelledPoints:
 
-    def __init__(self, positions=None, cell=None, labels=None, dimensions=2):
+    def __init__(self, positions=None, cell=None, labels=None, dimensions=2, arrays=None, masks=None):
+        self._arrays = {}
+        self._masks = {}
 
         if positions is None:
             positions = np.zeros((0, dimensions), dtype=np.float)
@@ -162,35 +151,77 @@ class LabelledPoints(object):
         if (len(positions.shape) != dimensions) | (positions.shape[1] != dimensions):
             raise RuntimeError()
 
-        self._positions = positions
+        self.create_array('positions', positions, dtype=np.float)
+
+        if labels is None:
+            labels = np.zeros(len(positions), dtype=np.int)
+        else:
+            labels = np.array(labels).astype(np.int)
+
+        self.create_array('labels', labels, dtype=np.int)
 
         self._cell = np.zeros((dimensions, dimensions), np.float)
 
         if cell is not None:
             self.cell = cell
 
-        if labels is None:
-            labels = np.zeros(len(positions), dtype=np.int)
+        if arrays is not None:
+            for name, array in arrays.items():
+                self.create_array(name, array)
 
-        labels = np.array(labels, dtype=np.int)
-
-        if (len(labels.shape) != 1) | (labels.shape[0] != positions.shape[0]):
-            raise RuntimeError()
-
-        self._labels = labels
+        if masks is not None:
+            for name, mask in masks.items():
+                self.create_mask(name, mask)
 
     def __len__(self):
         return len(self.positions)
 
+    def create_mask(self, name, mask):
+        if isinstance(mask, (int, bool)):
+            mask = np.full(self.positions.shape[0], mask, dtype=np.bool)
+
+        self._masks[name] = mask
+
+    def set_mask(self, name, mask):
+        if name in self._arrays.keys():
+            self._masks[name][:] = mask
+        else:
+            self.create_mask(name, mask)
+
+    def get_mask(self, name):
+        return self._masks[name].copy()
+
+    def get_masked(self, name):
+        return self[self._masks[name]]
+
+    def create_array(self, name, values, dtype=None):
+        if isinstance(values, (int, float, complex, bool)):
+            values = np.full(self.positions.shape[0], values, dtype=dtype)
+
+        elif dtype is not None:
+            values = np.array(values)
+
+            if values.dtype != dtype:
+                raise RuntimeError()
+
+        self._arrays[name] = values
+
+    def set_array(self, name, values):
+        if name in self._arrays.keys():
+            self._arrays[name][:] = values
+        else:
+            self.create_array(name, values)
+
+    def get_array(self, name):
+        return self._arrays[name]
+
     @property
     def positions(self):
-        return self._positions
+        return self.get_array('positions')
 
     @positions.setter
     def positions(self, positions):
-        positions = np.array(positions, dtype=np.float)
-
-        self._positions[:] = positions
+        self.set_array('positions', positions)
 
     @property
     def scaled_positions(self):
@@ -211,16 +242,64 @@ class LabelledPoints(object):
 
     @property
     def labels(self):
-        return self._labels
+        return self.get_array('labels')
 
     @labels.setter
     def labels(self, labels):
-        labels = np.array(labels, dtype=np.int)
-        self._labels[:] = labels
+        self.set_array('labels', labels)
 
-    def extend(self, points):
-        self._positions = np.vstack((self._positions, points.positions))
-        self._labels = np.hstack((self._labels, points.labels))
+    def extend(self, other):
+        if len(self._arrays) != len(other._arrays):
+            raise RuntimeError()
+
+        for name, values in self._arrays.items():
+            if not name in other._arrays.keys():
+                raise RuntimeError()
+
+            self._arrays[name] = np.concatenate((values, other.get_array(name)))
+
+        for name, mask in self._masks.items():
+            if name in other._masks.keys():
+                other_mask = other.get_mask(name)
+            else:
+                other_mask = np.zeros(len(other), dtype=bool)
+
+            self._masks[name] = np.concatenate((mask, other_mask))
+
+        for name, mask in other._masks.items():
+            if name not in self._masks.keys():
+                self._masks[name] = np.concatenate((np.zeros(len(self), dtype=bool), other.get_mask(name)))
+
+    def repeat(self, n, m):
+        N = len(self)
+
+        n0, n1 = 0, n
+        m0, m1 = 0, m
+        new_positions = np.zeros((n * m * N, 2), dtype=np.float)
+
+        positions = self.positions.copy()
+        new_positions[:N] = self.positions
+
+        k = N
+        for i in range(n0, n1):
+            for j in range(m0, m1):
+                if i + j != 0:
+                    l = k + N
+                    new_positions[k:l] = positions + np.dot((i, j), self.cell)
+                    k = l
+
+        arrays = {}
+        for name, array in self._arrays.items():
+            if name != 'positions':
+                arrays[name] = np.tile(array, (n * m,))
+
+        masks = {}
+        for name, array in self._masks.items():
+            masks[name] = np.tile(array, (n * m,))
+
+        cell = self.cell.copy() * (n, m)
+
+        return LabelledPoints(new_positions, cell=cell, arrays=arrays, masks=masks)
 
     def __add__(self, other):
         new = self.copy()
@@ -228,18 +307,46 @@ class LabelledPoints(object):
         return new
 
     def __getitem__(self, i):
-        return self.__class__(positions=self.positions[i].copy(), labels=self.labels[i].copy(), cell=self.cell.copy())
+        if isinstance(i, numbers.Integral):
+            if i < -len(self) or i >= len(self):
+                raise IndexError('Index out of range.')
+
+            return Point(i, self)
+
+        arrays = {key: values[i] for key, values in self._arrays.items() if not key == 'positions'}
+        masks = {key: values[i] for key, values in self._masks.items()}
+
+        return self.__class__(positions=self.positions[i].copy(), cell=self.cell.copy(), arrays=arrays, masks=masks)
 
     def __delitem__(self, i):
-
         if isinstance(i, list) and len(i) > 0:
             i = np.array(i)
 
         mask = np.ones(len(self), bool)
         mask[i] = False
 
-        self._positions = self._positions[mask]
-        self._labels = self._labels[mask]
+        for key in self._arrays.keys():
+            self._arrays[key] = self._arrays[key][mask]
+
+        for key in self._masks.keys():
+            self._masks[key] = self._masks[key][mask]
 
     def copy(self):
-        return self.__class__(self.positions.copy(), self.cell.copy(), self.labels.copy())
+        arrays = {key: values.copy() for key, values in self._arrays.items() if not key == 'positions'}
+        masks = {key: values.copy() for key, values in self._masks.items()}
+        return self.__class__(self.positions.copy(), self.cell.copy(), self.labels.copy(), arrays=arrays, masks=masks)
+
+
+class Point:
+
+    def __init__(self, index, points):
+        self.index = index
+        self._points = points
+
+    @property
+    def label(self):
+        return self._points.labels[self.index]
+
+    @property
+    def position(self):
+        return self._points.positions[self.index]

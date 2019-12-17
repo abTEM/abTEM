@@ -1,6 +1,6 @@
 import io
 
-import PIL
+import PIL.Image
 import ipywidgets as widgets
 import numpy as np
 import cv2
