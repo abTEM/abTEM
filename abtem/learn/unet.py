@@ -98,12 +98,12 @@ class PartialConv2d(nn.Conv2d):
             return output
 
 
-class PartialConvUNetDown(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=3, normalize=True, dropout=0.0, bias=None):
+class PartialConvUNetEncoder(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=2, normalize=True, dropout=0.0, bias=None):
         super().__init__()
 
         padding = kernel_size // 2
-        self.conv = PartialConv2d(in_channels, out_channels, kernel_size, stride=2, padding=padding, bias=bias)
+        self.conv = PartialConv2d(in_channels, out_channels, kernel_size, stride=stride, padding=padding, bias=bias)
 
         nn.init.kaiming_normal_(self.conv.weight, a=0, mode='fan_in')
 
@@ -129,7 +129,7 @@ class PartialConvUNetDown(nn.Module):
         return x, mask
 
 
-class PartialConvUNetUp(nn.Module):
+class PartialConvUNetDecoder(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, normalize=True, dropout=0.0, bias=None):
         super().__init__()
 
@@ -179,17 +179,17 @@ class UNet(nn.Module):
 
         features = init_features
 
-        self.encoder1 = PartialConvUNetDown(in_channels, features, 3)
-        self.encoder2 = PartialConvUNetDown(features, features * 2, dropout=dropout)
-        self.encoder3 = PartialConvUNetDown(features * 2, features * 4, dropout=dropout)
-        self.encoder4 = PartialConvUNetDown(features * 4, features * 8, dropout=dropout)
+        self.encoder1 = PartialConvUNetEncoder(in_channels, features, 5, stride=1)
+        self.encoder2 = PartialConvUNetEncoder(features, features * 2, dropout=dropout)
+        self.encoder3 = PartialConvUNetEncoder(features * 2, features * 4, dropout=dropout)
+        self.encoder4 = PartialConvUNetEncoder(features * 4, features * 8, dropout=dropout)
 
-        self.bottleneck = PartialConvUNetDown(features * 8, features * 16, dropout=dropout)
+        self.bottleneck = PartialConvUNetEncoder(features * 8, features * 16, dropout=dropout)
 
-        self.decoder4 = PartialConvUNetUp(features * (16 + 8), features * 8, dropout=dropout)
-        self.decoder3 = PartialConvUNetUp(features * (8 + 4), features * 4, dropout=dropout)
-        self.decoder2 = PartialConvUNetUp(features * (4 + 2), features * 2, dropout=dropout)
-        self.decoder1 = PartialConvUNetUp(features * (2 + 1), features)
+        self.decoder4 = PartialConvUNetDecoder(features * (16 + 8), features * 8, dropout=dropout)
+        self.decoder3 = PartialConvUNetDecoder(features * (8 + 4), features * 4, dropout=dropout)
+        self.decoder2 = PartialConvUNetDecoder(features * (4 + 2), features * 2, dropout=dropout)
+        self.decoder1 = PartialConvUNetDecoder(features * (2 + 1), features)
 
         self.mappers = mappers
 
@@ -200,11 +200,17 @@ class UNet(nn.Module):
         return parameters
 
     def save_all(self, path):
-        state_dicts = {'unet':self.state_dict()}
+        state_dicts = {'unet': self.state_dict()}
         for key, model in self.mappers.items():
             state_dicts[key] = model.state_dict()
         torch.save(state_dicts, path)
-    
+
+    def load_all(self, path):
+        checkpoint = torch.load(path)
+        self.load_state_dict(checkpoint['unet'])
+        for key, model in self.mappers.items():
+            model.load_state_dict(checkpoint[key])
+
     def forward(self, x, mask):
         d1, d1_mask = self.encoder1(x, mask)
         d2, d2_mask = self.encoder2(d1, d1_mask)
@@ -218,4 +224,4 @@ class UNet(nn.Module):
         u2, u2_mask = self.decoder2(u3, d2, u3_mask, d2_mask)
         u1, u1_mask = self.decoder1(u2, d1, u2_mask, d1_mask)
 
-        return {key: mapper(u1, u1_mask) for key, mapper in self.mappers.items()}, u3_mask
+        return {key: mapper(u1, u1_mask) for key, mapper in self.mappers.items()}

@@ -41,7 +41,7 @@ class Sometimes(Augmentation):
             return image
 
 
-class FlipAndRotate90(Augmentation):
+class Flip(Augmentation):
 
     def __init__(self):
         super().__init__(apply_to_label=True, channels=None)
@@ -49,7 +49,6 @@ class FlipAndRotate90(Augmentation):
     def randomize(self):
         self._fliplr = np.random.rand() < .5
         self._flipud = np.random.rand() < .5
-        self._rot90 = np.random.rand() < .5
 
     def __call__(self, image):
         if self._fliplr:
@@ -58,8 +57,20 @@ class FlipAndRotate90(Augmentation):
         if self._flipud:
             image = np.flipud(image)
 
+        return image
+
+
+class Rotate90(Augmentation):
+
+    def __init__(self):
+        super().__init__(apply_to_label=True, channels=None)
+
+    def randomize(self):
+        self._rot90 = np.random.randint(0, 3)
+
+    def __call__(self, image):
         if self._rot90:
-            image = np.rot90(image)
+            image = np.rot90(image, k=self._rot90)
 
         return image
 
@@ -242,7 +253,6 @@ class ScanNoise(Augmentation):
         else:
             self._random_fast_scale = np.random.uniform(*self.fast_scale)
         self._noise = None
-
 
     def __call__(self, image):
         if self._random_fast_scale is None:
