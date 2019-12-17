@@ -211,6 +211,12 @@ class UNet(nn.Module):
         for key, model in self.mappers.items():
             model.load_state_dict(checkpoint[key])
 
+    def all_to(self, device):
+        self.to(device)
+
+        for model in self.mappers.values():
+            model.to(device)
+
     def forward(self, x, mask):
         d1, d1_mask = self.encoder1(x, mask)
         d2, d2_mask = self.encoder2(d1, d1_mask)
