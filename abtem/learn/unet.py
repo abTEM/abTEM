@@ -5,26 +5,49 @@ import torch
 import torch.nn as nn
 
 
-class DensityMap(nn.Module):
-
-    def __init__(self, features):
-        super().__init__()
-        self.conv = nn.Conv2d(in_channels=features, out_channels=1, kernel_size=1)
-
-    @property
-    def out_channels(self):
-        return 1
-
-    def forward(self, x):
-        x, _ = self.conv(x)
-        return torch.sigmoid(x)
+def extract_patches(images, patch_size):
+    dims = len(images.shape)
+    patches = images.unfold(dims - 2, patch_size, patch_size).unfold(dims - 1, patch_size, patch_size)
+    return patches
 
 
-class ClassificationMap(nn.Module):
+def patch_means(images, patch_size):
+    if patch_size == 1:
+        return images
 
-    def __init__(self, features, nclasses):
+    return torch.mean(extract_patches(images, patch_size), (-2, -1))
+
+
+def multi_patch_loss(input, target, loss_obj, patch_sizes, weights=None):
+    loss = 0.
+    for patch_size in patch_sizes:
+        if weights:
+            loss += torch.mean(loss_obj(patch_means(input, patch_size), patch_means(target, patch_size)) * weights)
+        else:
+            loss += torch.mean(loss_obj(patch_means(input, patch_size), patch_means(target, patch_size)))
+
+    return loss / len(patch_sizes)
+# class DensityMap(nn.Module):
+# 
+#     def __init__(self, features):
+#         super().__init__()
+#         self.conv = nn.Conv2d(in_channels=features, out_channels=1, kernel_size=1)
+# 
+#     @property
+#     def out_channels(self):
+#         return 1
+# 
+#     def forward(self, x):
+#         x = self.conv(x)
+#         return torch.sigmoid(x)
+
+
+class Head(nn.Module):
+
+    def __init__(self, features, nclasses, activation):
         super().__init__()
         self.conv = nn.Conv2d(in_channels=features, out_channels=nclasses, kernel_size=1)
+        self.activation = activation
         self._nclasses = nclasses
 
     @property
@@ -32,52 +55,52 @@ class ClassificationMap(nn.Module):
         return self._nclasses
 
     def forward(self, x):
-        x, _ = self.conv(x)
-        return nn.Softmax2d()(x)
+        x = self.conv(x)
+        return self.activation(x)
 
 
 class UNet(nn.Module):
 
-    def __init__(self, mappers, in_channels=1, init_features=16, p=.5):
-        super(UNet, self).__init__()
+    def __init__(self, heads, in_channels=1, init_features=16, dropout=.5):
+        super().__init__()
 
         features = init_features
 
         self.encoder1 = UNet._block(in_channels, features, name="enc1")
         self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.downdrop1 = nn.Dropout(p=p)
+        self.downdrop1 = nn.Dropout(p=dropout)
 
         self.encoder2 = UNet._block(features, features * 2, name="enc2")
         self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.downdrop2 = nn.Dropout(p=p)
+        self.downdrop2 = nn.Dropout(p=dropout)
 
         self.encoder3 = UNet._block(features * 2, features * 4, name="enc3")
         self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.downdrop3 = nn.Dropout(p=p)
+        self.downdrop3 = nn.Dropout(p=dropout)
 
         self.encoder4 = UNet._block(features * 4, features * 8, name="enc4")
         self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.downdrop4 = nn.Dropout(p=p)
+        self.downdrop4 = nn.Dropout(p=dropout)
 
         self.bottleneck = UNet._block(features * 8, features * 16, name="bottleneck")
 
         self.upconv4 = nn.ConvTranspose2d(features * 16, features * 8, kernel_size=2, stride=2)
-        self.updrop4 = nn.Dropout(p=p)
+        self.updrop4 = nn.Dropout(p=dropout)
         self.decoder4 = UNet._block((features * 8) * 2, features * 8, name="dec4")
 
         self.upconv3 = nn.ConvTranspose2d(features * 8, features * 4, kernel_size=2, stride=2)
-        self.updrop3 = nn.Dropout(p=p)
+        self.updrop3 = nn.Dropout(p=dropout)
         self.decoder3 = UNet._block((features * 4) * 2, features * 4, name="dec3")
 
         self.upconv2 = nn.ConvTranspose2d(features * 4, features * 2, kernel_size=2, stride=2)
-        self.updrop2 = nn.Dropout(p=p)
+        self.updrop2 = nn.Dropout(p=dropout)
         self.decoder2 = UNet._block((features * 2) * 2, features * 2, name="dec2")
 
         self.upconv1 = nn.ConvTranspose2d(features * 2, features, kernel_size=2, stride=2)
-        self.updrop1 = nn.Dropout(p=p)
+        self.updrop1 = nn.Dropout(p=dropout)
         self.decoder1 = UNet._block(features * 2, features, name="dec1")
 
-        self.mappers = mappers
+        self.heads = heads
 
     def forward(self, x):
         enc1 = self.encoder1(x)
@@ -107,12 +130,12 @@ class UNet(nn.Module):
         dec1 = self.updrop1(dec1)
         dec1 = self.decoder1(dec1)
 
-        return [mapper(dec1) for mapper in self.mappers]
+        return {key: head(dec1) for key, head in self.heads.items()}
 
     def mc_predict(self, images, n):
 
-        mc_outputs = [np.zeros((n,) + (images.shape[0],) + (mapper.out_channels,) + images.shape[2:]) for mapper in
-                      self.mappers]
+        mc_outputs = [np.zeros((n,) + (images.shape[0],) + (head.out_channels,) + images.shape[2:]) for head in
+                      self.heads]
 
         for i in range(n):
             outputs = self.forward(images)
@@ -156,23 +179,23 @@ class UNet(nn.Module):
 
     def all_parameters(self):
         parameters = list(self.parameters())
-        for model in self.mappers.values():
+        for model in self.heads.values():
             parameters += list(model.parameters())
         return parameters
 
     def save_all(self, path):
         state_dicts = {'unet': self.state_dict()}
-        for key, model in self.mappers.items():
+        for key, model in self.heads.items():
             state_dicts[key] = model.state_dict()
         torch.save(state_dicts, path)
 
     def load_all(self, path, map_location=None):
         checkpoint = torch.load(path, map_location=map_location)
         self.load_state_dict(checkpoint['unet'])
-        for key, model in self.mappers.items():
+        for key, model in self.heads.items():
             model.load_state_dict(checkpoint[key])
 
     def all_to(self, device):
         self.to(device)
-        for model in self.mappers.values():
+        for model in self.heads.values():
             model.to(device)

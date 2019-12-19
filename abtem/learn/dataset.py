@@ -2,6 +2,7 @@ import numpy as np
 from skimage.morphology import watershed
 
 from abtem.interpolation import interpolation_kernel_parallel
+from abtem.learn.augment import RandomCropStack
 
 
 def interpolate_radial_functions(array, r, values, positions, sampling, thread_safe=True):
@@ -71,49 +72,33 @@ def labels_to_masks(labels, n_classes):
     return masks.reshape((labels.shape[0], n_classes,) + labels.shape[1:])
 
 
-def safe_assign(assignee, assignment, index):
-    try:
-        assignee[index] = assignment
-    except:
-        assignee = np.zeros((assignee.shape[0],) + assignment.shape)
-        assignee[index] = assignment
-
-    return assignee
-
-
 class DataGenerator:
 
     def __init__(self, images, labels, batch_size=8, augmentations=None):
-        assert len(images.shape) == 4
 
+        self._num_examples = len(images)
         for label in labels:
-            assert len(label) == len(images)
-            assert len(label.shape) == 3
+            assert len(label) == self._num_examples
 
         self._images = images
         self._labels = labels
-
-        self._image_dtype = images.dtype
-        self._label_dtypes = [label.dtype for label in labels]
 
         if augmentations is None:
             augmentations = []
 
         self._augmentations = augmentations
 
-        self._num_iter = len(images) // batch_size
+        self._num_iter = self._num_examples // batch_size
         self._batch_size = batch_size
 
         self._indices = np.arange(self.num_examples)
-        self._i = 0
+        self._global_iteration = 280
+
+        self._crop = RandomCropStack(out_shape=(384, 384))
 
     @property
     def batch_size(self):
         return self._batch_size
-
-    @property
-    def labels_per_example(self):
-        return len(self._labels)
 
     @property
     def num_examples(self):
@@ -123,46 +108,34 @@ class DataGenerator:
         return self
 
     def __next__(self):
-        i = self._i % self.num_examples
+        epoch_iter = (self._global_iteration) % (self.num_examples // self.batch_size)
 
-        if i == 0:
+        if epoch_iter == 0:
             np.random.shuffle(self._indices)
 
-        batch_images = []
-        batch_labels = [[] for _ in range(self.labels_per_example)]
+        self._crop.randomize()
 
-        for j, k in enumerate(self._indices[i * self.batch_size:(i + 1) * self.batch_size]):
-            batch_images.append(self._images[k].copy())
-            for l in range(self.labels_per_example):
-                batch_labels[l].append(self._labels[l][k].copy())
+        batch_indices = self._indices[epoch_iter * self.batch_size:(epoch_iter + 1) * self.batch_size]
 
-            for augmentation in self._augmentations:
-                augmentation.randomize()
+        batch_images = self._crop(self._images[batch_indices].copy())
+        batch_labels = [self._crop(label[batch_indices].copy()) for label in self._labels]
 
-                original = batch_images[j].copy()
+        for augmentation in self._augmentations:
+            augmentation.randomize()
+            for i in range(len(batch_indices)):
+                augmented = augmentation(batch_images[i])
+                batch_images[i, :, :augmented.shape[1], :augmented.shape[2]] = augmented
 
-                if augmentation.channels is None:
-                    channels = range(batch_images[j].shape[0])
-                else:
-                    channels = augmentation.channels
+                if not augmentation.apply_to_label:
+                    continue
 
-                for channel in channels:
-                    augmented = augmentation(original[channel])
-                    batch_images[j] = safe_assign(batch_images[j], augmented, channel)
+                for j in range(len(batch_labels)):
+                    augmented = augmentation(batch_labels[j][i])
+                    batch_labels[j][i, :, :augmented.shape[1], :augmented.shape[2]] = augmented
 
-                if augmentation.apply_to_label:
-                    try:
-                        for l in augmentation.apply_to_label:
-                            batch_labels[l][j] = augmentation(batch_labels[l][j])
-                    except:
-                        for l in range(self.labels_per_example):
-                            batch_labels[l][j] = augmentation(batch_labels[l][j])
+        self._global_iteration += 1
 
-        batch_images = np.array(batch_images).astype(self._image_dtype)
-
-        for j in range(self.labels_per_example):
-            batch_labels[j] = np.array(batch_labels[j]).astype(self._label_dtypes[j])
-
-        i += 1
+        batch_images = batch_images.astype(np.float32)
+        batch_labels = [bl.astype(np.float32) for bl in batch_labels]
 
         return batch_images, batch_labels
