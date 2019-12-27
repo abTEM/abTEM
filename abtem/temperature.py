@@ -1,11 +1,26 @@
+from typing import Mapping, Union
+
 import numpy as np
+from ase import Atoms
 from ase.data import atomic_numbers
 
 
 class TDS:
 
-    def __init__(self, atoms, sigmas, n):
-        self._n = n
+    def __init__(self, atoms: Atoms, sigmas: Mapping[Union[str, int], float]):
+        """
+        Generates atomic configurations for thermal diffuse scattering.
+
+        Randomly displaces the atomic positions in of an ASE Atoms object to simulate thermal vibrations.
+
+        Parameters
+        ----------
+        atoms : ase.Atoms
+            ASE atoms object with the average atomic configuration.
+        sigmas : Mapping[Union[str, int], float]
+            Mapping from atomic species to the variance of the displacements of that atomic species. The atomic species
+            can be specified as atomic number or symbol.
+        """
         new_sigmas = {}
         for key, sigma in sigmas.items():
             try:
@@ -13,31 +28,27 @@ class TDS:
             except KeyError:
                 pass
 
+        unique_atomic_numbers = np.unique(atoms.get_atomic_numbers())
+
+        if len(set(unique_atomic_numbers).intersection(set(self._sigmas.keys()))) != len(unique_atomic_numbers):
+            raise RuntimeError('provide sigma for all atomic species')
+
         self._sigmas = new_sigmas
         self._atoms = atoms
 
-    @property
-    def n(self):
-        return self._n
+    def __iter__(self):
+        return self
 
-    def get_displaced_atoms(self):
+    def __next__(self):
         atoms = self._atoms.copy()
-
-        atomic_numbers = np.unique(atoms.get_atomic_numbers())
-
-        if len(set(atomic_numbers).intersection(set(self._sigmas.keys()))) != len(atomic_numbers):
-            raise RuntimeError('provide sigma for all atomic species')
-
         positions = atoms.get_positions()
 
-        for number in atomic_numbers:
+        for number, sigma in self._sigmas.items():
             indices = np.where(atoms.get_atomic_numbers() == number)[0]
-            positions[indices] += self._sigmas[number] * np.random.randn(len(indices), 3)
+            positions[indices] += sigma * np.random.randn(len(indices), 3)
 
         atoms.set_positions(positions)
         atoms.wrap()
-        return atoms
 
-    def generate(self):
-        for i in range(self._n):
-            yield self.get_displaced_atoms()
+        while True:
+            yield atoms

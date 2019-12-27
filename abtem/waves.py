@@ -28,8 +28,7 @@ class Propagator(Grid, Energy, Cache):
     """
     Propagator object
 
-    The propagator object represents a
-
+    The propagator object represents a Fourier propagator.
 
     Parameters
     ----------
@@ -60,17 +59,17 @@ def multislice(waves, potential, in_place=False, show_progress=False):
     Parameters
     ----------
     waves : waves object
-
+        Waves object to propagate through the potential.
     potential : potential object
         A potential object representing
     in_place : bool
         If true modify the array representing the wave in place, otherwise create a copy.
     show_progress : bool
         If true create a progress bar.
-
     Returns
     -------
-
+    waves : waves object
+        Updated waves object.
     """
 
     if not in_place:
@@ -279,7 +278,7 @@ class ProbeWaves(CTF):
     cutoff : float
         Convergence semi-angle [rad.].
     rolloff : float
-        Softens the cutoff. a value of 0 gives a hard cutoff, while 1 gives the softest possible cutoff.
+        Softens the cutoff. A value of 0 gives a hard cutoff, while 1 gives the softest possible cutoff.
     focal_spread : float
         The focal spread due to, among other factors, chromatic aberrations and lens current instabilities.
     parameters : dict
@@ -297,10 +296,11 @@ class ProbeWaves(CTF):
     energy : float, optional
         Waves energy [eV].
     **kwargs
-        Provide the parameters as keyword arguments.
-    """
+        Provide the aberration coefficients as keyword arguments.
 
-    def __init__(self, cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0., parameters: dict = None,
+    """
+    def __init__(self, cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
+                 angular_spread: float = 0., parameters: dict = None,
                  normalize: bool = False,
                  extent: Union[float, Sequence[float]] = None,
                  gpts: Union[int, Sequence[int]] = None,
@@ -310,8 +310,8 @@ class ProbeWaves(CTF):
 
         self._normalize = normalize
 
-        super().__init__(cutoff=cutoff, rolloff=rolloff, focal_spread=focal_spread, parameters=parameters,
-                         extent=extent, gpts=gpts, sampling=sampling, energy=energy, **kwargs)
+        super().__init__(cutoff=cutoff, rolloff=rolloff, focal_spread=focal_spread, angular_spread=angular_spread,
+                         parameters=parameters, extent=extent, gpts=gpts, sampling=sampling, energy=energy, **kwargs)
 
     @property
     def normalize(self) -> bool:
@@ -402,8 +402,6 @@ class ProbeWaves(CTF):
         elif np.any(potential.gpts != self.gpts):
             raise RuntimeError('inconsistent grid points')
 
-
-
         scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint)
         return do_scan(self, self._get_scan_waves_maker(potential), scan=scan, detectors=detectors, max_batch=max_batch,
                        show_progress=show_progress)
@@ -430,6 +428,19 @@ class ProbeWaves(CTF):
 
 
 def prism_translate(positions, kx, ky):
+    """
+    Create Fourier space translation multiplier.
+
+    Parameters
+    ----------
+    positions : Nx2 numpy array
+    kx :
+    ky :
+
+    Returns
+    -------
+
+    """
     return complex_exponential(2 * np.pi * (kx[None] * positions[:, 0, None] + ky[None] * positions[:, 1, None]))
 
 

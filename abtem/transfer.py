@@ -2,6 +2,7 @@ import numpy as np
 
 from abtem.bases import Energy, Cache, Grid, cached_method, ArrayWithGridAndEnergy, notify
 from abtem.utils import complex_exponential, squared_norm, semiangles
+from typing import Mapping, Union, Sequence
 
 polar_symbols = ('C10', 'C12', 'phi12',
                  'C21', 'phi21', 'C23', 'phi23',
@@ -15,18 +16,63 @@ polar_aliases = {'defocus': 'C10', 'astigmatism': 'C12', 'astigmatism_angle': 'p
                  'C5': 'C50'}
 
 
-def calculate_symmetric_chi(alpha, parameters):
+def calculate_symmetric_chi(alpha: np.ndarray, wavelength: float, parameters: Mapping[str, float]) -> np.ndarray:
+    """
+    Calculates the first three symmetric terms in the phase error expansion.
+
+    See Eq. 2.6 in ref [1].
+
+    Parameters
+    ----------
+    alpha : numpy.ndarray
+        Angle between the scattered electrons and the optical axis.
+    wavelength : float
+        Relativistic wavelength of wavefunction.
+    parameters : Mapping[str, float]
+        Mapping from Cn0 coefficients to its corresponding value.
+    Returns
+    -------
+
+    References
+    ----------
+    .. [1] Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.). Springer.
+
+    """
     alpha2 = alpha ** 2
-    return (1 / 2. * alpha2 * parameters['C10'] +
-            1 / 4. * alpha2 ** 2 * parameters['C30'] +
-            1 / 6. * alpha2 ** 3 * parameters['C50'])
+    return 2 * np.pi / wavelength * (1 / 2. * alpha2 * parameters['C10'] +
+                                     1 / 4. * alpha2 ** 2 * parameters['C30'] +
+                                     1 / 6. * alpha2 ** 3 * parameters['C50'])
 
 
-def calculate_polar_chi(alpha, phi, parameters):
+def calculate_polar_chi(alpha: np.ndarray, phi: np.ndarray, wavelength: float,
+                        parameters: Mapping[str, float]) -> np.ndarray:
+    """
+    Calculates the polar expansion of the phase error up to 5th order.
+
+    See Eq. 2.22 in ref [1].
+
+    Parameters
+    ----------
+    alpha : numpy.ndarray
+        Angle between the scattered electrons and the optical axis.
+    phi : numpy.ndarray
+        Angle around the optical axis of the scattered electrons.
+    wavelength : float
+        Relativistic wavelength of wavefunction.
+    parameters : Mapping[str, float]
+        Mapping from Cnn, phinn coefficients to their corresponding values. See parameter `parameters` in class CTFBase.
+
+    Returns
+    -------
+
+    References
+    ----------
+    .. [1] Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.). Springer.
+
+    """
+    alpha2 = alpha ** 2
+
     array = np.zeros(alpha.shape)
-
-    alpha2 = alpha ** 2
-
     if any([parameters[symbol] != 0. for symbol in ('C10', 'C12', 'phi12')]):
         array += (1 / 2. * alpha2 *
                   (parameters['C10'] +
@@ -56,18 +102,20 @@ def calculate_polar_chi(alpha, phi, parameters):
                    parameters['C54'] * np.cos(4. * (phi - parameters['phi54'])) +
                    parameters['C56'] * np.cos(6. * (phi - parameters['phi56']))))
 
-    return array
+    return 2 * np.pi / wavelength * array
 
 
-def calculate_symmetric_aberrations(alpha, wavelength, parameters):
-    return complex_exponential(-2 * np.pi / wavelength * calculate_symmetric_chi(alpha, parameters))
+def calculate_symmetric_aberrations(alpha: np.ndarray, wavelength: float,
+                                    parameters: Mapping[str, float]) -> np.ndarray:
+    return complex_exponential(-calculate_symmetric_chi(alpha, wavelength, parameters))
 
 
-def calculate_polar_aberrations(alpha, phi, wavelength, parameters):
-    return complex_exponential(-2 * np.pi / wavelength * calculate_polar_chi(alpha, phi, parameters))
+def calculate_polar_aberrations(alpha: np.ndarray, phi: np.ndarray, wavelength: float,
+                                parameters: Mapping[str, float]) -> np.ndarray:
+    return complex_exponential(-calculate_polar_chi(alpha, phi, wavelength, parameters))
 
 
-def calculate_aperture(alpha, cutoff, rolloff):
+def calculate_aperture(alpha: np.ndarray, cutoff: float, rolloff: float) -> np.ndarray:
     if rolloff > 0.:
         rolloff *= cutoff
         array = .5 * (1 + np.cos(np.pi * (alpha - cutoff + rolloff) / rolloff))
@@ -78,14 +126,12 @@ def calculate_aperture(alpha, cutoff, rolloff):
     return array
 
 
-def calculate_temporal_envelope(alpha, wavelength, focal_spread):
-    array = np.exp(- (.5 * np.pi / wavelength * focal_spread * alpha ** 2) ** 2)
-    return array
+def calculate_temporal_envelope(alpha: np.ndarray, wavelength: float, focal_spread: float) -> np.ndarray:
+    return np.exp(- (.5 * np.pi / wavelength * focal_spread * alpha ** 2) ** 2)
 
 
-def calculate_blur(alpha, wavelength, focal_spread):
-    array = np.exp(- (.5 * np.pi / wavelength * focal_spread * alpha ** 2) ** 2)
-    return array
+def calculate_gaussian_blur_envelope(alpha: np.ndarray, wavelength: float, focal_spread: float) -> np.ndarray:
+    return np.exp(- (.5 * np.pi / wavelength * focal_spread * alpha ** 2) ** 2)
 
 
 def calculate_spatial_envelope(alpha, phi, wavelength, angular_spread, parameters):
@@ -101,6 +147,7 @@ def calculate_spatial_envelope(alpha, phi, wavelength, angular_spread, parameter
             (parameters['C56'] * np.cos(6. * (phi - parameters['phi56'])) +
              parameters['C54'] * np.cos(4. * (phi - parameters['phi54'])) +
              parameters['C52'] * np.cos(2. * (phi - parameters['phi52'])) + parameters['C50']) * alpha ** 5)
+
     dchi_dphi = -2 * np.pi / wavelength * (
             1 / 2. * (2. * parameters['C12'] * np.sin(2. * (phi - parameters['phi12']))) * alpha +
             1 / 3. * (3. * parameters['C23'] * np.sin(3. * (phi - parameters['phi23'])) +
@@ -117,7 +164,7 @@ def calculate_spatial_envelope(alpha, phi, wavelength, angular_spread, parameter
     return np.exp(-np.sign(angular_spread) * (angular_spread / 2) ** 2 * (dchi_dk ** 2 + dchi_dphi ** 2))
 
 
-def parametrization_property(key):
+def _parametrization_property(key):
     def getter(self):
         return self._parameters[key]
 
@@ -131,8 +178,8 @@ def parametrization_property(key):
 
 class CTFBase(Energy):
 
-    def __init__(self, cutoff=np.inf, rolloff=0., focal_spread=0., angular_spread=0., energy=None, parameters=None,
-                 **kwargs):
+    def __init__(self, cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
+                 angular_spread: float = 0., energy: float = None, parameters: Mapping[str, float] = None, **kwargs):
 
         self._cutoff = cutoff
         self._rolloff = rolloff
@@ -148,12 +195,12 @@ class CTFBase(Energy):
         self.set_parameters(parameters)
 
         for symbol in polar_symbols:
-            setattr(self.__class__, symbol, parametrization_property(symbol))
+            setattr(self.__class__, symbol, _parametrization_property(symbol))
             kwargs.pop(symbol, None)
 
         for key, value in polar_aliases.items():
             if key != 'defocus':
-                setattr(self.__class__, key, parametrization_property(value))
+                setattr(self.__class__, key, _parametrization_property(value))
             kwargs.pop(key, None)
 
         super().__init__(energy=energy, **kwargs)
@@ -256,8 +303,6 @@ class CTFBase(Energy):
 
         return array[None]
 
-    # def preview(self, ax=None, phi=0, max_k=.1, n=1000):
-
     # def copy(self):
     #     parameters = self._parameters
     #
@@ -266,10 +311,46 @@ class CTFBase(Energy):
 
 class CTF(Grid, Cache, CTFBase):
 
-    def __init__(self, cutoff=np.inf, rolloff=0., focal_spread=0., extent=None, gpts=None, sampling=None, energy=None,
-                 parameters=None, **kwargs):
-        super().__init__(cutoff=cutoff, rolloff=rolloff, focal_spread=focal_spread, extent=extent, gpts=gpts,
-                         sampling=sampling, energy=energy, parameters=parameters, **kwargs)
+    def __init__(self, cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
+                 angular_spread: float = 0., parameters: Mapping[str, float] = None,
+                 extent: Union[float, Sequence[float]] = None,
+                 gpts: Union[int, Sequence[int]] = None,
+                 sampling: Union[float, Sequence[float]] = None,
+                 energy: float = None,
+                 **kwargs):
+        """
+        Contrast Transfer Function object.
+
+        Parameters
+        ----------
+        cutoff : float
+            Default is infinite.
+        rolloff : float
+            Softens the cutoff. A value of 0 gives a hard cutoff, while 1 gives the softest possible cutoff.
+        focal_spread : float
+            Default is 0.
+        angular_spread :
+            Default is 0.
+        parameters :
+            `C10`, `C12`, `phi12`,
+            `C21`, `phi21`, `C23`, `phi23`,
+            `C30`, `C32`, `phi32`, `C34`, `phi34`,
+            `C41`, `phi41`, `C43`, `phi43`, `C45`, `phi45`,
+            `C50`, `C52`, `phi52`, `C54`, `phi54`, `C56`, `phi56`
+        extent : sequence of float, float, optional
+            Lateral extent of wavefunctions [Å].
+        gpts : sequence of int, int, optional
+            Number of grid points describing the wavefunctions
+        sampling : sequence of float, float, optional
+            Lateral sampling of wavefunctions [1 / Å].
+        energy : float, optional
+            Waves energy [eV].
+        kwargs :
+            Provide the aberration coefficients as keyword arguments.
+        """
+
+        super().__init__(cutoff=cutoff, rolloff=rolloff, focal_spread=focal_spread, angular_spread=angular_spread,
+                         extent=extent, gpts=gpts, sampling=sampling, energy=energy, parameters=parameters, **kwargs)
         self.register_observer(self)
 
     @cached_method(('extent', 'gpts', 'sampling', 'energy'))

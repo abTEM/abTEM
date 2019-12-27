@@ -6,6 +6,18 @@ from abtem.utils import convert_complex, energy2wavelength, energy2sigma, linspa
 
 
 def notify(func):
+    """
+    Decorator for class methods that have to notify.
+
+    Parameters
+    ----------
+    func : function
+        notifying function
+
+    Returns
+    -------
+
+    """
     name = func.__name__
 
     def wrapper(*args):
@@ -147,6 +159,21 @@ def cached_method_with_args(clear_conditions=None):
 class GridProperty:
 
     def __init__(self, value, dtype, dimensions=2):
+
+        """
+        A property describing a grid
+
+
+        Parameters
+        ----------
+        value : sequence of float, sequence of int, float, int, optional
+
+        dtype : datatype object
+            the datatype of the ndarray representing the grid type
+        dimensions : int
+            number of dimensions
+        """
+
         self._dtype = dtype
         self._dimensions = dimensions
         self._value = self._validate(value)
@@ -189,10 +216,6 @@ class GridProperty:
         return self.__class__(value=self._value, dtype=self._dtype, dimensions=self._dimensions)
 
 
-def fourier_extent(extent, n):
-    return np.array([-n[0] / extent[0], n[1] / extent[1]]) / 2.
-
-
 class Grid(Observable):
 
     def __init__(self,
@@ -201,6 +224,27 @@ class Grid(Observable):
                  sampling: Union[float, Sequence[float], Sequence[int], GridProperty] = None,
                  dimensions: int = 2, endpoint: bool = False,
                  **kwargs):
+
+        """
+        Grid object.
+
+        The grid object represent the simulation grid on which the wave function and potential is discretized.
+
+        Parameters
+        ----------
+        extent : sequence of float, float, optional
+            Grid extent in each dimension [Å]
+        gpts : sequence of int, int, optional
+            Number of grid points in each dimension
+        sampling : sequence of float, float, optional
+            Grid sampling in each dimension [1 / Å]
+        dimensions : int
+            Number of dimensions represented by the grid.
+        endpoint : bool, optional
+            If true include the grid endpoint (the dafault is False). For periodic grids the endpoint should not be
+            included.
+        kwargs :
+        """
 
         self._dimensions = dimensions
         self._endpoint = endpoint
@@ -368,15 +412,26 @@ class Grid(Observable):
 
 
 class Energy(Observable):
+    """
+    Energy base class
+
+    Base class for describing the energy of wavefunctions and transfer functions.
+
+    :param energy: energy
+    :type energy: optional, float
+    """
 
     def __init__(self, energy: Optional[float] = None, **kwargs):
         """
-        Energy base class
+        Energy base class.
 
-        Base class for describing the energy of wavefunctions and transfer functions.
+        The Energy object is used to represent the acceleration energy of an inheriting waves object.
 
-        :param energy: energy
-        :type energy: optional, float
+        Parameters
+        ----------
+        energy : float
+            Acceleration energy [eV]
+        kwargs :
         """
         self._energy = energy
 
@@ -428,6 +483,7 @@ class Energy(Observable):
 
 
 class ArrayWithGrid(Grid):
+    
     def __init__(self, array, spatial_dimensions, extent=None, sampling=None, **kwargs):
         array_dimensions = len(array.shape)
 

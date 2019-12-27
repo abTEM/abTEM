@@ -268,8 +268,6 @@ class Potential(PotentialBase, Cache):
         return tanh_sinh_quadrature(m, h)
 
     def _evaluate_interpolation(self, i):
-        #print(self.cache,'sss')
-
         v = self._allocate()
         v[:, :] = 0.
 
@@ -326,6 +324,18 @@ class PrecalculatedPotential(ArrayWithGrid):
 
     def __init__(self, array: np.ndarray, slice_thicknesses: Union[float, Sequence], extent: np.ndarray = None,
                  sampling: np.ndarray = None):
+
+        """
+        Precalculated potential object. This object
+
+
+        Parameters
+        ----------
+        array :
+        slice_thicknesses :
+        extent :
+        sampling :
+        """
 
         slice_thicknesses = np.array(slice_thicknesses)
 
