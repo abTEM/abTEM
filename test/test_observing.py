@@ -1,6 +1,6 @@
 import mock
 
-from ..bases import Observable, Observer
+from abtem.bases import Observable, Observer
 
 
 def test_register_observer():

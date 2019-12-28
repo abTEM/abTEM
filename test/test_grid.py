@@ -2,8 +2,8 @@ import mock
 import numpy as np
 import pytest
 
-from ..bases import Grid, Observable, GridProperty
-from ..utils import fftfreq
+from abtem.bases import Grid, Observable, GridProperty
+from abtem.utils import fftfreq
 
 def test_create_grid():
     grid = Grid(extent=5, sampling=.2)

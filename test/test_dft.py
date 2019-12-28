@@ -8,7 +8,7 @@ import pytest
 
 @pytest.mark.gpaw
 def test_dft():
-    atoms = read('../../data/graphene.traj')
+    atoms = read('../data/graphene.traj')
 
     calc = GPAW(mode=PW(400), h=.1, txt=None, kpts=(4, 2, 2))
     atoms.set_calculator(calc)

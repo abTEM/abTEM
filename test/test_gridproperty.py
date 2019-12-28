@@ -1,5 +1,5 @@
 import numpy as np
-from ..bases import GridProperty
+from abtem.bases import GridProperty
 import pytest
 
 

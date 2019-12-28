@@ -2,8 +2,8 @@ from itertools import combinations
 
 import numpy as np
 
-from ..parametrizations import lobato, kirkland, load_kirkland_parameters, load_lobato_parameters
-from ..potentials import kappa
+from abtem.parametrizations import lobato, kirkland, load_kirkland_parameters, load_lobato_parameters
+from abtem.potentials import kappa
 
 kirkland_parameters = load_kirkland_parameters()
 lobato_parameters = load_lobato_parameters()

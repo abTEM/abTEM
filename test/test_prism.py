@@ -2,9 +2,9 @@ import mock
 import numpy as np
 import pytest
 
-from ..bases import Grid
-from ..detect import DetectorBase
-from ..waves import ProbeWaves, PrismWaves
+from abtem.bases import Grid
+from abtem.detect import DetectorBase
+from abtem.waves import ProbeWaves, PrismWaves
 
 
 @pytest.fixture

@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from ..waves import Propagator
+from abtem.waves import Propagator
 
 
 @pytest.fixture

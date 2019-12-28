@@ -26,9 +26,9 @@ def get_fft_plans(shape, threads=16):
 
 class Propagator(Grid, Energy, Cache):
     """
-    Propagator object
+    Propagator object.
 
-    The propagator object represents a Fourier propagator.
+    The propagator object represents a 2d Fresnel propagator in Fourier space.
 
     Parameters
     ----------
@@ -299,6 +299,7 @@ class ProbeWaves(CTF):
         Provide the aberration coefficients as keyword arguments.
 
     """
+
     def __init__(self, cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
                  angular_spread: float = 0., parameters: dict = None,
                  normalize: bool = False,

@@ -2,10 +2,10 @@ import mock
 import numpy as np
 import pytest
 
-from ..bases import energy2wavelength
-from ..transfer import calculate_polar_aberrations, calculate_aperture, CTFBase
-from ..transfer import calculate_polar_chi, calculate_symmetric_chi, polar_symbols
-from ..transfer import calculate_temporal_envelope, CTF, polar_aliases
+from abtem.bases import energy2wavelength
+from abtem.transfer import calculate_polar_aberrations, calculate_aperture, CTFBase
+from abtem.transfer import calculate_polar_chi, calculate_symmetric_chi, polar_symbols
+from abtem.transfer import calculate_temporal_envelope, CTF, polar_aliases
 
 energy = 300e3
 gpts = 64

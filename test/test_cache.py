@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from ..bases import Cache, Observable, cached_method, cached_method_with_args
+from abtem.bases import Cache, Observable, cached_method, cached_method_with_args
 
 
 def test_cache():

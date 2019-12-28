@@ -1,8 +1,8 @@
 import pytest
 import numpy as np
-from ..waves import Waves, PlaneWaves, ProbeWaves
-from ..bases import Grid
-from ..detect import DetectorBase
+from abtem.waves import Waves, PlaneWaves, ProbeWaves
+from abtem.bases import Grid
+from abtem.detect import DetectorBase
 import mock
 
 

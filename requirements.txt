@@ -1,9 +1,8 @@
 numpy
-h5py
-pyfftw
 numba
-numexpr
-bqplot
+pytest
 scipy
-pillow
+pyfftw
+h5py
+numexpr
 matplotlib

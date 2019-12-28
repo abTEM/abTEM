@@ -328,6 +328,9 @@ class CTF(Grid, Cache, CTFBase):
         rolloff : float
             Softens the cutoff. A value of 0 gives a hard cutoff, while 1 gives the softest possible cutoff.
         focal_spread : float
+            The spread
+
+            due to, among other factors, chromatic aberrations and lens current instabilities [rad.].
             Default is 0.
         angular_spread :
             Default is 0.

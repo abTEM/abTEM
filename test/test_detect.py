@@ -1,6 +1,6 @@
 import numpy as np
 
-from ..detect import RingDetector, FourierSpaceDetector
+from abtem.detect import RingDetector, FourierSpaceDetector
 
 
 def test_ring_detector():

@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from ..bases import ArrayWithGrid, ArrayWithGridAndEnergy
+from abtem.bases import ArrayWithGrid, ArrayWithGridAndEnergy
 
 
 def test_array_with_grid():

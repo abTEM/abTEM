@@ -2,7 +2,7 @@ import mock
 import numpy as np
 import pytest
 
-from ..scan import ScanBase, CustomScan, LineScan, GridScan, assemble_partitions_2d
+from abtem.scan import ScanBase, CustomScan, LineScan, GridScan, assemble_partitions_2d
 
 
 def test_scan_base():

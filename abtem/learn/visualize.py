@@ -1,9 +1,8 @@
 import io
 
 import PIL.Image
-import ipywidgets as widgets
-import numpy as np
 import cv2
+import ipywidgets as widgets
 import numpy as np
 
 
