@@ -21,7 +21,7 @@ def load_parameters(filename):
 def load_lobato_parameters():
     parameters = {}
 
-    for key, value in load_parameters('data/lobato.txt').items():
+    for key, value in load_parameters('../data/lobato.txt').items():
         a = np.array([value[key] for key in ('a1', 'a2', 'a3', 'a4', 'a5')])
         b = np.array([value[key] for key in ('b1', 'b2', 'b3', 'b4', 'b5')])
         a = np.pi ** 2 * a / b ** (3 / 2.)
@@ -63,7 +63,7 @@ def dvdr_lobato(r, p):
 def load_kirkland_parameters():
     parameters = {}
 
-    for key, value in load_parameters('data/kirkland.txt').items():
+    for key, value in load_parameters('../data/kirkland.txt').items():
         a = np.array([value[key] for key in ('a1', 'a2', 'a3')])
         b = np.array([value[key] for key in ('b1', 'b2', 'b3')])
         c = np.array([value[key] for key in ('c1', 'c2', 'c3')])

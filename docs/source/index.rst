@@ -3,23 +3,28 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-abinitEM: ab initio Transmission Electron Microscopy
+abiniTEM: ab initio Transmission Electron Microscopy
 ====================================================
 
-This is the docs of abinitEM
+abiniTEM provides a Python API for running simulations of Transmission Electron Microscopy images.
+
+>>> from ase import read
+>>> from abiniTEM.waves import PlaneWaves
+>>> atoms = read('SrTiO.cif')
+>>> waves = PlaneWaves(sampling=0.1, energy=300e3)
+>>> waves.multislice(atoms)
+>>> waves.apply_ctf(defocus=200, focal_spread=40)
+>>> waves.display_image(repeat=(5, 5))
+
+abiniTEM works with the Atomic Simulation Environment and the density functional theory code GPAW
+
 
 .. toctree::
    :maxdepth: 1
    :caption: Contents:
 
    install
-   tutorials/introduction.rst
+   tutorials/introduction
+   modules/api
    cite
-
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
+   ../../examples/test

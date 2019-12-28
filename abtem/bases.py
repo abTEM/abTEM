@@ -219,9 +219,9 @@ class GridProperty:
 class Grid(Observable):
 
     def __init__(self,
-                 extent: Union[float, Sequence[float], Sequence[int], GridProperty] = None,
+                 extent: Union[float, Sequence[float], GridProperty] = None,
                  gpts: Union[int, Sequence[int], GridProperty] = None,
-                 sampling: Union[float, Sequence[float], Sequence[int], GridProperty] = None,
+                 sampling: Union[float, Sequence[float], GridProperty] = None,
                  dimensions: int = 2, endpoint: bool = False,
                  **kwargs):
 

@@ -16,7 +16,7 @@ from abtem.transfer import CTF, CTFBase
 from abtem.utils import complex_exponential, fftfreq, BatchGenerator
 
 
-def get_fft_plans(shape, threads=16):
+def get_fft_plans(shape, threads=12):
     temp_1 = fftw.empty_aligned(shape, dtype='complex128')
     temp_2 = fftw.empty_aligned(shape, dtype='complex128')
     fft_object_forward = fftw.FFTW(temp_1, temp_2, axes=(1, 2), threads=threads)
@@ -51,7 +51,7 @@ class Propagator(Grid, Energy, Cache):
         return complex_exponential(-k * np.pi * self.wavelength * dz)[None]
 
 
-def multislice(waves, potential, in_place=False, show_progress=False):
+def multislice(waves, potential: Potential, in_place: bool = False, show_progress: bool = False):
     """
     The multislice algorithm
 
@@ -83,9 +83,12 @@ def multislice(waves, potential, in_place=False, show_progress=False):
     propagator = Propagator(extent=potential.extent, gpts=potential.gpts, energy=waves.energy)
 
     for i in tqdm(range(potential.num_slices), disable=not show_progress):
-        temp_1[:] = waves.array * complex_exponential(waves.sigma * potential.get_slice(i))
-        temp_2[:] = fft_object_forward() * propagator.build(potential.slice_thickness(i))
-        waves.array[:] = fft_object_backward()
+        #temp_1[:] = \
+        waves.array * complex_exponential(waves.sigma * potential.get_slice(i))
+        #temp_2[:] = \
+        fft_object_forward() * propagator.build(potential.slice_thickness(i))
+        #waves.array[:] = fft_object_backward()
+        fft_object_backward()
 
     return waves
 
@@ -94,27 +97,49 @@ class Waves(ArrayWithGridAndEnergy):
     """
     Waves object.
 
-    The waves object can define a stack of arbitrary 2d wavefunctions defined by a complex array.
+    The waves object can define a stack of n arbitrary 2d wavefunctions of shape (w, h) defined by a (n, w, h) complex
+    numpy array.
 
     Parameters
     ----------
     array : complex ndarray of shape (n, gpts_x, gpts_y)
-        the complex wavefunctions
+        Stack of n complex wavefunctions
     extent : sequence of float, float, optional
-        lateral extent of wavefunctions [Å]
+        Lateral extent of wavefunctions [Å]
     sampling : sequence of float, float, optional
-        lateral sampling of wavefunctions [1 / Å]
+        Lateral sampling of wavefunctions [1 / Å]
     energy : float, optional
-        waves energy [eV]
+        Wave function energy [eV]
     """
 
-    def __init__(self, array, extent=None, sampling=None, energy=None):
+    def __init__(self, array: np.ndarray, extent: Union[float, Sequence[float]] = None,
+                 sampling: Union[float, Sequence[float]] = None, energy: float = None):
+
         array = np.array(array, dtype=np.complex)
+
         if len(array.shape) == 2:
             array = array[None]
+
         super().__init__(array=array, spatial_dimensions=2, extent=extent, sampling=sampling, energy=energy)
 
     def apply_ctf(self, ctf=None, in_place=False, **kwargs):
+        """
+
+
+        Parameters
+        ----------
+        ctf : CTF object
+            Contrast Transfer Function object to be applied
+        in_place : bool
+
+        kwargs :
+
+        Returns
+        -------
+        Waves
+            The wavefunctions with aberrations applied.
+        """
+
         if not in_place:
             waves = self.copy()
         else:
@@ -152,10 +177,40 @@ class Waves(ArrayWithGridAndEnergy):
             Propagator(extent=self.extent, gpts=self.gpts, energy=self.energy).build(dz) * np.fft.fft2(new.array))
         return new
 
-    def multislice(self, potential, in_place=False, show_progress=True):
+    def multislice(self, potential, in_place: bool = False, show_progress: bool = True):
+        """
+
+        Parameters
+        ----------
+        potential : Potential object or Atoms object
+        in_place : bool
+            Modify the wavefunction arrays in place.
+        show_progress : bool
+            If true create a progress bar.
+
+        Returns
+        -------
+        Waves
+            Wavefunctions after multislice propagation through the potential.
+
+        """
+
         return multislice(self, potential, in_place=in_place, show_progress=show_progress)
 
-    def copy(self, copy_array=True):
+    def copy(self, copy_array=True) -> 'Waves':
+        """
+
+        Parameters
+        ----------
+        copy_array : bool
+            If true copy the underlying numpy array.
+
+        Returns
+        -------
+        Waves
+            A copy of itself.
+        """
+
         try:
             extent = self.extent.copy()
         except AttributeError:
@@ -222,8 +277,8 @@ class PlaneWaves(Grid, Energy, Cache):
         return self.__class__(num_waves=self.num_waves, extent=self.extent.copy(), energy=self.energy)
 
 
-def do_scan(probe, scan_waves_maker: callable, scan: ScanBase, detectors: Union[Sequence[DetectorBase], DetectorBase],
-            max_batch: int, show_progress: bool = True):
+def _do_scan(probe, scan_waves_maker: callable, scan: ScanBase, detectors: Union[Sequence[DetectorBase], DetectorBase],
+             max_batch: int, show_progress: bool = True):
     if not isinstance(detectors, Sequence):
         detectors = [detectors]
 
@@ -236,34 +291,20 @@ def do_scan(probe, scan_waves_maker: callable, scan: ScanBase, detectors: Union[
     for start, stop, positions in tqdm(scan.generate_positions(max_batch),
                                        total=int(np.ceil(np.prod(scan.gpts) / max_batch)),
                                        disable=not show_progress):
-
         waves = scan_waves_maker(probe, positions)
 
-        for detector in detectors:
-            if detector.export is not None:
-                with h5py.File(detector.export, 'a') as f:
-                    f['data'][start:start + stop] = detector.detect(waves)
-
-            else:
-                scan.measurements[detector][start:start + stop] = detector.detect(waves)
+        # for detector in detectors:
+        #     if detector.export is not None:
+        #         with h5py.File(detector.export, 'a') as f:
+        #             f['data'][start:start + stop] = detector.detect(waves)
+        #
+        #     else:
+        #         scan.measurements[detector][start:start + stop] = detector.detect(waves)
 
     for detector in detectors:
         scan.finalize_measurements(detector)
 
     return scan
-
-
-def translate(positions, kx, ky):
-    kx = kx.reshape((1, -1, 1))
-    ky = ky.reshape((1, 1, -1))
-    x = positions[:, 0].reshape((-1,) + (1, 1))
-    y = positions[:, 1].reshape((-1,) + (1, 1))
-    return complex_exponential(2 * np.pi * (kx * x + ky * y))
-
-
-def normalize_in_place(array):
-    array[:] = array / np.sum(np.abs(array) ** 2, axis=(1, 2)) * np.prod(array.shape[1:])[None]
-    return array
 
 
 class ProbeWaves(CTF):
@@ -333,21 +374,30 @@ class ProbeWaves(CTF):
     def probe_shape(self):
         return self.gpts
 
+    def _translation_multiplier(self, positions):
+        kx, ky = fftfreq(self)
+
+        kx = kx.reshape((1, -1, 1))
+        ky = ky.reshape((1, 1, -1))
+        x = positions[:, 0].reshape((-1,) + (1, 1))
+        y = positions[:, 1].reshape((-1,) + (1, 1))
+        return complex_exponential(2 * np.pi * (kx * x + ky * y))
+
     def build_at(self, positions: Sequence[Sequence[float]]) -> Waves:
         positions = np.array(positions)
 
         if len(positions.shape) == 1:
             positions = np.expand_dims(positions, axis=0)
 
-        kx, ky = fftfreq(self)
-
         temp_1 = fftw.empty_aligned((len(positions), self.gpts[0], self.gpts[1]), dtype='complex128')
         temp_2 = fftw.empty_aligned((len(positions), self.gpts[0], self.gpts[1]), dtype='complex128')
 
-        fft_object = fftw.FFTW(temp_1, temp_2, axes=(1, 2))
+        fft_object = fftw.FFTW(temp_1, temp_2, axes=(1, 2), threads=12)
 
-        temp_1[:] = super().get_array() * translate(positions, kx, ky)
+        temp_1[:] = super().get_array() * self._translation_multiplier(positions)
         fft_object()
+
+        #temp_2 = np.fft.fft2(super().get_array() * self._translation_multiplier(positions))
 
         return Waves(temp_2, extent=self.extent, energy=self.energy)
 
@@ -361,7 +411,7 @@ class ProbeWaves(CTF):
         array = np.fft.fftshift(np.fft.fft2(super().get_array()))
 
         if self.normalize:
-            normalize_in_place(array)
+            array[:] = array / np.sum(np.abs(array) ** 2, axis=(1, 2)) * np.prod(array.shape[1:])[None]
 
         return Waves(array, extent=self.extent, energy=self.energy)
 
@@ -380,8 +430,8 @@ class ProbeWaves(CTF):
                     show_progress: bool = True):
 
         scan = CustomScan(positions=positions)
-        return do_scan(self, self._get_scan_waves_maker(potential), scan=scan, detectors=detectors, max_batch=1,
-                       show_progress=show_progress)
+        return _do_scan(self, self._get_scan_waves_maker(potential), scan=scan, detectors=detectors, max_batch=1,
+                        show_progress=show_progress)
 
     def line_scan(self, potential: Union[Atoms, PotentialBase],
                   detectors: Union[Sequence[DetectorBase], DetectorBase],
@@ -404,8 +454,9 @@ class ProbeWaves(CTF):
             raise RuntimeError('inconsistent grid points')
 
         scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint)
-        return do_scan(self, self._get_scan_waves_maker(potential), scan=scan, detectors=detectors, max_batch=max_batch,
-                       show_progress=show_progress)
+        return _do_scan(self, self._get_scan_waves_maker(potential), scan=scan, detectors=detectors,
+                        max_batch=max_batch,
+                        show_progress=show_progress)
 
     def grid_scan(self, potential: Union[Atoms, PotentialBase],
                   detectors: Union[Sequence[DetectorBase], DetectorBase],
@@ -416,6 +467,15 @@ class ProbeWaves(CTF):
         if isinstance(potential, Atoms):
             potential = Potential(potential)
 
+        if self.extent is None:
+            self.extent = potential.extent
+
+        if self.gpts is None:
+            self.gpts = potential.gpts
+
+        if potential.gpts is None:
+            potential.gpts = self.gpts
+
         if start is None:
             start = potential.origin
 
@@ -424,11 +484,11 @@ class ProbeWaves(CTF):
 
         scan = GridScan(start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint)
 
-        return do_scan(self, self._get_scan_waves_maker(potential), scan=scan, detectors=detectors, max_batch=max_batch,
-                       show_progress=show_progress)
+        return _do_scan(self, self._get_scan_waves_maker(potential), scan=scan, detectors=detectors,
+                        max_batch=max_batch, show_progress=show_progress)
 
 
-def prism_translate(positions, kx, ky):
+def _prism_translate(positions, kx, ky):
     """
     Create Fourier space translation multiplier.
 
@@ -470,7 +530,9 @@ class ScatteringMatrix(ArrayWithGrid, CTFBase, Cache):
     always_recenter :
     """
 
-    def __init__(self, array, interpolation, cutoff, kx, ky, extent=None, sampling=None, energy=None,
+    def __init__(self, array: np.ndarray, interpolation: int, cutoff: float, kx: np.ndarray, ky: np.ndarray,
+                 extent=None,
+                 sampling=None, energy=None,
                  always_recenter: bool = False):
 
         self._interpolation = interpolation
@@ -503,7 +565,7 @@ class ScatteringMatrix(ArrayWithGrid, CTFBase, Cache):
         return np.array((self.gpts[0] // self.interpolation, self.gpts[1] // self.interpolation))
 
     def build_at(self, positions: Sequence[Sequence[float]]) -> Waves:
-        coefficients = super().get_array()[0] * prism_translate(positions, self.kx, self.ky)
+        coefficients = super().get_array()[0] * _prism_translate(positions, self.kx, self.ky)
 
         if (self.interpolation > 1) | self.always_recenter:
             window_shape = (len(positions), self.gpts[0] // self.interpolation, self.gpts[1] // self.interpolation)
@@ -545,16 +607,16 @@ class ScatteringMatrix(ArrayWithGrid, CTFBase, Cache):
 
         scan = CustomScan(positions=positions)
 
-        return do_scan(self, self._get_scan_waves_maker(), scan=scan, detectors=detectors, max_batch=1,
-                       show_progress=show_progress)
+        return _do_scan(self, self._get_scan_waves_maker(), scan=scan, detectors=detectors, max_batch=1,
+                        show_progress=show_progress)
 
     def line_scan(self, detectors: Union[Sequence[DetectorBase], DetectorBase],
                   start: Sequence[float], end: Sequence[float], gpts: int = None, sampling: float = None,
                   endpoint: bool = True, max_batch: int = 1, show_progress: bool = True):
 
         scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint)
-        return do_scan(self, self._get_scan_waves_maker(), scan=scan, detectors=detectors, max_batch=max_batch,
-                       show_progress=show_progress)
+        return _do_scan(self, self._get_scan_waves_maker(), scan=scan, detectors=detectors, max_batch=max_batch,
+                        show_progress=show_progress)
 
     def grid_scan(self, detectors: Union[Sequence[DetectorBase], DetectorBase],
                   start: Sequence[float], end: Sequence[float], gpts: Union[int, Sequence[int]] = None,
@@ -569,8 +631,8 @@ class ScatteringMatrix(ArrayWithGrid, CTFBase, Cache):
 
         scan = GridScan(start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint)
 
-        return do_scan(self, self._get_scan_waves_maker(), scan=scan, detectors=detectors, max_batch=max_batch,
-                       show_progress=show_progress)
+        return _do_scan(self, self._get_scan_waves_maker(), scan=scan, detectors=detectors, max_batch=max_batch,
+                        show_progress=show_progress)
 
 
 class PrismWaves(Grid, Energy, Cache):

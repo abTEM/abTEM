@@ -19,7 +19,7 @@ eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 kappa = 4 * np.pi * eps0 / (2 * np.pi * units.Bohr * units._e * units.C)
 
 QUADRATURE_PARAMETER_RATIO = 4
-
+DTYPE = np.float32
 
 class PotentialBase(Grid):
 
@@ -83,8 +83,8 @@ class PotentialBase(Grid):
 
 
 def tanh_sinh_quadrature(order, parameter):
-    xk = np.zeros(2 * order)
-    wk = np.zeros(2 * order)
+    xk = np.zeros(2 * order, dtype=DTYPE)
+    wk = np.zeros(2 * order, dtype=DTYPE)
     for i in range(0, 2 * order):
         k = i - order
         xk[i] = np.tanh(np.pi / 2 * np.sinh(k * parameter))
@@ -143,9 +143,9 @@ class Potential(PotentialBase, Cache):
                  num_slices: int = None,
                  parametrization: str = 'lobato',
                  method: str = 'interpolation',
-                 cutoff_tolerance: float = 1e-3,
-                 quadrature_order: int = 40,
-                 interpolation_sampling: float = .001):
+                 cutoff_tolerance: float = 1e-2,
+                 quadrature_order: int = 10,
+                 interpolation_sampling: float = .01):
 
         self._cutoff_tolerance = cutoff_tolerance
         self._method = method
@@ -234,7 +234,7 @@ class Potential(PotentialBase, Cache):
     @cached_method(('gpts',))
     def _allocate(self):
         self.check_is_grid_defined()
-        return np.zeros(self.gpts)
+        return np.zeros(self.gpts, dtype=DTYPE)
 
     @cached_method_with_args(('tolerance',))
     def get_soft_potential_function(self, atomic_number):
