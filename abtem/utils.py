@@ -1,9 +1,9 @@
 from collections import defaultdict
 
-import numexpr as ne
 import numpy as np
 from ase import units
 from numba import njit
+from abtem.config import DTYPE, COMPLEX_DTYPE
 
 
 def energy2mass(energy):
@@ -87,17 +87,17 @@ def cartesian2polar(cartesian):
     return polar
 
 
-def complex_exponential(x):
-    return ne.evaluate('exp(1.j * x)')
-
-
 # def complex_exponential(x):
-#     df_exp = np.empty(x.shape, dtype=np.complex64)
-#     trig_buf = np.cos(x)
-#     df_exp.real[:] = trig_buf
-#     np.sin(x, out=trig_buf)
-#     df_exp.imag[:] = trig_buf
-#     return df_exp
+#     return ne.evaluate('exp(1.j * x)')
+
+
+def complex_exponential(x):
+    df_exp = np.empty(x.shape, dtype=COMPLEX_DTYPE)
+    trig_buf = np.cos(x)
+    df_exp.real[:] = trig_buf
+    np.sin(x, out=trig_buf)
+    df_exp.imag[:] = trig_buf
+    return df_exp
 
 
 def squared_norm(x, y):
@@ -106,17 +106,18 @@ def squared_norm(x, y):
 
 def fftfreq(grid):
     grid.check_is_grid_defined()
-    return tuple(np.fft.fftfreq(gpts, sampling) for gpts, sampling in zip(grid.gpts, grid.sampling))
+    return tuple(DTYPE(np.fft.fftfreq(gpts, sampling)) for gpts, sampling in zip(grid.gpts, grid.sampling))
 
 
 def linspace(grid):
     grid.check_is_grid_defined()
-    return tuple(np.linspace(0, extent, gpts, endpoint=grid.endpoint) for gpts, extent in zip(grid.gpts, grid.extent))
+    return tuple(np.linspace(0, extent, gpts, endpoint=grid.endpoint, dtype=DTYPE) for gpts, extent in
+                 zip(grid.gpts, grid.extent))
 
 
 def semiangles(grid_and_energy):
     wavelength = grid_and_energy.wavelength
-    return (np.fft.fftfreq(gpts, sampling) * wavelength for gpts, sampling in
+    return (DTYPE(np.fft.fftfreq(gpts, sampling)) * wavelength for gpts, sampling in
             zip(grid_and_energy.gpts, grid_and_energy.sampling))
 
 

@@ -3,6 +3,7 @@ import numpy as np
 from abtem.bases import Energy, Cache, Grid, cached_method, ArrayWithGridAndEnergy, notify
 from abtem.utils import complex_exponential, squared_norm, semiangles
 from typing import Mapping, Union, Sequence
+from abtem.config import DTYPE, COMPLEX_DTYPE
 
 polar_symbols = ('C10', 'C12', 'phi12',
                  'C21', 'phi21', 'C23', 'phi23',
@@ -72,37 +73,38 @@ def calculate_polar_chi(alpha: np.ndarray, phi: np.ndarray, wavelength: float,
     """
     alpha2 = alpha ** 2
 
-    array = np.zeros(alpha.shape)
+    array = np.zeros(alpha.shape, dtype=DTYPE)
     if any([parameters[symbol] != 0. for symbol in ('C10', 'C12', 'phi12')]):
-        array += (1 / 2. * alpha2 *
+        array += (1 / 2 * alpha2 *
                   (parameters['C10'] +
-                   parameters['C12'] * np.cos(2. * (phi - parameters['phi12']))))
+                   parameters['C12'] * np.cos(2 * (phi - parameters['phi12']))))
 
     if any([parameters[symbol] != 0. for symbol in ('C21', 'phi21', 'C23', 'phi23')]):
-        array += (1 / 3. * alpha2 * alpha *
+        array += (1 / 3 * alpha2 * alpha *
                   (parameters['C21'] * np.cos(phi - parameters['phi21']) +
-                   parameters['C23'] * np.cos(3. * (phi - parameters['phi23']))))
+                   parameters['C23'] * np.cos(3 * (phi - parameters['phi23']))))
 
     if any([parameters[symbol] != 0. for symbol in ('C30', 'C32', 'phi32', 'C34', 'phi34')]):
-        array += (1 / 4. * alpha2 ** 2 *
+        array += (1 / 4 * alpha2 ** 2 *
                   (parameters['C30'] +
-                   parameters['C32'] * np.cos(2. * (phi - parameters['phi32'])) +
-                   parameters['C34'] * np.cos(4. * (phi - parameters['phi34']))))
+                   parameters['C32'] * np.cos(2 * (phi - parameters['phi32'])) +
+                   parameters['C34'] * np.cos(4 * (phi - parameters['phi34']))))
 
     if any([parameters[symbol] != 0. for symbol in ('C41', 'phi41', 'C43', 'phi43', 'C45', 'phi41')]):
-        array += (1 / 5. * alpha2 ** 2 * alpha *
+        array += (1 / 5 * alpha2 ** 2 * alpha *
                   (parameters['C41'] * np.cos((phi - parameters['phi41'])) +
-                   parameters['C43'] * np.cos(3. * (phi - parameters['phi43'])) +
-                   parameters['C45'] * np.cos(5. * (phi - parameters['phi45']))))
+                   parameters['C43'] * np.cos(3 * (phi - parameters['phi43'])) +
+                   parameters['C45'] * np.cos(5 * (phi - parameters['phi45']))))
 
     if any([parameters[symbol] != 0. for symbol in ('C50', 'C52', 'phi52', 'C54', 'phi54', 'C56', 'phi56')]):
-        array += (1 / 6. * alpha2 ** 3 *
+        array += (1 / 6 * alpha2 ** 3 *
                   (parameters['C50'] +
-                   parameters['C52'] * np.cos(2. * (phi - parameters['phi52'])) +
-                   parameters['C54'] * np.cos(4. * (phi - parameters['phi54'])) +
-                   parameters['C56'] * np.cos(6. * (phi - parameters['phi56']))))
+                   parameters['C52'] * np.cos(2 * (phi - parameters['phi52'])) +
+                   parameters['C54'] * np.cos(4 * (phi - parameters['phi54'])) +
+                   parameters['C56'] * np.cos(6 * (phi - parameters['phi56']))))
 
-    return 2 * np.pi / wavelength * array
+    array = 2 * np.pi / wavelength * array
+    return array
 
 
 def calculate_symmetric_aberrations(alpha: np.ndarray, wavelength: float,
@@ -120,18 +122,18 @@ def calculate_aperture(alpha: np.ndarray, cutoff: float, rolloff: float) -> np.n
         rolloff *= cutoff
         array = .5 * (1 + np.cos(np.pi * (alpha - cutoff + rolloff) / rolloff))
         array[alpha > cutoff] = 0.
-        array = np.where(alpha > cutoff - rolloff, array, np.ones_like(alpha))
+        array = np.where(alpha > cutoff - rolloff, array, np.ones_like(alpha, dtype=DTYPE))
     else:
-        array = np.array(alpha < cutoff).astype(np.float)
+        array = np.array(alpha < cutoff).astype(DTYPE)
     return array
 
 
 def calculate_temporal_envelope(alpha: np.ndarray, wavelength: float, focal_spread: float) -> np.ndarray:
-    return np.exp(- (.5 * np.pi / wavelength * focal_spread * alpha ** 2) ** 2)
+    return DTYPE(np.exp(- (.5 * np.pi / wavelength * focal_spread * alpha ** 2) ** 2))
 
 
 def calculate_gaussian_blur_envelope(alpha: np.ndarray, wavelength: float, focal_spread: float) -> np.ndarray:
-    return np.exp(- (.5 * np.pi / wavelength * focal_spread * alpha ** 2) ** 2)
+    return DTYPE(np.exp(- (.5 * np.pi / wavelength * focal_spread * alpha ** 2) ** 2))
 
 
 def calculate_spatial_envelope(alpha, phi, wavelength, angular_spread, parameters):
@@ -181,10 +183,10 @@ class CTFBase(Energy):
     def __init__(self, cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
                  angular_spread: float = 0., energy: float = None, parameters: Mapping[str, float] = None, **kwargs):
 
-        self._cutoff = cutoff
-        self._rolloff = rolloff
-        self._focal_spread = focal_spread
-        self._angular_spread = angular_spread
+        self._cutoff = DTYPE(cutoff)
+        self._rolloff = DTYPE(rolloff)
+        self._focal_spread = DTYPE(focal_spread)
+        self._angular_spread = DTYPE(angular_spread)
         self._parameters = dict(zip(polar_symbols, [0.] * len(polar_symbols)))
 
         if parameters is None:
@@ -216,7 +218,7 @@ class CTFBase(Energy):
     @defocus.setter
     @notify
     def defocus(self, value: float):
-        self._parameters['C10'] = -value
+        self._parameters['C10'] = DTYPE(-value)
 
     @property
     def cutoff(self) -> float:
@@ -225,7 +227,7 @@ class CTFBase(Energy):
     @cutoff.setter
     @notify
     def cutoff(self, value: float):
-        self._cutoff = value
+        self._cutoff = DTYPE(value)
 
     @property
     def rolloff(self) -> float:
@@ -234,7 +236,7 @@ class CTFBase(Energy):
     @rolloff.setter
     @notify
     def rolloff(self, value: float):
-        self._rolloff = value
+        self._rolloff = DTYPE(value)
 
     @property
     def focal_spread(self) -> float:
@@ -243,7 +245,7 @@ class CTFBase(Energy):
     @focal_spread.setter
     @notify
     def focal_spread(self, value: float):
-        self._focal_spread = value
+        self._focal_spread = DTYPE(value)
 
     @property
     def angular_spread(self) -> float:
@@ -252,7 +254,7 @@ class CTFBase(Energy):
     @angular_spread.setter
     @notify
     def angular_spread(self, value: float):
-        self._angular_spread = value
+        self._angular_spread = DTYPE(value)
 
     def set_parameters(self, parameters):
         for symbol, value in parameters.items():

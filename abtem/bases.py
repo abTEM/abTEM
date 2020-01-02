@@ -3,7 +3,7 @@ from typing import Optional, Union, Any, Sequence
 import numpy as np
 
 from abtem.utils import convert_complex, energy2wavelength, energy2sigma, linspace
-
+from abtem.config import DTYPE, COMPLEX_DTYPE
 
 def notify(func):
     """
@@ -252,7 +252,7 @@ class Grid(Observable):
         if isinstance(extent, GridProperty):
             self._extent = extent
         else:
-            self._extent = GridProperty(extent, np.float, dimensions=dimensions)
+            self._extent = GridProperty(extent, DTYPE, dimensions=dimensions)
 
         if isinstance(gpts, GridProperty):
             self._gpts = gpts
@@ -262,7 +262,7 @@ class Grid(Observable):
         if isinstance(sampling, GridProperty):
             self._sampling = sampling
         else:
-            self._sampling = GridProperty(sampling, np.float, dimensions=dimensions)
+            self._sampling = GridProperty(sampling, DTYPE, dimensions=dimensions)
 
         if self.extent is None:
             if not ((self.gpts is None) | (self.sampling is None)):
@@ -433,7 +433,7 @@ class Energy(Observable):
             Acceleration energy [eV]
         kwargs :
         """
-        self._energy = energy
+        self._energy = DTYPE(energy)
 
         super().__init__(**kwargs)
 
@@ -444,7 +444,7 @@ class Energy(Observable):
     @energy.setter
     @notify
     def energy(self, value: float):
-        self._energy = value
+        self._energy = DTYPE(value)
 
     @property
     def wavelength(self) -> float:
@@ -454,7 +454,7 @@ class Energy(Observable):
         :rtype: float
         """
         self.check_is_energy_defined()
-        return energy2wavelength(self.energy)
+        return DTYPE(energy2wavelength(self.energy))
 
     @property
     def sigma(self) -> float:
@@ -462,7 +462,7 @@ class Energy(Observable):
         Interaction parameter from energy.
         """
         self.check_is_energy_defined()
-        return energy2sigma(self.energy)
+        return DTYPE(energy2sigma(self.energy))
 
     def check_is_energy_defined(self):
         """ Throw error if the energy is not defined. """

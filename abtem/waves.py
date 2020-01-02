@@ -14,14 +14,7 @@ from abtem.prism import window_and_collapse
 from abtem.scan import GridScan, LineScan, CustomScan, ScanBase
 from abtem.transfer import CTF, CTFBase
 from abtem.utils import complex_exponential, fftfreq, BatchGenerator
-
-
-def get_fft_plans(shape, threads=12):
-    temp_1 = fftw.empty_aligned(shape, dtype='complex128')
-    temp_2 = fftw.empty_aligned(shape, dtype='complex128')
-    fft_object_forward = fftw.FFTW(temp_1, temp_2, axes=(1, 2), threads=threads)
-    fft_object_backward = fftw.FFTW(temp_2, temp_1, axes=(1, 2), direction='FFTW_BACKWARD', threads=threads)
-    return temp_1, temp_2, fft_object_forward, fft_object_backward
+from abtem.config import DTYPE, COMPLEX_DTYPE, FFTW_THREADS
 
 
 class Propagator(Grid, Energy, Cache):
@@ -45,8 +38,8 @@ class Propagator(Grid, Energy, Cache):
     def build(self, dz):
         self.check_is_grid_defined()
         self.check_is_energy_defined()
-        kx = np.fft.fftfreq(self.gpts[0], self.sampling[0])
-        ky = np.fft.fftfreq(self.gpts[1], self.sampling[1])
+        kx = np.fft.fftfreq(self.gpts[0], self.sampling[0]).astype(DTYPE)
+        ky = np.fft.fftfreq(self.gpts[1], self.sampling[1]).astype(DTYPE)
         k = (kx ** 2)[:, None] + (ky ** 2)[None]
         return complex_exponential(-k * np.pi * self.wavelength * dz)[None]
 
@@ -78,16 +71,16 @@ def multislice(waves, potential: Potential, in_place: bool = False, show_progres
     if (waves.extent is not None) & np.all(potential.extent != waves.extent):
         raise RuntimeError('inconsistent extent')
 
-    temp_1, temp_2, fft_object_forward, fft_object_backward = get_fft_plans(waves.array.shape)
+    fft_object_forward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), threads=FFTW_THREADS)
+    fft_object_backward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), direction='FFTW_BACKWARD',
+                                    threads=FFTW_THREADS, flags=('FFTW_ESTIMATE',))
 
     propagator = Propagator(extent=potential.extent, gpts=potential.gpts, energy=waves.energy)
 
     for i in tqdm(range(potential.num_slices), disable=not show_progress):
-        #temp_1[:] = \
-        waves.array * complex_exponential(waves.sigma * potential.get_slice(i))
-        #temp_2[:] = \
-        fft_object_forward() * propagator.build(potential.slice_thickness(i))
-        #waves.array[:] = fft_object_backward()
+        waves._array *= complex_exponential(waves.sigma * potential.get_slice(i))
+        fft_object_forward()
+        waves._array *= propagator.build(potential.slice_thickness(i))
         fft_object_backward()
 
     return waves
@@ -115,7 +108,7 @@ class Waves(ArrayWithGridAndEnergy):
     def __init__(self, array: np.ndarray, extent: Union[float, Sequence[float]] = None,
                  sampling: Union[float, Sequence[float]] = None, energy: float = None):
 
-        array = np.array(array, dtype=np.complex)
+        # array = np.array(array, dtype=COMPLEX_DTYPE)
 
         if len(array.shape) == 2:
             array = array[None]
@@ -164,12 +157,15 @@ class Waves(ArrayWithGridAndEnergy):
         waves.check_is_grid_defined()
         waves.check_is_energy_defined()
 
-        temp_1, temp_2, fft_object_forward, fft_object_backward = get_fft_plans(self.array.shape)
-        temp_1[:] = waves.array
-        temp_2[:] = fft_object_forward() * ctf.get_array()
-        array = fft_object_backward()
+        fft_object_forward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), threads=FFTW_THREADS)
+        fft_object_backward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), direction='FFTW_BACKWARD',
+                                        threads=FFTW_THREADS, flags=('FFTW_ESTIMATE',))
 
-        return self.__class__(array, extent=self.extent, energy=self.energy)
+        fft_object_forward()
+        waves._array[:] *= ctf.get_array()
+        fft_object_backward()
+
+        return waves
 
     def propagate(self, dz):
         new = self.copy()
@@ -270,7 +266,7 @@ class PlaneWaves(Grid, Energy, Cache):
         if self.gpts is None:
             raise RuntimeError('gpts not defined')
 
-        array = np.ones((self.num_waves, self.gpts[0], self.gpts[1]), dtype=np.complex64)
+        array = np.ones((self.num_waves, self.gpts[0], self.gpts[1]), dtype=COMPLEX_DTYPE)
         return Waves(array, extent=self.extent, energy=self.energy)
 
     def copy(self):
@@ -293,13 +289,13 @@ def _do_scan(probe, scan_waves_maker: callable, scan: ScanBase, detectors: Union
                                        disable=not show_progress):
         waves = scan_waves_maker(probe, positions)
 
-        # for detector in detectors:
-        #     if detector.export is not None:
-        #         with h5py.File(detector.export, 'a') as f:
-        #             f['data'][start:start + stop] = detector.detect(waves)
-        #
-        #     else:
-        #         scan.measurements[detector][start:start + stop] = detector.detect(waves)
+        for detector in detectors:
+            if detector.export is not None:
+                with h5py.File(detector.export, 'a') as f:
+                    f['data'][start:start + stop] = detector.detect(waves)
+
+            else:
+                scan.measurements[detector][start:start + stop] = detector.detect(waves)
 
     for detector in detectors:
         scan.finalize_measurements(detector)
@@ -376,7 +372,6 @@ class ProbeWaves(CTF):
 
     def _translation_multiplier(self, positions):
         kx, ky = fftfreq(self)
-
         kx = kx.reshape((1, -1, 1))
         ky = ky.reshape((1, 1, -1))
         x = positions[:, 0].reshape((-1,) + (1, 1))
@@ -384,22 +379,16 @@ class ProbeWaves(CTF):
         return complex_exponential(2 * np.pi * (kx * x + ky * y))
 
     def build_at(self, positions: Sequence[Sequence[float]]) -> Waves:
-        positions = np.array(positions)
-
+        positions = np.array(positions, dtype=DTYPE)
         if len(positions.shape) == 1:
             positions = np.expand_dims(positions, axis=0)
 
-        temp_1 = fftw.empty_aligned((len(positions), self.gpts[0], self.gpts[1]), dtype='complex128')
-        temp_2 = fftw.empty_aligned((len(positions), self.gpts[0], self.gpts[1]), dtype='complex128')
+        temp = fftw.empty_aligned((len(positions), self.gpts[0], self.gpts[1]), dtype=COMPLEX_DTYPE)
+        fft_object = fftw.FFTW(temp, temp, axes=(1, 2), threads=FFTW_THREADS)
 
-        fft_object = fftw.FFTW(temp_1, temp_2, axes=(1, 2), threads=12)
-
-        temp_1[:] = super().get_array() * self._translation_multiplier(positions)
+        temp[:] = super().get_array() * self._translation_multiplier(positions)
         fft_object()
-
-        #temp_2 = np.fft.fft2(super().get_array() * self._translation_multiplier(positions))
-
-        return Waves(temp_2, extent=self.extent, energy=self.energy)
+        return Waves(temp, extent=self.extent, energy=self.energy)
 
     def get_ctf(self) -> CTF:
         return super().build()
@@ -539,7 +528,6 @@ class ScatteringMatrix(ArrayWithGrid, CTFBase, Cache):
         self._cutoff = cutoff
         self._kx = kx
         self._ky = ky
-        self._positions = np.array([[0., 0.]])
         self.always_recenter = always_recenter
         super().__init__(array=array, spatial_dimensions=2, extent=extent, sampling=sampling, energy=energy)
         self.cutoff = cutoff
@@ -624,7 +612,7 @@ class ScatteringMatrix(ArrayWithGrid, CTFBase, Cache):
                   show_progress: bool = True):
 
         if start is None:
-            start = (0., 0.)
+            start = np.zeros(2, dtype=DTYPE)
 
         if end is None:
             end = self.extent
