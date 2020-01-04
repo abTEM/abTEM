@@ -1,9 +1,9 @@
 from collections import OrderedDict
-
+from abtem.utils import BatchGenerator
 import numpy as np
 import torch
 import torch.nn as nn
-
+from abtem.learn.partialconv2d import PartialConv2d
 
 def extract_patches(images, patch_size):
     dims = len(images.shape)
@@ -27,26 +27,17 @@ def multi_patch_loss(input, target, loss_obj, patch_sizes, weights=None):
             loss += torch.mean(loss_obj(patch_means(input, patch_size), patch_means(target, patch_size)))
 
     return loss / len(patch_sizes)
-# class DensityMap(nn.Module):
-# 
-#     def __init__(self, features):
-#         super().__init__()
-#         self.conv = nn.Conv2d(in_channels=features, out_channels=1, kernel_size=1)
-# 
-#     @property
-#     def out_channels(self):
-#         return 1
-# 
-#     def forward(self, x):
-#         x = self.conv(x)
-#         return torch.sigmoid(x)
 
 
 class Head(nn.Module):
 
     def __init__(self, features, nclasses, activation):
         super().__init__()
-        self.conv = nn.Conv2d(in_channels=features, out_channels=nclasses, kernel_size=1)
+        layer1 = nn.Conv2d(in_channels=features, out_channels=features // 2, kernel_size=1)
+        layer2 = nn.Conv2d(in_channels=features // 2, out_channels=nclasses, kernel_size=1)
+
+        self.layers = nn.Sequential(layer1, nn.ReLU(inplace=True), layer2)
+
         self.activation = activation
         self._nclasses = nclasses
 
@@ -55,7 +46,8 @@ class Head(nn.Module):
         return self._nclasses
 
     def forward(self, x):
-        x = self.conv(x)
+        x = self.layers(x)
+        #x = self.conv(x)
         return self.activation(x)
 
 
@@ -84,7 +76,7 @@ class UNet(nn.Module):
 
         self.bottleneck = UNet._block(features * 8, features * 16, name="bottleneck")
 
-        self.upconv4 = nn.ConvTranspose2d(features * 16, features * 8, kernel_size=2, stride=2)
+        #self.upconv4 = nn.ConvTranspose2d(features * 16, features * 8, kernel_size=2, stride=2)
         self.updrop4 = nn.Dropout(p=dropout)
         self.decoder4 = UNet._block((features * 8) * 2, features * 8, name="dec4")
 
@@ -132,17 +124,47 @@ class UNet(nn.Module):
 
         return {key: head(dec1) for key, head in self.heads.items()}
 
-    def mc_predict(self, images, n):
+    def predict_series(self, images, max_batch, num_samples=1):
+        batch_generator = BatchGenerator(len(images), max_batch)
 
-        mc_outputs = [np.zeros((n,) + (images.shape[0],) + (head.out_channels,) + images.shape[2:]) for head in
-                      self.heads]
+        outputs = {}
+        for key, head in self.heads.items():
 
-        for i in range(n):
+            if num_samples > 1:
+                outputs[key + '_mean'] = np.zeros((images.shape[0],) + (head.out_channels,) + images.shape[2:])
+                outputs[key + '_std'] = np.zeros((images.shape[0],) + (head.out_channels,) + images.shape[2:])
+            else:
+                outputs[key] = np.zeros((images.shape[0],) + (head.out_channels,) + images.shape[2:])
+
+        for start, size in batch_generator.generate():
+
+            if num_samples > 1:
+                batch_outputs = self.mc_predict(images[start:start + size], num_samples=num_samples)
+
+            else:
+                batch_outputs = self.forward(images[start:start + size])
+                batch_outputs = {key: output.detach().cpu() for key, output in batch_outputs.items()}
+
+            for key in outputs.keys():
+                outputs[key][start:start + size] = batch_outputs[key]
+
+        return outputs
+
+    def mc_predict(self, images, num_samples):
+        mc_outputs = {key: np.zeros((num_samples,) + (images.shape[0],) + (head.out_channels,) + images.shape[2:])
+                      for key, head in self.heads.items()}
+
+        for i in range(num_samples):
             outputs = self.forward(images)
-            for j in range(len(mc_outputs)):
-                mc_outputs[j][i] = outputs[j].cpu().detach().numpy()
+            for key in mc_outputs.keys():
+                mc_outputs[key][i] = outputs[key].cpu().detach().numpy()
 
-        return [(np.mean(mc_output, 0), np.std(mc_output, 0)) for mc_output in mc_outputs]
+        output = {}
+        for key, mc_output in mc_outputs.items():
+            output[key + '_mean'] = np.mean(mc_output, 0)
+            output[key + '_std'] = np.std(mc_output, 0)
+
+        return output
 
     @staticmethod
     def _block(in_channels, features, name):
@@ -151,7 +173,7 @@ class UNet(nn.Module):
                 [
                     (
                         name + "conv1",
-                        nn.Conv2d(
+                        PartialConv2d(
                             in_channels=in_channels,
                             out_channels=features,
                             kernel_size=3,
@@ -163,7 +185,7 @@ class UNet(nn.Module):
                     (name + "relu1", nn.ReLU(inplace=True)),
                     (
                         name + "conv2",
-                        nn.Conv2d(
+                        PartialConv2d(
                             in_channels=features,
                             out_channels=features,
                             kernel_size=3,
