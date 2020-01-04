@@ -103,6 +103,7 @@ def kirkland_soft(r, r_cut, v_cut, dvdr_cut, p):
 
     return v - v_cut - (r - r_cut) * dvdr_cut
 
+
 # TODO : implement threads
 @jit(nopython=True, nogil=True)
 def project_tanh_sinh(r, z0, z1, xk, wk, f):
