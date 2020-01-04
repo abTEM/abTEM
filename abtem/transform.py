@@ -1,6 +1,5 @@
 import numpy as np
 from ase import Atoms
-from ase.build import niggli_reduce
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.interpolate import RegularGridInterpolator
 

@@ -3,10 +3,16 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-abiniTEM: ab initio Transmission Electron Microscopy
+abTEM: ab initio Transmission Electron Microscopy
 ====================================================
 
-abiniTEM provides a Python API for running simulations of Transmission Electron Microscopy images.
+abTEM provides a Python API for running simulations of Transmission Electron Microscopy images. It is written entirely
+in Python, which enables easy integration with first-principles codes and analysis tools accessible from Python,
+and allows for a simple and intuitive user interface. The computationally demanding parts are implemented using
+jit-compiled Numba code and high-performance libraries, maintaining speed while ensuring portability.
+
+abTEM works with the Atomic Simulation Environment and the density functional theory code GPAW to provide an seamless
+environment for simulating images from first principles.
 
 >>> from ase import read
 >>> from abiniTEM.waves import PlaneWaves
@@ -16,15 +22,17 @@ abiniTEM provides a Python API for running simulations of Transmission Electron 
 >>> waves.apply_ctf(defocus=200, focal_spread=40)
 >>> waves.display_image(repeat=(5, 5))
 
-abiniTEM works with the Atomic Simulation Environment and the density functional theory code GPAW
-
-
 .. toctree::
    :maxdepth: 1
-   :caption: Contents:
+   :caption: Main
 
    install
-   tutorials/introduction
-   modules/api
-   cite
+   getting_started/introduction
+   .. tutorials/introduction
+   .. modules/api
+   .. cite
    ../../examples/test
+
+abTEM has been developed at the Faculty of Physics of the University of Vienna, Austria. Please consult the credits page
+for information on how to cite abTEM. abTEM and its development are hosted on github. Bugs and feature requests are
+ideally submitted via the github issue tracker.

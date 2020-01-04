@@ -117,14 +117,14 @@ class Waves(ArrayWithGridAndEnergy):
 
     def apply_ctf(self, ctf=None, in_place=False, **kwargs):
         """
-
+        Apply the aberrations defined by a CTF object to wave function.
 
         Parameters
         ----------
         ctf : CTF object
             Contrast Transfer Function object to be applied
         in_place : bool
-
+            If true modify the array representing the wave in place, otherwise create a copy.
         kwargs :
 
         Returns
@@ -167,14 +167,9 @@ class Waves(ArrayWithGridAndEnergy):
 
         return waves
 
-    def propagate(self, dz):
-        new = self.copy()
-        new.array[:] = np.fft.ifft2(
-            Propagator(extent=self.extent, gpts=self.gpts, energy=self.energy).build(dz) * np.fft.fft2(new.array))
-        return new
-
     def multislice(self, potential, in_place: bool = False, show_progress: bool = True):
         """
+        Propagate the wave function through a potential using the multislice
 
         Parameters
         ----------
@@ -630,6 +625,19 @@ class PrismWaves(Grid, Energy, Cache):
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
                  energy: float = None, always_recenter: bool = False):
+
+        """
+
+        Parameters
+        ----------
+        cutoff :
+        interpolation :
+        extent :
+        gpts :
+        sampling :
+        energy :
+        always_recenter :
+        """
 
         if not isinstance(interpolation, int):
             raise ValueError('interpolation factor must be int')

@@ -1,7 +1,7 @@
 Tutorials
 =========
 
-This is the docs of abTEM
+Welcome to the abTEM tutorials. The purpose of these tutorials is to teach you the essentials of abTEM through examples.
 
 .. toctree::
     :maxdepth: 2
