@@ -2,6 +2,7 @@ import numpy as np
 from scipy.ndimage import gaussian_filter
 from skimage.transform import PiecewiseAffineTransform, warp
 from skimage.transform import rescale
+from skimage.exposure import equalize_adapthist
 
 
 class Augmentation(object):
@@ -161,6 +162,19 @@ class NormalizeLocal(Augmentation):
         mean = gaussian_filter(image, (0, self.sigma, self.sigma))
         image = image - mean
         image = image / np.sqrt(gaussian_filter(image ** 2, (0, self.sigma, self.sigma)))
+        return image
+
+
+class EqualizeAdaptive(Augmentation):
+
+    def __init__(self, kernel_size=None, clip_limit=.01):
+        self.clip_limit = clip_limit
+        self.kernel_size = kernel_size
+        super().__init__(apply_to_label=False)
+
+    def __call__(self, image):
+        for i in range(len(image)):
+            image[i] = equalize_adapthist(image[i], kernel_size=self.kernel_size, clip_limit=self.clip_limit)
         return image
 
 
