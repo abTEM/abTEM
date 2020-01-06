@@ -74,7 +74,7 @@ def labels_to_masks(labels, n_classes):
 
 class DataGenerator:
 
-    def __init__(self, images, labels, batch_size=8, augmentations=None):
+    def __init__(self, images, labels, crop, batch_size=8, augmentations=None):
 
         self._num_examples = len(images)
         for label in labels:
@@ -94,7 +94,7 @@ class DataGenerator:
         self._indices = np.arange(self.num_examples)
         self._global_iteration = 280
 
-        self._crop = RandomCropStack(out_shape=(384, 384))
+        self._crop = RandomCropStack(out_shape=crop)
 
     @property
     def batch_size(self):
