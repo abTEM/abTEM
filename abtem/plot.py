@@ -6,7 +6,7 @@ from ase.data import covalent_radii
 from ase.data.colors import cpk_colors
 from matplotlib.patches import Circle
 from matplotlib.patches import Rectangle
-
+from abtem.utils import convert_complex
 from abtem.transfer import calculate_polar_aberrations, calculate_aperture, calculate_temporal_envelope, \
     calculate_spatial_envelope
 
@@ -104,6 +104,21 @@ def plot_ctf(ctf, max_k, ax=None, phi=0, n=1000):
 
     ax.set_xlabel('k [1 / Å]')
     ax.legend()
+
+
+def plot_image(waves, i=0, ax=None, convert='intensity', cmap='gray', **kwargs):
+    try:
+        waves = waves.build()
+    except AttributeError:
+        pass
+
+    if ax is None:
+        ax = plt.subplot()
+
+    array = convert_complex(waves.array[i], output=convert)
+    ax.imshow(array.T, extent = [0, waves.extent[0], 0, waves.extent[1]], cmap=cmap, **kwargs)
+    ax.set_xlabel('x [Å]')
+    ax.set_ylabel('y [Å]')
 
 
 def domain_coloring(z, fade_to_white=False, saturation=1, k=.5):

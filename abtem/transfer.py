@@ -180,10 +180,10 @@ def _parametrization_property(key):
 
 class CTFBase(Energy):
 
-    def __init__(self, cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
+    def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
                  angular_spread: float = 0., energy: float = None, parameters: Mapping[str, float] = None, **kwargs):
 
-        self._cutoff = DTYPE(cutoff)
+        self._semiangle_cutoff = DTYPE(semiangle_cutoff)
         self._rolloff = DTYPE(rolloff)
         self._focal_spread = DTYPE(focal_spread)
         self._angular_spread = DTYPE(angular_spread)
@@ -221,13 +221,13 @@ class CTFBase(Energy):
         self._parameters['C10'] = DTYPE(-value)
 
     @property
-    def cutoff(self) -> float:
-        return self._cutoff
+    def semiangle_cutoff(self) -> float:
+        return self._semiangle_cutoff
 
-    @cutoff.setter
+    @semiangle_cutoff.setter
     @notify
-    def cutoff(self, value: float):
-        self._cutoff = DTYPE(value)
+    def semiangle_cutoff(self, value: float):
+        self._semiangle_cutoff = DTYPE(value)
 
     @property
     def rolloff(self) -> float:
@@ -279,7 +279,7 @@ class CTFBase(Energy):
         raise NotImplementedError()
 
     def get_aperture(self):
-        return calculate_aperture(self.get_alpha(), self.cutoff, self.rolloff)
+        return calculate_aperture(self.get_alpha(), self.semiangle_cutoff, self.rolloff)
 
     def get_temporal_envelope(self):
         return calculate_temporal_envelope(self.get_alpha(), self.wavelength, self.focal_spread)
@@ -294,7 +294,7 @@ class CTFBase(Energy):
     def get_array(self):
         array = self.get_aberrations()
 
-        if self.cutoff < np.inf:
+        if self.semiangle_cutoff < np.inf:
             array = array * self.get_aperture()
 
         if self.focal_spread > 0.:
@@ -313,7 +313,7 @@ class CTFBase(Energy):
 
 class CTF(Grid, Cache, CTFBase):
 
-    def __init__(self, cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
+    def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
                  angular_spread: float = 0., parameters: Mapping[str, float] = None,
                  extent: Union[float, Sequence[float]] = None,
                  gpts: Union[int, Sequence[int]] = None,
@@ -354,7 +354,7 @@ class CTF(Grid, Cache, CTFBase):
             Provide the aberration coefficients as keyword arguments.
         """
 
-        super().__init__(cutoff=cutoff, rolloff=rolloff, focal_spread=focal_spread, angular_spread=angular_spread,
+        super().__init__(semiangle_cutoff=semiangle_cutoff, rolloff=rolloff, focal_spread=focal_spread, angular_spread=angular_spread,
                          extent=extent, gpts=gpts, sampling=sampling, energy=energy, parameters=parameters, **kwargs)
         self.register_observer(self)
 
@@ -372,7 +372,7 @@ class CTF(Grid, Cache, CTFBase):
         phi = np.arctan2(alpha_x.reshape((-1, 1)), alpha_y.reshape((1, -1)))
         return phi
 
-    @cached_method(('extent', 'gpts', 'sampling', 'energy', 'cutoff', 'rolloff'))
+    @cached_method(('extent', 'gpts', 'sampling', 'energy', 'semiangle_cutoff', 'rolloff'))
     def get_aperture(self):
         return super().get_aperture()
 

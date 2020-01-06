@@ -332,7 +332,7 @@ class ProbeWaves(CTF):
 
     """
 
-    def __init__(self, cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
+    def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
                  angular_spread: float = 0., parameters: dict = None,
                  normalize: bool = False,
                  extent: Union[float, Sequence[float]] = None,
@@ -343,7 +343,7 @@ class ProbeWaves(CTF):
 
         self._normalize = normalize
 
-        super().__init__(cutoff=cutoff, rolloff=rolloff, focal_spread=focal_spread, angular_spread=angular_spread,
+        super().__init__(semiangle_cutoff=semiangle_cutoff, rolloff=rolloff, focal_spread=focal_spread, angular_spread=angular_spread,
                          parameters=parameters, extent=extent, gpts=gpts, sampling=sampling, energy=energy, **kwargs)
 
     @property

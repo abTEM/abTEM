@@ -21,6 +21,7 @@ kappa = 4 * np.pi * eps0 / (2 * np.pi * units.Bohr * units._e * units.C)
 QUADRATURE_PARAMETER_RATIO = 4
 DTYPE = np.float32
 
+
 class PotentialBase(Grid):
 
     def __init__(self, atoms, origin=None, extent=None, gpts=None, sampling=None, num_slices=None, **kwargs):
@@ -300,13 +301,17 @@ class Potential(PotentialBase, Cache):
 
         return v / kappa
 
-    def get_slice(self, i):
+    def _get_slice_array(self, i):
         if self._method == 'interpolation':
             return self._evaluate_interpolation(i)
         elif self._method == 'fourier':
             raise NotImplementedError()
         else:
             raise NotImplementedError('method {} not implemented')
+
+    def get_slice(self, i):
+        
+        return ArrayWithGrid(self._get_slice_array(i)[None], extent=self.extent, spatial_dimensions=2)
 
     def copy(self, copy_atoms=False):
         if copy_atoms:
