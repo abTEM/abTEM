@@ -56,6 +56,9 @@ class PotentialBase(Grid):
     def thickness(self):
         return self._atoms.cell[2, 2]
 
+    def _get_slice_array(self, i):
+        raise NotImplementedError()
+
     def get_slice(self, i):
         raise NotImplementedError()
 
@@ -77,7 +80,7 @@ class PotentialBase(Grid):
         slice_thicknesses = np.zeros(self.num_slices)
 
         for i in tqdm(range(self.num_slices), disable=not show_progress):
-            array[i] = self.get_slice(i)
+            array[i] = self._get_slice_array(i)
             slice_thicknesses[i] = self.slice_thickness(i)
 
         return PrecalculatedPotential(array, slice_thicknesses, self.extent)
@@ -124,7 +127,7 @@ class Potential(PotentialBase, Cache):
         The potential parametrization describes the radial dependence of the potential for each element. Two of the most
         accurate parametrizations are available by Lobato et. al. and EJ Kirkland.
         See the citation guide for references.
-    method : 'interpolation'
+    method : 'finite'
         The method for calculating the potential, currently the only implemented method is 'interpolation'.
     cutoff_tolerance : float
         The error tolerance used for deciding the radial cutoff distance of the potential in units of eV / e.
@@ -143,7 +146,7 @@ class Potential(PotentialBase, Cache):
                  slice_thickness: float = .5,
                  num_slices: int = None,
                  parametrization: str = 'lobato',
-                 method: str = 'interpolation',
+                 method: str = 'finite',
                  cutoff_tolerance: float = 1e-2,
                  quadrature_order: int = 10,
                  interpolation_sampling: float = .01):
@@ -301,8 +304,14 @@ class Potential(PotentialBase, Cache):
 
         return v / kappa
 
+    def get_projected(self):
+        projected = self.get_slice(0)
+        for i in range(1, self.num_slices):
+            projected._array += self._get_slice_array(i)
+        return projected
+
     def _get_slice_array(self, i):
-        if self._method == 'interpolation':
+        if self._method == 'finite':
             return self._evaluate_interpolation(i)
         elif self._method == 'fourier':
             raise NotImplementedError()
@@ -310,7 +319,6 @@ class Potential(PotentialBase, Cache):
             raise NotImplementedError('method {} not implemented')
 
     def get_slice(self, i):
-        
         return ArrayWithGrid(self._get_slice_array(i)[None], extent=self.extent, spatial_dimensions=2)
 
     def copy(self, copy_atoms=False):

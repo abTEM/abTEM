@@ -106,19 +106,32 @@ def plot_ctf(ctf, max_k, ax=None, phi=0, n=1000):
     ax.legend()
 
 
-def plot_image(waves, i=0, ax=None, convert='intensity', cmap='gray', **kwargs):
+def plot_image(waves, i=0, ax=None, convert=None, title=None, cmap='gray', **kwargs):
     try:
         waves = waves.build()
     except AttributeError:
         pass
 
+    array = waves.array
+
+    if len(array.shape) == 3:
+        array = array[i]
+
+    if (convert is not None):
+        array = convert_complex(array, output=convert)
+
+    elif (convert is None) & np.iscomplexobj(array):
+        array = convert_complex(array, output='intensity')
+
     if ax is None:
         ax = plt.subplot()
 
-    array = convert_complex(waves.array[i], output=convert)
-    ax.imshow(array.T, extent = [0, waves.extent[0], 0, waves.extent[1]], cmap=cmap, **kwargs)
+    ax.imshow(array.T, extent=[0, waves.extent[0], 0, waves.extent[1]], cmap=cmap, **kwargs)
     ax.set_xlabel('x [Å]')
     ax.set_ylabel('y [Å]')
+
+    if title is not None:
+        ax.set_title(title)
 
 
 def domain_coloring(z, fade_to_white=False, saturation=1, k=.5):

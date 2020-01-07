@@ -410,8 +410,8 @@ class Border(Augmentation):
 
     def __call__(self, image):
         new_image = np.zeros_like(image)
-        new_image[self._random_amount:-self._random_amount,
-        self._random_amount:-self._random_amount] = image[self._random_amount:-self._random_amount,
+        new_image[:,self._random_amount:-self._random_amount,
+        self._random_amount:-self._random_amount] = image[:,self._random_amount:-self._random_amount,
                                                     self._random_amount:-self._random_amount]
 
         return new_image

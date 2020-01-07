@@ -10,5 +10,6 @@ Welcome to the introductory abTEM tutorials.
     structures.ipynb
     waves.ipynb
     potentials.ipynb
-    the_multislice_algorithm.ipynb
-
+    multislice.ipynb
+    contrast_transfer_function.ipynb
+    multislice_derivation.ipynb
