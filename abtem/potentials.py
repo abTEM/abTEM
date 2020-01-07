@@ -310,7 +310,7 @@ class Potential(PotentialBase, Cache):
             raise NotImplementedError('method {} not implemented')
 
     def get_slice(self, i):
-        
+
         return ArrayWithGrid(self._get_slice_array(i)[None], extent=self.extent, spatial_dimensions=2)
 
     def copy(self, copy_atoms=False):
