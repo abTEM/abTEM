@@ -71,6 +71,9 @@ def multislice(waves, potential: Potential, in_place: bool = False, show_progres
     if (waves.extent is not None) & np.all(potential.extent != waves.extent):
         raise RuntimeError('inconsistent extent')
 
+    if (waves.gpts is not None) & np.all(potential.gpts != waves.gpts):
+        raise RuntimeError('inconsistent gpts')
+
     fft_object_forward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), threads=FFTW_THREADS)
     fft_object_backward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), direction='FFTW_BACKWARD',
                                     threads=FFTW_THREADS, flags=('FFTW_ESTIMATE',))
@@ -78,7 +81,7 @@ def multislice(waves, potential: Potential, in_place: bool = False, show_progres
     propagator = Propagator(extent=potential.extent, gpts=potential.gpts, energy=waves.energy)
 
     for i in tqdm(range(potential.num_slices), disable=not show_progress):
-        waves._array *= complex_exponential(waves.sigma * potential.get_slice(i))
+        waves._array *= complex_exponential(waves.sigma * potential._get_slice_array(i))
         fft_object_forward()
         waves._array *= propagator.build(potential.slice_thickness(i))
         fft_object_backward()
@@ -245,16 +248,21 @@ class PlaneWaves(Grid, Energy, Cache):
         self._num_waves = value
 
     def multislice(self, potential, show_progress=True):
+        waves = self.copy()
+
         if isinstance(potential, Atoms):
             potential = Potential(atoms=potential)
 
         if self.extent is None:
-            self.extent = potential.extent
+            waves.extent = potential.extent
 
         if self.gpts is None:
-            self.gpts = potential.gpts
+            waves.gpts = potential.gpts
 
-        return self.build().multislice(potential, in_place=True, show_progress=show_progress)
+        if potential.gpts is None:
+            potential.gpts = waves.gpts
+
+        return waves.build().multislice(potential, in_place=True, show_progress=show_progress)
 
     @cached_method()
     def build(self):
