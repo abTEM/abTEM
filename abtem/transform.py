@@ -62,8 +62,8 @@ def fill_rectangle_with_atoms(atoms, origin, extent, margin=0., return_atom_labe
 
 
 def orthogonalize_atoms(atoms, n=1, m=None, tol=1e-12):
-    cell = np.abs(atoms.cell)
-    cell = cell[np.argmax(cell, 1)]
+    cell = np.abs(atoms.cell) + np.identity(3) * 2 * tol
+    cell = cell[np.argmax(cell, 0)]
     non_zero = np.abs(cell) > tol
 
     if not (np.all(np.array([[1, 0, 0], [1, 1, 0], [0, 0, 1]], dtype=np.bool) == non_zero) | np.all(

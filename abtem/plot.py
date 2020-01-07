@@ -80,7 +80,7 @@ def plot_ctf(ctf, max_k, ax=None, phi=0, n=1000):
     k = np.linspace(0, max_k, n)
     alpha = k * ctf.wavelength
     aberrations = calculate_polar_aberrations(alpha, phi, ctf.wavelength, ctf._parameters)
-    aperture = calculate_aperture(alpha, ctf.cutoff, ctf.rolloff)
+    aperture = calculate_aperture(alpha, ctf.semiangle_cutoff, ctf.rolloff)
     temporal_envelope = calculate_temporal_envelope(alpha, ctf.wavelength, ctf.focal_spread)
     spatial_envelope = calculate_spatial_envelope(alpha, phi, ctf.wavelength, ctf.angular_spread, ctf.parameters)
     envelope = aperture * temporal_envelope * spatial_envelope
@@ -90,7 +90,7 @@ def plot_ctf(ctf, max_k, ax=None, phi=0, n=1000):
 
     ax.plot(k, aberrations.imag * aperture * temporal_envelope * spatial_envelope, label='CTF')
 
-    if ctf.cutoff < np.inf:
+    if ctf.semiangle_cutoff < np.inf:
         ax.plot(k, aperture, label='Aperture')
 
     if ctf.focal_spread > 0.:

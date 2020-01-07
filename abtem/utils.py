@@ -41,10 +41,6 @@ def energy2sigma(energy):
             units._hplanck * units.s * units.J) ** 2)
 
 
-def scherzer_defocus(Cs, energy):
-    return 1.2 * np.sign(Cs) * np.sqrt(np.abs(Cs) * energy2wavelength(energy))
-
-
 def polar2cartesian(polar):
     polar = defaultdict(lambda: 0, polar)
 
