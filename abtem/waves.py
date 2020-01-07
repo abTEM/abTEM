@@ -191,6 +191,9 @@ class Waves(ArrayWithGridAndEnergy):
 
         return multislice(self, potential, in_place=in_place, show_progress=show_progress)
 
+    def write(self, name):
+        np.savez('')
+
     def copy(self, copy_array=True) -> 'Waves':
         """
 
@@ -253,10 +256,10 @@ class PlaneWaves(Grid, Energy, Cache):
         if isinstance(potential, Atoms):
             potential = Potential(atoms=potential)
 
-        if self.extent is None:
+        if waves.extent is None:
             waves.extent = potential.extent
 
-        if self.gpts is None:
+        if waves.gpts is None:
             waves.gpts = potential.gpts
 
         if potential.gpts is None:
@@ -273,7 +276,8 @@ class PlaneWaves(Grid, Energy, Cache):
         return Waves(array, extent=self.extent, energy=self.energy)
 
     def copy(self):
-        return self.__class__(num_waves=self.num_waves, extent=self.extent.copy(), energy=self.energy)
+        return self.__class__(num_waves=self.num_waves, extent=self.extent, gpts=self.gpts, sampling=self.sampling,
+                              energy=self.energy)
 
 
 def _do_scan(probe, scan_waves_maker: callable, scan: ScanBase, detectors: Union[Sequence[DetectorBase], DetectorBase],
@@ -351,7 +355,8 @@ class ProbeWaves(CTF):
 
         self._normalize = normalize
 
-        super().__init__(semiangle_cutoff=semiangle_cutoff, rolloff=rolloff, focal_spread=focal_spread, angular_spread=angular_spread,
+        super().__init__(semiangle_cutoff=semiangle_cutoff, rolloff=rolloff, focal_spread=focal_spread,
+                         angular_spread=angular_spread,
                          parameters=parameters, extent=extent, gpts=gpts, sampling=sampling, energy=energy, **kwargs)
 
     @property

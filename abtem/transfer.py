@@ -1,7 +1,7 @@
 import numpy as np
 
 from abtem.bases import Energy, Cache, Grid, cached_method, ArrayWithGridAndEnergy, notify
-from abtem.utils import complex_exponential, squared_norm, semiangles
+from abtem.utils import complex_exponential, squared_norm, semiangles, energy2wavelength
 from typing import Mapping, Union, Sequence
 from abtem.config import DTYPE, COMPLEX_DTYPE
 
@@ -311,6 +311,10 @@ class CTFBase(Energy):
     #     self.__class__()
 
 
+def scherzer_defocus(Cs, energy):
+    return 1.2 * np.sign(Cs) * np.sqrt(np.abs(Cs) * energy2wavelength(energy))
+
+
 class CTF(Grid, Cache, CTFBase):
 
     def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
@@ -354,7 +358,8 @@ class CTF(Grid, Cache, CTFBase):
             Provide the aberration coefficients as keyword arguments.
         """
 
-        super().__init__(semiangle_cutoff=semiangle_cutoff, rolloff=rolloff, focal_spread=focal_spread, angular_spread=angular_spread,
+        super().__init__(semiangle_cutoff=semiangle_cutoff, rolloff=rolloff, focal_spread=focal_spread,
+                         angular_spread=angular_spread,
                          extent=extent, gpts=gpts, sampling=sampling, energy=energy, parameters=parameters, **kwargs)
         self.register_observer(self)
 
