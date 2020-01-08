@@ -25,10 +25,14 @@ class Propagator(Grid, Energy, Cache):
 
     Parameters
     ----------
-    extent :
-    gpts :
-    sampling :
-    energy :
+    extent : one or two float
+        Lateral extent of propagator [Å]
+    gpts : one or two int
+        Number of grid points describing the propagator
+    sampling : one or two float
+        Lateral sampling of wave functions [1 / Å]
+    energy : float
+        Energy of electrons to be propagated [eV]
     """
 
     def __init__(self, extent=None, gpts=None, sampling=None, energy=None):
@@ -46,8 +50,7 @@ class Propagator(Grid, Energy, Cache):
 
 def multislice(waves, potential: Potential, in_place: bool = False, show_progress: bool = False):
     """
-    The multislice algorithm
-
+    The multislice algorithm.
 
     Parameters
     ----------
@@ -99,11 +102,11 @@ class Waves(ArrayWithGridAndEnergy):
     Parameters
     ----------
     array : complex ndarray of shape (n, gpts_x, gpts_y)
-        Stack of n complex wavefunctions
+        Stack of n complex wave functions
     extent : sequence of float, float, optional
-        Lateral extent of wavefunctions [Å]
+        Lateral extent of wave functions [Å]
     sampling : sequence of float, float, optional
-        Lateral sampling of wavefunctions [1 / Å]
+        Lateral sampling of wave functions [1 / Å]
     energy : float, optional
         Wave function energy [eV]
     """
@@ -133,7 +136,7 @@ class Waves(ArrayWithGridAndEnergy):
         Returns
         -------
         Waves
-            The wavefunctions with aberrations applied.
+            The wave functions with aberrations applied.
         """
 
         if not in_place:
@@ -160,7 +163,8 @@ class Waves(ArrayWithGridAndEnergy):
         waves.check_is_grid_defined()
         waves.check_is_energy_defined()
 
-        fft_object_forward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), threads=FFTW_THREADS)
+        fft_object_forward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), threads=FFTW_THREADS,
+                                       flags=('FFTW_ESTIMATE',))
         fft_object_backward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), direction='FFTW_BACKWARD',
                                         threads=FFTW_THREADS, flags=('FFTW_ESTIMATE',))
 
@@ -184,18 +188,49 @@ class Waves(ArrayWithGridAndEnergy):
 
         Returns
         -------
-        Waves
-            Wavefunctions after multislice propagation through the potential.
+        Waves object
+            Wave functions after multislice propagation through the potential.
 
         """
 
         return multislice(self, potential, in_place=in_place, show_progress=show_progress)
 
-    def write(self, name):
-        np.savez('')
+    def write(self, path) -> None:
+        """
+        Write Waves object to file.
+
+        Parameters
+        ----------
+        path : str
+            Path of the file to write to.
+
+        Returns
+        -------
+        None
+        """
+        np.savez(path, array=self.array, extent=self.extent, energy=self.energy)
+
+    @staticmethod
+    def read(path) -> 'Waves':
+        """
+        Read Waves object from file.
+
+        Parameters
+        ----------
+        path : str
+            Path of the file to read.
+
+        Returns
+        -------
+        Waves object
+            Wave function saved in specified file.
+        """
+        npzfile = np.load(path)
+        return Waves(npzfile['array'], extent=npzfile['extent'], energy=npzfile['energy'])
 
     def copy(self, copy_array=True) -> 'Waves':
         """
+        Return a copy.
 
         Parameters
         ----------
@@ -204,10 +239,9 @@ class Waves(ArrayWithGridAndEnergy):
 
         Returns
         -------
-        Waves
+        Waves object
             A copy of itself.
         """
-
         try:
             extent = self.extent.copy()
         except AttributeError:
@@ -226,15 +260,15 @@ class PlaneWaves(Grid, Energy, Cache):
     Parameters
     ----------
     num_waves : int
-        number of plane waves in stack
+        Number of plane waves in stack
     extent : sequence of float, float, optional
-        lateral extent of wavefunctions [Å]
+        Lateral extent of wave functions [Å]
     gpts : sequence of int, int, optional
-        number of grid points describing the wavefunctions
+        Number of grid points describing the wave functions
     sampling : sequence of float, float, optional
-        lateral sampling of wavefunctions [1 / Å]
+        Lateral sampling of wave functions [1 / Å]
     energy : float, optional
-        waves energy [eV]
+        Energy of electrons represented by wave functions [eV]
     """
 
     def __init__(self, num_waves=1, extent=None, gpts=None, sampling=None, energy=None):
