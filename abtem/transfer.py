@@ -132,8 +132,8 @@ def calculate_temporal_envelope(alpha: np.ndarray, wavelength: float, focal_spre
     return DTYPE(np.exp(- (.5 * np.pi / wavelength * focal_spread * alpha ** 2) ** 2))
 
 
-def calculate_gaussian_blur_envelope(alpha: np.ndarray, wavelength: float, focal_spread: float) -> np.ndarray:
-    return DTYPE(np.exp(- (.5 * np.pi / wavelength * focal_spread * alpha ** 2) ** 2))
+def calculate_gaussian_envelope(alpha: np.ndarray, wavelength: float, sigma: float) -> np.ndarray:
+    return DTYPE(np.exp(- .5 * sigma ** 2 * alpha ** 2 / wavelength ** 2))
 
 
 def calculate_spatial_envelope(alpha, phi, wavelength, angular_spread, parameters):
@@ -181,12 +181,14 @@ def _parametrization_property(key):
 class CTFBase(Energy):
 
     def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
-                 angular_spread: float = 0., energy: float = None, parameters: Mapping[str, float] = None, **kwargs):
+                 angular_spread: float = 0., sigma: float = 0., energy: float = None,
+                 parameters: Mapping[str, float] = None, **kwargs):
 
         self._semiangle_cutoff = DTYPE(semiangle_cutoff)
         self._rolloff = DTYPE(rolloff)
         self._focal_spread = DTYPE(focal_spread)
         self._angular_spread = DTYPE(angular_spread)
+        self._sigma = DTYPE(sigma)
         self._parameters = dict(zip(polar_symbols, [0.] * len(polar_symbols)))
 
         if parameters is None:
@@ -256,6 +258,15 @@ class CTFBase(Energy):
     def angular_spread(self, value: float):
         self._angular_spread = DTYPE(value)
 
+    @property
+    def sigma(self) -> float:
+        return self._sigma
+
+    @sigma.setter
+    @notify
+    def sigma(self, value: float):
+        self._sigma = DTYPE(value)
+
     def set_parameters(self, parameters):
         for symbol, value in parameters.items():
             if symbol in self._parameters.keys():
@@ -288,6 +299,9 @@ class CTFBase(Energy):
         return calculate_spatial_envelope(self.get_alpha(), self.get_phi(), self.wavelength, self.angular_spread,
                                           self.parameters)
 
+    def get_gaussian_envelope(self):
+        return calculate_gaussian_envelope(self.get_alpha(), self.wavelength, self.sigma)
+
     def get_aberrations(self):
         return calculate_polar_aberrations(self.get_alpha(), self.get_phi(), self.wavelength, self._parameters)
 
@@ -302,6 +316,9 @@ class CTFBase(Energy):
 
         if self.angular_spread > 0.:
             array = array * self.get_spatial_envelope()
+
+        if self.sigma > 0.:
+            array = array * self.get_gaussian_envelope()
 
         return array[None]
 
@@ -318,7 +335,7 @@ def scherzer_defocus(Cs, energy):
 class CTF(Grid, Cache, CTFBase):
 
     def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
-                 angular_spread: float = 0., parameters: Mapping[str, float] = None,
+                 angular_spread: float = 0., sigma: float = 0., parameters: Mapping[str, float] = None,
                  extent: Union[float, Sequence[float]] = None,
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
@@ -359,8 +376,8 @@ class CTF(Grid, Cache, CTFBase):
         """
 
         super().__init__(semiangle_cutoff=semiangle_cutoff, rolloff=rolloff, focal_spread=focal_spread,
-                         angular_spread=angular_spread,
-                         extent=extent, gpts=gpts, sampling=sampling, energy=energy, parameters=parameters, **kwargs)
+                         angular_spread=angular_spread, sigma=sigma, extent=extent, gpts=gpts, sampling=sampling,
+                         energy=energy, parameters=parameters, **kwargs)
         self.register_observer(self)
 
     @cached_method(('extent', 'gpts', 'sampling', 'energy'))
@@ -387,6 +404,10 @@ class CTF(Grid, Cache, CTFBase):
 
     @cached_method(('extent', 'gpts', 'sampling', 'energy', 'angular_spread'))
     def get_spatial_envelope(self):
+        return super().get_spatial_envelope()
+
+    @cached_method(('extent', 'gpts', 'sampling', 'energy', 'sigma'))
+    def get_gaussian_envelope(self):
         return super().get_spatial_envelope()
 
     @cached_method(('extent', 'gpts', 'sampling', 'energy', 'defocus') + polar_symbols)

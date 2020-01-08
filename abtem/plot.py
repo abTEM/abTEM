@@ -8,7 +8,7 @@ from matplotlib.patches import Circle
 from matplotlib.patches import Rectangle
 from abtem.utils import convert_complex
 from abtem.transfer import calculate_polar_aberrations, calculate_aperture, calculate_temporal_envelope, \
-    calculate_spatial_envelope
+    calculate_spatial_envelope, calculate_gaussian_envelope
 
 cube = np.array([[[0, 0, 0], [0, 0, 1]],
                  [[0, 0, 0], [0, 1, 0]],
@@ -83,12 +83,13 @@ def plot_ctf(ctf, max_k, ax=None, phi=0, n=1000):
     aperture = calculate_aperture(alpha, ctf.semiangle_cutoff, ctf.rolloff)
     temporal_envelope = calculate_temporal_envelope(alpha, ctf.wavelength, ctf.focal_spread)
     spatial_envelope = calculate_spatial_envelope(alpha, phi, ctf.wavelength, ctf.angular_spread, ctf.parameters)
-    envelope = aperture * temporal_envelope * spatial_envelope
+    gaussian_envelope = calculate_gaussian_envelope(alpha, ctf.wavelength, ctf.sigma)
+    envelope = aperture * temporal_envelope * spatial_envelope * gaussian_envelope
 
     if ax is None:
         ax = plt.subplot()
 
-    ax.plot(k, aberrations.imag * aperture * temporal_envelope * spatial_envelope, label='CTF')
+    ax.plot(k, aberrations.imag * envelope, label='CTF')
 
     if ctf.semiangle_cutoff < np.inf:
         ax.plot(k, aperture, label='Aperture')
@@ -98,6 +99,9 @@ def plot_ctf(ctf, max_k, ax=None, phi=0, n=1000):
 
     if ctf.angular_spread > 0.:
         ax.plot(k, spatial_envelope, label='Spatial envelope')
+
+    if ctf.sigma > 0.:
+        ax.plot(k, gaussian_envelope, label='Gaussian envelope')
 
     if np.any(envelope != 1.):
         ax.plot(k, envelope, label='Product envelope')

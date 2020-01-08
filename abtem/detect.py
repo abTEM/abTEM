@@ -32,7 +32,7 @@ class DetectorBase:
         raise NotImplementedError()
 
 
-class RealSpaceDetector:
+class PolarDetector:
     pass
 
 

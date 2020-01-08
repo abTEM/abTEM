@@ -12,4 +12,6 @@ Welcome to the introductory abTEM tutorials.
     potentials.ipynb
     multislice.ipynb
     contrast_transfer_function.ipynb
+    scan.ipynb
+    noise.ipynb
     multislice_derivation.ipynb
