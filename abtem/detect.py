@@ -31,6 +31,11 @@ class DetectorBase:
     def detect(self, wave):
         raise NotImplementedError()
 
+    def match_grid_and_energy(self, waves):
+        self.extent = waves.extent
+        self.gpts = waves.gpts
+        self.energy = waves.energy
+
 
 class PolarDetector:
     pass
@@ -133,6 +138,10 @@ class RingDetector(DetectorBase, Energy, Grid, Cache):
             array = (alpha >= self._inner) & (alpha <= self._outer)
 
         return ArrayWithGridAndEnergy(array, spatial_dimensions=2, extent=self.extent, energy=self.energy)
+
+    @property
+    def array(self) -> np.ndarray:
+        return self.get_efficiency()
 
     def detect(self, waves):
         self.extent = waves.extent

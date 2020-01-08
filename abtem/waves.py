@@ -15,6 +15,7 @@ from abtem.scan import GridScan, LineScan, CustomScan, ScanBase
 from abtem.transfer import CTF, CTFBase
 from abtem.utils import complex_exponential, fftfreq, BatchGenerator
 from abtem.config import DTYPE, COMPLEX_DTYPE, FFTW_THREADS
+from abtem.plot import plot_image
 
 
 class Propagator(Grid, Energy, Cache):
@@ -249,6 +250,9 @@ class Waves(ArrayWithGridAndEnergy):
 
         new = self.__class__(array=self.array.copy(), extent=extent, energy=self.energy)
         return new
+
+    def show(self, **kwargs):
+        plot_image(self, **kwargs)
 
 
 class PlaneWaves(Grid, Energy, Cache):
