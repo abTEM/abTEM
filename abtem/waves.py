@@ -115,8 +115,6 @@ class Waves(ArrayWithGridAndEnergy):
     def __init__(self, array: np.ndarray, extent: Union[float, Sequence[float]] = None,
                  sampling: Union[float, Sequence[float]] = None, energy: float = None):
 
-        # array = np.array(array, dtype=COMPLEX_DTYPE)
-
         if len(array.shape) == 2:
             array = array[None]
 
@@ -182,6 +180,7 @@ class Waves(ArrayWithGridAndEnergy):
         Parameters
         ----------
         potential : Potential object or Atoms object
+            The potential to propaget the waves through.
         in_place : bool
             Modify the wavefunction arrays in place.
         show_progress : bool
@@ -229,6 +228,15 @@ class Waves(ArrayWithGridAndEnergy):
         npzfile = np.load(path)
         return Waves(npzfile['array'], extent=npzfile['extent'], energy=npzfile['energy'])
 
+    def __getitem__(self, item):
+        new_copy = self.copy(copy_array=False)
+        new_copy._array = new_copy._array[item]
+
+        if len(new_copy._array.shape) == 2:
+            new_copy._array = np.expand_dims(new_copy._array, 0)
+
+        return new_copy
+
     def copy(self, copy_array=True) -> 'Waves':
         """
         Return a copy.
@@ -248,7 +256,12 @@ class Waves(ArrayWithGridAndEnergy):
         except AttributeError:
             extent = self.extent
 
-        new = self.__class__(array=self.array.copy(), extent=extent, energy=self.energy)
+        if copy_array:
+            array = self.array.copy()
+        else:
+            array = self.array
+
+        new = self.__class__(array=array, extent=extent, energy=self.energy)
         return new
 
     def show(self, **kwargs):
@@ -357,7 +370,7 @@ class ProbeWaves(CTF):
 
     Parameters
     ----------
-    cutoff : float
+    semiangle_cutoff : float
         Convergence semi-angle [rad.].
     rolloff : float
         Softens the cutoff. A value of 0 gives a hard cutoff, while 1 gives the softest possible cutoff.
@@ -424,8 +437,12 @@ class ProbeWaves(CTF):
         y = positions[:, 1].reshape((-1,) + (1, 1))
         return complex_exponential(2 * np.pi * (kx * x + ky * y))
 
-    def build_at(self, positions: Sequence[Sequence[float]]) -> Waves:
-        positions = np.array(positions, dtype=DTYPE)
+    def build_at(self, positions: Sequence[Sequence[float]] = None) -> Waves:
+        if positions is None:
+            positions = np.zeros((1, 2), dtype=DTYPE)
+        else:
+            positions = np.array(positions, dtype=DTYPE)
+
         if len(positions.shape) == 1:
             positions = np.expand_dims(positions, axis=0)
 
@@ -434,21 +451,14 @@ class ProbeWaves(CTF):
 
         temp[:] = super().get_array() * self._translation_multiplier(positions)
         fft_object()
+
+        if self.normalize:
+            temp[:] = temp / np.sum(np.abs(temp) ** 2, axis=(1, 2), keepdims=True) * np.prod(temp.shape[1:])
+
         return Waves(temp, extent=self.extent, energy=self.energy)
 
     def get_ctf(self) -> CTF:
         return super().build()
-
-    def build(self) -> Waves:
-        self.check_is_grid_defined()
-        self.check_is_energy_defined()
-
-        array = np.fft.fftshift(np.fft.fft2(super().get_array()))
-
-        if self.normalize:
-            array[:] = array / np.sum(np.abs(array) ** 2, axis=(1, 2)) * np.prod(array.shape[1:])[None]
-
-        return Waves(array, extent=self.extent, energy=self.energy)
 
     def _get_scan_waves_maker(self, potential):
 
@@ -552,7 +562,7 @@ class ScatteringMatrix(ArrayWithGrid, CTFBase, Cache):
         The array representation of the scattering matrix.
     interpolation : int
 
-    cutoff : float
+    expansion_cutoff : float
         The angular cutoff of the plane wave expansion.
     kx : sequence of floats
         The
@@ -565,18 +575,15 @@ class ScatteringMatrix(ArrayWithGrid, CTFBase, Cache):
     always_recenter :
     """
 
-    def __init__(self, array: np.ndarray, interpolation: int, cutoff: float, kx: np.ndarray, ky: np.ndarray,
-                 extent=None,
-                 sampling=None, energy=None,
-                 always_recenter: bool = False):
+    def __init__(self, array: np.ndarray, interpolation: int, expansion_cutoff: float, kx: np.ndarray, ky: np.ndarray,
+                 extent=None, sampling=None, energy=None, always_recenter: bool = False):
 
         self._interpolation = interpolation
-        self._cutoff = cutoff
+        self._expansion_cutoff = expansion_cutoff
         self._kx = kx
         self._ky = ky
         self.always_recenter = always_recenter
         super().__init__(array=array, spatial_dimensions=2, extent=extent, sampling=sampling, energy=energy)
-        self.cutoff = cutoff
 
     @property
     def kx(self) -> np.ndarray:
@@ -671,7 +678,7 @@ class ScatteringMatrix(ArrayWithGrid, CTFBase, Cache):
 
 class PrismWaves(Grid, Energy, Cache):
 
-    def __init__(self, cutoff: float, interpolation: int = 1,
+    def __init__(self, expansion_cutoff: float, interpolation: int = 1,
                  extent: Union[float, Sequence[float]] = None,
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
@@ -681,7 +688,7 @@ class PrismWaves(Grid, Energy, Cache):
 
         Parameters
         ----------
-        cutoff :
+        expansion_cutoff :
         interpolation :
         extent :
         gpts :
@@ -694,19 +701,19 @@ class PrismWaves(Grid, Energy, Cache):
             raise ValueError('interpolation factor must be int')
 
         self._interpolation = interpolation
-        self._cutoff = cutoff
+        self._expansion_cutoff = expansion_cutoff
         self.always_recenter = always_recenter
 
         super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy)
 
     @property
-    def cutoff(self) -> float:
-        return self._cutoff
+    def expansion_cutoff(self) -> float:
+        return self._expansion_cutoff
 
-    @cutoff.setter
+    @expansion_cutoff.setter
     @notify
-    def cutoff(self, value: float):
-        self._cutoff = value
+    def expansion_cutoff(self, value: float):
+        self._expansion_cutoff = value
 
     @property
     def interpolation(self) -> int:

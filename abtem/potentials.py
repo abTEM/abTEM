@@ -389,7 +389,7 @@ class PrecalculatedPotential(ArrayWithGrid):
 
         self.extent = self.extent
 
-    def get_slice(self, i):
+    def _get_slice_array(self, i):
         return self._array[i]
 
     def extract(self, first, last):

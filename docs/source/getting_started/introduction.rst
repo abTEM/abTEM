@@ -1,5 +1,5 @@
-Getting started
-===============
+How to use
+==========
 
 Welcome to the introductory abTEM tutorials.
 
