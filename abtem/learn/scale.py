@@ -1,6 +1,10 @@
 import numpy as np
 from scipy import ndimage
+from scipy.signal import savgol_filter
+from skimage import exposure
+
 from abtem.utils import ind2sub
+
 
 def polar_bins(shape, inner, outer, nbins_angular=32, nbins_radial=None):
     if nbins_radial is None:
@@ -50,43 +54,9 @@ def unroll_powerspec(f, inner=1, outer=None, nbins_angular=64, nbins_radial=None
     return unrolled
 
 
-def rotational_average(images):
-    power_spec = np.abs(np.fft.fftshift(np.fft.fft2(images)))
-
-    if len(power_spec.shape) == 3:
-        power_spec = power_spec.sum(0)
-
-    #import matplotlib.pyplot as plt
-    #plt.imshow(np.log(1+power_spec)[200:-200,200:-200])
-    #plt.show()
-
-    unrolled = unroll_powerspec(power_spec, inner=1)
-
-    return unrolled.mean(0)
-
-
-def find_ring(images, a, min_sampling=0.):
-    if len(images.shape) == 3:
-        shape = images.shape[1:]
-    else:
-        shape = images.shape
-
-    power_spec = rotational_average(images)
-
-    #import matplotlib.pyplot as plt
-    #plt.plot(power_spec)
-    #plt.show()
-
-    inner = int(np.floor(min_sampling / a * float(min(shape)) * 2. / np.sqrt(3.))) - 1
-    inner = max(0, inner)
-
-    scale = (np.argmax(power_spec[inner:]) + inner + 1 + .5) * a / float(min(shape)) * (np.sqrt(3.) / 2.)
-    return scale
-
 def top_n_2d(array, n, margin=0):
     top = np.argsort(array.ravel())[::-1]
     accepted = np.zeros((n, 2), dtype=np.int)
-    values = np.zeros(n)
     marked = np.zeros((array.shape[0] + 2 * margin, array.shape[1] + 2 * margin), dtype=np.bool_)
     i = 0
     j = 0
@@ -99,73 +69,74 @@ def top_n_2d(array, n, margin=0):
             marked[-2 * margin:-margin] += marked[:margin]
 
             accepted[j] = idx
-            values[j] = array[idx[0], idx[1]]
             j += 1
 
         i += 1
         if i >= array.size - 1:
             break
 
-    return accepted, values
-#
-#
-# def moving_average(x, w):
-#     return np.convolve(x, np.ones(1 + 2 * w), 'valid') / w
-#
-#
-def find_circular_spots(power_spec, n, m=1, inner=1, w=1, bins_per_spot=16):
-    nbins_angular = n * bins_per_spot
+    return accepted
 
-    unrolled = unroll_powerspec(power_spec, inner=inner, nbins_angular=nbins_angular)
-    #unrolled /= unrolled.mean(axis=0, keepdims=True)
-    unrolled /= unrolled.mean(axis=1, keepdims=True)
-    unrolled = unrolled.reshape((n, bins_per_spot, unrolled.shape[1])).sum(0)
+
+def round_up_to_odd(f):
+    return np.ceil(f) // 2 * 2 + 1
+
+
+def fourier_padding(N, k):
+    m = np.ones(N)
+    m[:k] = np.sin(np.linspace(-np.pi / 2, np.pi / 2, k)) / 2 + .5
+    m[-k:] = np.sin(-np.linspace(-np.pi / 2, np.pi / 2, k)) / 2 + .5
+    return m
+
+
+def fourier_padding_2d(shape, k):
+    return fourier_padding(shape[0], k)[:, None] * fourier_padding(shape[1], k)[None]
+
+
+def fixed_fft2d(image):
+
+    #image = ((image - image.min()) / image.ptp() * 255).astype(np.uint16)
+    #image = exposure.equalize_adapthist(image, clip_limit=.03)
+    image = image * fourier_padding_2d(image.shape[1:], image.shape[1] // 8)[None]
+    return np.fft.fftshift(np.abs(np.fft.fft2(image)) ** 2).sum(0)
+
+
+def find_hexagonal_sampling(image, a, min_scale):
+    bins_per_spot = 16
+
+    if len(image.shape) == 2:
+        image = image[None]
+
+    inner = int(np.ceil(min_scale / a * float(min(image.shape[1:])) * 2. / np.sqrt(3.))) - 1
+    inner = max(1, inner)
+
+    f = fixed_fft2d(image)
+    nbins_angular = 6 * bins_per_spot
 
     #import matplotlib.pyplot as plt
-    #plt.figure(figsize=(16,16))
-    #plt.imshow(unrolled[:,4:])
+    #plt.imshow(np.log(f)[200:-200,200:-200])
     #plt.show()
 
-    #unrolled = unrolled[:, w:-w] / moving_average(unrolled.mean(axis=0), w)
-    peaks, intensities = top_n_2d(unrolled, m, bins_per_spot // 4)
-    radials, angles = peaks[:, 1], peaks[:, 0]
+    #print(inner)
 
-    angles = (angles + .5) / nbins_angular * 2 * np.pi
-    radials = radials + inner + w + .5
+    unrolled = unroll_powerspec(f, inner, outer=None, nbins_angular=nbins_angular, nbins_radial=None)
+    unrolled = unrolled.reshape((6, bins_per_spot, unrolled.shape[1])).sum(0)
 
-    #x = radials[:, None] * np.cos(angles[:, None] + np.linspace(0, 2 * np.pi, n, endpoint=False)[None, :]) + w // 2
-    #y = radials[:, None] * np.sin(angles[:, None] + np.linspace(0, 2 * np.pi, n, endpoint=False)[None, :]) + h // 2
+    normalized = unrolled / savgol_filter(unrolled.mean(0), round_up_to_odd(inner), 1, mode='nearest')
 
-    return radials, angles, intensities
+    peaks = top_n_2d(normalized, 3, 1)
+    intensities = unrolled[peaks[:, 0], peaks[:, 1]]
+    angle, radial = peaks[np.argmax(intensities)]
+    # print(radial)
+    import matplotlib.pyplot as plt
+    #plt.imshow(normalized[:,:50])
+    plt.imshow(normalized[:, :50].T)
+    #plt.plot(*peaks.T,'o')
+    plt.show()
 
+    # angle = (angle + .5) / nbins_angular * 2 * np.pi
+    radial = radial + inner + .5
 
-def find_hexagonal_scale(image, a=2.46, min_scale=0.):
-    #angle_tol = angle_tol / 180. * np.pi
-
-    power_spec = np.fft.fftshift(np.abs(np.fft.fft2(image)) ** 2)
-    if len(power_spec.shape) == 3:
-        power_spec = power_spec.sum(0)
-
-    inner = int(np.ceil(min_scale / a * float(min(power_spec.shape)) * 2. / np.sqrt(3.))) - 1
-    inner = max(1, inner)
-    radials, angles, intensities = find_circular_spots(power_spec, 6, m=2, inner=inner)
-
-    #print(radials, angles, intensities)
-
-    ordered_angles = np.sort(angles)
-    ordered_radials = np.sort(radials)
-    #ratio = ordered_radials[0] / ordered_radials[1]
-    #angle_diff = np.diff(ordered_angles)[0]
-
-    scale = radials[np.argmax(intensities)] * a / float(min(power_spec.shape)) * (np.sqrt(3.) / 2.)
-
-    # if np.isclose(ratio, 1 / np.sqrt(3), atol=ratio_tol) & np.isclose(angle_diff, np.pi / 6, atol=angle_tol):
-    #     scale = np.max(radials) * a / float(min(power_spec.shape)) / 2.
-    # elif limiting_regime == 'low':
-    #     scale = radials[np.argmax(intensities)] * a / float(min(power_spec.shape)) / 2.
-    # elif limiting_regime == 'high':
-    #     scale = radials[np.argmax(intensities)] * a / float(min(power_spec.shape)) * (np.sqrt(3.) / 2.)
-    # else:
-    #     raise RuntimeError()
+    scale = radial * a / float(min(f.shape)) * (np.sqrt(3.) / 2.)
 
     return scale
