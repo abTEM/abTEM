@@ -15,7 +15,7 @@ abTEM works with the Atomic Simulation Environment and the density functional th
 environment for simulating images from first principles.
 
 >>> from ase import read
->>> from abiniTEM.waves import PlaneWaves
+>>> from abTEM.waves import PlaneWaves
 >>> atoms = read('SrTiO.cif')
 >>> waves = PlaneWaves(sampling=0.1, energy=300e3)
 >>> waves.multislice(atoms)

@@ -130,7 +130,7 @@ def plot_image(waves, i=0, ax=None, convert=None, title=None, cmap='gray', **kwa
     if ax is None:
         ax = plt.subplot()
 
-    ax.imshow(array.T, extent=[0, waves.extent[0], 0, waves.extent[1]], cmap=cmap, **kwargs)
+    ax.imshow(array.T, extent=[0, waves.extent[0], 0, waves.extent[1]], cmap=cmap, origin='lower', **kwargs)
     ax.set_xlabel('x [Å]')
     ax.set_ylabel('y [Å]')
 

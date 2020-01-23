@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.abspath('../../abtem/'))
 
 # -- Project information -----------------------------------------------------
 
-project = 'abinitEM'
+project = 'abTEM'
 copyright = '2019, Jacob Madsen'
 author = 'Jacob Madsen'
 
@@ -37,8 +37,8 @@ extensions = [
     'sphinx.ext.autosummary',
     'sphinx.ext.viewcode',
     'sphinx.ext.napoleon',
+    'sphinx.ext.mathjax',
     'nbsphinx',
-    'sphinx.ext.mathjax'
 ]
 
 # Add any paths that contain templates here, relative to this directory.

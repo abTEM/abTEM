@@ -60,7 +60,6 @@ def rotational_average(images):
     #plt.imshow(np.log(1+power_spec)[200:-200,200:-200])
     #plt.show()
 
-
     unrolled = unroll_powerspec(power_spec, inner=1)
 
     return unrolled.mean(0)
@@ -87,7 +86,7 @@ def find_ring(images, a, min_sampling=0.):
 def top_n_2d(array, n, margin=0):
     top = np.argsort(array.ravel())[::-1]
     accepted = np.zeros((n, 2), dtype=np.int)
-    values = np.zeros(n, dtype=np.int)
+    values = np.zeros(n)
     marked = np.zeros((array.shape[0] + 2 * margin, array.shape[1] + 2 * margin), dtype=np.bool_)
     i = 0
     j = 0
@@ -118,9 +117,14 @@ def find_circular_spots(power_spec, n, m=1, inner=1, w=1, bins_per_spot=16):
     nbins_angular = n * bins_per_spot
 
     unrolled = unroll_powerspec(power_spec, inner=inner, nbins_angular=nbins_angular)
-    unrolled /= unrolled.mean(axis=0, keepdims=True)
+    #unrolled /= unrolled.mean(axis=0, keepdims=True)
     unrolled /= unrolled.mean(axis=1, keepdims=True)
     unrolled = unrolled.reshape((n, bins_per_spot, unrolled.shape[1])).sum(0)
+
+    #import matplotlib.pyplot as plt
+    #plt.figure(figsize=(16,16))
+    #plt.imshow(unrolled[:,4:])
+    #plt.show()
 
     #unrolled = unrolled[:, w:-w] / moving_average(unrolled.mean(axis=0), w)
     peaks, intensities = top_n_2d(unrolled, m, bins_per_spot // 4)
@@ -135,29 +139,33 @@ def find_circular_spots(power_spec, n, m=1, inner=1, w=1, bins_per_spot=16):
     return radials, angles, intensities
 
 
-def find_hexagonal_scale(image, a=2.46, ratio_tol=.0, angle_tol=0., limiting_regime='high'):
-    angle_tol = angle_tol / 180. * np.pi
+def find_hexagonal_scale(image, a=2.46, min_scale=0.):
+    #angle_tol = angle_tol / 180. * np.pi
 
     power_spec = np.fft.fftshift(np.abs(np.fft.fft2(image)) ** 2)
     if len(power_spec.shape) == 3:
         power_spec = power_spec.sum(0)
 
-    #inner = int(np.ceil(min_scale / a * float(min(power_spec.shape)) * 2. / np.sqrt(3.))) - 1
-    #inner = max(1, inner)
-    radials, angles, intensities = find_circular_spots(power_spec, 6, m=2, inner=1)
+    inner = int(np.ceil(min_scale / a * float(min(power_spec.shape)) * 2. / np.sqrt(3.))) - 1
+    inner = max(1, inner)
+    radials, angles, intensities = find_circular_spots(power_spec, 6, m=2, inner=inner)
+
+    #print(radials, angles, intensities)
 
     ordered_angles = np.sort(angles)
     ordered_radials = np.sort(radials)
-    ratio = ordered_radials[0] / ordered_radials[1]
-    angle_diff = np.diff(ordered_angles)[0]
+    #ratio = ordered_radials[0] / ordered_radials[1]
+    #angle_diff = np.diff(ordered_angles)[0]
 
-    if np.isclose(ratio, 1 / np.sqrt(3), atol=ratio_tol) & np.isclose(angle_diff, np.pi / 6, atol=angle_tol):
-        scale = np.max(radials) * a / float(min(power_spec.shape)) / 2.
-    elif limiting_regime == 'low':
-        scale = radials[np.argmax(intensities)] * a / float(min(power_spec.shape)) / 2.
-    elif limiting_regime == 'high':
-        scale = radials[np.argmax(intensities)] * a / float(min(power_spec.shape)) * (np.sqrt(3.) / 2.)
-    else:
-        raise RuntimeError()
+    scale = radials[np.argmax(intensities)] * a / float(min(power_spec.shape)) * (np.sqrt(3.) / 2.)
+
+    # if np.isclose(ratio, 1 / np.sqrt(3), atol=ratio_tol) & np.isclose(angle_diff, np.pi / 6, atol=angle_tol):
+    #     scale = np.max(radials) * a / float(min(power_spec.shape)) / 2.
+    # elif limiting_regime == 'low':
+    #     scale = radials[np.argmax(intensities)] * a / float(min(power_spec.shape)) / 2.
+    # elif limiting_regime == 'high':
+    #     scale = radials[np.argmax(intensities)] * a / float(min(power_spec.shape)) * (np.sqrt(3.) / 2.)
+    # else:
+    #     raise RuntimeError()
 
     return scale
