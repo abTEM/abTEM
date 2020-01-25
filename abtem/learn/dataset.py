@@ -3,6 +3,7 @@ from skimage.morphology import watershed
 
 from abtem.interpolation import interpolation_kernel_parallel
 from abtem.learn.augment import RandomCropStack
+import numbers
 
 
 def interpolate_radial_functions(array, r, values, positions, sampling, thread_safe=True):
@@ -22,6 +23,9 @@ def interpolate_radial_functions(array, r, values, positions, sampling, thread_s
 
 
 def gaussian_marker_labels(points, width, gpts):
+    if isinstance(gpts, numbers.Number):
+        gpts = (gpts,) * 2
+
     gpts = np.array(gpts)
     extent = np.diag(points.cell)
     sampling = extent / gpts
