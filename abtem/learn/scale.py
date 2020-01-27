@@ -1,14 +1,11 @@
-import numpy as np
-from scipy import ndimage
-from scipy.signal import savgol_filter
-from skimage import exposure
+from bisect import bisect_left
 
-from abtem.utils import ind2sub
+import numpy as np
+import torch
 import functools
 
 
-# @functools.lru_cache(maxsize=32)
-def polar_bins(shape, inner=1, outer=None, nbins_angular=32, nbins_radial=None):
+def polar_labels(shape, inner=1, outer=None, nbins_angular=32, nbins_radial=None):
     if outer is None:
         outer = min(shape) // 2
     if nbins_radial is None:
@@ -31,34 +28,100 @@ def polar_bins(shape, inner=1, outer=None, nbins_angular=32, nbins_radial=None):
     return bins
 
 
-def unroll_powerspec(f, inner=1, outer=None, nbins_angular=64, nbins_radial=None):
-    if f.shape[0] != f.shape[1]:
-        raise RuntimeError()
-
-    bins = polar_bins(f.shape, inner, outer, nbins_angular=nbins_angular, nbins_radial=nbins_radial)
-
-    with np.errstate(divide='ignore', invalid='ignore'):
-        unrolled = ndimage.mean(f, bins, range(0, bins.max() + 1))
-
-    unrolled = unrolled.reshape((nbins_angular, -1))
-
-    for i in range(unrolled.shape[1]):
-        y = unrolled[:, i]
-        nans = np.isnan(y)
-        y[nans] = np.interp(nans.nonzero()[0], (~nans).nonzero()[0], y[~nans], period=len(y))
-        unrolled[:, i] = y
-
-    return unrolled
+def generate_indices(labels, first_label=0):
+    labels = labels.flatten()
+    labels_order = labels.argsort()
+    sorted_labels = labels[labels_order]
+    indices = np.arange(0, len(labels) + 1)[labels_order]
+    index = np.arange(first_label, np.max(labels) + 1)
+    lo = np.searchsorted(sorted_labels, index, side='left')
+    hi = np.searchsorted(sorted_labels, index, side='right')
+    for i, (l, h) in enumerate(zip(lo, hi)):
+        yield np.sort(indices[l:h])
 
 
-def top_n_2d(array, n, margin=0):
-    top = np.argsort(array.ravel())[::-1]
-    accepted = np.zeros((n, 2), dtype=np.int)
-    marked = np.zeros((array.shape[0] + 2 * margin, array.shape[1] + 2 * margin), dtype=np.bool_)
+@functools.lru_cache(maxsize=1)
+def polar_indices(shape, inner, outer, nbins_angular):
+    labels = polar_labels(shape, inner=inner, outer=outer, nbins_angular=nbins_angular)
+
+    indices = np.zeros((labels.max() + 1, nbins_angular), dtype=np.int)
+    weights = np.zeros((labels.max() + 1, nbins_angular))
+    lengths = np.zeros((labels.max() + 1,), dtype=np.int)
+
+    for j, i in enumerate(generate_indices(labels, first_label=0)):
+        if len(i) > 0:
+            indices[j, :len(i)] = i
+            weights[j, :len(i)] = 1 / len(i)
+            lengths[j] = len(i)
+
+    indices = indices.reshape((nbins_angular, -1, nbins_angular))
+    weights = weights.reshape((nbins_angular, -1, nbins_angular))
+    lengths = lengths.reshape((nbins_angular, -1))
+    nans = lengths == 0
+
+    for i in range(indices.shape[0]):
+        k = np.where(nans[:, i] == 0)[0]
+        for j in np.where(nans[:, i])[0]:
+            idx = bisect_left(k, j)
+            idx = idx % len(k)
+
+            l1 = lengths[k[idx - 1], i]
+            l2 = lengths[k[idx], i]
+
+            indices[j, i, :l1] = indices[k[idx - 1], i, :l1]
+            indices[j, i, l1:l1 + l2] = indices[k[idx], i, :l2]
+
+            d1 = min(abs(k[idx - 1] - j), abs((nbins_angular - k[idx - 1] + j)))
+            d2 = min(abs(k[idx] - j), abs((-nbins_angular - k[idx] + j)))
+
+            weights[j, i, :l1] = 1 / d1
+            weights[j, i, l1:l1 + l2] = 1 / d2
+            weights[j, i, :l1 + l2] /= weights[j, i, :l1 + l2].sum()
+
+    indices = indices[:, :, :np.max(lengths)]
+    weights = weights[:, :, :np.max(lengths)]
+
+    return indices, weights
+
+
+def roll(X, axis, n):
+    f_idx = tuple(slice(None, None, None) if i != axis else slice(0, n, None) for i in range(X.dim()))
+    b_idx = tuple(slice(None, None, None) if i != axis else slice(n, None, None) for i in range(X.dim()))
+    front = X[f_idx]
+    back = X[b_idx]
+    return torch.cat([back, front], axis)
+
+
+def fftshift2d(x):
+    for dim in range(1, len(x.size())):
+        n_shift = x.size(dim) // 2
+        if x.size(dim) % 2 != 0:
+            n_shift += 1
+        x = roll(x, axis=dim, n=n_shift)
+    return x
+
+
+def soft_border(shape, k):
+    def f(N, k):
+        mask = torch.ones(N)
+        # print(torch.linspace(-np.pi / 2, np.pi / 2, k))
+        mask[:k] = torch.sin(torch.linspace(-np.pi / 2, np.pi / 2, k)) / 2 + .5
+        mask[-k:] = torch.sin(-torch.linspace(-np.pi / 2, np.pi / 2, k)) / 2 + .5
+
+        return mask
+
+    return f(shape[0], k)[:, None] * f(shape[1], k)[None]
+
+
+def nms(array, n, margin=0):
+    top = torch.argsort(array.view(-1), descending=True)
+    accepted = torch.zeros((n, 2), dtype=np.long)
+    marked = torch.zeros((array.shape[0] + 2 * margin, array.shape[1] + 2 * margin), dtype=torch.bool)
+
     i = 0
     j = 0
     while j < n:
-        idx = ind2sub(array.shape, top[i])
+        idx = torch.tensor((top[i] // array.shape[1], top[i] % array.shape[1]))
 
         if marked[idx[0] + margin, idx[1] + margin] == False:
             marked[idx[0]:idx[0] + 2 * margin, idx[1]:idx[1] + 2 * margin] = True
@@ -69,32 +132,10 @@ def top_n_2d(array, n, margin=0):
             j += 1
 
         i += 1
-        if i >= array.size - 1:
+        if i >= torch.numel(array) - 1:
             break
 
     return accepted
-
-
-def round_up_to_odd(f):
-    return np.ceil(f) // 2 * 2 + 1
-
-
-def fourier_padding(N, k):
-    m = np.ones(N)
-    m[:k] = np.sin(np.linspace(-np.pi / 2, np.pi / 2, k)) / 2 + .5
-    m[-k:] = np.sin(-np.linspace(-np.pi / 2, np.pi / 2, k)) / 2 + .5
-    return m
-
-
-def fourier_padding_2d(shape, k):
-    return fourier_padding(shape[0], k)[:, None] * fourier_padding(shape[1], k)[None]
-
-
-def fixed_fft2d(image):
-    # image = ((image - image.min()) / image.ptp() * 255).astype(np.uint16)
-    # image = exposure.equalize_adapthist(image, clip_limit=.03)
-    image = image * fourier_padding_2d(image.shape[1:], image.shape[1] // 4)[None]
-    return np.fft.fftshift(np.abs(np.fft.fft2(image)) ** 2).sum(0)
 
 
 def find_hexagonal_sampling(image, a, min_sampling, bins_per_spot=16):
@@ -104,27 +145,35 @@ def find_hexagonal_sampling(image, a, min_sampling, bins_per_spot=16):
     if image.shape[1] != image.shape[2]:
         raise RuntimeError('square image required')
 
-    inner = max(1, int(np.ceil(min_sampling / a * float(min(image.shape[1:])) * 2. / np.sqrt(3.))) - 1)
-    outer = min(image.shape[1:]) // 2
+    N = image.shape[1]
+
+    inner = max(1, int(np.ceil(min_sampling / a * float(N) * 2. / np.sqrt(3.))) - 1)
+    outer = N // 2
 
     if inner >= outer:
         raise RuntimeError('min. sampling too large')
 
-    f = fixed_fft2d(image)
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     nbins_angular = 6 * bins_per_spot
+    indices, weights = polar_indices(image.shape[1:], inner=inner, outer=outer, nbins_angular=nbins_angular)
 
-    unrolled = unroll_powerspec(f, inner, outer=None, nbins_angular=nbins_angular, nbins_radial=None)
+    indices = torch.tensor(indices, dtype=torch.long).to(device)
+    weights = torch.tensor(weights).to(device)
 
-    # unrolled = unrolled.reshape((6, bins_per_spot, unrolled.shape[1])).sum(0)
-    #
-    # normalized = unrolled / savgol_filter(unrolled.mean(0), 5, 1, mode='nearest')
-    #
-    # peaks = top_n_2d(normalized, 5, 2)
-    # intensities = unrolled[peaks[:, 0], peaks[:, 1]]
-    # angle, radial = peaks[np.argmax(intensities)]
-    #
-    # # angle = (angle + .5) / nbins_angular * 2 * np.pi
-    # radial = radial + inner + .5
-    #
-    # return radial * a / float(min(f.shape)) * (np.sqrt(3.) / 2.)
+    complex_image = torch.zeros(tuple(image.shape) + (2,), dtype=torch.float32, device=device)
+    complex_image[..., 0] = image * soft_border(image.shape[1:], N // 4).to(device)[None]
+
+    f = torch.sum(torch.fft(complex_image, 2) ** 2, axis=-1)
+    f = fftshift2d(f)
+    unrolled = (f.view(-1)[indices] * weights).sum(-1)
+    unrolled = unrolled.view((6, -1, unrolled.shape[1])).sum(0)
+
+    normalized = unrolled / unrolled.mean(0)
+    peaks = nms(normalized, 5, 3)
+
+    intensities = unrolled[peaks[:, 0], peaks[:, 1]]
+    angle, r = peaks[torch.argmax(intensities)]
+    r = r + inner + .5
+
+    return r * a / float(min(f.shape[1:])) * (np.sqrt(3.) / 2.)
