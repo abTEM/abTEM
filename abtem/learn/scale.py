@@ -45,7 +45,7 @@ def polar_indices(shape, inner, outer, nbins_angular):
     labels = polar_labels(shape, inner=inner, outer=outer, nbins_angular=nbins_angular)
 
     indices = np.zeros((labels.max() + 1, nbins_angular), dtype=np.int)
-    weights = np.zeros((labels.max() + 1, nbins_angular))
+    weights = np.zeros((labels.max() + 1, nbins_angular), dtype=np.float32)
     lengths = np.zeros((labels.max() + 1,), dtype=np.int)
 
     for j, i in enumerate(generate_indices(labels, first_label=0)):
@@ -104,7 +104,6 @@ def fftshift2d(x):
 def soft_border(shape, k):
     def f(N, k):
         mask = torch.ones(N)
-        # print(torch.linspace(-np.pi / 2, np.pi / 2, k))
         mask[:k] = torch.sin(torch.linspace(-np.pi / 2, np.pi / 2, k)) / 2 + .5
         mask[-k:] = torch.sin(-torch.linspace(-np.pi / 2, np.pi / 2, k)) / 2 + .5
 
@@ -142,6 +141,10 @@ def find_hexagonal_sampling(image, a, min_sampling, bins_per_spot=16):
     if len(image.shape) == 2:
         image = image[None]
 
+    elif len(image.shape) == 4:
+        assert image.shape[1] == 1
+        image = image[:, 0]
+
     if image.shape[1] != image.shape[2]:
         raise RuntimeError('square image required')
 
@@ -174,6 +177,8 @@ def find_hexagonal_sampling(image, a, min_sampling, bins_per_spot=16):
 
     intensities = unrolled[peaks[:, 0], peaks[:, 1]]
     angle, r = peaks[torch.argmax(intensities)]
+    r = r.to(torch.float32)
+
     r = r + inner + .5
 
-    return r * a / float(min(f.shape[1:])) * (np.sqrt(3.) / 2.)
+    return (r * a / float(N) * np.sqrt(3.) / 2.).item()
