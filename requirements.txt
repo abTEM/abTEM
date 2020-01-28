@@ -6,3 +6,5 @@ pyfftw
 h5py
 numexpr
 matplotlib
+ase
+scikit-image
