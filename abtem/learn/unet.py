@@ -2,7 +2,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from abtem.learn.partialconv2d import PartialConv2d
 from abtem.utils import BatchGenerator
 
 
@@ -72,7 +71,7 @@ class Up(nn.Module):
 
 class UNet(nn.Module):
 
-    def __init__(self, in_channels, out_channels, activation, init_features=16, dropout=.5, bilinear=True):
+    def __init__(self, in_channels, out_channels, init_features=16, dropout=.5, bilinear=True):
         super().__init__()
 
         features = init_features
@@ -89,7 +88,6 @@ class UNet(nn.Module):
         self.up4 = Up(2 * features, features, bilinear, dropout=dropout)
         self.out1 = nn.Conv2d(in_channels=features, out_channels=features // 2, kernel_size=1)
         self.out2 = nn.Conv2d(in_channels=features // 2, out_channels=out_channels, kernel_size=1)
-        self.activation = activation
 
     def forward(self, x):
         x1 = self.inc(x)
@@ -103,7 +101,7 @@ class UNet(nn.Module):
         x = self.up4(x, x1)
         x = self.out1(x)
         x = self.out2(x)
-        return self.activation(x)
+        return x
 
     def get_device(self):
         return next(self.parameters()).device
@@ -135,3 +133,5 @@ class UNet(nn.Module):
             mc_output[i] = outputs.cpu().detach().numpy()
 
         return np.mean(mc_output, 0), np.std(mc_output, 0)
+
+
