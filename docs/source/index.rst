@@ -27,7 +27,7 @@ environment for simulating images from first principles.
    :caption: Main
 
    install
-   getting_started/introduction
+   how_to_use/introduction
    .. tutorials/introduction
    .. modules/api
    .. cite
