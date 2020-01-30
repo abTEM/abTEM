@@ -78,7 +78,8 @@ def multislice(waves, potential: Potential, in_place: bool = False, show_progres
     if (waves.gpts is not None) & np.all(potential.gpts != waves.gpts):
         raise RuntimeError('inconsistent gpts')
 
-    fft_object_forward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), threads=FFTW_THREADS)
+    fft_object_forward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), threads=FFTW_THREADS,
+                                   flags=('FFTW_ESTIMATE',))
     fft_object_backward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), direction='FFTW_BACKWARD',
                                     threads=FFTW_THREADS, flags=('FFTW_ESTIMATE',))
 

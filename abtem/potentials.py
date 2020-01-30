@@ -151,6 +151,8 @@ class Potential(PotentialBase, Cache):
                  quadrature_order: int = 10,
                  interpolation_sampling: float = .01):
 
+        # TODO : cell warning
+
         self._cutoff_tolerance = cutoff_tolerance
         self._method = method
 

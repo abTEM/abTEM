@@ -61,6 +61,27 @@ def fill_rectangle_with_atoms(atoms, origin, extent, margin=0., return_atom_labe
         return new_atoms
 
 
+
+def standardize_cell(atoms, tol=1e-12):
+    """
+    Permute the lattice vectors of an Atoms object without changing the positions. The lattice vectors will be sorted
+    such that the first component is maximized.  This means that an orthorhombic cell will have a diagonal
+    representation. Additionaly, negative lattice vectors are reversed (and atomic positions shifted to compensate).
+
+    Parameters
+    ----------
+    atoms : Atoms object
+        Atoms object to modify cell
+    tol : float
+        Tolerance for ensuring correct treatment of zero length lattice vectors.
+    """
+    old_cell = atoms.cell.copy()
+    cell = np.abs(old_cell) + np.identity(3) * tol
+    cell = cell[np.argmax(cell, 0)]
+    atoms.set_cell(cell)
+    atoms.positions += np.sum(cell - old_cell, axis=0) / 2
+
+
 def orthogonalize_atoms(atoms, n=1, m=None, tol=1e-12):
     cell = np.abs(atoms.cell) + np.identity(3) * 2 * tol
     cell = cell[np.argmax(cell, 0)]

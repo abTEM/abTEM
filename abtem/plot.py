@@ -40,12 +40,15 @@ def plane2axes(plane):
     return axes + (last_axis[0],)
 
 
-def plot_atoms(atoms, scan_area=None, plane='xy', ax=None, scale_atoms=.5, numbering=False):
+def plot_atoms(atoms, repeat=(1, 1), scan_area=None, plane='xy', ax=None, scale_atoms=.5, numbering=False):
     if ax is None:
         fig, ax = plt.subplots()
 
     axes = plane2axes(plane)
+
+    atoms = atoms.copy()
     cell = atoms.cell
+    atoms *= repeat + (1,)
 
     for line in cube:
         cell_lines = np.array([np.dot(line[0], cell), np.dot(line[1], cell)])
