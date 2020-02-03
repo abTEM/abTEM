@@ -49,7 +49,7 @@ class Propagator(Grid, Energy, Cache):
         return complex_exponential(-k * np.pi * self.wavelength * dz)[None]
 
 
-def multislice(waves, potential: Potential, in_place: bool = False, show_progress: bool = False):
+def multislice(waves, potential: Potential, in_place: bool = True, show_progress: bool = False):
     """
     The multislice algorithm.
 
@@ -72,11 +72,10 @@ def multislice(waves, potential: Potential, in_place: bool = False, show_progres
     if not in_place:
         waves = waves.copy()
 
-    if (waves.extent is not None) & np.all(potential.extent != waves.extent):
-        raise RuntimeError('inconsistent extent')
-
-    if (waves.gpts is not None) & np.all(potential.gpts != waves.gpts):
-        raise RuntimeError('inconsistent gpts')
+    waves.match_grid(potential)
+    waves.check_is_energy_defined()
+    waves.check_is_grid_defined()
+    potential.check_is_grid_defined()
 
     fft_object_forward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), threads=FFTW_THREADS,
                                    flags=('FFTW_ESTIMATE',))
@@ -303,21 +302,10 @@ class PlaneWaves(Grid, Energy, Cache):
         self._num_waves = value
 
     def multislice(self, potential, show_progress=True):
-        waves = self.copy()
-
         if isinstance(potential, Atoms):
             potential = Potential(atoms=potential)
-
-        if waves.extent is None:
-            waves.extent = potential.extent
-
-        if waves.gpts is None:
-            waves.gpts = potential.gpts
-
-        if potential.gpts is None:
-            potential.gpts = waves.gpts
-
-        return waves.build().multislice(potential, in_place=True, show_progress=show_progress)
+        potential.match_grid(self)
+        return self.build().multislice(potential, in_place=True, show_progress=show_progress)
 
     @cached_method()
     def build(self):
@@ -457,6 +445,9 @@ class ProbeWaves(CTF):
             temp[:] = temp / np.sum(np.abs(temp) ** 2, axis=(1, 2), keepdims=True) * np.prod(temp.shape[1:])
 
         return Waves(temp, extent=self.extent, energy=self.energy)
+
+    def build(self):
+        return self.build_at([self.extent / 2])
 
     def get_ctf(self) -> CTF:
         return super().build()

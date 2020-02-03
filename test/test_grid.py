@@ -18,7 +18,7 @@ def test_create_grid():
     assert np.all(grid.extent == 2.)
 
     grid = Grid(extent=(8, 6), gpts=10)
-    assert np.all(grid.sampling == np.array([0.8, 0.6]))
+    assert np.allclose(grid.sampling, np.array([0.8, 0.6]))
 
     grid = Grid()
     with pytest.raises(RuntimeError):
@@ -29,26 +29,26 @@ def test_change_free_grid():
     grid = Grid(extent=(8, 6), gpts=10)
 
     grid.sampling = .2
-    assert np.all(grid.extent == np.array([8., 6.]))
-    assert np.all(grid.gpts == np.array([40, 30]))
+    assert np.allclose(grid.extent, np.array([8., 6.]))
+    assert np.allclose(grid.gpts, np.array([40, 30]))
 
     grid.gpts = 100
-    assert np.all(grid.extent == np.array([8, 6]))
-    assert np.all(grid.sampling == np.array([0.08, 0.06]))
+    assert np.allclose(grid.extent, np.array([8, 6]))
+    assert np.allclose(grid.sampling, np.array([0.08, 0.06]))
 
     grid.extent = (16, 12)
-    assert np.all(grid.gpts == np.array([100, 100]))
-    assert np.all(grid.extent == np.array([16, 12]))
-    assert np.all(grid.sampling == np.array([16 / 100, 12 / 100]))
+    assert np.allclose(grid.gpts, np.array([100, 100]))
+    assert np.allclose(grid.extent, np.array([16, 12]))
+    assert np.allclose(grid.sampling, np.array([16 / 100, 12 / 100]))
 
     grid.extent = (10, 10)
-    assert np.all(grid.sampling == grid.extent / grid.gpts)
+    assert np.allclose(grid.sampling, grid.extent / grid.gpts)
 
     grid.sampling = .3
-    assert np.all(grid.extent == grid.sampling * grid.gpts)
+    assert np.allclose(grid.extent, grid.sampling * grid.gpts)
 
     grid.gpts = 30
-    assert np.all(grid.sampling == grid.extent / grid.gpts)
+    assert np.allclose(grid.sampling, grid.extent / grid.gpts)
 
 
 def test_grid_raises():

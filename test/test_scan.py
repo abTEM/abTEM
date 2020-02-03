@@ -43,14 +43,14 @@ def test_line_scan():
     scan = LineScan(start, end, gpts=5)
 
     positions = scan.get_positions()
-    assert np.all(positions[0] == start)
-    assert np.all(positions[-1] == end)
-    assert np.all(positions[2] == np.mean([start, end], axis=0))
+    assert np.allclose(positions[0], start)
+    assert np.allclose(positions[-1], end)
+    assert np.allclose(positions[2], np.mean([start, end], axis=0))
     assert np.allclose(np.linalg.norm(np.diff(positions, axis=0), axis=1), scan.sampling[0])
 
     scan = LineScan(start, end, gpts=5, endpoint=False)
     positions = scan.get_positions()
-    assert np.all(positions[0] == start)
+    assert np.allclose(positions[0], start)
     assert np.allclose(positions[-1], (end[0] - (end[0] - start[0]) / 5, end[1] - (end[1] - start[1]) / 5))
 
 

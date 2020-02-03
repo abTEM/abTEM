@@ -12,11 +12,13 @@ def test_fig_5_12():
     waves = PlaneWaves(energy=200e3)
 
     waves = waves.multislice(potential, show_progress=False)
-    waves = waves.apply_ctf(defocus=700, Cs=1.3e7, cutoff=.01037)
+    waves = waves.apply_ctf(defocus=700, Cs=1.3e7, semiangle_cutoff=.01037)
 
     intensity = np.abs(waves.array[0]) ** 2
 
-    assert np.round(intensity.min(), 2) == .72
-    assert np.round(intensity.max(), 2) == 1.03
+    print(intensity.min())
+
+    assert np.round(intensity.min(), 2) == np.float32(.72)
+    assert np.round(intensity.max(), 2) == np.float32(1.03)
 
 

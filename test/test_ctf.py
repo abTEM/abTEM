@@ -47,18 +47,20 @@ def symmetric_phi():
     return np.zeros(gpts // 2)
 
 
-def test_polar_chi_symmetric(symmetric_parameters, alpha):
-    assert np.allclose(calculate_polar_chi(alpha, 0., symmetric_parameters),
-                       calculate_symmetric_chi(alpha, symmetric_parameters))
+def test_polar_chi_symmetric(symmetric_parameters, alpha, symmetric_phi):
+    wavelength = energy2wavelength(300e3)
+    assert np.allclose(calculate_polar_chi(alpha, symmetric_phi, wavelength, symmetric_parameters),
+                       calculate_symmetric_chi(alpha, wavelength, symmetric_parameters))
 
 
-def test_polar_chi_scherzer(empty_parameters, wavelength):
+def test_polar_chi_scherzer(empty_parameters, wavelength, symmetric_phi):
     Cs = np.random.rand() * 1e5
     defocus = np.sqrt(1.5 * Cs * wavelength)
     empty_parameters.update({'C10': defocus, 'C30': Cs})
     alpha = (6 * wavelength / Cs) ** (1 / 4.)
 
-    assert np.isclose(calculate_polar_aberrations(alpha, 0, wavelength, empty_parameters).imag, 0)
+    assert np.isclose(calculate_polar_aberrations(np.array([alpha]), np.array([0.]), wavelength, empty_parameters).imag,
+                      0., atol=5e-6)
 
 
 def test_calculate_aperture(alpha):
@@ -111,15 +113,14 @@ def test_ctf_base_aliases(mocked_ctf_base, random_parameters):
 
 def test_ctf_base_calculate_aberrations(mocked_ctf_base, symmetric_parameters, alpha, symmetric_phi, wavelength):
     ctf_base = mocked_ctf_base(energy=energy, **symmetric_parameters)
-
-    assert np.all(ctf_base.get_aberrations() == calculate_polar_aberrations(alpha,
-                                                                            symmetric_phi,
-                                                                            wavelength,
-                                                                            symmetric_parameters))
+    assert np.all(np.isclose(ctf_base.get_aberrations(), calculate_polar_aberrations(alpha,
+                                                                                     symmetric_phi,
+                                                                                     wavelength,
+                                                                                     symmetric_parameters)))
 
 
 def test_ctf_base_calculate_aperture(mocked_ctf_base, alpha):
-    ctf_base = mocked_ctf_base(energy=energy, cutoff=5., rolloff=0.1)
+    ctf_base = mocked_ctf_base(energy=energy, semiangle_cutoff=5., rolloff=0.1)
     assert np.allclose(ctf_base.get_aperture(), calculate_aperture(alpha, 5., 0.1))
 
 
@@ -157,6 +158,7 @@ def test_ctf_raises():
 
     ctf.extent = 10
     ctf.gpts = 100
+
     with pytest.raises(RuntimeError) as e:
         ctf.build()
 
@@ -178,7 +180,7 @@ def test_ctf_cache(ctf):
     assert set(ctf.cache.keys()) == {'get_alpha', 'get_aperture'}
     alpha = ctf.get_alpha()
 
-    ctf.cutoff = 2
+    ctf.semiangle_cutoff = 2
     assert set(ctf.cache.keys()) == {'get_alpha'}
 
     ctf.get_array()

@@ -22,11 +22,11 @@ def test_energy():
     energy = Energy(energy=300e3)
 
     assert energy.energy == 300e3
-    assert energy.wavelength == energy2wavelength(300e3)
+    assert np.isclose(energy.wavelength, energy2wavelength(300e3))
 
     energy.energy = 200e3
 
-    assert energy.wavelength == energy2wavelength(200e3)
+    assert np.isclose(energy.wavelength, energy2wavelength(200e3))
 
 
 def test_energy_raises():

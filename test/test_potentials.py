@@ -52,7 +52,7 @@ def test_potential_centered():
     potential = Potential(atoms=atoms, gpts=41, num_slices=1).precalculate()
 
     proj = potential.array.sum(0)
-    center = np.where(proj == np.max(proj))
+    center = np.where(np.isclose(proj, np.max(proj)))
 
     assert np.all(center[0] == [20, 20, 21, 21]) & np.all(center[1] == [20, 21, 20, 21])
 
@@ -60,7 +60,7 @@ def test_potential_centered():
     potential = Potential(atoms=atoms, gpts=40, num_slices=1).precalculate()
 
     proj = potential.array.sum(0)
-    center = np.where(proj == np.max(proj))
+    center = np.where(np.isclose(proj, np.max(proj)))
 
     assert np.all(center[0] == [20]) & np.all(center[1] == [20])
 

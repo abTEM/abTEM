@@ -31,8 +31,7 @@ def test_tanh_sinh_quadrature():
         xk = xk * c + d
         wk = wk * c
 
-        assert np.sum(gaussian(xk) * wk) - 1 < 1e-7
-        assert np.sum(gaussian(xk) * wk) - 1 > 1e-9
+        assert np.sum(gaussian(xk) * wk) - 1 < 2e-7
 
 
 # def test_tanh_sinh_vs_riemann():

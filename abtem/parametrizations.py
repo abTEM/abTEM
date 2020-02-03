@@ -105,11 +105,11 @@ def kirkland_soft(r, r_cut, v_cut, dvdr_cut, p):
 
 
 # TODO : implement threads
-@jit(nopython=True, nogil=True)
+@jit(nopython=True, nogil=True, parallel=True)
 def project_tanh_sinh(r, z0, z1, xk, wk, f):
     projected = np.zeros((len(z0), len(r)))
 
-    for i in range(z0.shape[0]):
+    for i in prange(z0.shape[0]):
         inside = (z0[i] < 0.) & (z1[i] > 0.)
         zm = (z1[i] - z0[i]) / 2.
         zp = (z0[i] + z1[i]) / 2.

@@ -5,6 +5,7 @@ import numpy as np
 from abtem.utils import convert_complex, energy2wavelength, energy2sigma, linspace
 from abtem.config import DTYPE, COMPLEX_DTYPE
 
+
 def notify(func):
     """
     Decorator for class methods that have to notify.
@@ -323,7 +324,7 @@ class Grid(Observable):
 
     @gpts.setter
     @notify
-    def gpts(self, value):
+    def gpts(self, value: Union[int, Sequence[int], GridProperty]):
         if self._extent.locked & self._sampling.locked:
             raise RuntimeError()
 
@@ -394,14 +395,33 @@ class Grid(Observable):
         fourier_limits = self.fourier_limits
         return fourier_limits[:, 1] - fourier_limits[:, 0]
 
+    def match_grid(self, other):
+        if (self.extent is None) & (other.extent is None):
+            raise RuntimeError('grid extent cannot be infered')
+
+        elif self.extent is None:
+            self.extent = other.extent
+
+        elif other.extent is None:
+            other.extent = self.extent
+
+        if (self.gpts is None) & (other.gpts is None):
+            raise RuntimeError('grid gpts cannot be infered')
+
+        elif self.gpts is None:
+            self.gpts = other.gpts
+
+        elif other.gpts is None:
+            other.gpts = self.gpts
+
     def check_same_grid(self, other):
         """ Throw error if the grid of another object is different from this object. """
 
         if (self.extent is not None) & (self.extent is not None) & np.any(self.extent != other.extent):
-            raise RuntimeError('inconsistent extent')
+            raise RuntimeError('inconsistent grid extent')
 
         elif (self.gpts is not None) & (self.gpts is not None) & np.any(self.sampling != other.sampling):
-            raise RuntimeError('inconsistent sampling')
+            raise RuntimeError('inconsistent grid sampling')
 
     def linspace(self):
         return linspace(self)
@@ -433,7 +453,10 @@ class Energy(Observable):
             Acceleration energy [eV]
         kwargs :
         """
-        self._energy = DTYPE(energy)
+        if energy is not None:
+            energy = DTYPE(energy)
+
+        self._energy = energy
 
         super().__init__(**kwargs)
 
@@ -444,7 +467,10 @@ class Energy(Observable):
     @energy.setter
     @notify
     def energy(self, value: float):
-        self._energy = DTYPE(value)
+        if value is not None:
+            value = DTYPE(value)
+
+        self._energy = value
 
     @property
     def wavelength(self) -> float:
@@ -466,6 +492,7 @@ class Energy(Observable):
 
     def check_is_energy_defined(self):
         """ Throw error if the energy is not defined. """
+
         if self.energy is None:
             raise RuntimeError('energy is not defined')
 
@@ -483,7 +510,7 @@ class Energy(Observable):
 
 
 class ArrayWithGrid(Grid):
-    
+
     def __init__(self, array, spatial_dimensions, extent=None, sampling=None, **kwargs):
         array_dimensions = len(array.shape)
 

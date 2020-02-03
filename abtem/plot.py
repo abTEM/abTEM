@@ -113,7 +113,8 @@ def plot_ctf(ctf, max_k, ax=None, phi=0, n=1000):
     ax.legend()
 
 
-def plot_image(waves, i=0, ax=None, convert=None, title=None, cmap='gray', **kwargs):
+def plot_image(waves, i=0, ax=None, space='real', scale='linear', logscale_constant=.1, convert=None, title=None,
+               cmap='gray', **kwargs):
     try:
         waves = waves.build()
     except AttributeError:
@@ -124,6 +125,26 @@ def plot_image(waves, i=0, ax=None, convert=None, title=None, cmap='gray', **kwa
     if len(array.shape) == 3:
         array = array[i]
 
+    if space == 'fourier':
+        array = np.fft.fftshift(np.fft.fft2(array))
+        extent = waves.fourier_limits.ravel()
+        x_label = 'kx [1 / Å]'
+        y_label = 'ky [1 / Å]'
+
+    elif space == 'real':
+        extent = [0, waves.extent[0], 0, waves.extent[1]]
+        x_label = 'x [Å]'
+        y_label = 'y [Å]'
+
+    else:
+        raise RuntimeError('space must be "real" or "fourier"')
+
+    if scale == 'log':
+        array = np.log(1 + logscale_constant * array)
+
+    elif scale != 'linear':
+        raise RuntimeError('scale must be "log" or "linear"')
+
     if (convert is not None):
         array = convert_complex(array, output=convert)
 
@@ -133,9 +154,9 @@ def plot_image(waves, i=0, ax=None, convert=None, title=None, cmap='gray', **kwa
     if ax is None:
         ax = plt.subplot()
 
-    ax.imshow(array.T, extent=[0, waves.extent[0], 0, waves.extent[1]], cmap=cmap, origin='lower', **kwargs)
-    ax.set_xlabel('x [Å]')
-    ax.set_ylabel('y [Å]')
+    ax.imshow(array.T, extent=extent, cmap=cmap, origin='lower', **kwargs)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
 
     if title is not None:
         ax.set_title(title)
