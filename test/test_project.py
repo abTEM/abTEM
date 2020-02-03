@@ -1,18 +1,24 @@
 import numpy as np
-from scipy.special import kn
 
 from abtem.interpolation import interpolation_kernel_parallel
-from abtem.parametrizations import project_riemann, kirkland, dvdr_kirkland, project_tanh_sinh, kirkland_soft, \
-    load_kirkland_parameters
-from abtem.potentials import tanh_sinh_quadrature, Potential
-from ase import Atoms
+from abtem.parametrizations import project_riemann, kirkland, dvdr_kirkland, kirkland_soft, \
+    load_kirkland_parameters, kirkland_projected_fourier, kirkland_projected
+from abtem.potentials import tanh_sinh_quadrature
 
 
-def kirkland_project_infinite(r, p):
-    v = (2 * p[0, 0] * kn(0, p[1, 0] * r) + np.sqrt(np.pi / p[3, 0]) * p[2, 0] * np.exp(-p[3, 0] * r ** 2.) +
-         2 * p[0, 1] * kn(0, p[1, 1] * r) + np.sqrt(np.pi / p[3, 1]) * p[2, 1] * np.exp(-p[3, 1] * r ** 2.) +
-         2 * p[0, 2] * kn(0, p[1, 2] * r) + np.sqrt(np.pi / p[3, 2]) * p[2, 2] * np.exp(-p[3, 2] * r ** 2.))
-    return v
+def test_projected_fourier():
+    gpts = 800
+    sampling = 0.002
+    x, y = (np.linspace(0, gpts, gpts, endpoint=False) * sampling,) * 2
+    kx, ky = (np.fft.fftfreq(gpts, sampling),) * 2
+    k = np.sqrt(kx[:, None] ** 2 + ky[None, :] ** 2)
+    r = np.sqrt(x[:, None] ** 2 + y[None, :] ** 2) * 2 * np.pi
+    p = load_kirkland_parameters()[15]
+    f = kirkland_projected_fourier(k, p)
+    v = kirkland_projected(r, p)
+    f[0, 0] = f[1, 0]
+    v_numeric = np.fft.fft2(f).real / (sampling ** 2 * gpts ** 2 * 2 * np.pi)
+    assert np.all(np.isclose(v[0, 1:gpts // 8], v_numeric[0, 1:gpts // 8], rtol=.02, atol=1e-3))
 
 
 def test_tanh_sinh_quadrature():
@@ -109,4 +115,3 @@ def test_interpolation():
     interpolation_kernel_parallel(v, r, vr, corner_positions, block_positions, x, y, thread_safe=True)
 
     np.allclose(vr[0], v[0, :10])
-
