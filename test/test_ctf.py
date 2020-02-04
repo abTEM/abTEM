@@ -154,7 +154,7 @@ def test_ctf_raises():
     with pytest.raises(RuntimeError) as e:
         ctf.build()
 
-    assert str(e.value) == 'extent is not defined'
+    assert str(e.value) == 'grid extent is not defined'
 
     ctf.extent = 10
     ctf.gpts = 100

@@ -92,14 +92,14 @@ def test_check_grid_matches():
     grid1 = Grid(extent=10, gpts=10)
     grid2 = Grid(extent=10, gpts=10)
 
-    grid1.check_same_grid(grid2)
+    grid1.check_grids_can_match(grid2)
 
     grid2.sampling = .2
 
     with pytest.raises(RuntimeError) as e:
-        grid1.check_same_grid(grid2)
+        grid1.check_grids_can_match(grid2)
 
-    assert str(e.value) == 'inconsistent sampling'
+    assert str(e.value) == 'inconsistent grid gpts ([10 10] != [50 50])'
 
 
 def test_fourier_limits():

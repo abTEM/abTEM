@@ -76,15 +76,16 @@ def test_multislice(array):
     new_waves = waves.multislice(potential, in_place=True)
 
     assert potential.gpts is not None
-    assert waves.extent is None
+    assert waves.extent is not None
 
+    assert np.all(np.isclose(new_waves.array, waves.array))
 
-    #assert np.any(new_waves.array != waves.array)
+    new_waves = waves.multislice(potential, in_place=False)
 
-    #new_waves = waves.multislice(potential, in_place=True)
+    assert potential.gpts is not None
+    assert waves.extent is not None
 
-    #assert new_waves.extent is None
-    #assert np.all(new_waves.array == waves.array)
+    assert not np.all(np.isclose(new_waves.array, waves.array))
 
 
 def test_multislice_raises(array):
@@ -94,7 +95,7 @@ def test_multislice_raises(array):
     with pytest.raises(RuntimeError) as e:
         waves.multislice(potential)
 
-    assert str(e.value) == 'inconsistent extent'
+    assert str(e.value) == 'inconsistent grid extent ([4. 4.] != [5. 5.])'
 
     waves = Waves(array, extent=5)
     with pytest.raises(RuntimeError) as e:
@@ -120,7 +121,7 @@ def test_plane_waves_raises():
     with pytest.raises(RuntimeError) as e:
         plane_waves.multislice(DummyPotential(extent=5))
 
-    assert str(e.value) == 'gpts not defined'
+    assert str(e.value) == 'grid gpts cannot be inferred'
 
 
 def test_plane_waves_multislice():
@@ -154,7 +155,7 @@ def test_probe_waves_raises():
     with pytest.raises(RuntimeError) as e:
         probe_waves.build()
 
-    assert str(e.value) == 'extent is not defined'
+    assert str(e.value) == 'grid extent is not defined'
 
     probe_waves.extent = 10
     probe_waves.gpts = 100

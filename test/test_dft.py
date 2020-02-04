@@ -2,7 +2,10 @@ import numpy as np
 from abtem.dft import GPAWPotential
 from abtem.potentials import Potential
 from ase.io import read
-from gpaw import GPAW, PW
+try:
+    from gpaw import GPAW, PW
+except:
+    pass
 import pytest
 
 

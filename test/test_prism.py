@@ -28,7 +28,7 @@ class DummyPotential(Grid):
     def slice_thickness(self, i):
         return .5
 
-    def get_slice(self, i):
+    def _get_slice_array(self, i):
         array = np.zeros(self.gpts, dtype=np.float32)
         array[:self.gpts[0] // 2] = 1
         return array
@@ -47,7 +47,7 @@ def test_prism_raises():
         prism = PrismWaves(.01, 1)
         prism.build()
 
-    assert str(e.value) == 'extent is not defined'
+    assert str(e.value) == 'grid extent is not defined'
 
     with pytest.raises(RuntimeError) as e:
         prism = PrismWaves(.01, 1, extent=10, gpts=100)
@@ -57,48 +57,47 @@ def test_prism_raises():
 
 
 def test_prism():
-    prism = PrismWaves(.01, 1, extent=5, gpts=50, energy=60e3)
-    probe = ProbeWaves(extent=5, gpts=50, energy=60e3, cutoff=.01)
-    assert np.allclose(prism.build().build().array, probe.build().array)
+    prism = PrismWaves(.01, 1, extent=5, gpts=101, energy=60e3)
+    probe = ProbeWaves(extent=5, gpts=101, energy=60e3, semiangle_cutoff=.01)
+
+    assert np.allclose(np.fft.fftshift(probe.build_at([(0., 0.)]).array), prism.build().build().array, atol=1e-6)
 
 
 def test_prism_translate():
     S = PrismWaves(.01, 1, extent=5, gpts=50, energy=60e3).build()
-    probe = ProbeWaves(extent=5, gpts=50, energy=60e3, cutoff=.01)
+    probe = ProbeWaves(extent=5, gpts=50, energy=60e3, semiangle_cutoff=.01)
 
     probe_waves = probe.build_at(np.array([(0, 0)]))
     prism_waves = S.build_at(np.array([(0, 0)]))
 
-    assert np.allclose(probe_waves.array, prism_waves.array)
+    assert np.allclose(probe_waves.array, prism_waves.array, atol=1e-6)
 
     probe_waves = probe.build_at(np.array([(2.5, 2.5)]))
     prism_waves = S.build_at(np.array([(2.5, 2.5)]))
 
-    assert np.allclose(probe_waves.array, prism_waves.array)
+    assert np.allclose(probe_waves.array, prism_waves.array, atol=1e-6)
 
 
 def test_prism_interpolation():
     S = PrismWaves(.01, 2, extent=10, gpts=100, energy=60e3).build()
-    probe = ProbeWaves(extent=5, gpts=50, energy=60e3, cutoff=.01)
+    probe = ProbeWaves(extent=5, gpts=50, energy=60e3, semiangle_cutoff=.01)
 
     probe_waves = probe.build_at(np.array([(2.5, 2.5)]))
     prism_waves = S.build_at(np.array([(0, 0)]))
 
-    assert np.allclose(probe_waves.array, prism_waves.array)
+    assert np.allclose(probe_waves.array, prism_waves.array, atol=1e-6)
 
 
 def test_prism_multislice():
-    S = PrismWaves(.01, 1, extent=5, gpts=100, energy=60e3).build()
-    probe = ProbeWaves(extent=5, gpts=100, energy=60e3, cutoff=.01)
+    S = PrismWaves(.03, 1, extent=5, gpts=500, energy=60e3).build()
 
+    probe = ProbeWaves(extent=5, gpts=500, energy=60e3, semiangle_cutoff=.03)
     potential = DummyPotential(extent=5)
-
     S = S.multislice(potential)
-
     prism_waves = S.build_at(np.array([[2.5, 2.5]]))
     probe_waves = probe.build_at(np.array([[2.5, 2.5]])).multislice(potential)
 
-    assert np.allclose(probe_waves.array, prism_waves.array)
+    assert np.allclose(probe_waves.array, prism_waves.array, atol=2e-5)
 
 
 def test_prism_custom_scan(mocked_detector_base):

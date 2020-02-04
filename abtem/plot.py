@@ -113,8 +113,7 @@ def plot_ctf(ctf, max_k, ax=None, phi=0, n=1000):
     ax.legend()
 
 
-def plot_image(waves, i=0, ax=None, space='real', scale='linear', logscale_constant=.1, convert=None, title=None,
-               cmap='gray', **kwargs):
+def _prepare_array(waves, i=0, space='real', scale='linear', logscale_constant=.1, convert=None, ):
     try:
         waves = waves.build()
     except AttributeError:
@@ -127,16 +126,8 @@ def plot_image(waves, i=0, ax=None, space='real', scale='linear', logscale_const
 
     if space == 'fourier':
         array = np.fft.fftshift(np.fft.fft2(array))
-        extent = waves.fourier_limits.ravel()
-        x_label = 'kx [1 / Å]'
-        y_label = 'ky [1 / Å]'
 
-    elif space == 'real':
-        extent = [0, waves.extent[0], 0, waves.extent[1]]
-        x_label = 'x [Å]'
-        y_label = 'y [Å]'
-
-    else:
+    elif space != 'real':
         raise RuntimeError('space must be "real" or "fourier"')
 
     if scale == 'log':
@@ -150,6 +141,48 @@ def plot_image(waves, i=0, ax=None, space='real', scale='linear', logscale_const
 
     elif (convert is None) & np.iscomplexobj(array):
         array = convert_complex(array, output='intensity')
+
+    return array
+
+
+def plot_profile(waves, i=0, ax=None, space='real', scale='linear', logscale_constant=.1, convert=None, title=None,
+                 **kwargs):
+    array = _prepare_array(waves, i=i, space=space, scale=scale, logscale_constant=logscale_constant, convert=convert)
+
+    y = array[array.shape[0] // 2]
+
+    if space == 'fourier':
+        x_label = 'kx [1 / Å]'
+        fourier_limits = waves.fourier_limits.ravel()
+        x = np.linspace(fourier_limits[0], fourier_limits[1], len(y))
+
+    else:
+        x_label = 'x [Å]'
+        x = np.linspace(0, waves.extent[0], len(y))
+
+    if ax is None:
+        ax = plt.subplot()
+
+    ax.plot(x, y, **kwargs)
+    ax.set_xlabel(x_label)
+
+    if title is not None:
+        ax.set_title(title)
+
+
+def plot_image(waves, i=0, ax=None, space='real', scale='linear', logscale_constant=.1, convert=None, title=None,
+               cmap='gray', **kwargs):
+    array = _prepare_array(waves, i=i, space=space, scale=scale, logscale_constant=logscale_constant, convert=convert)
+
+    if space == 'fourier':
+        x_label = 'kx [1 / Å]'
+        y_label = 'ky [1 / Å]'
+        extent = waves.fourier_limits.ravel()
+
+    else:
+        x_label = 'x [Å]'
+        y_label = 'y [Å]'
+        extent = [0, waves.extent[0], 0, waves.extent[1]]
 
     if ax is None:
         ax = plt.subplot()

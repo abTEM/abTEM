@@ -72,10 +72,22 @@ def multislice(waves, potential: Potential, in_place: bool = True, show_progress
     if not in_place:
         waves = waves.copy()
 
-    waves.match_grid(potential)
     waves.check_is_energy_defined()
+
+    waves.match_grid(potential)
     waves.check_is_grid_defined()
+
     potential.check_is_grid_defined()
+
+    propagator = Propagator(extent=potential.extent, gpts=potential.gpts, energy=waves.energy)
+
+    # for i in tqdm(range(potential.num_slices), disable=not show_progress):
+    #
+    #     waves._array *= complex_exponential(waves.sigma * potential._get_slice_array(i))
+    #     waves._array = np.fft.fft2(waves._array)
+    #     waves._array *= propagator.build(potential.slice_thickness(i))
+    #     waves._array = np.fft.ifft2(waves._array)
+
 
     fft_object_forward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), threads=FFTW_THREADS,
                                    flags=('FFTW_ESTIMATE',))
@@ -144,17 +156,7 @@ class Waves(ArrayWithGridAndEnergy):
             waves = self
 
         if ctf is not None:
-            if ctf.extent is None:
-                ctf.extent = self.extent
-
-            if ctf.gpts is None:
-                ctf.gpts = self.gpts
-
-            if self.extent is None:
-                self.extent = ctf.extent
-
-            self.check_same_grid(ctf)
-            self.check_same_energy(ctf)
+            waves.match_grid(ctf)
 
         else:
             ctf = CTF(**kwargs, extent=self.extent, gpts=self.gpts, energy=self.energy)
@@ -304,7 +306,9 @@ class PlaneWaves(Grid, Energy, Cache):
     def multislice(self, potential, show_progress=True):
         if isinstance(potential, Atoms):
             potential = Potential(atoms=potential)
+
         potential.match_grid(self)
+
         return self.build().multislice(potential, in_place=True, show_progress=show_progress)
 
     @cached_method()
@@ -427,6 +431,9 @@ class ProbeWaves(CTF):
         return complex_exponential(2 * np.pi * (kx * x + ky * y))
 
     def build_at(self, positions: Sequence[Sequence[float]] = None) -> Waves:
+        self.check_is_grid_defined()
+        self.check_is_energy_defined()
+
         if positions is None:
             positions = np.zeros((1, 2), dtype=DTYPE)
         else:
@@ -447,12 +454,15 @@ class ProbeWaves(CTF):
         return Waves(temp, extent=self.extent, energy=self.energy)
 
     def build(self):
-        return self.build_at([self.extent / 2])
+        waves = super().build()
+        waves._array = np.fft.fftshift(np.fft.fft2(waves._array))
+        return waves
 
     def get_ctf(self) -> CTF:
         return super().build()
 
     def _get_scan_waves_maker(self, potential):
+        self.match_grid(potential)
 
         def scan_waves_func(waves, positions):
             waves = waves.build_at(positions)
@@ -568,13 +578,16 @@ class ScatteringMatrix(ArrayWithGrid, CTFBase, Cache):
     """
 
     def __init__(self, array: np.ndarray, interpolation: int, expansion_cutoff: float, kx: np.ndarray, ky: np.ndarray,
-                 extent=None, sampling=None, energy=None, always_recenter: bool = False):
+                 extent: Union[float, Sequence[float]] = None,
+                 sampling: Union[float, Sequence[float]] = None,
+                 energy: float = None, always_recenter: bool = False):
 
         self._interpolation = interpolation
         self._expansion_cutoff = expansion_cutoff
         self._kx = kx
         self._ky = ky
         self.always_recenter = always_recenter
+
         super().__init__(array=array, spatial_dimensions=2, extent=extent, sampling=sampling, energy=energy)
 
     @property
@@ -721,13 +734,13 @@ class PrismWaves(Grid, Energy, Cache):
         self.check_is_grid_defined()
         self.check_is_energy_defined()
 
-        n_max = np.ceil(self.cutoff / (self.wavelength / self.extent[0] * self.interpolation))
-        m_max = np.ceil(self.cutoff / (self.wavelength / self.extent[1] * self.interpolation))
+        n_max = np.ceil(self.expansion_cutoff / (self.wavelength / self.extent[0] * self.interpolation))
+        m_max = np.ceil(self.expansion_cutoff / (self.wavelength / self.extent[1] * self.interpolation))
 
         kx = np.arange(-n_max, n_max + 1) / self.extent[0] * self.interpolation
         ky = np.arange(-m_max, m_max + 1) / self.extent[1] * self.interpolation
 
-        mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (self.cutoff / self.wavelength) ** 2
+        mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (self.expansion_cutoff / self.wavelength) ** 2
         kx, ky = np.meshgrid(kx, ky, indexing='ij')
 
         return kx[mask], ky[mask]
@@ -746,6 +759,9 @@ class PrismWaves(Grid, Energy, Cache):
         return self.build().multislice(potential, in_place=True, show_progress=show_progress)
 
     def generate_expansion(self, max_batch: int = None):
+        self.check_is_grid_defined()
+        self.check_is_energy_defined()
+
         kx, ky = self.get_spatial_frequencies()
         x = np.linspace(0, self.extent[0], self.gpts[0], endpoint=self.endpoint)
         y = np.linspace(0, self.extent[1], self.gpts[1], endpoint=self.endpoint)
@@ -761,8 +777,9 @@ class PrismWaves(Grid, Energy, Cache):
             yield ScatteringMatrix(complex_exponential(-2 * np.pi *
                                                        (kx_batch[:, None, None] * x[None, :, None] +
                                                         ky_batch[:, None, None] * y[None, None, :])),
-                                   interpolation=self.interpolation, cutoff=self.cutoff, extent=self.extent,
-                                   energy=self.energy, kx=kx_batch, ky=ky_batch, always_recenter=self.always_recenter)
+                                   interpolation=self.interpolation, expansion_cutoff=self.expansion_cutoff,
+                                   extent=self.extent, energy=self.energy, kx=kx_batch, ky=ky_batch,
+                                   always_recenter=self.always_recenter)
 
     def build(self) -> ScatteringMatrix:
         return next(self.generate_expansion())

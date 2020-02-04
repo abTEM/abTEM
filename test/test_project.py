@@ -78,7 +78,7 @@ def test_project():
     z1 = np.array([20.])
     samples = 100000
 
-    inifite = kirkland_project_infinite(r, parameters)
+    inifite = kirkland_projected(r, parameters)
 
     v_cut = kirkland(r_cut, parameters)
     dvdr_cut = dvdr_kirkland(r_cut, parameters)

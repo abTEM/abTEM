@@ -379,10 +379,10 @@ class Grid(Observable):
     def check_is_grid_defined(self):
         """ Throw error if the grid is not defined. """
         if self.extent is None:
-            raise RuntimeError('extent is not defined')
+            raise RuntimeError('grid extent is not defined')
 
         elif self.gpts is None:
-            raise RuntimeError('gpts is not defined')
+            raise RuntimeError('grid gpts is not defined')
 
     @property
     def fourier_limits(self):
@@ -396,8 +396,10 @@ class Grid(Observable):
         return fourier_limits[:, 1] - fourier_limits[:, 0]
 
     def match_grid(self, other):
+        self.check_grids_can_match(other)
+
         if (self.extent is None) & (other.extent is None):
-            raise RuntimeError('grid extent cannot be infered')
+            raise RuntimeError('grid extent cannot be inferred')
 
         elif self.extent is None:
             self.extent = other.extent
@@ -406,7 +408,7 @@ class Grid(Observable):
             other.extent = self.extent
 
         if (self.gpts is None) & (other.gpts is None):
-            raise RuntimeError('grid gpts cannot be infered')
+            raise RuntimeError('grid gpts cannot be inferred')
 
         elif self.gpts is None:
             self.gpts = other.gpts
@@ -414,14 +416,14 @@ class Grid(Observable):
         elif other.gpts is None:
             other.gpts = self.gpts
 
-    def check_same_grid(self, other):
+    def check_grids_can_match(self, other):
         """ Throw error if the grid of another object is different from this object. """
 
-        if (self.extent is not None) & (self.extent is not None) & np.any(self.extent != other.extent):
-            raise RuntimeError('inconsistent grid extent')
+        if (self.extent is not None) & (other.extent is not None) & np.any(self.extent != other.extent):
+            raise RuntimeError('inconsistent grid extent ({} != {})'.format(self.extent, other.extent))
 
-        elif (self.gpts is not None) & (self.gpts is not None) & np.any(self.sampling != other.sampling):
-            raise RuntimeError('inconsistent grid sampling')
+        elif (self.gpts is not None) & (other.gpts is not None) & np.any(self.gpts != other.gpts):
+            raise RuntimeError('inconsistent grid gpts ({} != {})'.format(self.gpts, other.gpts))
 
     def linspace(self):
         return linspace(self)
