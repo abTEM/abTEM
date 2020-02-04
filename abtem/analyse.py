@@ -91,11 +91,11 @@ def center_of_mass(data):
     return com - center[None, None]
 
 
-def fwhm(lineprofile):
-    y = lineprofile.array
-
+def fwhm(probe):
+    array = probe.build().array
+    y = array[0, array.shape[1] // 2]
     peak_idx = np.argmax(y)
     peak_value = y[peak_idx]
     left = np.argmin(np.abs(y[:peak_idx] - peak_value / 2))
     right = peak_idx + np.argmin(np.abs(y[peak_idx:] - peak_value / 2))
-    return (right - left) * lineprofile.sampling[0]
+    return (right - left) * probe.sampling[0]

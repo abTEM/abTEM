@@ -88,7 +88,6 @@ def multislice(waves, potential: Potential, in_place: bool = True, show_progress
     #     waves._array *= propagator.build(potential.slice_thickness(i))
     #     waves._array = np.fft.ifft2(waves._array)
 
-
     fft_object_forward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), threads=FFTW_THREADS,
                                    flags=('FFTW_ESTIMATE',))
     fft_object_backward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), direction='FFTW_BACKWARD',
@@ -421,6 +420,10 @@ class ProbeWaves(CTF):
     @property
     def probe_shape(self):
         return self.gpts
+
+    def fwhm(self):
+        from abtem.analyse import fwhm
+        return fwhm(self)
 
     def _translation_multiplier(self, positions):
         kx, ky = fftfreq(self)
