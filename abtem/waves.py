@@ -7,13 +7,13 @@ from ase import Atoms
 from tqdm.auto import tqdm
 
 from abtem.bases import cached_method, Grid, Energy, cached_method_with_args, ArrayWithGridAndEnergy, Cache, \
-    notify, ArrayWithGrid
+    notify, ArrayWithGrid, fftfreq
 from abtem.detect import DetectorBase
 from abtem.potentials import Potential, PotentialBase
 from abtem.prism import window_and_collapse
 from abtem.scan import GridScan, LineScan, CustomScan, ScanBase
 from abtem.transfer import CTF, CTFBase
-from abtem.utils import complex_exponential, fftfreq, BatchGenerator
+from abtem.utils import complex_exponential, BatchGenerator
 from abtem.config import DTYPE, COMPLEX_DTYPE, FFTW_THREADS
 from abtem.plot import plot_image
 

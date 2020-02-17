@@ -1,9 +1,13 @@
-from collections import defaultdict
+import numbers
 
 import numpy as np
-from ase import units
-from numba import njit
 from abtem.config import DTYPE, COMPLEX_DTYPE
+from ase import units
+
+try:
+    import cupy as cp
+except:
+    pass
 
 
 def energy2mass(energy):
@@ -41,50 +45,23 @@ def energy2sigma(energy):
             units._hplanck * units.s * units.J) ** 2)
 
 
-def polar2cartesian(polar):
-    polar = defaultdict(lambda: 0, polar)
-
-    cartesian = {}
-    cartesian['C10'] = polar['C10']
-    cartesian['C12a'] = - polar['C12'] * np.cos(2 * polar['phi12'])
-    cartesian['C12b'] = polar['C12'] * np.sin(2 * polar['phi12'])
-    cartesian['C21a'] = polar['C21'] * np.sin(polar['phi21'])
-    cartesian['C21b'] = polar['C21'] * np.cos(polar['phi21'])
-    cartesian['C23a'] = - polar['C23'] * np.sin(3 * polar['phi23'])
-    cartesian['C23b'] = polar['C23'] * np.cos(3 * polar['phi23'])
-    cartesian['C30'] = polar['C30']
-    cartesian['C32a'] = - polar['C32'] * np.cos(2 * polar['phi32'])
-    cartesian['C32b'] = polar['C32'] * np.cos(np.pi / 2 - 2 * polar['phi32'])
-    cartesian['C34a'] = polar['C34'] * np.cos(-4 * polar['phi34'])
-    K = np.sqrt(3 + np.sqrt(8.))
-    cartesian['C34b'] = 1 / 4. * (1 + K ** 2) ** 2 / (K ** 3 - K) * polar['C34'] * np.cos(
-        4 * np.arctan(1 / K) - 4 * polar['phi34'])
-
-    return cartesian
-
-
-def cartesian2polar(cartesian):
-    cartesian = defaultdict(lambda: 0, cartesian)
-
-    polar = {}
-    polar['C10'] = cartesian['C10']
-    polar['C12'] = - np.sqrt(cartesian['C12a'] ** 2 + cartesian['C12b'] ** 2)
-    polar['phi12'] = - np.arctan2(cartesian['C12b'], cartesian['C12a']) / 2.
-    polar['C21'] = np.sqrt(cartesian['C21a'] ** 2 + cartesian['C21b'] ** 2)
-    polar['phi21'] = np.arctan2(cartesian['C21a'], cartesian['C21b'])
-    polar['C23'] = np.sqrt(cartesian['C23a'] ** 2 + cartesian['C23b'] ** 2)
-    polar['phi23'] = -np.arctan2(cartesian['C23a'], cartesian['C23b']) / 3.
-    polar['C30'] = cartesian['C30']
-    polar['C32'] = -np.sqrt(cartesian['C32a'] ** 2 + cartesian['C32b'] ** 2)
-    polar['phi32'] = -np.arctan2(cartesian['C32b'], cartesian['C32a']) / 2.
-    polar['C34'] = np.sqrt(cartesian['C34a'] ** 2 + cartesian['C34b'] ** 2)
-    polar['phi34'] = np.arctan2(cartesian['C34b'], cartesian['C34a']) / 4
-
-    return polar
-
-
 # def complex_exponential(x):
 #     return ne.evaluate('exp(1.j * x)')
+
+def cosine_window(x, cutoff, rolloff, invert=False):
+    xp = cp.get_array_module(x)
+
+    rolloff *= cutoff
+    # array = .5 * (1 + np.cos(np.pi * (x - cutoff + rolloff) / rolloff))
+    if invert:
+        array = .5 * (1 + xp.cos(xp.pi * (x - cutoff - rolloff) / rolloff))
+        array[x < cutoff] = 0.
+        array = xp.where(x < cutoff + rolloff, array, xp.ones_like(x, dtype=DTYPE))
+    else:
+        array = .5 * (1 + xp.cos(xp.pi * (x - cutoff + rolloff) / rolloff))
+        array[x > cutoff] = 0.
+        array = xp.where(x > cutoff - rolloff, array, xp.ones_like(x, dtype=DTYPE))
+    return array
 
 
 def complex_exponential(x):
@@ -96,34 +73,28 @@ def complex_exponential(x):
     return df_exp
 
 
+def coordinates_in_disc(radius, shape=None):
+    cols = np.zeros((2 * radius + 1, 2 * radius + 1), dtype=cp.int32)
+    cols[:] = np.linspace(0, 2 * radius, 2 * radius + 1) - radius
+    rows = cols.copy().T
+    r2 = rows ** 2 + cols ** 2
+    inside = r2 < radius ** 2
+
+    if shape is None:
+        return rows[inside], cols[inside]
+    else:
+        return rows[inside] * shape[0] + cols[inside]
+
+
 def squared_norm(x, y):
     return x.reshape((-1, 1)) ** 2 + y.reshape((1, -1)) ** 2
 
 
-def fftfreq(grid):
-    grid.check_is_grid_defined()
-    return tuple(DTYPE(np.fft.fftfreq(gpts, sampling)) for gpts, sampling in zip(grid.gpts, grid.sampling))
+def sub2ind2d(rows, cols, shape):
+    return rows * shape[0] + cols
 
 
-def linspace(grid):
-    grid.check_is_grid_defined()
-    return tuple(np.linspace(0, extent, gpts, endpoint=grid.endpoint, dtype=DTYPE) for gpts, extent in
-                 zip(grid.gpts, grid.extent))
-
-
-def semiangles(grid_and_energy):
-    wavelength = grid_and_energy.wavelength
-    return (DTYPE(np.fft.fftfreq(gpts, sampling)) * wavelength for gpts, sampling in
-            zip(grid_and_energy.gpts, grid_and_energy.sampling))
-
-
-@njit
-def sub2ind(rows, cols, array_shape):
-    return rows * array_shape[1] + cols
-
-
-@njit
-def ind2sub(array_shape, ind):
+def ind2sub2d(array_shape, ind):
     rows = ind // array_shape[1]
     cols = ind % array_shape[1]
     return (rows, cols)
@@ -194,3 +165,48 @@ class BatchGenerator:
                 yield batch_start, self.batch_size
 
             batch_start = batch_end
+
+
+def view_as_windows(arr_in, window_shape, step):
+    if not isinstance(arr_in, (np.ndarray, cp.ndarray)):
+        raise TypeError("`arr_in` must be a numpy ndarray")
+
+    xp = cp.get_array_module(arr_in)
+
+    ndim = arr_in.ndim
+
+    if isinstance(window_shape, numbers.Number):
+        window_shape = (window_shape,) * ndim
+
+    if not (len(window_shape) == ndim):
+        raise ValueError("`window_shape` is incompatible with `arr_in.shape`")
+
+    if isinstance(step, numbers.Number):
+        if step < 1:
+            raise ValueError("`step` must be >= 1")
+        step = (step,) * ndim
+    if len(step) != ndim:
+        raise ValueError("`step` is incompatible with `arr_in.shape`")
+
+    arr_shape = xp.array(arr_in.shape)
+    window_shape = xp.array(window_shape, dtype=arr_shape.dtype)
+
+    if ((arr_shape - window_shape) < 0).any():
+        raise ValueError("`window_shape` is too large")
+
+    if ((window_shape - 1) < 0).any():
+        raise ValueError("`window_shape` is too small")
+
+    # -- build rolling window view
+    slices = tuple(slice(None, None, st) for st in step)
+    window_strides = xp.array(arr_in.strides)
+
+    indexing_strides = xp.asarray(arr_in[slices].strides)
+
+    win_indices_shape = (((xp.array(arr_in.shape) - xp.array(window_shape)) // xp.array(step)) + 1)
+
+    new_shape = tuple(xp.asnumpy(xp.concatenate((win_indices_shape, window_shape))))
+    strides = tuple(xp.asnumpy(xp.concatenate((indexing_strides, window_strides))))
+
+    arr_out = xp.lib.stride_tricks.as_strided(arr_in, shape=new_shape, strides=strides)
+    return arr_out

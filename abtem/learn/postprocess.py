@@ -1,64 +1,54 @@
 import numpy as np
-from abtem.utils import ind2sub, sub2ind
+from abtem.utils import coordinates_in_disc, ind2sub2d
 
 
-def non_maximum_suppresion(density, distance, threshold, classes=None):
-    shape = density.shape[2:]
-
-    density = density.reshape((density.shape[0], -1))
-
-    if classes is not None:
-        classes = classes.reshape(classes.shape[:2] + (-1,))
-        probabilities = np.zeros(classes.shape, dtype=classes.dtype)
-
+def non_maximum_suppresion(density, distance, threshold, max_num_maxima=np.inf, segmentation=None):
+    shape = density.shape
+    density = density.reshape((-1,))
     accepted = np.zeros(density.shape, dtype=np.bool_)
-    suppressed = np.zeros(density.shape, dtype=np.bool_)
 
-    x_disc = np.zeros((2 * distance + 1, 2 * distance + 1), dtype=np.int32)
+    suppressed = np.zeros(np.prod(shape), dtype=np.bool_)
 
-    x_disc[:] = np.linspace(0, 2 * distance, 2 * distance + 1)
-    y_disc = x_disc.copy().T
-    x_disc -= distance
-    y_disc -= distance
-    x_disc = x_disc.ravel()
-    y_disc = y_disc.ravel()
+    if segmentation is not None:
+        segmentation = segmentation.reshape((segmentation.shape[0],) + (-1,))
+        probabilities = np.zeros(segmentation.shape, dtype=segmentation.dtype)
+    else:
+        probabilities = None
 
-    r2 = x_disc ** 2 + y_disc ** 2
+    disc_row, disc_col = coordinates_in_disc(distance)
+    disc_flat = disc_col + disc_row * shape[1]
 
-    x_disc = x_disc[r2 < distance ** 2]
-    y_disc = y_disc[r2 < distance ** 2]
+    suppressed[density < threshold] = True
 
-    weights = np.exp(-r2 / (2 * (distance / 3) ** 2))
-    weights = np.reshape(weights[r2 < distance ** 2], (-1, 1))
+    num_maxima = 0
+    for i in np.argsort(-density):
+        if num_maxima == max_num_maxima:
+            break
 
-    for i in range(density.shape[0]):
-        suppressed[i][density[i] < threshold] = True
-        for j in np.argsort(-density[i].ravel()):
-            if not suppressed[i, j]:
-                accepted[i, j] = True
+        if not suppressed[i]:
+            accepted[i] = True
 
-                x, y = ind2sub(shape, j)
-                neighbors_x = x + x_disc
-                neighbors_y = y + y_disc
+            row, col = np.unravel_index(i, shape)
 
-                valid = ((neighbors_x > -1) & (neighbors_y > -1) & (neighbors_x < shape[0]) & (
-                        neighbors_y < shape[1]))
+            neighbors_row = row + disc_row
+            neighbors_col = col + disc_col
 
-                neighbors_x = neighbors_x[valid]
-                neighbors_y = neighbors_y[valid]
+            valid = ((neighbors_row > -1) & (neighbors_col > -1) &
+                     (neighbors_row < shape[0]) & (neighbors_col < shape[1]))
 
-                k = sub2ind(neighbors_x, neighbors_y, shape)
-                suppressed[i][k] = True
+            neighbors = i + disc_flat
+            neighbors = neighbors[valid]
+            suppressed[neighbors] = True
 
-                if classes is not None:
-                    tmp = np.sum(classes[i, :, k] * weights[valid], axis=0)
-                    probabilities[i, :, j] = tmp / np.sum(tmp)
+            if probabilities is not None:
+                probabilities[:, i] = np.sum(segmentation[:, neighbors] * density[neighbors], axis=1)
+                probabilities[:, i] /= np.sum(probabilities[:, i])
 
-    accepted = accepted.reshape((density.shape[0],) + shape)
+            num_maxima += 1
 
-    if classes is not None:
-        probabilities = probabilities.reshape(classes.shape[:2] + shape)
-        return accepted, probabilities
+    positions = np.array(np.where(accepted.reshape(shape))).T
+    if segmentation is None:
+        return positions
 
     else:
-        return accepted
+        return positions, probabilities.reshape((-1,) + shape)[:, positions[:, 0], positions[:, 1]]

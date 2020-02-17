@@ -1,184 +1,142 @@
-from bisect import bisect_left
-
+import cupy as cp
 import numpy as np
-import torch
-import functools
+from cupyx.scipy.ndimage import map_coordinates
 
 
-def polar_labels(shape, inner=1, outer=None, nbins_angular=32, nbins_radial=None):
+def periodic_smooth_decomposition(image):
+    u = image
+    v = u2v(u)
+    v_fft = cp.fft.fft2(v)
+    s = v2s(v_fft)
+    s_i = cp.fft.ifft2(s)
+    s_f = cp.real(s_i)
+    p = u - s_f  # u = p + s
+    return p, s_f
+
+
+def u2v(u):
+    v = cp.zeros(u.shape, dtype=u.dtype)
+    v[..., 0, :] = u[..., -1, :] - u[..., 0, :]
+    v[..., -1, :] = u[..., 0, :] - u[..., -1, :]
+
+    v[..., :, 0] += u[..., :, -1] - u[..., :, 0]
+    v[..., :, -1] += u[..., :, 0] - u[..., :, -1]
+    return v
+
+
+def v2s(v_hat):
+    M, N = v_hat.shape[-2:]
+
+    q = cp.arange(M).reshape(M, 1).astype(v_hat.dtype)
+    r = cp.arange(N).reshape(1, N).astype(v_hat.dtype)
+
+    den = (2 * cp.cos(cp.divide((2 * np.pi * q), M)) + 2 * cp.cos(cp.divide((2 * cp.pi * r), N)) - 4)
+
+    for i in range(len(v_hat.shape) - 2):
+        den = cp.expand_dims(den, 0)
+
+    s = v_hat / den
+    s[..., 0, 0] = 0
+    return s
+
+
+def periodic_smooth_decomposed_fft(image):
+    p, s = periodic_smooth_decomposition(image)
+    return cp.fft.fft2(p)
+
+
+def image_as_polar_representation(image, inner=1, outer=None, symmetry=1, bins_per_symmetry=32):
+    center = cp.array(image.shape[-2:]) // 2
+
     if outer is None:
-        outer = min(shape) // 2
-    if nbins_radial is None:
-        nbins_radial = outer - inner
-    sx, sy = shape
-    X, Y = np.ogrid[0:sx, 0:sy]
+        outer = (cp.min(center) // 2).item()
 
-    r = np.hypot(X - sx / 2, Y - sy / 2)
-    radial_bins = -np.ones(shape, dtype=int)
-    valid = (r > inner) & (r < outer)
-    radial_bins[valid] = nbins_radial * (r[valid] - inner) / (outer - inner)
+    n_radial = outer - inner
+    n_angular = (symmetry // 2) * bins_per_symmetry
 
-    angles = np.arctan2(X - sx // 2, Y - sy // 2) % (2 * np.pi)
+    radials = cp.linspace(inner, outer, n_radial)
+    angles = cp.linspace(0, cp.pi, n_angular)
 
-    angular_bins = np.floor(nbins_angular * (angles / (2 * np.pi)))
-    angular_bins = np.clip(angular_bins, 0, nbins_angular - 1).astype(np.int)
+    polar_coordinates = center[:, None, None] + radials[None, :, None] * cp.array([cp.cos(angles), cp.sin(angles)])[:,
+                                                                         None]
+    polar_coordinates = polar_coordinates.reshape((2, -1))
 
-    bins = -np.ones(shape, dtype=int)
-    bins[valid] = angular_bins[valid] * nbins_radial + radial_bins[valid]
-    return bins
+    unrolled = map_coordinates(image, polar_coordinates, order=1)
+    unrolled = unrolled.reshape((n_radial, n_angular))
 
+    if symmetry > 1:
+        unrolled = unrolled.reshape((unrolled.shape[0], symmetry // 2, -1)).sum(1)
 
-def generate_indices(labels, first_label=0):
-    labels = labels.flatten()
-    labels_order = labels.argsort()
-    sorted_labels = labels[labels_order]
-    indices = np.arange(0, len(labels) + 1)[labels_order]
-    index = np.arange(first_label, np.max(labels) + 1)
-    lo = np.searchsorted(sorted_labels, index, side='left')
-    hi = np.searchsorted(sorted_labels, index, side='right')
-    for i, (l, h) in enumerate(zip(lo, hi)):
-        yield np.sort(indices[l:h])
+    return unrolled
 
 
-@functools.lru_cache(maxsize=1)
-def polar_indices(shape, inner, outer, nbins_angular):
-    labels = polar_labels(shape, inner=inner, outer=outer, nbins_angular=nbins_angular)
+def find_hexagonal_spots(image, lattice_constant=None, min_sampling=None, max_sampling=None, bins_per_symmetry=32,
+                         cartesian=False):
+    if image.shape[0] != image.shape[1]:
+        raise RuntimeError('image is not square')
 
-    indices = np.zeros((labels.max() + 1, nbins_angular), dtype=np.int)
-    weights = np.zeros((labels.max() + 1, nbins_angular), dtype=np.float32)
-    lengths = np.zeros((labels.max() + 1,), dtype=np.int)
+    n = image.shape[0]
 
-    for j, i in enumerate(generate_indices(labels, first_label=0)):
-        if len(i) > 0:
-            indices[j, :len(i)] = i
-            weights[j, :len(i)] = 1 / len(i)
-            lengths[j] = len(i)
+    if (lattice_constant is None) & ((min_sampling is not None) | (max_sampling is not None)):
+        raise RuntimeError()
 
-    indices = indices.reshape((nbins_angular, -1, nbins_angular))
-    weights = weights.reshape((nbins_angular, -1, nbins_angular))
-    lengths = lengths.reshape((nbins_angular, -1))
-    nans = lengths == 0
+    k = n / lattice_constant * 2 / cp.sqrt(3)
+    if min_sampling is None:
+        inner = 1
+    else:
+        inner = int(cp.ceil(max(1, k * min_sampling)))
 
-    for i in range(indices.shape[0]):
-        k = np.where(nans[:, i] == 0)[0]
-        for j in np.where(nans[:, i])[0]:
-            idx = bisect_left(k, j)
-            idx = idx % len(k)
+    if max_sampling is None:
+        outer = None
+    else:
+        outer = int(cp.floor(min(n // 2, k * max_sampling)))
 
-            l1 = lengths[k[idx - 1], i]
-            l2 = lengths[k[idx], i]
+    f = periodic_smooth_decomposed_fft(image)
+    f = cp.abs(cp.fft.fftshift(f))
 
-            indices[j, i, :l1] = indices[k[idx - 1], i, :l1]
-            indices[j, i, l1:l1 + l2] = indices[k[idx], i, :l2]
+    unrolled = image_as_polar_representation(f, inner=inner, outer=outer, symmetry=6,
+                                             bins_per_symmetry=bins_per_symmetry)
 
-            d1 = min(abs(k[idx - 1] - j), abs((nbins_angular - k[idx - 1] + j)))
-            d2 = min(abs(k[idx] - j), abs((-nbins_angular - k[idx] + j)))
+    unrolled = unrolled - unrolled.mean(1)[:, None]
+    unrolled = unrolled - unrolled.min(1)[:, None]
 
-            weights[j, i, :l1] = 1 / d1
-            weights[j, i, l1:l1 + l2] = 1 / d2
-            weights[j, i, :l1 + l2] /= weights[j, i, :l1 + l2].sum()
+    radial, angle = cp.unravel_index(cp.argmax(unrolled), unrolled.shape)
+    radial = radial + inner + .5
+    angle = angle / (bins_per_symmetry * 6) * 2 * np.pi
 
-    indices = indices[:, :, :np.max(lengths)]
-    weights = weights[:, :, :np.max(lengths)]
+    if cartesian:
+        angles = angle + cp.linspace(0, 2 * np.pi, 6, endpoint=False)
+        radial = cp.array(radial)[None]
 
-    return indices, weights
-
-
-def roll(X, axis, n):
-    f_idx = tuple(slice(None, None, None) if i != axis else slice(0, n, None) for i in range(X.dim()))
-    b_idx = tuple(slice(None, None, None) if i != axis else slice(n, None, None) for i in range(X.dim()))
-    front = X[f_idx]
-    back = X[b_idx]
-    return torch.cat([back, front], axis)
+        return cp.array([cp.cos(angles) * radial + image.shape[0] // 2,
+                         cp.sin(angles) * radial + image.shape[0] // 2]).T
+    else:
+        return radial, angle
 
 
-def fftshift2d(x):
-    for dim in range(1, len(x.size())):
-        n_shift = x.size(dim) // 2
-        if x.size(dim) % 2 != 0:
-            n_shift += 1
-        x = roll(x, axis=dim, n=n_shift)
-    return x
+def find_hexagonal_sampling(image, lattice_constant, min_sampling=None, max_sampling=None):
+    if image.shape[0] != image.shape[1]:
+        raise RuntimeError('image is not square')
+
+    n = image.shape[0]
+
+    radial, _ = find_hexagonal_spots(image, lattice_constant, min_sampling, max_sampling)
+    return (radial * lattice_constant / n * np.sqrt(3) / 2).item()
 
 
-def soft_border(shape, k):
-    def f(N, k):
-        mask = torch.ones(N)
-        mask[:k] = torch.sin(torch.linspace(-np.pi / 2, np.pi / 2, k)) / 2 + .5
-        mask[-k:] = torch.sin(-torch.linspace(-np.pi / 2, np.pi / 2, k)) / 2 + .5
+class ScaleModel:
 
-        return mask
+    def __init__(self, target_sampling):
+        self._target_sampling = target_sampling
 
-    return f(shape[0], k)[:, None] * f(shape[1], k)[None]
+    def rescale(self):
+        pass
 
-
-def nms(array, n, margin=0):
-    top = torch.argsort(array.view(-1), descending=True)
-    accepted = torch.zeros((n, 2), dtype=np.long)
-    marked = torch.zeros((array.shape[0] + 2 * margin, array.shape[1] + 2 * margin), dtype=torch.bool)
-
-    i = 0
-    j = 0
-    while j < n:
-        idx = torch.tensor((top[i] // array.shape[1], top[i] % array.shape[1]))
-
-        if marked[idx[0] + margin, idx[1] + margin] == False:
-            marked[idx[0]:idx[0] + 2 * margin, idx[1]:idx[1] + 2 * margin] = True
-            marked[margin:2 * margin] += marked[-margin:]
-            marked[-2 * margin:-margin] += marked[:margin]
-
-            accepted[j] = idx
-            j += 1
-
-        i += 1
-        if i >= torch.numel(array) - 1:
-            break
-
-    return accepted
+    def predict(self):
+        pass
 
 
-def find_hexagonal_sampling(image, a, min_sampling, bins_per_spot=16):
-    if len(image.shape) == 2:
-        image = image[None]
+class FourierSpaceScaleModel:
 
-    elif len(image.shape) == 4:
-        assert image.shape[1] == 1
-        image = image[:, 0]
-
-    if image.shape[1] != image.shape[2]:
-        raise RuntimeError('square image required')
-
-    N = image.shape[1]
-
-    inner = max(1, int(np.ceil(min_sampling / a * float(N) * 2. / np.sqrt(3.))) - 1)
-    outer = N // 2
-
-    if inner >= outer:
-        raise RuntimeError('min. sampling too large')
-
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-    nbins_angular = 6 * bins_per_spot
-    indices, weights = polar_indices(image.shape[1:], inner=inner, outer=outer, nbins_angular=nbins_angular)
-
-    indices = torch.tensor(indices, dtype=torch.long).to(device)
-    weights = torch.tensor(weights).to(device)
-
-    complex_image = torch.zeros(tuple(image.shape) + (2,), dtype=torch.float32, device=device)
-    complex_image[..., 0] = image * soft_border(image.shape[1:], N // 4).to(device)[None]
-
-    f = torch.sum(torch.fft(complex_image, 2) ** 2, axis=-1)
-    f = fftshift2d(f)
-    unrolled = (f.view(-1)[indices] * weights).sum(-1)
-    unrolled = unrolled.view((6, -1, unrolled.shape[1])).sum(0)
-
-    normalized = unrolled / unrolled.mean(0)
-    peaks = nms(normalized, 5, 3)
-
-    intensities = unrolled[peaks[:, 0], peaks[:, 1]]
-    angle, r = peaks[torch.argmax(intensities)]
-    r = r.to(torch.float32)
-
-    r = r + inner + .5
-
-    return (r * a / float(N) * np.sqrt(3.) / 2.).item()
+    def __init__(self, crystal_system):
+        pass

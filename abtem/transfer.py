@@ -1,9 +1,10 @@
-import numpy as np
-
-from abtem.bases import Energy, Cache, Grid, cached_method, ArrayWithGridAndEnergy, notify
-from abtem.utils import complex_exponential, squared_norm, semiangles, energy2wavelength
+from collections import defaultdict
 from typing import Mapping, Union, Sequence
-from abtem.config import DTYPE, COMPLEX_DTYPE
+
+import numpy as np
+from abtem.bases import Energy, Cache, Grid, cached_method, ArrayWithGridAndEnergy, notify, semiangles
+from abtem.config import DTYPE
+from abtem.utils import complex_exponential, squared_norm, energy2wavelength
 
 polar_symbols = ('C10', 'C12', 'phi12',
                  'C21', 'phi21', 'C23', 'phi23',
@@ -376,7 +377,8 @@ class CTF(Grid, Cache, CTFBase):
         """
 
         super().__init__(semiangle_cutoff=semiangle_cutoff, rolloff=rolloff, focal_spread=focal_spread,
-                         angular_spread=angular_spread, gaussian_spread=gaussian_spread, extent=extent, gpts=gpts, sampling=sampling,
+                         angular_spread=angular_spread, gaussian_spread=gaussian_spread, extent=extent, gpts=gpts,
+                         sampling=sampling,
                          energy=energy, parameters=parameters, **kwargs)
         self.register_observer(self)
 
@@ -421,3 +423,45 @@ class CTF(Grid, Cache, CTFBase):
     def build(self):
         return ArrayWithGridAndEnergy(np.fft.fftshift(self.get_array(), axes=(1, 2)), spatial_dimensions=2,
                                       extent=self.extent, energy=self.energy)
+
+
+def polar2cartesian(polar):
+    polar = defaultdict(lambda: 0, polar)
+
+    cartesian = {}
+    cartesian['C10'] = polar['C10']
+    cartesian['C12a'] = - polar['C12'] * np.cos(2 * polar['phi12'])
+    cartesian['C12b'] = polar['C12'] * np.sin(2 * polar['phi12'])
+    cartesian['C21a'] = polar['C21'] * np.sin(polar['phi21'])
+    cartesian['C21b'] = polar['C21'] * np.cos(polar['phi21'])
+    cartesian['C23a'] = - polar['C23'] * np.sin(3 * polar['phi23'])
+    cartesian['C23b'] = polar['C23'] * np.cos(3 * polar['phi23'])
+    cartesian['C30'] = polar['C30']
+    cartesian['C32a'] = - polar['C32'] * np.cos(2 * polar['phi32'])
+    cartesian['C32b'] = polar['C32'] * np.cos(np.pi / 2 - 2 * polar['phi32'])
+    cartesian['C34a'] = polar['C34'] * np.cos(-4 * polar['phi34'])
+    K = np.sqrt(3 + np.sqrt(8.))
+    cartesian['C34b'] = 1 / 4. * (1 + K ** 2) ** 2 / (K ** 3 - K) * polar['C34'] * np.cos(
+        4 * np.arctan(1 / K) - 4 * polar['phi34'])
+
+    return cartesian
+
+
+def cartesian2polar(cartesian):
+    cartesian = defaultdict(lambda: 0, cartesian)
+
+    polar = {}
+    polar['C10'] = cartesian['C10']
+    polar['C12'] = - np.sqrt(cartesian['C12a'] ** 2 + cartesian['C12b'] ** 2)
+    polar['phi12'] = - np.arctan2(cartesian['C12b'], cartesian['C12a']) / 2.
+    polar['C21'] = np.sqrt(cartesian['C21a'] ** 2 + cartesian['C21b'] ** 2)
+    polar['phi21'] = np.arctan2(cartesian['C21a'], cartesian['C21b'])
+    polar['C23'] = np.sqrt(cartesian['C23a'] ** 2 + cartesian['C23b'] ** 2)
+    polar['phi23'] = -np.arctan2(cartesian['C23a'], cartesian['C23b']) / 3.
+    polar['C30'] = cartesian['C30']
+    polar['C32'] = -np.sqrt(cartesian['C32a'] ** 2 + cartesian['C32b'] ** 2)
+    polar['phi32'] = -np.arctan2(cartesian['C32b'], cartesian['C32a']) / 2.
+    polar['C34'] = np.sqrt(cartesian['C34a'] ** 2 + cartesian['C34b'] ** 2)
+    polar['phi34'] = np.arctan2(cartesian['C34b'], cartesian['C34a']) / 4
+
+    return polar

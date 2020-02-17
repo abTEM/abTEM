@@ -2,7 +2,87 @@ import h5py
 import numpy as np
 
 from abtem.bases import Grid, Energy, cached_method, Cache, notify, ArrayWithGridAndEnergy
-from abtem.utils import squared_norm, semiangles
+from abtem.utils import squared_norm
+from abtem.bases import semiangles
+import functools
+
+def polar_labels(shape, inner=1, outer=None, nbins_angular=32, nbins_radial=None):
+    if outer is None:
+        outer = min(shape) // 2
+    if nbins_radial is None:
+        nbins_radial = outer - inner
+    sx, sy = shape
+    X, Y = np.ogrid[0:sx, 0:sy]
+
+    r = np.hypot(X - sx / 2, Y - sy / 2)
+    radial_bins = -np.ones(shape, dtype=int)
+    valid = (r > inner) & (r < outer)
+    radial_bins[valid] = nbins_radial * (r[valid] - inner) / (outer - inner)
+
+    angles = np.arctan2(X - sx // 2, Y - sy // 2) % (2 * np.pi)
+
+    angular_bins = np.floor(nbins_angular * (angles / (2 * np.pi)))
+    angular_bins = np.clip(angular_bins, 0, nbins_angular - 1).astype(np.int)
+
+    bins = -np.ones(shape, dtype=int)
+    bins[valid] = angular_bins[valid] * nbins_radial + radial_bins[valid]
+    return bins
+
+
+def generate_indices(labels, first_label=0):
+    labels = labels.flatten()
+    labels_order = labels.argsort()
+    sorted_labels = labels[labels_order]
+    indices = np.arange(0, len(labels) + 1)[labels_order]
+    index = np.arange(first_label, np.max(labels) + 1)
+    lo = np.searchsorted(sorted_labels, index, side='left')
+    hi = np.searchsorted(sorted_labels, index, side='right')
+    for i, (l, h) in enumerate(zip(lo, hi)):
+        yield np.sort(indices[l:h])
+
+
+@functools.lru_cache(maxsize=1)
+def polar_indices(shape, inner, outer, nbins_angular):
+    labels = polar_labels(shape, inner=inner, outer=outer, nbins_angular=nbins_angular)
+
+    indices = np.zeros((labels.max() + 1, nbins_angular), dtype=np.int)
+    weights = np.zeros((labels.max() + 1, nbins_angular), dtype=np.float32)
+    lengths = np.zeros((labels.max() + 1,), dtype=np.int)
+
+    for j, i in enumerate(generate_indices(labels, first_label=0)):
+        if len(i) > 0:
+            indices[j, :len(i)] = i
+            weights[j, :len(i)] = 1 / len(i)
+            lengths[j] = len(i)
+
+    indices = indices.reshape((nbins_angular, -1, nbins_angular))
+    weights = weights.reshape((nbins_angular, -1, nbins_angular))
+    lengths = lengths.reshape((nbins_angular, -1))
+    nans = lengths == 0
+
+    for i in range(indices.shape[0]):
+        k = np.where(nans[:, i] == 0)[0]
+        for j in np.where(nans[:, i])[0]:
+            idx = bisect_left(k, j)
+            idx = idx % len(k)
+
+            l1 = lengths[k[idx - 1], i]
+            l2 = lengths[k[idx], i]
+
+            indices[j, i, :l1] = indices[k[idx - 1], i, :l1]
+            indices[j, i, l1:l1 + l2] = indices[k[idx], i, :l2]
+
+            d1 = min(abs(k[idx - 1] - j), abs((nbins_angular - k[idx - 1] + j)))
+            d2 = min(abs(k[idx] - j), abs((-nbins_angular - k[idx] + j)))
+
+            weights[j, i, :l1] = 1 / d1
+            weights[j, i, l1:l1 + l2] = 1 / d2
+            weights[j, i, :l1 + l2] /= weights[j, i, :l1 + l2].sum()
+
+    indices = indices[:, :, :np.max(lengths)]
+    weights = weights[:, :, :np.max(lengths)]
+
+    return indices, weights
 
 
 class DetectorBase:
