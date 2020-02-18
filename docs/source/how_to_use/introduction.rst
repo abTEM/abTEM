@@ -7,11 +7,11 @@ Welcome to the introductory abTEM tutorials.
     :maxdepth: 1
     :caption: Contents:
 
-    structures.ipynb
-    waves.ipynb
+    atomic_models.ipynb
+    wave_functions.ipynb
     potentials.ipynb
     multislice.ipynb
     contrast_transfer_function.ipynb
-    scan.ipynb
+    scan_and_detect.ipynb
     noise.ipynb
     multislice_derivation.ipynb

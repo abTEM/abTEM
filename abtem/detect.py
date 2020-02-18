@@ -1,4 +1,3 @@
-import h5py
 import numpy as np
 
 from abtem.bases import Grid, Energy, cached_method, Cache, notify, ArrayWithGridAndEnergy

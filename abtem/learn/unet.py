@@ -71,11 +71,12 @@ class Up(nn.Module):
 
 class UNet(nn.Module):
 
-    def __init__(self, in_channels, out_channels, init_features=16, dropout=.5, bilinear=True):
+    def __init__(self, in_channels, out_channels, init_features=16, dropout=.5, bilinear=True, activation=None):
         super().__init__()
 
         features = init_features
         self.out_channels = out_channels
+        self.activation = activation
 
         self.inc = DoubleConv(in_channels, features)
         self.down1 = Down(features, 2 * features, dropout=dropout)
@@ -101,7 +102,10 @@ class UNet(nn.Module):
         x = self.up4(x, x1)
         x = self.out1(x)
         x = self.out2(x)
-        return x
+        if self.activation is not None:
+            return self.activation(x)
+        else:
+            return x
 
     def get_device(self):
         return next(self.parameters()).device
@@ -133,5 +137,3 @@ class UNet(nn.Module):
             mc_output[i] = outputs.cpu().detach().numpy()
 
         return np.mean(mc_output, 0), np.std(mc_output, 0)
-
-

@@ -42,7 +42,12 @@ def generate_indices(labels, first_label=0):
 
 @functools.lru_cache(maxsize=1)
 def polar_indices(shape, inner, outer, nbins_angular):
-    labels = polar_labels(shape, inner=inner, outer=outer, nbins_angular=nbins_angular)
+    nbins_radial = outer - inner
+
+    labels = polar_labels(shape, inner=inner, outer=outer, nbins_angular=nbins_angular, nbins_radial=nbins_radial)
+
+    if (labels.max() + 1) != (nbins_radial * nbins_angular):
+        raise RuntimeError()
 
     indices = np.zeros((labels.max() + 1, nbins_angular), dtype=np.int)
     weights = np.zeros((labels.max() + 1, nbins_angular), dtype=np.float32)
@@ -54,12 +59,12 @@ def polar_indices(shape, inner, outer, nbins_angular):
             weights[j, :len(i)] = 1 / len(i)
             lengths[j] = len(i)
 
-    indices = indices.reshape((nbins_angular, -1, nbins_angular))
-    weights = weights.reshape((nbins_angular, -1, nbins_angular))
+    indices = indices.reshape((nbins_angular, nbins_radial, -1))
+    weights = weights.reshape((nbins_angular, nbins_radial, -1))
     lengths = lengths.reshape((nbins_angular, -1))
     nans = lengths == 0
 
-    for i in range(indices.shape[0]):
+    for i in range(indices.shape[1]):
         k = np.where(nans[:, i] == 0)[0]
         for j in np.where(nans[:, i])[0]:
             idx = bisect_left(k, j)
@@ -137,7 +142,7 @@ def nms(array, n, margin=0):
     return accepted
 
 
-def find_hexagonal_sampling(image, a, min_sampling, bins_per_spot=16):
+def find_hexagonal_sampling(image, a, min_sampling, max_sampling=None, bins_per_spot=16):
     if len(image.shape) == 2:
         image = image[None]
 
@@ -150,8 +155,11 @@ def find_hexagonal_sampling(image, a, min_sampling, bins_per_spot=16):
 
     N = image.shape[1]
 
-    inner = max(1, int(np.ceil(min_sampling / a * float(N) * 2. / np.sqrt(3.))) - 1)
-    outer = N // 2
+    inner = np.max((1, int(np.ceil(min_sampling / a * float(N) * 2. / np.sqrt(3.))) - 1))
+    if max_sampling is None:
+        outer = N // 2
+    else:
+        outer = np.min((np.max((1, int(np.ceil(max_sampling / a * float(N) * 2. / np.sqrt(3.))) - 1)), N // 2))
 
     if inner >= outer:
         raise RuntimeError('min. sampling too large')
@@ -165,15 +173,30 @@ def find_hexagonal_sampling(image, a, min_sampling, bins_per_spot=16):
     weights = torch.tensor(weights).to(device)
 
     complex_image = torch.zeros(tuple(image.shape) + (2,), dtype=torch.float32, device=device)
-    complex_image[..., 0] = image * soft_border(image.shape[1:], N // 4).to(device)[None]
+    complex_image[..., 0] = image * soft_border(image.shape[1:], N // 2).to(device)[None]
 
     f = torch.sum(torch.fft(complex_image, 2) ** 2, axis=-1)
     f = fftshift2d(f)
     unrolled = (f.view(-1)[indices] * weights).sum(-1)
     unrolled = unrolled.view((6, -1, unrolled.shape[1])).sum(0)
 
-    normalized = unrolled / unrolled.mean(0)
+    normalized = unrolled / (unrolled.mean(0) + 1e-7)#unrolled.max() )#1e-7) / (
+        #torch.linspace(inner, unrolled.shape[1] + inner, unrolled.shape[1]))
+
     peaks = nms(normalized, 5, 3)
+
+    # import matplotlib.pyplot as plt
+    #
+    # plt.figure(figsize=(12, 12))
+    # plt.imshow(np.log(1 + f).sum(0)[200:-200, 200:-200])
+    # # plt.imshow(normalized[:, :50])
+    # # plt.imshow(normalized[:, :50])
+    # plt.show()
+    #
+    # plt.figure(figsize=(12, 12))
+    # plt.imshow(np.log(1 + f).sum(0)[200:-200, 200:-200])
+    # plt.imshow(normalized[:, :50])
+    # plt.show()
 
     intensities = unrolled[peaks[:, 0], peaks[:, 1]]
     angle, r = peaks[torch.argmax(intensities)]
