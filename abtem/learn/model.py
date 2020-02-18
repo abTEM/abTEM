@@ -44,11 +44,10 @@ def build_model_from_dict(parameters):
 
 class AtomRecognitionModel:
 
-    def __init__(self, mask_model, density_model, training_sampling, scale_model, discretization_model):
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.mask_model = mask_model
+    def __init__(self, mask_model, density_model, scale_model, discretization_model):
+        self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self._mask_model = mask_model
         self.density_model = density_model
-        self.training_sampling = training_sampling
         self.scale_model = scale_model
         self.discretization_model = discretization_model
 

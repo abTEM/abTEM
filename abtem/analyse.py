@@ -6,6 +6,7 @@ from scipy import ndimage
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.optimize import minimize_scalar
 from ase.symbols import string2symbols, symbols2numbers
+from abtem.utils import view_as_windows
 
 
 def generate_indices(labels):
@@ -99,3 +100,7 @@ def fwhm(probe):
     left = np.argmin(np.abs(y[:peak_idx] - peak_value / 2))
     right = peak_idx + np.argmin(np.abs(y[peak_idx:] - peak_value / 2))
     return (right - left) * probe.sampling[0]
+
+
+# def spectrogram(image):
+
