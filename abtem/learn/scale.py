@@ -1,6 +1,8 @@
 import cupy as cp
 import numpy as np
-from cupyx.scipy.ndimage import map_coordinates
+from cupyx.scipy.ndimage import map_coordinates, zoom
+from abtem.learn.postprocess import non_maximum_suppresion
+from abtem.cudakernels import interpolate_radial_functions
 
 
 def periodic_smooth_decomposition(image):
@@ -71,7 +73,7 @@ def image_as_polar_representation(image, inner=1, outer=None, symmetry=1, bins_p
 
 
 def find_hexagonal_spots(image, lattice_constant=None, min_sampling=None, max_sampling=None, bins_per_symmetry=32,
-                         cartesian=False):
+                         return_cartesian=False):
     if image.shape[0] != image.shape[1]:
         raise RuntimeError('image is not square')
 
@@ -92,26 +94,36 @@ def find_hexagonal_spots(image, lattice_constant=None, min_sampling=None, max_sa
         outer = int(cp.floor(min(n // 2, k * max_sampling)))
 
     f = periodic_smooth_decomposed_fft(image)
-    f = cp.abs(cp.fft.fftshift(f))
+    f = cp.abs(cp.fft.fftshift(f)) ** 2
 
     unrolled = image_as_polar_representation(f, inner=inner, outer=outer, symmetry=6,
                                              bins_per_symmetry=bins_per_symmetry)
 
-    unrolled = unrolled - unrolled.mean(1)[:, None]
-    unrolled = unrolled - unrolled.min(1)[:, None]
+    # unrolled = unrolled - unrolled.mean(1)[:, None]
+    # unrolled = unrolled - unrolled.min(1)[:, None]
+    normalized = unrolled / (unrolled.mean(1, keepdims=True) + 1)
+    normalized = normalized - normalized.mean(0, keepdims=True)  # [:, None]
 
-    radial, angle = cp.unravel_index(cp.argmax(unrolled), unrolled.shape)
-    radial = radial + inner + .5
-    angle = angle / (bins_per_symmetry * 6) * 2 * np.pi
+    maxima = non_maximum_suppresion(cp.asnumpy(normalized), 3, 0., max_num_maxima=3)
+    maxima = cp.asarray((maxima))
 
-    if cartesian:
-        angles = angle + cp.linspace(0, 2 * np.pi, 6, endpoint=False)
-        radial = cp.array(radial)[None]
+    import matplotlib.pyplot as plt
+    plt.imshow(cp.asnumpy(normalized).T)
+    plt.plot(*cp.asnumpy(maxima).T,'rx')
+    plt.show()
 
-        return cp.array([cp.cos(angles) * radial + image.shape[0] // 2,
-                         cp.sin(angles) * radial + image.shape[0] // 2]).T
+    spot_radial, spot_angle = maxima[cp.argmax(unrolled[maxima[:, 0], maxima[:, 1]])]
+    # radial, angle = cp.unravel_index(cp.argmax(unrolled), unrolled.shape)
+    spot_radial = spot_radial + inner + .5
+    spot_angle = spot_angle / (bins_per_symmetry * 6) * 2 * np.pi
+
+    if return_cartesian:
+        angles = spot_angle + cp.linspace(0, 2 * np.pi, 6, endpoint=False)
+        radial = cp.array(spot_radial)[None]
+        return spot_radial, spot_angle, cp.array([cp.cos(angles) * radial + image.shape[0] // 2,
+                                                  cp.sin(angles) * radial + image.shape[0] // 2]).T
     else:
-        return radial, angle
+        return spot_radial, spot_angle
 
 
 def find_hexagonal_sampling(image, lattice_constant, min_sampling=None, max_sampling=None):
@@ -124,19 +136,46 @@ def find_hexagonal_sampling(image, lattice_constant, min_sampling=None, max_samp
     return (radial * lattice_constant / n * np.sqrt(3) / 2).item()
 
 
-class ScaleModel:
+class FourierSpaceScaleModel:
 
     def __init__(self, target_sampling):
         self._target_sampling = target_sampling
+        self._spot_positions = None
+        self._spot_radial = None
+        self._sampling = None
+        self._image = None
 
-    def rescale(self):
-        pass
+    def get_spots(self):
+        if self._spot_positions is None:
+            raise RuntimeError()
+        return self._spot_positions
 
-    def predict(self):
-        pass
+    def create_fourier_filter(self, function):
+        return interpolate_radial_functions(function, self._spot_positions, self._image.shape[-2:],
+                                            int(self._spot_radial))
+
+    def rescale(self, images):
+        return zoom(images, zoom=self._sampling / self._target_sampling, order=1)
 
 
-class FourierSpaceScaleModel:
+class HexagonalFourierSpaceScaleModel(FourierSpaceScaleModel):
 
-    def __init__(self, crystal_system):
-        pass
+    def __init__(self, lattice_constant, target_sampling=None, min_sampling=None, max_sampling=None):
+        self._lattice_constant = lattice_constant
+        self._min_sampling = min_sampling
+        self._max_sampling = max_sampling
+
+        super().__init__(target_sampling=target_sampling)
+
+    def _find_spots(self, image):
+        self._spot_radial, _, self._spot_positions = find_hexagonal_spots(image, self._lattice_constant,
+                                                                          min_sampling=self._min_sampling,
+                                                                          max_sampling=self._max_sampling,
+                                                                          return_cartesian=True)
+
+    def predict(self, image):
+        self._find_spots(image)
+        self._image = image
+        n = image.shape[0]
+        self._sampling = (self._spot_radial * self._lattice_constant / n * np.sqrt(3) / 2).item()
+        return self._sampling

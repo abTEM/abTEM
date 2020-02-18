@@ -86,6 +86,16 @@ def coordinates_in_disc(radius, shape=None):
         return rows[inside] * shape[0] + cols[inside]
 
 
+def polar_coordinates(shape, return_azimuth=False):
+    x = cp.arange(shape[0], dtype=cp.float32) - shape[0] // 2
+    y = cp.arange(shape[1], dtype=cp.float32) - shape[1] // 2
+    r = cp.sqrt(x[:, None] ** 2 + y[None] ** 2)
+    if return_azimuth:
+        # TODO : implement azimuthal coordinates
+        raise NotImplementedError()
+    return r
+
+
 def squared_norm(x, y):
     return x.reshape((-1, 1)) ** 2 + y.reshape((1, -1)) ** 2
 
