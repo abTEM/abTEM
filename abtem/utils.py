@@ -48,10 +48,8 @@ def energy2sigma(energy):
 # def complex_exponential(x):
 #     return ne.evaluate('exp(1.j * x)')
 
-def cosine_window(x, cutoff, rolloff, invert=False):
+def cosine_window(x, cutoff, rolloff=0., invert=False):
     xp = cp.get_array_module(x)
-
-    rolloff *= cutoff
     # array = .5 * (1 + np.cos(np.pi * (x - cutoff + rolloff) / rolloff))
     if invert:
         array = .5 * (1 + xp.cos(xp.pi * (x - cutoff - rolloff) / rolloff))
