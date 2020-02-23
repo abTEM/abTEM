@@ -6,9 +6,10 @@ except:
     from scipy.ndimage import map_coordinates, zoom
 
 import numpy as np
-
 from abtem.cudakernels import interpolate_radial_functions
 from abtem.learn.postprocess import NonMaximumSuppression
+from abtem.utils import cosine_window, polar_coordinates
+
 
 def periodic_smooth_decomposition(image):
     u = image
@@ -109,17 +110,25 @@ def find_hexagonal_spots(image, lattice_constant=None, min_sampling=None, max_sa
     normalized = unrolled / (unrolled.mean(1, keepdims=True) + 1)
     normalized = normalized - normalized.mean(0, keepdims=True)  # [:, None]
 
+
     nms = NonMaximumSuppression(4, 0., max_num_maxima=2)
     maxima = xp.asarray(nms.predict(normalized))
+
+    #nms = NonMaximumSuppression(3, 0., max_num_maxima=3)
+    #maxima = nms.predict(cp.asnumpy(normalized))
+    #maxima = cp.asarray((maxima))
+
 
     #import matplotlib.pyplot as plt
     #plt.imshow(normalized.T)
     #plt.plot(*maxima.T, 'rx')
     #plt.show()
 
+
     spot_radial, spot_angle = maxima[xp.argmax(unrolled[maxima[:, 0], maxima[:, 1]])]
     # radial, angle = xp.unravel_index(xp.argmax(unrolled), unrolled.shape)
-    spot_radial = spot_radial + inner + .5
+    spot_radial = spot_radial + inner #+ .5
+
     spot_angle = spot_angle / (bins_per_symmetry * 6) * 2 * np.pi
 
     if return_cartesian:
@@ -158,6 +167,23 @@ class FourierSpaceScaleModel:
     def create_fourier_filter(self, function):
         return interpolate_radial_functions(function, self._spot_positions, self._image.shape[-2:],
                                             int(self._spot_radial))
+
+    def create_band_pass_filter(self, width, rolloff=1):
+        width = width / 2
+
+        inner = self._spot_radial - width
+        outer = self._spot_radial + width
+
+        r = polar_coordinates(self._image.shape)
+
+        mask = cosine_window(r, inner, rolloff=rolloff, invert=True)
+        mask *= cosine_window(r, outer, rolloff=rolloff)
+        return cp.fft.fftshift(mask)
+
+    def create_low_pass_filter(self, displacement=0., rolloff=0.):
+        cutoff = self._spot_radial - displacement
+        r = polar_coordinates(self._image.shape)
+        return cp.fft.fftshift(cosine_window(r, cutoff, rolloff=rolloff, invert=True))
 
     def rescale(self, images):
         return zoom(images, zoom=self._sampling / self._target_sampling, order=1)

@@ -21,6 +21,13 @@ def pad_to_size(images, height, width, n=None):
     images = F.pad(images, pad=[up, down, left, right])
     return images
 
+#def add_margin(images):
+
+
+
+
+
+
 
 def normalize_global(images):
     return (images - torch.mean(images, dim=(-2, -1), keepdim=True)) / torch.std(images, dim=(-2, -1), keepdim=True)

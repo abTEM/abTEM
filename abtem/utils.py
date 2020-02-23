@@ -48,9 +48,10 @@ def energy2sigma(energy):
 # def complex_exponential(x):
 #     return ne.evaluate('exp(1.j * x)')
 
-def cosine_window(x, cutoff, rolloff, invert=False):
 
+def cosine_window(x, cutoff, rolloff, invert=False):
     rolloff *= cutoff
+
     # array = .5 * (1 + np.cos(np.pi * (x - cutoff + rolloff) / rolloff))
     if invert:
         array = .5 * (1 + xp.cos(xp.pi * (x - cutoff - rolloff) / rolloff))
@@ -180,7 +181,7 @@ def view_as_windows(arr_in, window_shape, step):
     if not isinstance(arr_in, (np.ndarray, xp.ndarray)):
         raise TypeError("`arr_in` must be a numpy ndarray")
 
-    #xp = xp.get_array_module(arr_in)
+    # xp = xp.get_array_module(arr_in)
 
     ndim = arr_in.ndim
 
