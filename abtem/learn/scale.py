@@ -1,23 +1,28 @@
-import cupy as cp
-import numpy as np
-from cupyx.scipy.ndimage import map_coordinates, zoom
-from abtem.learn.postprocess import non_maximum_suppresion
-from abtem.cudakernels import interpolate_radial_functions
+try:
+    import cupy as xp
+    from cupyx.scipy.ndimage import map_coordinates, zoom
+except:
+    import numpy as xp
+    from scipy.ndimage import map_coordinates, zoom
 
+import numpy as np
+
+from abtem.cudakernels import interpolate_radial_functions
+from abtem.learn.postprocess import NonMaximumSuppression
 
 def periodic_smooth_decomposition(image):
     u = image
     v = u2v(u)
-    v_fft = cp.fft.fft2(v)
+    v_fft = xp.fft.fft2(v)
     s = v2s(v_fft)
-    s_i = cp.fft.ifft2(s)
-    s_f = cp.real(s_i)
+    s_i = xp.fft.ifft2(s)
+    s_f = xp.real(s_i)
     p = u - s_f  # u = p + s
     return p, s_f
 
 
 def u2v(u):
-    v = cp.zeros(u.shape, dtype=u.dtype)
+    v = xp.zeros(u.shape, dtype=u.dtype)
     v[..., 0, :] = u[..., -1, :] - u[..., 0, :]
     v[..., -1, :] = u[..., 0, :] - u[..., -1, :]
 
@@ -29,13 +34,13 @@ def u2v(u):
 def v2s(v_hat):
     M, N = v_hat.shape[-2:]
 
-    q = cp.arange(M).reshape(M, 1).astype(v_hat.dtype)
-    r = cp.arange(N).reshape(1, N).astype(v_hat.dtype)
+    q = xp.arange(M).reshape(M, 1).astype(v_hat.dtype)
+    r = xp.arange(N).reshape(1, N).astype(v_hat.dtype)
 
-    den = (2 * cp.cos(cp.divide((2 * np.pi * q), M)) + 2 * cp.cos(cp.divide((2 * cp.pi * r), N)) - 4)
+    den = (2 * xp.cos(xp.divide((2 * np.pi * q), M)) + 2 * xp.cos(xp.divide((2 * xp.pi * r), N)) - 4)
 
     for i in range(len(v_hat.shape) - 2):
-        den = cp.expand_dims(den, 0)
+        den = xp.expand_dims(den, 0)
 
     s = v_hat / den
     s[..., 0, 0] = 0
@@ -44,22 +49,22 @@ def v2s(v_hat):
 
 def periodic_smooth_decomposed_fft(image):
     p, s = periodic_smooth_decomposition(image)
-    return cp.fft.fft2(p)
+    return xp.fft.fft2(p)
 
 
 def image_as_polar_representation(image, inner=1, outer=None, symmetry=1, bins_per_symmetry=32):
-    center = cp.array(image.shape[-2:]) // 2
+    center = xp.array(image.shape[-2:]) // 2
 
     if outer is None:
-        outer = (cp.min(center) // 2).item()
+        outer = (xp.min(center) // 2).item()
 
     n_radial = outer - inner
     n_angular = (symmetry // 2) * bins_per_symmetry
 
-    radials = cp.linspace(inner, outer, n_radial)
-    angles = cp.linspace(0, cp.pi, n_angular)
+    radials = xp.linspace(inner, outer, n_radial)
+    angles = xp.linspace(0, xp.pi, n_angular)
 
-    polar_coordinates = center[:, None, None] + radials[None, :, None] * cp.array([cp.cos(angles), cp.sin(angles)])[:,
+    polar_coordinates = center[:, None, None] + radials[None, :, None] * xp.array([xp.cos(angles), xp.sin(angles)])[:,
                                                                          None]
     polar_coordinates = polar_coordinates.reshape((2, -1))
 
@@ -82,19 +87,19 @@ def find_hexagonal_spots(image, lattice_constant=None, min_sampling=None, max_sa
     if (lattice_constant is None) & ((min_sampling is not None) | (max_sampling is not None)):
         raise RuntimeError()
 
-    k = n / lattice_constant * 2 / cp.sqrt(3)
+    k = n / lattice_constant * 2 / xp.sqrt(3)
     if min_sampling is None:
         inner = 1
     else:
-        inner = int(cp.ceil(max(1, k * min_sampling)))
+        inner = int(xp.ceil(max(1, k * min_sampling)))
 
     if max_sampling is None:
         outer = None
     else:
-        outer = int(cp.floor(min(n // 2, k * max_sampling)))
+        outer = int(xp.floor(min(n // 2, k * max_sampling)))
 
     f = periodic_smooth_decomposed_fft(image)
-    f = cp.abs(cp.fft.fftshift(f)) ** 2
+    f = xp.abs(xp.fft.fftshift(f)) ** 2
 
     unrolled = image_as_polar_representation(f, inner=inner, outer=outer, symmetry=6,
                                              bins_per_symmetry=bins_per_symmetry)
@@ -104,24 +109,24 @@ def find_hexagonal_spots(image, lattice_constant=None, min_sampling=None, max_sa
     normalized = unrolled / (unrolled.mean(1, keepdims=True) + 1)
     normalized = normalized - normalized.mean(0, keepdims=True)  # [:, None]
 
-    maxima = non_maximum_suppresion(cp.asnumpy(normalized), 3, 0., max_num_maxima=3)
-    maxima = cp.asarray((maxima))
+    nms = NonMaximumSuppression(4, 0., max_num_maxima=2)
+    maxima = xp.asarray(nms.predict(normalized))
 
-    # import matplotlib.pyplot as plt
-    # plt.imshow(cp.asnumpy(normalized).T)
-    # plt.plot(*cp.asnumpy(maxima).T, 'rx')
-    # plt.show()
+    #import matplotlib.pyplot as plt
+    #plt.imshow(normalized.T)
+    #plt.plot(*maxima.T, 'rx')
+    #plt.show()
 
-    spot_radial, spot_angle = maxima[cp.argmax(unrolled[maxima[:, 0], maxima[:, 1]])]
-    # radial, angle = cp.unravel_index(cp.argmax(unrolled), unrolled.shape)
+    spot_radial, spot_angle = maxima[xp.argmax(unrolled[maxima[:, 0], maxima[:, 1]])]
+    # radial, angle = xp.unravel_index(xp.argmax(unrolled), unrolled.shape)
     spot_radial = spot_radial + inner + .5
     spot_angle = spot_angle / (bins_per_symmetry * 6) * 2 * np.pi
 
     if return_cartesian:
-        angles = spot_angle + cp.linspace(0, 2 * np.pi, 6, endpoint=False)
-        radial = cp.array(spot_radial)[None]
-        return spot_radial, spot_angle, cp.array([cp.cos(angles) * radial + image.shape[0] // 2,
-                                                  cp.sin(angles) * radial + image.shape[0] // 2]).T
+        angles = spot_angle + xp.linspace(0, 2 * np.pi, 6, endpoint=False)
+        radial = xp.array(spot_radial)[None]
+        return spot_radial, spot_angle, xp.array([xp.cos(angles) * radial + image.shape[0] // 2,
+                                                  xp.sin(angles) * radial + image.shape[0] // 2]).T
     else:
         return spot_radial, spot_angle
 

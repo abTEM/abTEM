@@ -5,9 +5,9 @@ from abtem.config import DTYPE, COMPLEX_DTYPE
 from ase import units
 
 try:
-    import cupy as cp
+    import cupy as xp
 except:
-    pass
+    import numpy as xp
 
 
 def energy2mass(energy):
@@ -49,7 +49,6 @@ def energy2sigma(energy):
 #     return ne.evaluate('exp(1.j * x)')
 
 def cosine_window(x, cutoff, rolloff, invert=False):
-    xp = cp.get_array_module(x)
 
     rolloff *= cutoff
     # array = .5 * (1 + np.cos(np.pi * (x - cutoff + rolloff) / rolloff))
@@ -74,7 +73,7 @@ def complex_exponential(x):
 
 
 def coordinates_in_disc(radius, shape=None):
-    cols = np.zeros((2 * radius + 1, 2 * radius + 1), dtype=cp.int32)
+    cols = np.zeros((2 * radius + 1, 2 * radius + 1), dtype=np.int32)
     cols[:] = np.linspace(0, 2 * radius, 2 * radius + 1) - radius
     rows = cols.copy().T
     r2 = rows ** 2 + cols ** 2
@@ -87,9 +86,9 @@ def coordinates_in_disc(radius, shape=None):
 
 
 def polar_coordinates(shape, return_azimuth=False):
-    x = cp.arange(shape[0], dtype=cp.float32) - shape[0] // 2
-    y = cp.arange(shape[1], dtype=cp.float32) - shape[1] // 2
-    r = cp.sqrt(x[:, None] ** 2 + y[None] ** 2)
+    x = xp.arange(shape[0], dtype=xp.float32) - shape[0] // 2
+    y = xp.arange(shape[1], dtype=xp.float32) - shape[1] // 2
+    r = xp.sqrt(x[:, None] ** 2 + y[None] ** 2)
     if return_azimuth:
         # TODO : implement azimuthal coordinates
         raise NotImplementedError()
@@ -178,10 +177,10 @@ class BatchGenerator:
 
 
 def view_as_windows(arr_in, window_shape, step):
-    if not isinstance(arr_in, (np.ndarray, cp.ndarray)):
+    if not isinstance(arr_in, (np.ndarray, xp.ndarray)):
         raise TypeError("`arr_in` must be a numpy ndarray")
 
-    xp = cp.get_array_module(arr_in)
+    #xp = xp.get_array_module(arr_in)
 
     ndim = arr_in.ndim
 
@@ -215,8 +214,8 @@ def view_as_windows(arr_in, window_shape, step):
 
     win_indices_shape = (((xp.array(arr_in.shape) - xp.array(window_shape)) // xp.array(step)) + 1)
 
-    new_shape = tuple(xp.asnumpy(xp.concatenate((win_indices_shape, window_shape))))
-    strides = tuple(xp.asnumpy(xp.concatenate((indexing_strides, window_strides))))
+    new_shape = tuple(xp.concatenate((win_indices_shape, window_shape)))
+    strides = tuple(xp.concatenate((indexing_strides, window_strides)))
 
     arr_out = xp.lib.stride_tricks.as_strided(arr_in, shape=new_shape, strides=strides)
     return arr_out

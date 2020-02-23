@@ -4,7 +4,7 @@ from abtem.utils import coordinates_in_disc, ind2sub2d
 
 class NonMaximumSuppression:
 
-    def __init__(self, distance, threshold, max_num_maxima):
+    def __init__(self, distance, threshold, max_num_maxima=np.inf):
         self._threshold = threshold
         self._max_num_maxima = max_num_maxima
         self._disc = coordinates_in_disc(distance)

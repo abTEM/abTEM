@@ -21,12 +21,16 @@ class ArrayImage(widgets.Image):
             self.set_array(array)
 
     def set_array(self, array):
-        if len(array.shape) != 2:
-            raise RuntimeError()
+        if array.dtype == np.uint8:
+            self.value = array_as_image(array.astype(np.uint8))
 
-        array = (array - array.min()) / array.ptp() * 255
+        else:
+            if len(array.shape) != 2:
+                raise RuntimeError()
 
-        self.value = array_as_image(array.astype(np.uint8))
+            array = (array - array.min()) / array.ptp() * 255
+
+            self.value = array_as_image(array.astype(np.uint8))
 
 
 class Playback(widgets.VBox):

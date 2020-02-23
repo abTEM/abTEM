@@ -1,9 +1,13 @@
-import cupy as cp
-from numba import cuda
+try:
+    import cupy as cp
+except:
+    pass
+
 import math
-from abtem.utils import coordinates_in_disc
+
 from numba import cuda, prange, jit
-import numpy as np
+
+from abtem.utils import coordinates_in_disc
 
 
 @cuda.jit
