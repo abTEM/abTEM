@@ -143,7 +143,7 @@ class GPAWPotential(PotentialBase, Cache):
     def slice_thickness(self, i):
         return self._nz[i] * self._dz
 
-    def get_slice(self, i):
+    def _get_slice_array(self, i):
         start = np.sum(self._nz[:i], dtype=np.int)
         stop = np.sum(self._nz[:i + 1], dtype=np.int)
         slice_entrance = start * self._dz

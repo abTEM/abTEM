@@ -143,13 +143,13 @@ class Potential(PotentialBase, Cache):
                  extent: Union[float, Sequence[float]] = None,
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
-                 slice_thickness: float = .5,
+                 slice_thickness: float = .2,
                  num_slices: int = None,
                  parametrization: str = 'lobato',
                  method: str = 'finite',
-                 cutoff_tolerance: float = 1e-2,
+                 cutoff_tolerance: float = 1e-3,
                  quadrature_order: int = 10,
-                 interpolation_sampling: float = .01):
+                 interpolation_sampling: float = .001):
 
         # TODO : cell warning
 
