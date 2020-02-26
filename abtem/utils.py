@@ -1,5 +1,6 @@
 import numbers
 
+import numba as nb
 import numpy as np
 from abtem.config import DTYPE, COMPLEX_DTYPE
 from ase import units
@@ -49,18 +50,21 @@ def energy2sigma(energy):
 #     return ne.evaluate('exp(1.j * x)')
 
 
-def cosine_window(x, cutoff, rolloff, invert=False):
+def cosine_window(x, cutoff, rolloff, attenuate='high'):
     rolloff *= cutoff
 
     # array = .5 * (1 + np.cos(np.pi * (x - cutoff + rolloff) / rolloff))
-    if invert:
+    if attenuate == 'high':
         array = .5 * (1 + xp.cos(xp.pi * (x - cutoff - rolloff) / rolloff))
         array[x < cutoff] = 0.
         array = xp.where(x < cutoff + rolloff, array, xp.ones_like(x, dtype=DTYPE))
-    else:
+    elif attenuate == 'low':
         array = .5 * (1 + xp.cos(xp.pi * (x - cutoff + rolloff) / rolloff))
         array[x > cutoff] = 0.
         array = xp.where(x > cutoff - rolloff, array, xp.ones_like(x, dtype=DTYPE))
+    else:
+        raise RuntimeError('attenuate must be "high" or "low"')
+
     return array
 
 
@@ -71,6 +75,11 @@ def complex_exponential(x):
     np.sin(x, out=trig_buf)
     df_exp.imag[:] = trig_buf
     return df_exp
+
+
+@nb.vectorize([nb.float32(nb.complex64), nb.float64(nb.complex128)])
+def abs2(x):
+    return x.real ** 2 + x.imag ** 2
 
 
 def coordinates_in_disc(radius, shape=None):
@@ -127,23 +136,6 @@ def split_integer(n, m):
                 v.append(pp)
 
         return v
-
-
-def convert_complex(array, output):
-    if output == 'intensity':
-        array = np.abs(array) ** 2
-    elif output == 'abs':
-        array = np.abs(array)
-    elif output == 'real':
-        array = array.real
-    elif output == 'imag':
-        array = array.imag
-    elif output == 'phase':
-        array = np.angle(array)
-    else:
-        raise RuntimeError()
-
-    return array
 
 
 class BatchGenerator:

@@ -147,9 +147,9 @@ class Potential(PotentialBase, Cache):
                  num_slices: int = None,
                  parametrization: str = 'lobato',
                  method: str = 'finite',
-                 cutoff_tolerance: float = 1e-3,
+                 cutoff_tolerance: float = 1e-2,
                  quadrature_order: int = 10,
-                 interpolation_sampling: float = .001):
+                 interpolation_sampling: float = .01):
 
         # TODO : cell warning
 

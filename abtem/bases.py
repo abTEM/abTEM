@@ -1,8 +1,9 @@
 from typing import Optional, Union, Any, Sequence
 
 import numpy as np
+import matplotlib.pyplot as plt
 
-from abtem.utils import convert_complex, energy2wavelength, energy2sigma
+from abtem.utils import energy2wavelength, energy2sigma, abs2
 from abtem.config import DTYPE, COMPLEX_DTYPE
 
 
@@ -159,7 +160,7 @@ def cached_method_with_args(clear_conditions=None):
 
 class GridProperty:
 
-    def __init__(self, value, dtype, dimensions=2):
+    def __init__(self, value, dtype, locked=False, dimensions=2):
 
         """
         A property describing a grid
@@ -178,17 +179,15 @@ class GridProperty:
         self._dtype = dtype
         self._dimensions = dimensions
         self._value = self._validate(value)
+        self._locked = locked
 
     @property
     def locked(self):
-        return callable(self._value)
+        return self._locked
 
     @property
     def value(self):
-        if self.locked:
-            return self._validate(self._value(self))
-        else:
-            return self._value
+        return self._value
 
     def _validate(self, value):
         if isinstance(value, (np.ndarray, list, tuple)):
@@ -198,9 +197,6 @@ class GridProperty:
 
         if isinstance(value, (int, float, complex)):
             return np.full(self._dimensions, value, dtype=self._dtype)
-
-        if callable(value):
-            return value
 
         if value is None:
             return value
@@ -385,14 +381,14 @@ class Grid(Observable):
             raise RuntimeError('grid gpts is not defined')
 
     @property
-    def fourier_limits(self):
+    def spatial_frequency_limits(self):
         return np.array([(-1 / (2 * d), 1 / (2 * d) - 1 / (d * p)) if (p % 2 == 0) else
                          (-1 / (2 * d) + 1 / (2 * d * p), 1 / (2 * d) - 1 / (2 * d * p)) for d, p in
                          zip(self.sampling, self.gpts)])
 
     @property
-    def fourier_extent(self):
-        fourier_limits = self.fourier_limits
+    def spatial_frequency_extent(self):
+        fourier_limits = self.spatial_frequency_limits
         return fourier_limits[:, 1] - fourier_limits[:, 0]
 
     def match_grid(self, other):
@@ -530,7 +526,7 @@ class Energy(Observable):
 
 class ArrayWithGrid(Grid):
 
-    def __init__(self, array, spatial_dimensions, extent=None, sampling=None, **kwargs):
+    def __init__(self, array, spatial_dimensions, extent=None, sampling=None, fourier_space=False, **kwargs):
         array_dimensions = len(array.shape)
 
         if array_dimensions < spatial_dimensions:
@@ -538,8 +534,10 @@ class ArrayWithGrid(Grid):
 
         self._array = array
         self._spatial_dimensions = spatial_dimensions
+        self._fourier_space = fourier_space
 
-        gpts = GridProperty(value=lambda obj: obj.gpts, dtype=np.int, dimensions=spatial_dimensions)
+        gpts = GridProperty(value=array.shape[-spatial_dimensions:], dtype=np.int, dimensions=spatial_dimensions,
+                            locked=True)
         super().__init__(extent=extent, gpts=gpts, sampling=sampling, dimensions=spatial_dimensions, **kwargs)
 
     @property
@@ -547,26 +545,83 @@ class ArrayWithGrid(Grid):
         return self._spatial_dimensions
 
     @property
-    def gpts(self):
-        shape = self.array.shape
-        return np.array([dim for dim in shape[- self._dimensions:]])
+    def fourier_space(self):
+        return self._fourier_space
 
     @property
     def array(self):
         return self._array
 
-    def get_image(self, i=0, convert='intensity'):
-        return Image(convert_complex(self._array[i], convert), extent=self.extent)
+    def __getitem__(self, item):
+        if self.array.shape == self.spatial_dimensions:
+            raise RuntimeError()
+        new = self.copy(copy_array=False)
+        new._array = self._array[item]
+        return new
 
-    def copy(self):
-        return self.__class__(array=self.array.copy(), extent=self.extent.copy())
+    def plot(self, ax=None, logscale=False, logscale_constant=1., transform=None, fourier_space=None, title=None,
+             cmap='gray', **kwargs):
+        if ax is None:
+            ax = plt.subplot()
+
+        array = np.squeeze(self.array)
+
+        if len(array.shape) != 2:
+            raise RuntimeError()
+
+        if fourier_space is None:
+            fourier_space = self.fourier_space
+
+        if self.fourier_space & fourier_space:
+            array = np.fft.fftshift(array)
+
+        elif (not self.fourier_space) & fourier_space:
+            array = np.fft.fftshift(np.fft.fftn(array))
+
+        elif (self.fourier_space) & (not fourier_space):
+            array = np.fft.ifftn(array)
+
+        if (transform is None) & np.iscomplexobj(array):
+            array = abs2(array)
+
+        elif transform is not None:
+            array = transform(array)
+
+        if logscale:
+            array = np.log(1 + logscale_constant * array)
+
+        if fourier_space:
+            x_label = 'kx [1 / Å]'
+            y_label = 'ky [1 / Å]'
+            extent = self.spatial_frequency_limits.ravel()
+
+        else:
+            x_label = 'x [Å]'
+            y_label = 'y [Å]'
+            extent = [0, self.extent[0], 0, self.extent[1]]
+
+        ax.imshow(array.T, extent=extent, cmap=cmap, origin='lower', **kwargs)
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+
+        if title is not None:
+            ax.set_title(title)
+
+    def copy(self, copy_array=True):
+        if copy_array:
+            array = self.array.copy()
+        else:
+            array = self.array
+
+        return self.__class__(array=array, extent=self.extent.copy())
 
 
 class ArrayWithGridAndEnergy(ArrayWithGrid, Energy):
 
-    def __init__(self, array, spatial_dimensions, extent=None, sampling=None, energy=None, **kwargs):
+    def __init__(self, array, spatial_dimensions, extent=None, sampling=None, energy=None, fourier_space=False,
+                 **kwargs):
         super().__init__(array=array, spatial_dimensions=spatial_dimensions, extent=extent, sampling=sampling,
-                         energy=energy, **kwargs)
+                         energy=energy, fourier_space=fourier_space, **kwargs)
 
     def copy(self):
         return self.__class__(array=self.array.copy(), spatial_dimensions=self.spatial_dimensions,

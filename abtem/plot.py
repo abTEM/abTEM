@@ -6,7 +6,6 @@ from ase.data import covalent_radii
 from ase.data.colors import cpk_colors
 from matplotlib.patches import Circle
 from matplotlib.patches import Rectangle
-from abtem.utils import convert_complex
 from abtem.transfer import calculate_polar_aberrations, calculate_aperture, calculate_temporal_envelope, \
     calculate_spatial_envelope, calculate_gaussian_envelope
 

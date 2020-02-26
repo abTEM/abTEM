@@ -15,7 +15,7 @@ from abtem.potentials import Potential, PotentialBase
 from abtem.prism import window_and_collapse
 from abtem.scan import GridScan, LineScan, CustomScan, ScanBase
 from abtem.transfer import CTF, CTFBase
-from abtem.utils import complex_exponential, BatchGenerator
+from abtem.utils import complex_exponential, BatchGenerator, abs2
 
 
 class Propagator(Grid, Energy, Cache):
@@ -126,9 +126,6 @@ class Waves(ArrayWithGridAndEnergy):
     def __init__(self, array: np.ndarray, extent: Union[float, Sequence[float]] = None,
                  sampling: Union[float, Sequence[float]] = None, energy: float = None):
 
-        if len(array.shape) == 2:
-            array = array[None]
-
         super().__init__(array=array, spatial_dimensions=2, extent=extent, sampling=sampling, energy=energy)
 
     def apply_ctf(self, ctf=None, in_place=False, **kwargs):
@@ -228,15 +225,6 @@ class Waves(ArrayWithGridAndEnergy):
         """
         npzfile = np.load(path)
         return Waves(npzfile['array'], extent=npzfile['extent'], energy=npzfile['energy'])
-
-    def __getitem__(self, item):
-        new_copy = self.copy(copy_array=False)
-        new_copy._array = new_copy._array[item]
-
-        if len(new_copy._array.shape) == 2:
-            new_copy._array = np.expand_dims(new_copy._array, 0)
-
-        return new_copy
 
     def copy(self, copy_array=True) -> 'Waves':
         """
