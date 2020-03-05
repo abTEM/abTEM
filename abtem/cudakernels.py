@@ -54,6 +54,8 @@ def interpolate_radial_functions_cuda_kernel(array, indices, positions, rows, co
 def interpolate_radial_functions_kernel(array, indices, positions, rows, cols, r, values, derivatives):
     dr = r[1] - r[0]
 
+    #print(indices)
+
     for i in range(indices.shape[0]):
         for j in prange(indices.shape[1]):
             r_interp = math.sqrt((rows[indices[i, j]] - positions[i, 0]) ** 2 +
@@ -65,13 +67,17 @@ def interpolate_radial_functions_kernel(array, indices, positions, rows, cols, r
             if idx < 0:
                 val = values[0]
 
-            elif idx > len(r) - 1:
-                val = values[-1]
+            elif idx > len(r) - 2:
+                if idx > len(r) - 1:
+                    val = values[-1]
+                else:
+                    val = values[-2]
 
             else:
                 val = values[idx] + (r_interp - r[idx]) * derivatives[idx]
 
-            array[indices[i, j]] += val
+            if indices[i, j] < array.shape[0]:
+                array[indices[i, j]] += val
 
 
 def interpolate_radial_functions(func, positions, shape, cutoff, inner_cutoff=0.):
@@ -82,6 +88,7 @@ def interpolate_radial_functions(func, positions, shape, cutoff, inner_cutoff=0.
     values = func(r)
 
     margin = xp.int(xp.ceil(r[-1]))
+
     padded_shape = (shape[0] + 2 * margin, shape[1] + 2 * margin)
     array = xp.zeros(padded_shape[0] * padded_shape[1], dtype=cp.float32)
 
@@ -89,7 +96,7 @@ def interpolate_radial_functions(func, positions, shape, cutoff, inner_cutoff=0.
 
     positions = positions + margin
     indices = xp.rint(positions).astype(xp.int)[:, 0] * padded_shape[0] + xp.rint(positions).astype(xp.int)[:, 1]
-    indices = (indices[:, None] + xp.asarray(coordinates_in_disc(margin - 1, padded_shape))[None]).ravel()
+    indices = (indices[:, None] + xp.asarray(coordinates_in_disc(margin - 1, padded_shape))[None])#.ravel()
 
     rows, cols = xp.indices(padded_shape)
     rows = rows.ravel()

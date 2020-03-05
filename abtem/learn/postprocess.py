@@ -4,9 +4,9 @@ from abtem.utils import coordinates_in_disc, ind2sub2d
 
 class NonMaximumSuppression:
 
-    def __init__(self, distance, threshold, max_num_maxima=np.inf):
+    def __init__(self, distance, threshold):  # , max_num_maxima=np.inf):
         self._threshold = threshold
-        self._max_num_maxima = max_num_maxima
+        # self._max_num_maxima = max_num_maxima
         self._disc = coordinates_in_disc(distance)
 
     def predict(self, density, segmentation=None):
@@ -28,10 +28,13 @@ class NonMaximumSuppression:
 
         suppressed[density < self._threshold] = True
 
+        indices = np.arange(len(density))[suppressed == False]
+        indices = indices[np.argsort(-density[suppressed == False])]
+
         num_maxima = 0
-        for i in np.argsort(-density):
-            if num_maxima == self._max_num_maxima:
-                break
+        for i in indices:
+            # if num_maxima == self._max_num_maxima:
+            #     break
 
             if not suppressed[i]:
                 accepted[i] = True
@@ -49,8 +52,11 @@ class NonMaximumSuppression:
                 suppressed[neighbors] = True
 
                 if probabilities is not None:
-                    probabilities[:, i] = np.sum(segmentation[:, neighbors] * density[neighbors], axis=1)
-                    probabilities[:, i] /= np.sum(probabilities[:, i])
+                    probabilities[:, i] = segmentation[:, i]
+                    #probabilities[:, i] /= np.sum(probabilities[:, i])
+                    # probabilities[:, i] = np.sum(
+                    #     segmentation[:, neighbors] * density[neighbors] ** 2, axis=1)
+                    # probabilities[:, i] /= np.sum(probabilities[:, i])
 
                 num_maxima += 1
 

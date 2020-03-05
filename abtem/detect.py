@@ -146,7 +146,7 @@ def label_to_index_generator(labels, first_label=0):
         yield np.sort(indices[l:h])
 
 
-class SegmentedDetector(Energy, Grid, DetectorBase):
+class SegmentedDetector(Energy, Grid, DetectorBase, Cache):
 
     def __init__(self, inner, outer, nbins_radial, nbins_angular=1, extent=None, gpts=None, sampling=None,
                  energy=None, export=None):
@@ -200,26 +200,23 @@ class SegmentedDetector(Energy, Grid, DetectorBase):
         self.check_is_grid_defined()
         self.check_is_energy_defined()
 
-        alpha2 = squared_norm(*semiangles(self))
-        alpha = np.sqrt(alpha2)
+        alpha_x, alpha_y = semiangles(self)
+        alpha = np.sqrt(squared_norm(alpha_x, alpha_y))
 
         radial_bins = -np.ones(self.gpts, dtype=int)
         valid = (alpha > self.inner) & (alpha < self.outer)
         radial_bins[valid] = self.nbins_radial * (alpha[valid] - self.inner) / (self.outer - self.inner)
 
-        angles = np.arctan2(X - sx // 2, Y - sy // 2) % (2 * np.pi)
+        angles = np.arctan2(alpha_x[:, None], alpha_y[None]) % (2 * np.pi)
 
-        angular_bins = np.floor(nbins_angular * (angles / (2 * np.pi)))
-        angular_bins = np.clip(angular_bins, 0, nbins_angular - 1).astype(np.int)
+        angular_bins = np.floor(self.nbins_angular * (angles / (2 * np.pi)))
+        angular_bins = np.clip(angular_bins, 0, self.nbins_angular - 1).astype(np.int)
 
-        bins = -np.ones(shape, dtype=int)
-        bins[valid] = angular_bins[valid] * nbins_radial + radial_bins[valid]
+        bins = -np.ones(self.gpts, dtype=int)
+        bins[valid] = angular_bins[valid] * self.nbins_radial + radial_bins[valid]
 
-        # regions = polar_labels(self.gpts, inner=self.inner, outer=self.outer, nbins_radial=self.nbins_radial,
-        #                        nbins_angular=self.nbins_angular)
-
-        # return ArrayWithGridAndEnergy(array, spatial_dimensions=2, extent=self.extent, energy=self.energy,
-        #                               fourier_space=True)
+        return ArrayWithGridAndEnergy(bins, spatial_dimensions=2, extent=self.extent, energy=self.energy,
+                                      fourier_space=True)
 
 
 class PixelatedDetector(Energy, Grid, DetectorBase):

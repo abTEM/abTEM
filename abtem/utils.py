@@ -1,14 +1,11 @@
 import numbers
 
+import cupy as cp
 import numba as nb
 import numpy as np
-from abtem.config import DTYPE, COMPLEX_DTYPE
 from ase import units
 
-try:
-    import cupy as xp
-except:
-    import numpy as xp
+from abtem.config import DTYPE, COMPLEX_DTYPE
 
 
 def energy2mass(energy):
@@ -50,10 +47,8 @@ def energy2sigma(energy):
 #     return ne.evaluate('exp(1.j * x)')
 
 
-def cosine_window(x, cutoff, rolloff, attenuate='high'):
+def cosine_window(x, cutoff, rolloff, attenuate='high', xp=np):
     rolloff *= cutoff
-
-    # array = .5 * (1 + np.cos(np.pi * (x - cutoff + rolloff) / rolloff))
     if attenuate == 'high':
         array = .5 * (1 + xp.cos(xp.pi * (x - cutoff - rolloff) / rolloff))
         array[x < cutoff] = 0.
@@ -95,7 +90,7 @@ def coordinates_in_disc(radius, shape=None):
         return rows[inside] * shape[0] + cols[inside]
 
 
-def polar_coordinates(shape, return_azimuth=False):
+def polar_coordinates(shape, return_azimuth=False, xp=np):
     x = xp.arange(shape[0], dtype=xp.float32) - shape[0] // 2
     y = xp.arange(shape[1], dtype=xp.float32) - shape[1] // 2
     r = xp.sqrt(x[:, None] ** 2 + y[None] ** 2)
@@ -170,10 +165,10 @@ class BatchGenerator:
 
 
 def view_as_windows(arr_in, window_shape, step):
-    if not isinstance(arr_in, (np.ndarray, xp.ndarray)):
+    if not isinstance(arr_in, (np.ndarray, cp.ndarray)):
         raise TypeError("`arr_in` must be a numpy ndarray")
 
-    # xp = xp.get_array_module(arr_in)
+    xp = cp.get_array_module(arr_in)
 
     ndim = arr_in.ndim
 

@@ -600,12 +600,14 @@ class ArrayWithGrid(Grid):
             y_label = 'y [Å]'
             extent = [0, self.extent[0], 0, self.extent[1]]
 
-        ax.imshow(array.T, extent=extent, cmap=cmap, origin='lower', **kwargs)
+        im = ax.imshow(array.T, extent=extent, cmap=cmap, origin='lower', **kwargs)
         ax.set_xlabel(x_label)
         ax.set_ylabel(y_label)
 
         if title is not None:
             ax.set_title(title)
+
+        return ax, im
 
     def copy(self, copy_array=True):
         if copy_array:
