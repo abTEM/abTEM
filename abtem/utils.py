@@ -1,11 +1,34 @@
 import numbers
 
-import cupy as cp
 import numba as nb
 import numpy as np
 from ase import units
+from scipy import ndimage
 
 from abtem.config import DTYPE, COMPLEX_DTYPE
+
+try:
+    import cupy as cp
+    from cupyx.scipy import ndimage as cupyx_ndimage
+
+    get_array_module = cp.get_array_module
+
+
+    def get_ndimage_module(array):
+        xp = get_array_module(array)
+        if xp is np:
+            return ndimage
+        else:
+            return cupyx_ndimage
+
+except ImportError:
+
+    def get_array_module(*args, **kwargs):
+        return np
+
+
+    def get_ndimage_module(*args, **kwargs):
+        return ndimage
 
 
 def energy2mass(energy):
@@ -165,10 +188,7 @@ class BatchGenerator:
 
 
 def view_as_windows(arr_in, window_shape, step):
-    if not isinstance(arr_in, (np.ndarray, cp.ndarray)):
-        raise TypeError("`arr_in` must be a numpy ndarray")
-
-    xp = cp.get_array_module(arr_in)
+    xp = get_array_module(arr_in)
 
     ndim = arr_in.ndim
 

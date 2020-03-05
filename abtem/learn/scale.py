@@ -1,24 +1,14 @@
-import cupy as cp
 import numpy as np
-from cupyx.scipy import ndimage as cupyx_ndimage
 from scipy import ndimage
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import pdist
 
 from abtem.cudakernels import interpolate_radial_functions
-from abtem.utils import cosine_window, polar_coordinates
-
-
-def get_ndimage_module(array):
-    xp = cp.get_array_module(array)
-    if xp is np:
-        return ndimage
-    else:
-        return cupyx_ndimage
+from abtem.utils import cosine_window, polar_coordinates, get_array_module, get_ndimage_module
 
 
 def periodic_smooth_decomposition(image):
-    xp = cp.get_array_module(image)
+    xp = get_array_module(image)
 
     u = image
     v = u2v(u)
@@ -31,7 +21,7 @@ def periodic_smooth_decomposition(image):
 
 
 def u2v(u):
-    xp = cp.get_array_module(u)
+    xp = get_array_module(u)
     v = xp.zeros(u.shape, dtype=u.dtype)
     v[..., 0, :] = u[..., -1, :] - u[..., 0, :]
     v[..., -1, :] = u[..., 0, :] - u[..., -1, :]
@@ -42,7 +32,7 @@ def u2v(u):
 
 
 def v2s(v_hat):
-    xp = cp.get_array_module(v_hat)
+    xp = get_array_module(v_hat)
     M, N = v_hat.shape[-2:]
 
     q = xp.arange(M).reshape(M, 1).astype(v_hat.dtype)
@@ -59,13 +49,14 @@ def v2s(v_hat):
 
 
 def periodic_smooth_decomposed_fft(image):
-    xp = cp.get_array_module(image)
+    xp = get_array_module(image)
     p, s = periodic_smooth_decomposition(image)
     return xp.fft.fft2(p)
 
 
 def image_as_polar_representation(image, inner=1, outer=None, symmetry=1, bins_per_symmetry=32):
-    xp = cp.get_array_module(image)
+    xp = get_array_module(image)
+    ndimage = get_ndimage_module(image)
 
     center = xp.array(image.shape[-2:]) // 2
 
@@ -81,12 +72,7 @@ def image_as_polar_representation(image, inner=1, outer=None, symmetry=1, bins_p
     polar_coordinates = center[:, None, None] + radials[None, :, None] * xp.array([xp.cos(angles), xp.sin(angles)])[:,
                                                                          None]
     polar_coordinates = polar_coordinates.reshape((2, -1))
-
-    if xp is np:
-        unrolled = ndimage.map_coordinates(image, polar_coordinates, order=1)
-    else:
-        unrolled = cupyx_ndimage.map_coordinates(image, polar_coordinates, order=1)
-
+    unrolled = ndimage.map_coordinates(image, polar_coordinates, order=1)
     unrolled = unrolled.reshape((n_radial, n_angular))
 
     if symmetry > 1:
@@ -96,7 +82,7 @@ def image_as_polar_representation(image, inner=1, outer=None, symmetry=1, bins_p
 
 
 def _window_sum_2d(image, window_shape):
-    xp = cp.get_array_module()
+    xp = get_array_module()
 
     window_sum = xp.cumsum(image, axis=0)
     window_sum = (window_sum[window_shape[0]:-1] - window_sum[:-window_shape[0] - 1])
@@ -118,18 +104,15 @@ def _centered(arr, newshape):
 
 
 def normalized_cross_correlation_with_2d_gaussian(image, kernel_size, std):
-    xp = cp.get_array_module(image)
+    xp = get_array_module(image)
+    ndimage = get_ndimage_module(image)
 
     kernel_1d = xp.exp(-(xp.arange(kernel_size) - (kernel_size - 1) / 2) ** 2 / (2 * std ** 2))
     kernel = np.outer(kernel_1d, kernel_1d)
     kernel_mean = kernel.mean()
     kernel_ssd = xp.sum((kernel - kernel_mean) ** 2)
 
-    if xp is np:
-        xcorr = ndimage.convolve(ndimage.convolve(image, kernel_1d[None]), kernel_1d[None].T)
-    else:
-        xcorr = cupyx_ndimage.convolve(image, kernel)
-        # xcorr = cupyx_ndimage.convolve(cupyx_ndimage.convolve(image, kernel_1d[None]), kernel_1d[None].T)
+    xcorr = ndimage.convolve(ndimage.convolve(image, kernel_1d[None]), kernel_1d[None].T)
 
     image_window_sum = _window_sum_2d(image, kernel.shape)
     image_window_sum2 = _window_sum_2d(image ** 2, kernel.shape)
@@ -142,7 +125,7 @@ def normalized_cross_correlation_with_2d_gaussian(image, kernel_size, std):
     np.divide(image_window_sum, np.prod(kernel.shape), out=image_window_sum)
     denominator -= image_window_sum
     denominator *= kernel_ssd
-    np.maximum(denominator, 0, out=denominator)  # sqrt of negative number not allowed
+    np.maximum(denominator, 0, out=denominator)
     np.sqrt(denominator, out=denominator)
 
     response = np.zeros_like(xcorr, dtype=xp.float32)
@@ -154,7 +137,7 @@ def normalized_cross_correlation_with_2d_gaussian(image, kernel_size, std):
 
 def find_hexagonal_spots(image, lattice_constant=None, min_sampling=None, max_sampling=None, bins_per_symmetry=16,
                          return_cartesian=False):
-    xp = cp.get_array_module(image)
+    xp = get_array_module(image)
 
     if image.shape[0] != image.shape[1]:
         raise RuntimeError('image is not square')
@@ -298,7 +281,7 @@ def pad_to_size(image, height, width, n=None):
     if n is not None:
         height = closest_multiple_ceil(height, n)
         width = closest_multiple_ceil(width, n)
-    xp = cp.get_array_module(image)
+    xp = get_array_module(image)
     shape = image.shape[-2:]
     up = (height - shape[0]) // 2
     down = height - shape[0] - up
@@ -315,7 +298,7 @@ def rescale(image, scale_factor):
 
 
 def threshold_otsu(image, nbins=256):
-    xp = cp.get_array_module(image)
+    xp = get_array_module(image)
     hist, bin_edges = xp.histogram(image.ravel(), nbins)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.
     weight1 = xp.cumsum(hist)
@@ -329,7 +312,7 @@ def threshold_otsu(image, nbins=256):
 
 
 def create_band_pass_filter(image, center, width, rolloff=0):
-    xp = cp.get_array_module(image)
+    xp = get_array_module(image)
 
     width = width / 2
 
