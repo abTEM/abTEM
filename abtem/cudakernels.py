@@ -5,21 +5,36 @@ except:
 
 import math
 
+import numpy as np
 from numba import cuda, prange, jit
 
 from abtem.utils import coordinates_in_disc
 
 
 @cuda.jit
-def put_squares(array, positions, indices):
+def superpose_deltas_kernel(array, positions, indices):
     i = cuda.threadIdx.x + cuda.blockIdx.x * cuda.blockDim.x
 
     if i < indices.shape[0]:
         row, col = indices[i]
+
         cuda.atomic.add(array, (row, col), (positions[i, 0] - row) * (positions[i, 1] - col))
         cuda.atomic.add(array, (row + 1, col), (row + 1 - positions[i, 0]) * (positions[i, 1] - col))
         cuda.atomic.add(array, (row, col + 1), (positions[i, 0] - row) * (col + 1 - positions[i, 1]))
         cuda.atomic.add(array, (row + 1, col + 1), (row + 1 - positions[i, 0]) * (col + 1 - positions[i, 1]))
+
+
+def superpose_deltas(positions, shape):
+    if cp.any(positions < 0) or cp.any(positions[:, 0] > shape[0]) or cp.any(positions[:, 1] > shape[1]):
+        raise RuntimeError()
+
+    rounded = cp.floor(positions).astype(cp.int32)
+    array = cp.zeros((shape[0], shape[1]), dtype=cp.float32)
+
+    threadsperblock = 32
+    blockspergrid = (positions.shape[0] + (threadsperblock - 1)) // threadsperblock
+    superpose_deltas_kernel[blockspergrid, threadsperblock](array, positions, rounded)
+    return array
 
 
 @cuda.jit
@@ -54,7 +69,7 @@ def interpolate_radial_functions_cuda_kernel(array, indices, positions, rows, co
 def interpolate_radial_functions_kernel(array, indices, positions, rows, cols, r, values, derivatives):
     dr = r[1] - r[0]
 
-    #print(indices)
+    # print(indices)
 
     for i in range(indices.shape[0]):
         for j in prange(indices.shape[1]):
@@ -96,7 +111,7 @@ def interpolate_radial_functions(func, positions, shape, cutoff, inner_cutoff=0.
 
     positions = positions + margin
     indices = xp.rint(positions).astype(xp.int)[:, 0] * padded_shape[0] + xp.rint(positions).astype(xp.int)[:, 1]
-    indices = (indices[:, None] + xp.asarray(coordinates_in_disc(margin - 1, padded_shape))[None])#.ravel()
+    indices = (indices[:, None] + xp.asarray(coordinates_in_disc(margin - 1, padded_shape))[None])  # .ravel()
 
     rows, cols = xp.indices(padded_shape)
     rows = rows.ravel()

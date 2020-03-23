@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
+import cupy as cp
 
 
 def pixel_times(dwell_time, flyback_time, shape):
@@ -66,3 +67,23 @@ def add_poisson_noise(image, dose, background=0):
     image.array[:] = image.array / np.sum(image.array) * dose * np.product(image.sampling) * np.prod(image.gpts)
     image.array[:] = np.random.poisson(image.array).astype(np.float)
     return image
+
+
+def bandpass_noise(inner, outer, shape, xp=None):
+    if xp is None:
+        xp = np
+
+    if len(shape) == 1:
+        k = xp.fft.fftfreq(shape[0], 1 / shape[0])
+    elif len(shape) == 2:
+        kx = xp.fft.fftfreq(shape[0], 1 / shape[0])
+        ky = xp.fft.fftfreq(shape[1], 1 / shape[1])
+        k = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
+    else:
+        raise RuntimeError()
+
+    r = xp.random.rand(*k.shape).astype(xp.float32)
+    mask = ((k > inner) & (k < outer)).astype(xp.float32)
+    noise = xp.fft.fftn(mask * xp.exp(-1.j * r * 2 * np.pi), axes=tuple(range(len(k.shape))))
+    noise = (noise.real + noise.imag) / 2
+    return (noise / xp.std(noise))

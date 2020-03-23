@@ -4,10 +4,13 @@ from abtem.utils import coordinates_in_disc, ind2sub2d
 
 class NonMaximumSuppression:
 
-    def __init__(self, distance, threshold):  # , max_num_maxima=np.inf):
+    def __init__(self, distance, threshold, max_num_maxima=np.inf):
         self._threshold = threshold
-        # self._max_num_maxima = max_num_maxima
+        self._max_num_maxima = max_num_maxima
         self._disc = coordinates_in_disc(distance)
+
+    def __call__(self, density, segmentation):
+        return self.predict(density, segmentation)
 
     def predict(self, density, segmentation=None):
 
@@ -33,8 +36,8 @@ class NonMaximumSuppression:
 
         num_maxima = 0
         for i in indices:
-            # if num_maxima == self._max_num_maxima:
-            #     break
+            if num_maxima == self._max_num_maxima:
+                break
 
             if not suppressed[i]:
                 accepted[i] = True

@@ -38,6 +38,21 @@ def gaussian_marker_labels(points, width, gpts):
     return markers
 
 
+def marker_labels(points, width, gpts):
+    if isinstance(gpts, numbers.Number):
+        gpts = (gpts,) * 2
+
+    gpts = np.array(gpts)
+    extent = np.diag(points.cell)
+    sampling = extent / gpts
+    markers = np.zeros(gpts)
+
+
+
+    #interpolate_radial_functions(markers, r, values, points.positions, sampling)
+    return markers
+
+
 def voronoi_labels(points, gpts):
     if len(points) == 0:
         return np.zeros(gpts, dtype=np.int)
@@ -78,7 +93,7 @@ def labels_to_masks(labels, n_classes):
 
 class DataGenerator:
 
-    def __init__(self, images, labels, crop, batch_size=8, augmentations=None):
+    def __init__(self, images, labels, crop, priors=None, batch_size=8, augmentations=None):
 
         self._num_examples = len(images)
         for label in labels:
@@ -86,6 +101,7 @@ class DataGenerator:
 
         self._images = images
         self._labels = labels
+        self._priors = priors
 
         if augmentations is None:
             augmentations = []
@@ -123,6 +139,7 @@ class DataGenerator:
 
         batch_images = self._crop(self._images[batch_indices].copy())
         batch_labels = [self._crop(label[batch_indices].copy()) for label in self._labels]
+        batch_priors = self._priors[batch_indices]
 
         for augmentation in self._augmentations:
             augmentation.randomize()
@@ -142,4 +159,4 @@ class DataGenerator:
         batch_images = batch_images.astype(np.float32)
         batch_labels = [bl.astype(np.float32) for bl in batch_labels]
 
-        return batch_images, batch_labels
+        return batch_images, batch_labels, batch_priors

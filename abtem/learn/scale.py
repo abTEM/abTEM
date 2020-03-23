@@ -146,13 +146,12 @@ def normalized_cross_correlation_with_2d_gaussian(image, kernel_size, std):
     np.sqrt(denominator, out=denominator)
 
     response = np.zeros_like(xcorr, dtype=xp.float32)
+    mask = denominator >= xp.finfo(xp.float32).eps
+    response[mask] = numerator[mask] / (denominator[mask])
+    return response #np.float32(mask)
 
-    mask = denominator > xp.finfo(xp.float32).eps
-    response[mask] = numerator[mask] / (denominator[mask] + 1e-6)
-    return response
 
-
-def find_hexagonal_spots(image, lattice_constant=None, min_sampling=None, max_sampling=None, bins_per_symmetry=16,
+def find_hexagonal_spots(image, lattice_constant=None, min_sampling=None, max_sampling=None, bins_per_symmetry=32,
                          return_cartesian=False):
     xp = cp.get_array_module(image)
 
@@ -185,41 +184,62 @@ def find_hexagonal_spots(image, lattice_constant=None, min_sampling=None, max_sa
         response = normalized_cross_correlation_with_2d_gaussian(f, w, w / 8)
         polar = image_as_polar_representation(response, inner=inner, outer=outer, symmetry=6,
                                               bins_per_symmetry=bins_per_symmetry)
-        polar = polar - polar.min(axis=1, keepdims=True)
-
-        peak = np.array(np.unravel_index((-polar).ravel().argsort()[:5], polar.shape)).T
-
+        #polar = polar - polar.min(axis=1, keepdims=True)
+        peak = np.vstack(np.unravel_index((-polar).ravel().argsort()[:5], polar.shape)).T
         peaks.append(peak)
-    # print(peaks)
-    peaks = np.vstack(peaks)
 
+    peaks = cp.asnumpy(xp.vstack(peaks))
+
+    below_center = peaks[:, 1] > bins_per_symmetry / 2
+    peaks = np.vstack([peaks,
+                       np.array([peaks[below_center][:, 0], peaks[below_center][:, 1] - bins_per_symmetry]).T,
+                       np.array([peaks[below_center == 0][:, 0],
+                                 peaks[below_center == 0][:, 1] + bins_per_symmetry]).T])
+
+    assignments = fcluster(linkage(pdist(peaks), method='single'), 2, 'distance')
+    unique, counts = np.unique(assignments, return_counts=True)
+    cluster_centers = np.array([np.mean(peaks[assignments == u], axis=0) for u in unique])
+
+    valid = (cluster_centers[:, 1] > -1e-12) & (cluster_centers[:, 1] < bins_per_symmetry) & (counts > 3)
+    cluster_centers = cluster_centers[valid][np.argsort(-counts[valid])][:2]
+
+    # print(cluster_centers)
+    #
     # import matplotlib.pyplot as plt
+
+    # response -= response.min()
+    #
+    # plt.imshow(np.log(1+1e4*cp.asnumpy(response).T)[200:-200,200:-200])
+    # plt.show()
     # plt.imshow(cp.asnumpy(polar).T)
     # plt.plot(*cp.asnumpy(peaks).T, 'rx')
+    # plt.plot(*cluster_centers.T, 'bv')
     # plt.show()
 
-    assignments = fcluster(linkage(pdist(peaks), method='complete'), 3, 'distance')
-    unique, counts = np.unique(assignments, return_counts=True)
-
-    top_2_possible_peak_labels = unique[counts > 1][np.argsort(-counts[counts > 1])[:2]]
-    peaks = np.array([np.mean(peaks[assignments == u], axis=0) for u in top_2_possible_peak_labels])
+    # import scipy.spatial.distance
     # print(peaks)
+    # print((peaks[:, 0][:, None] - peaks[:, 0][None]) ** 2 <
+    #       (peaks[:, 0][:, None] - peaks[:, 0][None] - bins_per_symmetry) ** 2)
+    # print(scipy.spatial.distance.pdist(peaks, 'cityblock'))
 
-    peaks[:, 0] += inner - .5
-    peaks[:, 1] = peaks[:, 1] / (bins_per_symmetry * 6) * 2 * np.pi
 
-    if len(top_2_possible_peak_labels) > 1:
-        # print('a')
-        radial_ratio = np.min(peaks[:, 0]) / np.max(peaks[:, 0])
-        angle_diff = np.max(peaks[:, 1]) - np.min(peaks[:, 1])
+    cluster_centers[:, 0] += inner - .5
+    cluster_centers[:, 1] = (cluster_centers[:, 1] / (bins_per_symmetry * 6) * 2 * np.pi) % (2 * np.pi / 6)
 
+    #print(cluster_centers)
+
+    if len(cluster_centers) > 1:
+        #print('a')
+        radial_ratio = np.min(cluster_centers[:, 0]) / np.max(cluster_centers[:, 0])
+        angle_diff = np.max(cluster_centers[:, 1]) - np.min(cluster_centers[:, 1])
         if (np.abs(radial_ratio * np.sqrt(3) - 1) < .1) & (np.abs(angle_diff - np.pi / 6) < np.pi / 10):
-            spot_radial, spot_angle = peaks[np.argmin(peaks[:, 0])]
+            #print('b')
+            spot_radial, spot_angle = cluster_centers[np.argmin(cluster_centers[:, 0])]
         else:
-            spot_radial, spot_angle = peaks[0]
+            spot_radial, spot_angle = cluster_centers[0]
 
     else:
-        spot_radial, spot_angle = peaks[0]
+        spot_radial, spot_angle = cluster_centers[0]
 
     if return_cartesian:
         angles = spot_angle + xp.linspace(0, 2 * np.pi, 6, endpoint=False)
@@ -253,10 +273,11 @@ class FourierSpaceScaleModel:
             raise RuntimeError()
         return self._spot_positions
 
-    def create_low_pass_filter(self, displacement=0., rolloff=0.):
-        cutoff = self._spot_radial - displacement
-        r = polar_coordinates(self._image.shape)
-        return xp.fft.fftshift(cosine_window(r, cutoff, rolloff=rolloff, attenuate='high'))
+    def predict(self, image):
+        raise RuntimeError()
+
+    def __call__(self, image):
+        return self.predict(image)
 
 
 class HexagonalFourierSpaceScaleModel(FourierSpaceScaleModel):

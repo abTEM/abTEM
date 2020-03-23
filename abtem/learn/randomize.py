@@ -3,9 +3,144 @@ import functools
 import cupy as cp
 import cupyx.scipy.ndimage
 import numpy as np
+import scipy.spatial as spatial
 
 from abtem.learn.filters import gaussian_filter_2d
-from abtem.noise import bandpass_noise
+from abtem.points import Points, fill_rectangle
+
+
+def graphene_like(a=2.46, n=1, m=1, pointwise_properties=None):
+    basis = [(0, 0), (2 / 3., 1 / 3.)]
+    cell = [[a, 0], [-a / 2., a * 3 ** 0.5 / 2.]]
+    positions = np.dot(np.array(basis), np.array(cell))
+
+    points = Points(positions, cell=cell, pointwise_properties=pointwise_properties)
+    points = points.repeat(n, m)
+    return points
+
+
+
+
+
+class SequentialStructureModifier:
+
+    def __init__(self, modifiers):
+        self.modifiers = modifiers
+
+    def __call__(self, points):
+        for modifier in self.modifiers:
+            points = modifier(points)
+
+        return points
+
+
+class RandomRotation:
+
+    def __init__(self, rotate_cell=True):
+        self.rotate_cell = rotate_cell
+
+    def __call__(self, points):
+        return points.rotate(np.random.rand() * 360., rotate_cell=True)
+
+
+class FillRectangle:
+
+    def __init__(self, extent, margin):
+        self.extent = extent
+        self.margin = margin
+
+    def __call__(self, points):
+        return fill_rectangle(points, self.extent, margin=self.margin)
+
+
+class RandomDelete:
+
+    def __init__(self, fraction):
+        self.fraction = fraction
+
+    def __call__(self, points):
+        n = int(np.round((1 - self.fraction) * len(points)))
+        return points[np.random.choice(len(points), n, replace=False)]
+
+
+class RandomSetProperties:
+
+    def __init__(self, fraction, name, new_value, default_value=0):
+        self.fraction = fraction
+        self.name = name
+        self.new_value = new_value
+        self.default_value = default_value
+
+    def __call__(self, points):
+        n = int(np.round(self.fraction * len(points)))
+        idx = np.random.choice(len(points), n, replace=False)
+
+        try:
+            properties = points.get_properties(self.name)
+            properties[idx] = self.new_value
+        except KeyError:
+            properties = np.full(fill_value=self.default_value, shape=len(points))
+            properties[idx] = self.new_value
+            points.set_properties(self.name, properties)
+
+        return points
+
+
+class RandomRotateNeighbors:
+
+    def __init__(self, fraction, cutoff):
+        self.R = np.array([[np.cos(np.pi / 2), -np.sin(np.pi / 2)],
+                           [np.sin(np.pi / 2), np.cos(np.pi / 2)]])
+
+        self.fraction = fraction
+        self.cutoff = cutoff
+
+    def __call__(self, points):
+        point_tree = spatial.cKDTree(points.positions)
+        n = int(np.round(self.fraction * len(points)))
+        first_indices = np.random.choice(len(points), n, replace=False)
+
+        marked = np.zeros(len(points), dtype=np.bool)
+        pairs = []
+        for first_index in first_indices:
+            marked[first_index] = True
+            second_indices = point_tree.query_ball_point(points.positions[first_index], 1.5)
+
+            if len(second_indices) < 2:
+                continue
+
+            np.random.shuffle(second_indices)
+
+            for second_index in second_indices:
+                if not marked[second_index]:
+                    break
+
+            marked[second_index] = True
+            pairs += [(first_index, second_index)]
+
+        for i, j in pairs:
+            center = np.mean(points.positions[[i, j]], axis=0)
+            points.positions[[i, j]] = np.dot(self.R, (points.positions[[i, j]] - center).T).T + center
+
+        return points
+
+
+class RandomStrain:
+
+    def __init__(self):
+        pass
+
+    def random_strain(points, scale, amplitude):
+        shape = np.array((128, 128))
+        sampling = np.linalg.norm(points.cell, axis=1) / shape
+        outer = 1 / scale * 2
+        noise = bandpass_noise(inner=0, outer=outer, shape=shape, sampling=sampling)
+        indices = np.floor((points.scaled_positions % 1.) * shape).astype(np.int)
+
+        for i in [0, 1]:
+            points.positions[:, i] += amplitude * noise[indices[:, 0], indices[:, 1]]
+
+        return points
 
 
 class RandomNumberGenerator:
@@ -61,13 +196,13 @@ class DataModifier:
         except AttributeError:
             return random_number_generator
 
-    def __call__(self, image, label):
-        # assert len(images) == len(labels)
+    def __call__(self, images, labels):
+        assert len(images) == len(labels)
 
-        # for i in range(len(images)):
-        #     images[i], labels[i] = self.apply(images[i], labels[i])
+        for i in range(len(images)):
+            images[i], labels[i] = self.apply(images[i], labels[i])
 
-        return self.apply(image, label)
+        return images, labels
 
 
 class SequentialDataModifiers(DataModifier):
@@ -76,11 +211,11 @@ class SequentialDataModifiers(DataModifier):
         super().__init__()
         self.modifiers = modifiers
 
-    def __call__(self, image, label):
+    def __call__(self, images, labels):
         for modifier in self.modifiers:
-            image, label = modifier(image, label)
+            images, labels = modifier(images, labels)
 
-        return image, label
+        return images, labels
 
 
 class RandomCrop(DataModifier):
@@ -101,14 +236,12 @@ class RandomCrop(DataModifier):
         shift_x = np.round(shift_x * (old_shape[0] - self.new_shape[0])).astype(np.int)
         shift_y = np.round(shift_y * (old_shape[1] - self.new_shape[1])).astype(np.int)
 
-        sampling = np.linalg.norm(label.cell, axis=0) / np.array(image.shape)
+        sampling = cp.linalg.norm(label.cell, axis=0) / cp.array(image.shape)
 
         image = image[shift_x:shift_x + self.new_shape[0], shift_y:shift_y + self.new_shape[1]]
+        label.positions -= cp.array((shift_x * sampling[0], shift_y * sampling[1]))
 
 
-
-        label.positions -= np.array((shift_x * sampling[0], shift_y * sampling[1]))
-        label.cell *= np.asarray(self.new_shape) / np.asarray(old_shape)
 
         return image, label
 
@@ -131,24 +264,16 @@ class PoissonNoise(DataModifier):
         b = - image.min() + self.background
         image = image + b
         a = image.shape[0] * image.shape[1] / image.sum() * self.mean
-        image = cp.random.poisson(image * a)
-        return (image / a - b).astype(cp.float32), label
+        image = cp.random.poisson(image * a).astype(cp.float32)
+        return image / a - b, label
 
 
 class ScanNoise(DataModifier):
 
     def __init__(self, periodicity, amount):
-        self._periodicity = periodicity
-        self._amount = amount
+        self.periodicity = periodicity
+        self.amount = amount
         super().__init__()
-
-    @property
-    def periodicity(self):
-        return self.randomize(self._periodicity)
-
-    @property
-    def amount(self):
-        return self.randomize(self._amount)
 
     @staticmethod
     def independent_roll(array, shifts):
@@ -159,29 +284,20 @@ class ScanNoise(DataModifier):
         return result
 
     def apply(self, image, label):
-        noise = bandpass_noise(0, image.shape[1], (image.shape[1],), xp=cp.get_array_module(image))
-        if self.periodicity > 1:
-            noise *= bandpass_noise(0, self.periodicity, (image.shape[1],), xp=cp.get_array_module(image))
-        noise *= self.amount / cp.std(noise)
+        freqs = cp.fft.fftfreq(image.shape[0], 1 / image.shape[0])
+        noise = bandpass_noise(0, self.periodicity, freqs)
+        noise = noise / cp.std(noise) * self.amount
         image = self.independent_roll(image, noise.astype(cp.int32))
         return image, label
 
 
 class Warp(DataModifier):
 
-    def __init__(self, periodicity, amount, axis=0):
-        self._periodicity = periodicity
-        self._amount = amount
+    def __init__(self, scale, amount, axis=0):
+        self.scale = scale
+        self.amount = amount
         self.axis = axis
         super().__init__()
-
-    @property
-    def periodicity(self):
-        return self.randomize(self._periodicity)
-
-    @property
-    def amount(self):
-        return self.randomize(self._amount)
 
     @functools.lru_cache(1)
     def get_coordinates(self, shape):
@@ -191,7 +307,10 @@ class Warp(DataModifier):
         return cp.vstack([x.ravel(), y.ravel()])
 
     def apply(self, image, label):
-        noise = bandpass_noise(0, self.periodicity, image.shape, xp=cp.get_array_module(image))
+        kx = cp.fft.fftfreq(image.shape[0], 1 / image.shape[0])
+        ky = cp.fft.fftfreq(image.shape[1], 1 / image.shape[1])
+        k = cp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
+        noise = bandpass_noise(0, self.scale, k)
 
         coordinates = self.get_coordinates(image.shape).copy()[::-1]
         coordinates[self.axis] += noise.ravel() * self.amount
@@ -203,13 +322,10 @@ class Warp(DataModifier):
         image = image.reshape(shape)
 
         positions = label.positions
-        sampling = np.linalg.norm(label.cell, axis=0) / np.array(noise.shape)
+        sampling = cp.linalg.norm(label.cell, axis=0) / cp.array(noise.shape)
 
-        rounded = np.around(positions / sampling).astype(np.int)
-        rounded[:, 0] = np.clip(rounded[:, 0], 0, shape[0] - 1)
-        rounded[:, 1] = np.clip(rounded[:, 1], 0, shape[1] - 1)
-
-        positions[:, self.axis] -= cp.asnumpy(noise)[rounded[:, 0], rounded[:, 1]] * sampling[self.axis] * self.amount
+        rounded = cp.around(positions / sampling).astype(cp.int)
+        positions[:, self.axis] -= noise[rounded[:, 0], rounded[:, 1]] * sampling[self.axis] * self.amount
         return image, label
 
 
@@ -219,7 +335,7 @@ class Flip(DataModifier):
         super().__init__()
 
     def apply(self, image, label):
-        sampling = np.linalg.norm(label.cell, axis=0)[0] / np.array(image.shape)
+        sampling = np.linalg.norm(label.cell, axis=0)[0] / cp.array(image.shape)
 
         if np.random.rand() < .5:
             image = image[::-1, :]
@@ -262,23 +378,18 @@ class Border(DataModifier):
 
 class Stain(DataModifier):
 
-    def __init__(self, periodicity, amount):
-        self._periodicity = periodicity
-        self._amount = amount
+    def __init__(self, scale, amount):
+        self.scale = scale
+        self.amount = amount
         super().__init__()
 
-    @property
-    def periodicity(self):
-        return self.randomize(self._periodicity)
-
-    @property
-    def amount(self):
-        return self.randomize(self._amount)
-
     def apply(self, image, label):
-        noise = bandpass_noise(0, self.periodicity, image.shape, xp=cp.get_array_module(image))
-        noise *= image.std() / noise.std()
-        return image + self.amount * noise, label
+        kx = cp.fft.fftfreq(image.shape[0], 1 / image.shape[0])
+        ky = cp.fft.fftfreq(image.shape[1], 1 / image.shape[1])
+        k = cp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
+        noise = bandpass_noise(0, self.scale, k)
+        noise /= noise.max()
+        return image * (1 - self.amount * noise), label
 
 
 class Normalize(DataModifier):
@@ -313,12 +424,8 @@ class Multiply(DataModifier):
 class Blur(DataModifier):
 
     def __init__(self, sigma):
-        self._sigma = sigma
+        self.sigma = sigma
         super().__init__()
-
-    @property
-    def sigma(self):
-        return self.randomize(self._sigma)
 
     def __call__(self, image, label):
         return gaussian_filter_2d(image, self.sigma), label

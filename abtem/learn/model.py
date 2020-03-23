@@ -1,101 +1,103 @@
+import cupy as cp
 import numpy as np
 import torch
-import torch.nn.functional as F
-from abtem.learn.postprocess import non_maximum_suppresion
-from abtem.learn.preprocess import pad_to_size, weighted_normalization
-from abtem.learn.scale import find_hexagonal_sampling
-from abtem.learn.unet import UNet
+import torch.nn as nn
+from torch.utils import dlpack
 
-
-def build_unet_model(parameters, device):
-    model = UNet(in_channels=parameters['in_channels'],
-                 out_channels=parameters['out_channels'],
-                 init_features=parameters['init_features'],
-                 dropout=0.)
-    model.load_state_dict(torch.load(parameters['weights_file'], map_location=device))
-    return model
-
-
-def build_model_from_dict(parameters):
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-
-    mask_model = build_unet_model(parameters=parameters['mask_model'], device=device)
-    density_model = build_unet_model(parameters=parameters['density_model'], device=device)
-
-    if parameters['scale']['crystal_system'] == 'hexagonal':
-        scale_model = lambda x: find_hexagonal_sampling(x, a=parameters['scale']['lattice_constant'],
-                                                        min_sampling=parameters['scale']['min_sampling'])
-    else:
-        raise NotImplementedError('')
-
-    def discretization_model(density):
-        nms_distance_pixels = int(np.round(parameters['nms']['distance'] / parameters['training_sampling']))
-
-        accepted = non_maximum_suppresion(density, distance=nms_distance_pixels,
-                                          threshold=parameters['nms']['threshold'])
-
-        points = np.array(np.where(accepted[0])).T
-        # probabilities = probabilities[0, :, points[:, 0], points[:, 1]]
-        return points
-
-    model = AtomRecognitionModel(mask_model, density_model, training_sampling=parameters['training_sampling'],
-                                 scale_model=scale_model, discretization_model=discretization_model)
+from abtem.learn.scale import add_margin_to_image
+from abtem.learn.unet import GaussianFilter2d, PeakEnhancementFilter
+from abtem.learn.utils import pytorch_to_cupy, cupy_to_pytorch
+from cupyx.scipy.ndimage import zoom
 
 
 class AtomRecognitionModel:
 
-    def __init__(self, mask_model, density_model, scale_model, discretization_model):
-        self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self._mask_model = mask_model
-        self.density_model = density_model
-        self.scale_model = scale_model
-        self.discretization_model = discretization_model
+    def __init__(self, training_sampling, scale_model, model, marker_head, segmentation_head, margin=0):
+        self._scale_model = scale_model
+        self._model = model
+        self._segmentation_head = segmentation_head
+        self._marker_head = marker_head
+        self._training_sampling = training_sampling
+        self._margin = int(np.ceil(margin / self._training_sampling))
 
-    def standardize_dims(self, images):
-        if len(images.shape) == 2:
-            images = images.unsqueeze(0).unsqueeze(0)
-        elif len(images.shape) == 3:
-            images = torch.unsqueeze(images, 0)
-        elif len(images.shape) != 4:
-            raise RuntimeError('')
-        return images
+    def prepare_image(self, image):
+        image = cp.asarray(image)
+        sampling = self._scale_model(image)
+        image = (image - image.mean()) / image.std()
+        image = zoom(image, zoom=sampling / self._training_sampling)
+        image, padding = add_margin_to_image(image, self._margin)
+        image = cp.stack((image, cp.zeros_like(image)))
+        image[1, :padding[0][0]] = 1
+        image[1, -padding[0][1]:] = 1
+        image[1, :, :padding[1][0]] = 1
+        image[1, :, -padding[1][1]:] = 1
 
-    def rescale_images(self, images, sampling):
-        scale_factor = sampling / self.training_sampling
-        images = F.interpolate(images, scale_factor=scale_factor, mode='nearest')
-        images = pad_to_size(images, images.shape[2], images.shape[3], n=16)
-        return images
+        image = cupy_to_pytorch(image)
+        image = image[None]
+        return image, sampling, padding
 
-    def normalize_images(self, images, mask=None):
-        return weighted_normalization(images, mask)
+    def __call__(self, image):
+        return self.predict(image)
 
-    # def postprocess_images(self, image, original_shape, sampling):
-    #     image = rescale(image, self.training_sampling / sampling, multichannel=False, anti_aliasing=False)
-    #     shape = image.shape
-    #     padding = (shape[0] - original_shape[0], shape[1] - original_shape[1])
-    #     image = image[padding[0] // 2: padding[0] // 2 + original_shape[0],
-    #             padding[1] // 2: padding[1] // 2 + original_shape[1]]
-    #     return image
+    def predict(self, image):
+        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-    def postprocess_points(self, points, shape, original_shape, sampling):
-        shape = np.round(np.array(shape) * self.training_sampling / sampling)
-        padding = (shape[0] - original_shape[0], shape[1] - original_shape[1])
-        points = points * self.training_sampling / sampling
-        return points - np.array([padding[0] // 2, padding[1] // 2])
+        preprocessed, sampling, padding = self.prepare_image(image)
 
-    def forward(self, images):
-        images = torch.tensor(images).to(self.device)
-        images = self.standardize_dims(images)
-        orig_shape = images.shape[-2:]
-        sampling = self.scale_model(images)
-        images = self.rescale_images(images, sampling)
-        images = self.normalize_images(images)
-        mask = self.mask_model(images)
-        mask = torch.sum(mask[:, :-1], dim=1)[:, None]
-        images = self.normalize_images(images, mask)
-        density = self.density_model(images)
-        density = mask * density
-        density = density.detach().cpu().numpy()
-        points = self.discretization_model(density)
-        points = [self.postprocess_points(p, density.shape[-2:], orig_shape, sampling) for p in points]
-        return points
+        with torch.no_grad():
+            features = self._model(preprocessed)
+            markers = self._marker_head(features)
+            segmentation = nn.LogSoftmax(1)(self._segmentation_head(features))
+
+            base_filter = GaussianFilter2d(4)
+            base_filter = base_filter.to(device)
+            peak_enhancement_filter = PeakEnhancementFilter(base_filter, 20, 1.4)
+            markers = peak_enhancement_filter(markers)
+
+            markers = pytorch_to_cupy(markers)
+            segmentation = pytorch_to_cupy(segmentation)
+
+        points = cp.array(cp.where(markers[0, 0] > .3)).T
+
+        segmentation = cp.argmax(segmentation[0], axis=0)
+        labels = segmentation[points[:, 0], points[:, 1]]
+
+        points = cp.asnumpy(points).astype(np.float)
+        labels = cp.asnumpy(labels)
+
+        # labels = np.zeros(len(points), dtype=np.int)
+        points = (points - padding[0]) * self._training_sampling / sampling
+        return points[:, ::-1], labels  # labels
+
+        # segmentation = self._segmentation_model(preprocessed)
+
+        # preprocessed = weighted_normalization(preprocessed, segmentation[:, 0][None])
+        # print(preprocessed.shape)
+        # density = self._density_model(preprocessed)
+        #
+        # segmentation = segmentation[0, :].detach().cpu().numpy()
+        #
+        # density = density[0, 0].detach().cpu().numpy()
+        #
+        # points, labels = self._discretization_model(density, segmentation)
+        # points = (points - padding[0]) * self._training_sampling / sampling
+        #
+        # return points[:, ::-1], np.argmax(labels, axis=0)
+
+    # def predict(self, image):
+    #     preprocessed, sampling, padding = self.prepare_image(image)
+    #     segmentation = self._segmentation_model(preprocessed)
+    #
+    #     preprocessed = weighted_normalization(preprocessed, segmentation[:, 0][None])
+    #     print(preprocessed.shape)
+    #     density = self._density_model(preprocessed)
+    #
+    #     segmentation = segmentation[0, :].detach().cpu().numpy()
+    #
+    #     density = density[0, 0].detach().cpu().numpy()
+    #
+    #     points, labels = self._discretization_model(density, segmentation)
+    #     points = (points - padding[0]) * self._training_sampling / sampling
+    #
+    #     return points[:, ::-1], np.argmax(labels, axis=0)  # {'species': np.argmax(labels, axis=0),
+    #     # 'distortion': np.zeros(len(labels), dtype=np.int)}

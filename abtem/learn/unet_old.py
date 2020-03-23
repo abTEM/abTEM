@@ -1,7 +1,10 @@
+
+
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+
+from abtem.utils import BatchGenerator
 
 
 class DoubleConv(nn.Module):
@@ -70,8 +73,13 @@ class Up(nn.Module):
 
 class UNet(nn.Module):
 
-    def __init__(self, in_channels, features=16, dropout=.3, bilinear=True):
+    def __init__(self, in_channels, out_channels, init_features=16, dropout=.5, bilinear=True, activation=None):
         super().__init__()
+
+        features = init_features
+        self.out_channels = out_channels
+        self.activation = activation
+
         self.inc = DoubleConv(in_channels, features)
         self.down1 = Down(features, 2 * features, dropout=dropout)
         self.down2 = Down(2 * features, 4 * features, dropout=dropout)
@@ -81,6 +89,8 @@ class UNet(nn.Module):
         self.up2 = Up(8 * features, 2 * features, bilinear, dropout=dropout)
         self.up3 = Up(4 * features, features, bilinear, dropout=dropout)
         self.up4 = Up(2 * features, features, bilinear, dropout=dropout)
+        self.out1 = nn.Conv2d(in_channels=features, out_channels=features // 2, kernel_size=1)
+        self.out2 = nn.Conv2d(in_channels=features // 2, out_channels=out_channels, kernel_size=1)
 
     def forward(self, x):
         x1 = self.inc(x)
@@ -91,77 +101,41 @@ class UNet(nn.Module):
         x = self.up1(x5, x4)
         x = self.up2(x, x3)
         x = self.up3(x, x2)
-        return self.up4(x, x1)
-
-
-class ConvHead(nn.Module):
-
-    def __init__(self, in_channels, out_channels, activation=None):
-        super().__init__()
-        self.in_channels = in_channels
-        self.activation = activation
-
-        layers = []
-        for _ in range(2):
-            layers.append(nn.Conv2d(in_channels, in_channels, kernel_size=1))
-            layers.append(nn.ReLU(inplace=True))
-
-        layers.append(nn.Conv2d(in_channels, out_channels, kernel_size=1))
-        self.layers = nn.Sequential(*layers)
-
-    def forward(self, x):
-        if self.activation is None:
-            return self.layers(x)
+        x = self.up4(x, x1)
+        x = self.out1(x)
+        x = self.out2(x)
+        if self.activation is not None:
+            return self.activation(x)
         else:
-            return self.activation(self.layers(x))
+            return x
 
+    def get_device(self):
+        return next(self.parameters()).device
 
-class SeparableFilter(nn.Module):
+    def predict_series(self, images, max_batch, num_samples=1):
+        batch_generator = BatchGenerator(len(images), max_batch)
 
-    def __init__(self, kernel):
-        super().__init__()
-        self.kernel_size = len(kernel)
-        self.register_buffer('kernel', kernel)
+        if num_samples > 1:
+            outputs = (np.zeros((images.shape[0],) + (self.out_channels,) + images.shape[2:], dtype=np.float32),
+                       np.zeros((images.shape[0],) + (self.out_channels,) + images.shape[2:], dtype=np.float32))
+            forward = lambda x: (self.mc_predict(x, num_samples=num_samples),)
+        else:
+            outputs = (np.zeros((images.shape[0],) + (self.out_channels,) + images.shape[2:], dtype=np.float32),)
+            forward = lambda x: (self.forward(x),)
 
-    def forward(self, x):
-        x = F.pad(x, (self.kernel_size // 2,) * 4)
-        return F.conv2d(F.conv2d(x, self.kernel.reshape((1, 1, 1, -1))), self.kernel.reshape((1, 1, -1, 1)))
+        for start, size in batch_generator.generate():
+            batch_outputs = forward(images[start:start + size])
 
+            for i, batch_output in enumerate(batch_outputs):
+                outputs[i][start:start + size] = batch_output.detach().cpu().numpy()
 
-class GaussianFilter2d(SeparableFilter):
-    def __init__(self, sigma):
-        kernel_size = int(np.ceil(sigma) ** 2) * 4 + 1
-        kernel = torch.exp(-(torch.arange(kernel_size) - (kernel_size - 1) / 2) ** 2 / (2 * sigma ** 2))
-        super().__init__(kernel)
+        return outputs
 
+    def mc_predict(self, images, num_samples):
+        mc_output = np.zeros((num_samples,) + (images.shape[0],) + (self.out_channels,) + images.shape[2:])
 
-class SumFilter2d(SeparableFilter):
-    def __init__(self, kernel_size):
-        kernel = torch.ones(kernel_size)
-        super().__init__(kernel)
+        for i in range(num_samples):
+            outputs = self.forward(images)
+            mc_output[i] = outputs.cpu().detach().numpy()
 
-
-class PeakEnhancementFilter:
-
-    def __init__(self, base_filter, iterations=10, alpha=2, epsilon=1e-7):
-        self.base_filter = base_filter
-        self.alpha = alpha
-        self.epsilon = epsilon
-        self.iterations = iterations
-
-    def iterate(self, tensor):
-        temp = tensor ** self.alpha
-        return temp * self.base_filter(tensor) / (self.base_filter(temp) + self.epsilon)
-
-    def generate(self, tensor):
-        for i in range(self.iterations):
-            tensor = self.iterate(tensor)
-            yield tensor
-
-    def apply(self, tensor):
-        for tensor in self.generate(tensor):
-            pass
-        return tensor
-
-    def __call__(self, tensor):
-        return self.apply(tensor)
+        return np.mean(mc_output, 0), np.std(mc_output, 0)

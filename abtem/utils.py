@@ -207,3 +207,6 @@ def view_as_windows(arr_in, window_shape, step):
 
     arr_out = xp.lib.stride_tricks.as_strided(arr_in, shape=new_shape, strides=strides)
     return arr_out
+
+
+
