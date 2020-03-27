@@ -311,34 +311,55 @@ class PlaneWaves(Grid, Energy, Cache):
                               energy=self.energy)
 
 
-def _do_scan(probe, scan_waves_maker: callable, scan: ScanBase, detectors: Union[Sequence[DetectorBase], DetectorBase],
-             max_batch: int, show_progress: bool = True):
-    if not isinstance(detectors, Sequence):
-        detectors = [detectors]
+class Scanable:
 
-    for detector in detectors:
-        detector.extent = probe.probe_extent
-        detector.gpts = probe.probe_shape
-        detector.energy = probe.energy
-        scan.open_measurements(detector)
-
-    for start, stop, positions in tqdm(scan.generate_positions(max_batch),
-                                       total=int(np.ceil(np.prod(scan.gpts) / max_batch)),
-                                       disable=not show_progress):
-        waves = scan_waves_maker(probe, positions)
+    def _do_scan(self, probe_generator, scan: ScanBase,
+                 detectors: Union[Sequence[DetectorBase], DetectorBase],
+                 max_batch: int, show_progress: bool = True):
+        if not isinstance(detectors, Sequence):
+            detectors = [detectors]
 
         for detector in detectors:
-            if detector.export is not None:
-                with h5py.File(detector.export, 'a') as f:
-                    f['data'][start:start + stop] = detector.detect(waves)
+            detector.extent = self.probe_window_extent
+            detector.gpts = self.probe_window_gpts
+            detector.energy = self.energy
+            scan.open_measurements(detector)
 
-            else:
-                scan.measurements[detector][start:start + stop] = detector.detect(waves)
+        for start, stop, positions in tqdm(scan.generate_positions(max_batch),
+                                           total=int(np.ceil(np.prod(scan.gpts) / max_batch)),
+                                           disable=not show_progress):
+            waves = scan_waves_maker(self, positions)
 
-    for detector in detectors:
-        scan.finalize_measurements(detector)
+            for detector in detectors:
+                if detector.export is not None:
+                    with h5py.File(detector.export, 'a') as f:
+                        f['data'][start:start + stop] = detector.detect(waves)
 
-    return scan
+                else:
+                    scan.measurements[detector][start:start + stop] = detector.detect(waves)
+
+        for detector in detectors:
+            scan.finalize_measurements(detector)
+
+        return scan
+
+    @property
+    def energy(self):
+        raise NotImplementedError()
+
+    @property
+    def probe_window_extent(self):
+        raise NotImplementedError()
+
+    @property
+    def probe_window_gpts(self):
+        raise NotImplementedError()
+
+    def propagate(self, *args):
+        raise NotImplementedError()
+
+    def generate_probes(self, scan, *args):
+        raise NotImplementedError()
 
 
 class ProbeWaves(CTF):
@@ -401,14 +422,6 @@ class ProbeWaves(CTF):
     def get_image(self):
         return self.build().get_image()
 
-    @property
-    def probe_extent(self):
-        return self.extent
-
-    @property
-    def probe_shape(self):
-        return self.gpts
-
     def fwhm(self):
         from abtem.analyse import fwhm
         return fwhm(self)
@@ -455,12 +468,16 @@ class ProbeWaves(CTF):
     def _get_scan_waves_maker(self, potential):
         self.match_grid(potential)
 
-        def scan_waves_func(waves, positions):
+        def scan_waves_func(positions):
             waves = waves.build_at(positions)
             waves.multislice(potential=potential, in_place=True, show_progress=False)
             return waves
 
         return scan_waves_func
+
+    def scan(self, scan, potential, detectors, max_batch: int = 1, show_progress: bool = True):
+        return _do_scan(self, self._get_scan_waves_maker(potential), scan=scan, detectors=detectors,
+                        max_batch=max_batch, show_progress=show_progress)
 
     def custom_scan(self, potential: Union[Atoms, PotentialBase],
                     detectors: Union[Sequence[DetectorBase], DetectorBase],
@@ -492,9 +509,7 @@ class ProbeWaves(CTF):
             raise RuntimeError('inconsistent grid points')
 
         scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint)
-        return _do_scan(self, self._get_scan_waves_maker(potential), scan=scan, detectors=detectors,
-                        max_batch=max_batch,
-                        show_progress=show_progress)
+        self.scan(scan=scan, potential=potential, detectors=detectors, max_batch=max_batch, show_progress=show_progress)
 
     def grid_scan(self, potential: Union[Atoms, PotentialBase],
                   detectors: Union[Sequence[DetectorBase], DetectorBase],
