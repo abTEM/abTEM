@@ -6,6 +6,7 @@ import numpy as np
 
 from abtem.learn.filters import gaussian_filter_2d
 from abtem.noise import bandpass_noise
+from abtem.learn.utils import pad_to_size
 
 
 class RandomNumberGenerator:
@@ -101,14 +102,14 @@ class RandomCrop(DataModifier):
         shift_x = np.round(shift_x * (old_shape[0] - self.new_shape[0])).astype(np.int)
         shift_y = np.round(shift_y * (old_shape[1] - self.new_shape[1])).astype(np.int)
 
-        sampling = np.linalg.norm(label.cell, axis=0) / np.array(image.shape)
+        shape = image.shape
 
         image = image[shift_x:shift_x + self.new_shape[0], shift_y:shift_y + self.new_shape[1]]
 
-
-
-        label.positions -= np.array((shift_x * sampling[0], shift_y * sampling[1]))
-        label.cell *= np.asarray(self.new_shape) / np.asarray(old_shape)
+        if label:
+            sampling = np.linalg.norm(label.cell, axis=0) / np.array(shape)
+            label.positions -= np.array((shift_x * sampling[0], shift_y * sampling[1]))
+            label.cell *= np.asarray(self.new_shape) / np.asarray(old_shape)
 
         return image, label
 
@@ -195,22 +196,38 @@ class Warp(DataModifier):
 
         coordinates = self.get_coordinates(image.shape).copy()[::-1]
         coordinates[self.axis] += noise.ravel() * self.amount
+
         shape = image.shape
 
         coordinates[0] = cp.clip(coordinates[0], 0, image.shape[0] - 1).astype(cp.int)
         coordinates[1] = cp.clip(coordinates[1], 0, image.shape[1] - 1).astype(cp.int)
         image = cupyx.scipy.ndimage.map_coordinates(image, coordinates, order=1)
+
         image = image.reshape(shape)
 
-        positions = label.positions
-        sampling = np.linalg.norm(label.cell, axis=0) / np.array(noise.shape)
+        if label:
+            positions = label.positions
+            sampling = np.linalg.norm(label.cell, axis=0) / np.array(noise.shape)
 
-        rounded = np.around(positions / sampling).astype(np.int)
-        rounded[:, 0] = np.clip(rounded[:, 0], 0, shape[0] - 1)
-        rounded[:, 1] = np.clip(rounded[:, 1], 0, shape[1] - 1)
+            rounded = np.around(positions / sampling).astype(np.int)
+            rounded[:, 0] = np.clip(rounded[:, 0], 0, shape[0] - 1)
+            rounded[:, 1] = np.clip(rounded[:, 1], 0, shape[1] - 1)
 
-        positions[:, self.axis] -= cp.asnumpy(noise)[rounded[:, 0], rounded[:, 1]] * sampling[self.axis] * self.amount
+            positions[:, self.axis] -= cp.asnumpy(noise)[rounded[:, 0], rounded[:, 1]] * sampling[self.axis] * self.amount
         return image, label
+
+
+class PadToSize(DataModifier):
+
+    def __init__(self, shape):
+        self.shape = shape
+        super().__init__()
+
+    def apply(self, image, label):
+        if label:
+            raise RuntimeError()
+
+        return pad_to_size(image, self.shape[0], self.shape[1]), label
 
 
 class Flip(DataModifier):
@@ -219,15 +236,18 @@ class Flip(DataModifier):
         super().__init__()
 
     def apply(self, image, label):
-        sampling = np.linalg.norm(label.cell, axis=0)[0] / np.array(image.shape)
+        if label:
+            sampling = np.linalg.norm(label.cell, axis=0)[0] / np.array(image.shape)
 
         if np.random.rand() < .5:
             image = image[::-1, :]
-            label.positions[:, 0] = image.shape[0] * sampling[0] - label.positions[:, 0]
+            if label:
+                label.positions[:, 0] = image.shape[0] * sampling[0] - label.positions[:, 0]
 
         if np.random.rand() < .5:
             image = image[:, ::-1]
-            label.positions[:, 1] = image.shape[1] * sampling[1] - label.positions[:, 1]
+            if label:
+                label.positions[:, 1] = image.shape[1] * sampling[1] - label.positions[:, 1]
 
         return image, label
 
@@ -238,11 +258,13 @@ class Rotate90(DataModifier):
         super().__init__()
 
     def apply(self, image, label):
+
         k = np.random.randint(0, 3)
 
         if k:
             image = cp.rot90(image, k=k)
-            label.rotate(k * 90)
+            if label:
+                label.rotate(k * 90)
 
         return image, label
 
@@ -293,8 +315,12 @@ class Normalize(DataModifier):
 class Add(DataModifier):
 
     def __init__(self, amount):
-        self.amount = amount
+        self._amount = amount
         super().__init__()
+
+    @property
+    def amount(self):
+        return self.randomize(self._amount)
 
     def apply(self, image, label):
         return image + self.amount, label
@@ -303,8 +329,12 @@ class Add(DataModifier):
 class Multiply(DataModifier):
 
     def __init__(self, multiplier):
-        self.multiplier = multiplier
+        self._multiplier = multiplier
         super().__init__()
+
+    @property
+    def multiplier(self):
+        return self.randomize(self._multiplier)
 
     def __call__(self, image, label):
         return image * self.multiplier, label

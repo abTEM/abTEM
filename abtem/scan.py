@@ -9,8 +9,7 @@ import h5py
 
 def load_measurements(path):
     with h5py.File(path, 'r') as f:
-
-        measurements = f['data'][:]#.reshape(tuple(f['data'].attrs['shape']))
+        measurements = f['data'][:]  # .reshape(tuple(f['data'].attrs['shape']))
         measurements = measurements.reshape(tuple(f['data'].attrs['shape']) + measurements.shape[1:])
         measurements = np.squeeze(measurements)
     return measurements
@@ -22,8 +21,7 @@ class ScanBase:
         self._measurements = {}
         super().__init__(**kwargs)
 
-    @property
-    def measurements(self):
+    def get_measurement(self, detector):
         return self._measurements
 
     def get_positions(self):
@@ -44,21 +42,16 @@ class ScanBase:
     def create_file(self, name, shape):
         raise NotImplementedError()
 
-    def open_measurements(self, detector):
+    def allocate_measurement(self, detector):
         shape = (int(np.prod(self.gpts)),) + tuple(n for n in detector.out_shape if n > 1)
 
         if detector.export is not None:
             with h5py.File(detector.export, 'w') as f:
                 dset = f.create_dataset('data', shape, dtype=np.float32)
                 dset.attrs['shape'] = self.gpts
-                self.measurements[detector] = f
+                self._measurements[detector] = f
         else:
-            self.measurements[detector] = np.zeros(shape)
-
-    def finalize_measurements(self, detector):
-        if detector.export is None:
-            self.measurements[detector] = self.measurements[detector].reshape(tuple(self.gpts) + detector.out_shape)
-            self.measurements[detector] = np.squeeze(self.measurements[detector])
+            self._measurements[detector] = np.zeros(shape)
 
     def generate_positions(self, max_batch):
         positions = self.get_positions()
@@ -201,9 +194,6 @@ class GridScan(Grid, ScanBase):
 
             start_n = start_n + self.sampling[0] * n
         return scans
-
-    def get_image(self, detector):
-        return Image(self.measurements[detector], extent=self.extent)
 
     def get_x_positions(self) -> np.ndarray:
         return np.linspace(self.start[0], self.end[0], self.gpts[0], endpoint=self._endpoint)

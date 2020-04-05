@@ -86,4 +86,4 @@ def bandpass_noise(inner, outer, shape, xp=None):
     mask = ((k > inner) & (k < outer)).astype(xp.float32)
     noise = xp.fft.fftn(mask * xp.exp(-1.j * r * 2 * np.pi), axes=tuple(range(len(k.shape))))
     noise = (noise.real + noise.imag) / 2
-    return (noise / xp.std(noise))
+    return (noise / (xp.std(noise) + 1e-6))

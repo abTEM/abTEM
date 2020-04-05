@@ -1,576 +1,453 @@
-import io
-
-import PIL.Image
+from bokeh import models
+from bokeh import plotting
+from bokeh.palettes import Category10
+from bokeh.transform import linear_cmap
 from bqplot import *
-from bqplot import interacts
-from ipyfilechooser import FileChooser
-from psm.graph import GeometricGraph
+from psm.geometry import polygon_area, point_in_polygon
+from psm.graph import stable_delaunay_faces
+from psm.representation import order_adjacency_clockwise, faces_to_dual_adjacency, faces_to_edges, \
+    faces_to_faces_around_node, faces_to_quadedge
+from psm.tools import extract_defects, enclosing_path, reference_path_from_path
 from scipy.ndimage import gaussian_filter
 from skimage.io import imread
 from skimage.transform import downscale_local_mean
+from collections import defaultdict
+from sklearn.neighbors import NearestNeighbors
 
-from abtem.learn.utils import walk_dir
 
+class Playback:
 
-class Playback(widgets.VBox):
+    def __init__(self, num_items=0, **kwargs):
+        self._previous_button = models.Button(label='Previous')
+        self._next_button = models.Button(label='Next')
+        self._slider = models.Slider(start=0, end=1, value=0, step=1)
 
-    def __init__(self, num_frames=1, **kwargs):
-        self._slider = widgets.IntSlider(min=0, max=num_frames - 1, **kwargs)
+        self.num_items = num_items
 
-        def next_frame(*args):
-            self._slider.value = (self._frame_slider.value + 1) % (self._frame_slider.max + 1)
+        def next_item(*args):
+            self._slider.value = (self._slider.value + 1) % (self._slider.end + 1)
 
-        self._next_button = widgets.Button(description='Next Frame')
-        self._next_button.on_click(next_frame)
+        self._next_button.on_click(next_item)
 
-        def previous_frame(*args):
-            self._slider.value = (self._frame_slider.value - 1) % (self._frame_slider.max + 1)
+        def previous_item(*args):
+            self._slider.value = (self._slider.value - 1) % (self._slider.end + 1)
 
-        self._previous_button = widgets.Button(description='Previous Frame')
-        self._previous_button.on_click(previous_frame)
-
-        super().__init__(children=[self._slider, widgets.HBox([self._next_button, self._previous_button])])
+        self._previous_button.on_click(previous_item)
 
     @property
-    def num_values(self):
-        return self._frame_slider.max + 1
+    def num_items(self):
+        return self._slider.end + 1
 
-    @num_values.setter
-    def num_values(self, value):
-        self._frame_slider.max = value - 1
+    @num_items.setter
+    def num_items(self, value):
+        if value < 2:
+            value = 2
+            self._slider.disabled = True
+
+        self._slider.end = value - 1
 
     @property
     def value(self):
-        return self._frame_slider.value
+        return self._slider.value
 
     @property
-    def on_change(self):
-        return self._on_value_change
-
-    @on_change.setter
-    def on_change(self, func):
-        self._on_value_change = func
-        self._frame_slider.observe(self._on_value_change, names='value')
-
-    @property
-    def disabled(self):
-        return self._next_button.disabled
-
-    @disabled.setter
-    def disabled(self, value):
-        self._next_button.disabled = value
-        self._previous_button.disabled = value
-        self._frame_slider.disabled = value
+    def widgets(self):
+        return models.Column(self._slider, models.Row(self._previous_button, self._next_button))
 
 
-class ImageReader(widgets.VBox):
+class ViewerExtension:
 
-    def __init__(self, path=os.getcwd(), filename='', **kwargs):
-        self._file_chooser = FileChooser(path, change_desc='Set read path', **kwargs)
-        self._read_image_button = widgets.Button(description='Read image(s)')
-        self._next_image_button = widgets.Button(description='Next image(s)')
-        self._previous_image_button = widgets.Button(description='Previous image(s)')
-        self._read_image_button.on_click(self.read_images)
-        self._file_chooser._apply_selection()
+    def __init__(self, widgets):
+        self._widgets = widgets
+        self._viewer = None
 
-        # self._info = widgets.HTML(value='')
-
-        def on_next(button):
-
-            files = sorted(walk_dir(os.path.join(*os.path.split(self._file_chooser.selected)[:-1]), '.tif'))
-            if self._file_chooser.selected_filename == '':
-                idx = 0
-            else:
-                if button is self._next_image_button:
-                    idx = (files.index(self._file_chooser.selected_filename) + 1) % len(files)
-                else:
-                    idx = (files.index(self._file_chooser.selected_filename) - 1) % len(files)
-
-            self._file_chooser.reset(self._file_chooser.selected_path, files[idx])
-            self._file_chooser._apply_selection()
-
-            # print(self._file_chooser.selected_filename)
-            # print(files, self._file_chooser.selected_filename)
-
-        self._next_image_button.on_click(on_next)
-        self._previous_image_button.on_click(on_next)
-
-        self._on_read_images = []
-
-        super().__init__(children=[self._file_chooser, widgets.HBox([self._read_image_button, self._next_image_button,
-                                                                     self._previous_image_button])])
+    def set_viewer(self, viewer):
+        self._viewer = viewer
 
     @property
-    def on_read_images(self):
-        return self._on_read_images
-
-    @on_read_images.setter
-    def on_read_images(self, value):
-        self._on_read_images.append(value)
-
-    def read_images(self, *args):
-
-        selected = self._file_chooser.selected
-
-        file_ending = selected.split('.')[-1]
-
-        data = {}
-        if file_ending == 'npz':
-            npzfile = np.load(selected)
-            images = npzfile['image']
-            data['points'] = npzfile['points']
-            data['labels'] = npzfile['labels']
-        else:
-            images = imread(selected)
-
-        if len(images.shape) == 2:
-            images = images[None]
-
-        data['images'] = downscale_local_mean(images, (1, 2, 2))
-
-        # self._info.value = '&ensp; Read a {}x{} image'.format(*images.shape)
-
-        for callback in self.on_read_images:
-            callback(data)
-
-        return data
+    def widgets(self):
+        return self._widgets
 
 
-class DataWriter(widgets.VBox):
+class BinningSlider(ViewerExtension):
 
-    def __init__(self, path=os.getcwd(), filename='', **kwargs):
-        self._write_file_button.on_click(self.read_images)
-        self._file_chooser._apply_selection()
+    def __init__(self, max=4, value=1):
+        self._slider = models.Slider(start=1, end=max, value=value, step=1, title='Binning')
+        super().__init__(self._slider)
 
-        super().__init__(children=[self._file_chooser, self._load_file_button])
+    def modify_image(self, image):
+        return downscale_local_mean(image, (self._slider.value,) * 2)
 
-    def write_images(self, *args):
-        images = imread(self._file_chooser.selected)
-
-        for callback in self.on_read_images:
-            callback(images)
-
-        return images
+    def set_viewer(self, viewer):
+        self._slider.on_change('value', lambda attr, old, new: viewer.set_image())
 
 
-def array_as_image(array):
-    if array.dtype == np.uint8:
-        return array_as_image(array.astype(np.uint8))
+class GaussianFilterSlider(ViewerExtension):
 
-    else:
-        if len(array.shape) != 2:
-            raise RuntimeError()
-        array = ((array - array.min()) / array.ptp() * 255).astype(np.uint8)
+    def __init__(self, min=0, max=10, value=0):
+        self._slider = models.Slider(start=min, end=max, value=value, step=1, title='Gaussian filter')
+        super().__init__(self._slider)
 
-    image = PIL.Image.fromarray(array)
-    bytes_io = io.BytesIO()
-    image.save(bytes_io, format='png')
-    return bytes_io.getvalue()
+    def modify_image(self, image):
+        return gaussian_filter(image, self._slider.value)
+
+    def set_viewer(self, viewer):
+        self._slider.on_change('value', lambda attr, old, new: viewer.update_image())
 
 
-class ArrayImage(Image):
+class ClipSlider(ViewerExtension):
 
-    def __init__(self, array=None, **kwargs):
-        self.set_array(array)
-        super().__init__(**kwargs)
-
-    def set_array(self, array):
-        self.x = [0, array.shape[0]]
-        self.y = [array.shape[1], 0]
-        self.image = widgets.Image(value=array_as_image(array))
-
-
-class GaussianFilterSlider(widgets.IntSlider):
-
-    def __init__(self, min=0, max=10, description='Gaussian filter', **kwargs):
-        super().__init__(description=description, min=min, max=max, **kwargs)
-
-    def apply(self, image):
-        return gaussian_filter(image, self.value)
-
-
-class ClipSlider(widgets.FloatRangeSlider):
-
-    def __init__(self, value=None, min=0, max=1, step=0.01, description='Clip', **kwargs):
+    def __init__(self, value=None, step=0.001, title='Clip', **kwargs):
         if value is None:
-            value = [0, 1]
-        super().__init__(value=value, min=min, max=max, step=step, description=description, **kwargs)
+            value = (0, 1)
+        self._slider = models.RangeSlider(start=0, end=1, step=step, value=value, title=title)
+        super().__init__(self._slider)
 
-    def apply(self, image):
-        image = (image - image.min()) / (image.max() - image.min())
-        image = np.clip(image, a_min=self.value[0], a_max=self.value[1])
+    def modify_image(self, image):
+        ptp = image.ptp()
+        clip_min = image.min() + self._slider.value[0] * ptp
+        clip_max = image.min() + self._slider.value[1] * ptp
+        image = np.clip(image, a_min=clip_min, a_max=clip_max)
         return image
 
-
-class EditableScatter(Scatter):
-
-    def __init__(self, points=None, labels=None, **kwargs):
-        if points is None:
-            points = np.zeros((0, 2), dtype=np.float)
-
-        self._on_edit = None
-
-        super().__init__(x=points[:, 0], y=points[:, 1], color=labels, **kwargs)
-
-    @property
-    def labels(self):
-        return self.color
-
-    @property
-    def points(self):
-        return np.array([self.x, self.y]).T
-
-    def on_edit(self, callback):
-        self._on_edit = callback
-
-    def add_points(self, new_points):
-        new_points = np.array(new_points)
-        with self.hold_sync():
-            self.x = np.append(self.x, new_points[:, 0])
-            self.y = np.append(self.y, new_points[:, 1])
-            self.color = np.append(self.color, [0.])
-
-        if self._on_edit:
-            self._on_edit(self)
-
-    def set_points(self, points, labels=None):
-        if labels is None:
-            labels = np.zeros(len(points), dtype=np.int)
-
-        if len(points) != len(labels):
-            raise RuntimeError()
-
-        with self.hold_sync():
-            self.x = points[:, 0]
-            self.y = points[:, 1]
-            self.color = labels
-            self.selected = None
-
-        if self._on_edit:
-            self._on_edit(self)
-
-    def set_labels(self, labels):
-        if len(labels) != len(self.x):
-            raise RuntimeError()
-        self.color = labels
-
-    def delete_points(self, indices):
-        with self.hold_sync():
-            self.x = np.delete(self.x, indices)
-            self.y = np.delete(self.y, indices)
-            self.color = np.delete(self.color, indices)
-            self.selected = None
-
-        if self._on_edit:
-            self._on_edit(self)
-
-    def delete_selected(self):
-        if not ((self.selected is None) or (len(self.selected) == 0)):
-            self.delete_points(self.selected)
-            self.selected = None
-
-        if self._on_edit:
-            self._on_edit(self)
-
-    def set_selected_label(self, new_label):
-        if not ((self.selected is None) or (len(self.selected) == 0)):
-            labels = self.labels.copy()
-            labels[self.selected] = new_label
-            with self.hold_sync():
-                self.color = labels
+    def set_viewer(self, viewer):
+        self._slider.on_change('value', lambda attr, old, new: viewer.update_image())
 
 
-colors = ['DodgerBlue', 'Yellow', 'HotPink', 'SeaGreen', 'OrangeRed']
+class Annotator(ViewerExtension):
+
+    def __init__(self, widgets):
+        super().__init__(widgets)
+
+    def annotate_current_image(self):
+        pass
+
+    def set_viewer(self, viewer):
+        self._viewer = viewer
 
 
-class Annotator:
+class FileAnnotator(Annotator):
 
-    def annotate_current_image(self, viewer):
-        raise NotImplementedError()
+    def __init__(self, annotations):
+        self._annotations = annotations
+        super().__init__()
+
+    def annotate_current_image(self):
+        npzfile = np.load(self._annotations[self._viewer._image_files[self._viewer._image_playback.value]])
+        return list(npzfile['x']), list(npzfile['y']), list(npzfile['labels'])
 
 
-class Viewer(widgets.HBox):
+def analyse_points(points, labels, shape):
+    contamination = points[labels == 1]
+    # print(contamination)
 
-    def __init__(self, image_files, annotator, image_modifiers):
+    if len(contamination) > 0:
+        nbrs = NearestNeighbors(radius=20, algorithm='ball_tree').fit(points)
+        distances, indices = nbrs.radius_neighbors(contamination, 20)
+        indices = np.unique(np.concatenate(indices))
+        labels[indices] = 1
+
+    l = (labels != 1) & (labels != 3)
+    lattice_points = points[l]
+
+    faces = stable_delaunay_faces(lattice_points, 2, 50)
+    edges = faces_to_edges(faces)
+
+    area = 0
+    for face in faces:
+        p = lattice_points[face]
+        if np.all(p[:,0] > -20) and np.all(p[:,0] < 1044) and np.all(p[:,1] > -20) and np.all(p[:,1] < 1044):
+            area += polygon_area(p)
+
+    faces_around_node = faces_to_faces_around_node(faces)
+    dopant = np.where(labels[l] == 2)[0]
+
+    dual_points = np.array([lattice_points[face].mean(axis=0) for face in faces])
+    dual_degree = np.array([len(face) for face in faces])
+    dual_adjacency = order_adjacency_clockwise(dual_points, faces_to_dual_adjacency(faces))
+
+    dual_degree_w_dopant = np.array(dual_degree).copy()
+
+    for i in dopant:
+        dual_degree_w_dopant[faces_around_node[i]] = -1
+
+    defects = extract_defects(faces, labels, dual_degree_w_dopant, dual_adjacency)
+
+    quad_edge = faces_to_quadedge(faces)
+    outer_adjacent = [faces[0] for faces in quad_edge.values() if len(faces) == 1]
+    dual_degree[outer_adjacent] = 6
+
+    column_names = ['include', 'num_missing', 'enclosed_area', 'center_x', 'center_y', 'num_enclosed', 'dopant',
+                    'stable', 'contamination', 'closed', 'outside_image']
+    defect_data = dict(zip(column_names, [[] for i in range(len(column_names))]))
+    polygons = []
+
+    contamination_area = 0
+    for i, defect in enumerate(defects):
+        path = enclosing_path(dual_points, defect, dual_adjacency)
+
+        if enclosing_path is None:
+            continue
+
+        polygon = dual_points[np.concatenate((path, [path[0]]))]
+        reference_path = reference_path_from_path(path, dual_adjacency)
+
+        density = 6 / (3 * np.sqrt(3) / 2)
+        inside = np.array([point_in_polygon(point, polygon) for point in lattice_points])
+
+        outside = np.ceil(np.abs(min(0., np.min(polygon), np.min(np.array(shape) - polygon))))
+
+        center = np.mean(polygon, axis=0)
+
+        if np.any(center < -20.) or np.any(center > 1044):
+            continue
+
+        inside_all = np.array([point_in_polygon(point, polygon) for point in points])
+        is_contamination = np.any(labels[inside_all] == 1)
+
+        if is_contamination:
+            contamination_area += polygon_area(polygon)
+            continue
+
+        polygons.append(polygon)
+
+        defect_data['num_missing'].append(int(np.round(polygon_area(reference_path) * density - np.sum(inside))))
+        defect_data['enclosed_area'].append(round(polygon_area(polygon), 3))
+
+        defect_data['center_x'].append(round(center[0], 3))
+        defect_data['center_y'].append(round(center[1], 3))
+        defect_data['num_enclosed'].append(np.sum(inside))
+
+        defect_data['contamination'].append(is_contamination)
+        defect_data['dopant'].append(np.any(labels[inside_all] == 2))
+        defect_data['stable'].append(not np.any(labels[inside_all] == 3))
+
+        defect_data['closed'].append(np.all(np.isclose(reference_path[0], reference_path[-1])))
+        defect_data['outside_image'].append(outside)
+
+        defect_data['include'].append(defect_data['closed'][-1] * (defect_data['outside_image'][-1] < 10) *
+                                      defect_data['stable'][-1] * (not defect_data['contamination'][-1]))
+
+    area_used = area - contamination_area
+    #print(np.abs(area_used-1024*1024) / (1024*1024))
+    if np.abs(area_used-1024*1024) /(1024*1024) < .04:
+        area_used = 1024*1024
+
+    return dict(defect_data), edges, faces, dual_points, dual_degree, polygons
+
+
+class ModelAnnotator(Annotator):
+
+    def __init__(self, model, path):
+        self._model = model
+
+        self._checkbox_button_group = models.CheckboxButtonGroup(labels=['Points',
+                                                                         'Dual Points',
+                                                                         'Graph'], active=[0, 1, 2])
+
+        def on_change(attr, old, new):
+            self._viewer._point_glyph.visible = 0 in self._checkbox_button_group.active
+            self._dual_glyph.visible = 1 in self._checkbox_button_group.active
+            self._graph_glyph.visible = 2 in self._checkbox_button_group.active
+
+        self._checkbox_button_group.on_change('active', on_change)
+
+        column_names = ['include', 'num_missing', 'enclosed_area', 'center_x', 'center_y', 'num_enclosed', 'dopant',
+                        'stable', 'contamination', 'closed', 'outside_image']
+
+        data = dict(zip(column_names, [] * len(column_names)))
+        self._table_source = models.ColumnDataSource(data)
+        columns = [models.TableColumn(field=name, title=name) for name in column_names]
+        self._data_table = models.DataTable(source=self._table_source, columns=columns)
+
+        self._path = path
+        self._button = models.Button(label='Write annotation')
+
+        def on_click(event):
+            x = self._viewer._point_source.data['x']
+            y = self._viewer._point_source.data['y']
+            labels = self._viewer._point_source.data['labels']
+
+            image_name = os.path.split(self._viewer._image_files[self._viewer._image_playback.value])[-1]
+            write_path = os.path.join(self._path, '.'.join(image_name.split('.')[:-1]) + '.npz')
+
+            data = dict(self._table_source.data)
+            np.savez(write_path, x=x, y=y, labels=labels, **data)
+
+        self._button.on_click(on_click)
+
+        super().__init__(models.Column(self._checkbox_button_group, self._button, self._data_table))
+
+    def update_graph(self):
+        x = self._viewer._point_source.data['x']
+        y = self._viewer._point_source.data['y']
+        labels = np.array(self._viewer._point_source.data['labels'])
+        points = np.stack((x, y), axis=-1)
+
+        shape = self._viewer._image.shape
+        data, edges, dual_points, dual_degree, polygons = analyse_points(points, labels, shape)
+
+        xs = [[edge[0, 0], edge[1, 0]] for edge in edges]
+        ys = [[edge[0, 1], edge[1, 1]] for edge in edges]
+        self._graph_source.data = {'xs': xs, 'ys': ys}
+
+        self._dual_source.data = {'x': list(dual_points[:, 0]), 'y': list(dual_points[:, 1]),
+                                  'labels': list(dual_degree)}
+
+        self._table_source.data = data
+
+        top = [polygon[:, 1].max() for polygon in polygons]
+        bottom = [polygon[:, 1].min() for polygon in polygons]
+        left = [polygon[:, 0].min() for polygon in polygons]
+        right = [polygon[:, 0].max() for polygon in polygons]
+
+        self._rect_source.data = {'top': top, 'bottom': bottom, 'left': left, 'right': right}
+
+    def set_viewer(self, viewer):
+        mapper = linear_cmap(field_name='labels', palette=Category10[9], low=0, high=8)
+
+        self._graph_source = models.ColumnDataSource(dict(xs=[], ys=[]))
+        self._graph_model = models.MultiLine(xs='xs', ys='ys', line_width=2)
+        self._graph_glyph = viewer._figure.add_glyph(self._graph_source, glyph=self._graph_model)
+
+        self._dual_source = models.ColumnDataSource(data=dict(x=[], y=[], labels=[]))
+        self._dual_model = models.Circle(x='x', y='y', fill_color=mapper, radius=8)
+        self._dual_glyph = viewer._figure.add_glyph(self._dual_source, glyph=self._dual_model)
+
+        self._rect_source = models.ColumnDataSource(data=dict(top=[], bottom=[], left=[], right=[]))
+        self._rect_model = models.Quad(top='top', bottom='bottom', left='left', right='right', line_color="#B3DE69",
+                                       fill_color=None, line_width=3)
+        self._rect_glyph = viewer._figure.add_glyph(self._rect_source, glyph=self._rect_model)
+
+        def on_change(attr, old, new):
+            self.update_graph()
+
+        viewer._point_source.on_change('data', on_change)
+        self._viewer = viewer
+
+    def annotate(self):
+        image = self._viewer._image
+        points, labels, marker_mean, marker_variance, a = self._model(image)
+
+        # self._viewer._image_source
+        self._viewer._point_source.data = {'x': list(points[:, 0]), 'y': list(points[:, 1]), 'labels': list(labels)}
+
+
+class LabelEditor(ViewerExtension):
+
+    def __init__(self):
+        self._text_input = models.TextInput(value='0', title='')
+        self._button = models.Button(label='Label selected')
+
+        def label_selected(event):
+            indices = self._viewer._point_source.selected.indices
+            new_data = dict(self._viewer._point_source.data)
+            for i in indices:
+                new_data['labels'][i] = int(self._text_input.value)
+            self._viewer._point_source.data = new_data
+
+        self._button.on_click(label_selected)
+
+        def on_change(attr, old, new):
+            self._viewer._point_draw_tool.empty_value = int(self._text_input.value)
+
+        self._text_input.on_change('value', on_change)
+
+        super().__init__(models.Row(self._text_input, self._button))
+
+
+class VisibilityCheckboxes(ViewerExtension):
+
+    def __init__(self):
+        self._checkbox_button_group = models.CheckboxButtonGroup(labels=['Image', 'Points', 'Edges'], active=[0, 1, 2])
+
+        def on_change(attr, old, new):
+            self._viewer._image_glyph.visible = 0 in self._checkbox_button_group.active
+            self._viewer._circle_glyph.visible = 1 in self._checkbox_button_group.active
+            self._viewer._multi_line_glyph.visible = 2 in self._checkbox_button_group.active
+
+        self._checkbox_button_group.on_change('active', on_change)
+
+        super().__init__(self._checkbox_button_group)
+
+
+class WriteAnnotationButton(ViewerExtension):
+
+    def __init__(self, path):
+        self._path = path
+        self._button = models.Button(label='Write annotation')
+
+        def on_click(event):
+            x = self._viewer._circle_source.data['x']
+            y = self._viewer._circle_source.data['y']
+            labels = self._viewer._circle_source.data['labels']
+
+            image_name = os.path.split(self._viewer._image_files[self._viewer._image_playback.value])[-1]
+            write_path = os.path.join(self._path, '.'.join(image_name.split('.')[:-1]) + '.npz')
+            np.savez(write_path, x=x, y=y, labels=labels)
+
+        self._button.on_click(on_click)
+
+        super().__init__(self._button)
+
+
+class Viewer:
+
+    def __init__(self, image_files, extensions=None, annotator=None, ):
         self._image_files = image_files
+        self._extensions = extensions
         self._annotator = annotator
 
-        self._scales = {'x': LinearScale(),
-                        'y': LinearScale(),
-                        'color': ColorScale(colors=colors, min=0, max=4)}
-        self._axes = {'x': Axis(scale=self._scales['x']),
-                      'y': Axis(scale=self._scales['y'], orientation='vertical')}
+        self._figure = plotting.Figure(plot_width=800, plot_height=800, title=None, toolbar_location='below',
+                                       tools='lasso_select,box_select,pan,wheel_zoom,box_zoom,reset')
 
-        self._figure = Figure(marks=[], axes=[self.axes['x'], self.axes['y']], min_aspect_ratio=1, max_aspect_ratio=1,
-                              fig_margin={'top': 10, 'bottom': 40, 'left': 40, 'right': 10}, padding_x=.05,
-                              padding_y=.05)
+        self._image_source = models.ColumnDataSource(data=dict(image=[], x=[], y=[], dw=[], dh=[]))
+        self._image_model = models.Image(image='image', x='x', y='y', dw='dw', dh='dh', palette='Greys256')
+        self._image_glyph = self._figure.add_glyph(self._image_source, glyph=self._image_model)
 
-        def apply_image_modifications(image):
-            image = gaussian_filter_slider.apply(image)
-            image = clip_slider.apply(image)
-            return image
+        mapper = linear_cmap(field_name='labels', palette=Category10[9], low=0, high=8)
 
-        def update_image(*args):
-            image = apply_image_modifications(self._data['images'][playback.current_frame_index])
-            self._image_mark.set_array(image)
+        self._point_source = models.ColumnDataSource(data=dict(x=[], y=[], labels=[]))
+        self._point_model = models.Square(x='x', y='y', fill_color=mapper, size=8)
 
+        self._image_playback = Playback(len(image_files))
+        self._image_playback._slider.on_change('value_throttled', lambda attr, old, new: self.update())
+        self._image_playback._next_button.on_click(lambda event: self.update())
+        self._image_playback._previous_button.on_click(lambda event: self.update())
 
-                # if model is not None:
-                #     points, labels = model(self._data['images'][change['new']])
-                #     self._scatter.set_points(points, labels)
-                # else:
-                #     try:
-                #         self._scatter.set_points(self._data['points'], self._data['labels'])
-                #     except KeyError:
-                #         pass
-                #
-                # if self._lasso_selector is not None:
-                #     self._lasso_selector.reset()
-                #     self._lasso_selector = interacts.LassoSelector(marks=[self._scatter])
-                #
-                # on_tool_change({'new': tools_toggle_buttons.value})
+        for extension in self._extensions:
+            extension.set_viewer(self)
 
-        self._frame_playback = Playback()
-        self._file_playback = Playback()
+        if annotator is not None:
+            annotator.set_viewer(self)
 
-        super().__init__(children=[self._figure, self._frame_playback, self._file_playback])
+        self._point_glyph = self._figure.add_glyph(self._point_source, glyph=self._point_model)
+        self._point_draw_tool = models.PointDrawTool(renderers=[self._point_glyph], empty_value=0)
+        self._figure.add_tools(self._point_draw_tool)
 
-    def set_current_image(self, ):
-        image_file = imread(self._image_files[self._file_playback.current_frame_index])
+        self.update()
 
-        # if self._image_mark is None:
-        #     self._image_mark = ArrayImage(array=apply_image_modifications(data['images'][0]), scales=self.scales)
-        #
-        #
-        # with self._image_mark.hold_sync(), self._scatter.hold_sync():
-        #     update_image()
+    def update_image(self):
+
+        image = self._image.copy()
+        for extension in self._extensions:
+            if hasattr(extension, 'modify_image'):
+                image = extension.modify_image(image)
+
+        self._image_source.data = {'image': [image],
+                                   'x': [0], 'y': [0], 'dw': [image.shape[0]],
+                                   'dh': [image.shape[1]]}
+
+    def update(self):
+        self._image = downscale_local_mean(imread(self._image_files[self._image_playback.value]), (2, 2))
+
+        self.update_image()
+
+        if self._annotator is not None:
+            self._annotator.annotate()
 
     @property
-    def axes(self):
-        return self._axes
-
-    @property
-    def scales(self):
-        return self._scales
-
-    @property
-    def figure(self):
-        return self._figure
-
-
-class GUI(widgets.HBox):
-
-    def __init__(self, path=os.getcwd(), model=None):
-        self._scales = {'x': LinearScale(),
-                        'y': LinearScale(),
-                        'color': ColorScale(colors=colors, min=0, max=4)}
-        self._axes = {'x': Axis(scale=self._scales['x']),
-                      'y': Axis(scale=self._scales['y'], orientation='vertical')}
-
-        self._figure = Figure(marks=[], axes=[self.axes['x'], self.axes['y']], min_aspect_ratio=1, max_aspect_ratio=1,
-                              fig_margin={'top': 10, 'bottom': 40, 'left': 40, 'right': 10}, padding_x=.05,
-                              padding_y=.05)
-
-        self._image_mark = None
-        self._data = None
-        self._scatter = EditableScatter(scales=self.scales, selected_style={'stroke': 'orange'})
-        self._lines = Lines(scales={'x': self._scales['x'], 'y': self._scales['y']}, colors=['red'])
-        self._lasso_selector = None
-
-        def update_edges(scatter, *args):
-            graph = GeometricGraph(scatter.points)
-            graph.build_stable_delaunay_graph(1.)
-            edges = graph.points[graph.edges]
-            with self._lines.hold_sync():
-                self._lines.x = edges[:, :, 0]
-                self._lines.y = edges[:, :, 1]
-
-        self._scatter.on_edit(update_edges)
-        self._scatter.on_drag_end(update_edges)
-
-        image_loader = ImageReader(path=path)
-        playback = Playback()
-
-        gaussian_filter_slider = GaussianFilterSlider()
-        clip_slider = ClipSlider()
-
-        def apply_image_modifications(image):
-            image = gaussian_filter_slider.apply(image)
-            image = clip_slider.apply(image)
-            return image
-
-        def update_image(*args):
-            image = apply_image_modifications(self._data['images'][playback.current_frame_index])
-            self._image_mark.set_array(image)
-
-        def on_frame_change(change):
-            with self._image_mark.hold_sync(), self._scatter.hold_sync():
-                update_image()
-
-                if model is not None:
-                    points, labels = model(self._data['images'][change['new']])
-                    self._scatter.set_points(points, labels)
-                else:
-                    try:
-                        self._scatter.set_points(self._data['points'], self._data['labels'])
-                    except KeyError:
-                        pass
-
-                if self._lasso_selector is not None:
-                    self._lasso_selector.reset()
-                    self._lasso_selector = interacts.LassoSelector(marks=[self._scatter])
-
-                on_tool_change({'new': tools_toggle_buttons.value})
-
-        playback.on_frame_change = on_frame_change
-        gaussian_filter_slider.observe(update_image)
-        clip_slider.observe(update_image)
-
-        show_image_toggle_button = widgets.ToggleButton(value=True, description='Show image')
-        show_scatter_toggle_button = widgets.ToggleButton(value=True, description='Show points')
-        show_lines_toggle_button = widgets.ToggleButton(value=True, description='Show edges')
-
-        def on_show_toggle_button_change(*args):
-            marks = []
-            if show_image_toggle_button.value & (self._image_mark is not None):
-                marks += [self._image_mark]
-            if show_lines_toggle_button.value & (self._lines is not None):
-                marks += [self._lines]
-            if show_scatter_toggle_button.value & (self._scatter is not None):
-                marks += [self._scatter]
-            self.figure.marks = marks
-
-        show_image_toggle_button.observe(on_show_toggle_button_change, names='value')
-        show_scatter_toggle_button.observe(on_show_toggle_button_change, names='value')
-        show_lines_toggle_button.observe(on_show_toggle_button_change, names='value')
-
-        def on_read_images(data):
-            self._data = data
-            self._image_mark = ArrayImage(array=apply_image_modifications(data['images'][0]), scales=self.scales)
-            on_show_toggle_button_change()
-            playback.num_frames = len(data['images'])
-            on_frame_change({'new': 0})
-
-        image_loader.on_read_images = on_read_images
-
-        def add_point(_, target):
-            self.scatter.add_points([[target['data']['click_x'], target['data']['click_y']]])
-
-        def delete_point(_, target):
-            self.scatter.delete_points([target['data']['index']])
-
-        def on_tool_change(change):
-            self.figure.interaction = None
-            self.scatter.interactions = {'click': None}
-            self.scatter.enable_move = False
-            self.image_mark.on_element_click(add_point, remove=True)
-            self.scatter.on_element_click(delete_point, remove=True)
-            if self._lasso_selector is not None:
-                self._lasso_selector.reset()
-            self._lasso_selector = None
-
-            if change['new'] == 'PanZoom':
-                self.figure.interaction = PanZoom(scales={'x': [self.scales['x']], 'y': [self.scales['y']]})
-            elif change['new'] == 'Lasso':
-                self._lasso_selector = interacts.LassoSelector(marks=[self._scatter])
-                self.figure.interaction = self._lasso_selector
-            elif change['new'] == 'Select':
-                self.scatter.interactions = {'click': 'select'}
-            elif change['new'] == 'Drag':
-                self.scatter.enable_move = True
-            elif change['new'] == 'Add':
-                self.image_mark.on_element_click(add_point)
-                self.image_mark.enable_move = True
-            elif change['new'] == 'Delete':
-                self.scatter.on_element_click(delete_point)
-
-        tools_toggle_buttons = widgets.ToggleButtons(
-            options=['None', 'PanZoom', 'Select', 'Lasso', 'Drag', 'Add', 'Delete'],
-            style={'button_width': '100px'}, layout={'width': '400px'})
-
-        tools_toggle_buttons.observe(on_tool_change, names='value')
-
-        new_labels_int_text = widgets.IntText(value=0, description='New label:', layout=widgets.Layout(width='200px'))
-        set_labels_button = widgets.Button(description='Set', disabled=False, layout=widgets.Layout(width='120px'))
-
-        def set_selected_label(*args):
-            self.scatter.set_selected_label(int(new_labels_int_text.value))
-
-        set_labels_button.on_click(set_selected_label)
-
-        delete_selected_button = widgets.Button(description='Delete selected', layout=widgets.Layout(width='120px'))
-
-        def delete_selected(*args):
-            self.scatter.delete_selected()
-            self._lasso_selector.reset()
-
-        delete_selected_button.on_click(delete_selected)
-
-        deselect_button = widgets.Button(description='Deselect', layout=widgets.Layout(width='120px'))
-
-        def deselect(*args):
-            self.scatter.selected = None
-            self._lasso_selector.reset()
-
-        deselect_button.on_click(deselect)
-
-        reset_predictions_button = widgets.Button(description='Reset predictions', layout=widgets.Layout(width='120px'))
-
-        def reset_prediction(*args):
-            on_frame_change({'new': playback.current_frame_index})
-
-        reset_predictions_button.on_click(reset_prediction)
-
-        write_button = widgets.Button(description='Write labelled image', layout=widgets.Layout(width='300px'))
-
-        def write(*args):
-            if self._data['images'] is None:
-                return
-            base_path = '.'.join(image_loader._file_chooser.selected.split('.')[:-1])
-            write_path = base_path + '.npz'.format(playback.current_frame_index)
-
-            print(write_path)
-
-            # output_dict = {'image': self._data['images'][playback.current_frame_index], 'points': self.scatter.points,
-            #               'labels': self.scatter.labels}
-
-            output_dict = {'points': self.scatter.points, 'labels': self.scatter.labels}
-
-            np.savez(write_path, **output_dict)
-
-        write_button.on_click(write)
-
-        super().__init__(children=[self.figure,
-                                   widgets.VBox([image_loader,
-                                                 playback,
-                                                 widgets.HBox([show_image_toggle_button,
-                                                               show_scatter_toggle_button,
-                                                               show_lines_toggle_button]),
-                                                 gaussian_filter_slider,
-                                                 clip_slider,
-                                                 tools_toggle_buttons,
-                                                 widgets.HBox([new_labels_int_text, set_labels_button]),
-                                                 widgets.HBox([deselect_button, delete_selected_button,
-                                                               reset_predictions_button]),
-                                                 widgets.VBox([write_button])
-                                                 ])])
-
-    @property
-    def axes(self):
-        return self._axes
-
-    @property
-    def scales(self):
-        return self._scales
-
-    @property
-    def figure(self):
-        return self._figure
-
-    @property
-    def image_mark(self):
-        return self._image_mark
-
-    @property
-    def scatter(self):
-        return self._scatter
+    def widgets(self):
+        extension_widgets = [module.widgets for module in self._extensions]
+        column = models.Column(self._image_playback.widgets, *extension_widgets, self._annotator.widgets)
+        return models.Row(self._figure, column)

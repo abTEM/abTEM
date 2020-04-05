@@ -311,55 +311,39 @@ class PlaneWaves(Grid, Energy, Cache):
                               energy=self.energy)
 
 
-class Scanable:
+def _scan(scanable,
+          scan: ScanBase,
+          detectors: Union[Sequence[DetectorBase], DetectorBase],
+          max_batch: int,
+          potential=None,
+          show_progress: bool = True):
+    if not isinstance(detectors, Sequence):
+        detectors = [detectors]
 
-    def _do_scan(self, probe_generator, scan: ScanBase,
-                 detectors: Union[Sequence[DetectorBase], DetectorBase],
-                 max_batch: int, show_progress: bool = True):
-        if not isinstance(detectors, Sequence):
-            detectors = [detectors]
+    for detector in detectors:
+        detector.extent = scanable.probe_window_extent
+        detector.gpts = scanable.probe_window_gpts
+        detector.energy = scanable.energy
+        scan.open_measurements(detector)
 
-        for detector in detectors:
-            detector.extent = self.probe_window_extent
-            detector.gpts = self.probe_window_gpts
-            detector.energy = self.energy
-            scan.open_measurements(detector)
+    for start, stop, positions in tqdm(scan.generate_positions(max_batch),
+                                       total=int(np.ceil(np.prod(scan.gpts) / max_batch)),
+                                       disable=not show_progress):
 
-        for start, stop, positions in tqdm(scan.generate_positions(max_batch),
-                                           total=int(np.ceil(np.prod(scan.gpts) / max_batch)),
-                                           disable=not show_progress):
-            waves = scan_waves_maker(self, positions)
+        probes = scanable.build_at(positions)
 
-            for detector in detectors:
-                if detector.export is not None:
-                    with h5py.File(detector.export, 'a') as f:
-                        f['data'][start:start + stop] = detector.detect(waves)
-
-                else:
-                    scan.measurements[detector][start:start + stop] = detector.detect(waves)
+        if potential is not None:
+            probes.multislice(potential, in_place=True)
 
         for detector in detectors:
-            scan.finalize_measurements(detector)
+            if detector.export is not None:
+                with h5py.File(detector.export, 'a') as f:
+                    f['data'][start:start + stop] = detector.detect(probes)
 
-        return scan
+            else:
+                scan.measurements[detector][start:start + stop] = detector.detect(probes)
 
-    @property
-    def energy(self):
-        raise NotImplementedError()
-
-    @property
-    def probe_window_extent(self):
-        raise NotImplementedError()
-
-    @property
-    def probe_window_gpts(self):
-        raise NotImplementedError()
-
-    def propagate(self, *args):
-        raise NotImplementedError()
-
-    def generate_probes(self, scan, *args):
-        raise NotImplementedError()
+    return scan
 
 
 class ProbeWaves(CTF):

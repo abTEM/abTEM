@@ -4,7 +4,7 @@ from scipy.special import kn
 
 import numpy as np
 from numba import jit, prange
-from ase.data import chemical_symbols
+
 
 
 def load_parameters(filename):
@@ -28,7 +28,7 @@ def load_lobato_parameters():
         b = np.array([value[key] for key in ('b1', 'b2', 'b3', 'b4', 'b5')])
         a = np.pi ** 2 * a / b ** (3 / 2.)
         b = 2 * np.pi / np.sqrt(b)
-        parameters[chemical_symbols[key]] = np.vstack((a, b))
+        parameters[key] = np.vstack((a, b))
 
     return parameters
 

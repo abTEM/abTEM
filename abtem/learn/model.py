@@ -10,9 +10,17 @@ from abtem.learn.utils import pytorch_to_cupy, cupy_to_pytorch
 from cupyx.scipy.ndimage import zoom
 
 
+
+
+def weighted_normalization(image, mask):
+    weighted_means = cp.sum(image * mask) / cp.sum(mask)
+    weighted_stds = cp.sqrt(cp.sum(mask * (image - weighted_means) ** 2) / cp.sum(mask ** 2))
+    return (image - weighted_means) / weighted_stds
+
+
 class AtomRecognitionModel:
 
-    def __init__(self, training_sampling, scale_model, model, marker_head, segmentation_head, margin=0):
+    def __init__(self, model, marker_head, segmentation_head, training_sampling, scale_model=None, margin=0):
         self._scale_model = scale_model
         self._model = model
         self._segmentation_head = segmentation_head
@@ -20,11 +28,15 @@ class AtomRecognitionModel:
         self._training_sampling = training_sampling
         self._margin = int(np.ceil(margin / self._training_sampling))
 
-    def prepare_image(self, image):
+    def prepare_image(self, image, weights=None):
         image = cp.asarray(image)
-        sampling = self._scale_model(image)
-        image = (image - image.mean()) / image.std()
-        image = zoom(image, zoom=sampling / self._training_sampling)
+        sampling = .05  # self._scale_model(image)
+        if weights is None:
+            image = (image - image.mean()) / image.std()
+        else:
+            image = weighted_normalization(image, weights)
+
+        # image = zoom(image, zoom=sampling / self._training_sampling)
         image, padding = add_margin_to_image(image, self._margin)
         image = cp.stack((image, cp.zeros_like(image)))
         image[1, :padding[0][0]] = 1
@@ -42,62 +54,55 @@ class AtomRecognitionModel:
     def predict(self, image):
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-        preprocessed, sampling, padding = self.prepare_image(image)
-
         with torch.no_grad():
-            features = self._model(preprocessed)
-            markers = self._marker_head(features)
-            segmentation = nn.LogSoftmax(1)(self._segmentation_head(features))
+            preprocessed, sampling, padding = self.prepare_image(image.copy())
 
-            base_filter = GaussianFilter2d(4)
+            features = self._model(preprocessed)
+            segmentation = nn.Softmax(1)(self._segmentation_head(features))
+
+            weights = pytorch_to_cupy(segmentation[0, 0])
+            weights = weights[padding[0][0]:-padding[0][1],padding[1][0]:-padding[1][1]]
+
+            preprocessed, sampling, padding = self.prepare_image(image, weights)
+
+            markers = torch.zeros((5,1) + preprocessed.shape[2:], device=device)
+            segmentation = torch.zeros((5,) + (3,) + preprocessed.shape[2:], device=device)
+
+            for i in range(5):
+                features = self._model(preprocessed)
+                segmentation[i] = nn.Softmax(1)(self._segmentation_head(features))
+                markers[i] = self._marker_head(features)
+
+            segmentation = segmentation.mean(0)
+            markers_mean = markers.mean(0)
+
+            base_filter = GaussianFilter2d(7)
             base_filter = base_filter.to(device)
             peak_enhancement_filter = PeakEnhancementFilter(base_filter, 20, 1.4)
-            markers = peak_enhancement_filter(markers)
+            markers_mean = peak_enhancement_filter(markers_mean[None])[0]
 
-            markers = pytorch_to_cupy(markers)
+            for i in range(markers.shape[0]):
+                markers[i] = base_filter(markers[i][None])
+
+            markers_variance = markers.std(0)
+
+            markers_mean = pytorch_to_cupy(markers_mean)
+            markers_variance = pytorch_to_cupy(markers_variance)
             segmentation = pytorch_to_cupy(segmentation)
 
-        points = cp.array(cp.where(markers[0, 0] > .3)).T
+        points = cp.array(cp.where(markers_mean[0] > .3)).T
 
-        segmentation = cp.argmax(segmentation[0], axis=0)
+        segmentation = cp.argmax(segmentation, axis=0)
         labels = segmentation[points[:, 0], points[:, 1]]
 
-        points = cp.asnumpy(points).astype(np.float)
+        points = cp.asnumpy(points) #.astype(np.float)
         labels = cp.asnumpy(labels)
 
-        # labels = np.zeros(len(points), dtype=np.int)
-        points = (points - padding[0]) * self._training_sampling / sampling
-        return points[:, ::-1], labels  # labels
+        #points, labels = merge_close(points, labels, 8)
+        #contamination_points = np.array(np.where(np.random.poisson((cp.asnumpy(segmentation) == 1) * .0025))).T
 
-        # segmentation = self._segmentation_model(preprocessed)
+        #points = np.vstack((points, contamination_points))
+        #labels = np.concatenate((labels, np.ones(len(contamination_points), dtype=np.int)))
 
-        # preprocessed = weighted_normalization(preprocessed, segmentation[:, 0][None])
-        # print(preprocessed.shape)
-        # density = self._density_model(preprocessed)
-        #
-        # segmentation = segmentation[0, :].detach().cpu().numpy()
-        #
-        # density = density[0, 0].detach().cpu().numpy()
-        #
-        # points, labels = self._discretization_model(density, segmentation)
-        # points = (points - padding[0]) * self._training_sampling / sampling
-        #
-        # return points[:, ::-1], np.argmax(labels, axis=0)
-
-    # def predict(self, image):
-    #     preprocessed, sampling, padding = self.prepare_image(image)
-    #     segmentation = self._segmentation_model(preprocessed)
-    #
-    #     preprocessed = weighted_normalization(preprocessed, segmentation[:, 0][None])
-    #     print(preprocessed.shape)
-    #     density = self._density_model(preprocessed)
-    #
-    #     segmentation = segmentation[0, :].detach().cpu().numpy()
-    #
-    #     density = density[0, 0].detach().cpu().numpy()
-    #
-    #     points, labels = self._discretization_model(density, segmentation)
-    #     points = (points - padding[0]) * self._training_sampling / sampling
-    #
-    #     return points[:, ::-1], np.argmax(labels, axis=0)  # {'species': np.argmax(labels, axis=0),
-    #     # 'distortion': np.zeros(len(labels), dtype=np.int)}
+        #points = (points - padding[0])
+        return points[:, ::-1], labels, markers_mean[0], segmentation, padding

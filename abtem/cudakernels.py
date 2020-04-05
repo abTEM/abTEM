@@ -25,7 +25,12 @@ def superpose_deltas_kernel(array, positions, indices):
 
 
 def superpose_deltas(positions, shape):
-    if cp.any(positions < 0) or cp.any(positions[:, 0] > shape[0]) or cp.any(positions[:, 1] > shape[1]):
+
+    if len(positions) == 0:
+        raise RuntimeError()
+
+    if (cp.any(positions[:, 0] < 0) or cp.any(positions[:, 1] < 0) or cp.any(positions[:, 0] > shape[0]) or cp.any(
+            positions[:, 1] > shape[1])):
         raise RuntimeError()
 
     rounded = cp.floor(positions).astype(cp.int32)

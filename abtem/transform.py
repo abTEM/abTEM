@@ -3,7 +3,7 @@ from ase import Atoms
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.interpolate import RegularGridInterpolator
 
-from abtem.points import LabelledPoints, fill_rectangle
+from abtem.points import Points, fill_rectangle
 
 
 def is_hexagonal(atoms):
@@ -46,20 +46,19 @@ def fill_rectangle_with_atoms(atoms, origin, extent, margin=0., return_atom_labe
     positions = atoms.positions[:, :2]
     cell = atoms.cell[:2, :2]
 
-    points = LabelledPoints(positions, cell=cell, labels=np.arange(len(positions)))
+    points = Points(positions, cell=cell, pointwise_attributes={'labels': np.arange(len(positions))})
 
     points = fill_rectangle(points, extent=extent, origin=origin, margin=margin)
 
-    positions = np.hstack((points.positions, atoms.positions[points.labels, 2][:, None]))
+    positions = np.hstack((points.positions, atoms.positions[points.get_attributes('labels'), 2][:, None]))
     cell = [points.cell[0, 0], points.cell[1, 1], atoms.cell[2, 2]]
 
-    new_atoms = Atoms(atoms.numbers[points.labels], positions=positions, cell=cell)
+    new_atoms = Atoms(atoms.numbers[points.get_attributes('labels')], positions=positions, cell=cell)
 
     if return_atom_labels:
-        return new_atoms, points.labels
+        return new_atoms, points.get_attributes('labels')
     else:
         return new_atoms
-
 
 
 def standardize_cell(atoms, tol=1e-12):

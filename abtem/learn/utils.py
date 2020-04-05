@@ -74,3 +74,24 @@ def concatenate_mask(x, n):
     x[:, :, :, :n] = means
     x[:, :, :, -n:] = means
     return cp.concatenate((x, mask), axis=1)
+
+
+def closest_multiple_ceil(n, m):
+    return int(np.ceil(n / m) * m)
+
+
+def pad_to_size(images, height, width, n=None):
+    xp = cp.get_array_module(images)
+
+    if n is not None:
+        height = closest_multiple_ceil(height, n)
+        width = closest_multiple_ceil(width, n)
+
+    shape = images.shape[-2:]
+
+    up = max((height - shape[0]) // 2, 0)
+    down = max(height - shape[0] - up, 0)
+    left = max((width - shape[1]) // 2, 0)
+    right = max(width - shape[1] - left, 0)
+    images = xp.pad(images, pad_width=[(up, down), (left, right)])
+    return images

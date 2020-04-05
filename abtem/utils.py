@@ -161,6 +161,7 @@ class BatchGenerator:
     def __init__(self, n_items, max_batch_size):
         self._n_items = n_items
         self._n_batches = (n_items + (-n_items % max_batch_size)) // max_batch_size
+        print(n_items)
         self._batch_size = (n_items + (-n_items % self.n_batches)) // self.n_batches
 
     @property
