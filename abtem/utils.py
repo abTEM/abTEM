@@ -87,10 +87,11 @@ def cosine_window(x, cutoff, rolloff, attenuate='high', xp=np):
 
 
 def complex_exponential(x):
-    df_exp = np.empty(x.shape, dtype=COMPLEX_DTYPE)
-    trig_buf = np.cos(x)
+    xp = get_array_module(x)
+    df_exp = xp.empty(x.shape, dtype=COMPLEX_DTYPE)
+    trig_buf = xp.cos(x)
     df_exp.real[:] = trig_buf
-    np.sin(x, out=trig_buf)
+    xp.sin(x, out=trig_buf)
     df_exp.imag[:] = trig_buf
     return df_exp
 
@@ -228,6 +229,3 @@ def view_as_windows(arr_in, window_shape, step):
 
     arr_out = xp.lib.stride_tricks.as_strided(arr_in, shape=new_shape, strides=strides)
     return arr_out
-
-
-

@@ -216,10 +216,13 @@ class GridProperty:
 class Grid(Observable):
 
     def __init__(self,
-                 extent: Union[float, Sequence[float], GridProperty] = None,
-                 gpts: Union[int, Sequence[int], GridProperty] = None,
-                 sampling: Union[float, Sequence[float], GridProperty] = None,
+                 extent: Union[float, Sequence[float]] = None,
+                 gpts: Union[int, Sequence[int]] = None,
+                 sampling: Union[float, Sequence[float]] = None,
                  dimensions: int = 2, endpoint: bool = False,
+                 lock_extent=False,
+                 lock_gpts=False,
+                 lock_sampling=False,
                  **kwargs):
 
         """
@@ -246,40 +249,40 @@ class Grid(Observable):
         self._dimensions = dimensions
         self._endpoint = endpoint
 
-        if isinstance(extent, GridProperty):
-            self._extent = extent
-        else:
-            self._extent = GridProperty(extent, DTYPE, dimensions=dimensions)
+        if sum([lock_extent, lock_gpts, lock_sampling]) > 1:
+            raise RuntimeError('at most one of extent, gpts, and sampling may be locked')
 
-        if isinstance(gpts, GridProperty):
-            self._gpts = gpts
-        else:
-            self._gpts = GridProperty(gpts, np.int, dimensions=dimensions)
+        self._lock_extent = lock_extent
+        self._lock_gpts = lock_gpts
+        self._lock_sampling = lock_sampling
 
-        if isinstance(sampling, GridProperty):
-            self._sampling = sampling
-        else:
-            self._sampling = GridProperty(sampling, DTYPE, dimensions=dimensions)
+        self._extent = self._validate(extent, dtype=DTYPE)
+        self._gpts = self._validate(gpts, dtype=np.int)
+        self._sampling = self._validate(sampling, dtype=DTYPE)
 
         if self.extent is None:
-            if not ((self.gpts is None) | (self.sampling is None)):
-                self._extent.value = self._adjusted_extent(self.gpts, self.sampling)
+            self._adjust_extent(self.gpts, self.sampling)
 
         if self.gpts is None:
-            if not ((self.extent is None) | (self.sampling is None)):
-                self._gpts.value = self._adjusted_gpts(self.extent, self.sampling)
+            self._adjust_gpts(self.extent, self.sampling)
 
-        if self.sampling is None:
-            if not ((self.extent is None) | (self.gpts is None)):
-                self._sampling.value = self._adjusted_sampling(self.extent, self.gpts)
-
-        if (extent is not None) & (self.gpts is not None):
-            self._sampling.value = self._adjusted_sampling(self.extent, self.gpts)
-
-        if (gpts is not None) & (self.extent is not None):
-            self._sampling.value = self._adjusted_sampling(self.extent, self.gpts)
+        self._adjust_sampling(self.extent, self.gpts)
 
         super().__init__(**kwargs)
+
+    def _validate(self, value, dtype):
+        if isinstance(value, (np.ndarray, list, tuple)):
+            if len(value) != self._dimensions:
+                raise RuntimeError('grid value length of {} != {}'.format(len(value), self._dimensions))
+            return np.array(value).astype(dtype)
+
+        if isinstance(value, (int, float, complex)):
+            return np.full(self._dimensions, value, dtype=dtype)
+
+        if value is None:
+            return value
+
+        raise RuntimeError('invalid grid property ({})'.format(value))
 
     @property
     def endpoint(self) -> bool:
@@ -291,86 +294,83 @@ class Grid(Observable):
 
     @property
     def extent(self) -> np.ndarray:
-        if self._gpts.locked & self._sampling.locked:
-            return self._adjusted_extent(self.gpts, self.sampling)
-
-        return self._extent.value
+        return self._extent
 
     @extent.setter
     @notify
-    def extent(self, value):
-        if self._gpts.locked & self._sampling.locked:
-            raise RuntimeError()
+    def extent(self, extent: Union[float, Sequence[float]]):
+        if self._lock_extent:
+            raise RuntimeError('extent locked')
 
-        if not (self._sampling.locked | (value is None) | (self.gpts is None)):
-            self._sampling.value = self._adjusted_sampling(value, self.gpts)
+        extent = self._validate(extent, dtype=DTYPE)
 
-        elif not (self._gpts.locked | (value is None) | (self.sampling is None)):
-            self._gpts.value = self._adjusted_gpts(value, self.sampling)
-            self._sampling.value = self._adjusted_sampling(value, self.gpts)
+        if self._lock_sampling:
+            self._adjust_gpts(extent, self.sampling)
+            self._adjust_sampling(self.extent, self.gpts)
+        else:
+            self._adjust_sampling(extent, self.gpts)
 
-        self._extent.value = value
+        self._extent = extent
 
     @property
     def gpts(self) -> np.ndarray:
-        if self._extent.locked & self._sampling.locked:
-            return self._adjusted_sampling(self.extent, self.sampling)
-
-        return self._gpts.value
+        return self._gpts
 
     @gpts.setter
     @notify
-    def gpts(self, value: Union[int, Sequence[int], GridProperty]):
-        if self._extent.locked & self._sampling.locked:
-            raise RuntimeError()
+    def gpts(self, gpts: Union[int, Sequence[int]]):
+        if self._lock_gpts:
+            raise RuntimeError('gpts locked')
 
-        if not (self._sampling.locked | (self.extent is None) | (value is None)):
-            self._sampling.value = self._adjusted_sampling(self.extent, value)
+        gpts = self._validate(gpts, dtype=np.int)
 
-        elif not (self._extent.locked | (value is None) | (self.sampling is None)):
-            self._extent.value = self._adjusted_extent(value, self.sampling)
+        if self._lock_sampling:
+            self._adjust_extent(gpts, self.sampling)
+        else:
+            self._adjust_sampling(self.extent, gpts)
 
-        self._gpts.value = value
+        self._gpts = gpts
 
     @property
     def sampling(self) -> np.ndarray:
-        if self._extent.locked & self._gpts.locked:
-            return self._adjusted_sampling(self.extent, self.gpts)
-
-        return self._sampling.value
+        return self._sampling
 
     @sampling.setter
     @notify
-    def sampling(self, value):
-        if self._gpts.locked & self._extent.locked:
-            raise RuntimeError()
+    def sampling(self, sampling):
+        if self._lock_sampling:
+            raise RuntimeError('sampling locked')
 
-        if not (self._gpts.locked | (self.extent is None) | (value is None)):
-            self._gpts.value = self._adjusted_gpts(self.extent, value)
-            value = self._adjusted_sampling(self.extent, self.gpts)
+        sampling = self._validate(sampling, dtype=DTYPE)
 
-        elif not (self._extent.locked | (self.gpts is None) | (value is None)):
-            self._extent.value = self._adjusted_extent(self.gpts, value)
+        if self._lock_gpts:
+            self._adjust_extent(self.gpts, sampling)
 
-        self._sampling.value = value
-
-    def _adjusted_extent(self, gpts, sampling):
-        if self._endpoint:
-            return (gpts - 1) * sampling
         else:
-            return gpts * sampling
+            self._adjust_gpts(self.extent, sampling)
 
-    def _adjusted_gpts(self, extent, sampling):
-        if self._endpoint:
-            return np.ceil(extent / sampling).astype(np.int) + 1
-        else:
-            return np.ceil(extent / sampling).astype(np.int)
+        self._adjust_sampling(self.extent, self.gpts)
 
-    def _adjusted_sampling(self, extent, gpts):
-        if self._endpoint:
-            return extent / (gpts - 1)
-        else:
-            return extent / gpts
+    def _adjust_extent(self, gpts, sampling):
+        if (gpts is not None) & (sampling is not None):
+            if self._endpoint:
+                self._extent = (gpts - 1) * sampling
+            else:
+                self._extent = gpts * sampling
+
+    def _adjust_gpts(self, extent, sampling):
+        if (extent is not None) & (sampling is not None):
+            if self._endpoint:
+                self._gpts = np.ceil(extent / sampling).astype(np.int) + 1
+            else:
+                self._gpts = np.ceil(extent / sampling).astype(np.int)
+
+    def _adjust_sampling(self, extent, gpts):
+        if (extent is not None) & (gpts is not None):
+            if self._endpoint:
+                self._sampling = extent / (gpts - 1)
+            else:
+                self._sampling = extent / gpts
 
     def check_is_grid_defined(self):
         """ Throw error if the grid is not defined. """
@@ -422,22 +422,16 @@ class Grid(Observable):
             raise RuntimeError('inconsistent grid gpts ({} != {})'.format(self.gpts, other.gpts))
 
     def linspace(self):
-        return linspace(self)
+        self.check_is_grid_defined()
+        return [np.linspace(0, e, g, endpoint=self.endpoint, dtype=DTYPE) for g, e in zip(self.gpts, self.extent)]
+
+    def fftfreq(self):
+        self.check_is_grid_defined()
+        return [DTYPE(np.fft.fftfreq(g, s)) for g, s in zip(self.gpts, self.sampling)]
 
     def copy(self):
         return self.__class__(extent=self._extent.copy(), gpts=self._gpts.copy(), sampling=self._sampling.copy(),
                               dimensions=self._dimensions)
-
-
-def fftfreq(grid):
-    grid.check_is_grid_defined()
-    return tuple(DTYPE(np.fft.fftfreq(gpts, sampling)) for gpts, sampling in zip(grid.gpts, grid.sampling))
-
-
-def linspace(grid):
-    grid.check_is_grid_defined()
-    return tuple(np.linspace(0, extent, gpts, endpoint=grid.endpoint, dtype=DTYPE) for gpts, extent in
-                 zip(grid.gpts, grid.extent))
 
 
 def semiangles(grid_and_energy):
@@ -536,8 +530,8 @@ class ArrayWithGrid(Grid):
         self._spatial_dimensions = spatial_dimensions
         self._fourier_space = fourier_space
 
-        gpts = GridProperty(value=array.shape[-spatial_dimensions:], dtype=np.int, dimensions=spatial_dimensions,
-                            locked=True)
+        gpts = GridProperty(value=array.shape[-spatial_dimensions:], dtype=np.int,
+                            dimensions=spatial_dimensions, locked=True)
         super().__init__(extent=extent, gpts=gpts, sampling=sampling, dimensions=spatial_dimensions, **kwargs)
 
     @property
@@ -559,10 +553,11 @@ class ArrayWithGrid(Grid):
         new._array = self._array[item]
         return new
 
-    def plot(self, ax=None, logscale=False, logscale_constant=1., transform=None, fourier_space=None, title=None,
-             cmap='gray', **kwargs):
+    def plot(self, ax=None, logscale=False, logscale_constant=1., complex_representation=None, fourier_space=None,
+             title=None, cmap='gray', figsize=None, **kwargs):
+
         if ax is None:
-            ax = plt.subplot()
+            fig, ax = plt.subplots(figsize=figsize)
 
         array = np.squeeze(self.array)
 
@@ -581,11 +576,17 @@ class ArrayWithGrid(Grid):
         elif (self.fourier_space) & (not fourier_space):
             array = np.fft.ifftn(array)
 
-        if (transform is None) & np.iscomplexobj(array):
+        if (complex_representation is None) & np.iscomplexobj(array):
             array = abs2(array)
 
-        elif transform is not None:
-            array = transform(array)
+        elif complex_representation is not None:
+            if isinstance(complex_representation, str):
+                if complex_representation == 'phase':
+                    complex_representation = np.angle
+                elif complex_representation == 'abs2':
+                    complex_representation = abs2
+
+            array = complex_representation(array)
 
         if logscale:
             array = np.log(1 + logscale_constant * array)

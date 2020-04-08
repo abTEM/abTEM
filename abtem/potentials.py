@@ -13,6 +13,7 @@ from ase import units
 from numba import jit
 from scipy.optimize import brentq
 from tqdm.auto import tqdm
+import h5py
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
@@ -22,7 +23,38 @@ QUADRATURE_PARAMETER_RATIO = 4
 DTYPE = np.float32
 
 
-class PotentialBase(Grid):
+class PotentialBase:
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    @property
+    def num_slices(self):
+        raise NotImplementedError()
+
+    def check_slice_idx(self, i):
+        if i >= self.num_slices:
+            raise RuntimeError('slice index {} too large'.format(i))
+
+    def slice_thickness(self, i):
+        raise NotImplementedError()
+
+    def _get_slice_array(self, i):
+        raise NotImplementedError()
+
+    def get_slice(self, i):
+        raise NotImplementedError()
+
+    def __getitem__(self, item):
+        if not isinstance(item, int):
+            raise RuntimeError()
+
+        if item >= self.num_slices:
+            raise StopIteration
+        return self.get_slice(item)
+
+
+class CalculatedPotentialBase(PotentialBase, Grid):
 
     def __init__(self, atoms, origin=None, extent=None, gpts=None, sampling=None, num_slices=None, **kwargs):
 
@@ -45,41 +77,43 @@ class PotentialBase(Grid):
         super().__init__(extent=extent, gpts=gpts, sampling=sampling, **kwargs)
 
     @property
-    def origin(self):
-        return self._origin
+    def atoms(self):
+        return self._atoms
 
     @property
-    def num_slices(self):
-        return self._num_slices
+    def origin(self):
+        return self._origin
 
     @property
     def thickness(self):
         return self._atoms.cell[2, 2]
 
-    def _get_slice_array(self, i):
-        raise NotImplementedError()
+    @property
+    def num_slices(self):
+        return self._num_slices
 
     def get_slice(self, i):
-        raise NotImplementedError()
-
-    def check_slice_idx(self, i):
-        if i >= self.num_slices:
-            raise RuntimeError('slice index {} too large'.format(i))
+        return PotentialSlice(self._get_slice_array(i)[None], thickness=self.slice_thickness(i), extent=self.extent)
 
     def __getitem__(self, i):
-        if i >= self.num_slices:
-            raise StopIteration
+        if isinstance(i, int):
+            if i >= self.num_slices:
+                raise StopIteration
+            return self.get_slice(i)
+        elif isinstance(i, slice):
+            return self.precalculate(show_progress=False, first_slice=slice.start, last_slice=slice.stop)
 
-        return self.get_slice(i)
+    def precalculate(self, show_progress=False, first_slice=None, last_slice=None):
+        if first_slice is None:
+            first_slice = 0
 
-    def slice_thickness(self, i):
-        raise NotImplementedError()
+        if last_slice is None:
+            last_slice = self.num_slices
 
-    def precalculate(self, show_progress=False):
         array = np.zeros((self.num_slices,) + (self.gpts[0], self.gpts[1]))
         slice_thicknesses = np.zeros(self.num_slices)
 
-        for i in tqdm(range(self.num_slices), disable=not show_progress):
+        for i in tqdm(range(first_slice, last_slice), disable=not show_progress):
             array[i] = self._get_slice_array(i)
             slice_thicknesses[i] = self.slice_thickness(i)
 
@@ -98,7 +132,18 @@ def tanh_sinh_quadrature(order, parameter):
     return xk, wk
 
 
-class Potential(PotentialBase, Cache):
+class PotentialSlice(ArrayWithGrid):
+
+    def __init__(self, array, thickness, extent=None):
+        self._thickness = thickness
+        super().__init__(array=array, extent=extent, spatial_dimensions=2)
+
+    @property
+    def thickness(self):
+        return self._thickness
+
+
+class Potential(CalculatedPotentialBase, Cache):
     """
     Potential object
 
@@ -188,18 +233,6 @@ class Potential(PotentialBase, Cache):
     @property
     def cutoff_tolerance(self):
         return self._cutoff_tolerance
-
-    @property
-    def num_slices(self):
-        return self._num_slices
-
-    @property
-    def atoms(self):
-        return self._atoms
-
-    @property
-    def thickness(self):
-        return self.atoms.cell[2, 2]
 
     @property
     def parameters(self):
@@ -320,9 +353,6 @@ class Potential(PotentialBase, Cache):
         else:
             raise NotImplementedError('method {} not implemented')
 
-    def get_slice(self, i):
-        return ArrayWithGrid(self._get_slice_array(i)[None], extent=self.extent, spatial_dimensions=2)
-
     def copy(self, copy_atoms=False):
         if copy_atoms:
             return self.__class__(self.atoms.copy())
@@ -335,22 +365,30 @@ def import_potential(path):
     return PrecalculatedPotential(npzfile['array'], npzfile['slice_thicknesses'], npzfile['extent'])
 
 
-class PrecalculatedPotential(ArrayWithGrid):
+class PrecalculatedPotential(PotentialBase, ArrayWithGrid):
 
     def __init__(self, array: np.ndarray, slice_thicknesses: Union[float, Sequence], extent: np.ndarray = None,
                  sampling: np.ndarray = None):
 
         """
-        Precalculated potential object. This object
-
+        Precalculated potential object.
 
         Parameters
         ----------
-        array :
-        slice_thicknesses :
-        extent :
-        sampling :
+        array : 3d ndarray
+            The array representing the potential slices. The first dimension is the slice index and the last two are the
+            spatial dimensions.
+        slice_thicknesses : float, sequence of floats
+            The thicknesses of the potential slices in Angstrom. If float, the thickness is the same for all slices.
+            If sequence, the length must equal the length of potential array.
+        extent : two floats, float, optional
+            Lateral extent of potential, if the unit cell of the atoms is too small it will be repeated. Units of Angstrom.
+        sampling : two floats, float, optional
+            Lateral sampling of the potential. Units of 1 / Angstrom.
         """
+
+        if len(array.shape) != 3:
+            raise RuntimeError()
 
         slice_thicknesses = np.array(slice_thicknesses)
 
@@ -361,7 +399,11 @@ class PrecalculatedPotential(ArrayWithGrid):
 
         self._slice_thicknesses = slice_thicknesses
 
-        super().__init__(array=array, spatial_dimensions=2, extent=extent, sampling=sampling)
+        super().__init__(extent=extent, sampling=sampling, spatial_dimensions=2, array=array)
+
+    @property
+    def array(self):
+        return self._array
 
     @property
     def thickness(self):
@@ -380,32 +422,36 @@ class PrecalculatedPotential(ArrayWithGrid):
         new_extent = multiples * self.extent
         return self.__class__(array=new_array, thickness=self.thickness, extent=new_extent)
 
-    def downsample(self):
-        N, M = self.gpts
-
-        X = np.fft.fft(self._array, axis=1)
-        self._array = np.fft.ifft((X[:, :(N // 2), :] + X[:, -(N // 2):, :]) / 2., axis=1).real
-
-        X = np.fft.fft(self._array, axis=2)
-        self._array = np.fft.ifft((X[:, :, :(M // 2)] + X[:, :, -(M // 2):]) / 2., axis=2).real
-
-        self.extent = self.extent
+    def get_slice(self, i):
+        return PotentialSlice(self._get_slice_array(i)[None], thickness=self.slice_thickness(i), extent=self.extent)
 
     def _get_slice_array(self, i):
         return self._array[i]
 
-    def extract(self, first, last):
-        if last < 0:
-            last = self.num_slices + last
+    def write(self, path, overwrite=True):
+        if path.split('.')[-1] != 'hdf5':
+            path = path + '.hdf5'
 
-        if first >= last:
-            raise RuntimeError()
+        if os.path.isfile(path) & (not overwrite):
+            raise RuntimeError('file {} already exists (set overwrite = True)'.format(path))
 
-        slice_thicknesses = self._slice_thicknesses[first:last]
-        return self.__class__(array=self.array[first:last], slice_thicknesses=slice_thicknesses, extent=self.extent)
+        with h5py.File(path, 'w') as f:
+            f.create_dataset('array', data=self._array)
+            f.create_dataset('slice_thicknesses', data=self._slice_thicknesses)
+            f.create_dataset('extent', data=self.extent)
 
-    def export(self, path, overwrite=False):
-        if (os.path.isfile(path) | os.path.isfile(path + '.npz')) & (not overwrite):
-            raise RuntimeError('file {} already exists')
+    @staticmethod
+    def read(path):
+        # TODO: implement chunks
+        with h5py.File(path, 'r') as f:
+            array = f.get('array')[()]
+            slice_thicknesses = f.get('slice_thicknesses')[()]
+            extent = f.get('extent')[()]
+        return PrecalculatedPotential(array=array, slice_thicknesses=slice_thicknesses, extent=extent)
 
-        np.savez(path, array=self.array, slice_thicknesses=self._slice_thicknesses, extent=self.extent)
+    # def copy(self, copy_array=True):
+    #     if copy_array:
+    #         array = self.array.copy()
+    #     else:
+    #         array = self.array
+    #     return self.__class__(array=array, slice_thicknesses=self._slice_thicknesses.copy(), extent=self.extent.copy())

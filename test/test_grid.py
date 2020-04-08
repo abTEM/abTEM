@@ -2,12 +2,13 @@ import mock
 import numpy as np
 import pytest
 
-from abtem.bases import Grid, Observable, GridProperty, fftfreq
+from abtem.bases import Grid, Observable, fftfreq
 
 
 def test_create_grid():
     grid = Grid(extent=5, sampling=.2)
 
+    print(grid.gpts)
     assert np.all(grid.extent == 5.)
     assert np.all(grid.gpts == 25)
 
@@ -15,7 +16,7 @@ def test_create_grid():
 
     grid = Grid(sampling=.2, gpts=10)
 
-    assert np.all(grid.extent == 2.)
+    assert np.all(np.isclose(grid.extent, 2.))
 
     grid = Grid(extent=(8, 6), gpts=10)
     assert np.allclose(grid.sampling, np.array([0.8, 0.6]))
@@ -73,9 +74,7 @@ def test_grid_notify(mock_notify_observers):
 
 
 def test_locked_grid():
-    gpts = GridProperty(value=5, dtype=np.int, locked=True)
-
-    grid = Grid(gpts=gpts)
+    grid = Grid(gpts=5, lock_gpts=True)
 
     grid.extent = 10
     assert np.all(grid.sampling == 2)
@@ -85,7 +84,7 @@ def test_locked_grid():
     with pytest.raises(RuntimeError) as e:
         grid.gpts = 6
 
-    assert str(e.value) == 'grid property locked'
+    assert str(e.value) == 'gpts locked'
 
 
 def test_check_grid_matches():
@@ -100,11 +99,3 @@ def test_check_grid_matches():
         grid1.check_grids_can_match(grid2)
 
     assert str(e.value) == 'inconsistent grid gpts ([10 10] != [50 50])'
-
-
-def test_fourier_limits():
-    grid = Grid(extent=(3, 3), gpts=(12, 13))
-    assert np.isclose(fftfreq(grid)[0][5], grid.fourier_limits[0][1])
-    assert np.isclose(fftfreq(grid)[0][6], grid.fourier_limits[0][0])
-    assert np.isclose(fftfreq(grid)[1][6], grid.fourier_limits[1][1])
-    assert np.isclose(fftfreq(grid)[1][7], grid.fourier_limits[1][0])

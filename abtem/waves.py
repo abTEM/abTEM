@@ -7,7 +7,7 @@ from ase import Atoms
 from tqdm.auto import tqdm
 
 from abtem.bases import cached_method, Grid, Energy, cached_method_with_args, ArrayWithGridAndEnergy, Cache, \
-    notify, ArrayWithGrid, fftfreq
+    notify, ArrayWithGrid
 from abtem.config import DTYPE, COMPLEX_DTYPE, FFTW_THREADS
 from abtem.detect import DetectorBase
 from abtem.plot import plot_image
@@ -76,7 +76,6 @@ def multislice(waves, potential: Potential, in_place: bool = True, show_progress
 
     waves.match_grid(potential)
     waves.check_is_grid_defined()
-
     potential.check_is_grid_defined()
 
     propagator = Propagator(extent=potential.extent, gpts=potential.gpts, energy=waves.energy)
@@ -104,7 +103,7 @@ def multislice(waves, potential: Potential, in_place: bool = True, show_progress
     return waves
 
 
-class Waves(ArrayWithGridAndEnergy):
+class Waves(ArrayWithGridAndEnergy, Cache):
     """
     Waves object.
 
@@ -146,30 +145,54 @@ class Waves(ArrayWithGridAndEnergy):
             The wave functions with aberrations applied.
         """
 
+        if ctf is not None:
+            self.match_grid(ctf)
+
+        else:
+            ctf = CTF(**kwargs, extent=self.extent, gpts=self.gpts, energy=self.energy)
+
+        return self.fft_convolve(ctf.get_array(), in_place)
+
+    @cached_method()
+    def get_fftw_plans(self):
+        fftw_forward = fftw.FFTW(self._array, self._array, axes=(1, 2), threads=FFTW_THREADS,
+                                 flags=('FFTW_ESTIMATE',))
+        fftw_backward = fftw.FFTW(self._array, self._array, axes=(1, 2), direction='FFTW_BACKWARD',
+                                  threads=FFTW_THREADS, flags=('FFTW_ESTIMATE',))
+
+        return fftw_forward, fftw_backward
+
+    def fft_convolve(self, array, in_place=True):
         if not in_place:
             waves = self.copy()
         else:
             waves = self
 
-        if ctf is not None:
-            waves.match_grid(ctf)
-
-        else:
-            ctf = CTF(**kwargs, extent=self.extent, gpts=self.gpts, energy=self.energy)
-
-        waves.check_is_grid_defined()
-        waves.check_is_energy_defined()
-
-        fft_object_forward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), threads=FFTW_THREADS,
-                                       flags=('FFTW_ESTIMATE',))
-        fft_object_backward = fftw.FFTW(waves._array, waves._array, axes=(1, 2), direction='FFTW_BACKWARD',
-                                        threads=FFTW_THREADS, flags=('FFTW_ESTIMATE',))
-
-        fft_object_forward()
-        waves._array[:] *= ctf.get_array()
-        fft_object_backward()
-
+        fftw_forward, fftw_backward = waves.get_fftw_plans()
+        fftw_forward()
+        waves._array *= array
+        fftw_backward()
         return waves
+
+    def transmit(self, potential_slice, in_place=True):
+        if not in_place:
+            waves = self.copy()
+        else:
+            waves = self
+        waves._array *= complex_exponential(waves.sigma * potential_slice.array)
+        return waves
+
+    @cached_method_with_args(('gpts', 'extent', 'sampling', 'energy'))
+    def get_propagator(self, dz):
+        self.check_is_grid_defined()
+        self.check_is_energy_defined()
+        kx = np.fft.fftfreq(self.gpts[0], self.sampling[0]).astype(DTYPE)
+        ky = np.fft.fftfreq(self.gpts[1], self.sampling[1]).astype(DTYPE)
+        k = (kx ** 2)[:, None] + (ky ** 2)[None]
+        return complex_exponential(-k * np.pi * self.wavelength * dz)[None]
+
+    def propagate(self, dz, in_place=True):
+        return self.fft_convolve(self.get_propagator(dz), in_place=in_place)
 
     def multislice(self, potential, in_place: bool = False, show_progress: bool = True):
         """
@@ -298,6 +321,15 @@ class PlaneWaves(Grid, Energy, Cache):
 
         return self.build().multislice(potential, in_place=True, show_progress=show_progress)
 
+    def transmit(self, potential_slice):
+        self.match_grid(potential_slice)
+        self.check_is_energy_defined()
+        self.check_is_grid_defined()
+        return self.build().transmit(potential_slice, in_place=False)
+
+    def propagate(self):
+        pass
+
     @cached_method()
     def build(self):
         if self.gpts is None:
@@ -411,7 +443,7 @@ class ProbeWaves(CTF):
         return fwhm(self)
 
     def _translation_multiplier(self, positions):
-        kx, ky = fftfreq(self)
+        kx, ky = self.fftfreq()
         kx = kx.reshape((1, -1, 1))
         ky = ky.reshape((1, 1, -1))
         x = positions[:, 0].reshape((-1,) + (1, 1))

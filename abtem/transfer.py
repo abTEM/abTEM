@@ -307,6 +307,7 @@ class CTFBase(Energy):
         return calculate_polar_aberrations(self.get_alpha(), self.get_phi(), self.wavelength, self._parameters)
 
     def get_array(self):
+
         array = self.get_aberrations()
 
         if self.semiangle_cutoff < np.inf:

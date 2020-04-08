@@ -1,6 +1,8 @@
 import numpy as np
+import cupy as cp
 
 DTYPE = np.float32
+CUPY_DTYPE = cp.float32
 FFTW_THREADS = 16
 
 if DTYPE == np.float32:
