@@ -2,9 +2,10 @@ from collections import defaultdict
 from typing import Mapping, Union, Sequence
 
 import numpy as np
-from abtem.bases import Energy, Cache, Grid, cached_method, ArrayWithGridAndEnergy, notify, semiangles
+from abtem.bases import Energy, Cache, Grid, cached_method, ArrayWithGridAndEnergy2D, notify, Buildable
 from abtem.config import DTYPE
 from abtem.utils import complex_exponential, squared_norm, energy2wavelength
+import cupy as cp
 
 polar_symbols = ('C10', 'C12', 'phi12',
                  'C21', 'phi21', 'C23', 'phi23',
@@ -72,39 +73,39 @@ def calculate_polar_chi(alpha: np.ndarray, phi: np.ndarray, wavelength: float,
     .. [1] Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.). Springer.
 
     """
+    xp = cp.get_array_module(alpha)
     alpha2 = alpha ** 2
-
-    array = np.zeros(alpha.shape, dtype=DTYPE)
+    array = xp.zeros(alpha.shape, dtype=DTYPE)
     if any([parameters[symbol] != 0. for symbol in ('C10', 'C12', 'phi12')]):
         array += (1 / 2 * alpha2 *
                   (parameters['C10'] +
-                   parameters['C12'] * np.cos(2 * (phi - parameters['phi12']))))
+                   parameters['C12'] * xp.cos(2 * (phi - parameters['phi12']))))
 
     if any([parameters[symbol] != 0. for symbol in ('C21', 'phi21', 'C23', 'phi23')]):
         array += (1 / 3 * alpha2 * alpha *
-                  (parameters['C21'] * np.cos(phi - parameters['phi21']) +
-                   parameters['C23'] * np.cos(3 * (phi - parameters['phi23']))))
+                  (parameters['C21'] * xp.cos(phi - parameters['phi21']) +
+                   parameters['C23'] * xp.cos(3 * (phi - parameters['phi23']))))
 
     if any([parameters[symbol] != 0. for symbol in ('C30', 'C32', 'phi32', 'C34', 'phi34')]):
         array += (1 / 4 * alpha2 ** 2 *
                   (parameters['C30'] +
-                   parameters['C32'] * np.cos(2 * (phi - parameters['phi32'])) +
-                   parameters['C34'] * np.cos(4 * (phi - parameters['phi34']))))
+                   parameters['C32'] * xp.cos(2 * (phi - parameters['phi32'])) +
+                   parameters['C34'] * xp.cos(4 * (phi - parameters['phi34']))))
 
     if any([parameters[symbol] != 0. for symbol in ('C41', 'phi41', 'C43', 'phi43', 'C45', 'phi41')]):
         array += (1 / 5 * alpha2 ** 2 * alpha *
-                  (parameters['C41'] * np.cos((phi - parameters['phi41'])) +
-                   parameters['C43'] * np.cos(3 * (phi - parameters['phi43'])) +
-                   parameters['C45'] * np.cos(5 * (phi - parameters['phi45']))))
+                  (parameters['C41'] * xp.cos((phi - parameters['phi41'])) +
+                   parameters['C43'] * xp.cos(3 * (phi - parameters['phi43'])) +
+                   parameters['C45'] * xp.cos(5 * (phi - parameters['phi45']))))
 
     if any([parameters[symbol] != 0. for symbol in ('C50', 'C52', 'phi52', 'C54', 'phi54', 'C56', 'phi56')]):
         array += (1 / 6 * alpha2 ** 3 *
                   (parameters['C50'] +
-                   parameters['C52'] * np.cos(2 * (phi - parameters['phi52'])) +
-                   parameters['C54'] * np.cos(4 * (phi - parameters['phi54'])) +
-                   parameters['C56'] * np.cos(6 * (phi - parameters['phi56']))))
+                   parameters['C52'] * xp.cos(2 * (phi - parameters['phi52'])) +
+                   parameters['C54'] * xp.cos(4 * (phi - parameters['phi54'])) +
+                   parameters['C56'] * xp.cos(6 * (phi - parameters['phi56']))))
 
-    array = 2 * np.pi / wavelength * array
+    array = 2 * xp.pi / wavelength * array
     return array
 
 
@@ -113,19 +114,20 @@ def calculate_symmetric_aberrations(alpha: np.ndarray, wavelength: float,
     return complex_exponential(-calculate_symmetric_chi(alpha, wavelength, parameters))
 
 
-def calculate_polar_aberrations(alpha: np.ndarray, phi: np.ndarray, wavelength: float,
+def calculate_polar_aberrations(alpha: (np.ndarray, cp.ndarray), phi: np.ndarray, wavelength: float,
                                 parameters: Mapping[str, float]) -> np.ndarray:
     return complex_exponential(-calculate_polar_chi(alpha, phi, wavelength, parameters))
 
 
 def calculate_aperture(alpha: np.ndarray, cutoff: float, rolloff: float) -> np.ndarray:
+    xp = cp.get_array_module(alpha)
     if rolloff > 0.:
         rolloff *= cutoff
-        array = .5 * (1 + np.cos(np.pi * (alpha - cutoff + rolloff) / rolloff))
+        array = .5 * (1 + xp.cos(np.pi * (alpha - cutoff + rolloff) / rolloff))
         array[alpha > cutoff] = 0.
-        array = np.where(alpha > cutoff - rolloff, array, np.ones_like(alpha, dtype=DTYPE))
+        array = xp.where(alpha > cutoff - rolloff, array, xp.ones_like(alpha, dtype=DTYPE))
     else:
-        array = np.array(alpha < cutoff).astype(DTYPE)
+        array = xp.array(alpha < cutoff).astype(DTYPE)
     return array
 
 
@@ -334,7 +336,7 @@ def scherzer_defocus(Cs, energy):
     return 1.2 * np.sign(Cs) * np.sqrt(np.abs(Cs) * energy2wavelength(energy))
 
 
-class CTF(Grid, Cache, CTFBase):
+class CTF(Grid, Cache, Buildable, CTFBase):
 
     def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
                  angular_spread: float = 0., gaussian_spread: float = 0., parameters: Mapping[str, float] = None,
@@ -342,6 +344,7 @@ class CTF(Grid, Cache, CTFBase):
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
                  energy: float = None,
+                 build_on_gpu: bool = False,
                  **kwargs):
         """
         Contrast Transfer Function object.
@@ -380,22 +383,27 @@ class CTF(Grid, Cache, CTFBase):
         super().__init__(semiangle_cutoff=semiangle_cutoff, rolloff=rolloff, focal_spread=focal_spread,
                          angular_spread=angular_spread, gaussian_spread=gaussian_spread, extent=extent, gpts=gpts,
                          sampling=sampling,
-                         energy=energy, parameters=parameters, **kwargs)
+                         energy=energy, parameters=parameters, build_on_gpu=build_on_gpu, **kwargs)
         self.register_observer(self)
 
     @cached_method(('extent', 'gpts', 'sampling', 'energy'))
     def get_alpha(self):
-        self.check_is_grid_defined()
         self.check_is_energy_defined()
-        return np.sqrt(squared_norm(*semiangles(self)))
+        xp = self._array_module()
+        kx, ky = self.fftfreq()
+        kx = xp.asarray(kx)
+        ky = xp.asarray(ky)
+        return xp.sqrt(squared_norm(kx * self.wavelength, ky * self.wavelength))
 
     @cached_method(('extent', 'gpts', 'sampling', 'energy'))
     def get_phi(self):
         self.check_is_grid_defined()
         self.check_is_energy_defined()
-        alpha_x, alpha_y = semiangles(self)
-        phi = np.arctan2(alpha_x.reshape((-1, 1)), alpha_y.reshape((1, -1)))
-        return phi
+        xp = self._array_module()
+        kx, ky = self.fftfreq()
+        kx = xp.asarray(kx)
+        ky = xp.asarray(ky)
+        return xp.arctan2(kx.reshape((-1, 1)), ky.reshape((1, -1)))
 
     @cached_method(('extent', 'gpts', 'sampling', 'energy', 'semiangle_cutoff', 'rolloff'))
     def get_aperture(self):
@@ -422,8 +430,7 @@ class CTF(Grid, Cache, CTFBase):
         return super().get_array()
 
     def build(self):
-        return ArrayWithGridAndEnergy(np.fft.fftshift(self.get_array(), axes=(1, 2)), spatial_dimensions=2,
-                                      extent=self.extent, energy=self.energy)
+        return ArrayWithGridAndEnergy2D(np.fft.fftshift(self.get_array(), axes=(1, 2)), extent=self.extent, energy=self.energy)
 
 
 def polar2cartesian(polar):

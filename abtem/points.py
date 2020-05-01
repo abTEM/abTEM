@@ -11,7 +11,7 @@ def inside_cell(points, margin=0):
             (scaled_positions[:, 0] <= 1 + margin[0]) & (scaled_positions[:, 1] <= 1 + margin[1]))
 
 
-def fill_rectangle(points, extent, origin=None, margin=0., eps=1e-12):
+def fill_rectangle(points, extent, origin=None, margin=0., eps=1e-17):
     xp = cp.get_array_module(points.positions)
 
     if origin is None:
@@ -49,8 +49,8 @@ def fill_rectangle(points, extent, origin=None, margin=0., eps=1e-12):
 
     positions = positions + original_cell[0] * n1 + original_cell[1] * m1
 
-    inside = ((positions[:, 0] > lower_corner[0] - eps - margin) &
-              (positions[:, 1] > lower_corner[1] - eps - margin) &
+    inside = ((positions[:, 0] > lower_corner[0] + eps - margin) &
+              (positions[:, 1] > lower_corner[1] + eps - margin) &
               (positions[:, 0] < upper_corner[0] + margin) &
               (positions[:, 1] < upper_corner[1] + margin))
     new_positions = positions[inside] - lower_corner
@@ -82,7 +82,7 @@ def wrap(points, center=(0.5, 0.5), eps=1e-7):
 
 class Points:
 
-    def __init__(self, positions=None, cell=None, pointwise_attributes=None, dimensions=2):
+    def __init__(self, positions=None, cell=None, origin=None, pointwise_attributes=None, dimensions=2):
         self._arrays = {}
 
         if positions is None:
@@ -101,6 +101,11 @@ class Points:
 
         if cell is not None:
             self.cell = cell
+
+        self._origin = np.zeros(dimensions, np.float)
+
+        if origin is not None:
+            self.origin = origin
 
     def __len__(self):
         return len(self.positions)
@@ -155,6 +160,16 @@ class Points:
             cell = np.diag(cell)
 
         self._cell[:] = cell
+
+    @property
+    def origin(self):
+        return self._origin
+
+    @origin.setter
+    def origin(self, origin):
+        origin = np.array(origin, dtype=np.float)
+
+        self._origin[:] = origin
 
     def get_filtered_positions(self, attribute_name, value):
         return self.positions[self.get_attributes(attribute_name) == value]

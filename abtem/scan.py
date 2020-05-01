@@ -1,75 +1,127 @@
-from typing import Union, Sequence, Tuple
+from contextlib import ExitStack
+from typing import Union, Sequence
 
-import numpy as np
-
-from abtem.bases import Grid, Image, ArrayWithGrid
-from abtem.utils import BatchGenerator, split_integer
 import h5py
+import numpy as np
+from ase import Atoms
+from matplotlib.patches import Rectangle
+from tqdm.auto import tqdm
+
+from abtem.bases import Grid, ArrayWithGrid1D, ArrayWithGrid2D
+from abtem.potentials import Potential
+from abtem.utils import split_integer
+from collections.abc import Iterable
+import cupy as cp
 
 
-def load_measurements(path):
-    with h5py.File(path, 'r') as f:
-        measurements = f['data'][:]  # .reshape(tuple(f['data'].attrs['shape']))
-        measurements = measurements.reshape(tuple(f['data'].attrs['shape']) + measurements.shape[1:])
-        measurements = np.squeeze(measurements)
-    return measurements
+def unravel_slice_2d(start, end, shape):
+    slices = []
+    rows = []
+    slices_1d = []
+    n = 0
+    n_accum = 0
+    for index in range(start, end):
+        index_in_row = index % shape[-1]
+        n += 1
+        if index_in_row == shape[-1] - 1:
+            slices_1d.append(slice(n_accum, n_accum + n))
+            slices.append(slice(index_in_row - n + 1, index_in_row + 1))
+            rows.append(index // shape[-1])
+            n_accum += n
+            n = 0
+
+    if n > 0:
+        slices_1d.append(slice(n_accum, n_accum + n))
+        slices.append(slice(index_in_row - n + 1, index_in_row + 1))
+        rows.append(index // shape[-1])
+    return rows, slices, slices_1d
 
 
 class ScanBase:
 
     def __init__(self, **kwargs):
-        self._measurements = {}
+        self._data = None
+        self._partitions = None
         super().__init__(**kwargs)
 
-    def get_measurement(self, detector):
-        return self._measurements
+    def __len__(self):
+        return self.num_measurements
 
-    def get_positions(self):
+    @property
+    def num_measurements(self):
         raise NotImplementedError()
 
     @property
-    def gpts(self) -> np.ndarray:
+    def shape(self):
         raise NotImplementedError()
 
-    @property
-    def extent(self) -> Union[np.ndarray, None]:
-        return None
-
-    @property
-    def endpoint(self) -> bool:
-        return True
-
-    def create_file(self, name, shape):
+    def get_all_positions(self):
         raise NotImplementedError()
 
-    def allocate_measurement(self, detector):
-        shape = (int(np.prod(self.gpts)),) + tuple(n for n in detector.out_shape if n > 1)
-
-        if detector.export is not None:
-            with h5py.File(detector.export, 'w') as f:
-                dset = f.create_dataset('data', shape, dtype=np.float32)
-                dset.attrs['shape'] = self.gpts
-                self._measurements[detector] = f
-        else:
-            self._measurements[detector] = np.zeros(shape)
+    def get_next_partition(self):
+        return self._partitions.pop(0)
 
     def generate_positions(self, max_batch):
+        positions = self.get_all_positions()
+        self._partition_positions(max_batch)
+
+        while len(self._partitions) > 0:
+            start, end = self.get_next_partition()
+            yield start, end, positions[start:end]
+
+    def allocate_measurements(self, detectors):
+        raise NotImplementedError()
+
+    def _partition_positions(self, max_batch):
+        n = len(self)
+        n_batches = (n + (-n % max_batch)) // max_batch
+        batch_sizes = split_integer(len(self), n_batches)
+        self._partitions = [(0, batch_sizes[0])]
+        for batch_size in batch_sizes[1:]:
+            self._partitions.append((self._partitions[-1][-1], self._partitions[-1][-1] + batch_size))
+
+    def insert_new_measurement(self, measurement, start, end, new_measurement):
+        raise NotImplementedError()
+
+    def go(self, max_batch, show_progress=False):
+        if not isinstance(detectors, Iterable):
+            detectors = [detectors]
+
+        self._detectors = detectors
+
+        measurements = self.allocate()
+        jobs = self._create_jobs(max_batch)
         positions = self.get_positions()
 
-        batch_generator = BatchGenerator(len(positions), max_batch)
+        with tqdm(total=len(self)) if show_progress else ExitStack() as pbar:
+            while jobs:
+                start, end = jobs.pop(0)
+                exit_probes = self._probe.multislice_at(positions[start:end], self._potential)
 
-        for start, stop in batch_generator.generate():
-            yield start, stop, positions[start:start + stop]
+                for detector, measurement in measurements.items():
+                    self.insert_new_measurement(measurement, start, end, detector.detect(exit_probes))
+
+                if show_progress:
+                    pbar.update(end - start)
+
+        return measurements
+
+    def finalise_measurements(self):
+        raise NotImplementedError()
+
+    @property
+    def measurements(self):
+        return self._measurements
 
 
 class CustomScan(ScanBase):
-    def __init__(self, positions):
-        ScanBase.__init__(self)
+    def __init__(self, probe, potential, positions, detectors=None):
+        ScanBase.__init__(self, probe=probe, potential=potential, detectors=detectors)
         self._positions = positions
 
     @property
-    def gpts(self):
-        return np.array([len(self._positions)])
+    def num_measurements(self):
+        return len(self._positions)
 
     def get_positions(self):
         return self._positions
@@ -77,9 +129,9 @@ class CustomScan(ScanBase):
 
 class LineScan(Grid, ScanBase):
 
-    def __init__(self, start: Sequence[float], end: Sequence[float], gpts: Union[int, Sequence[int]] = None,
+    def __init__(self, start: Sequence[float], end: Sequence[float],
+                 gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None, endpoint: bool = True):
-        ScanBase.__init__(self)
 
         start = np.array(start)
         end = np.array(end)
@@ -90,13 +142,21 @@ class LineScan(Grid, ScanBase):
         self._start = start
         self._direction, extent = self._direction_and_extent(start, end)
 
-        super().__init__(extent=extent, gpts=gpts, sampling=sampling, dimensions=1, endpoint=endpoint)
+        super().__init__(extent=extent, gpts=gpts, sampling=sampling, dimensions=1,
+                         endpoint=endpoint)
 
     def _direction_and_extent(self, start, end):
         extent = np.linalg.norm((end - start), axis=0)
         direction = (end - start) / extent
-
         return direction, extent
+
+    @property
+    def num_measurements(self):
+        return self.gpts[0]
+
+    @property
+    def shape(self):
+        return (self.gpts[0].item(),)
 
     @property
     def start(self) -> np.ndarray:
@@ -119,44 +179,65 @@ class LineScan(Grid, ScanBase):
     def direction(self) -> np.ndarray:
         return self._direction
 
-    def partition(self, partitions: int):
-        scans = {}
+    def allocate_measurements(self, detectors):
+        extent = self.extent * self.gpts / (self.gpts - 1) if self.endpoint else self.extent
+        measurements = {}
+        for detector in self._detectors:
+            array = np.zeros(self.shape + detector.output_shape)
+            measurement = ArrayWithGrid1D(array, extent=extent)
 
-        start = self.start
-        for i, n in enumerate(split_integer(self.gpts[0], partitions)):
+            if isinstance(detector.output, str):
+                measurement = measurement.write(detector.output)
+            measurements[detector] = measurement
 
-            if self._endpoint:
-                extent = self.sampling * (n - 1)
-            else:
-                extent = self.sampling * n
+        return measurements
 
-            end = start + self.direction * extent
-            scans[i] = LineScan(start, end, np.array([n]), endpoint=self._endpoint)
-            start = start + self.direction * self.sampling * n
+    def insert_new_measurement(self, measurement, start, end, new_measurement):
+        if isinstance(measurement, str):
+            with h5py.File(measurement, 'a') as f:
+                f['array'][start:end] = cp.asnumpy(new_measurement)
 
-        return scans
+        else:
+            measurement.array[start:end] = cp.asnumpy(new_measurement)
 
-    def get_positions(self) -> np.ndarray:
+    def get_all_positions(self) -> np.ndarray:
         x = np.linspace(self.start[0], self.start[0] + self.extent * self.direction[0], self.gpts[0],
                         endpoint=self._endpoint)
         y = np.linspace(self.start[1], self.start[1] + self.extent * self.direction[1], self.gpts[0],
                         endpoint=self._endpoint)
         return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
+    def add_to_mpl_plot(self, ax, linestyle='-', color='r', **kwargs):
+        ax.plot([self.start[0], self.end[0]], [self.start[1], self.end[1]], linestyle=linestyle, color=color, **kwargs)
+
 
 class GridScan(Grid, ScanBase):
 
-    def __init__(self, start, end, gpts=None, sampling=None, endpoint=False):
+    def __init__(self, probe, potential, start=None, end=None, gpts=None, sampling=None, endpoint=False,
+                 detectors=None):
+
+        if start is None:
+            start = (0, 0)
+
+        if (end is None) & (potential is not None):
+            end = potential.extent
+
         self._start = np.array(start)
         end = np.array(end)
 
         if (self._start.shape != (2,)) | (end.shape != (2,)):
             raise ValueError('scan start/end has wrong shape')
 
-        super().__init__(extent=end - start, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint)
+        super().__init__(probe=probe, potential=potential, extent=end - start, gpts=gpts, sampling=sampling,
+                         dimensions=2, endpoint=endpoint, detectors=detectors)
 
-    def __len__(self):
+    @property
+    def num_measurements(self):
         return np.prod(self.gpts)
+
+    @property
+    def shape(self):
+        return tuple(self.gpts)
 
     @property
     def start(self) -> np.ndarray:
@@ -175,26 +256,6 @@ class GridScan(Grid, ScanBase):
     def end(self, end: Sequence[float]):
         self.extent = np.array(end) - self.start
 
-    def partition(self, partitions: Tuple[int, int]):
-        scans = {}
-        start_n = self.start[0]
-        for i, n in enumerate(split_integer(self.gpts[0], partitions[0])):
-            start_m = self.start[1]
-            for j, m in enumerate(split_integer(self.gpts[1], partitions[1])):
-                start = np.array([start_n, start_m])
-
-                if self._endpoint:
-                    extent = self.sampling * (n - 1, m - 1)
-                else:
-                    extent = self.sampling * (n, m)
-
-                end = start + extent
-                scans[(i, j)] = GridScan(start, end, np.array([n, m]), endpoint=self._endpoint)
-                start_m = start_m + self.sampling[1] * m
-
-            start_n = start_n + self.sampling[0] * n
-        return scans
-
     def get_x_positions(self) -> np.ndarray:
         return np.linspace(self.start[0], self.end[0], self.gpts[0], endpoint=self._endpoint)
 
@@ -206,22 +267,28 @@ class GridScan(Grid, ScanBase):
         return np.stack((np.reshape(x, (-1,)),
                          np.reshape(y, (-1,))), axis=1)
 
+    def insert_new_measurement(self, measurement, start, end, new_measurement):
+        for row, slic, slic_1d in zip(*unravel_slice_2d(start, end, self.shape)):
+            if isinstance(measurement, str):
+                with h5py.File(measurement, 'a') as f:
+                    f['array'][row, slic] = cp.asnumpy(new_measurement[slic_1d])
+            else:
+                measurement.array[row, slic] = cp.asnumpy(new_measurement[slic_1d])
 
-def assemble_partitions_2d(partitions):
-    n = max([key[0] for key in partitions.keys()]) + 1
-    m = max([key[1] for key in partitions.keys()]) + 1
+    def add_to_mpl_plot(self, ax, alpha=.33, facecolor='r', edgecolor='r', **kwargs):
+        rect = Rectangle(tuple(self.start), *self.extent, alpha=alpha, facecolor=facecolor, edgecolor=edgecolor,
+                         **kwargs)
+        ax.add_patch(rect)
 
-    N = sum([partition.shape[0] for key, partition in partitions.items() if key[1] == 0])
-    M = sum([partition.shape[1] for key, partition in partitions.items() if key[0] == 0])
+    def allocate(self):
+        self._measurements = {}
+        extent = self.extent * (self.gpts) / (self.gpts - 1) if self.endpoint else self.extent
+        for detector in self._detectors:
+            array = np.zeros(self.shape + detector.output_shape)
+            measurement = ArrayWithGrid2D(array, extent=extent)
 
-    data = np.zeros((N, M) + partitions[(0, 0)].shape[2:])
+            if isinstance(detector.output, str):
+                measurement = measurement.write(detector.output)
+            self._measurements[detector] = measurement
 
-    l = 0
-    for i in range(n):
-        k = 0
-        for j in range(m):
-            partition = partitions[(i, j)]
-            data[l:l + partition.shape[0], k:k + partition.shape[1]] = partition
-            k += partition.shape[1]
-        l += partition.shape[0]
-    return data
+        return self._measurements

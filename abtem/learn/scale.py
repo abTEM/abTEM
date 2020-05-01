@@ -1,5 +1,5 @@
 import numpy as np
-from scipy import ndimage
+import cupy as cp
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import pdist
 
@@ -134,7 +134,7 @@ def normalized_cross_correlation_with_2d_gaussian(image, kernel_size, std):
     return response #np.float32(mask)
 
 
-def find_hexagonal_spots(image, lattice_constant=None, min_sampling=None, max_sampling=None, bins_per_symmetry=32,
+def find_hexagonal_spots(image, lattice_constant=None, min_sampling=None, max_sampling=None, bins_per_symmetry=16,
                          return_cartesian=False):
     xp = get_array_module(image)
 
@@ -163,13 +163,21 @@ def find_hexagonal_spots(image, lattice_constant=None, min_sampling=None, max_sa
     f = (f - f.min()) / (f.max() - f.min())
 
     peaks = []
-    for w in range(5, 11, 1):
+    for w in range(3, 11, 1):
         response = normalized_cross_correlation_with_2d_gaussian(f, w, w / 8)
         polar = image_as_polar_representation(response, inner=inner, outer=outer, symmetry=6,
                                               bins_per_symmetry=bins_per_symmetry)
-        #polar = polar - polar.min(axis=1, keepdims=True)
+        #polar = polar - polar.mean(axis=1, keepdims=True)
         peak = np.vstack(np.unravel_index((-polar).ravel().argsort()[:5], polar.shape)).T
         peaks.append(peak)
+
+    #import matplotlib.pyplot as plt
+
+    #plt.figure(figsize=(12,12))
+    #plt.imshow(np.log(1+1e10*cp.asnumpy(f)))
+    #plt.imshow(response[400:-400,400:-400])
+    #plt.imshow(cp.asnumpy(polar)[:50])
+    #plt.show()
 
     peaks = cp.asnumpy(xp.vstack(peaks))
 
@@ -186,37 +194,13 @@ def find_hexagonal_spots(image, lattice_constant=None, min_sampling=None, max_sa
     valid = (cluster_centers[:, 1] > -1e-12) & (cluster_centers[:, 1] < bins_per_symmetry) & (counts > 3)
     cluster_centers = cluster_centers[valid][np.argsort(-counts[valid])][:2]
 
-    # print(cluster_centers)
-    #
-    # import matplotlib.pyplot as plt
-
-    # response -= response.min()
-    #
-    # plt.imshow(np.log(1+1e4*cp.asnumpy(response).T)[200:-200,200:-200])
-    # plt.show()
-    # plt.imshow(cp.asnumpy(polar).T)
-    # plt.plot(*cp.asnumpy(peaks).T, 'rx')
-    # plt.plot(*cluster_centers.T, 'bv')
-    # plt.show()
-
-    # import scipy.spatial.distance
-    # print(peaks)
-    # print((peaks[:, 0][:, None] - peaks[:, 0][None]) ** 2 <
-    #       (peaks[:, 0][:, None] - peaks[:, 0][None] - bins_per_symmetry) ** 2)
-    # print(scipy.spatial.distance.pdist(peaks, 'cityblock'))
-
-
     cluster_centers[:, 0] += inner - .5
     cluster_centers[:, 1] = (cluster_centers[:, 1] / (bins_per_symmetry * 6) * 2 * np.pi) % (2 * np.pi / 6)
 
-    #print(cluster_centers)
-
     if len(cluster_centers) > 1:
-        #print('a')
         radial_ratio = np.min(cluster_centers[:, 0]) / np.max(cluster_centers[:, 0])
         angle_diff = np.max(cluster_centers[:, 1]) - np.min(cluster_centers[:, 1])
         if (np.abs(radial_ratio * np.sqrt(3) - 1) < .1) & (np.abs(angle_diff - np.pi / 6) < np.pi / 10):
-            #print('b')
             spot_radial, spot_angle = cluster_centers[np.argmin(cluster_centers[:, 0])]
         else:
             spot_radial, spot_angle = cluster_centers[0]

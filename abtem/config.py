@@ -11,3 +11,8 @@ elif DTYPE == np.float64:
     COMPLEX_DTYPE = np.complex128
 else:
     raise RuntimeError('')
+
+if CUPY_DTYPE == cp.float32:
+    COMPLEX_DTYPE = cp.complex64
+else:
+    raise RuntimeError('')

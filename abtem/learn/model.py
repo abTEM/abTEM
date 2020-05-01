@@ -10,6 +10,9 @@ from abtem.learn.unet import GaussianFilter2d, PeakEnhancementFilter
 from abtem.learn.utils import pytorch_to_cupy, cupy_to_pytorch
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import pdist
+from cupyx.scipy.ndimage import zoom
+from abtem.learn.utils import pad_to_size
+
 
 def merge_dopants_into_contamination(segmentation):
     binary = segmentation != 0
@@ -59,22 +62,27 @@ class AtomRecognitionModel:
 
     def prepare_image(self, image, weights=None):
         image = cp.asarray(image)
-        sampling = .05  # self._scale_model(image)
+        #sampling = self._scale_model(image)
+        sampling = .028
+
         if weights is None:
             image = (image - image.mean()) / image.std()
         else:
             image = weighted_normalization(image, weights)
 
-        # image = zoom(image, zoom=sampling / self._training_sampling)
-        image, padding = add_margin_to_image(image, self._margin)
-        image = cp.stack((image, cp.zeros_like(image)))
-        image[1, :padding[0][0]] = 1
-        image[1, -padding[0][1]:] = 1
-        image[1, :, :padding[1][0]] = 1
-        image[1, :, -padding[1][1]:] = 1
+        image = zoom(image, zoom=sampling / self._training_sampling)
+        image, padding = pad_to_size(image, image.shape[0] + 8,
+                                             image.shape[1] + 8, mode='reflect', n=16)
+
+        #image, padding = add_margin_to_image(image, self._margin)
+        #image = cp.stack((image, cp.zeros_like(image)))
+        #image[1, :padding[0][0]] = 1
+        #image[1, -padding[0][1]:] = 1
+        #image[1, :, :padding[1][0]] = 1
+        #image[1, :, -padding[1][1]:] = 1
 
         image = cupy_to_pytorch(image)
-        image = image[None]
+        image = image[None,None]
         return image, sampling, padding
 
     def __call__(self, image):
@@ -83,45 +91,37 @@ class AtomRecognitionModel:
     def predict(self, image):
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
+        peak_enhancement_filter = PeakEnhancementFilter(1.8, 6, 25).to(device)
+
         with torch.no_grad():
+
             preprocessed, sampling, padding = self.prepare_image(image.copy())
+
+            #features = self._model(preprocessed)
+            #segmentation = nn.Softmax(1)(self._segmentation_head(features))
+
+            #weights = pytorch_to_cupy(segmentation[0, 0])
+            #weights = weights[padding[0][0]:-padding[0][1],padding[1][0]:-padding[1][1]]
+
+            #preprocessed, sampling, padding = self.prepare_image(image, weights)
+
+            #markers = torch.zeros((2,1) + preprocessed.shape[2:], device=device)
+            #segmentation = torch.zeros((2,) + (3,) + preprocessed.shape[2:], device=device)
 
             features = self._model(preprocessed)
             segmentation = nn.Softmax(1)(self._segmentation_head(features))
+            markers = self._marker_head(features)
 
-            weights = pytorch_to_cupy(segmentation[0, 0])
-            weights = weights[padding[0][0]:-padding[0][1],padding[1][0]:-padding[1][1]]
+            segmentation[:, 1] = 0
 
-            preprocessed, sampling, padding = self.prepare_image(image, weights)
+            markers = peak_enhancement_filter(markers)
 
-            markers = torch.zeros((2,1) + preprocessed.shape[2:], device=device)
-            segmentation = torch.zeros((2,) + (3,) + preprocessed.shape[2:], device=device)
-
-            for i in range(2):
-                features = self._model(preprocessed)
-                segmentation[i] = nn.Softmax(1)(self._segmentation_head(features))
-                markers[i] = self._marker_head(features)
-
-            segmentation = segmentation.mean(0)
-            markers_mean = markers.mean(0)
-
-            base_filter = GaussianFilter2d(7)
-            base_filter = base_filter.to(device)
-            peak_enhancement_filter = PeakEnhancementFilter(base_filter, 20, 1.4)
-            markers_mean = peak_enhancement_filter(markers_mean[None])[0]
-
-            for i in range(markers.shape[0]):
-                markers[i] = base_filter(markers[i][None])
-
-            markers_variance = markers.std(0)
-
-            markers_mean = pytorch_to_cupy(markers_mean)
-            markers_variance = pytorch_to_cupy(markers_variance)
+            markers = pytorch_to_cupy(markers)
             segmentation = pytorch_to_cupy(segmentation)
 
-        points = cp.array(cp.where(markers_mean[0] > .2)).T
+        points = cp.array(cp.where(markers[0,0] > .2)).T
 
-        segmentation = cp.argmax(segmentation, axis=0)
+        segmentation = cp.argmax(segmentation[0], axis=0)
 
         points = cp.asnumpy(points)
         segmentation = cp.asnumpy(segmentation)
@@ -145,5 +145,5 @@ class AtomRecognitionModel:
         points = np.vstack((points, contamination))
         labels = np.concatenate((labels, np.ones(len(contamination))))
 
-        points = (points - padding[0])
-        return points[:, ::-1], labels, segmentation
+        points = (points - padding[0]) * self._training_sampling / sampling
+        return points[:, ::-1], labels

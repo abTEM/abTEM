@@ -1,12 +1,9 @@
-import functools
-
 import cupy as cp
 import cupyx.scipy.ndimage
 import numpy as np
-
-from abtem.learn.filters import gaussian_filter_2d
-from abtem.noise import bandpass_noise
 from abtem.learn.utils import pad_to_size
+from abtem.noise import bandpass_noise
+from scipy.ndimage import gaussian_filter
 
 
 class RandomNumberGenerator:
@@ -51,10 +48,7 @@ class RandomNormal(RandomNumberGenerator):
         self._value = max((np.random.randn() * self.std + self.mean, self.min_value))
 
 
-class DataModifier:
-
-    def apply(self, image, label):
-        raise NotImplementedError()
+class Augmentation:
 
     def randomize(self, random_number_generator):
         try:
@@ -62,59 +56,47 @@ class DataModifier:
         except AttributeError:
             return random_number_generator
 
-    def __call__(self, image, label):
-        # assert len(images) == len(labels)
+    def apply(self, example):
+        raise NotImplementedError()
 
-        # for i in range(len(images)):
-        #     images[i], labels[i] = self.apply(images[i], labels[i])
-
-        return self.apply(image, label)
+    def __call__(self, example):
+        self.apply(example)
 
 
-class SequentialDataModifiers(DataModifier):
+class SequentialAugmentations(Augmentation):
 
     def __init__(self, modifiers):
         super().__init__()
         self.modifiers = modifiers
 
-    def __call__(self, image, label):
+    def apply(self, example):
         for modifier in self.modifiers:
-            image, label = modifier(image, label)
-
-        return image, label
+            modifier.apply(example)
 
 
-class RandomCrop(DataModifier):
+class RandomCrop(Augmentation):
 
     def __init__(self, new_shape):
         self.new_shape = new_shape
         super().__init__()
 
-    def apply(self, image, label):
+    def apply(self, example):
         shift_x = np.random.rand()
         shift_y = np.random.rand()
 
-        old_shape = image.shape
+        old_shape = example.image.shape
 
         if (old_shape[0] < self.new_shape[0]) | (old_shape[1] < self.new_shape[1]):
-            raise RuntimeError()
+            return example
 
         shift_x = np.round(shift_x * (old_shape[0] - self.new_shape[0])).astype(np.int)
         shift_y = np.round(shift_y * (old_shape[1] - self.new_shape[1])).astype(np.int)
+        example.image = example.image[shift_x:shift_x + self.new_shape[0], shift_y:shift_y + self.new_shape[1]]
 
-        shape = image.shape
-
-        image = image[shift_x:shift_x + self.new_shape[0], shift_y:shift_y + self.new_shape[1]]
-
-        if label:
-            sampling = np.linalg.norm(label.cell, axis=0) / np.array(shape)
-            label.positions -= np.array((shift_x * sampling[0], shift_y * sampling[1]))
-            label.cell *= np.asarray(self.new_shape) / np.asarray(old_shape)
-
-        return image, label
+        example.positions -= np.array((shift_x, shift_y))
 
 
-class PoissonNoise(DataModifier):
+class PoissonNoise(Augmentation):
 
     def __init__(self, mean, background):
         self._mean = mean
@@ -128,15 +110,17 @@ class PoissonNoise(DataModifier):
     def background(self):
         return self.randomize(self._background)
 
-    def apply(self, image, label):
+    def apply(self, example):
+        image = example.image
+        xp = cp.get_array_module(image)
         b = - image.min() + self.background
         image = image + b
         a = image.shape[0] * image.shape[1] / image.sum() * self.mean
-        image = cp.random.poisson(image * a)
-        return (image / a - b).astype(cp.float32), label
+        image = xp.random.poisson(image * a)
+        example.image[:] = (image / a - b).astype(xp.float32)
 
 
-class ScanNoise(DataModifier):
+class ScanNoise(Augmentation):
 
     def __init__(self, periodicity, amount):
         self._periodicity = periodicity
@@ -153,22 +137,24 @@ class ScanNoise(DataModifier):
 
     @staticmethod
     def independent_roll(array, shifts):
+        xp = cp.get_array_module(array)
         shifts[shifts < 0] += array.shape[1]
-        x = cp.arange(array.shape[0])[:, None]
-        y = cp.arange(array.shape[1])[None] - shifts[:, None]
+        x = xp.arange(array.shape[0])[:, None]
+        y = xp.arange(array.shape[1])[None] - shifts[:, None]
         result = array[x, y]
         return result
 
-    def apply(self, image, label):
-        noise = bandpass_noise(0, image.shape[1], (image.shape[1],), xp=cp.get_array_module(image))
+    def apply(self, example):
+        image = example.image
+        xp = cp.get_array_module(image)
+        noise = bandpass_noise(0, image.shape[1], (image.shape[1],), xp=xp)
         if self.periodicity > 1:
-            noise *= bandpass_noise(0, self.periodicity, (image.shape[1],), xp=cp.get_array_module(image))
-        noise *= self.amount / cp.std(noise)
-        image = self.independent_roll(image, noise.astype(cp.int32))
-        return image, label
+            noise *= bandpass_noise(0, self.periodicity, (image.shape[1],), xp=xp)
+        noise *= self.amount / xp.std(noise)
+        example.image[:] = self.independent_roll(image, noise.astype(np.int32))
 
 
-class Warp(DataModifier):
+class Warp(Augmentation):
 
     def __init__(self, periodicity, amount, axis=0):
         self._periodicity = periodicity
@@ -184,105 +170,106 @@ class Warp(DataModifier):
     def amount(self):
         return self.randomize(self._amount)
 
-    @functools.lru_cache(1)
-    def get_coordinates(self, shape):
-        x = cp.linspace(0, shape[0], shape[0], endpoint=False)
-        y = cp.linspace(0, shape[1], shape[1], endpoint=False)
-        x, y = cp.meshgrid(x, y)
-        return cp.vstack([x.ravel(), y.ravel()])
+    def apply(self, example):
+        image = example.image
+        xp = cp.get_array_module(image)
+        scipy = cupyx.scipy.get_array_module(image)
 
-    def apply(self, image, label):
         noise = bandpass_noise(0, self.periodicity, image.shape, xp=cp.get_array_module(image))
 
-        coordinates = self.get_coordinates(image.shape).copy()[::-1]
+        x = xp.linspace(0, image.shape[0], image.shape[0], endpoint=False)
+        y = xp.linspace(0, image.shape[1], image.shape[1], endpoint=False)
+        x, y = xp.meshgrid(x, y)
+        coordinates = xp.vstack([y.ravel(), x.ravel()])
+
         coordinates[self.axis] += noise.ravel() * self.amount
 
         shape = image.shape
 
-        coordinates[0] = cp.clip(coordinates[0], 0, image.shape[0] - 1).astype(cp.int)
-        coordinates[1] = cp.clip(coordinates[1], 0, image.shape[1] - 1).astype(cp.int)
-        image = cupyx.scipy.ndimage.map_coordinates(image, coordinates, order=1)
+        coordinates[0] = xp.clip(coordinates[0], 0, image.shape[0] - 1).astype(cp.int)
+        coordinates[1] = xp.clip(coordinates[1], 0, image.shape[1] - 1).astype(cp.int)
 
-        image = image.reshape(shape)
+        image = scipy.ndimage.map_coordinates(image, coordinates, order=1)
 
-        if label:
-            positions = label.positions
-            sampling = np.linalg.norm(label.cell, axis=0) / np.array(noise.shape)
+        example.image = image.reshape(shape)
 
-            rounded = np.around(positions / sampling).astype(np.int)
-            rounded[:, 0] = np.clip(rounded[:, 0], 0, shape[0] - 1)
-            rounded[:, 1] = np.clip(rounded[:, 1], 0, shape[1] - 1)
+        positions = example.positions
+        rounded = np.around(positions).astype(np.int)
+        rounded[:, 0] = np.clip(rounded[:, 0], 0, shape[0] - 1)
+        rounded[:, 1] = np.clip(rounded[:, 1], 0, shape[1] - 1)
 
-            positions[:, self.axis] -= cp.asnumpy(noise)[rounded[:, 0], rounded[:, 1]] * sampling[self.axis] * self.amount
-        return image, label
+        positions[:, self.axis] -= cp.asnumpy(noise)[rounded[:, 0], rounded[:, 1]] * self.amount
 
 
-class PadToSize(DataModifier):
+class PadToSize(Augmentation):
 
     def __init__(self, shape):
         self.shape = shape
         super().__init__()
 
-    def apply(self, image, label):
-        if label:
-            raise RuntimeError()
-
-        return pad_to_size(image, self.shape[0], self.shape[1]), label
+    def apply(self, example):
+        example.image, padding = pad_to_size(example.image, self.shape[0], self.shape[1], mode='reflect')
+        example.positions[:] += [padding[0], padding[2]]
 
 
-class Flip(DataModifier):
-
-    def __init__(self):
-        super().__init__()
-
-    def apply(self, image, label):
-        if label:
-            sampling = np.linalg.norm(label.cell, axis=0)[0] / np.array(image.shape)
-
-        if np.random.rand() < .5:
-            image = image[::-1, :]
-            if label:
-                label.positions[:, 0] = image.shape[0] * sampling[0] - label.positions[:, 0]
-
-        if np.random.rand() < .5:
-            image = image[:, ::-1]
-            if label:
-                label.positions[:, 1] = image.shape[1] * sampling[1] - label.positions[:, 1]
-
-        return image, label
-
-
-class Rotate90(DataModifier):
-
-    def __init__(self):
-        super().__init__()
-
-    def apply(self, image, label):
-
-        k = np.random.randint(0, 3)
-
-        if k:
-            image = cp.rot90(image, k=k)
-            if label:
-                label.rotate(k * 90)
-
-        return image, label
-
-
-class Border(DataModifier):
+class PadByAmount(Augmentation):
 
     def __init__(self, amount):
         self.amount = amount
+        super().__init__()
 
-    def apply(self, image, label):
-        image[:self.amount] = 0.
-        image[-self.amount:] = 0.
-        image[:, :self.amount] = 0.
-        image[:, -self.amount:] = 0.
-        return image, label
+    def apply(self, example):
+        example.image, padding = pad_to_size(example.image, example.shape[0] + self.amount,
+                                             example.shape[1] + self.amount, mode='reflect', n=16)
+        example.positions[:] += [padding[0], padding[2]]
 
 
-class Stain(DataModifier):
+class Flip(Augmentation):
+
+    def __init__(self):
+        super().__init__()
+
+    def apply(self, example):
+        if np.random.rand() < .5:
+            example.image[:] = example.image[::-1, :]
+            example.positions[:, 0] = example.image.shape[0] - example.positions[:, 0]
+
+        if np.random.rand() < .5:
+            example.image[:] = example.image[:, ::-1]
+            example.positions[:, 1] = example.image.shape[1] - example.positions[:, 1]
+
+        return example
+
+
+class Rotate90(Augmentation):
+
+    def __init__(self):
+        super().__init__()
+
+    def apply(self, example):
+        xp = cp.get_array_module(example)
+        k = np.random.randint(0, 3)
+
+        if k:
+            example.image = xp.rot90(example.image, k=k).copy()
+
+            if k == 1:
+                old_positions = example.positions.copy() - np.array(example.image.shape)[::-1] / 2
+                example.positions[:, 0] = - old_positions[:, 1]
+                example.positions[:, 1] = old_positions[:, 0]
+            elif k == 2:
+                old_positions = example.positions.copy() - np.array(example.image.shape) / 2
+                example.positions[:, 0] = - old_positions[:, 0]
+                example.positions[:, 1] = - old_positions[:, 1]
+            else:
+                old_positions = example.positions.copy() - np.array(example.image.shape)[::-1] / 2
+                example.positions[:, 0] = old_positions[:, 1]
+                example.positions[:, 1] = - old_positions[:, 0]
+
+            example.positions += np.array(example.image.shape) / 2
+
+
+class Stain(Augmentation):
 
     def __init__(self, periodicity, amount):
         self._periodicity = periodicity
@@ -297,22 +284,25 @@ class Stain(DataModifier):
     def amount(self):
         return self.randomize(self._amount)
 
-    def apply(self, image, label):
+    def apply(self, example):
+        image = example.image
         noise = bandpass_noise(0, self.periodicity, image.shape, xp=cp.get_array_module(image))
         noise *= image.std() / noise.std()
-        return image + self.amount * noise, label
+        example.image = example.image + self.amount * noise
 
 
-class Normalize(DataModifier):
+class Normalize(Augmentation):
 
     def __init__(self):
         super().__init__()
 
-    def apply(self, image, label):
-        return (image - cp.mean(image)) / cp.std(image), label
+    def apply(self, example):
+        image = example.image
+        xp = cp.get_array_module(image)
+        example.image = (example.image - xp.mean(image)) / xp.std(image)
 
 
-class Add(DataModifier):
+class Add(Augmentation):
 
     def __init__(self, amount):
         self._amount = amount
@@ -322,11 +312,11 @@ class Add(DataModifier):
     def amount(self):
         return self.randomize(self._amount)
 
-    def apply(self, image, label):
-        return image + self.amount, label
+    def apply(self, example):
+        example.image += self.amount
 
 
-class Multiply(DataModifier):
+class Multiply(Augmentation):
 
     def __init__(self, multiplier):
         self._multiplier = multiplier
@@ -336,11 +326,11 @@ class Multiply(DataModifier):
     def multiplier(self):
         return self.randomize(self._multiplier)
 
-    def __call__(self, image, label):
-        return image * self.multiplier, label
+    def apply(self, example):
+        example.image *= self.multiplier
 
 
-class Blur(DataModifier):
+class Blur(Augmentation):
 
     def __init__(self, sigma):
         self._sigma = sigma
@@ -350,5 +340,5 @@ class Blur(DataModifier):
     def sigma(self):
         return self.randomize(self._sigma)
 
-    def __call__(self, image, label):
-        return gaussian_filter_2d(image, self.sigma), label
+    def apply(self, example):
+        example.image = gaussian_filter(example.image, self.sigma)

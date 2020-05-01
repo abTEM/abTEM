@@ -85,7 +85,7 @@ def plot_ctf(ctf, max_k, ax=None, phi=0, n=1000):
     aperture = calculate_aperture(alpha, ctf.semiangle_cutoff, ctf.rolloff)
     temporal_envelope = calculate_temporal_envelope(alpha, ctf.wavelength, ctf.focal_spread)
     spatial_envelope = calculate_spatial_envelope(alpha, phi, ctf.wavelength, ctf.angular_spread, ctf.parameters)
-    gaussian_envelope = calculate_gaussian_envelope(alpha, ctf.wavelength, ctf.sigma)
+    gaussian_envelope = calculate_gaussian_envelope(alpha, ctf.wavelength, ctf.gaussian_spread)
     envelope = aperture * temporal_envelope * spatial_envelope * gaussian_envelope
 
     if ax is None:
@@ -102,10 +102,11 @@ def plot_ctf(ctf, max_k, ax=None, phi=0, n=1000):
     if ctf.angular_spread > 0.:
         ax.plot(k, spatial_envelope, label='Spatial envelope')
 
-    if ctf.sigma > 0.:
+    if ctf.gaussian_spread > 0.:
+        #print(gaussian_envelope)
         ax.plot(k, gaussian_envelope, label='Gaussian envelope')
 
-    if np.any(envelope != 1.):
+    if not np.allclose(envelope, 1.):
         ax.plot(k, envelope, label='Product envelope')
 
     ax.set_xlabel('k [1 / Å]')

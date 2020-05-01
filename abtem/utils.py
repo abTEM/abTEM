@@ -1,6 +1,5 @@
 import numbers
 
-import numba as nb
 import numpy as np
 from ase import units
 from scipy import ndimage
@@ -66,11 +65,9 @@ def energy2sigma(energy):
             units._hplanck * units.s * units.J) ** 2)
 
 
-# def complex_exponential(x):
-#     return ne.evaluate('exp(1.j * x)')
+def cosine_window(x, cutoff, rolloff, attenuate='high'):
+    xp = cp.get_array_module(x)
 
-
-def cosine_window(x, cutoff, rolloff, attenuate='high', xp=np):
     rolloff *= cutoff
     if attenuate == 'high':
         array = .5 * (1 + xp.cos(xp.pi * (x - cutoff - rolloff) / rolloff))
@@ -88,17 +85,22 @@ def cosine_window(x, cutoff, rolloff, attenuate='high', xp=np):
 
 def complex_exponential(x):
     xp = get_array_module(x)
-    df_exp = xp.empty(x.shape, dtype=COMPLEX_DTYPE)
+    result = xp.empty(x.shape, dtype=COMPLEX_DTYPE)
     trig_buf = xp.cos(x)
-    df_exp.real[:] = trig_buf
+    result.real[:] = trig_buf
     xp.sin(x, out=trig_buf)
-    df_exp.imag[:] = trig_buf
-    return df_exp
+    result.imag[:] = trig_buf
+    return result
 
 
-@nb.vectorize([nb.float32(nb.complex64), nb.float64(nb.complex128)])
+# @nb.vectorize([nb.float32(nb.complex64), nb.float64(nb.complex128)])
 def abs2(x):
     return x.real ** 2 + x.imag ** 2
+
+
+# @nb.cuda.jit([nb.float32(nb.complex64), nb.float64(nb.complex128)], target='cuda')
+# def abs2_gpu(x):
+#    return x.real ** 2 + x.imag ** 2
 
 
 def coordinates_in_disc(radius, shape=None):
@@ -153,8 +155,19 @@ def split_integer(n, m):
                 v.append(pp + 1)
             else:
                 v.append(pp)
-
         return v
+
+
+def label_to_index_generator(labels, first_label=0):
+    labels = labels.flatten()
+    labels_order = labels.argsort()
+    sorted_labels = labels[labels_order]
+    indices = np.arange(0, len(labels) + 1)[labels_order]
+    index = np.arange(first_label, np.max(labels) + 1)
+    lo = np.searchsorted(sorted_labels, index, side='left')
+    hi = np.searchsorted(sorted_labels, index, side='right')
+    for i, (l, h) in enumerate(zip(lo, hi)):
+        yield np.sort(indices[l:h])
 
 
 class BatchGenerator:
@@ -162,7 +175,6 @@ class BatchGenerator:
     def __init__(self, n_items, max_batch_size):
         self._n_items = n_items
         self._n_batches = (n_items + (-n_items % max_batch_size)) // max_batch_size
-        print(n_items)
         self._batch_size = (n_items + (-n_items % self.n_batches)) // self.n_batches
 
     @property

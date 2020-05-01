@@ -3,6 +3,11 @@ How to use
 
 Welcome to the introductory abTEM tutorials.
 
+These tutorials are meant to give an in-depth introduction to the features of abTEM, as well as a basic introduction to image simulations in general.
+
+It should be noted that following this tutorials requires basic understanding of Python.
+
+
 .. toctree::
     :maxdepth: 1
     :caption: Contents:

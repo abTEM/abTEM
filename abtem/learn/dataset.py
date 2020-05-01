@@ -1,120 +1,78 @@
+import bisect
+import functools
+import random
+import os
+
+import cupy as cp
 import numpy as np
-from skimage.morphology import watershed
+import torch
+from abtem.cudakernels import superpose_gaussians
+from abtem.learn.utils import cupy_to_pytorch
+from abtem.utils import BatchGenerator
+from abtem.learn.augment import SequentialAugmentations
 
-from abtem.interpolation import interpolation_kernel_parallel
-from abtem.learn.augment import RandomCropStack
-import numbers
+class Example:
 
+    def __init__(self, image, sampling, positions, labels):
+        self.sampling = sampling
+        self.image = image
+        self.positions = positions
+        self.labels = labels
 
-def interpolate_radial_functions(array, r, values, positions, sampling, thread_safe=True):
-    block_margin = int(r[-1] / min(sampling))
-    block_size = 2 * block_margin + 1
+    @property
+    def shape(self):
+        return self.image.shape
 
-    corner_positions = np.round(positions[:, :2] / sampling).astype(np.int) - block_margin
-    block_positions = positions[:, :2] - sampling * corner_positions
+    def get_density(self, sigma):
+        array = cupy_to_pytorch(superpose_gaussians(self.positions, self.shape, sigma))
+        return torch.clamp(array, 0, 1.05)[None, None]
 
-    x = np.linspace(0., block_size * sampling[0], block_size, endpoint=False)
-    y = np.linspace(0., block_size * sampling[1], block_size, endpoint=False)
+    @functools.lru_cache(1)
+    def get_segmentation(self, sigma, num_classes):
+        array = cp.zeros((num_classes,) + self.shape, dtype=cp.float32)
+        for label in range(array.shape[0]):
+            positions = self.positions[self.labels == label]
+            if len(positions) > 0:
+                array[label] = superpose_gaussians(positions, tuple(array.shape[1:]), sigma)
 
-    if values.shape == (len(r),):
-        values = np.tile(values, (len(corner_positions), 1))
+        array /= array.sum(axis=0, keepdims=True) + 1e-3
+        array = cupy_to_pytorch(array)
+        return array[None]
 
-    interpolation_kernel_parallel(array, r, values, corner_positions, block_positions, x, y, thread_safe)
+    def get_image(self):
+        return torch.from_numpy(self.image)[None, None].to('cuda:0')
 
+    def get_class_weights(self, class_weights, sigma):
+        array = torch.zeros((1, 1,) + self.shape, device='cuda:0')
+        for i, value in enumerate(class_weights):
+            array[0, 0] += self.get_segmentation(sigma, len(class_weights))[0, i] * value
+        return array
 
-def gaussian_marker_labels(points, width, gpts):
-    if isinstance(gpts, numbers.Number):
-        gpts = (gpts,) * 2
+    def write(self, path):
+        np.savez(path, image=self.image, positions=self.positions, labels=self.labels)
 
-    gpts = np.array(gpts)
-    extent = np.diag(points.cell)
-    sampling = extent / gpts
-    markers = np.zeros(gpts)
+    @classmethod
+    def read(cls, path):
+        with np.load(path) as f:
+            return cls(image=f['image'], sampling=f['sampling'], positions=f['postions'], labels=f['labels'])
 
-    r = np.linspace(0, 4 * width, 100)
-    values = np.exp(-r ** 2 / (2 * width ** 2))
-
-    interpolate_radial_functions(markers, r, values, points.positions, sampling)
-    return markers
-
-
-def marker_labels(points, width, gpts):
-    if isinstance(gpts, numbers.Number):
-        gpts = (gpts,) * 2
-
-    gpts = np.array(gpts)
-    extent = np.diag(points.cell)
-    sampling = extent / gpts
-    markers = np.zeros(gpts)
-
-
-
-    #interpolate_radial_functions(markers, r, values, points.positions, sampling)
-    return markers
-
-
-def voronoi_labels(points, gpts):
-    if len(points) == 0:
-        return np.zeros(gpts, dtype=np.int)
-
-    gpts = np.array(gpts)
-    margin = np.ceil(
-        np.max((np.abs(np.min(points.scaled_positions * gpts)),
-                np.max(points.scaled_positions * gpts - gpts)))).astype(np.int)
-    markers = np.zeros(gpts + 2 * margin, dtype=np.int)
-    indices = (points.scaled_positions * gpts + margin).astype(int)
-    markers[indices[:, 0], indices[:, 1]] = 1 + points.labels
-    labels = watershed(np.zeros_like(markers), markers, compactness=1000)
-    labels = labels[margin:-margin, margin:-margin]
-    return labels - 1
+    def copy(self):
+        self.get_segmentation.cache_clear()
+        return self.__class__(image=self.image.copy(), sampling=self.sampling, positions=self.positions.copy(),
+                              labels=self.labels.copy())
 
 
-def generate_indices(labels):
-    labels = labels.flatten()
-    labels_order = labels.argsort()
-    sorted_labels = labels[labels_order]
-    indices = np.arange(0, len(labels) + 1)[labels_order]
-    index = np.arange(0, np.max(labels) + 1)
-    lo = np.searchsorted(sorted_labels, index, side='left')
-    hi = np.searchsorted(sorted_labels, index, side='right')
-    for i, (l, h) in enumerate(zip(lo, hi)):
-        yield np.sort(indices[l:h])
+class Dataset:
 
-
-def labels_to_masks(labels, n_classes):
-    masks = np.zeros((labels.shape[0], n_classes,) + (np.prod(labels.shape[1:]),), dtype=bool)
-
-    for i in range(labels.shape[0]):
-        for j, indices in enumerate(generate_indices(labels[i])):
-            masks[i, j, indices] = True
-
-    return masks.reshape((labels.shape[0], n_classes,) + labels.shape[1:])
-
-
-class DataGenerator:
-
-    def __init__(self, images, labels, crop, priors=None, batch_size=8, augmentations=None):
-
-        self._num_examples = len(images)
-        for label in labels:
-            assert len(label) == self._num_examples
-
-        self._images = images
-        self._labels = labels
-        self._priors = priors
-
-        if augmentations is None:
-            augmentations = []
-
-        self._augmentations = augmentations
-
-        self._num_iter = self._num_examples // batch_size
+    def __init__(self, examples, batch_size=1, augmentations=None, shuffle=True):
+        self._examples = examples
+        self.shuffle = shuffle
         self._batch_size = batch_size
+        self._augmentations = augmentations
+        self._epoch_data = self._examples
 
-        self._indices = np.arange(self.num_examples)
-        self._global_iteration = 280
-
-        self._crop = RandomCropStack(out_shape=crop)
+    def __len__(self):
+        return len(self._examples)
 
     @property
     def batch_size(self):
@@ -122,41 +80,103 @@ class DataGenerator:
 
     @property
     def num_examples(self):
-        return len(self._images)
+        return len(self._examples)
+
+    @property
+    def augmentations(self):
+        return self._augmentations
+
+    @augmentations.setter
+    def augmentations(self, augmentations):
+        if isinstance(augmentations, list):
+            augmentations = SequentialAugmentations(augmentations)
+        self._augmentations = augmentations
+
+    def append(self, example):
+        self._examples.append(example)
+
+    def write(self, base_path):
+        for i, example in enumerate(self._examples):
+            path = base_path + '_{}'.format(str(i).zfill(len(str(len(self._examples)))))
+            np.savez(path, image=example.image, sampling=example.sampling, positions=example.positions,
+                     labels=example.labels)
+
+    @classmethod
+    def read(cls, base_path):
+        dataset = cls([])
+        for filename in os.listdir(base_path):
+            _, file_extension = os.path.splitext(filename)
+            if file_extension != '.npz':
+                continue
+
+            with np.load(os.path.join(base_path, filename)) as f:
+                dataset.append(
+                    Example(image=f['image'], sampling=f['sampling'], positions=f['positions'], labels=f['labels']))
+        return dataset
 
     def __iter__(self):
-        return self
+        indices = np.arange(len(self), dtype=np.int)
+        if self.shuffle:
+            np.random.shuffle(indices)
 
-    def __next__(self):
-        epoch_iter = (self._global_iteration) % (self.num_examples // self.batch_size)
+        batch_generator = BatchGenerator(len(indices), max_batch_size=self._batch_size)
 
-        if epoch_iter == 0:
-            np.random.shuffle(self._indices)
+        for start, size in batch_generator.generate():
+            batch = []
+            batch_indices = indices[start: start + size]
 
-        self._crop.randomize()
 
-        batch_indices = self._indices[epoch_iter * self.batch_size:(epoch_iter + 1) * self.batch_size]
+            for i in batch_indices:
+                example = self._examples[i]
+                if self._augmentations:
+                    self._augmentations(example.copy())
+                batch.append(example)
 
-        batch_images = self._crop(self._images[batch_indices].copy())
-        batch_labels = [self._crop(label[batch_indices].copy()) for label in self._labels]
-        batch_priors = self._priors[batch_indices]
+            yield batch
 
-        for augmentation in self._augmentations:
-            augmentation.randomize()
-            for i in range(len(batch_indices)):
-                augmented = augmentation(batch_images[i])
-                batch_images[i, :, :augmented.shape[1], :augmented.shape[2]] = augmented
 
-                if not augmentation.apply_to_label:
-                    continue
+class DatasetWithHardExamples(Dataset):
 
-                for j in range(len(batch_labels)):
-                    augmented = augmentation(batch_labels[j][i])
-                    batch_labels[j][i, :, :augmented.shape[1], :augmented.shape[2]] = augmented
+    def __init__(self, data, batch_size, augmentation=None, preprocessing_func=None, preprocessing_kwargs=None,
+                 num_hard_examples=0, max_repeat_hard_examples=1, shuffle=True):
+        self._num_hard_examples = num_hard_examples
+        self._max_repeat_hard_examples = max_repeat_hard_examples
+        self._hard_examples = []
 
-        self._global_iteration += 1
+        super().__init__(data, batch_size=batch_size, augmentation=augmentation, preprocessing_func=preprocessing_func,
+                         preprocessing_kwargs=preprocessing_kwargs, shuffle=shuffle)
 
-        batch_images = batch_images.astype(np.float32)
-        batch_labels = [bl.astype(np.float32) for bl in batch_labels]
+    @property
+    def hard_examples(self):
+        return self._hard_examples
 
-        return batch_images, batch_labels, batch_priors
+    def reset(self):
+        self._epoch_data = self._data.copy()
+        for example in self._hard_examples:
+            example = example[2].copy()
+            example.augment = False
+            self._epoch_data += [example]
+
+        self._hard_examples = []
+        self._k = 0
+
+        super().reset()
+
+    def collect_hard_example(self, metrics, examples, extra_data=None):
+        for i, (metric, example) in enumerate(zip(metrics, examples)):
+
+            if len(self._hard_examples) < self._num_hard_examples:
+                max_hard_metric = np.inf
+            else:
+                max_hard_metric = self._hard_examples[-1][0]
+
+            if metric < max_hard_metric:
+                if len(self._hard_examples) == self._num_hard_examples:
+                    self._hard_examples.pop(-1)
+
+                if extra_data:
+                    bisect.insort(self._hard_examples, (metric, self._k, example, extra_data[i]))
+                else:
+                    bisect.insort(self._hard_examples, (metric, self._k, example))
+
+                self._k += 1

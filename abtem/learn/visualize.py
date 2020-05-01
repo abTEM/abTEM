@@ -45,12 +45,18 @@ class Playback:
         if value < 2:
             value = 2
             self._slider.disabled = True
+        else:
+            self._slider.disabled = False
 
         self._slider.end = value - 1
 
     @property
     def value(self):
         return self._slider.value
+
+    @value.setter
+    def value(self, value):
+        self._slider.value = value
 
     @property
     def widgets(self):
@@ -165,7 +171,7 @@ def analyse_points(points, labels, shape):
     image_bounding_box = [[-5, 1029], [-5, 1029]]
     labels[(labels == 2) & (points_in_bounding_box(points, image_bounding_box) == 0)] = 0
 
-    defect_faces[select_faces_around_nodes(np.where((labels == 2))[0],faces)] = 1
+    defect_faces[select_faces_around_nodes(np.where((labels == 2))[0], faces)] = 1
     defect_faces[border_adjacent_faces] = 0
 
     dual_adjacency = order_adjacency_clockwise(dual_points, faces_to_dual_adjacency(faces))
@@ -189,8 +195,6 @@ def analyse_points(points, labels, shape):
             print('No path found')
             continue
 
-
-
         polygon = dual_points[np.concatenate((path, [path[0]]))]
 
         inside_all = np.array([point_in_polygon(point, polygon) for point in points])
@@ -202,7 +206,6 @@ def analyse_points(points, labels, shape):
         inside = np.array([point_in_polygon(point, polygon) for point in points[labels != 1]])
         outside = np.ceil(np.abs(min(0., np.min(polygon), np.min(np.array((1024, 1024)) - polygon))))
         center = np.mean(polygon, axis=0)
-
 
         is_contamination = np.any(labels[inside_all] == 1)
 
@@ -264,10 +267,17 @@ class ModelAnnotator(Annotator):
             labels = self._viewer._point_source.data['labels']
 
             image_name = os.path.split(self._viewer._image_files[self._viewer._image_playback.value])[-1]
-            write_path = os.path.join(self._path, '.'.join(image_name.split('.')[:-1]) + '.npz')
+            image_name = '.'.join(image_name.split('.')[:-1])
 
-            data = dict(self._table_source.data)
-            np.savez(write_path, x=x, y=y, labels=labels, **data)
+            if len(self._viewer._images.shape) == 3:
+                num_images = len(self._viewer._images)
+                image_index = self._viewer._series_playback.value
+                image_name = image_name + '_{}'.format(str(image_index).zfill(len(str(num_images))))
+
+            write_path = os.path.join(self._path, image_name + '.npz')
+
+            # data = dict(self._table_source.data)
+            np.savez(write_path, x=x, y=y, labels=labels, image=self._viewer._image)
 
         self._write_annotation_button.on_click(on_click)
 
@@ -277,28 +287,32 @@ class ModelAnnotator(Annotator):
     def update_graph(self):
         x = self._viewer._point_source.data['x']
         y = self._viewer._point_source.data['y']
+
         labels = np.array(self._viewer._point_source.data['labels'])
+
         points = np.stack((x, y), axis=-1)
+        #faces = stable_delaunay_faces(points, 2.5, 3 / .05)
+        #edges = points[faces_to_edges(faces)]
 
         shape = self._viewer._image.shape
-        data, edges, dual_points, dual_degree, polygons = analyse_points(points, labels, shape)
+        #data, edges, dual_points, dual_degree, polygons = analyse_points(points, labels, shape)
 
-        xs = [[edge[0, 0], edge[1, 0]] for edge in edges]
-        ys = [[edge[0, 1], edge[1, 1]] for edge in edges]
-        self._graph_source.data = {'xs': xs, 'ys': ys}
+        #xs = [[edge[0, 0], edge[1, 0]] for edge in edges]
+        #ys = [[edge[0, 1], edge[1, 1]] for edge in edges]
+        #self._graph_source.data = {'xs': xs, 'ys': ys}
 
-        self._dual_source.data = {'x': list(dual_points[:, 0]), 'y': list(dual_points[:, 1]),
-                                  'labels': list(dual_degree)}
-
-        self._table_source.data = data
-
-        top = [polygon[:, 1].max() for polygon in polygons]
-        bottom = [polygon[:, 1].min() for polygon in polygons]
-        left = [polygon[:, 0].min() for polygon in polygons]
-        right = [polygon[:, 0].max() for polygon in polygons]
-        line_color = ['green' if include else 'red' for include in data['include']]
-
-        self._rect_source.data = {'top': top, 'bottom': bottom, 'left': left, 'right': right, 'line_color': line_color}
+        # self._dual_source.data = {'x': list(dual_points[:, 0]), 'y': list(dual_points[:, 1]),
+        #                           'labels': list(dual_degree)}
+        #
+        # self._table_source.data = data
+        #
+        # top = [polygon[:, 1].max() for polygon in polygons]
+        # bottom = [polygon[:, 1].min() for polygon in polygons]
+        # left = [polygon[:, 0].min() for polygon in polygons]
+        # right = [polygon[:, 0].max() for polygon in polygons]
+        # line_color = ['green' if include else 'red' for include in data['include']]
+        #
+        # self._rect_source.data = {'top': top, 'bottom': bottom, 'left': left, 'right': right, 'line_color': line_color}
 
     def set_viewer(self, viewer):
         mapper = linear_cmap(field_name='labels', palette=Category10[9], low=0, high=8)
@@ -432,9 +446,14 @@ class Viewer:
         self._point_model = models.Square(x='x', y='y', fill_color=mapper, size=10)
 
         self._image_playback = Playback(len(image_files))
-        self._image_playback._slider.on_change('value_throttled', lambda attr, old, new: self.update())
-        self._image_playback._next_button.on_click(lambda event: self.update())
-        self._image_playback._previous_button.on_click(lambda event: self.update())
+        self._image_playback._slider.on_change('value_throttled', lambda attr, old, new: self.import_image())
+        self._image_playback._next_button.on_click(lambda event: self.import_image())
+        self._image_playback._previous_button.on_click(lambda event: self.import_image())
+
+        self._series_playback = Playback()
+        self._series_playback._slider.on_change('value_throttled', lambda attr, old, new: self.update())
+        self._series_playback._next_button.on_click(lambda event: self.update())
+        self._series_playback._previous_button.on_click(lambda event: self.update())
 
         for extension in self._extensions:
             extension.set_viewer(self)
@@ -446,21 +465,44 @@ class Viewer:
         self._point_draw_tool = models.PointDrawTool(renderers=[self._point_glyph], empty_value=0)
         self._figure.add_tools(self._point_draw_tool)
 
-        self.update()
+        self.import_image()
 
     def update_image(self):
 
+        if len(self._images.shape) == 3:
+            self._image = self._images[self._series_playback.value]
+        elif len(self._images.shape) == 2:
+            self._image = self._images
+        else:
+            raise RuntimeError('')
+
         image = self._image.copy()
+
         for extension in self._extensions:
             if hasattr(extension, 'modify_image'):
                 image = extension.modify_image(image)
 
         self._image_source.data = {'image': [image],
-                                   'x': [0], 'y': [0], 'dw': [image.shape[0]],
-                                   'dh': [image.shape[1]]}
+                                   'x': [0], 'y': [0], 'dw': [image.shape[1]],
+                                   'dh': [image.shape[0]]}
+
+    def import_image(self):
+        #print(self._image_files)
+        #self._images = imread(self._image_files[self._image_playback.value])
+        print(self._image_files[self._image_playback.value])
+        self._images = np.load(self._image_files[self._image_playback.value])
+        #print(self._images.shape)
+        #self._images = self._images[self._image_playback.value]
+
+        self._series_playback.num_items = len(self._images)
+        self._series_playback.value = 0
+        self.update()
 
     def update(self):
-        self._image = downscale_local_mean(imread(self._image_files[self._image_playback.value]), (2, 2))
+        # self._image = downscale_local_mean(imread(self._image_files[self._image_playback.value]), (2, 2))
+        # self._images = imread(self._image_files[self._image_playback.value])
+
+        # self._image = downscale_local_mean(imread(self._image_files[self._image_playback.value]), (2, 2))
 
         self.update_image()
 
@@ -470,5 +512,6 @@ class Viewer:
     @property
     def widgets(self):
         extension_widgets = [module.widgets for module in self._extensions]
-        column = models.Column(self._image_playback.widgets, *extension_widgets, self._annotator.widgets, width=1200)
+        column = models.Column(self._image_playback.widgets, self._series_playback.widgets, *extension_widgets,
+                               self._annotator.widgets, width=1200)
         return models.Row(self._figure, column)

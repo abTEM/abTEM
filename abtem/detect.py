@@ -1,53 +1,50 @@
+import cupy as cp
 import numpy as np
+import pyfftw as fftw
 
-from abtem.bases import Grid, Energy, cached_method, Cache, notify, ArrayWithGridAndEnergy
-from abtem.utils import squared_norm, cosine_window
-from abtem.bases import semiangles
-import functools
+from abtem.bases import Grid, Energy, cached_method, Cache, notify, ArrayWithGridAndEnergy2D, Buildable
+from abtem.config import FFTW_THREADS, COMPLEX_DTYPE
+from abtem.utils import squared_norm, cosine_window, abs2
 
 
 class DetectorBase:
 
-    def __init__(self, export=None, **kwargs):
+    def __init__(self, output=None, **kwargs):
 
-        if export is not None:
-            if not export.endswith('.hdf5'):
-                self._export = export + '.hdf5'
+        if output is not None:
+            if not output.endswith('.hdf5'):
+                self._output = output + '.hdf5'
             else:
-                self._export = export
+                self._output = output
 
         else:
-            self._export = None
+            self._output = None
 
         super().__init__(**kwargs)
 
     @property
-    def export(self):
-        return self._export
+    def output(self):
+        return self._output
 
     @property
-    def out_shape(self) -> tuple:
+    def output_shape(self) -> tuple:
         raise NotImplementedError()
 
-    def detect(self, wave):
+    def detect(self, waves):
         raise NotImplementedError()
 
-    def match_grid_and_energy(self, waves):
-        self.extent = waves.extent
-        self.gpts = waves.gpts
-        self.energy = waves.energy
 
-
-class AnnularDetector(DetectorBase, Energy, Grid, Cache):
+class AnnularDetector(DetectorBase, Energy, Grid, Buildable, Cache):
 
     def __init__(self, inner, outer, rolloff=0., extent=None, gpts=None, sampling=None, energy=None,
-                 export=None):
+                 output=None, build_on_gpu=False):
 
         self._inner = inner
         self._outer = outer
         self._rolloff = rolloff
 
-        super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy, export=export)
+        super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy, output=output,
+                         build_on_gpu=build_on_gpu)
 
         self.register_observer(self)
 
@@ -79,16 +76,21 @@ class AnnularDetector(DetectorBase, Energy, Grid, Cache):
         self._rolloff = value
 
     @property
-    def out_shape(self):
-        return (1,)
+    def output_shape(self) -> tuple:
+        return ()
 
     @cached_method()
     def get_integration_region(self):
         self.check_is_grid_defined()
         self.check_is_energy_defined()
+        xp = self._array_module()
 
-        alpha2 = squared_norm(*semiangles(self))
-        alpha = np.sqrt(alpha2)
+        kx, ky = self.fftfreq()
+
+        kx = xp.asarray(kx * self.wavelength)
+        ky = xp.asarray(ky * self.wavelength)
+
+        alpha = xp.sqrt(squared_norm(kx, ky))
 
         if self.rolloff > 0.:
             array = cosine_window(alpha, self.outer, self.rolloff) * cosine_window(alpha, self.inner, self.rolloff)
@@ -96,19 +98,33 @@ class AnnularDetector(DetectorBase, Energy, Grid, Cache):
         else:
             array = (alpha >= self._inner) & (alpha <= self._outer)
 
-        return ArrayWithGridAndEnergy(array, spatial_dimensions=2, extent=self.extent, energy=self.energy,
-                                      fourier_space=True)
+        return ArrayWithGridAndEnergy2D(array, extent=self.extent, energy=self.energy, fourier_space=True)
 
-    def detect(self, waves):
-        self.match_grid_and_energy(waves)
+    def detect(self, waves, in_place=False):
+        self.match_grid(waves)
+        self.match_energy(waves)
 
-        intensity = np.abs(np.fft.fft2(waves.array)) ** 2
+        xp = self._array_module()
 
-        return np.sum(intensity * self.get_integration_region().array, axis=(1, 2)) / np.sum(intensity, axis=(1, 2))
+        array = waves.array
 
-    def copy(self) -> 'RingDetector':
+        if in_place:
+            out_array = array
+        else:
+            out_array = xp.zeros(array.shape, dtype=COMPLEX_DTYPE)
+
+        if self._build_on_gpu:
+            intensity = abs2(cp.fft.fft2(array))
+        else:
+            fftw.FFTW(array, out_array, axes=(1, 2), threads=FFTW_THREADS, flags=('FFTW_ESTIMATE',))()
+            intensity = abs2(out_array)
+
+        result = xp.sum(intensity * self.get_integration_region().array, axis=(1, 2)) / xp.sum(intensity, axis=(1, 2))
+        return result
+
+    def copy(self) -> 'AnnularDetector':
         return self.__class__(self.inner, self.outer, rolloff=self.rolloff, extent=self.extent, gpts=self.gpts,
-                              energy=self.energy, export=self.export)
+                              energy=self.energy, export=self.output)
 
 
 def polar_labels(shape, inner=1, outer=None, nbins_angular=1, nbins_radial=None):
@@ -134,27 +150,17 @@ def polar_labels(shape, inner=1, outer=None, nbins_angular=1, nbins_radial=None)
     return bins
 
 
-def label_to_index_generator(labels, first_label=0):
-    labels = labels.flatten()
-    labels_order = labels.argsort()
-    sorted_labels = labels[labels_order]
-    indices = np.arange(0, len(labels) + 1)[labels_order]
-    index = np.arange(first_label, np.max(labels) + 1)
-    lo = np.searchsorted(sorted_labels, index, side='left')
-    hi = np.searchsorted(sorted_labels, index, side='right')
-    for i, (l, h) in enumerate(zip(lo, hi)):
-        yield np.sort(indices[l:h])
 
 
 class SegmentedDetector(Energy, Grid, DetectorBase, Cache):
 
     def __init__(self, inner, outer, nbins_radial, nbins_angular=1, extent=None, gpts=None, sampling=None,
-                 energy=None, export=None):
+                 energy=None, output=None, build_on_gpu=False):
         self._inner = inner
         self._outer = outer
         self._nbins_radial = nbins_radial
         self._nbins_angular = nbins_angular
-        super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy, export=export)
+        super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy, output=output)
 
     @property
     def inner(self) -> float:
@@ -200,7 +206,10 @@ class SegmentedDetector(Energy, Grid, DetectorBase, Cache):
         self.check_is_grid_defined()
         self.check_is_energy_defined()
 
-        alpha_x, alpha_y = semiangles(self)
+        kx, ky = self.fftfreq()
+        alpha_x = kx * self.wavelength
+        alpha_y = ky * self.wavelength
+
         alpha = np.sqrt(squared_norm(alpha_x, alpha_y))
 
         radial_bins = -np.ones(self.gpts, dtype=int)
@@ -215,8 +224,7 @@ class SegmentedDetector(Energy, Grid, DetectorBase, Cache):
         bins = -np.ones(self.gpts, dtype=int)
         bins[valid] = angular_bins[valid] * self.nbins_radial + radial_bins[valid]
 
-        return ArrayWithGridAndEnergy(bins, spatial_dimensions=2, extent=self.extent, energy=self.energy,
-                                      fourier_space=True)
+        return ArrayWithGridAndEnergy2D(bins, extent=self.extent, energy=self.energy, fourier_space=True)
 
 
 class PixelatedDetector(Energy, Grid, DetectorBase):

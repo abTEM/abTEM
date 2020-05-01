@@ -1,19 +1,20 @@
-import os
 from typing import Union, Sequence
 
+import h5py
 import numpy as np
-from abtem.bases import Grid, cached_method, ArrayWithGrid, Cache, cached_method_with_args
-from abtem.interpolation import interpolation_kernel_parallel
-from abtem.parametrizations import load_lobato_parameters, load_kirkland_parameters, kirkland, dvdr_kirkland, \
-    project_tanh_sinh
-from abtem.parametrizations import lobato, dvdr_lobato
-from abtem.transform import fill_rectangle_with_atoms
 from ase import Atoms
 from ase import units
 from numba import jit
 from scipy.optimize import brentq
 from tqdm.auto import tqdm
-import h5py
+
+from abtem.bases import Grid, cached_method, ArrayWithGrid, ArrayWithGrid2D, Cache, cached_method_with_args
+from abtem.interpolation import interpolation_kernel_parallel
+from abtem.parametrizations import load_lobato_parameters, load_kirkland_parameters, kirkland, dvdr_kirkland, \
+    project_tanh_sinh
+from abtem.parametrizations import lobato, dvdr_lobato
+from abtem.transform import fill_rectangle_with_atoms
+import cupy as cp
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
@@ -132,11 +133,11 @@ def tanh_sinh_quadrature(order, parameter):
     return xk, wk
 
 
-class PotentialSlice(ArrayWithGrid):
+class PotentialSlice(ArrayWithGrid2D):
 
     def __init__(self, array, thickness, extent=None):
         self._thickness = thickness
-        super().__init__(array=array, extent=extent, spatial_dimensions=2)
+        super().__init__(array=array, extent=extent)
 
     @property
     def thickness(self):
@@ -188,12 +189,12 @@ class Potential(CalculatedPotentialBase, Cache):
                  extent: Union[float, Sequence[float]] = None,
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
-                 slice_thickness: float = .2,
+                 slice_thickness: float = .5,
                  num_slices: int = None,
                  parametrization: str = 'lobato',
                  method: str = 'finite',
                  cutoff_tolerance: float = 1e-2,
-                 quadrature_order: int = 10,
+                 quadrature_order: int = 20,
                  interpolation_sampling: float = .01):
 
         # TODO : cell warning
@@ -428,30 +429,20 @@ class PrecalculatedPotential(PotentialBase, ArrayWithGrid):
     def _get_slice_array(self, i):
         return self._array[i]
 
-    def write(self, path, overwrite=True):
-        if path.split('.')[-1] != 'hdf5':
-            path = path + '.hdf5'
-
-        if os.path.isfile(path) & (not overwrite):
-            raise RuntimeError('file {} already exists (set overwrite = True)'.format(path))
-
+    def write(self, path):
         with h5py.File(path, 'w') as f:
-            f.create_dataset('array', data=self._array)
+            dset = f.create_dataset('class', (1,), dtype='S100')
+            dset[:] = np.string_('abtem.potentials.PrecalculatedPotential')
+            f.create_dataset('array', data=self.array)
             f.create_dataset('slice_thicknesses', data=self._slice_thicknesses)
             f.create_dataset('extent', data=self.extent)
 
-    @staticmethod
-    def read(path):
-        # TODO: implement chunks
-        with h5py.File(path, 'r') as f:
-            array = f.get('array')[()]
-            slice_thicknesses = f.get('slice_thicknesses')[()]
-            extent = f.get('extent')[()]
-        return PrecalculatedPotential(array=array, slice_thicknesses=slice_thicknesses, extent=extent)
+    def projection(self):
+        array = np.zeros(self.gpts, dtype=DTYPE)
+        for potential_slice in self:
+            array += potential_slice.array[0] * potential_slice.thickness
+        return ArrayWithGrid2D(array, extent=self.extent)
 
-    # def copy(self, copy_array=True):
-    #     if copy_array:
-    #         array = self.array.copy()
-    #     else:
-    #         array = self.array
-    #     return self.__class__(array=array, slice_thicknesses=self._slice_thicknesses.copy(), extent=self.extent.copy())
+    def copy(self, to_gpu=True):
+        return self.__class__(array=cp.asarray(self.array), slice_thicknesses=self._slice_thicknesses.copy(),
+                              extent=self.extent.copy())

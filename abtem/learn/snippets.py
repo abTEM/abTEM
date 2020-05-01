@@ -132,3 +132,21 @@ positions = torch.stack((torch.cos(angles), -torch.sin(angles))).T
 # positions
 
 distances_and_angles(positions, 2.5)
+
+from scipy.ndimage import zoom
+import skimage.morphology as morphology
+from sklearn.neighbors import BallTree
+
+
+
+def region_border(region, scale_factor=.25):
+    region = zoom(region, scale_factor, order=1)
+    region = region > .5
+    dilated_region = morphology.binary_dilation(region, selem=morphology.disk(1))
+    return np.array(np.where(dilated_region^region)).T / scale_factor
+
+def points_close_to_other_points(points, other_points, distance):
+    ball_tree = BallTree(points)
+    close_points = ball_tree.query_radius(other_points, distance)
+    close_points = np.array(close_points)
+    return np.concatenate(close_points)

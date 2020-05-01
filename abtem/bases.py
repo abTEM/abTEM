@@ -1,10 +1,16 @@
+import os
 from typing import Optional, Union, Any, Sequence
 
-import numpy as np
+import cupy as cp
+import h5py
 import matplotlib.pyplot as plt
+import numpy as np
 
+from abtem.config import DTYPE, CUPY_DTYPE
 from abtem.utils import energy2wavelength, energy2sigma, abs2
-from abtem.config import DTYPE, COMPLEX_DTYPE
+from collections.abc import Iterable
+from skimage.io import imsave
+from sys import getsizeof
 
 
 def notify(func):
@@ -158,68 +164,14 @@ def cached_method_with_args(clear_conditions=None):
     return wrapper
 
 
-class GridProperty:
-
-    def __init__(self, value, dtype, locked=False, dimensions=2):
-
-        """
-        A property describing a grid
-
-
-        Parameters
-        ----------
-        value : sequence of float, sequence of int, float, int, optional
-
-        dtype : datatype object
-            the datatype of the ndarray representing the grid type
-        dimensions : int
-            number of dimensions
-        """
-
-        self._dtype = dtype
-        self._dimensions = dimensions
-        self._value = self._validate(value)
-        self._locked = locked
-
-    @property
-    def locked(self):
-        return self._locked
-
-    @property
-    def value(self):
-        return self._value
-
-    def _validate(self, value):
-        if isinstance(value, (np.ndarray, list, tuple)):
-            if len(value) != self._dimensions:
-                raise RuntimeError('grid value length of {} != {}'.format(len(value), self._dimensions))
-            return np.array(value).astype(self._dtype)
-
-        if isinstance(value, (int, float, complex)):
-            return np.full(self._dimensions, value, dtype=self._dtype)
-
-        if value is None:
-            return value
-
-        raise RuntimeError('invalid grid property ({})'.format(value))
-
-    @value.setter
-    def value(self, value):
-        if self.locked:
-            raise RuntimeError('grid property locked')
-        self._value = self._validate(value)
-
-    def copy(self):
-        return self.__class__(value=self._value, dtype=self._dtype, dimensions=self._dimensions)
-
-
 class Grid(Observable):
 
     def __init__(self,
                  extent: Union[float, Sequence[float]] = None,
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
-                 dimensions: int = 2, endpoint: bool = False,
+                 dimensions: int = 2,
+                 endpoint: bool = False,
                  lock_extent=False,
                  lock_gpts=False,
                  lock_sampling=False,
@@ -434,12 +386,6 @@ class Grid(Observable):
                               dimensions=self._dimensions)
 
 
-def semiangles(grid_and_energy):
-    wavelength = grid_and_energy.wavelength
-    return (DTYPE(np.fft.fftfreq(gpts, sampling)) * wavelength for gpts, sampling in
-            zip(grid_and_energy.gpts, grid_and_energy.sampling))
-
-
 class Energy(Observable):
     """
     Energy base class
@@ -505,10 +451,21 @@ class Energy(Observable):
         if self.energy is None:
             raise RuntimeError('energy is not defined')
 
-    def check_same_energy(self, other: 'Energy'):
-        """ Throw error if the energy of another object is different from this object. """
-        if self.energy != other.energy:
+    def check_energies_can_match(self, other: 'Energy'):
+        if (self.energy is not None) & (other.energy is not None) & (self.energy != other.energy):
             raise RuntimeError('inconsistent energies')
+
+    def match_energy(self, other):
+        self.check_energies_can_match(other)
+
+        if (self.energy is None) & (other.energy is None):
+            raise RuntimeError('energy cannot be inferred')
+
+        elif self.energy is None:
+            self.energy = other.energy
+
+        elif other.energy is None:
+            other.energy = self.energy
 
     def copy(self) -> 'Energy':
         """
@@ -518,9 +475,33 @@ class Energy(Observable):
         return self.__class__(self.energy)
 
 
+class Buildable(object):
+
+    def __init__(self, build_on_gpu=False, **kwargs):
+        self._build_on_gpu = build_on_gpu
+        super().__init__(**kwargs)
+
+    def _dtype(self):
+        if self._build_on_gpu:
+            return CUPY_DTYPE
+        else:
+            return DTYPE
+
+    @property
+    def build_on_gpu(self):
+        return self._build_on_gpu
+
+    def _array_module(self):
+        if self._build_on_gpu:
+            return cp
+        else:
+            return np
+
+
 class ArrayWithGrid(Grid):
 
-    def __init__(self, array, spatial_dimensions, extent=None, sampling=None, fourier_space=False, **kwargs):
+    def __init__(self, array, spatial_dimensions, extent=None, sampling=None, fourier_space=False, endpoint=False,
+                 **kwargs):
         array_dimensions = len(array.shape)
 
         if array_dimensions < spatial_dimensions:
@@ -530,9 +511,20 @@ class ArrayWithGrid(Grid):
         self._spatial_dimensions = spatial_dimensions
         self._fourier_space = fourier_space
 
-        gpts = GridProperty(value=array.shape[-spatial_dimensions:], dtype=np.int,
-                            dimensions=spatial_dimensions, locked=True)
-        super().__init__(extent=extent, gpts=gpts, sampling=sampling, dimensions=spatial_dimensions, **kwargs)
+        super().__init__(extent=extent, sampling=sampling, lock_gpts=True, dimensions=spatial_dimensions,
+                         endpoint=endpoint, **kwargs)
+
+    @property
+    def shape(self):
+        return self._array.shape
+
+    @property
+    def memory_usage(self):
+        return getsizeof(self._array)
+
+    @property
+    def gpts(self):
+        return self._array.shape[-self._spatial_dimensions:]
 
     @property
     def spatial_dimensions(self):
@@ -546,23 +538,138 @@ class ArrayWithGrid(Grid):
     def array(self):
         return self._array
 
-    def __getitem__(self, item):
-        if self.array.shape == self.spatial_dimensions:
-            raise RuntimeError()
-        new = self.copy(copy_array=False)
-        new._array = self._array[item]
-        return new
+    def tile(self, repetitions):
+        if not isinstance(repetitions, Iterable):
+            repetitions = (repetitions) * self.spatial_dimensions
 
-    def plot(self, ax=None, logscale=False, logscale_constant=1., complex_representation=None, fourier_space=None,
-             title=None, cmap='gray', figsize=None, **kwargs):
+        if len(repetitions) != self.spatial_dimensions:
+            raise RuntimeError()
+
+        self._extent = repetitions * self._extent
+        repetitions = (1,) * (len(repetitions) - self.spatial_dimensions) + repetitions
+        self._array = np.tile(self._array, repetitions)
+        return self
+
+    def save_as_image(self, fname, dtype='uint16', **kwargs):
+        array = (self._array - self._array.min()) / self._array.ptp() * np.iinfo(dtype).max
+        array = array.astype(dtype)
+        imsave(fname, array, **kwargs)
+
+    def to_gpu(self):
+        return self.copy(to_gpu=True)
+
+    def __getitem__(self, item):
+        if len(self.array.shape) <= self.spatial_dimensions:
+            raise RuntimeError()
+        return self.__class__(array=self._array[item], spatial_dimensions=self.spatial_dimensions - 1,
+                              extent=self.extent.copy(), fourier_space=self.fourier_space)
+
+    def write(self, path):
+        with h5py.File(path, 'w') as f:
+            dset = f.create_dataset('class', (100,), dtype='S100')
+            dset[:] = 'abtem.bases.ArrayWithGrid'
+            f.create_dataset('array', data=self.array)
+            f.create_dataset('spatial_dimensions', data=self.spatial_dimensions)
+            f.create_dataset('extent', data=self.extent)
+            f.create_dataset('fourier_space', data=self.fourier_space)
+        return path
+
+    @classmethod
+    def read(cls, path):
+        # TODO: implement chunks
+        with h5py.File(path, 'r') as f:
+            datasets = {}
+            for key in f.keys():
+                datasets[key] = f.get(key)[()]
+        return cls(**datasets)
+
+    def copy(self, to_gpu=False):
+        if to_gpu:
+            new_array = cp.asarray(self.array)
+        else:
+            new_array = self.array.copy()
+        return self.__class__(array=new_array, spatial_dimensions=self.spatial_dimensions,
+                              extent=self.extent.copy(), fourier_space=self.fourier_space)
+
+
+class ArrayWithGrid1D(ArrayWithGrid):
+
+    def __init__(self, array, extent=None, sampling=None, fourier_space=False, endpoint=False, **kwargs):
+        super().__init__(array=array, spatial_dimensions=1, extent=extent, sampling=sampling,
+                         fourier_space=fourier_space, endpoint=endpoint, **kwargs)
+
+    def plot(self, ax=None, complex_reduction=None, fourier_space=False, title=None, figsize=None):
 
         if ax is None:
             fig, ax = plt.subplots(figsize=figsize)
 
         array = np.squeeze(self.array)
 
-        if len(array.shape) != 2:
-            raise RuntimeError()
+        if self.fourier_space & fourier_space:
+            array = np.fft.fftshift(array)
+
+        elif (not self.fourier_space) & fourier_space:
+            array = np.fft.fftshift(np.fft.fftn(array))
+
+        elif (self.fourier_space) & (not fourier_space):
+            array = np.fft.ifftn(array)
+
+        if complex_reduction is not None:
+            if isinstance(complex_reduction, str):
+                if complex_reduction == 'phase':
+                    complex_reduction = np.angle
+                elif complex_reduction == 'abs2':
+                    complex_reduction = abs2
+
+            array = complex_reduction(array)
+
+        if fourier_space:
+            x_label = 'kx [1 / Å]'
+            x = self.fftfreq()[0]
+
+        else:
+            x_label = 'x [Å]'
+            x = self.linspace()[0]
+
+        if np.iscomplexobj(array):
+            ax.plot(x, array.real)
+            ax.plot(x, array.imag)
+        else:
+            ax.plot(x, array)
+
+        ax.set_xlabel(x_label)
+
+        if title is not None:
+            ax.set_title(title)
+
+    def write(self, path):
+        with h5py.File(path, 'w') as f:
+            dset = f.create_dataset('class', (1,), dtype='S100')
+            dset[:] = np.string_('abtem.bases.ArrayWithGrid1D')
+            f.create_dataset('array', data=self.array)
+            f.create_dataset('extent', data=self.extent)
+            f.create_dataset('fourier_space', data=self.fourier_space)
+        return path
+
+
+class ArrayWithGrid2D(ArrayWithGrid):
+
+    def __init__(self, array, extent=None, sampling=None, fourier_space=False, endpoint=False, **kwargs):
+        super().__init__(array=array, spatial_dimensions=2, extent=extent, sampling=sampling,
+                         fourier_space=fourier_space, endpoint=endpoint, **kwargs)
+
+    def plot(self, ax=None, logscale=False, logscale_constant=1., complex_representation=None,
+             fourier_space=None, title=None, cmap='gray', figsize=None, scans=None, **kwargs):
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize)
+
+        array = np.squeeze(self.array)
+
+        array = cp.asnumpy(array)
+
+        if len(array.shape) > 2:
+            raise RuntimeError('array dimension greater 2, set reduction operation')
 
         if fourier_space is None:
             fourier_space = self.fourier_space
@@ -595,7 +702,6 @@ class ArrayWithGrid(Grid):
             x_label = 'kx [1 / Å]'
             y_label = 'ky [1 / Å]'
             extent = self.spatial_frequency_limits.ravel()
-
         else:
             x_label = 'x [Å]'
             y_label = 'y [Å]'
@@ -608,51 +714,36 @@ class ArrayWithGrid(Grid):
         if title is not None:
             ax.set_title(title)
 
+        if scans is not None:
+            if not isinstance(scans, Iterable):
+                scans = [scans]
+
+            for scan in scans:
+                scan.add_to_mpl_plot(ax)
+
         return ax, im
 
-    def copy(self, copy_array=True):
-        if copy_array:
-            array = self.array.copy()
-        else:
-            array = self.array
+    def write(self, path):
+        with h5py.File(path, 'w') as f:
+            dset = f.create_dataset('class', (1,), dtype='S100')
+            dset[:] = np.string_('abtem.bases.ArrayWithGrid2D')
+            f.create_dataset('array', data=self.array)
+            f.create_dataset('extent', data=self.extent)
+            f.create_dataset('fourier_space', data=self.fourier_space)
+        return path
 
-        return self.__class__(array=array, extent=self.extent.copy())
 
+class ArrayWithGridAndEnergy2D(ArrayWithGrid2D, Energy):
 
-class ArrayWithGridAndEnergy(ArrayWithGrid, Energy):
-
-    def __init__(self, array, spatial_dimensions, extent=None, sampling=None, energy=None, fourier_space=False,
+    def __init__(self, array, extent=None, sampling=None, energy=None, fourier_space=False,
                  **kwargs):
-        super().__init__(array=array, spatial_dimensions=spatial_dimensions, extent=extent, sampling=sampling,
-                         energy=energy, fourier_space=fourier_space, **kwargs)
+        super().__init__(array=array, extent=extent, sampling=sampling, energy=energy, fourier_space=fourier_space,
+                         **kwargs)
 
-    def copy(self):
-        return self.__class__(array=self.array.copy(), spatial_dimensions=self.spatial_dimensions,
-                              extent=self.extent.copy(), energy=self.energy)
-
-
-class LineProfile(ArrayWithGrid):
-
-    def __init__(self, array, extent=None, sampling=None):
-        super().__init__(array, 1, extent=extent, sampling=sampling)
-
-
-class Image(ArrayWithGrid):
-    def __init__(self, array, extent=None, sampling=None):
-        super().__init__(array, 2, extent=extent, sampling=sampling)
-
-    def get_profile(self, slice_position=None, axis=0):
-        if slice_position is None:
-            slice_position = self.gpts[int(not axis)] // 2
-
-        array = np.take(self.array, slice_position, int(not axis))
-        return LineProfile(array, extent=self.extent[axis])
-
-    def repeat(self, multiples):
-        assert len(multiples) == 2
-        new_array = np.tile(self._array, multiples)
-        new_extent = multiples * self.extent
-        return self.__class__(array=new_array, extent=new_extent)
-
-    def copy(self):
-        return self.__class__(array=self.array.copy(), extent=self.extent.copy())
+    def copy(self, to_gpu=False):
+        if to_gpu:
+            new_array = cp.asarray(self.array)
+        else:
+            new_array = self.array.copy()
+        return self.__class__(array=new_array, spatial_dimensions=self.spatial_dimensions,
+                              extent=self.extent.copy(), energy=self.energy, fourier_space=self.fourier_space)

@@ -9,6 +9,7 @@ import numpy as np
 from numba import cuda, prange, jit
 
 from abtem.utils import coordinates_in_disc
+from cupyx.scipy.ndimage import convolve
 
 
 @cuda.jit
@@ -25,21 +26,63 @@ def superpose_deltas_kernel(array, positions, indices):
 
 
 def superpose_deltas(positions, shape):
+    array = cp.zeros((shape[0], shape[1]), dtype=cp.float32)
 
     if len(positions) == 0:
-        raise RuntimeError()
+        return array
 
     if (cp.any(positions[:, 0] < 0) or cp.any(positions[:, 1] < 0) or cp.any(positions[:, 0] > shape[0]) or cp.any(
             positions[:, 1] > shape[1])):
         raise RuntimeError()
 
     rounded = cp.floor(positions).astype(cp.int32)
-    array = cp.zeros((shape[0], shape[1]), dtype=cp.float32)
 
     threadsperblock = 32
     blockspergrid = (positions.shape[0] + (threadsperblock - 1)) // threadsperblock
     superpose_deltas_kernel[blockspergrid, threadsperblock](array, positions, rounded)
     return array
+
+
+def gaussian_kernel(sigma, normalize=True):
+    kernel_size = int(np.ceil(sigma) ** 2) * 4 + 1
+    kernel = cp.exp(-(cp.arange(kernel_size) - (kernel_size - 1) / 2) ** 2 / (2 * sigma ** 2))
+    if normalize:
+        kernel /= kernel.sum()
+    return kernel
+
+
+def separable_filter_2d(image, kernel):
+    return convolve(convolve(image, kernel[None]), kernel[:, None])
+
+
+def average_filter_2d(image, width, normalize=True):
+    kernel_size = 1 + 2 * width
+    if normalize:
+        kernel = cp.full(kernel_size, 1 / kernel_size)
+    else:
+        kernel = cp.ones(1 + 2 * width)
+    return convolve(convolve(image, kernel[None]), kernel[:, None])
+
+
+def gaussian_filter_2d(image, sigma, normalize=True):
+    kernel = gaussian_kernel(sigma, normalize=normalize)
+    return convolve(convolve(image, kernel[None]), kernel[:, None])
+
+
+def superpose_gaussians(positions, shape, sigma):
+    margin = int(np.ceil(4 * sigma))
+    positions = positions + margin
+
+    positions = positions[((positions[:, 0] > 0) & (positions[:, 1] > 0) &
+                           (positions[:, 0] < shape[0] + 2 * margin) &
+                           (positions[:, 1] < shape[1] + 2 * margin))]
+
+    positions = cp.asarray(positions)
+
+    gaussians = superpose_deltas(positions, (shape[0] + 2 * margin, shape[1] + 2 * margin))
+    gaussians = gaussian_filter_2d(gaussians, sigma, normalize=False)
+    gaussians = gaussians[margin:-margin, margin:-margin]
+    return gaussians
 
 
 @cuda.jit
