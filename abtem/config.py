@@ -4,6 +4,7 @@ import cupy as cp
 DTYPE = np.float32
 CUPY_DTYPE = cp.float32
 FFTW_THREADS = 16
+FFTW_EFFORT = 'FFTW_MEASURE'
 
 if DTYPE == np.float32:
     COMPLEX_DTYPE = np.complex64

@@ -1,17 +1,12 @@
+from abtem.learn.calibrate import GrapheneCalibrator
+from abtem.learn.dataset import Example
 from bokeh import models
 from bokeh import plotting
 from bokeh.palettes import Category10
 from bokeh.transform import linear_cmap
 from bqplot import *
-from psm.geometry import polygon_area, point_in_polygon, points_in_bounding_box
-from psm.geometry import regular_polygon
-from psm.graph import stable_delaunay_faces, connected_components
-from psm.representation import order_adjacency_clockwise, faces_to_dual_adjacency, faces_to_edges, \
-    outer_faces_from_faces
-from psm.rmsd import pairwise_rmsd
-from psm.select import select_faces_around_nodes
-from psm.traverse import enclosing_path, hexagonal_reference_path_from_path
-from psm.utils import flatten_list_of_lists, subgraph_adjacency
+from psm.graph import stable_delaunay_faces
+from psm.representation import faces_to_edges
 from scipy.ndimage import gaussian_filter
 from skimage.io import imread
 from skimage.transform import downscale_local_mean
@@ -60,7 +55,7 @@ class Playback:
 
     @property
     def widgets(self):
-        return models.Column(self._slider, models.Row(self._previous_button, self._next_button))
+        return models.Column(self._slider, models.Row(self._previous_button, self._next_button, width=600), width=600)
 
 
 class ViewerExtension:
@@ -127,109 +122,11 @@ class Annotator(ViewerExtension):
     def __init__(self, widgets):
         super().__init__(widgets)
 
-    def annotate_current_image(self):
-        pass
+    def annotate(self):
+        raise NotImplementedError()
 
     def set_viewer(self, viewer):
         self._viewer = viewer
-
-
-class FileAnnotator(Annotator):
-
-    def __init__(self, annotations):
-        self._annotations = annotations
-        super().__init__()
-
-    def annotate_current_image(self):
-        npzfile = np.load(self._annotations[self._viewer._image_files[self._viewer._image_playback.value]])
-        return list(npzfile['x']), list(npzfile['y']), list(npzfile['labels'])
-
-
-def analyse_points(points, labels, shape):
-    faces = stable_delaunay_faces(points, 2., 3 / .05)
-    edges = faces_to_edges(faces)
-
-    polygons = [points[face].astype(np.float) for face in faces]
-    dual_points = np.array([polygon.mean(axis=0) for polygon in polygons])
-
-    border_adjacent = labels == 1
-
-    image_bounding_box = [[-20, 1044], [-20, 1044]]
-    border_adjacent += points_in_bounding_box(points, image_bounding_box) == 0
-    outer_faces = outer_faces_from_faces(faces)
-    border_adjacent[flatten_list_of_lists(outer_faces)] = 1
-    border_adjacent = np.where(border_adjacent)[0]
-    border_adjacent_faces = select_faces_around_nodes(border_adjacent, faces)
-
-    dual_degree = np.array([len(face) for face in faces])
-
-    polygons = [polygon - dual_point for polygon, dual_point in zip(polygons, dual_points)]
-    hexagon = regular_polygon(27, 6)
-    rmsd = pairwise_rmsd([hexagon], polygons)[0]
-
-    defect_faces = rmsd > 20
-    image_bounding_box = [[-5, 1029], [-5, 1029]]
-    labels[(labels == 2) & (points_in_bounding_box(points, image_bounding_box) == 0)] = 0
-
-    defect_faces[select_faces_around_nodes(np.where((labels == 2))[0], faces)] = 1
-    defect_faces[border_adjacent_faces] = 0
-
-    dual_adjacency = order_adjacency_clockwise(dual_points, faces_to_dual_adjacency(faces))
-
-    defect_faces_indices = np.where(defect_faces)[0]
-    column_names = ['include', 'num_missing', 'enclosed_area', 'center_x', 'center_y', 'num_enclosed', 'dopant',
-                    'stable', 'contamination', 'closed', 'outside_image', 'histogram', 'enclosing_path']
-    data = dict(zip(column_names, [[] for i in range(len(column_names))]))
-
-    paths = []
-    if len(defect_faces_indices) == 0:
-        return data, points[edges], dual_points, dual_degree, paths
-
-    defects = [defect_faces_indices[component] for component in
-               connected_components(subgraph_adjacency(defect_faces_indices, dual_adjacency))]
-
-    for defect in defects:
-        try:
-            path = enclosing_path(dual_points, defect, dual_adjacency)
-        except:
-            print('No path found')
-            continue
-
-        polygon = dual_points[np.concatenate((path, [path[0]]))]
-
-        inside_all = np.array([point_in_polygon(point, polygon) for point in points])
-        if np.any(labels[inside_all] == 3):
-            continue
-        paths.append(polygon)
-        reference_path = hexagonal_reference_path_from_path(path, dual_adjacency)
-        density = 6 / (3 * np.sqrt(3) / 2)
-        inside = np.array([point_in_polygon(point, polygon) for point in points[labels != 1]])
-        outside = np.ceil(np.abs(min(0., np.min(polygon), np.min(np.array((1024, 1024)) - polygon))))
-        center = np.mean(polygon, axis=0)
-
-        is_contamination = np.any(labels[inside_all] == 1)
-
-        data['num_missing'].append(int(np.round(polygon_area(reference_path) * density - np.sum(inside))))
-        data['enclosed_area'].append(round(polygon_area(polygon), 3))
-
-        data['center_x'].append(round(center[0], 3))
-        data['center_y'].append(round(center[1], 3))
-        data['num_enclosed'].append(np.sum(inside))
-
-        data['contamination'].append(is_contamination)
-        data['dopant'].append(np.any(labels[inside_all] == 2))
-        data['stable'].append(not np.any(labels[inside_all] == 3))
-
-        data['closed'].append(np.all(np.isclose(reference_path[0], reference_path[-1])))
-        data['outside_image'].append(outside)
-
-        data['include'].append(data['closed'][-1] * (data['outside_image'][-1] < 15) *
-                               data['stable'][-1] * (not data['contamination'][-1]))
-
-        data['histogram'].append(np.histogram(dual_degree[defect], np.arange(3, 12))[0])
-        data['enclosing_path'].append(polygon)
-
-    return data, points[edges], dual_points, dual_degree, paths
 
 
 class ModelAnnotator(Annotator):
@@ -238,25 +135,13 @@ class ModelAnnotator(Annotator):
         self._model = model
 
         self._checkbox_button_group = models.CheckboxButtonGroup(labels=['Points',
-                                                                         'Dual Points',
-                                                                         'Graph'], active=[0, 1, 2])
+                                                                         'Graph'], active=[0, 1])
 
         def on_change(attr, old, new):
             self._viewer._point_glyph.visible = 0 in self._checkbox_button_group.active
-            self._dual_glyph.visible = 1 in self._checkbox_button_group.active
-            self._graph_glyph.visible = 2 in self._checkbox_button_group.active
+            self._graph_glyph.visible = 1 in self._checkbox_button_group.active
 
         self._checkbox_button_group.on_change('active', on_change)
-
-        column_names = ['include', 'num_missing', 'enclosed_area', 'center_x', 'center_y', 'num_enclosed', 'dopant',
-                        'stable', 'contamination', 'closed', 'outside_image']
-
-        # column_names += ['<4-sided', '4-sided', '5-sided', '6-sided', '7-sided', '8-sided', '9-sided', '>9-sided']
-
-        data = dict(zip(column_names, [] * len(column_names)))
-        self._table_source = models.ColumnDataSource(data)
-        columns = [models.TableColumn(field=name, title=name) for name in column_names]
-        self._data_table = models.DataTable(source=self._table_source, columns=columns, width=1200)
 
         self._path = path
         self._write_annotation_button = models.Button(label='Write annotation')
@@ -275,60 +160,49 @@ class ModelAnnotator(Annotator):
                 image_name = image_name + '_{}'.format(str(image_index).zfill(len(str(num_images))))
 
             write_path = os.path.join(self._path, image_name + '.npz')
-
-            # data = dict(self._table_source.data)
-            np.savez(write_path, x=x, y=y, labels=labels, image=self._viewer._image)
+            points = np.array([y, x]).T
+            example = Example(image=self._viewer._image, points=points, labels=labels, sampling=-1)
+            example.write(write_path)
 
         self._write_annotation_button.on_click(on_click)
 
+        self._sampling = .05
+        self._calibrator = GrapheneCalibrator(self._model, .01, .05)
+
+        def on_click(event):
+            self.calibrate()
+
+        self._calibrate_button = models.Button(label='Calibrate')
+        self._calibrate_button.on_click(on_click)
+
         super().__init__(
-            models.Column(self._checkbox_button_group, self._write_annotation_button, self._data_table, width=1200))
+            models.Column(self._calibrate_button, self._checkbox_button_group, self._write_annotation_button,
+                          width=600))
+
+    def calibrate(self):
+
+        self._sampling = .05 #self._calibrator(self._viewer._image)
+
 
     def update_graph(self):
         x = self._viewer._point_source.data['x']
         y = self._viewer._point_source.data['y']
 
-        labels = np.array(self._viewer._point_source.data['labels'])
-
         points = np.stack((x, y), axis=-1)
-        #faces = stable_delaunay_faces(points, 2.5, 3 / .05)
-        #edges = points[faces_to_edges(faces)]
+        faces = stable_delaunay_faces(points, 2.)
+        edges = np.array(faces_to_edges(faces))
 
-        shape = self._viewer._image.shape
-        #data, edges, dual_points, dual_degree, polygons = analyse_points(points, labels, shape)
+        if len(edges) > 0:
+            edges = points[edges]
 
-        #xs = [[edge[0, 0], edge[1, 0]] for edge in edges]
-        #ys = [[edge[0, 1], edge[1, 1]] for edge in edges]
-        #self._graph_source.data = {'xs': xs, 'ys': ys}
-
-        # self._dual_source.data = {'x': list(dual_points[:, 0]), 'y': list(dual_points[:, 1]),
-        #                           'labels': list(dual_degree)}
-        #
-        # self._table_source.data = data
-        #
-        # top = [polygon[:, 1].max() for polygon in polygons]
-        # bottom = [polygon[:, 1].min() for polygon in polygons]
-        # left = [polygon[:, 0].min() for polygon in polygons]
-        # right = [polygon[:, 0].max() for polygon in polygons]
-        # line_color = ['green' if include else 'red' for include in data['include']]
-        #
-        # self._rect_source.data = {'top': top, 'bottom': bottom, 'left': left, 'right': right, 'line_color': line_color}
+            xs = [[edge[0, 0], edge[1, 0]] for edge in edges]
+            ys = [[edge[0, 1], edge[1, 1]] for edge in edges]
+            self._graph_source.data = {'xs': xs, 'ys': ys}
 
     def set_viewer(self, viewer):
-        mapper = linear_cmap(field_name='labels', palette=Category10[9], low=0, high=8)
-
         self._graph_source = models.ColumnDataSource(dict(xs=[], ys=[]))
         self._graph_model = models.MultiLine(xs='xs', ys='ys', line_width=2)
         self._graph_glyph = viewer._figure.add_glyph(self._graph_source, glyph=self._graph_model)
-
-        self._dual_source = models.ColumnDataSource(data=dict(x=[], y=[], labels=[]))
-        self._dual_model = models.Circle(x='x', y='y', fill_color=mapper, radius=8)
-        self._dual_glyph = viewer._figure.add_glyph(self._dual_source, glyph=self._dual_model)
-
-        self._rect_source = models.ColumnDataSource(data=dict(top=[], bottom=[], left=[], right=[], line_color=[]))
-        self._rect_model = models.Quad(top='top', bottom='bottom', left='left', right='right', line_color='line_color',
-                                       fill_color=None, line_width=3)
-        self._rect_glyph = viewer._figure.add_glyph(self._rect_source, glyph=self._rect_model)
 
         def on_change(attr, old, new):
             self.update_graph()
@@ -338,16 +212,17 @@ class ModelAnnotator(Annotator):
 
     def annotate(self):
         image = self._viewer._image
-        points, labels = self._model(image)
+        output = self._model(image, self._sampling)
 
-        # self._viewer._image_source
+        points = output['points']
+        labels = output['labels']
+
         self._viewer._point_source.data = {'x': list(points[:, 0]), 'y': list(points[:, 1]), 'labels': list(labels)}
 
 
 class LabelEditor(ViewerExtension):
 
     def __init__(self):
-        # self._text_input = models.TextInput(value='0', title='')
         self._slider = models.Slider(start=0, end=4, value=0, step=1)
         self._button = models.Button(label='Label selected')
 
@@ -365,7 +240,7 @@ class LabelEditor(ViewerExtension):
 
         self._slider.on_change('value', on_change)
 
-        super().__init__(models.Row(self._slider, self._button, width=1200))
+        super().__init__(models.Row(self._slider, self._button, width=600))
 
 
 class DeleteButton(ViewerExtension):
@@ -476,6 +351,8 @@ class Viewer:
         else:
             raise RuntimeError('')
 
+        #self._image = downscale_local_mean(self._image, (2, 2))
+
         image = self._image.copy()
 
         for extension in self._extensions:
@@ -487,22 +364,29 @@ class Viewer:
                                    'dh': [image.shape[0]]}
 
     def import_image(self):
-        #print(self._image_files)
-        #self._images = imread(self._image_files[self._image_playback.value])
-        print(self._image_files[self._image_playback.value])
-        self._images = np.load(self._image_files[self._image_playback.value])
-        #print(self._images.shape)
-        #self._images = self._images[self._image_playback.value]
+        image_file = self._image_files[self._image_playback.value]
+
+        filename, file_extension = os.path.splitext(image_file)
+
+        if (file_extension == '.tif') or (file_extension == '.tiff'):
+            self._images = imread(image_file)
+
+        elif file_extension in '.npy':
+            self._images = np.load(image_file)
+
+        else:
+            raise RuntimeError()
 
         self._series_playback.num_items = len(self._images)
         self._series_playback.value = 0
-        self.update()
+
+        self.update_image()
+
+        if self._annotator is not None:
+            # self._annotator.calibrate()
+            self._annotator.annotate()
 
     def update(self):
-        # self._image = downscale_local_mean(imread(self._image_files[self._image_playback.value]), (2, 2))
-        # self._images = imread(self._image_files[self._image_playback.value])
-
-        # self._image = downscale_local_mean(imread(self._image_files[self._image_playback.value]), (2, 2))
 
         self.update_image()
 
@@ -513,5 +397,5 @@ class Viewer:
     def widgets(self):
         extension_widgets = [module.widgets for module in self._extensions]
         column = models.Column(self._image_playback.widgets, self._series_playback.widgets, *extension_widgets,
-                               self._annotator.widgets, width=1200)
+                               self._annotator.widgets, width=600)
         return models.Row(self._figure, column)

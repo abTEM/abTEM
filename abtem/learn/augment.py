@@ -74,6 +74,19 @@ class SequentialAugmentations(Augmentation):
             modifier.apply(example)
 
 
+class Sometimes(Augmentation):
+
+    def __init__(self, p, augmentation):
+        self._p = p
+        self._augmentation = augmentation
+
+    def apply(self, example):
+        if np.random.rand() < self._p:
+            return self._augmentation(example)
+        else:
+            return example
+
+
 class RandomCrop(Augmentation):
 
     def __init__(self, new_shape):
@@ -93,7 +106,7 @@ class RandomCrop(Augmentation):
         shift_y = np.round(shift_y * (old_shape[1] - self.new_shape[1])).astype(np.int)
         example.image = example.image[shift_x:shift_x + self.new_shape[0], shift_y:shift_y + self.new_shape[1]]
 
-        example.positions -= np.array((shift_x, shift_y))
+        example.points -= np.array((shift_x, shift_y))
 
 
 class PoissonNoise(Augmentation):
@@ -193,12 +206,12 @@ class Warp(Augmentation):
 
         example.image = image.reshape(shape)
 
-        positions = example.positions
-        rounded = np.around(positions).astype(np.int)
+        points = example.points
+        rounded = np.around(points).astype(np.int)
         rounded[:, 0] = np.clip(rounded[:, 0], 0, shape[0] - 1)
         rounded[:, 1] = np.clip(rounded[:, 1], 0, shape[1] - 1)
 
-        positions[:, self.axis] -= cp.asnumpy(noise)[rounded[:, 0], rounded[:, 1]] * self.amount
+        points[:, self.axis] -= cp.asnumpy(noise)[rounded[:, 0], rounded[:, 1]] * self.amount
 
 
 class PadToSize(Augmentation):
@@ -209,7 +222,7 @@ class PadToSize(Augmentation):
 
     def apply(self, example):
         example.image, padding = pad_to_size(example.image, self.shape[0], self.shape[1], mode='reflect')
-        example.positions[:] += [padding[0], padding[2]]
+        example.points[:] += [padding[0], padding[2]]
 
 
 class PadByAmount(Augmentation):
@@ -221,7 +234,8 @@ class PadByAmount(Augmentation):
     def apply(self, example):
         example.image, padding = pad_to_size(example.image, example.shape[0] + self.amount,
                                              example.shape[1] + self.amount, mode='reflect', n=16)
-        example.positions[:] += [padding[0], padding[2]]
+
+        example.points[:] += [padding[0], padding[2]]
 
 
 class Flip(Augmentation):
@@ -232,11 +246,11 @@ class Flip(Augmentation):
     def apply(self, example):
         if np.random.rand() < .5:
             example.image[:] = example.image[::-1, :]
-            example.positions[:, 0] = example.image.shape[0] - example.positions[:, 0]
+            example.points[:, 0] = example.image.shape[0] - example.points[:, 0]
 
         if np.random.rand() < .5:
             example.image[:] = example.image[:, ::-1]
-            example.positions[:, 1] = example.image.shape[1] - example.positions[:, 1]
+            example.points[:, 1] = example.image.shape[1] - example.points[:, 1]
 
         return example
 
@@ -254,19 +268,19 @@ class Rotate90(Augmentation):
             example.image = xp.rot90(example.image, k=k).copy()
 
             if k == 1:
-                old_positions = example.positions.copy() - np.array(example.image.shape)[::-1] / 2
-                example.positions[:, 0] = - old_positions[:, 1]
-                example.positions[:, 1] = old_positions[:, 0]
+                old_points = example.points.copy() - np.array(example.image.shape)[::-1] / 2
+                example.points[:, 0] = - old_points[:, 1]
+                example.points[:, 1] = old_points[:, 0]
             elif k == 2:
-                old_positions = example.positions.copy() - np.array(example.image.shape) / 2
-                example.positions[:, 0] = - old_positions[:, 0]
-                example.positions[:, 1] = - old_positions[:, 1]
+                old_points = example.points.copy() - np.array(example.image.shape) / 2
+                example.points[:, 0] = - old_points[:, 0]
+                example.points[:, 1] = - old_points[:, 1]
             else:
-                old_positions = example.positions.copy() - np.array(example.image.shape)[::-1] / 2
-                example.positions[:, 0] = old_positions[:, 1]
-                example.positions[:, 1] = - old_positions[:, 0]
+                old_points = example.points.copy() - np.array(example.image.shape)[::-1] / 2
+                example.points[:, 0] = old_points[:, 1]
+                example.points[:, 1] = - old_points[:, 0]
 
-            example.positions += np.array(example.image.shape) / 2
+            example.points += np.array(example.image.shape) / 2
 
 
 class Stain(Augmentation):

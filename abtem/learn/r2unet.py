@@ -1,7 +1,6 @@
 import e2cnn.nn as e2nn
 import torch.nn as nn
 from e2cnn import gspaces
-from abtem.learn.unet import OutConv
 
 
 class R2DoubleConv(nn.Module):
@@ -48,7 +47,7 @@ class R2Down(nn.Module):
 
 class R2Up(nn.Module):
 
-    def __init__(self, in_type, direct_sum_type, out_type, bilinear=True):
+    def __init__(self, in_type, direct_sum_type, out_type):
         super().__init__()
 
         self.up = e2nn.R2Upsampling(in_type, scale_factor=2, mode='bilinear', align_corners=True)
@@ -64,47 +63,66 @@ class R2Up(nn.Module):
         return self.conv(x)
 
 
-class R2UNet(nn.Module):
+class ConvHead(nn.Module):
 
-    def __init__(self, in_channels, features):
+    def __init__(self, in_type, out_channels):
         super().__init__()
 
-        r2_act = gspaces.Rot2dOnR2(N=8)
+        self.conv = R2DoubleConv(in_type, in_type)
+        self.gpool = e2nn.GroupPooling(in_type)
+        self.out = nn.Conv2d(len(in_type), out_channels, kernel_size=1)
 
-        self.in_type = e2nn.FieldType(r2_act, in_channels * [r2_act.trivial_repr])
-        out_type = e2nn.FieldType(r2_act, features * [r2_act.regular_repr])
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.gpool(x)
+        x = x.tensor
+        return self.out(x)
+
+
+class R2UNet(nn.Module):
+
+    def __init__(self, in_channels, features, N=8):
+        super().__init__()
+
+        self.r2_act = gspaces.Rot2dOnR2(N=N)
+
+        self.in_type = e2nn.FieldType(self.r2_act, in_channels * [self.r2_act.trivial_repr])
+        out_type = e2nn.FieldType(self.r2_act, features * [self.r2_act.regular_repr])
         self.inc = R2DoubleConv(self.in_type, out_type)
 
-        out_type = e2nn.FieldType(r2_act, 2 * features * [r2_act.regular_repr])
+        out_type = e2nn.FieldType(self.r2_act, 2 * features * [self.r2_act.regular_repr])
         self.down1 = R2Down(self.inc.out_type, out_type)
 
-        out_type = e2nn.FieldType(r2_act, 4 * features * [r2_act.regular_repr])
+        out_type = e2nn.FieldType(self.r2_act, 4 * features * [self.r2_act.regular_repr])
         self.down2 = R2Down(self.down1.out_type, out_type)
 
-        out_type = e2nn.FieldType(r2_act, 8 * features * [r2_act.regular_repr])
+        out_type = e2nn.FieldType(self.r2_act, 4 * features * [self.r2_act.regular_repr])
         self.down3 = R2Down(self.down2.out_type, out_type)
+        #
+        # out_type = e2nn.FieldType(self.r2_act, 8 * features * [self.r2_act.regular_repr])
+        # self.down4 = R2Down(self.down3.out_type, out_type)
+        #
+        # out_type = e2nn.FieldType(self.r2_act, 4 * features * [self.r2_act.regular_repr])
+        # direct_sum_type = self.down3.out_type + self.down4.out_type
+        # self.up1 = R2Up(self.down4.out_type, direct_sum_type, out_type)
 
-        out_type = e2nn.FieldType(r2_act, 8 * features * [r2_act.regular_repr])
-        self.down4 = R2Down(self.down3.out_type, out_type)
+        out_type = e2nn.FieldType(self.r2_act, 2 * features * [self.r2_act.regular_repr])
+        direct_sum_type = self.down2.out_type + self.down3.out_type
+        self.up1 = R2Up(self.down2.out_type, direct_sum_type, out_type)
 
-        out_type = e2nn.FieldType(r2_act, 4 * features * [r2_act.regular_repr])
-        direct_sum_type = self.down3.out_type + self.down4.out_type
-        self.up1 = R2Up(self.down4.out_type, direct_sum_type, out_type)
+        out_type = e2nn.FieldType(self.r2_act, 1 * features * [self.r2_act.regular_repr])
+        direct_sum_type = self.down1.out_type + self.up1.out_type
+        self.up2 = R2Up(self.down1.out_type, direct_sum_type, out_type)
 
-        out_type = e2nn.FieldType(r2_act, 2 * features * [r2_act.regular_repr])
-        direct_sum_type = self.down2.out_type + self.up1.out_type
-        self.up2 = R2Up(self.up1.out_type, direct_sum_type, out_type)
+        out_type = e2nn.FieldType(self.r2_act, 1 * features * [self.r2_act.regular_repr])
+        direct_sum_type = self.inc.out_type + self.up2.out_type
+        self.up3 = R2Up(self.inc.out_type, direct_sum_type, out_type)
 
-        out_type = e2nn.FieldType(r2_act, 1 * features * [r2_act.regular_repr])
-        direct_sum_type = self.down1.out_type + self.up2.out_type
-        self.up3 = R2Up(self.down1.out_type, direct_sum_type, out_type)
+        # self.gpool = e2nn.GroupPooling(out_type)
 
-        out_type = e2nn.FieldType(r2_act, 1 * features * [r2_act.regular_repr])
-        direct_sum_type = self.inc.out_type + self.up3.out_type
-        self.up4 = R2Up(self.inc.out_type, direct_sum_type, out_type)
-
-        self.gpool = e2nn.GroupPooling(out_type)
-        self.out = OutConv(features, 1)
+    @property
+    def out_type(self):
+        return self.up3.out_type
 
     def forward(self, x):
         x = e2nn.GeometricTensor(x, self.in_type)
@@ -113,13 +131,12 @@ class R2UNet(nn.Module):
         x2 = self.down1(x1)
         x3 = self.down2(x2)
         x4 = self.down3(x3)
-        x5 = self.down4(x4)
-        x = self.up1(x5, x4)
-        x = self.up2(x, x3)
-        x = self.up3(x, x2)
-        x = self.up4(x, x1)
-        x = self.gpool(x)
+        #x5 = self.down4(x4)
+        #x = self.up1(x5, x4)
+        x = self.up1(x4, x3)
+        x = self.up2(x, x2)
+        x = self.up3(x, x1)
+        # x = self.gpool(x)
 
-        x = x.tensor
-
-        return self.out(x)
+        # x = x.tensor
+        return x

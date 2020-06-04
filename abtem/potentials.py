@@ -8,13 +8,14 @@ from numba import jit
 from scipy.optimize import brentq
 from tqdm.auto import tqdm
 
-from abtem.bases import Grid, cached_method, ArrayWithGrid, ArrayWithGrid2D, Cache, cached_method_with_args
+from abtem.bases import Grid, HasGridMixin, watched_property
 from abtem.interpolation import interpolation_kernel_parallel
 from abtem.parametrizations import load_lobato_parameters, load_kirkland_parameters, kirkland, dvdr_kirkland, \
     project_tanh_sinh
 from abtem.parametrizations import lobato, dvdr_lobato
 from abtem.transform import fill_rectangle_with_atoms
 import cupy as cp
+from abc import ABC, abstractmethod, abstractproperty
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
@@ -24,10 +25,7 @@ QUADRATURE_PARAMETER_RATIO = 4
 DTYPE = np.float32
 
 
-class PotentialBase:
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+class AbstractPotential:
 
     @property
     def num_slices(self):
@@ -40,7 +38,8 @@ class PotentialBase:
     def slice_thickness(self, i):
         raise NotImplementedError()
 
-    def _get_slice_array(self, i):
+    @property
+    def thickness(self):
         raise NotImplementedError()
 
     def get_slice(self, i):
@@ -55,70 +54,66 @@ class PotentialBase:
         return self.get_slice(item)
 
 
-class CalculatedPotentialBase(PotentialBase, Grid):
-
-    def __init__(self, atoms, origin=None, extent=None, gpts=None, sampling=None, num_slices=None, **kwargs):
-
-        if np.abs(atoms.cell[2, 2]) < 1e-12:
-            raise RuntimeError('atoms has no thickness')
-
-        self._atoms = atoms.copy()
-        self._atoms.wrap()
-
-        if origin is None:
-            self._origin = np.array([0., 0.])
-        else:
-            self._origin = origin
-
-        if extent is None:
-            extent = np.diag(atoms.cell)[:2]
-
-        self._num_slices = num_slices
-
-        super().__init__(extent=extent, gpts=gpts, sampling=sampling, **kwargs)
-
-    @property
-    def atoms(self):
-        return self._atoms
-
-    @property
-    def origin(self):
-        return self._origin
-
-    @property
-    def thickness(self):
-        return self._atoms.cell[2, 2]
-
-    @property
-    def num_slices(self):
-        return self._num_slices
-
-    def get_slice(self, i):
-        return PotentialSlice(self._get_slice_array(i)[None], thickness=self.slice_thickness(i), extent=self.extent)
-
-    def __getitem__(self, i):
-        if isinstance(i, int):
-            if i >= self.num_slices:
-                raise StopIteration
-            return self.get_slice(i)
-        elif isinstance(i, slice):
-            return self.precalculate(show_progress=False, first_slice=slice.start, last_slice=slice.stop)
-
-    def precalculate(self, show_progress=False, first_slice=None, last_slice=None):
-        if first_slice is None:
-            first_slice = 0
-
-        if last_slice is None:
-            last_slice = self.num_slices
-
-        array = np.zeros((self.num_slices,) + (self.gpts[0], self.gpts[1]))
-        slice_thicknesses = np.zeros(self.num_slices)
-
-        for i in tqdm(range(first_slice, last_slice), disable=not show_progress):
-            array[i] = self._get_slice_array(i)
-            slice_thicknesses[i] = self.slice_thickness(i)
-
-        return PrecalculatedPotential(array, slice_thicknesses, self.extent)
+# class CalculatedPotentialBase(AbstractPotential):
+#
+#     def __init__(self, atoms, origin=None, extent=None, gpts=None, sampling=None, num_slices=None, **kwargs):
+#
+#         if np.abs(atoms.cell[2, 2]) < 1e-12:
+#             raise RuntimeError('atoms has no thickness')
+#
+#         self._atoms = atoms.copy()
+#         self._atoms.wrap()
+#
+#         if origin is None:
+#             self._origin = np.array([0., 0.])
+#         else:
+#             self._origin = origin
+#
+#         if extent is None:
+#             extent = np.diag(atoms.cell)[:2]
+#
+#         self._num_slices = num_slices
+#
+#         super().__init__(extent=extent, gpts=gpts, sampling=sampling, **kwargs)
+#
+#     @property
+#     def atoms(self):
+#         return self._atoms
+#
+#     @property
+#     def origin(self):
+#         return self._origin
+#
+#     @property
+#     def num_slices(self):
+#         return self._num_slices
+#
+#     def get_slice(self, i):
+#         return PotentialSlice(self._get_slice_array(i)[None], thickness=self.slice_thickness(i), extent=self.extent)
+#
+#     def __getitem__(self, i):
+#         if isinstance(i, int):
+#             if i >= self.num_slices:
+#                 raise StopIteration
+#             return self.get_slice(i)
+#         elif isinstance(i, slice):
+#             return self.precalculate(show_progress=False, first_slice=slice.start, last_slice=slice.stop)
+#
+#     def precalculate(self, show_progress=False, first_slice=None, last_slice=None):
+#         if first_slice is None:
+#             first_slice = 0
+#
+#         if last_slice is None:
+#             last_slice = self.num_slices
+#
+#         array = np.zeros((self.num_slices,) + (self.gpts[0], self.gpts[1]))
+#         slice_thicknesses = np.zeros(self.num_slices)
+#
+#         for i in tqdm(range(first_slice, last_slice), disable=not show_progress):
+#             array[i] = self._get_slice_array(i)
+#             slice_thicknesses[i] = self.slice_thickness(i)
+#
+#         return PrecalculatedPotential(array, slice_thicknesses, self.extent)
 
 
 def tanh_sinh_quadrature(order, parameter):
@@ -133,18 +128,19 @@ def tanh_sinh_quadrature(order, parameter):
     return xk, wk
 
 
-class PotentialSlice(ArrayWithGrid2D):
+class PotentialSlice(HasGridMixin):
 
-    def __init__(self, array, thickness, extent=None):
+    def __init__(self, array, thickness, extent=None, sampling=None):
         self._thickness = thickness
-        super().__init__(array=array, extent=extent)
+        self._array = array
+        self.grid = Grid(extent=extent, sampling=sampling, lock_gpts=True)
 
     @property
     def thickness(self):
         return self._thickness
 
 
-class Potential(CalculatedPotentialBase, Cache):
+class Potential(AbstractPotential, HasGridMixin):
     """
     Potential object
 
@@ -199,6 +195,22 @@ class Potential(CalculatedPotentialBase, Cache):
 
         # TODO : cell warning
 
+        if np.abs(atoms.cell[2, 2]) < 1e-12:
+            raise RuntimeError('atoms has no thickness')
+
+        self._atoms = atoms.copy()
+        self._atoms.wrap()
+
+        if origin is None:
+            self._origin = np.array([0., 0.])
+        else:
+            self._origin = origin
+
+        if extent is None:
+            extent = np.diag(atoms.cell)[:2]
+
+        self.grid = Grid(extent=extent, gpts=gpts, sampling=sampling, lock_extent=True)
+
         self._cutoff_tolerance = cutoff_tolerance
         self._method = method
 
@@ -219,17 +231,17 @@ class Potential(CalculatedPotentialBase, Cache):
         if num_slices is None:
             if slice_thickness is None:
                 raise RuntimeError()
-
-            num_slices = int(np.ceil(atoms.cell[2, 2] / slice_thickness))
+            self._num_slices = int(np.ceil(atoms.cell[2, 2] / slice_thickness))
 
         self._quadrature_order = quadrature_order
         self._interpolation_sampling = interpolation_sampling
 
-        super().__init__(atoms=atoms.copy(), origin=origin, extent=extent, gpts=gpts, sampling=sampling,
-                         num_slices=num_slices)
-
     def slice_thickness(self, i):
         return self.thickness / self.num_slices
+
+    @property
+    def atoms(self):
+        return self._atoms
 
     @property
     def cutoff_tolerance(self):
@@ -253,25 +265,25 @@ class Potential(CalculatedPotentialBase, Cache):
     def evaluate_potential_derivative(self, r, atomic_number):
         return self._potential_derivative(r, self.parameters[atomic_number])
 
-    @cached_method_with_args(('tolerance', 'parametrization'))
+    @watched_property('changed')
     def get_cutoff(self, atomic_number):
         func = lambda r: self.evaluate_potential(r, atomic_number) - self.cutoff_tolerance
         return brentq(func, 1e-7, 1000)
 
-    @cached_method(())
+    @watched_property('changed')
     def _get_unique_atomic_numbers(self):
         return np.unique(self._atoms.get_atomic_numbers())
 
-    @cached_method(('tolerance',))
+    @watched_property('changed')
     def max_cutoff(self):
         return max([self.get_cutoff(number) for number in self._get_unique_atomic_numbers()])
 
-    @cached_method(('tolerance', 'origin', 'extent'))
+    @watched_property('changed')
     def get_padded_atoms(self):
         cutoff = self.max_cutoff()
         return fill_rectangle_with_atoms(self.atoms, self._origin, self.extent, margin=cutoff, )
 
-    @cached_method(('gpts',))
+    @watched_property('changed')
     def _allocate(self):
         self.check_is_grid_defined()
         return np.zeros(self.gpts, dtype=DTYPE)
@@ -421,7 +433,7 @@ class PrecalculatedPotential(PotentialBase, ArrayWithGrid):
         assert len(multiples) == 2
         new_array = np.tile(self._array, (1,) + multiples)
         new_extent = multiples * self.extent
-        return self.__class__(array=new_array, thickness=self.thickness, extent=new_extent)
+        return self.__class__(array=new_array, slice_thicknesses=self._slice_thicknesses, extent=new_extent)
 
     def get_slice(self, i):
         return PotentialSlice(self._get_slice_array(i)[None], thickness=self.slice_thickness(i), extent=self.extent)

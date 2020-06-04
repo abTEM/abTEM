@@ -1,141 +1,136 @@
+import json
+import os
+
 import cupy as cp
 import numpy as np
-import skimage.measure
-import skimage.morphology
 import skimage.util
 import torch
 import torch.nn as nn
-from abtem.learn.scale import add_margin_to_image
-from abtem.learn.unet import GaussianFilter2d, PeakEnhancementFilter
-from abtem.learn.utils import pytorch_to_cupy, cupy_to_pytorch
-from scipy.cluster.hierarchy import linkage, fcluster
-from scipy.spatial.distance import pdist
+from abtem.learn.filters import PeakEnhancementFilter
+from abtem.learn.postprocess import merge_close_points, integrate_discs, merge_dopants_into_contamination
+from abtem.learn.r2unet import R2UNet, ConvHead
+from abtem.learn.utils import pad_to_size, pytorch_to_cupy, cupy_to_pytorch, weighted_normalization
 from cupyx.scipy.ndimage import zoom
-from abtem.learn.utils import pad_to_size
 
-
-def merge_dopants_into_contamination(segmentation):
-    binary = segmentation != 0
-    labels, n = skimage.measure.label(binary, return_num=True)
-
-    new_segmentation = np.zeros_like(segmentation)
-    for label in range(1, n + 1):
-        in_segment = labels == label
-        if np.sum(segmentation[in_segment] == 1) > np.sum(segmentation[in_segment] == 2):
-            new_segmentation[in_segment] = 1
-        else:
-            new_segmentation[in_segment] = 2
-
-    return new_segmentation
-
-
-def weighted_normalization(image, mask):
-    weighted_means = cp.sum(image * mask) / cp.sum(mask)
-    weighted_stds = cp.sqrt(cp.sum(mask * (image - weighted_means) ** 2) / cp.sum(mask ** 2))
-    return (image - weighted_means) / weighted_stds
-
-
-def merge_close(points, labels, distance):
-    clusters = fcluster(linkage(pdist(points), method='complete'), distance, criterion='distance')
-    cluster_labels, counts = np.unique(clusters, return_counts=True)
-
-    to_delete = []
-    for cluster_label in cluster_labels[counts > 1]:
-        cluster_members = np.where(clusters == cluster_label)[0][1:]
-        to_delete.append(cluster_members)
-
-    if len(to_delete) > 0:
-        points = np.delete(points, np.concatenate(to_delete), axis=0)
-        labels = np.delete(labels, np.concatenate(to_delete), axis=0)
-
-    return points, labels
 
 class AtomRecognitionModel:
 
-    def __init__(self, model, marker_head, segmentation_head, training_sampling, scale_model=None, margin=0):
-        self._scale_model = scale_model
-        self._model = model
+    def __init__(self, backbone, density_head, segmentation_head, training_sampling, density_sigma, threshold,
+                 enhancement_filter_kwargs):
+        self._backbone = backbone
         self._segmentation_head = segmentation_head
-        self._marker_head = marker_head
+        self._density_head = density_head
         self._training_sampling = training_sampling
-        self._margin = int(np.ceil(margin / self._training_sampling))
+        self._density_sigma = density_sigma
+        self._threshold = threshold
+        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        self._enhancement_filter = PeakEnhancementFilter(**enhancement_filter_kwargs).to(device)
 
-    def prepare_image(self, image, weights=None):
+    def to(self, *args, **kwargs):
+        self._backbone.to(*args, **kwargs)
+        self._segmentation_head.to(*args, **kwargs)
+        self._density_head.to(*args, **kwargs)
+        self._enhancement_filter.to(*args, **kwargs)
+        return self
+
+    @classmethod
+    def load(cls, path):
+
+        with open(path, 'r') as fp:
+            state = json.load(fp)
+
+        folder = os.path.dirname(path)
+
+        backbone = R2UNet(1, 8)
+        density_head = ConvHead(backbone.out_type, 1)
+        segmentation_head = ConvHead(backbone.out_type, 3)
+
+        backbone.load_state_dict(torch.load(os.path.join(folder, state['backbone']['weights_file'])))
+        density_head.load_state_dict(torch.load(os.path.join(folder, state['density_head']['weights_file'])))
+        segmentation_head.load_state_dict(torch.load(os.path.join(folder, state['segmentation_head']['weights_file'])))
+
+        return cls(backbone=backbone,
+                   density_head=density_head,
+                   segmentation_head=segmentation_head,
+                   training_sampling=state['training_sampling'],
+                   density_sigma=state['density_sigma'],
+                   threshold=state['threshold'],
+                   enhancement_filter_kwargs=state['enhancement_filter'])
+
+    @property
+    def training_sampling(self):
+        return self._training_sampling
+
+    def prepare_image(self, image, sampling=None, mask=None):
+        image = image.astype(np.float32)
+        sampling=.1
         image = cp.asarray(image)
-        #sampling = self._scale_model(image)
-        sampling = .028
 
-        if weights is None:
-            image = (image - image.mean()) / image.std()
-        else:
-            image = weighted_normalization(image, weights)
+        if sampling is not None:
+            image = zoom(image, zoom=sampling / self._training_sampling)
 
-        image = zoom(image, zoom=sampling / self._training_sampling)
-        image, padding = pad_to_size(image, image.shape[0] + 8,
-                                             image.shape[1] + 8, mode='reflect', n=16)
+        image, padding = pad_to_size(image, image.shape[0], image.shape[1], n=16)
 
-        #image, padding = add_margin_to_image(image, self._margin)
-        #image = cp.stack((image, cp.zeros_like(image)))
-        #image[1, :padding[0][0]] = 1
-        #image[1, -padding[0][1]:] = 1
-        #image[1, :, :padding[1][0]] = 1
-        #image[1, :, -padding[1][1]:] = 1
+        image = cupy_to_pytorch(image)[None, None]
 
-        image = cupy_to_pytorch(image)
-        image = image[None,None]
+        image = weighted_normalization(image, mask)
+
         return image, sampling, padding
 
-    def __call__(self, image):
-        return self.predict(image)
+    def __call__(self, image, sampling=None):
+        try:
+            return self.predict(image, sampling=sampling)
+        except RuntimeError as e:
+            if 'out of memory' in str(e):
+                print('WARNING: ran out of memory for image of size {}'.format(image.shape))
+                torch.cuda.empty_cache()
+                return None
+            else:
+                raise e
 
-    def predict(self, image):
-        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-
-        peak_enhancement_filter = PeakEnhancementFilter(1.8, 6, 25).to(device)
-
+    def predict(self, image, sampling=None):
         with torch.no_grad():
+            preprocessed, sampling, padding = self.prepare_image(image.copy(), sampling)
 
-            preprocessed, sampling, padding = self.prepare_image(image.copy())
-
-            #features = self._model(preprocessed)
-            #segmentation = nn.Softmax(1)(self._segmentation_head(features))
-
-            #weights = pytorch_to_cupy(segmentation[0, 0])
-            #weights = weights[padding[0][0]:-padding[0][1],padding[1][0]:-padding[1][1]]
-
-            #preprocessed, sampling, padding = self.prepare_image(image, weights)
-
-            #markers = torch.zeros((2,1) + preprocessed.shape[2:], device=device)
-            #segmentation = torch.zeros((2,) + (3,) + preprocessed.shape[2:], device=device)
-
-            features = self._model(preprocessed)
+            features = self._backbone(preprocessed)
             segmentation = nn.Softmax(1)(self._segmentation_head(features))
-            markers = self._marker_head(features)
 
-            segmentation[:, 1] = 0
+            mask = (segmentation[0, 0] + segmentation[0, 2])[None, None]
 
-            markers = peak_enhancement_filter(markers)
+            #import matplotlib.pyplot as plt
+            #plt.imshow(mask.cpu().numpy()[0,0],vmin=0,vmax=1)
+            #plt.show()
+            #plt.show()
+
+            preprocessed, sampling, padding = self.prepare_image(image.copy(), sampling, mask)
+            features = self._backbone(preprocessed)
+
+            segmentation = nn.Softmax(1)(self._segmentation_head(features))
+            density = nn.Sigmoid()(self._density_head(features))
+
+            #segmentation[:, 1] = 0
+
+            markers = self._enhancement_filter(density)
 
             markers = pytorch_to_cupy(markers)
             segmentation = pytorch_to_cupy(segmentation)
 
-        points = cp.array(cp.where(markers[0,0] > .2)).T
+        torch.cuda.empty_cache()
 
-        segmentation = cp.argmax(segmentation[0], axis=0)
+        points = cp.array(cp.where(markers[0, 0] > self._threshold)).T
 
         points = cp.asnumpy(points)
-        segmentation = cp.asnumpy(segmentation)
+        segmentation = cp.asnumpy(segmentation)[0]
 
-        labels = segmentation[points[:, 0], points[:, 1]]
+        points, indices = merge_close_points(points, self._density_sigma)
 
-        points, labels = merge_close(points, labels, 4)
+        label_probabilities = integrate_discs(points, segmentation, self._density_sigma)
+        labels = np.argmax(label_probabilities, axis=-1)
 
-        segmentation = merge_dopants_into_contamination(segmentation)
-        contamination = segmentation == 1
+        points = points[labels != 1]
+        labels = labels[labels != 1]
 
-        not_contaminated = contamination[points[:, 0], points[:, 1]] == 0
-        points = points[not_contaminated]
-        labels = labels[not_contaminated]
+        contamination = merge_dopants_into_contamination(np.argmax(segmentation, axis=0)) == 1
 
         scale_factor = 16
         contamination = skimage.util.view_as_blocks(contamination, (scale_factor,) * 2).sum((-2, -1)) > (
@@ -145,5 +140,15 @@ class AtomRecognitionModel:
         points = np.vstack((points, contamination))
         labels = np.concatenate((labels, np.ones(len(contamination))))
 
-        points = (points - padding[0]) * self._training_sampling / sampling
-        return points[:, ::-1], labels
+        points = points.astype(np.float)
+        points = points - padding[0]
+
+        if sampling is not None:
+            points *= self._training_sampling / sampling
+
+        output = {'points': points[:, ::-1],
+                  'labels': labels,
+                  'density': density[0, 0].detach().cpu().numpy(),
+                  'segmentation': segmentation}
+
+        return output

@@ -24,7 +24,7 @@ def is_orthogonal(atoms, tol=1e-12):
     return not np.any(np.abs(atoms.cell[~np.eye(3, dtype=bool)]) > tol)
 
 
-def merge_close(atoms, tol=1e-12):
+def merge_overlapping(atoms, tol=1e-12):
     labels = fcluster(linkage(atoms.positions), tol, criterion='distance')
 
     _, idx = np.unique(labels, return_index=True)
@@ -108,8 +108,7 @@ def orthogonalize_atoms(atoms, n=1, m=None, tol=1e-12):
         positions[close, i] = positions[close, i] - cell[i]
 
     new_atoms = Atoms(atoms.numbers, positions=positions, cell=cell)
-
-    return merge_close(new_atoms)
+    return merge_overlapping(new_atoms, tol=tol)
 
 
 def orthogonalize_array(array, original_cell, origin, extent, new_gpts=None):

@@ -1,11 +1,5 @@
-import numpy as np
 import matplotlib.pyplot as plt
-
-
-def mask_outside_positions(positions, shape, margin=0):
-    mask = ((positions[:, 0] >= margin) & (positions[:, 1] >= margin) &
-            (positions[:, 0] < shape[0] - margin) & (positions[:, 1] < shape[1] - margin))
-    return mask
+import numpy as np
 
 
 def find_pairs(positions_1, positions_2, cutoff):
@@ -13,7 +7,6 @@ def find_pairs(positions_1, positions_2, cutoff):
     norms_2 = (positions_2 ** 2).sum(1)[None, :]
     distances = norms_1 + norms_2 - 2. * np.dot(positions_1, positions_2.T)
     shape = distances.shape
-    # max_pairs = min(len(positions_1), len(positions_2))
 
     distances = distances.ravel()
     pairs = np.zeros(shape, dtype=np.bool)

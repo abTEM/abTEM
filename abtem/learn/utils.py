@@ -1,18 +1,14 @@
 import bisect
+import functools
 import os
 
 import cupy as cp
 import numpy as np
 import torch
-from scipy.cluster.hierarchy import linkage, fcluster
-from scipy.spatial.distance import pdist
-from torch.utils import dlpack
-
 from abtem.cudakernels import superpose_gaussians
 from abtem.utils import BatchGenerator
-from abtem.utils import label_to_index_generator
-import functools
-
+from torch.utils import dlpack
+import torch.nn.functional as F
 
 def walk_dir(path, ending):
     files = []
@@ -195,30 +191,51 @@ def closest_multiple_ceil(n, m):
     return int(np.ceil(n / m) * m)
 
 
-def pad_to_size(images, height, width, n=None, **kwargs):
+def pad_to_size(images, height, width, n=16, **kwargs):
     xp = cp.get_array_module(images)
+    shape = images.shape[-2:]
 
     if n is not None:
         height = closest_multiple_ceil(height, n)
         width = closest_multiple_ceil(width, n)
 
-    shape = images.shape[-2:]
-
     up = max((height - shape[0]) // 2, 0)
     down = max(height - shape[0] - up, 0)
     left = max((width - shape[1]) // 2, 0)
     right = max(width - shape[1] - left, 0)
+
+    #padding = [up, down, left, right]
     images = xp.pad(images, pad_width=[(up, down), (left, right)], **kwargs)
     return images, [up, down, left, right]
+    #return F.pad(images, padding, mode=mode), padding
+
+# def pad_to_size(images, height, width, n=None, **kwargs):
+#     xp = cp.get_array_module(images)
+#
+#     if n is not None:
+#         height = closest_multiple_ceil(height, n)
+#         width = closest_multiple_ceil(width, n)
+#
+#     shape = images.shape[-2:]
+#
+#     up = max((height - shape[0]) // 2, 0)
+#     down = max(height - shape[0] - up, 0)
+#     left = max((width - shape[1]) // 2, 0)
+#     right = max(width - shape[1] - left, 0)
+#     images = xp.pad(images, pad_width=[(up, down), (left, right)], **kwargs)
+#
+#     return images, [up, down, left, right]
 
 
-def merge_close(positions, distance):
-    clusters = fcluster(linkage(pdist(positions), method='complete'), distance, criterion='distance')
+def weighted_normalization(image, mask=None):
+    if mask is None:
+        return (image - torch.mean(image)) / torch.std(image)
 
-    new_positions = np.zeros_like(positions)
-    indices = np.zeros(len(positions), dtype=np.int)
-    for i, cluster in enumerate(label_to_index_generator(clusters, 1)):
-        new_positions[i] = np.mean(positions[cluster], axis=0)
-        indices[i] = np.min(indices)
+    weighted_means = (torch.sum(image * mask, dim=(1, 2, 3), keepdims=True) /
+                      torch.sum(mask, dim=(1, 2, 3), keepdims=True))
+    weighted_stds = torch.sqrt(
+        torch.sum(mask * (image - weighted_means) ** 2, dim=(1, 2, 3), keepdims=True) /
+        torch.sum(mask ** 2, dim=(1, 2, 3), keepdims=True))
+    return (image - weighted_means) / weighted_stds
 
-    return new_positions, indices
+

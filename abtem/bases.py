@@ -11,160 +11,93 @@ from abtem.utils import energy2wavelength, energy2sigma, abs2
 from collections.abc import Iterable
 from skimage.io import imsave
 from sys import getsizeof
+from copy import copy
+from forwardable import forwardable, def_delegators
+from functools import lru_cache
 
 
-def notify(func):
+def watched_property(event):
     """
     Decorator for class methods that have to notify.
-
-    Parameters
-    ----------
-    func : function
-        notifying function
-
-    Returns
-    -------
-
     """
-    name = func.__name__
 
-    def wrapper(*args):
-        obj, value = args
-        old = getattr(obj, name)
-        func(*args)
-        change = np.any(old != value)
-        obj.notify_observers({'notifier': name, 'change': change})
-
-    return wrapper
-
-
-class Observable:
-
-    def __init__(self, **kwargs):
-        """
-        Observable base class.
-
-        Base class for creating an observable class in the classic observer design pattern.
-
-        :param kwargs: dummy
-        """
-        self._observers = []
-        super().__init__(**kwargs)
-
-    @property
-    def observers(self) -> list:
-        return self._observers
-
-    def register_observer(self, observer: 'Observer'):
-        if observer not in self._observers:
-            self._observers.append(observer)
-
-    def notify_observers(self, message):
-        for observer in self._observers:
-            observer.notify(self, message)
-
-
-class Observer:
-
-    def __init__(self, **kwargs):
-        """
-        Observer base class.
-
-        Base class for creating an observer class in the classic observer design pattern.
-
-        :param kwargs: dummy
-        """
-        super().__init__(**kwargs)
-
-    def observe(self, observable: Observable):
-        observable.register_observer(self)
-
-    def notify(self, observable: Observable, message: dict):
-        raise NotImplementedError()
-
-
-class Cache(Observer):
-
-    def __init__(self, **kwargs):
-        """
-        Observer with a cache.
-
-        This object has a dictionary for saving results that might be
-        used for further calculations.
-
-        :param kwargs: dummy
-        """
-        self._cache = {}
-        self._clear_conditions = {}
-
-        super().__init__(**kwargs)
-
-    @property
-    def cache(self) -> dict:
-        return self._cache
-
-    def retrieve_from_cache(self, key: str):
-        return self._cache[key]
-
-    def update_cache(self, key: str, data: Any, clear_condition: Optional[tuple] = None):
-        self._cache[key] = data
-        self._clear_conditions[key] = clear_condition
-
-    def notify(self, observable: Observable, message: dict):
-        pop = []
-        if message['change']:
-            for key, conditions in self._clear_conditions.items():
-                if conditions is None:
-                    pop.append(key)
-                elif message['notifier'] in conditions:
-                    pop.append(key)
-
-        for key in pop:
-            self._cache.pop(key, None)
-            self._clear_conditions.pop(key, None)
-
-    def clear_cache(self):
-        self._cache = {}
-
-
-def cached_method(clear_conditions=None):
     def wrapper(func):
+        property_name = func.__name__
+
         def new_func(*args):
-            self = args[0]
-            name = func.__name__
-            try:
-                return self.retrieve_from_cache(name)
-            except KeyError:
-                data = func(*args)
-                self.update_cache(name, data, clear_conditions)
-                return data
+            instance, value = args
+            old = getattr(instance, property_name)
+            func(*args)
+            change = old != value
+            if isinstance(change, Iterable):
+                change = any(change)
+            getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': change})
 
         return new_func
 
     return wrapper
 
 
-def cached_method_with_args(clear_conditions=None):
-    def wrapper(func):
-        def new_func(*args):
-            self = args[0]
-            name = func.__name__
-            try:
-                return self.retrieve_from_cache(name)[args[1:]]
-            except KeyError:
-                data = func(*args)
-                try:
-                    self._cache[name][args[1:]] = data
-                except KeyError:
-                    self.update_cache(name, {args[1:]: data}, clear_conditions)
-                return data
+class Event(object):
 
-        return new_func
+    def __init__(self):
+        self.callbacks = []
 
-    return wrapper
+    def notify(self, *args, **kwargs):
+        for callback in self.callbacks:
+            callback(*args, **kwargs)
+
+    def register(self, callback):
+        self.callbacks.append(callback)
+        return callback
+
+    @classmethod
+    def watched_property(cls, event_name, key):
+        actual_key = '_%s' % key
+
+        def getter(obj):
+            return getattr(obj, actual_key)
+
+        def setter(obj, value):
+            event = getattr(obj, event_name)
+            setattr(obj, actual_key, value)
+            event.notify(obj, key, value)
+
+        return property(fget=getter, fset=setter)
 
 
-class Grid(Observable):
+def cache_clear_callback(target_func):
+    def callback(notifier, property_name, change):
+        if change:
+            target_func.cache_clear()
+
+    return callback
+
+
+class DelegatedAttribute:
+    def __init__(self, delegate_name, attr_name):
+        self.attr_name = attr_name
+        self.delegate_name = delegate_name
+
+    def __get__(self, instance, owner):
+        if instance is None:
+            return self
+        else:
+            # return instance.delegate.attr
+            return getattr(self.delegate(instance), self.attr_name)
+
+    def __set__(self, instance, value):
+        # instance.delegate.attr = value
+        setattr(self.delegate(instance), self.attr_name, value)
+
+    def __delete__(self, instance):
+        delattr(self.delegate(instance), self.attr_name)
+
+    def delegate(self, instance):
+        return getattr(instance, self.delegate_name)
+
+
+class Grid:
 
     def __init__(self,
                  extent: Union[float, Sequence[float]] = None,
@@ -174,8 +107,7 @@ class Grid(Observable):
                  endpoint: bool = False,
                  lock_extent=False,
                  lock_gpts=False,
-                 lock_sampling=False,
-                 **kwargs):
+                 lock_sampling=False):
 
         """
         Grid object.
@@ -195,9 +127,9 @@ class Grid(Observable):
         endpoint : bool, optional
             If true include the grid endpoint (the dafault is False). For periodic grids the endpoint should not be
             included.
-        kwargs :
         """
 
+        self.changed = Event()
         self._dimensions = dimensions
         self._endpoint = endpoint
 
@@ -220,7 +152,8 @@ class Grid(Observable):
 
         self._adjust_sampling(self.extent, self.gpts)
 
-        super().__init__(**kwargs)
+        self.changed.register(cache_clear_callback(self.coordinates))
+        self.changed.register(cache_clear_callback(self.spatial_frequencies))
 
     def _validate(self, value, dtype):
         if isinstance(value, (np.ndarray, list, tuple)):
@@ -249,7 +182,7 @@ class Grid(Observable):
         return self._extent
 
     @extent.setter
-    @notify
+    @watched_property('changed')
     def extent(self, extent: Union[float, Sequence[float]]):
         if self._lock_extent:
             raise RuntimeError('extent locked')
@@ -269,7 +202,7 @@ class Grid(Observable):
         return self._gpts
 
     @gpts.setter
-    @notify
+    @watched_property('changed')
     def gpts(self, gpts: Union[int, Sequence[int]]):
         if self._lock_gpts:
             raise RuntimeError('gpts locked')
@@ -288,7 +221,7 @@ class Grid(Observable):
         return self._sampling
 
     @sampling.setter
-    @notify
+    @watched_property('changed')
     def sampling(self, sampling):
         if self._lock_sampling:
             raise RuntimeError('sampling locked')
@@ -324,7 +257,7 @@ class Grid(Observable):
             else:
                 self._sampling = extent / gpts
 
-    def check_is_grid_defined(self):
+    def check_is_defined(self):
         """ Throw error if the grid is not defined. """
         if self.extent is None:
             raise RuntimeError('grid extent is not defined')
@@ -343,8 +276,8 @@ class Grid(Observable):
         fourier_limits = self.spatial_frequency_limits
         return fourier_limits[:, 1] - fourier_limits[:, 0]
 
-    def match_grid(self, other):
-        self.check_grids_can_match(other)
+    def match(self, other):
+        self.check_can_match(other)
 
         if (self.extent is None) & (other.extent is None):
             raise RuntimeError('grid extent cannot be inferred')
@@ -364,7 +297,7 @@ class Grid(Observable):
         elif other.gpts is None:
             other.gpts = self.gpts
 
-    def check_grids_can_match(self, other):
+    def check_can_match(self, other):
         """ Throw error if the grid of another object is different from this object. """
 
         if (self.extent is not None) & (other.extent is not None) & np.any(self.extent != other.extent):
@@ -373,20 +306,29 @@ class Grid(Observable):
         elif (self.gpts is not None) & (other.gpts is not None) & np.any(self.gpts != other.gpts):
             raise RuntimeError('inconsistent grid gpts ({} != {})'.format(self.gpts, other.gpts))
 
-    def linspace(self):
-        self.check_is_grid_defined()
+    @lru_cache(1)
+    def coordinates(self):
+        self.check_is_defined()
         return [np.linspace(0, e, g, endpoint=self.endpoint, dtype=DTYPE) for g, e in zip(self.gpts, self.extent)]
 
-    def fftfreq(self):
-        self.check_is_grid_defined()
+    @lru_cache(1)
+    def spatial_frequencies(self):
+        self.check_is_defined()
         return [DTYPE(np.fft.fftfreq(g, s)) for g, s in zip(self.gpts, self.sampling)]
 
-    def copy(self):
+    def __copy__(self):
         return self.__class__(extent=self._extent.copy(), gpts=self._gpts.copy(), sampling=self._sampling.copy(),
-                              dimensions=self._dimensions)
+                              dimensions=self._dimensions, endpoint=self.endpoint, lock_extent=self._lock_extent,
+                              lock_gpts=self._lock_gpts, lock_sampling=self._lock_sampling)
 
 
-class Energy(Observable):
+class HasGridMixin:
+    extent = DelegatedAttribute('grid', 'extent')
+    gpts = DelegatedAttribute('grid', 'gpts')
+    sampling = DelegatedAttribute('grid', 'sampling')
+
+
+class Accelerator:
     """
     Energy base class
 
@@ -396,7 +338,7 @@ class Energy(Observable):
     :type energy: optional, float
     """
 
-    def __init__(self, energy: Optional[float] = None, **kwargs):
+    def __init__(self, energy: Optional[float] = None):
         """
         Energy base class.
 
@@ -411,20 +353,18 @@ class Energy(Observable):
         if energy is not None:
             energy = DTYPE(energy)
 
+        self.changed = Event()
         self._energy = energy
-
-        super().__init__(**kwargs)
 
     @property
     def energy(self) -> float:
         return self._energy
 
     @energy.setter
-    @notify
+    @watched_property('changed')
     def energy(self, value: float):
         if value is not None:
             value = DTYPE(value)
-
         self._energy = value
 
     @property
@@ -434,7 +374,7 @@ class Energy(Observable):
         :return: wavelength
         :rtype: float
         """
-        self.check_is_energy_defined()
+        self.check_is_defined()
         return DTYPE(energy2wavelength(self.energy))
 
     @property
@@ -442,20 +382,20 @@ class Energy(Observable):
         """
         Interaction parameter from energy.
         """
-        self.check_is_energy_defined()
+        self.check_is_defined()
         return DTYPE(energy2sigma(self.energy))
 
-    def check_is_energy_defined(self):
+    def check_is_defined(self):
         """ Throw error if the energy is not defined. """
 
         if self.energy is None:
             raise RuntimeError('energy is not defined')
 
-    def check_energies_can_match(self, other: 'Energy'):
+    def check_energies_can_match(self, other: 'Accelerator'):
         if (self.energy is not None) & (other.energy is not None) & (self.energy != other.energy):
             raise RuntimeError('inconsistent energies')
 
-    def match_energy(self, other):
+    def match(self, other):
         self.check_energies_can_match(other)
 
         if (self.energy is None) & (other.energy is None):
@@ -467,60 +407,68 @@ class Energy(Observable):
         elif other.energy is None:
             other.energy = self.energy
 
-    def copy(self) -> 'Energy':
-        """
-        :return: A copy of itself
-        :rtype: Energy
-        """
+    def __copy__(self):
         return self.__class__(self.energy)
 
 
-class Buildable(object):
-
-    def __init__(self, build_on_gpu=False, **kwargs):
-        self._build_on_gpu = build_on_gpu
-        super().__init__(**kwargs)
-
-    def _dtype(self):
-        if self._build_on_gpu:
-            return CUPY_DTYPE
-        else:
-            return DTYPE
+class HasAcceleratorMixin:
+    _accelerator: Accelerator
 
     @property
-    def build_on_gpu(self):
-        return self._build_on_gpu
+    def accelerator(self) -> Accelerator:
+        return self._accelerator
 
-    def _array_module(self):
-        if self._build_on_gpu:
+    @accelerator.setter
+    def accelerator(self, new: Accelerator):
+        changed_event = self._accelerator.changed
+        self._accelerator = new
+        self._accelerator.changed = changed_event
+
+    energy = DelegatedAttribute('accelerator', 'energy')
+    wavelength = DelegatedAttribute('accelerator', 'wavelength')
+
+
+class DeviceManager:
+
+    def __init__(self, device):
+        if device is None:
+            device = 'cpu'
+
+        self._device = device
+
+    @property
+    def device(self):
+        return self._device
+
+    @property
+    def is_cuda(self):
+        return not self.device == 'cpu'
+
+    def get_array_library(self):
+        if self.is_cuda:
             return cp
         else:
             return np
 
+    def __copy__(self):
+        return self.__class__(self._device)
 
-class ArrayWithGrid(Grid):
 
-    def __init__(self, array, spatial_dimensions, extent=None, sampling=None, fourier_space=False, endpoint=False,
-                 **kwargs):
+class Array:
+
+    def __init__(self, array, spatial_dimensions, extent=None, sampling=None, endpoint=False):
         array_dimensions = len(array.shape)
 
         if array_dimensions < spatial_dimensions:
             raise RuntimeError('array dimensions exceeds spatial dimensions')
 
         self._array = array
+        self.grid = Grid(extent=extent, sampling=sampling, endpoint=endpoint, lock_gpts=True)
         self._spatial_dimensions = spatial_dimensions
-        self._fourier_space = fourier_space
-
-        super().__init__(extent=extent, sampling=sampling, lock_gpts=True, dimensions=spatial_dimensions,
-                         endpoint=endpoint, **kwargs)
 
     @property
     def shape(self):
         return self._array.shape
-
-    @property
-    def memory_usage(self):
-        return getsizeof(self._array)
 
     @property
     def gpts(self):
@@ -529,10 +477,6 @@ class ArrayWithGrid(Grid):
     @property
     def spatial_dimensions(self):
         return self._spatial_dimensions
-
-    @property
-    def fourier_space(self):
-        return self._fourier_space
 
     @property
     def array(self):
@@ -555,195 +499,175 @@ class ArrayWithGrid(Grid):
         array = array.astype(dtype)
         imsave(fname, array, **kwargs)
 
-    def to_gpu(self):
-        return self.copy(to_gpu=True)
+    #     def __getitem__(self, item):
+    #         if len(self.array.shape) <= self.spatial_dimensions:
+    #             raise RuntimeError()
+    #         return self.__class__(array=self._array[item], spatial_dimensions=self.spatial_dimensions - 1,
+    #                               extent=self.extent.copy(), fourier_space=self.fourier_space)
+    #
+    #     def write(self, path):
+    #         with h5py.File(path, 'w') as f:
+    #             dset = f.create_dataset('class', (100,), dtype='S100')
+    #             dset[:] = 'abtem.bases.ArrayWithGrid'
+    #             f.create_dataset('array', data=self.array)
+    #             f.create_dataset('spatial_dimensions', data=self.spatial_dimensions)
+    #             f.create_dataset('extent', data=self.extent)
+    #             f.create_dataset('fourier_space', data=self.fourier_space)
+    #         return path
+    #
+    #     @classmethod
+    #     def read(cls, path):
+    #         # TODO: implement chunks
+    #         with h5py.File(path, 'r') as f:
+    #             datasets = {}
+    #             for key in f.keys():
+    #                 datasets[key] = f.get(key)[()]
+    #         datasets.pop('class')
+    #         return cls(**datasets)
+    #
+    def copy(self):
+        new_copy = self.__class__(array=self.array.copy(), spatial_dimensions=self.spatial_dimensions)
+        new_copy.grid = copy(self.grid)
+        return new_copy
 
-    def __getitem__(self, item):
-        if len(self.array.shape) <= self.spatial_dimensions:
-            raise RuntimeError()
-        return self.__class__(array=self._array[item], spatial_dimensions=self.spatial_dimensions - 1,
-                              extent=self.extent.copy(), fourier_space=self.fourier_space)
-
-    def write(self, path):
-        with h5py.File(path, 'w') as f:
-            dset = f.create_dataset('class', (100,), dtype='S100')
-            dset[:] = 'abtem.bases.ArrayWithGrid'
-            f.create_dataset('array', data=self.array)
-            f.create_dataset('spatial_dimensions', data=self.spatial_dimensions)
-            f.create_dataset('extent', data=self.extent)
-            f.create_dataset('fourier_space', data=self.fourier_space)
-        return path
-
-    @classmethod
-    def read(cls, path):
-        # TODO: implement chunks
-        with h5py.File(path, 'r') as f:
-            datasets = {}
-            for key in f.keys():
-                datasets[key] = f.get(key)[()]
-        return cls(**datasets)
-
-    def copy(self, to_gpu=False):
-        if to_gpu:
-            new_array = cp.asarray(self.array)
-        else:
-            new_array = self.array.copy()
-        return self.__class__(array=new_array, spatial_dimensions=self.spatial_dimensions,
-                              extent=self.extent.copy(), fourier_space=self.fourier_space)
-
-
-class ArrayWithGrid1D(ArrayWithGrid):
-
-    def __init__(self, array, extent=None, sampling=None, fourier_space=False, endpoint=False, **kwargs):
-        super().__init__(array=array, spatial_dimensions=1, extent=extent, sampling=sampling,
-                         fourier_space=fourier_space, endpoint=endpoint, **kwargs)
-
-    def plot(self, ax=None, complex_reduction=None, fourier_space=False, title=None, figsize=None):
-
-        if ax is None:
-            fig, ax = plt.subplots(figsize=figsize)
-
-        array = np.squeeze(self.array)
-
-        if self.fourier_space & fourier_space:
-            array = np.fft.fftshift(array)
-
-        elif (not self.fourier_space) & fourier_space:
-            array = np.fft.fftshift(np.fft.fftn(array))
-
-        elif (self.fourier_space) & (not fourier_space):
-            array = np.fft.ifftn(array)
-
-        if complex_reduction is not None:
-            if isinstance(complex_reduction, str):
-                if complex_reduction == 'phase':
-                    complex_reduction = np.angle
-                elif complex_reduction == 'abs2':
-                    complex_reduction = abs2
-
-            array = complex_reduction(array)
-
-        if fourier_space:
-            x_label = 'kx [1 / Å]'
-            x = self.fftfreq()[0]
-
-        else:
-            x_label = 'x [Å]'
-            x = self.linspace()[0]
-
-        if np.iscomplexobj(array):
-            ax.plot(x, array.real)
-            ax.plot(x, array.imag)
-        else:
-            ax.plot(x, array)
-
-        ax.set_xlabel(x_label)
-
-        if title is not None:
-            ax.set_title(title)
-
-    def write(self, path):
-        with h5py.File(path, 'w') as f:
-            dset = f.create_dataset('class', (1,), dtype='S100')
-            dset[:] = np.string_('abtem.bases.ArrayWithGrid1D')
-            f.create_dataset('array', data=self.array)
-            f.create_dataset('extent', data=self.extent)
-            f.create_dataset('fourier_space', data=self.fourier_space)
-        return path
-
-
-class ArrayWithGrid2D(ArrayWithGrid):
-
-    def __init__(self, array, extent=None, sampling=None, fourier_space=False, endpoint=False, **kwargs):
-        super().__init__(array=array, spatial_dimensions=2, extent=extent, sampling=sampling,
-                         fourier_space=fourier_space, endpoint=endpoint, **kwargs)
-
-    def plot(self, ax=None, logscale=False, logscale_constant=1., complex_representation=None,
-             fourier_space=None, title=None, cmap='gray', figsize=None, scans=None, **kwargs):
-
-        if ax is None:
-            fig, ax = plt.subplots(figsize=figsize)
-
-        array = np.squeeze(self.array)
-
-        array = cp.asnumpy(array)
-
-        if len(array.shape) > 2:
-            raise RuntimeError('array dimension greater 2, set reduction operation')
-
-        if fourier_space is None:
-            fourier_space = self.fourier_space
-
-        if self.fourier_space & fourier_space:
-            array = np.fft.fftshift(array)
-
-        elif (not self.fourier_space) & fourier_space:
-            array = np.fft.fftshift(np.fft.fftn(array))
-
-        elif (self.fourier_space) & (not fourier_space):
-            array = np.fft.ifftn(array)
-
-        if (complex_representation is None) & np.iscomplexobj(array):
-            array = abs2(array)
-
-        elif complex_representation is not None:
-            if isinstance(complex_representation, str):
-                if complex_representation == 'phase':
-                    complex_representation = np.angle
-                elif complex_representation == 'abs2':
-                    complex_representation = abs2
-
-            array = complex_representation(array)
-
-        if logscale:
-            array = np.log(1 + logscale_constant * array)
-
-        if fourier_space:
-            x_label = 'kx [1 / Å]'
-            y_label = 'ky [1 / Å]'
-            extent = self.spatial_frequency_limits.ravel()
-        else:
-            x_label = 'x [Å]'
-            y_label = 'y [Å]'
-            extent = [0, self.extent[0], 0, self.extent[1]]
-
-        im = ax.imshow(array.T, extent=extent, cmap=cmap, origin='lower', **kwargs)
-        ax.set_xlabel(x_label)
-        ax.set_ylabel(y_label)
-
-        if title is not None:
-            ax.set_title(title)
-
-        if scans is not None:
-            if not isinstance(scans, Iterable):
-                scans = [scans]
-
-            for scan in scans:
-                scan.add_to_mpl_plot(ax)
-
-        return ax, im
-
-    def write(self, path):
-        with h5py.File(path, 'w') as f:
-            dset = f.create_dataset('class', (1,), dtype='S100')
-            dset[:] = np.string_('abtem.bases.ArrayWithGrid2D')
-            f.create_dataset('array', data=self.array)
-            f.create_dataset('extent', data=self.extent)
-            f.create_dataset('fourier_space', data=self.fourier_space)
-        return path
-
-
-class ArrayWithGridAndEnergy2D(ArrayWithGrid2D, Energy):
-
-    def __init__(self, array, extent=None, sampling=None, energy=None, fourier_space=False,
-                 **kwargs):
-        super().__init__(array=array, extent=extent, sampling=sampling, energy=energy, fourier_space=fourier_space,
-                         **kwargs)
-
-    def copy(self, to_gpu=False):
-        if to_gpu:
-            new_array = cp.asarray(self.array)
-        else:
-            new_array = self.array.copy()
-        return self.__class__(array=new_array, spatial_dimensions=self.spatial_dimensions,
-                              extent=self.extent.copy(), energy=self.energy, fourier_space=self.fourier_space)
+# class ArrayWithGrid1D(ArrayWithGrid):
+#
+#     def __init__(self, array, extent=None, sampling=None, fourier_space=False, endpoint=False, **kwargs):
+#         super().__init__(array=array, spatial_dimensions=1, extent=extent, sampling=sampling,
+#                          fourier_space=fourier_space, endpoint=endpoint, **kwargs)
+#
+#     def plot(self, ax=None, complex_reduction=None, fourier_space=False, title=None, figsize=None):
+#
+#         if ax is None:
+#             fig, ax = plt.subplots(figsize=figsize)
+#
+#         array = np.squeeze(self.array)
+#
+#         if self.fourier_space & fourier_space:
+#             array = np.fft.fftshift(array)
+#
+#         elif (not self.fourier_space) & fourier_space:
+#             array = np.fft.fftshift(np.fft.fftn(array))
+#
+#         elif (self.fourier_space) & (not fourier_space):
+#             array = np.fft.ifftn(array)
+#
+#         if complex_reduction is not None:
+#             if isinstance(complex_reduction, str):
+#                 if complex_reduction == 'phase':
+#                     complex_reduction = np.angle
+#                 elif complex_reduction == 'abs2':
+#                     complex_reduction = abs2
+#
+#             array = complex_reduction(array)
+#
+#         if fourier_space:
+#             x_label = 'kx [1 / Å]'
+#             x = self.fftfreq()[0]
+#
+#         else:
+#             x_label = 'x [Å]'
+#             x = self.linspace()[0]
+#
+#         if np.iscomplexobj(array):
+#             ax.plot(x, array.real)
+#             ax.plot(x, array.imag)
+#         else:
+#             ax.plot(x, array)
+#
+#         ax.set_xlabel(x_label)
+#
+#         if title is not None:
+#             ax.set_title(title)
+#
+#     def write(self, path):
+#         with h5py.File(path, 'w') as f:
+#             dset = f.create_dataset('class', (1,), dtype='S100')
+#             dset[:] = np.string_('abtem.bases.ArrayWithGrid1D')
+#             f.create_dataset('array', data=self.array)
+#             f.create_dataset('extent', data=self.extent)
+#             f.create_dataset('fourier_space', data=self.fourier_space)
+#         return path
+#
+#
+# class ArrayWithGrid2D(ArrayWithGrid):
+#
+#     def __init__(self, array, extent=None, sampling=None, fourier_space=False, endpoint=False, **kwargs):
+#         super().__init__(array=array, spatial_dimensions=2, extent=extent, sampling=sampling,
+#                          fourier_space=fourier_space, endpoint=endpoint, **kwargs)
+#
+#     def plot(self, ax=None, logscale=False, logscale_constant=1., complex_representation=None,
+#              fourier_space=None, title=None, cmap='gray', figsize=None, scans=None, **kwargs):
+#
+#         if ax is None:
+#             fig, ax = plt.subplots(figsize=figsize)
+#
+#         array = np.squeeze(self.array)
+#
+#         array = cp.asnumpy(array)
+#
+#         if len(array.shape) > 2:
+#             raise RuntimeError('array dimension greater 2, set reduction operation')
+#
+#         if fourier_space is None:
+#             fourier_space = self.fourier_space
+#
+#         if self.fourier_space & fourier_space:
+#             array = np.fft.fftshift(array)
+#
+#         elif (not self.fourier_space) & fourier_space:
+#             array = np.fft.fftshift(np.fft.fftn(array))
+#
+#         elif (self.fourier_space) & (not fourier_space):
+#             array = np.fft.ifftn(array)
+#
+#         if (complex_representation is None) & np.iscomplexobj(array):
+#             array = abs2(array)
+#
+#         elif complex_representation is not None:
+#             if isinstance(complex_representation, str):
+#                 if complex_representation == 'phase':
+#                     complex_representation = np.angle
+#                 elif complex_representation == 'abs2':
+#                     complex_representation = abs2
+#
+#             array = complex_representation(array)
+#
+#         if logscale:
+#             array = np.log(1 + logscale_constant * array)
+#
+#         if fourier_space:
+#             x_label = 'kx [1 / Å]'
+#             y_label = 'ky [1 / Å]'
+#             extent = self.spatial_frequency_limits.ravel()
+#         else:
+#             x_label = 'x [Å]'
+#             y_label = 'y [Å]'
+#             extent = [0, self.extent[0], 0, self.extent[1]]
+#
+#         im = ax.imshow(array.T, extent=extent, cmap=cmap, origin='lower', **kwargs)
+#         ax.set_xlabel(x_label)
+#         ax.set_ylabel(y_label)
+#
+#         if title is not None:
+#             ax.set_title(title)
+#
+#         if scans is not None:
+#             if not isinstance(scans, Iterable):
+#                 scans = [scans]
+#
+#             for scan in scans:
+#                 scan.add_to_mpl_plot(ax)
+#
+#         return ax, im
+#
+#     def write(self, path):
+#         with h5py.File(path, 'w') as f:
+#             dset = f.create_dataset('class', (1,), dtype='S100')
+#             dset[:] = np.string_('abtem.bases.ArrayWithGrid2D')
+#             f.create_dataset('array', data=self.array)
+#             f.create_dataset('extent', data=self.extent)
+#             f.create_dataset('fourier_space', data=self.fourier_space)
+#         return path
+#
+#

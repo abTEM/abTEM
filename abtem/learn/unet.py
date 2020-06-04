@@ -184,21 +184,15 @@ class UNet(nn.Module):
 
 class ConvHead(nn.Module):
 
-    def __init__(self, in_channels, out_channels, activation=None):
+    def __init__(self, in_channels, out_channels):
         super().__init__()
         self.in_channels = in_channels
-        self.activation = activation
 
         layers = []
-        for _ in range(2):
-            layers.append(nn.Conv2d(in_channels, in_channels, kernel_size=1))
-            layers.append(nn.ReLU(inplace=True))
-
+        layers.append(nn.Conv2d(in_channels, in_channels, kernel_size=1))
+        layers.append(nn.ReLU(inplace=True))
         layers.append(nn.Conv2d(in_channels, out_channels, kernel_size=1))
         self.layers = nn.Sequential(*layers)
 
     def forward(self, x):
-        if self.activation is None:
-            return self.layers(x)
-        else:
-            return self.activation(self.layers(x))
+        return self.layers(x)

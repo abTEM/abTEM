@@ -8,3 +8,4 @@ numexpr
 matplotlib
 ase
 scikit-image
+cupy

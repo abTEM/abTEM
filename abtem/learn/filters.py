@@ -17,19 +17,10 @@ class SeparableFilter(nn.Module):
 
 class GaussianFilter2d(SeparableFilter):
     def __init__(self, sigma):
-        kernel = self.get_kernel(sigma)
-        super().__init__(kernel)
-
-    def get_kernel(self, sigma):
-        kernel_size = int(np.ceil(sigma) ** 2) * 4 + 1
+        kernel_size = int(np.ceil(sigma) ** 2) * 2 + 1
         A = 1 / (sigma * np.sqrt(2 * np.pi))
-        return A * torch.exp(-(torch.arange(kernel_size) - (kernel_size - 1) / 2) ** 2 / (2 * sigma ** 2))
-
-    def set_sigma(self, sigma):
-        new_kernel = self.get_kernel(sigma)
-        if self.kernel.is_cuda:
-            new_kernel = new_kernel.to(self.kernel.get_device())
-        self.kernel = new_kernel
+        kernel = A * torch.exp(-(torch.arange(kernel_size) - (kernel_size - 1) / 2) ** 2 / (2 * sigma ** 2))
+        super().__init__(kernel)
 
 
 class SumFilter2d(SeparableFilter):
@@ -38,41 +29,34 @@ class SumFilter2d(SeparableFilter):
         super().__init__(kernel)
 
 
-class PeakEnhancementFilter:
+class PeakEnhancementFilter(nn.Module):
 
-    def __init__(self, alpha, sigma, iterations, epsilon=1e-7):
-        self._base_filter = GaussianFilter2d(sigma)
+    def __init__(self, alpha, sigmas, iterations, epsilon=1e-7):
+        super().__init__()
+        self._filters = nn.ModuleList([GaussianFilter2d(sigma) for sigma in sigmas])
         self._alpha = alpha
         self._iterations = iterations
         self._epsilon = epsilon
 
-    def iterate(self, tensor):
-        temp = tensor ** self._alpha
-        return temp * self._base_filter(tensor) / (self._base_filter(temp) + self._epsilon)
-
-    def to(self, device):
-        self._base_filter.to(device)
-        return self
-
-    def __call__(self, tensor):
+    def forward(self, tensor):
+        temp = tensor.clone()
         for i in range(self._iterations):
-            tensor = self.iterate(tensor)
-        return tensor
+            temp = temp ** self._alpha
+            for filt in self._filters:
+                temp = temp * filt(tensor) / (filt(temp) + self._epsilon)
+        return temp
 
 
-class GaussianEnhancementFilter:
+class GaussianEnhancementFilter(nn.Module):
 
-    def __init__(self, sigma, alpha, enhancement_sigma, iterations):
-        self._peak_enhancement_filter = PeakEnhancementFilter(alpha, enhancement_sigma, iterations)
-        print(sigma * np.sqrt(1 - 1 / alpha ** iterations))
-        self._gaussian_filter = GaussianFilter2d(sigma * np.sqrt(1 - 1 / alpha ** iterations))
+    def __init__(self, sigma, alpha, enhancement_sigmas, iterations):
+        super().__init__()
+        self._peak_enhancement_filter = PeakEnhancementFilter(alpha, enhancement_sigmas, iterations)
+        self._gaussian_filter = GaussianFilter2d(sigma * np.sqrt(1 - 1 / alpha ** (iterations)))
 
-    def to(self, device):
-        self._peak_enhancement_filter.to(device)
-        self._gaussian_filter.to(device)
-        return self
-
-    def __call__(self, tensor):
+    def forward(self, tensor, return_markers=False):
         markers = self._peak_enhancement_filter(tensor)
-
-        return self._gaussian_filter()
+        if return_markers:
+            return self._gaussian_filter(markers), markers
+        else:
+            return self._gaussian_filter(markers)

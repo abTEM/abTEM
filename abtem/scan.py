@@ -1,4 +1,3 @@
-from contextlib import ExitStack
 from typing import Union, Sequence
 
 import h5py
@@ -63,7 +62,7 @@ class ScanBase:
 
     def generate_positions(self, max_batch):
         positions = self.get_all_positions()
-        self._partition_positions(max_batch)
+        self.partition_positions(max_batch)
 
         while len(self._partitions) > 0:
             start, end = self.get_next_partition()
@@ -72,7 +71,7 @@ class ScanBase:
     def allocate_measurements(self, detectors):
         raise NotImplementedError()
 
-    def _partition_positions(self, max_batch):
+    def partition_positions(self, max_batch):
         n = len(self)
         n_batches = (n + (-n % max_batch)) // max_batch
         batch_sizes = split_integer(len(self), n_batches)
@@ -82,36 +81,6 @@ class ScanBase:
 
     def insert_new_measurement(self, measurement, start, end, new_measurement):
         raise NotImplementedError()
-
-    def go(self, max_batch, show_progress=False):
-        if not isinstance(detectors, Iterable):
-            detectors = [detectors]
-
-        self._detectors = detectors
-
-        measurements = self.allocate()
-        jobs = self._create_jobs(max_batch)
-        positions = self.get_positions()
-
-        with tqdm(total=len(self)) if show_progress else ExitStack() as pbar:
-            while jobs:
-                start, end = jobs.pop(0)
-                exit_probes = self._probe.multislice_at(positions[start:end], self._potential)
-
-                for detector, measurement in measurements.items():
-                    self.insert_new_measurement(measurement, start, end, detector.detect(exit_probes))
-
-                if show_progress:
-                    pbar.update(end - start)
-
-        return measurements
-
-    def finalise_measurements(self):
-        raise NotImplementedError()
-
-    @property
-    def measurements(self):
-        return self._measurements
 
 
 class CustomScan(ScanBase):
@@ -180,9 +149,12 @@ class LineScan(Grid, ScanBase):
         return self._direction
 
     def allocate_measurements(self, detectors):
+        if not isinstance(detectors, Iterable):
+            detectors = [detectors]
+
         extent = self.extent * self.gpts / (self.gpts - 1) if self.endpoint else self.extent
         measurements = {}
-        for detector in self._detectors:
+        for detector in detectors:
             array = np.zeros(self.shape + detector.output_shape)
             measurement = ArrayWithGrid1D(array, extent=extent)
 
@@ -213,14 +185,7 @@ class LineScan(Grid, ScanBase):
 
 class GridScan(Grid, ScanBase):
 
-    def __init__(self, probe, potential, start=None, end=None, gpts=None, sampling=None, endpoint=False,
-                 detectors=None):
-
-        if start is None:
-            start = (0, 0)
-
-        if (end is None) & (potential is not None):
-            end = potential.extent
+    def __init__(self, start, end, gpts=None, sampling=None, endpoint=False):
 
         self._start = np.array(start)
         end = np.array(end)
@@ -228,8 +193,7 @@ class GridScan(Grid, ScanBase):
         if (self._start.shape != (2,)) | (end.shape != (2,)):
             raise ValueError('scan start/end has wrong shape')
 
-        super().__init__(probe=probe, potential=potential, extent=end - start, gpts=gpts, sampling=sampling,
-                         dimensions=2, endpoint=endpoint, detectors=detectors)
+        super().__init__(extent=end - start, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint)
 
     @property
     def num_measurements(self):
@@ -262,7 +226,7 @@ class GridScan(Grid, ScanBase):
     def get_y_positions(self) -> np.ndarray:
         return np.linspace(self.start[1], self.end[1], self.gpts[1], endpoint=self._endpoint)
 
-    def get_positions(self) -> np.ndarray:
+    def get_all_positions(self) -> np.ndarray:
         x, y = np.meshgrid(self.get_x_positions(), self.get_y_positions(), indexing='ij')
         return np.stack((np.reshape(x, (-1,)),
                          np.reshape(y, (-1,))), axis=1)
@@ -280,10 +244,13 @@ class GridScan(Grid, ScanBase):
                          **kwargs)
         ax.add_patch(rect)
 
-    def allocate(self):
+    def allocate_measurements(self, detectors):
+        if not isinstance(detectors, Iterable):
+            detectors = [detectors]
+
         self._measurements = {}
         extent = self.extent * (self.gpts) / (self.gpts - 1) if self.endpoint else self.extent
-        for detector in self._detectors:
+        for detector in detectors:
             array = np.zeros(self.shape + detector.output_shape)
             measurement = ArrayWithGrid2D(array, extent=extent)
 

@@ -1,8 +1,9 @@
 from collections import defaultdict
 from typing import Mapping, Union, Sequence
-
+from functools import lru_cache
 import numpy as np
-from abtem.bases import Energy, Cache, Grid, cached_method, ArrayWithGridAndEnergy2D, notify, Buildable
+from abtem.bases import HasGridMixin, Grid, HasAcceleratorMixin, Accelerator, watched_property, Event, DeviceManager, \
+    cache_clear_callback
 from abtem.config import DTYPE
 from abtem.utils import complex_exponential, squared_norm, energy2wavelength
 import cupy as cp
@@ -169,23 +170,15 @@ def calculate_spatial_envelope(alpha, phi, wavelength, angular_spread, parameter
     return np.exp(-np.sign(angular_spread) * (angular_spread / 2) ** 2 * (dchi_dk ** 2 + dchi_dphi ** 2))
 
 
-def _parametrization_property(key):
-    def getter(self):
-        return self._parameters[key]
-
-    def setter(self, value):
-        old = getattr(self, key)
-        self._parameters[key] = value
-        self.notify_observers({'notifier': key, 'change': old != value})
-
-    return property(getter, setter)
-
-
-class CTFBase(Energy):
+class CTF(HasAcceleratorMixin):
 
     def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
                  angular_spread: float = 0., gaussian_spread: float = 0., energy: float = None,
-                 parameters: Mapping[str, float] = None, **kwargs):
+                 parameters: Mapping[str, float] = None, device=None, **kwargs):
+
+        self.changed = Event()
+        self.accelerator = Accelerator(energy=energy)
+        self.device_manager = DeviceManager(device)
 
         self._semiangle_cutoff = DTYPE(semiangle_cutoff)
         self._rolloff = DTYPE(rolloff)
@@ -201,16 +194,27 @@ class CTFBase(Energy):
 
         self.set_parameters(parameters)
 
+        def parametrization_property(key):
+            def getter(self):
+                return self._parameters[key]
+
+            def setter(self, value):
+                old = getattr(self, key)
+                self._parameters[key] = value
+                self.notify_observers({'notifier': key, 'change': old != value})
+
+            return property(getter, setter)
+
         for symbol in polar_symbols:
-            setattr(self.__class__, symbol, _parametrization_property(symbol))
+            setattr(self.__class__, symbol, parametrization_property(symbol))
             kwargs.pop(symbol, None)
 
         for key, value in polar_aliases.items():
             if key != 'defocus':
-                setattr(self.__class__, key, _parametrization_property(value))
+                setattr(self.__class__, key, parametrization_property(value))
             kwargs.pop(key, None)
 
-        super().__init__(energy=energy, **kwargs)
+        self.changed.register(cache_clear_callback(self.as_array_waves))
 
     @property
     def parameters(self):
@@ -221,7 +225,7 @@ class CTFBase(Energy):
         return - self._parameters['C10']
 
     @defocus.setter
-    @notify
+    @watched_property('changed')
     def defocus(self, value: float):
         self._parameters['C10'] = DTYPE(-value)
 
@@ -230,7 +234,7 @@ class CTFBase(Energy):
         return self._semiangle_cutoff
 
     @semiangle_cutoff.setter
-    @notify
+    @watched_property('changed')
     def semiangle_cutoff(self, value: float):
         self._semiangle_cutoff = DTYPE(value)
 
@@ -239,7 +243,7 @@ class CTFBase(Energy):
         return self._rolloff
 
     @rolloff.setter
-    @notify
+    @watched_property('changed')
     def rolloff(self, value: float):
         self._rolloff = DTYPE(value)
 
@@ -248,7 +252,7 @@ class CTFBase(Energy):
         return self._focal_spread
 
     @focal_spread.setter
-    @notify
+    @watched_property('changed')
     def focal_spread(self, value: float):
         self._focal_spread = DTYPE(value)
 
@@ -257,7 +261,7 @@ class CTFBase(Energy):
         return self._angular_spread
 
     @angular_spread.setter
-    @notify
+    @watched_property('changed')
     def angular_spread(self, value: float):
         self._angular_spread = DTYPE(value)
 
@@ -266,7 +270,7 @@ class CTFBase(Energy):
         return self._gaussian_spread
 
     @gaussian_spread.setter
-    @notify
+    @watched_property('changed')
     def gaussian_spread(self, value: float):
         self._gaussian_spread = DTYPE(value)
 
@@ -286,45 +290,52 @@ class CTFBase(Energy):
 
         return parameters
 
-    def get_alpha(self):
-        raise NotImplementedError()
+    def evaluate_aperture(self, alpha):
+        return calculate_aperture(alpha, self.semiangle_cutoff, self.rolloff)
 
-    def get_phi(self):
-        raise NotImplementedError()
+    def evaluate_temporal_envelope(self, alpha):
+        return calculate_temporal_envelope(alpha, self.wavelength, self.focal_spread)
 
-    def get_aperture(self):
-        return calculate_aperture(self.get_alpha(), self.semiangle_cutoff, self.rolloff)
+    def evaluate_spatial_envelope(self, alpha, phi):
+        return calculate_spatial_envelope(alpha, phi, self.wavelength, self.angular_spread, self.parameters)
 
-    def get_temporal_envelope(self):
-        return calculate_temporal_envelope(self.get_alpha(), self.wavelength, self.focal_spread)
+    def evaluate_gaussian_envelope(self, alpha):
+        return calculate_gaussian_envelope(alpha, self.wavelength, self.gaussian_spread)
 
-    def get_spatial_envelope(self):
-        return calculate_spatial_envelope(self.get_alpha(), self.get_phi(), self.wavelength, self.angular_spread,
-                                          self.parameters)
+    def evaluate_aberrations(self, alpha, phi):
+        return calculate_polar_aberrations(alpha, phi, self.wavelength, self._parameters)
 
-    def get_gaussian_envelope(self):
-        return calculate_gaussian_envelope(self.get_alpha(), self.wavelength, self.gaussian_spread)
-
-    def get_aberrations(self):
-        return calculate_polar_aberrations(self.get_alpha(), self.get_phi(), self.wavelength, self._parameters)
-
-    def get_array(self):
-
-        array = self.get_aberrations()
+    def evaluate(self, alpha, phi):
+        array = self.evaluate_aberrations(alpha, phi)
 
         if self.semiangle_cutoff < np.inf:
-            array = array * self.get_aperture()
+            array *= self.evaluate_aperture(alpha)
 
         if self.focal_spread > 0.:
-            array = array * self.get_temporal_envelope()
+            array *= self.evaluate_temporal_envelope(alpha)
 
         if self.angular_spread > 0.:
-            array = array * self.get_spatial_envelope()
+            array *= self.evaluate_spatial_envelope(alpha, phi)
 
         if self.gaussian_spread > 0.:
-            array = array * self.get_gaussian_envelope()
+            array *= self.evaluate_gaussian_envelope(alpha)
 
-        return array[None]
+        return array
+
+    @lru_cache(1)
+    def evaluate_on_grid(self, grid):
+        grid.check_is_defined()
+        self.accelerator.check_is_defined()
+
+        xp = self.device_manager.get_array_library()
+        kx, ky = grid.spatial_frequencies()
+        kx = xp.asarray(kx)
+        ky = xp.asarray(ky)
+
+        alpha = xp.sqrt(squared_norm(kx * self.wavelength, ky * self.wavelength))
+        phi = xp.arctan2(kx.reshape((-1, 1)), ky.reshape((1, -1)))
+
+        return self.evaluate(alpha, phi)
 
     # def copy(self):
     #     parameters = self._parameters
@@ -334,103 +345,6 @@ class CTFBase(Energy):
 
 def scherzer_defocus(Cs, energy):
     return 1.2 * np.sign(Cs) * np.sqrt(np.abs(Cs) * energy2wavelength(energy))
-
-
-class CTF(Grid, Cache, Buildable, CTFBase):
-
-    def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
-                 angular_spread: float = 0., gaussian_spread: float = 0., parameters: Mapping[str, float] = None,
-                 extent: Union[float, Sequence[float]] = None,
-                 gpts: Union[int, Sequence[int]] = None,
-                 sampling: Union[float, Sequence[float]] = None,
-                 energy: float = None,
-                 build_on_gpu: bool = False,
-                 **kwargs):
-        """
-        Contrast Transfer Function object.
-
-        Parameters
-        ----------
-        cutoff : float
-            Default is infinite.
-        rolloff : float
-            Softens the cutoff. A value of 0 gives a hard cutoff, while 1 gives the softest possible cutoff.
-        focal_spread : float
-            The spread
-
-            due to, among other factors, chromatic aberrations and lens current instabilities [rad.].
-            Default is 0.
-        angular_spread :
-            Default is 0.
-        parameters :
-            `C10`, `C12`, `phi12`,
-            `C21`, `phi21`, `C23`, `phi23`,
-            `C30`, `C32`, `phi32`, `C34`, `phi34`,
-            `C41`, `phi41`, `C43`, `phi43`, `C45`, `phi45`,
-            `C50`, `C52`, `phi52`, `C54`, `phi54`, `C56`, `phi56`
-        extent : sequence of float, float, optional
-            Lateral extent of wavefunctions [Å].
-        gpts : sequence of int, int, optional
-            Number of grid points describing the wavefunctions
-        sampling : sequence of float, float, optional
-            Lateral sampling of wavefunctions [1 / Å].
-        energy : float, optional
-            Waves energy [eV].
-        kwargs :
-            Provide the aberration coefficients as keyword arguments.
-        """
-
-        super().__init__(semiangle_cutoff=semiangle_cutoff, rolloff=rolloff, focal_spread=focal_spread,
-                         angular_spread=angular_spread, gaussian_spread=gaussian_spread, extent=extent, gpts=gpts,
-                         sampling=sampling,
-                         energy=energy, parameters=parameters, build_on_gpu=build_on_gpu, **kwargs)
-        self.register_observer(self)
-
-    @cached_method(('extent', 'gpts', 'sampling', 'energy'))
-    def get_alpha(self):
-        self.check_is_energy_defined()
-        xp = self._array_module()
-        kx, ky = self.fftfreq()
-        kx = xp.asarray(kx)
-        ky = xp.asarray(ky)
-        return xp.sqrt(squared_norm(kx * self.wavelength, ky * self.wavelength))
-
-    @cached_method(('extent', 'gpts', 'sampling', 'energy'))
-    def get_phi(self):
-        self.check_is_grid_defined()
-        self.check_is_energy_defined()
-        xp = self._array_module()
-        kx, ky = self.fftfreq()
-        kx = xp.asarray(kx)
-        ky = xp.asarray(ky)
-        return xp.arctan2(kx.reshape((-1, 1)), ky.reshape((1, -1)))
-
-    @cached_method(('extent', 'gpts', 'sampling', 'energy', 'semiangle_cutoff', 'rolloff'))
-    def get_aperture(self):
-        return super().get_aperture()
-
-    @cached_method(('extent', 'gpts', 'sampling', 'energy', 'focal_spread'))
-    def get_temporal_envelope(self):
-        return super().get_temporal_envelope()
-
-    @cached_method(('extent', 'gpts', 'sampling', 'energy', 'angular_spread'))
-    def get_spatial_envelope(self):
-        return super().get_spatial_envelope()
-
-    @cached_method(('extent', 'gpts', 'sampling', 'energy', 'gaussian_spread'))
-    def get_gaussian_envelope(self):
-        return super().get_spatial_envelope()
-
-    @cached_method(('extent', 'gpts', 'sampling', 'energy', 'defocus') + polar_symbols)
-    def get_aberrations(self):
-        return super().get_aberrations()
-
-    @cached_method()
-    def get_array(self):
-        return super().get_array()
-
-    def build(self):
-        return ArrayWithGridAndEnergy2D(np.fft.fftshift(self.get_array(), axes=(1, 2)), extent=self.extent, energy=self.energy)
 
 
 def polar2cartesian(polar):
