@@ -3,32 +3,8 @@ import numbers
 import numpy as np
 from ase import units
 from scipy import ndimage
-
+import pyfftw
 from abtem.config import DTYPE, COMPLEX_DTYPE
-
-try:
-    import cupy as cp
-    from cupyx.scipy import ndimage as cupyx_ndimage
-
-    get_array_module = cp.get_array_module
-
-
-    def get_ndimage_module(array):
-        xp = get_array_module(array)
-        if xp is np:
-            return ndimage
-        else:
-            return cupyx_ndimage
-
-except ImportError:
-
-    def get_array_module(*args, **kwargs):
-        return np
-
-
-    def get_ndimage_module(*args, **kwargs):
-        return ndimage
-
 
 def energy2mass(energy):
     """
@@ -65,37 +41,9 @@ def energy2sigma(energy):
             units._hplanck * units.s * units.J) ** 2)
 
 
-def cosine_window(x, cutoff, rolloff, attenuate='high'):
-    xp = cp.get_array_module(x)
-
-    rolloff *= cutoff
-    if attenuate == 'high':
-        array = .5 * (1 + xp.cos(xp.pi * (x - cutoff - rolloff) / rolloff))
-        array[x < cutoff] = 0.
-        array = xp.where(x < cutoff + rolloff, array, xp.ones_like(x, dtype=DTYPE))
-    elif attenuate == 'low':
-        array = .5 * (1 + xp.cos(xp.pi * (x - cutoff + rolloff) / rolloff))
-        array[x > cutoff] = 0.
-        array = xp.where(x > cutoff - rolloff, array, xp.ones_like(x, dtype=DTYPE))
-    else:
-        raise RuntimeError('attenuate must be "high" or "low"')
-
-    return array
 
 
-def complex_exponential(x):
-    xp = get_array_module(x)
-    result = xp.empty(x.shape, dtype=COMPLEX_DTYPE)
-    trig_buf = xp.cos(x)
-    result.real[:] = trig_buf
-    xp.sin(x, out=trig_buf)
-    result.imag[:] = trig_buf
-    return result
 
-
-# @nb.vectorize([nb.float32(nb.complex64), nb.float64(nb.complex128)])
-def abs2(x):
-    return x.real ** 2 + x.imag ** 2
 
 
 # @nb.cuda.jit([nb.float32(nb.complex64), nb.float64(nb.complex128)], target='cuda')
@@ -126,8 +74,7 @@ def polar_coordinates(shape, return_azimuth=False, xp=np):
     return r
 
 
-def squared_norm(x, y):
-    return x.reshape((-1, 1)) ** 2 + y.reshape((1, -1)) ** 2
+
 
 
 def sub2ind2d(rows, cols, shape):
@@ -158,16 +105,34 @@ def split_integer(n, m):
         return v
 
 
-def label_to_index_generator(labels, first_label=0):
-    labels = labels.flatten()
-    labels_order = labels.argsort()
-    sorted_labels = labels[labels_order]
-    indices = np.arange(0, len(labels) + 1)[labels_order]
-    index = np.arange(first_label, np.max(labels) + 1)
-    lo = np.searchsorted(sorted_labels, index, side='left')
-    hi = np.searchsorted(sorted_labels, index, side='right')
-    for i, (l, h) in enumerate(zip(lo, hi)):
-        yield np.sort(indices[l:h])
+def create_fftw_objects(array, allow_new_plan=True):
+    """
+    Creates FFTW object for forward and backward Fourier transforms. The input array object will be transformed in place.
+    The function tries to retrieve plans from wisdom only. If no plan exists for the input array, a new plan is created.
+
+    Parameters
+    ----------
+    array : ndarray
+        Array to be transformed. 2 dimensions or greater.
+    allow_new_plan : bool
+        If true allow creation of new plan, otherwise, raise an exception
+    """
+
+    try:
+        fftw_forward = pyfftw.FFTW(array, array, axes=(-1, -2), threads=12, flags=('FFTW_WISDOM_ONLY',))
+        fftw_backward = pyfftw.FFTW(array, array, axes=(-1, -2), direction='FFTW_BACKWARD', threads=12,
+                                    flags=('FFTW_WISDOM_ONLY',))
+
+        return fftw_forward, fftw_backward
+
+    except RuntimeError as e:
+        if ('No FFTW wisdom is known for this plan.' != str(e)) or (not allow_new_plan):
+            raise
+
+        dummy = np.zeros_like(array)  # this is necessary because FFTW overwrites input arrays
+        pyfftw.FFTW(dummy, dummy, axes=(-1, -2), threads=12, flags=('FFTW_MEASURE',))
+        pyfftw.FFTW(dummy, dummy, axes=(-1, -2), direction='FFTW_BACKWARD', threads=12, flags=('FFTW_MEASURE',))
+        return create_fftw_objects(array, allow_new_plan=False)
 
 
 class BatchGenerator:
@@ -199,45 +164,3 @@ class BatchGenerator:
                 yield batch_start, self.batch_size
 
             batch_start = batch_end
-
-
-def view_as_windows(arr_in, window_shape, step):
-    xp = get_array_module(arr_in)
-
-    ndim = arr_in.ndim
-
-    if isinstance(window_shape, numbers.Number):
-        window_shape = (window_shape,) * ndim
-
-    if not (len(window_shape) == ndim):
-        raise ValueError("`window_shape` is incompatible with `arr_in.shape`")
-
-    if isinstance(step, numbers.Number):
-        if step < 1:
-            raise ValueError("`step` must be >= 1")
-        step = (step,) * ndim
-    if len(step) != ndim:
-        raise ValueError("`step` is incompatible with `arr_in.shape`")
-
-    arr_shape = xp.array(arr_in.shape)
-    window_shape = xp.array(window_shape, dtype=arr_shape.dtype)
-
-    if ((arr_shape - window_shape) < 0).any():
-        raise ValueError("`window_shape` is too large")
-
-    if ((window_shape - 1) < 0).any():
-        raise ValueError("`window_shape` is too small")
-
-    # -- build rolling window view
-    slices = tuple(slice(None, None, st) for st in step)
-    window_strides = xp.array(arr_in.strides)
-
-    indexing_strides = xp.asarray(arr_in[slices].strides)
-
-    win_indices_shape = (((xp.array(arr_in.shape) - xp.array(window_shape)) // xp.array(step)) + 1)
-
-    new_shape = tuple(xp.concatenate((win_indices_shape, window_shape)))
-    strides = tuple(xp.concatenate((indexing_strides, window_strides)))
-
-    arr_out = xp.lib.stride_tricks.as_strided(arr_in, shape=new_shape, strides=strides)
-    return arr_out

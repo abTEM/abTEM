@@ -1,7 +1,7 @@
 import h5py
 
 
-def read(path):
+def abtem_read(path):
     with h5py.File(path, 'r') as f:
         datasets = {}
         for key in f.keys():

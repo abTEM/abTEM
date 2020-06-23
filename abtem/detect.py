@@ -1,59 +1,89 @@
+from abc import ABCMeta, abstractmethod
+
 import cupy as cp
 import numpy as np
-import pyfftw as fftw
 
-from abtem.bases import Grid, Energy, cached_method, Cache, notify, ArrayWithGridAndEnergy2D, Buildable
-from abtem.config import FFTW_THREADS, COMPLEX_DTYPE
-from abtem.utils import squared_norm, cosine_window, abs2
+from abtem.bases import Grid, cached_method, Cache, DeviceManager, Event, cache_clear_callback, watched_property, \
+    Accelerator
+from abtem.measure import Calibration, calibrations_from_grid, fourier_space_offset
+from abtem.plot import show_image
+from abtem.utils import create_fftw_objects
+from abtem.config import DTYPE
+from abtem.cpu_kernels import abs2
+from copy import copy
 
 
-class DetectorBase:
+class AbstractDetector(metaclass=ABCMeta):
 
-    def __init__(self, output=None, **kwargs):
+    def __init__(self, save_file=None, device=None):
 
-        if output is not None:
-            if not output.endswith('.hdf5'):
-                self._output = output + '.hdf5'
+        if save_file is not None:
+            if not save_file.endswith('.hdf5'):
+                self._save_file = save_file + '.hdf5'
             else:
-                self._output = output
+                self._save_file = save_file
 
         else:
-            self._output = None
+            self._save_file = None
 
-        super().__init__(**kwargs)
-
-    @property
-    def output(self):
-        return self._output
+        self.device_manager = DeviceManager(device)
 
     @property
-    def output_shape(self) -> tuple:
-        raise NotImplementedError()
+    def save_file(self) -> str:
+        return self._save_file
 
+    @property
+    @abstractmethod
+    def shape(self) -> tuple:
+        pass
+
+    @property
+    @abstractmethod
+    def calibrations(self) -> tuple:
+        pass
+
+    @abstractmethod
     def detect(self, waves):
-        raise NotImplementedError()
+        pass
 
 
-class AnnularDetector(DetectorBase, Energy, Grid, Buildable, Cache):
+def cosine_window(x, cutoff, rolloff, attenuate='high'):
+    xp = cp.get_array_module(x)
 
-    def __init__(self, inner, outer, rolloff=0., extent=None, gpts=None, sampling=None, energy=None,
-                 output=None, build_on_gpu=False):
+    rolloff *= cutoff
+    if attenuate == 'high':
+        array = .5 * (1 + xp.cos(xp.pi * (x - cutoff - rolloff) / rolloff))
+        array[x < cutoff] = 0.
+        array = xp.where(x < cutoff + rolloff, array, xp.ones_like(x, dtype=DTYPE))
+    elif attenuate == 'low':
+        array = .5 * (1 + xp.cos(xp.pi * (x - cutoff + rolloff) / rolloff))
+        array[x > cutoff] = 0.
+        array = xp.where(x > cutoff - rolloff, array, xp.ones_like(x, dtype=DTYPE))
+    else:
+        raise RuntimeError('attenuate must be "high" or "low"')
+
+    return array
+
+
+class AnnularDetector(AbstractDetector):
+
+    def __init__(self, inner, outer, rolloff=0., save_file=None, device=None):
+
+        super().__init__(save_file=save_file, device=device)
 
         self._inner = inner
         self._outer = outer
         self._rolloff = rolloff
-
-        super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy, output=output,
-                         build_on_gpu=build_on_gpu)
-
-        self.register_observer(self)
+        self.cache = Cache(1)
+        self.changed = Event()
+        self.changed.register(cache_clear_callback(self.cache))
 
     @property
     def inner(self) -> float:
         return self._inner
 
     @inner.setter
-    @notify
+    @watched_property('changed')
     def inner(self, value: float):
         self._inner = value
 
@@ -62,7 +92,7 @@ class AnnularDetector(DetectorBase, Energy, Grid, Buildable, Cache):
         return self._outer
 
     @outer.setter
-    @notify
+    @watched_property('changed')
     def outer(self, value: float):
         self._outer = value
 
@@ -71,60 +101,59 @@ class AnnularDetector(DetectorBase, Energy, Grid, Buildable, Cache):
         return self._rolloff
 
     @rolloff.setter
-    @notify
+    @watched_property('changed')
     def rolloff(self, value: float):
         self._rolloff = value
 
     @property
-    def output_shape(self) -> tuple:
+    def shape(self) -> tuple:
         return ()
 
-    @cached_method()
-    def get_integration_region(self):
-        self.check_is_grid_defined()
-        self.check_is_energy_defined()
-        xp = self._array_module()
+    @property
+    def calibrations(self):
+        return ()
 
-        kx, ky = self.fftfreq()
+    @cached_method('cache')
+    def get_integration_region(self, grid, wavelength):
+        xp = self.device_manager.get_array_library()
 
-        kx = xp.asarray(kx * self.wavelength)
-        ky = xp.asarray(ky * self.wavelength)
+        kx, ky = grid.spatial_frequencies()
 
-        alpha = xp.sqrt(squared_norm(kx, ky))
+        alpha_x = xp.asarray(kx) * wavelength
+        alpha_y = xp.asarray(ky) * wavelength
+
+        alpha = xp.sqrt(alpha_x.reshape((-1, 1)) ** 2 + alpha_y.reshape((1, -1)) ** 2)
 
         if self.rolloff > 0.:
             array = cosine_window(alpha, self.outer, self.rolloff) * cosine_window(alpha, self.inner, self.rolloff)
-
         else:
             array = (alpha >= self._inner) & (alpha <= self._outer)
+        return array
 
-        return ArrayWithGridAndEnergy2D(array, extent=self.extent, energy=self.energy, fourier_space=True)
+    def detect(self, waves):
+        xp = self.device_manager.get_array_library()
 
-    def detect(self, waves, in_place=False):
-        self.match_grid(waves)
-        self.match_energy(waves)
+        array = waves.array.copy()
+        integration_region = self.get_integration_region(waves.grid, waves.wavelength)
 
-        xp = self._array_module()
-
-        array = waves.array
-
-        if in_place:
-            out_array = array
-        else:
-            out_array = xp.zeros(array.shape, dtype=COMPLEX_DTYPE)
-
-        if self._build_on_gpu:
+        if self.device_manager.is_cuda:
             intensity = abs2(cp.fft.fft2(array))
         else:
-            fftw.FFTW(array, out_array, axes=(1, 2), threads=FFTW_THREADS, flags=('FFTW_ESTIMATE',))()
-            intensity = abs2(out_array)
+            fftw_forward, _ = create_fftw_objects(array)
+            fftw_forward()
+            intensity = abs2(array)
 
-        result = xp.sum(intensity * self.get_integration_region().array, axis=(1, 2)) / xp.sum(intensity, axis=(1, 2))
+        result = xp.sum(intensity * integration_region, axis=(1, 2)) / xp.sum(intensity, axis=(1, 2))
         return result
 
     def copy(self) -> 'AnnularDetector':
-        return self.__class__(self.inner, self.outer, rolloff=self.rolloff, extent=self.extent, gpts=self.gpts,
-                              energy=self.energy, export=self.output)
+        return self.__class__(self.inner, self.outer, rolloff=self.rolloff, save_file=self.save_file)
+
+    def show(self, grid, wavelength, **kwargs):
+        array = np.fft.fftshift(self.get_integration_region(grid, wavelength))
+        calibrations = calibrations_from_grid(grid, names=['alpha_x', 'alpha_y'], units='mrad.',
+                                              scale_factor=wavelength, fourier_space=True)
+        return show_image(array, calibrations, **kwargs)
 
 
 def polar_labels(shape, inner=1, outer=None, nbins_angular=1, nbins_radial=None):
@@ -145,29 +174,41 @@ def polar_labels(shape, inner=1, outer=None, nbins_angular=1, nbins_radial=None)
     angular_bins = np.floor(nbins_angular * (angles / (2 * np.pi)))
     angular_bins = np.clip(angular_bins, 0, nbins_angular - 1).astype(np.int)
 
-    bins = -np.ones(shape, dtype=int)
-    bins[valid] = angular_bins[valid] * nbins_radial + radial_bins[valid]
+    bins = np.zeros(shape, dtype=int)
+    bins[valid] = radial_bins[valid] * nbins_angular + angular_bins[valid]
     return bins
 
 
+def label_to_index_generator(labels, first_label=0):
+    labels = labels.flatten()
+    labels_order = labels.argsort()
+    sorted_labels = labels[labels_order]
+    indices = np.arange(0, len(labels) + 1)[labels_order]
+    index = np.arange(first_label, np.max(labels) + 1)
+    lo = np.searchsorted(sorted_labels, index, side='left')
+    hi = np.searchsorted(sorted_labels, index, side='right')
+    for i, (l, h) in enumerate(zip(lo, hi)):
+        yield np.sort(indices[l:h])
 
 
-class SegmentedDetector(Energy, Grid, DetectorBase, Cache):
+class SegmentedDetector(AbstractDetector):
 
-    def __init__(self, inner, outer, nbins_radial, nbins_angular=1, extent=None, gpts=None, sampling=None,
-                 energy=None, output=None, build_on_gpu=False):
+    def __init__(self, inner, outer, nbins_radial, nbins_angular=1, save_file=None, device=None):
+        super().__init__(save_file=save_file, device=device)
         self._inner = inner
         self._outer = outer
         self._nbins_radial = nbins_radial
         self._nbins_angular = nbins_angular
-        super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy, output=output)
+        self.cache = Cache(1)
+        self.changed = Event()
+        self.changed.register(cache_clear_callback(self.cache))
 
     @property
     def inner(self) -> float:
         return self._inner
 
     @inner.setter
-    @notify
+    @watched_property('changed')
     def inner(self, value: float):
         self._inner = value
 
@@ -176,7 +217,7 @@ class SegmentedDetector(Energy, Grid, DetectorBase, Cache):
         return self._outer
 
     @outer.setter
-    @notify
+    @watched_property('changed')
     def outer(self, value: float):
         self._outer = value
 
@@ -185,7 +226,7 @@ class SegmentedDetector(Energy, Grid, DetectorBase, Cache):
         return self._nbins_radial
 
     @nbins_radial.setter
-    @notify
+    @watched_property('changed')
     def nbins_radial(self, value: float):
         self._nbins_radial = value
 
@@ -194,67 +235,158 @@ class SegmentedDetector(Energy, Grid, DetectorBase, Cache):
         return self._nbins_angular
 
     @nbins_angular.setter
-    @notify
+    @watched_property('changed')
     def nbins_angular(self, value: float):
         self._nbins_angular = value
 
-    def out_shape(self) -> tuple:
+    @property
+    def shape(self) -> tuple:
         return (self.nbins_radial, self.nbins_angular)
 
-    @cached_method()
-    def get_integration_region(self):
-        self.check_is_grid_defined()
-        self.check_is_energy_defined()
+    @property
+    def calibrations(self):
+        radial_sampling = (self.outer - self.inner) / self.nbins_radial * 1000
+        angular_sampling = 2 * np.pi / self.nbins_angular
+        return (Calibration(offset=self.inner * 1000, sampling=radial_sampling, units='mrad'),
+                Calibration(offset=0, sampling=angular_sampling, units='rad'))
 
-        kx, ky = self.fftfreq()
-        alpha_x = kx * self.wavelength
-        alpha_y = ky * self.wavelength
+    @cached_method('cache')
+    def get_integration_region(self, grid, wavelength):
+        xp = self.device_manager.get_array_library()
+        kx, ky = grid.spatial_frequencies()
 
-        alpha = np.sqrt(squared_norm(alpha_x, alpha_y))
+        alpha_x = xp.asarray(kx) * wavelength
+        alpha_y = xp.asarray(ky) * wavelength
 
-        radial_bins = -np.ones(self.gpts, dtype=int)
+        alpha = xp.sqrt(alpha_x.reshape((-1, 1)) ** 2 + alpha_y.reshape((1, -1)) ** 2)
+
+        radial_bins = -xp.ones(grid.gpts, dtype=int)
         valid = (alpha > self.inner) & (alpha < self.outer)
         radial_bins[valid] = self.nbins_radial * (alpha[valid] - self.inner) / (self.outer - self.inner)
 
-        angles = np.arctan2(alpha_x[:, None], alpha_y[None]) % (2 * np.pi)
+        angles = xp.arctan2(alpha_x[:, None], alpha_y[None]) % (2 * np.pi)
 
-        angular_bins = np.floor(self.nbins_angular * (angles / (2 * np.pi)))
-        angular_bins = np.clip(angular_bins, 0, self.nbins_angular - 1).astype(np.int)
+        angular_bins = xp.floor(self.nbins_angular * (angles / (2 * np.pi)))
+        angular_bins = xp.clip(angular_bins, 0, self.nbins_angular - 1).astype(np.int)
 
-        bins = -np.ones(self.gpts, dtype=int)
-        bins[valid] = angular_bins[valid] * self.nbins_radial + radial_bins[valid]
+        bins = -xp.ones(grid.gpts, dtype=int)
+        bins[valid] = angular_bins[valid] + radial_bins[valid] * self.nbins_angular
 
-        return ArrayWithGridAndEnergy2D(bins, extent=self.extent, energy=self.energy, fourier_space=True)
-
-
-class PixelatedDetector(Energy, Grid, DetectorBase):
-
-    def __init__(self, max_angle=None, extent=None, gpts=None, sampling=None, energy=None, export=None):
-        self.max_angle = max_angle
-        super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy, export=export)
-
-    @property
-    def out_shape(self):
-        if self.max_angle:
-            self.check_is_grid_defined()
-            self.check_is_energy_defined()
-
-            angular_extent = self.gpts / self.extent * self.wavelength / 2
-            out_shape = tuple(np.ceil(self.max_angle / angular_extent * self.gpts / 2.).astype(int) * 2)
-
-            return out_shape
-        else:
-            return tuple(self.gpts)
+        return bins
 
     def detect(self, waves):
-        intensity = np.fft.fftshift(np.abs(np.fft.fft2(waves.array)) ** 2, axes=(1, 2))
+        labels = self.get_integration_region(waves.grid, waves.wavelength)
+        xp = self.device_manager.get_array_library()
+        array = waves.array.copy()
 
-        if self.max_angle:
-            self.check_is_grid_defined()
-            self.check_is_energy_defined()
+        if self.device_manager.is_cuda:
+            intensity = abs2(cp.fft.fft2(array))
+        else:
+            fftw_forward, _ = create_fftw_objects(array)
+            fftw_forward()
+            intensity = abs2(array)
 
-            out_shape = self.out_shape
-            crop = ((intensity.shape[1] - out_shape[0]) // 2, (intensity.shape[2] - out_shape[1]) // 2)
-            intensity = intensity[:, crop[0]:crop[0] + out_shape[0], crop[1]:crop[1] + out_shape[1]]
+        intensity = intensity.reshape((len(intensity), -1))
+        result = xp.zeros((len(intensity),) + self.shape, dtype=np.float32)
 
+        total_intensity = xp.sum(intensity, axis=1)
+        for i, indices in enumerate(label_to_index_generator(labels)):
+            j = i % self.nbins_angular
+            i = i // self.nbins_angular
+            result[:, i, j] = xp.sum(intensity[:, indices], axis=1) / total_intensity
+
+        return result
+
+    def show(self, grid, wavelength, **kwargs):
+        array = np.fft.fftshift(self.get_integration_region(grid, wavelength))
+        calibrations = calibrations_from_grid(grid, names=['alpha_x', 'alpha_y'], units='mrad.',
+                                              scale_factor=wavelength, fourier_space=True)
+        return show_image(array, calibrations, discrete=True, **kwargs)
+
+
+class PixelatedDetector(AbstractDetector):
+
+    def __init__(self, max_semiangle=None, save_file=None, device=None):
+        super().__init__(save_file=save_file, device=device)
+        self._max_semiangle = max_semiangle
+        self._shape = None
+        self._calibrations = None
+        self.device_manager = DeviceManager(device)
+
+    def adapt_to_waves(self, waves):
+
+        waves.grid.check_is_defined()
+        waves.accelerator.check_is_defined()
+
+        if self.max_semiangle is None:
+            self._shape = tuple(waves.grid.gpts)
+        else:
+            angular_extent = waves.grid.gpts / waves.grid.extent * waves.accelerator.wavelength / 2
+            self._shape = tuple(np.floor(self.max_semiangle / angular_extent * waves.grid.gpts / 2.).astype(int) * 2)
+
+        samplings = 1 / waves.grid.extent * waves.accelerator.wavelength * 1000
+        offsets = fourier_space_offset(waves.grid.extent / np.array(self.shape),
+                                       self.shape) * waves.accelerator.wavelength * 1000
+        self._calibrations = (Calibration(offset=offsets[0], sampling=samplings[0], units='mrad.', name='alpha_x'),
+                              Calibration(offset=offsets[1], sampling=samplings[1], units='mrad.', name='alpha_y'))
+
+    @property
+    def calibrations(self) -> tuple:
+        return self._calibrations
+
+    @property
+    def max_semiangle(self):
+        return self._max_semiangle
+
+    @property
+    def shape(self):
+        return self._shape
+
+    def detect(self, waves):
+        xp = self.device_manager.get_array_library()
+        self.adapt_to_waves(waves)
+
+        array = waves.array.copy()
+
+        if self.device_manager.is_cuda:
+            intensity = abs2(cp.fft.fft2(array))
+        else:
+            fftw_forward, _ = create_fftw_objects(array)
+            fftw_forward()
+            intensity = abs2(array)
+
+        intensity = xp.fft.fftshift(intensity, axes=(-1, -2))
+        crop = ((intensity.shape[1] - self.shape[0]) // 2, (intensity.shape[2] - self.shape[1]) // 2)
+        intensity = intensity[:, crop[0]:crop[0] + self.shape[0], crop[1]:crop[1] + self.shape[1]]
         return intensity
+
+
+class WavefunctionDetector:
+
+    def __init__(self, save_file=None, device=None):
+        super().__init__(save_file=save_file, device=device)
+        self._shape = None
+        self._calibrations = None
+        self.device_manager = DeviceManager(device)
+
+    def adapt_to_waves(self, waves):
+        waves.grid.check_is_defined()
+
+        self._shape = waves.gpts
+
+        samplings = 1 / waves.grid.extent * waves.accelerator.wavelength * 1000
+        offsets = fourier_space_offset(waves.grid.extent / np.array(self.shape),
+                                       self.shape) * waves.accelerator.wavelength * 1000
+        self._calibrations = (Calibration(offset=offsets[0], sampling=samplings[0], units='mrad.', name='alpha_x'),
+                              Calibration(offset=offsets[1], sampling=samplings[1], units='mrad.', name='alpha_y'))
+
+    @property
+    def calibrations(self) -> tuple:
+        return self._calibrations
+
+    @property
+    def shape(self):
+        return self._shape
+
+    def detect(self, waves):
+        return waves.array

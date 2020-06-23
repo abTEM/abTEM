@@ -2,11 +2,10 @@ from itertools import combinations
 
 import numpy as np
 from ase.symbols import Symbols
+from ase.symbols import string2symbols, symbols2numbers
 from scipy import ndimage
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.optimize import minimize_scalar
-from ase.symbols import string2symbols, symbols2numbers
-from abtem.utils import view_as_windows
 
 
 def generate_indices(labels):
@@ -40,7 +39,7 @@ def cluster_columns(atoms, tol=1e-6, longitudinal_ordering=False):
         else:
             numbers = np.sort(numbers)
 
-        key = Symbols(numbers).get_chemical_formula()  # tuple(chemical_symbols[number] for number in numbers)
+        key = Symbols(numbers).get_chemical_formula()
 
         positions[i] = np.mean(atoms.get_positions()[indices, :2], axis=0)
 
@@ -101,6 +100,4 @@ def fwhm(probe):
     right = peak_idx + np.argmin(np.abs(y[peak_idx:] - peak_value / 2))
     return (right - left) * probe.sampling[0]
 
-
 # def spectrogram(image):
-

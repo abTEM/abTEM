@@ -1,11 +1,13 @@
+from collections import Iterable
 from colorsys import hls_to_rgb
 
+from abtem.cpu_kernels import abs2
 import matplotlib.pyplot as plt
 import numpy as np
 from ase.data import covalent_radii
 from ase.data.colors import cpk_colors
 from matplotlib.patches import Circle
-from matplotlib.patches import Rectangle
+
 from abtem.transfer import calculate_polar_aberrations, calculate_aperture, calculate_temporal_envelope, \
     calculate_spatial_envelope, calculate_gaussian_envelope
 
@@ -39,7 +41,7 @@ def plane2axes(plane):
     return axes + (last_axis[0],)
 
 
-def plot_atoms(atoms, repeat=(1, 1), scan_area=None, plane='xy', ax=None, scale_atoms=.5, numbering=False):
+def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atoms=.5, numbering=False):
     if ax is None:
         fig, ax = plt.subplots()
 
@@ -70,15 +72,17 @@ def plot_atoms(atoms, repeat=(1, 1), scan_area=None, plane='xy', ax=None, scale_
 
         if numbering:
             for i, (position, size) in enumerate(zip(positions, sizes)):
-                ax.annotate('{}'.format(i), xy=position, ha="center", va="center")
+                ax.annotate('{}'.format(order[i]), xy=position, ha="center", va="center")
 
-    if scan_area is not None:
-        ax.add_patch(Rectangle(xy=scan_area[0],
-                               width=scan_area[1][0] - scan_area[0][0],
-                               height=scan_area[1][1] - scan_area[0][1], alpha=.33, color='k'))
+    if scans is not None:
+        if not isinstance(scans, Iterable):
+            scans = [scans]
+
+        for scan in scans:
+            scan.add_to_mpl_plot(ax)
 
 
-def plot_ctf(ctf, max_k, ax=None, phi=0, n=1000):
+def show_ctf(ctf, max_k, ax=None, phi=0, n=1000):
     k = np.linspace(0, max_k, n)
     alpha = k * ctf.wavelength
     aberrations = calculate_polar_aberrations(alpha, phi, ctf.wavelength, ctf._parameters)
@@ -103,7 +107,6 @@ def plot_ctf(ctf, max_k, ax=None, phi=0, n=1000):
         ax.plot(k, spatial_envelope, label='Spatial envelope')
 
     if ctf.gaussian_spread > 0.:
-        #print(gaussian_envelope)
         ax.plot(k, gaussian_envelope, label='Gaussian envelope')
 
     if not np.allclose(envelope, 1.):
@@ -113,83 +116,61 @@ def plot_ctf(ctf, max_k, ax=None, phi=0, n=1000):
     ax.legend()
 
 
-def _prepare_array(waves, i=0, space='real', scale='linear', logscale_constant=.1, convert=None, ):
-    try:
-        waves = waves.build()
-    except AttributeError:
-        pass
-
-    array = waves.array
-
-    if len(array.shape) == 3:
-        array = array[i]
-
-    if space == 'fourier':
-        array = np.fft.fftshift(np.fft.fft2(array))
-
-    elif space != 'real':
-        raise RuntimeError('space must be "real" or "fourier"')
-
-    if scale == 'log':
-        array = np.log(1 + logscale_constant * array)
-
-    elif scale != 'linear':
-        raise RuntimeError('scale must be "log" or "linear"')
-
-    if (convert is not None):
-        array = convert_complex(array, output=convert)
-
-    elif (convert is None) & np.iscomplexobj(array):
-        array = convert_complex(array, output='intensity')
-
-    return array
-
-
-def plot_profile(waves, i=0, ax=None, space='real', scale='linear', logscale_constant=.1, convert=None, title=None,
-                 **kwargs):
-    array = _prepare_array(waves, i=i, space=space, scale=scale, logscale_constant=logscale_constant, convert=convert)
-
-    y = array[array.shape[0] // 2]
-
-    if space == 'fourier':
-        x_label = 'kx [1 / Å]'
-        fourier_limits = waves.fourier_limits.ravel()
-        x = np.linspace(fourier_limits[0], fourier_limits[1], len(y))
-
-    else:
-        x_label = 'x [Å]'
-        x = np.linspace(0, waves.extent[0], len(y))
+def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='gray', figsize=None, scans=None,
+               display_func=None, discrete=False, cbar_label=None, **kwargs):
+    if display_func is None:
+        if np.iscomplexobj(array):
+            display_func = abs2
 
     if ax is None:
-        ax = plt.subplot()
+        fig, ax = plt.subplots(figsize=figsize)
 
-    ax.plot(x, y, **kwargs)
-    ax.set_xlabel(x_label)
+    if display_func is not None:
+        array = display_func(array)
+
+    extent = []
+    for calibration, num_elem in zip(calibrations, array.shape):
+        extent.append(calibration.offset)
+        extent.append(calibration.offset + num_elem * calibration.sampling)
+
+    vmin = np.min(array)
+    vmax = np.max(array)
+    if discrete:
+        cmap = plt.get_cmap(cmap, np.max(array) - np.min(array) + 1)
+        vmin -= .5
+        vmax += .5
+
+    im = ax.imshow(array.T, extent=extent, cmap=cmap, origin='lower', vmin=vmin, vmax=vmax, **kwargs)
+
+    if colorbar:
+        cax = plt.colorbar(im, ax=ax, label=cbar_label)
+        if discrete:
+            cax.set_ticks(ticks=np.arange(np.min(array), np.max(array) + 1))
+
+    ax.set_xlabel('{} [{}]'.format(calibrations[0].name, calibrations[0].units))
+    ax.set_ylabel('{} [{}]'.format(calibrations[1].name, calibrations[1].units))
 
     if title is not None:
         ax.set_title(title)
 
+    if scans is not None:
+        if not isinstance(scans, Iterable):
+            scans = [scans]
 
-def plot_image(waves, i=0, ax=None, space='real', scale='linear', logscale_constant=.1, convert=None, title=None,
-               cmap='gray', **kwargs):
-    array = _prepare_array(waves, i=i, space=space, scale=scale, logscale_constant=logscale_constant, convert=convert)
+        for scan in scans:
+            scan.add_to_mpl_plot(ax)
 
-    if space == 'fourier':
-        x_label = 'kx [1 / Å]'
-        y_label = 'ky [1 / Å]'
-        extent = waves.fourier_limits.ravel()
+    return ax, im
 
-    else:
-        x_label = 'x [Å]'
-        y_label = 'y [Å]'
-        extent = [0, waves.extent[0], 0, waves.extent[1]]
+
+def show_line(array, calibration, ax=None, title=None, **kwargs):
+    x = np.linspace(calibration.offset, calibration.offset + len(array) * calibration.sampling, len(array))
 
     if ax is None:
         ax = plt.subplot()
 
-    ax.imshow(array.T, extent=extent, cmap=cmap, origin='lower', **kwargs)
-    ax.set_xlabel(x_label)
-    ax.set_ylabel(y_label)
+    ax.plot(x, array, **kwargs)
+    ax.set_xlabel('{} [{}]'.format(calibration.name, calibration.units))
 
     if title is not None:
         ax.set_title(title)
@@ -205,5 +186,4 @@ def domain_coloring(z, fade_to_white=False, saturation=1, k=.5):
     c = np.array(c).T
 
     c = (c - c.min()) / c.ptp()
-
     return c

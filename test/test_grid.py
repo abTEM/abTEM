@@ -1,8 +1,7 @@
-import mock
 import numpy as np
 import pytest
 
-from abtem.bases import Grid, Observable, fftfreq
+from abtem.bases import Grid
 
 
 def test_create_grid():
@@ -23,7 +22,7 @@ def test_create_grid():
 
     grid = Grid()
     with pytest.raises(RuntimeError):
-        grid.check_is_grid_defined()
+        grid.check_is_defined()
 
 
 def test_change_free_grid():
@@ -59,18 +58,17 @@ def test_grid_raises():
     assert str(e.value) == 'grid value length of 3 != 2'
 
 
-@mock.patch.object(Observable, 'notify_observers')
-def test_grid_notify(mock_notify_observers):
+def test_grid_notify():
     grid = Grid()
 
     grid.extent = 5
-    assert mock_notify_observers.call_count == 1
+    assert grid.changed._notify_count == 1
 
     grid.gpts = 100
-    assert mock_notify_observers.call_count == 2
+    assert grid.changed._notify_count == 2
 
     grid.sampling = .1
-    assert mock_notify_observers.call_count == 3
+    assert grid.changed._notify_count == 3
 
 
 def test_locked_grid():
@@ -84,18 +82,18 @@ def test_locked_grid():
     with pytest.raises(RuntimeError) as e:
         grid.gpts = 6
 
-    assert str(e.value) == 'gpts locked'
+    assert str(e.value) == 'gpts cannot be modified'
 
 
 def test_check_grid_matches():
     grid1 = Grid(extent=10, gpts=10)
     grid2 = Grid(extent=10, gpts=10)
 
-    grid1.check_grids_can_match(grid2)
+    grid1.check_can_match(grid2)
 
     grid2.sampling = .2
 
     with pytest.raises(RuntimeError) as e:
-        grid1.check_grids_can_match(grid2)
+        grid1.check_can_match(grid2)
 
     assert str(e.value) == 'inconsistent grid gpts ([10 10] != [50 50])'

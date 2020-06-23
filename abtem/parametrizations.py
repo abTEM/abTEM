@@ -6,7 +6,6 @@ import numpy as np
 from numba import jit, prange
 
 
-
 def load_parameters(filename):
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
     parameters = {}
@@ -60,6 +59,22 @@ def dvdr_lobato(r, p):
               p[0, 4] * (2. / (p[1, 4] * r ** 2) + 2. / r + p[1, 4]) * np.exp(-p[1, 4] * r))
 
     return dvdr
+
+
+@jit(nopython=True, nogil=True)
+def d2vdr2_lobato(r, p):
+    d2vdr2 = (p[0, 0] * (2 * (p[1, 0] * r + 2) / (p[1, 0] * r ** 3) +
+                          2 * (p[1, 0] * r + 1) / r ** 2 + p[1, 0] ** 2) * np.exp(-p[1, 0] * r) +
+               p[0, 1] * (2 * (p[1, 1] * r + 2) / (p[1, 1] * r ** 3) +
+                          2 * (p[1, 1] * r + 1) / r ** 2 + p[1, 1] ** 2) * np.exp(-p[1, 1] * r) +
+               p[0, 2] * (2 * (p[1, 2] * r + 2) / (p[1, 2] * r ** 3) +
+                          2 * (p[1, 2] * r + 1) / r ** 2 + p[1, 2] ** 2) * np.exp(-p[1, 2] * r) +
+               p[0, 3] * (2 * (p[1, 3] * r + 2) / (p[1, 3] * r ** 3) +
+                          2 * (p[1, 3] * r + 1) / r ** 2 + p[1, 3] ** 2) * np.exp(-p[1, 3] * r) +
+               p[0, 4] * (2 * (p[1, 4] * r + 2) / (p[1, 4] * r ** 3) +
+                          2 * (p[1, 4] * r + 1) / r ** 2 + p[1, 4] ** 2) * np.exp(-p[1, 4] * r))
+
+    return d2vdr2
 
 
 def load_kirkland_parameters():

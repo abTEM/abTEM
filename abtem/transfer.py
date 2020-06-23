@@ -1,12 +1,14 @@
 from collections import defaultdict
-from typing import Mapping, Union, Sequence
 from functools import lru_cache
-import numpy as np
-from abtem.bases import HasGridMixin, Grid, HasAcceleratorMixin, Accelerator, watched_property, Event, DeviceManager, \
-    cache_clear_callback
-from abtem.config import DTYPE
-from abtem.utils import complex_exponential, squared_norm, energy2wavelength
+from typing import Mapping
+
 import cupy as cp
+import numpy as np
+from abtem.bases import HasAcceleratorMixin, Accelerator, watched_property, Event, DeviceManager, \
+    cache_clear_callback, cached_method, Cache
+from abtem.config import DTYPE
+from abtem.utils import energy2wavelength
+from abtem.cpu_kernels import complex_exponential
 
 polar_symbols = ('C10', 'C12', 'phi12',
                  'C21', 'phi21', 'C23', 'phi23',
@@ -177,7 +179,8 @@ class CTF(HasAcceleratorMixin):
                  parameters: Mapping[str, float] = None, device=None, **kwargs):
 
         self.changed = Event()
-        self.accelerator = Accelerator(energy=energy)
+        self.cache = Cache(1)
+        self._accelerator = Accelerator(energy=energy)
         self.device_manager = DeviceManager(device)
 
         self._semiangle_cutoff = DTYPE(semiangle_cutoff)
@@ -214,7 +217,7 @@ class CTF(HasAcceleratorMixin):
                 setattr(self.__class__, key, parametrization_property(value))
             kwargs.pop(key, None)
 
-        self.changed.register(cache_clear_callback(self.as_array_waves))
+        self.changed.register(cache_clear_callback(self.evaluate_on_grid))
 
     @property
     def parameters(self):
@@ -322,18 +325,17 @@ class CTF(HasAcceleratorMixin):
 
         return array
 
-    @lru_cache(1)
+    @cached_method('cache')
     def evaluate_on_grid(self, grid):
         grid.check_is_defined()
         self.accelerator.check_is_defined()
 
         xp = self.device_manager.get_array_library()
         kx, ky = grid.spatial_frequencies()
-        kx = xp.asarray(kx)
-        ky = xp.asarray(ky)
-
-        alpha = xp.sqrt(squared_norm(kx * self.wavelength, ky * self.wavelength))
-        phi = xp.arctan2(kx.reshape((-1, 1)), ky.reshape((1, -1)))
+        alpha_x = xp.asarray(kx) * self.wavelength
+        alpha_y = xp.asarray(ky) * self.wavelength
+        alpha = xp.sqrt(alpha_x.reshape((-1, 1)) ** 2 + alpha_y.reshape((1, -1)) ** 2)
+        phi = xp.arctan2(alpha_x.reshape((-1, 1)), alpha_y.reshape((1, -1)))
 
         return self.evaluate(alpha, phi)
 

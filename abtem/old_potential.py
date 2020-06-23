@@ -189,7 +189,9 @@ class PotentialInterpolator:
             result[r > cutoff] = 0
             return result
 
-        r = np.geomspace(np.min(sampling), cutoff, int(np.ceil(cutoff / np.min(sampling) * 4)))
+        self._sampling = sampling
+
+        r = np.linspace(np.min(sampling) / 2, cutoff, int(np.ceil(cutoff / np.min(sampling) * 4)))
 
         self._projector = PotentialIntegrator(soft_potential, r, 1e-9, cutoff)
         self._margin = np.int(np.ceil(r[-1] / np.min(sampling)))
@@ -216,7 +218,7 @@ class PotentialInterpolator:
 
     @property
     def sampling(self):
-        return self._projector.r[0]
+        return self._sampling
 
     @property
     def projector(self):
@@ -237,7 +239,7 @@ class PotentialInterpolator:
         for i, (a, b) in enumerate(np.nditer(limits)):
             v[i] = self.projector.integrate(a.item(), b.item())
 
-        positions = positions / self.sampling + self.margin
+        positions = positions / self._sampling + self.margin
 
         position_indices = np.ceil(positions).astype(np.int)[:, 0] * padded_shape[1] + \
                            np.ceil(positions).astype(np.int)[:, 1]
@@ -253,8 +255,7 @@ class PotentialInterpolator:
                                      disc_indices,
                                      positions,
                                      v,
-                                     self.projector.r / np.min(self.sampling))
-
+                                     self.projector.r / np.min(self._sampling))
         array = array.reshape(padded_shape)[self.margin:-self.margin, self.margin:-self.margin]
         return array
 
@@ -301,37 +302,52 @@ class Potential(AbstractPotential):
                  parametrization: str = 'lobato',
                  cutoff_tolerance: float = 1e-2):
 
+        self._grid = Grid(gpts=gpts, sampling=sampling)
+
+        self._cutoff_tolerance = cutoff_tolerance
+        self._parametrization = parametrization
+        self._slice_thickness = slice_thickness
+        self._interpolators = {}
+        self._positions = {}
+
+        if atoms is not None:
+            self.set_atoms(atoms)
+
+    def set_atoms(self, atoms):
         if np.abs(atoms.cell[2, 2]) < 1e-12:
             raise RuntimeError('atoms has no thickness')
 
         if not is_orthogonal(atoms):
             raise RuntimeError('atoms are non-orthogonal')
 
-        self._atoms = atoms.copy()
-        self._atoms.wrap()
+        atoms = atoms.copy()
+        atoms.wrap()
 
         self._thickness = atoms.cell[2, 2]
-        extent = np.diag(atoms.cell)[:2]
-        self._atoms = atoms.copy()
-        self._grid = Grid(gpts=gpts, sampling=sampling, extent=extent)
-        self._cutoff_tolerance = cutoff_tolerance
-        self._parametrization = parametrization
-        self._slice_thickness = slice_thickness
-        self._atomic_numbers = np.unique(atoms.numbers)
-        self._interpolators = {}
-        self._padded_positions = {}
+        self.extent = np.diag(atoms.cell)[:2]
+        self.grid.check_is_defined()
 
-    def displace_atoms(self, new_positons):
-        self._atoms.positions[:] = new_positons
-        self._padded_positions = {}
+        for number in np.unique(atoms.numbers):
+            if not number in self._interpolators:
+                self._interpolators[number] = PotentialInterpolator(
+                    number,
+                    self._parametrization,
+                    self.cutoff_tolerance,
+                    self.sampling
+                )
 
-    @property
-    def atoms(self):
-        return self._atoms
+            self._positions[number] = fill_rectangle(atoms[atoms.numbers == number],
+                                                     self.extent,
+                                                     [0., 0.],
+                                                     margin=self.interpolators[number].cutoff).positions
 
     @property
     def interpolators(self):
         return self._interpolators
+
+    @property
+    def positions(self):
+        return self._positions
 
     @property
     def cutoff_tolerance(self):
@@ -352,37 +368,12 @@ class Potential(AbstractPotential):
         self.check_slice_idx(i)
         return PotentialSlice(self, i)
 
-    def _create_interpolator(self, number):
-        self._interpolators[number] = PotentialInterpolator(
-            number,
-            self._parametrization,
-            self.cutoff_tolerance,
-            self.sampling
-        )
-        return self._interpolators[number]
-
-    def _create_padded_positions(self, number):
-        self._padded_positions[number] = fill_rectangle(self.atoms[self.atoms.numbers == number],
-                                                        self.extent,
-                                                        [0., 0.],
-                                                        margin=self.interpolators[number].cutoff).positions
-        return self._padded_positions[number]
-
     def _calculate_slice(self, i):
         self.grid.check_is_defined()
 
         v = np.zeros(self.gpts, dtype=DTYPE)
-        for number in self._atomic_numbers:
-            try:
-                interpolator = self._interpolators[number]
-            except KeyError:
-                interpolator = self._create_interpolator(number)
-
-            try:
-                positions = self._padded_positions[number]
-            except KeyError:
-                positions = self._create_padded_positions(number)
-
+        for number, interpolator in self.interpolators.items():
+            positions = self.positions[number]
             a = self.get_slice_entrance(i)
             b = self.get_slice_exit(i)
 

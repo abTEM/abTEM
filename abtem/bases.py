@@ -1,19 +1,16 @@
-import os
-from typing import Optional, Union, Any, Sequence
+from collections import OrderedDict
+from collections.abc import Iterable
+from typing import Optional, Union, Sequence
 
-import cupy as cp
-import h5py
-import matplotlib.pyplot as plt
 import numpy as np
 
-from abtem.config import DTYPE, CUPY_DTYPE
-from abtem.utils import energy2wavelength, energy2sigma, abs2
-from collections.abc import Iterable
-from skimage.io import imsave
-from sys import getsizeof
-from copy import copy
-from forwardable import forwardable, def_delegators
-from functools import lru_cache
+try:
+    import cupy as cp
+except ImportError:
+    pass
+
+from abtem.config import DTYPE
+from abtem.utils import energy2wavelength, energy2sigma
 
 
 def watched_property(event):
@@ -42,8 +39,10 @@ class Event(object):
 
     def __init__(self):
         self.callbacks = []
+        self._notify_count = 0
 
     def notify(self, *args, **kwargs):
+        self._notify_count += 1
         for callback in self.callbacks:
             callback(*args, **kwargs)
 
@@ -66,12 +65,61 @@ class Event(object):
         return property(fget=getter, fset=setter)
 
 
-def cache_clear_callback(target_func):
+def cache_clear_callback(target_cache):
     def callback(notifier, property_name, change):
         if change:
-            target_func.cache_clear()
+            target_cache.clear()
 
     return callback
+
+
+def cached_method(target_cache, key_args=None):
+    def wrapper(func):
+        def new_func(*args):
+            self = args[0]
+            cache = getattr(self, target_cache)
+            if key_args is None:
+                key = (func,) + args
+            else:
+                key = (func,) + tuple([args[i] for i in key_args])
+            if key in cache._cache:
+                result = cache._cache[key]
+                cache._hits += 1
+            else:
+                result = func(*args)
+                cache.insert(key, result)
+                cache._misses += 1
+            return result
+
+        return new_func
+
+    return wrapper
+
+
+class Cache:
+
+    def __init__(self, max_size):
+        self._max_size = max_size
+        self._cache = OrderedDict()
+        self._hits = 0
+        self._misses = 0
+
+    def __len__(self):
+        return len(self._cache)
+
+    def insert(self, key, value):
+        self._cache[key] = value
+        self._check_size()
+
+    def _check_size(self):
+        if self._max_size is not None:
+            while len(self) > self._max_size:
+                self._cache.popitem(last=False)
+
+    def clear(self):
+        self._cache = OrderedDict()
+        self._hits = 0
+        self._misses = 0
 
 
 class DelegatedAttribute:
@@ -152,8 +200,12 @@ class Grid:
 
         self._adjust_sampling(self.extent, self.gpts)
 
-        self.changed.register(cache_clear_callback(self.coordinates))
-        self.changed.register(cache_clear_callback(self.spatial_frequencies))
+        self.cache = Cache(1)
+        self.changed.register(cache_clear_callback(self.cache))
+        self.changed.register(cache_clear_callback(self.cache))
+
+    # def __str__(self):
+    #     str(' x '.join(map(str, list(np.round(self.grid.extent, 2))))) + ' Å'
 
     def _validate(self, value, dtype):
         if isinstance(value, (np.ndarray, list, tuple)):
@@ -168,6 +220,9 @@ class Grid:
             return value
 
         raise RuntimeError('invalid grid property ({})'.format(value))
+
+    def __len__(self):
+        return self.dimensions
 
     @property
     def endpoint(self) -> bool:
@@ -185,14 +240,14 @@ class Grid:
     @watched_property('changed')
     def extent(self, extent: Union[float, Sequence[float]]):
         if self._lock_extent:
-            raise RuntimeError('extent locked')
+            raise RuntimeError('extent cannot be modified')
 
         extent = self._validate(extent, dtype=DTYPE)
 
-        if self._lock_sampling:
+        if self._lock_sampling or (self.gpts is None):
             self._adjust_gpts(extent, self.sampling)
-            self._adjust_sampling(self.extent, self.gpts)
-        else:
+            self._adjust_sampling(extent, self.gpts)
+        elif self.gpts is not None:
             self._adjust_sampling(extent, self.gpts)
 
         self._extent = extent
@@ -205,14 +260,16 @@ class Grid:
     @watched_property('changed')
     def gpts(self, gpts: Union[int, Sequence[int]]):
         if self._lock_gpts:
-            raise RuntimeError('gpts locked')
+            raise RuntimeError('gpts cannot be modified')
 
         gpts = self._validate(gpts, dtype=np.int)
 
         if self._lock_sampling:
             self._adjust_extent(gpts, self.sampling)
-        else:
+        elif self.extent is not None:
             self._adjust_sampling(self.extent, gpts)
+        else:
+            self._adjust_extent(gpts, self.sampling)
 
         self._gpts = gpts
 
@@ -224,15 +281,16 @@ class Grid:
     @watched_property('changed')
     def sampling(self, sampling):
         if self._lock_sampling:
-            raise RuntimeError('sampling locked')
+            raise RuntimeError('sampling cannot be modified')
 
         sampling = self._validate(sampling, dtype=DTYPE)
 
         if self._lock_gpts:
             self._adjust_extent(self.gpts, sampling)
-
-        else:
+        elif self.extent is not None:
             self._adjust_gpts(self.extent, sampling)
+        else:
+            self._adjust_extent(self.gpts, sampling)
 
         self._adjust_sampling(self.extent, self.gpts)
 
@@ -265,16 +323,15 @@ class Grid:
         elif self.gpts is None:
             raise RuntimeError('grid gpts is not defined')
 
-    @property
-    def spatial_frequency_limits(self):
-        return np.array([(-1 / (2 * d), 1 / (2 * d) - 1 / (d * p)) if (p % 2 == 0) else
-                         (-1 / (2 * d) + 1 / (2 * d * p), 1 / (2 * d) - 1 / (2 * d * p)) for d, p in
-                         zip(self.sampling, self.gpts)])
-
-    @property
-    def spatial_frequency_extent(self):
-        fourier_limits = self.spatial_frequency_limits
-        return fourier_limits[:, 1] - fourier_limits[:, 0]
+    # def spatial_frequency_limits(self):
+    #     return np.array([(-1 / (2 * d), 1 / (2 * d) - 1 / (d * p)) if (p % 2 == 0) else
+    #                      (-1 / (2 * d) + 1 / (2 * d * p), 1 / (2 * d) - 1 / (2 * d * p)) for d, p in
+    #                      zip(self.sampling, self.gpts)])
+    #
+    # @property
+    # def spatial_frequency_extent(self):
+    #     fourier_limits = self.spatial_frequency_limits
+    #     return fourier_limits[:, 1] - fourier_limits[:, 0]
 
     def match(self, other):
         self.check_can_match(other)
@@ -306,12 +363,15 @@ class Grid:
         elif (self.gpts is not None) & (other.gpts is not None) & np.any(self.gpts != other.gpts):
             raise RuntimeError('inconsistent grid gpts ({} != {})'.format(self.gpts, other.gpts))
 
-    @lru_cache(1)
+    def snap_to_power(self, power: float = 2):
+        self.gpts = [power ** np.ceil(np.log(n) / np.log(power)) for n in self.gpts]
+
+    @cached_method('cache')
     def coordinates(self):
         self.check_is_defined()
         return [np.linspace(0, e, g, endpoint=self.endpoint, dtype=DTYPE) for g, e in zip(self.gpts, self.extent)]
 
-    @lru_cache(1)
+    @cached_method('cache')
     def spatial_frequencies(self):
         self.check_is_defined()
         return [DTYPE(np.fft.fftfreq(g, s)) for g, s in zip(self.gpts, self.sampling)]
@@ -323,6 +383,12 @@ class Grid:
 
 
 class HasGridMixin:
+    _grid: Grid
+
+    @property
+    def grid(self) -> Grid:
+        return self._grid
+
     extent = DelegatedAttribute('grid', 'extent')
     gpts = DelegatedAttribute('grid', 'gpts')
     sampling = DelegatedAttribute('grid', 'sampling')
@@ -338,7 +404,7 @@ class Accelerator:
     :type energy: optional, float
     """
 
-    def __init__(self, energy: Optional[float] = None):
+    def __init__(self, energy: Optional[float] = None, lock_energy=False):
         """
         Energy base class.
 
@@ -355,6 +421,7 @@ class Accelerator:
 
         self.changed = Event()
         self._energy = energy
+        self._lock_energy = lock_energy
 
     @property
     def energy(self) -> float:
@@ -363,6 +430,9 @@ class Accelerator:
     @energy.setter
     @watched_property('changed')
     def energy(self, value: float):
+        if self._lock_energy:
+            raise RuntimeError('energy cannot be modified')
+
         if value is not None:
             value = DTYPE(value)
         self._energy = value
@@ -428,6 +498,10 @@ class HasAcceleratorMixin:
     wavelength = DelegatedAttribute('accelerator', 'wavelength')
 
 
+# def fft2_cpu(x):
+#    return mkl_fft
+
+
 class DeviceManager:
 
     def __init__(self, device):
@@ -435,6 +509,8 @@ class DeviceManager:
             device = 'cpu'
 
         self._device = device
+
+        # self._cpu_functions = {'fft2' : mkl_fft.fft2}
 
     @property
     def device(self):
@@ -444,6 +520,9 @@ class DeviceManager:
     def is_cuda(self):
         return not self.device == 'cpu'
 
+    def get_function(self, name):
+        pass
+
     def get_array_library(self):
         if self.is_cuda:
             return cp
@@ -452,222 +531,3 @@ class DeviceManager:
 
     def __copy__(self):
         return self.__class__(self._device)
-
-
-class Array:
-
-    def __init__(self, array, spatial_dimensions, extent=None, sampling=None, endpoint=False):
-        array_dimensions = len(array.shape)
-
-        if array_dimensions < spatial_dimensions:
-            raise RuntimeError('array dimensions exceeds spatial dimensions')
-
-        self._array = array
-        self.grid = Grid(extent=extent, sampling=sampling, endpoint=endpoint, lock_gpts=True)
-        self._spatial_dimensions = spatial_dimensions
-
-    @property
-    def shape(self):
-        return self._array.shape
-
-    @property
-    def gpts(self):
-        return self._array.shape[-self._spatial_dimensions:]
-
-    @property
-    def spatial_dimensions(self):
-        return self._spatial_dimensions
-
-    @property
-    def array(self):
-        return self._array
-
-    def tile(self, repetitions):
-        if not isinstance(repetitions, Iterable):
-            repetitions = (repetitions) * self.spatial_dimensions
-
-        if len(repetitions) != self.spatial_dimensions:
-            raise RuntimeError()
-
-        self._extent = repetitions * self._extent
-        repetitions = (1,) * (len(repetitions) - self.spatial_dimensions) + repetitions
-        self._array = np.tile(self._array, repetitions)
-        return self
-
-    def save_as_image(self, fname, dtype='uint16', **kwargs):
-        array = (self._array - self._array.min()) / self._array.ptp() * np.iinfo(dtype).max
-        array = array.astype(dtype)
-        imsave(fname, array, **kwargs)
-
-    #     def __getitem__(self, item):
-    #         if len(self.array.shape) <= self.spatial_dimensions:
-    #             raise RuntimeError()
-    #         return self.__class__(array=self._array[item], spatial_dimensions=self.spatial_dimensions - 1,
-    #                               extent=self.extent.copy(), fourier_space=self.fourier_space)
-    #
-    #     def write(self, path):
-    #         with h5py.File(path, 'w') as f:
-    #             dset = f.create_dataset('class', (100,), dtype='S100')
-    #             dset[:] = 'abtem.bases.ArrayWithGrid'
-    #             f.create_dataset('array', data=self.array)
-    #             f.create_dataset('spatial_dimensions', data=self.spatial_dimensions)
-    #             f.create_dataset('extent', data=self.extent)
-    #             f.create_dataset('fourier_space', data=self.fourier_space)
-    #         return path
-    #
-    #     @classmethod
-    #     def read(cls, path):
-    #         # TODO: implement chunks
-    #         with h5py.File(path, 'r') as f:
-    #             datasets = {}
-    #             for key in f.keys():
-    #                 datasets[key] = f.get(key)[()]
-    #         datasets.pop('class')
-    #         return cls(**datasets)
-    #
-    def copy(self):
-        new_copy = self.__class__(array=self.array.copy(), spatial_dimensions=self.spatial_dimensions)
-        new_copy.grid = copy(self.grid)
-        return new_copy
-
-# class ArrayWithGrid1D(ArrayWithGrid):
-#
-#     def __init__(self, array, extent=None, sampling=None, fourier_space=False, endpoint=False, **kwargs):
-#         super().__init__(array=array, spatial_dimensions=1, extent=extent, sampling=sampling,
-#                          fourier_space=fourier_space, endpoint=endpoint, **kwargs)
-#
-#     def plot(self, ax=None, complex_reduction=None, fourier_space=False, title=None, figsize=None):
-#
-#         if ax is None:
-#             fig, ax = plt.subplots(figsize=figsize)
-#
-#         array = np.squeeze(self.array)
-#
-#         if self.fourier_space & fourier_space:
-#             array = np.fft.fftshift(array)
-#
-#         elif (not self.fourier_space) & fourier_space:
-#             array = np.fft.fftshift(np.fft.fftn(array))
-#
-#         elif (self.fourier_space) & (not fourier_space):
-#             array = np.fft.ifftn(array)
-#
-#         if complex_reduction is not None:
-#             if isinstance(complex_reduction, str):
-#                 if complex_reduction == 'phase':
-#                     complex_reduction = np.angle
-#                 elif complex_reduction == 'abs2':
-#                     complex_reduction = abs2
-#
-#             array = complex_reduction(array)
-#
-#         if fourier_space:
-#             x_label = 'kx [1 / Å]'
-#             x = self.fftfreq()[0]
-#
-#         else:
-#             x_label = 'x [Å]'
-#             x = self.linspace()[0]
-#
-#         if np.iscomplexobj(array):
-#             ax.plot(x, array.real)
-#             ax.plot(x, array.imag)
-#         else:
-#             ax.plot(x, array)
-#
-#         ax.set_xlabel(x_label)
-#
-#         if title is not None:
-#             ax.set_title(title)
-#
-#     def write(self, path):
-#         with h5py.File(path, 'w') as f:
-#             dset = f.create_dataset('class', (1,), dtype='S100')
-#             dset[:] = np.string_('abtem.bases.ArrayWithGrid1D')
-#             f.create_dataset('array', data=self.array)
-#             f.create_dataset('extent', data=self.extent)
-#             f.create_dataset('fourier_space', data=self.fourier_space)
-#         return path
-#
-#
-# class ArrayWithGrid2D(ArrayWithGrid):
-#
-#     def __init__(self, array, extent=None, sampling=None, fourier_space=False, endpoint=False, **kwargs):
-#         super().__init__(array=array, spatial_dimensions=2, extent=extent, sampling=sampling,
-#                          fourier_space=fourier_space, endpoint=endpoint, **kwargs)
-#
-#     def plot(self, ax=None, logscale=False, logscale_constant=1., complex_representation=None,
-#              fourier_space=None, title=None, cmap='gray', figsize=None, scans=None, **kwargs):
-#
-#         if ax is None:
-#             fig, ax = plt.subplots(figsize=figsize)
-#
-#         array = np.squeeze(self.array)
-#
-#         array = cp.asnumpy(array)
-#
-#         if len(array.shape) > 2:
-#             raise RuntimeError('array dimension greater 2, set reduction operation')
-#
-#         if fourier_space is None:
-#             fourier_space = self.fourier_space
-#
-#         if self.fourier_space & fourier_space:
-#             array = np.fft.fftshift(array)
-#
-#         elif (not self.fourier_space) & fourier_space:
-#             array = np.fft.fftshift(np.fft.fftn(array))
-#
-#         elif (self.fourier_space) & (not fourier_space):
-#             array = np.fft.ifftn(array)
-#
-#         if (complex_representation is None) & np.iscomplexobj(array):
-#             array = abs2(array)
-#
-#         elif complex_representation is not None:
-#             if isinstance(complex_representation, str):
-#                 if complex_representation == 'phase':
-#                     complex_representation = np.angle
-#                 elif complex_representation == 'abs2':
-#                     complex_representation = abs2
-#
-#             array = complex_representation(array)
-#
-#         if logscale:
-#             array = np.log(1 + logscale_constant * array)
-#
-#         if fourier_space:
-#             x_label = 'kx [1 / Å]'
-#             y_label = 'ky [1 / Å]'
-#             extent = self.spatial_frequency_limits.ravel()
-#         else:
-#             x_label = 'x [Å]'
-#             y_label = 'y [Å]'
-#             extent = [0, self.extent[0], 0, self.extent[1]]
-#
-#         im = ax.imshow(array.T, extent=extent, cmap=cmap, origin='lower', **kwargs)
-#         ax.set_xlabel(x_label)
-#         ax.set_ylabel(y_label)
-#
-#         if title is not None:
-#             ax.set_title(title)
-#
-#         if scans is not None:
-#             if not isinstance(scans, Iterable):
-#                 scans = [scans]
-#
-#             for scan in scans:
-#                 scan.add_to_mpl_plot(ax)
-#
-#         return ax, im
-#
-#     def write(self, path):
-#         with h5py.File(path, 'w') as f:
-#             dset = f.create_dataset('class', (1,), dtype='S100')
-#             dset[:] = np.string_('abtem.bases.ArrayWithGrid2D')
-#             f.create_dataset('array', data=self.array)
-#             f.create_dataset('extent', data=self.extent)
-#             f.create_dataset('fourier_space', data=self.fourier_space)
-#         return path
-#
-#

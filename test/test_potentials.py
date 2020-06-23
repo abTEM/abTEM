@@ -13,7 +13,7 @@ def test_create_potential():
     assert np.all(potential.extent == [4, 6])
     assert potential.thickness == 4.3
     assert potential.num_slices == 9
-    assert potential.slice_thickness(0) == 4.3 / 9
+    assert potential.get_slice_thickness(0) == 4.3 / 9
 
 
 def test_potential_raises():
@@ -22,59 +22,29 @@ def test_potential_raises():
 
     assert str(e.value) == 'atoms has no thickness'
 
-    with pytest.raises(RuntimeError) as e:
-        Potential(Atoms('C', positions=[(2, 2, 2)], cell=(4, 4, 0)))
-
-
-def test_cutoff():
-    potential = Potential(Atoms(cell=(1, 1, 1)))
-
-    cutoff = potential.get_cutoff(6)
-    assert np.isclose(potential.evaluate_potential(cutoff, 6), potential.cutoff_tolerance)
-
-    cutoff = potential.get_cutoff(47)
-    assert np.isclose(potential.evaluate_potential(cutoff, 47), potential.cutoff_tolerance)
-
 
 def test_padded_atoms():
     atoms = Atoms('C', positions=[(1, 1, 1)], cell=(2, 2, 2))
-    potential = Potential(atoms, cutoff_tolerance=1e-3)
+    potential = Potential(atoms, cutoff_tolerance=1e-3, sampling=.1)
     padded_atoms = potential.get_padded_atoms()
     assert len(padded_atoms) == 9
 
-    potential = Potential(atoms, cutoff_tolerance=1e-5)
+    potential = Potential(atoms, cutoff_tolerance=1e-5, sampling=.1)
     padded_atoms = potential.get_padded_atoms()
     assert len(padded_atoms) == 25
 
 
 def test_potential_centered():
-    atoms = Atoms('C', positions=[(2, 2, 2)], cell=(4, 4, 4))
-    potential = Potential(atoms=atoms, gpts=41, num_slices=1).precalculate()
+    Lx = 5
+    Ly = 5
+    gpts_x = 40
+    gpts_y = 60
 
-    proj = potential.array.sum(0)
-    center = np.where(np.isclose(proj, np.max(proj)))
+    atoms1 = Atoms('C', positions=[(0, Ly / 2, 2)], cell=[Lx, Ly, 4])
+    atoms2 = Atoms('C', positions=[(Lx / 2, Ly / 2, 2)], cell=[Lx, Ly, 4])
+    potential1 = Potential(atoms1, gpts=(gpts_x, gpts_y), slice_thickness=4, cutoff_tolerance=1e-2)
+    potential2 = Potential(atoms2, gpts=(gpts_x, gpts_y), slice_thickness=4, cutoff_tolerance=1e-2)
 
-    assert np.all(center[0] == [20, 20, 21, 21]) & np.all(center[1] == [20, 21, 20, 21])
-
-    atoms = Atoms('C', positions=[(2, 2, 2)], cell=(4, 4, 4))
-    potential = Potential(atoms=atoms, gpts=40, num_slices=1).precalculate()
-
-    proj = potential.array.sum(0)
-    center = np.where(np.isclose(proj, np.max(proj)))
-
-    assert np.all(center[0] == [20]) & np.all(center[1] == [20])
-
-
-def test_potential_symmetric():
-    atoms = Atoms('C', positions=[(2, 2, 2)], cell=(4, 4, 4))
-    potential = Potential(atoms=atoms, gpts=32, num_slices=5).precalculate().array.sum(0)
-
-    a = potential[:, 1:17]
-    b = np.fliplr(potential[:, 16:])
-
-    assert np.all(np.isclose(a, b))
-
-    a = potential[1:17]
-    b = np.flipud(potential[16:])
-
-    assert np.all(np.isclose(a, b))
+    assert np.allclose(potential1[0].array[:, gpts_y // 2], np.roll(potential2[0].array[:, gpts_y // 2], gpts_x // 2))
+    assert np.allclose(potential2[0].array[:, gpts_y // 2][1:], (potential2[0].array[:, gpts_y // 2])[::-1][:-1])
+    assert np.allclose(potential2[0].array[gpts_x // 2][1:], potential2[0].array[gpts_x // 2][::-1][:-1])

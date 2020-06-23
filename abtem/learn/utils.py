@@ -5,7 +5,7 @@ import os
 import cupy as cp
 import numpy as np
 import torch
-from abtem.cudakernels import superpose_gaussians
+from abtem.cuda_kernels import superpose_gaussians
 from abtem.utils import BatchGenerator
 from torch.utils import dlpack
 import torch.nn.functional as F

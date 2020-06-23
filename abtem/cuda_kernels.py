@@ -13,7 +13,8 @@ from cupyx.scipy.ndimage import convolve
 
 
 @cuda.jit
-def superpose_deltas_kernel(array, positions, indices):
+def superpose_deltas_kernel(array :np.ndarray, positions, indices):
+
     i = cuda.threadIdx.x + cuda.blockIdx.x * cuda.blockDim.x
 
     if i < indices.shape[0]:
@@ -43,46 +44,6 @@ def superpose_deltas(positions, shape):
     return array
 
 
-def gaussian_kernel(sigma, normalize=True):
-    kernel_size = int(np.ceil(sigma) ** 2) * 4 + 1
-    kernel = cp.exp(-(cp.arange(kernel_size) - (kernel_size - 1) / 2) ** 2 / (2 * sigma ** 2))
-    if normalize:
-        kernel /= kernel.sum()
-    return kernel
-
-
-def separable_filter_2d(image, kernel):
-    return convolve(convolve(image, kernel[None]), kernel[:, None])
-
-
-def average_filter_2d(image, width, normalize=True):
-    kernel_size = 1 + 2 * width
-    if normalize:
-        kernel = cp.full(kernel_size, 1 / kernel_size)
-    else:
-        kernel = cp.ones(1 + 2 * width)
-    return convolve(convolve(image, kernel[None]), kernel[:, None])
-
-
-def gaussian_filter_2d(image, sigma, normalize=True):
-    kernel = gaussian_kernel(sigma, normalize=normalize)
-    return convolve(convolve(image, kernel[None]), kernel[:, None])
-
-
-def superpose_gaussians(positions, shape, sigma):
-    margin = int(np.ceil(4 * sigma))
-    positions = positions + margin
-
-    positions = positions[((positions[:, 0] > 0) & (positions[:, 1] > 0) &
-                           (positions[:, 0] < shape[0] + 2 * margin) &
-                           (positions[:, 1] < shape[1] + 2 * margin))]
-
-    positions = cp.asarray(positions)
-
-    gaussians = superpose_deltas(positions, (shape[0] + 2 * margin, shape[1] + 2 * margin))
-    gaussians = gaussian_filter_2d(gaussians, sigma, normalize=False)
-    gaussians = gaussians[margin:-margin, margin:-margin]
-    return gaussians
 
 
 @cuda.jit
@@ -117,13 +78,10 @@ def interpolate_radial_functions_cuda_kernel(array, indices, positions, rows, co
 def interpolate_radial_functions_kernel(array, indices, positions, rows, cols, r, values, derivatives):
     dr = r[1] - r[0]
 
-    # print(indices)
-
     for i in range(indices.shape[0]):
-        for j in prange(indices.shape[1]):
+        for j in prange(indices.shape[1]): # TODO : threadsafe, but barely worth the overhead
             r_interp = math.sqrt((rows[indices[i, j]] - positions[i, 0]) ** 2 +
                                  (cols[indices[i, j]] - positions[i, 1]) ** 2)
-            # idx = int(math.floor(math.log(r_interp / r[0]) / log_dr))
 
             idx = int(math.floor((r_interp - r[0]) / dr))
 

@@ -3,10 +3,43 @@ from abtem.bases import cached_method, Cache
 from abtem.interpolation import interpolation_kernel, interpolate_single
 from abtem.parametrizations import project_tanh_sinh
 from abtem.potentials import PotentialBase, tanh_sinh_quadrature, QUADRATURE_PARAMETER_RATIO
-from abtem.transform import fill_rectangle_with_atoms, orthogonalize_array
+from abtem.atoms import fill_rectangle_with_atoms, orthogonalize_array
 from abtem.utils import split_integer
 from ase import units
 from numba import jit
+
+def orthogonalize_array(array, original_cell, origin, extent, new_gpts=None):
+    if new_gpts is None:
+        new_gpts = array.shape
+
+    origin = np.array(origin)
+    extent = np.array(extent)
+
+    P = np.array(original_cell)
+    P_inv = np.linalg.inv(P)
+    origin_t = np.dot(origin, P_inv)
+    origin_t = origin_t % 1.0
+
+    lower = np.dot(origin_t, P)
+    upper = lower + extent
+
+    n, m = np.ceil(np.dot(upper, P_inv)).astype(np.int)
+
+    tiled = np.tile(array, (n + 2, m + 2))
+    x = np.linspace(-1, n + 1, tiled.shape[0], endpoint=False)
+    y = np.linspace(-1, m + 1, tiled.shape[1], endpoint=False)
+
+    x_ = np.linspace(lower[0], upper[0], new_gpts[0], endpoint=False)
+    y_ = np.linspace(lower[1], upper[1], new_gpts[1], endpoint=False)
+    x_, y_ = np.meshgrid(x_, y_, indexing='ij')
+
+    p = np.array([x_.ravel(), y_.ravel()]).T
+    p = np.dot(p, P_inv)
+
+    interpolated = RegularGridInterpolator((x, y), tiled)(p)
+
+    return interpolated.reshape((new_gpts[0], new_gpts[1]))
+
 
 
 def gaussian(radial_grid, alpha):

@@ -3,7 +3,7 @@ import cupy as cp
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import pdist
 
-from abtem.cudakernels import interpolate_radial_functions
+from abtem.cuda_kernels import interpolate_radial_functions
 from abtem.utils import cosine_window, polar_coordinates, get_array_module, get_ndimage_module
 
 

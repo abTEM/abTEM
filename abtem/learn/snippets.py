@@ -328,3 +328,88 @@ def analyse_points(points, labels, shape):
 #         self._rect_model = models.Quad(top='top', bottom='bottom', left='left', right='right', line_color='line_color',
 #                                        fill_color=None, line_width=3)
 #         self._rect_glyph = viewer._figure.add_glyph(self._rect_source, glyph=self._rect_model)
+
+
+def gaussian_kernel(sigma, normalize=True):
+    kernel_size = int(np.ceil(sigma) ** 2) * 4 + 1
+    kernel = cp.exp(-(cp.arange(kernel_size) - (kernel_size - 1) / 2) ** 2 / (2 * sigma ** 2))
+    if normalize:
+        kernel /= kernel.sum()
+    return kernel
+
+
+def separable_filter_2d(image, kernel):
+    return convolve(convolve(image, kernel[None]), kernel[:, None])
+
+
+def average_filter_2d(image, width, normalize=True):
+    kernel_size = 1 + 2 * width
+    if normalize:
+        kernel = cp.full(kernel_size, 1 / kernel_size)
+    else:
+        kernel = cp.ones(1 + 2 * width)
+    return convolve(convolve(image, kernel[None]), kernel[:, None])
+
+
+def gaussian_filter_2d(image, sigma, normalize=True):
+    kernel = gaussian_kernel(sigma, normalize=normalize)
+    return convolve(convolve(image, kernel[None]), kernel[:, None])
+
+
+def superpose_gaussians(positions, shape, sigma):
+    margin = int(np.ceil(4 * sigma))
+    positions = positions + margin
+
+    positions = positions[((positions[:, 0] > 0) & (positions[:, 1] > 0) &
+                           (positions[:, 0] < shape[0] + 2 * margin) &
+                           (positions[:, 1] < shape[1] + 2 * margin))]
+
+    positions = cp.asarray(positions)
+
+    gaussians = superpose_deltas(positions, (shape[0] + 2 * margin, shape[1] + 2 * margin))
+    gaussians = gaussian_filter_2d(gaussians, sigma, normalize=False)
+    gaussians = gaussians[margin:-margin, margin:-margin]
+    return gaussians
+
+
+
+def view_as_windows(arr_in, window_shape, step):
+    xp = get_array_module(arr_in)
+
+    ndim = arr_in.ndim
+
+    if isinstance(window_shape, numbers.Number):
+        window_shape = (window_shape,) * ndim
+
+    if not (len(window_shape) == ndim):
+        raise ValueError("`window_shape` is incompatible with `arr_in.shape`")
+
+    if isinstance(step, numbers.Number):
+        if step < 1:
+            raise ValueError("`step` must be >= 1")
+        step = (step,) * ndim
+    if len(step) != ndim:
+        raise ValueError("`step` is incompatible with `arr_in.shape`")
+
+    arr_shape = xp.array(arr_in.shape)
+    window_shape = xp.array(window_shape, dtype=arr_shape.dtype)
+
+    if ((arr_shape - window_shape) < 0).any():
+        raise ValueError("`window_shape` is too large")
+
+    if ((window_shape - 1) < 0).any():
+        raise ValueError("`window_shape` is too small")
+
+    # -- build rolling window view
+    slices = tuple(slice(None, None, st) for st in step)
+    window_strides = xp.array(arr_in.strides)
+
+    indexing_strides = xp.asarray(arr_in[slices].strides)
+
+    win_indices_shape = (((xp.array(arr_in.shape) - xp.array(window_shape)) // xp.array(step)) + 1)
+
+    new_shape = tuple(xp.concatenate((win_indices_shape, window_shape)))
+    strides = tuple(xp.concatenate((indexing_strides, window_strides)))
+
+    arr_out = xp.lib.stride_tricks.as_strided(arr_in, shape=new_shape, strides=strides)
+    return arr_out

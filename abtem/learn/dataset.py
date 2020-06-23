@@ -6,7 +6,7 @@ import cupy as cp
 import numpy as np
 import torch
 
-from abtem.cudakernels import superpose_gaussians
+from abtem.cuda_kernels import superpose_gaussians
 from abtem.learn.augment import SequentialAugmentations
 from abtem.learn.utils import cupy_to_pytorch
 from abtem.utils import BatchGenerator
