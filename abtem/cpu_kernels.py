@@ -3,7 +3,7 @@ import numpy as np
 from numba import jit, prange
 
 
-@nb.vectorize([nb.complex64(nb.float32), nb.complex128(nb.float64)])
+#@nb.vectorize([nb.complex64(nb.float32), nb.complex128(nb.float64)])
 def complex_exponential(x):
     return np.cos(x) + 1.j * np.sin(x)
 
@@ -43,7 +43,7 @@ def interpolate_radial_functions(array, array_rows, array_cols, indices, disc_in
                         array[k] += values[i, idx] + (r_interp - r[idx]) * dvdr[i, idx]
 
 
-@jit(nopython=True, parallel=True, nogil=True, cache=True)
+@jit(nopython=True, nogil=True)
 def window_and_collapse(probes: np.ndarray, S: np.ndarray, corners, coefficients):
     """
     Function for collapsing a Prism scattering matrix into a probe wave function.
@@ -59,7 +59,7 @@ def window_and_collapse(probes: np.ndarray, S: np.ndarray, corners, coefficients
     """
     N, M = S.shape[1:]
     n, m = probes.shape[1:]
-    for k in prange(len(corners)):
+    for k in range(len(corners)):
         i, j = corners[k]
         ti = n - (N - i)
         tj = m - (M - j)

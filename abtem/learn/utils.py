@@ -239,3 +239,32 @@ def weighted_normalization(image, mask=None):
     return (image - weighted_means) / weighted_stds
 
 
+class BatchGenerator:
+
+    def __init__(self, n_items, max_batch_size):
+        self._n_items = n_items
+        self._n_batches = (n_items + (-n_items % max_batch_size)) // max_batch_size
+        self._batch_size = (n_items + (-n_items % self.n_batches)) // self.n_batches
+
+    @property
+    def n_batches(self):
+        return self._n_batches
+
+    @property
+    def batch_size(self):
+        return self._batch_size
+
+    @property
+    def n_items(self):
+        return self._n_items
+
+    def generate(self):
+        batch_start = 0
+        for i in range(self.n_batches):
+            batch_end = batch_start + self.batch_size
+            if i == self.n_batches - 1:
+                yield batch_start, self.n_items - batch_end + self.batch_size
+            else:
+                yield batch_start, self.batch_size
+
+            batch_start = batch_end

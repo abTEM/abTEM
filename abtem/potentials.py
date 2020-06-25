@@ -1,4 +1,4 @@
-from abc import ABCMeta
+from abc import ABCMeta, abstractmethod
 from contextlib import ExitStack
 from copy import copy
 from typing import Union, Sequence
@@ -12,9 +12,10 @@ from scipy.optimize import brentq
 from tqdm.auto import tqdm
 
 from abtem.atoms import fill_rectangle, is_orthogonal
-from abtem.bases import Grid, HasGridMixin, Event, Cache, cached_method, cache_clear_callback, \
-    HasAcceleratorMixin, Accelerator
+from abtem.bases import Grid, HasGridMixin, Cache, cached_method, HasAcceleratorMixin, Accelerator, watched_method, \
+    Event, cache_clear_callback
 from abtem.cpu_kernels import interpolate_radial_functions, complex_exponential
+from abtem.device import get_array_module
 from abtem.measure import calibrations_from_grid
 from abtem.parametrizations import kirkland, dvdr_kirkland, load_kirkland_parameters
 from abtem.parametrizations import lobato, dvdr_lobato, load_lobato_parameters
@@ -43,26 +44,26 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         return float(sum([self.get_slice_thickness(j) for j in range(i + 1)]))
 
     @property
+    @abstractmethod
     def num_slices(self):
-        raise NotImplementedError()
+        pass
 
     def check_slice_idx(self, i):
         if i >= self.num_slices:
             raise RuntimeError('slice index {} too large for potential with {} slices'.format(i, self.num_slices))
 
+    @abstractmethod
     def get_slice_thickness(self, i):
-        raise NotImplementedError()
+        pass
 
     @property
+    @abstractmethod
     def thickness(self):
         raise NotImplementedError()
 
+    @abstractmethod
     def get_slice(self, i):
-        self.check_slice_idx(i)
-        return PotentialSlice(self, i)
-
-    def _calculate_slice(self, i):
-        raise NotImplementedError()
+        pass
 
     def __getitem__(self, item):
         if not isinstance(item, int):
@@ -71,23 +72,22 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
             raise StopIteration
         return self.get_slice(item)
 
-    def calculate(self, first_slice=None, last_slice=None, show_progress=False) -> 'ArrayPotential':
+    def calculate(self, start=None, end=None, xp=np, show_progress=False) -> 'ArrayPotential':
         self.grid.check_is_defined()
 
-        if first_slice is None:
-            first_slice = 0
+        if start is None:
+            start = 0
 
-        if last_slice is None:
-            last_slice = self.num_slices
+        if end is None:
+            end = self.num_slices
 
-        array = np.zeros((self.num_slices,) + (self.gpts[0], self.gpts[1]), dtype=self[0].array.dtype)
-        slice_thicknesses = np.zeros(self.num_slices)
+        array = xp.zeros((self.num_slices,) + (self.gpts[0], self.gpts[1]), dtype=self.get_slice(0)[0].dtype)
+        slice_thicknesses = xp.zeros(self.num_slices)
 
-        with tqdm(total=last_slice - first_slice) if show_progress else ExitStack() as pbar:
-            for i in range(first_slice, last_slice):
-                potential_slice = self.get_slice(i)
-                array[i] = potential_slice.array
-                slice_thicknesses[i] = potential_slice.thickness
+        with tqdm(total=end - start) if show_progress else ExitStack() as pbar:
+            for i in range(start, end):
+                array[i], slice_thicknesses[i] = self.get_slice(i)
+
                 if show_progress:
                     pbar.update(1)
 
@@ -97,39 +97,11 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         return show_image(self.calculate().array.sum(0), calibrations_from_grid(self.grid, names=['x', 'y']), **kwargs)
 
 
-class PotentialSlice(HasGridMixin):
-
-    def __init__(self, potential: AbstractPotential, index: int):
-        self._potential = potential
-        self._index = index
-
-    @property
-    def _grid(self):
-        return self._potential.grid
-
-    @property
-    def index(self) -> int:
-        return self._index
-
-    @property
-    def thickness(self) -> float:
-        return self._potential.get_slice_thickness(self.index)
-
-    @property
-    def array(self) -> np.ndarray:
-        return self._potential._calculate_slice(self.index)
-
-    def show(self, **kwargs):
-        return show_image(self.array, calibrations_from_grid(self.grid, names=['x', 'y']), **kwargs)
-
-
 class PotentialIntegrator:
 
-    def __init__(self, function, r, tol, cutoff, cache_size=512, cache_key_decimals=2):
+    def __init__(self, function, r, cache_size=512, cache_key_decimals=2):
         self._function = function
-        self._tol = tol
         self._r = r
-        self._cutoff = cutoff
         self.cache = Cache(cache_size)
         self._cache_key_decimals = cache_key_decimals
 
@@ -137,12 +109,16 @@ class PotentialIntegrator:
     def r(self):
         return self._r
 
+    @property
+    def cutoff(self):
+        return self._r[-1]
+
     def integrate(self, a, b):
         a = round(a, self._cache_key_decimals)
         b = round(b, self._cache_key_decimals)
 
-        a = max(min(a, b), -self._cutoff)
-        b = min(max(a, b), self._cutoff)
+        a = max(min(a, b), -self.cutoff)
+        b = min(max(a, b), self.cutoff)
         if np.sign(a) * np.sign(b) < 0:  # split integral
             result = self.cached_integrate(0, abs(a))
             result = result + self.cached_integrate(0, abs(b))
@@ -156,107 +132,10 @@ class PotentialIntegrator:
         zm = (b - a) / 2.
         zp = (a + b) / 2.
         f = lambda z: self._function(np.sqrt(self.r[0] ** 2 + (z * zm + zp) ** 2))
-        value, error_estimate, step_size, order = integrate(f, -1, 1, self._tol)
+        value, error_estimate, step_size, order = integrate(f, -1, 1, 1e-9)
         xk, wk = tanh_sinh_nodes_and_weights(step_size, order)
         f = lambda z: self._function(np.sqrt(self.r[:, None] ** 2 + (z * zm + zp) ** 2))
         return np.sum(f(xk[None]) * wk[None], axis=1) * zm
-
-
-class PotentialInterpolator:
-
-    def __init__(self, atomic_number, parametrization, tolerance, sampling):
-
-        if parametrization == 'lobato':
-            parameters = load_lobato_parameters()
-            self._function = lambda r: lobato(r, parameters[atomic_number])
-            self._derivative = lambda r: dvdr_lobato(r, parameters[atomic_number])
-
-        elif parametrization == 'kirkland':
-            self._function = lambda r: kirkland(r, parameters[atomic_number])
-            self._derivative = lambda r: dvdr_kirkland(r, parameters[atomic_number])
-            parameters = load_kirkland_parameters()
-
-        else:
-            raise RuntimeError('parametrization {} not recognized'.format(parametrization))
-
-        cutoff = brentq(lambda r: self._function(r) - tolerance, 1e-7, 1000)
-
-        cutoff_value = self._function(cutoff)
-        cutoff_derivative = self._derivative(cutoff)
-
-        def soft_potential(r):
-            result = np.array(self._function(r) - cutoff_value - (r - cutoff) * cutoff_derivative)
-            result[r > cutoff] = 0
-            return result
-
-        r = np.geomspace(np.min(sampling), cutoff, int(np.ceil(cutoff / np.min(sampling) * 4)))
-
-        self._projector = PotentialIntegrator(soft_potential, r, 1e-9, cutoff)
-        self._margin = np.int(np.ceil(r[-1] / np.min(sampling)))
-
-        m = self._margin
-        cols = np.zeros((2 * m + 1, 2 * m + 1), dtype=np.int32)
-        cols[:] = np.linspace(0, 2 * m, 2 * m + 1) - m
-        rows = cols.copy().T
-        r2 = rows ** 2 + cols ** 2
-        inside = r2 < m ** 2
-        self._disc_indices = (rows[inside], cols[inside])
-
-    @property
-    def function(self):
-        return self._function
-
-    @property
-    def derivative(self):
-        return self._derivative
-
-    @property
-    def cutoff(self):
-        return self.projector.r[-1]
-
-    @property
-    def sampling(self):
-        return self._projector.r[0]
-
-    @property
-    def projector(self):
-        return self._projector
-
-    @property
-    def margin(self):
-        return self._margin
-
-    def interpolate(self, shape, positions, limits):
-        assert len(positions) == len(limits[0]) == len(limits[1])
-
-        padded_shape = [num_elem + 2 * self.margin for num_elem in shape]
-
-        array = np.zeros(padded_shape, dtype=np.float32)
-
-        v = np.zeros((len(positions), len(self.projector.r)))
-        for i, (a, b) in enumerate(np.nditer(limits)):
-            v[i] = self.projector.integrate(a.item(), b.item())
-
-        positions = positions / self.sampling + self.margin
-
-        position_indices = np.ceil(positions).astype(np.int)[:, 0] * padded_shape[1] + \
-                           np.ceil(positions).astype(np.int)[:, 1]
-
-        disc_indices = self._disc_indices[0] * padded_shape[1] + self._disc_indices[1]
-
-        rows, cols = np.indices(padded_shape)
-
-        interpolate_radial_functions(array.ravel(),
-                                     rows.ravel(),
-                                     cols.ravel(),
-                                     position_indices,
-                                     disc_indices,
-                                     positions,
-                                     v,
-                                     self.projector.r / np.min(self.sampling))
-
-        array = array.reshape(padded_shape)[self.margin:-self.margin, self.margin:-self.margin]
-        return array
 
 
 class Potential(AbstractPotential):
@@ -299,7 +178,7 @@ class Potential(AbstractPotential):
                  sampling: Union[float, Sequence[float]] = None,
                  slice_thickness: float = .5,
                  parametrization: str = 'lobato',
-                 cutoff_tolerance: float = 1e-2):
+                 cutoff_tolerance: float = 1e-3):
 
         if np.abs(atoms.cell[2, 2]) < 1e-12:
             raise RuntimeError('atoms has no thickness')
@@ -309,29 +188,47 @@ class Potential(AbstractPotential):
 
         self._atoms = atoms.copy()
         self._atoms.wrap()
-
         self._thickness = atoms.cell[2, 2]
-        extent = np.diag(atoms.cell)[:2]
-        self._atoms = atoms.copy()
-        self._grid = Grid(gpts=gpts, sampling=sampling, extent=extent)
+
+        self._grid = Grid(gpts=gpts, sampling=sampling, extent=np.diag(atoms.cell)[:2])
         self._cutoff_tolerance = cutoff_tolerance
         self._parametrization = parametrization
         self._slice_thickness = slice_thickness
         self._atomic_numbers = np.unique(atoms.numbers)
-        self._interpolators = {}
-        self._padded_positions = {}
 
+        if parametrization == 'lobato':
+            self._parameters = load_lobato_parameters()
+            self._function = lobato  # lambda r: lobato(r, parameters[atomic_number])
+            self._derivative = dvdr_lobato  # lambda r: dvdr_lobato(r, parameters[atomic_number])
+
+        elif parametrization == 'kirkland':
+            self._parameters = load_kirkland_parameters()
+            self._function = kirkland  # lambda r: kirkland(r, parameters[atomic_number])
+            self._derivative = dvdr_kirkland  # lambda r: dvdr_kirkland(r, parameters[atomic_number])
+        else:
+            raise RuntimeError('parametrization {} not recognized'.format(parametrization))
+
+        self.positions_cache = Cache(len(self._atomic_numbers))
+        self.positions_changed_event = Event()
+        self.positions_changed_event.register(cache_clear_callback(self.positions_cache))
+
+        self.integrators_cache = Cache(len(self._atomic_numbers))
+
+    @watched_method('positions_changed_event')
     def displace_atoms(self, new_positons):
         self._atoms.positions[:] = new_positons
-        self._padded_positions = {}
+
+    @property
+    def parameters(self):
+        return self._parameters
+
+    @property
+    def function(self):
+        return self._function
 
     @property
     def atoms(self):
         return self._atoms
-
-    @property
-    def interpolators(self):
-        return self._interpolators
 
     @property
     def cutoff_tolerance(self):
@@ -348,53 +245,80 @@ class Potential(AbstractPotential):
     def get_slice_thickness(self, i):
         return self.thickness / self.num_slices
 
-    def get_slice(self, i):
+    def _get_cutoff(self, number):
+        return brentq(lambda r: self.function(r, self.parameters[number]) - self.cutoff_tolerance, 1e-7, 1000)
+
+    @cached_method('integrators_cache')
+    def _get_integrator(self, number):
+        cutoff = self._get_cutoff(number)
+        cutoff_value = self.function(cutoff, self.parameters[number])
+        cutoff_derivative = self._derivative(cutoff, self.parameters[number])
+
+        def soft_potential(r):
+            result = np.array(self._function(r, self.parameters[number]) - cutoff_value -
+                              (r - cutoff) * cutoff_derivative)
+            result[r > cutoff] = 0
+            return result
+
+        r = np.geomspace(np.min(self.sampling), cutoff, int(np.ceil(cutoff / np.min(self.sampling) * 4)))
+        return PotentialIntegrator(soft_potential, r)
+
+    @cached_method('positions_cache')
+    def _get_padded_positions(self, number):
+        cutoff = self._get_cutoff(number)
+        return fill_rectangle(self.atoms[self.atoms.numbers == number],
+                              self.extent,
+                              [0., 0.],
+                              margin=cutoff).positions
+
+    def get_slice(self, i, xp=np):
         self.check_slice_idx(i)
-        return PotentialSlice(self, i)
-
-    def _create_interpolator(self, number):
-        self._interpolators[number] = PotentialInterpolator(
-            number,
-            self._parametrization,
-            self.cutoff_tolerance,
-            self.sampling
-        )
-        return self._interpolators[number]
-
-    def _create_padded_positions(self, number):
-        self._padded_positions[number] = fill_rectangle(self.atoms[self.atoms.numbers == number],
-                                                        self.extent,
-                                                        [0., 0.],
-                                                        margin=self.interpolators[number].cutoff).positions
-        return self._padded_positions[number]
-
-    def _calculate_slice(self, i):
         self.grid.check_is_defined()
+        a = self.get_slice_entrance(i)
+        b = self.get_slice_exit(i)
 
-        v = np.zeros(self.gpts, dtype=DTYPE)
+        v = xp.zeros(self.gpts, dtype=xp.float32)
         for number in self._atomic_numbers:
-            try:
-                interpolator = self._interpolators[number]
-            except KeyError:
-                interpolator = self._create_interpolator(number)
+            integrator = self._get_integrator(number)
+            positions = self._get_padded_positions(number)
 
-            try:
-                positions = self._padded_positions[number]
-            except KeyError:
-                positions = self._create_padded_positions(number)
+            positions = positions[(positions[:, 2] > a - integrator.cutoff) *
+                                  (positions[:, 2] < b + integrator.cutoff)]
 
-            a = self.get_slice_entrance(i)
-            b = self.get_slice_exit(i)
+            if len(positions) == 0:
+                continue
 
-            positions = positions[(positions[:, 2] > a - interpolator.cutoff) *
-                                  (positions[:, 2] < b + interpolator.cutoff)]
+            vr = np.zeros((len(positions), len(integrator.r)))
+            for i, (a, b) in enumerate(np.nditer((a - positions[:, 2], b - positions[:, 2]))):
+                vr[i] = integrator.integrate(a.item(), b.item())
 
-            if len(positions) > 0:
-                v += interpolator.interpolate(v.shape,
-                                              positions[:, :2],
-                                              (a - positions[:, 2], b - positions[:, 2]))
+            pixel_positions = positions[:, :2] / self.sampling
 
-        return v / kappa
+            position_indices = np.ceil(pixel_positions).astype(np.int)[:, 0] * v.shape[1] + \
+                               np.ceil(pixel_positions).astype(np.int)[:, 1]
+
+            disc_rows, disc_cols = disc_meshgrid(np.int(np.ceil(integrator.r[-1] / np.min(self.sampling))))
+            rows, cols = np.indices(v.shape)
+
+            interpolate_radial_functions(v.ravel(),
+                                         rows.ravel(),
+                                         cols.ravel(),
+                                         position_indices,
+                                         disc_rows * v.shape[1] + disc_cols,
+                                         pixel_positions,
+                                         vr,
+                                         integrator.r / np.min(self.sampling))
+            v = v.reshape(self.gpts)
+
+        return v / kappa, b - a
+
+
+def disc_meshgrid(r):
+    cols = np.zeros((2 * r + 1, 2 * r + 1), dtype=np.int32)
+    cols[:] = np.linspace(0, 2 * r, 2 * r + 1) - r
+    rows = cols.T
+    inside = (rows ** 2 + cols ** 2) <= r ** 2
+    return rows[inside], cols[inside]
 
 
 class ArrayPotential(AbstractPotential, HasGridMixin):
@@ -454,8 +378,8 @@ class ArrayPotential(AbstractPotential, HasGridMixin):
     def get_slice_thickness(self, i):
         return self._slice_thicknesses[i]
 
-    def _calculate_slice(self, i):
-        return self._array[i]
+    def get_slice(self, i):
+        return self._array[i], self.get_slice_thickness(i)
 
     def repeat(self, multiples):
         assert len(multiples) == 2

@@ -1,14 +1,13 @@
 from collections import defaultdict
-from functools import lru_cache
 from typing import Mapping
 
-import cupy as cp
 import numpy as np
-from abtem.bases import HasAcceleratorMixin, Accelerator, watched_property, Event, DeviceManager, \
-    cache_clear_callback, cached_method, Cache
+
+from abtem.bases import HasAcceleratorMixin, Accelerator, watched_method, Event, cache_clear_callback, \
+    cached_method, Cache, Grid
 from abtem.config import DTYPE
-from abtem.utils import energy2wavelength
-from abtem.cpu_kernels import complex_exponential
+from abtem.utils import energy2wavelength, polargrid
+from abtem.device import get_array_module, get_device_function
 
 polar_symbols = ('C10', 'C12', 'phi12',
                  'C21', 'phi21', 'C23', 'phi23',
@@ -22,189 +21,36 @@ polar_aliases = {'defocus': 'C10', 'astigmatism': 'C12', 'astigmatism_angle': 'p
                  'C5': 'C50'}
 
 
-def calculate_symmetric_chi(alpha: np.ndarray, wavelength: float, parameters: Mapping[str, float]) -> np.ndarray:
-    """
-    Calculates the first three symmetric terms in the phase error expansion.
-
-    See Eq. 2.6 in ref [1].
-
-    Parameters
-    ----------
-    alpha : numpy.ndarray
-        Angle between the scattered electrons and the optical axis.
-    wavelength : float
-        Relativistic wavelength of wavefunction.
-    parameters : Mapping[str, float]
-        Mapping from Cn0 coefficients to its corresponding value.
-    Returns
-    -------
-
-    References
-    ----------
-    .. [1] Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.). Springer.
-
-    """
-    alpha2 = alpha ** 2
-    return 2 * np.pi / wavelength * (1 / 2. * alpha2 * parameters['C10'] +
-                                     1 / 4. * alpha2 ** 2 * parameters['C30'] +
-                                     1 / 6. * alpha2 ** 3 * parameters['C50'])
-
-
-def calculate_polar_chi(alpha: np.ndarray, phi: np.ndarray, wavelength: float,
-                        parameters: Mapping[str, float]) -> np.ndarray:
-    """
-    Calculates the polar expansion of the phase error up to 5th order.
-
-    See Eq. 2.22 in ref [1].
-
-    Parameters
-    ----------
-    alpha : numpy.ndarray
-        Angle between the scattered electrons and the optical axis.
-    phi : numpy.ndarray
-        Angle around the optical axis of the scattered electrons.
-    wavelength : float
-        Relativistic wavelength of wavefunction.
-    parameters : Mapping[str, float]
-        Mapping from Cnn, phinn coefficients to their corresponding values. See parameter `parameters` in class CTFBase.
-
-    Returns
-    -------
-
-    References
-    ----------
-    .. [1] Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.). Springer.
-
-    """
-    xp = cp.get_array_module(alpha)
-    alpha2 = alpha ** 2
-    array = xp.zeros(alpha.shape, dtype=DTYPE)
-    if any([parameters[symbol] != 0. for symbol in ('C10', 'C12', 'phi12')]):
-        array += (1 / 2 * alpha2 *
-                  (parameters['C10'] +
-                   parameters['C12'] * xp.cos(2 * (phi - parameters['phi12']))))
-
-    if any([parameters[symbol] != 0. for symbol in ('C21', 'phi21', 'C23', 'phi23')]):
-        array += (1 / 3 * alpha2 * alpha *
-                  (parameters['C21'] * xp.cos(phi - parameters['phi21']) +
-                   parameters['C23'] * xp.cos(3 * (phi - parameters['phi23']))))
-
-    if any([parameters[symbol] != 0. for symbol in ('C30', 'C32', 'phi32', 'C34', 'phi34')]):
-        array += (1 / 4 * alpha2 ** 2 *
-                  (parameters['C30'] +
-                   parameters['C32'] * xp.cos(2 * (phi - parameters['phi32'])) +
-                   parameters['C34'] * xp.cos(4 * (phi - parameters['phi34']))))
-
-    if any([parameters[symbol] != 0. for symbol in ('C41', 'phi41', 'C43', 'phi43', 'C45', 'phi41')]):
-        array += (1 / 5 * alpha2 ** 2 * alpha *
-                  (parameters['C41'] * xp.cos((phi - parameters['phi41'])) +
-                   parameters['C43'] * xp.cos(3 * (phi - parameters['phi43'])) +
-                   parameters['C45'] * xp.cos(5 * (phi - parameters['phi45']))))
-
-    if any([parameters[symbol] != 0. for symbol in ('C50', 'C52', 'phi52', 'C54', 'phi54', 'C56', 'phi56')]):
-        array += (1 / 6 * alpha2 ** 3 *
-                  (parameters['C50'] +
-                   parameters['C52'] * xp.cos(2 * (phi - parameters['phi52'])) +
-                   parameters['C54'] * xp.cos(4 * (phi - parameters['phi54'])) +
-                   parameters['C56'] * xp.cos(6 * (phi - parameters['phi56']))))
-
-    array = 2 * xp.pi / wavelength * array
-    return array
-
-
-def calculate_symmetric_aberrations(alpha: np.ndarray, wavelength: float,
-                                    parameters: Mapping[str, float]) -> np.ndarray:
-    return complex_exponential(-calculate_symmetric_chi(alpha, wavelength, parameters))
-
-
-def calculate_polar_aberrations(alpha: (np.ndarray, cp.ndarray), phi: np.ndarray, wavelength: float,
-                                parameters: Mapping[str, float]) -> np.ndarray:
-    return complex_exponential(-calculate_polar_chi(alpha, phi, wavelength, parameters))
-
-
-def calculate_aperture(alpha: np.ndarray, cutoff: float, rolloff: float) -> np.ndarray:
-    xp = cp.get_array_module(alpha)
-    if rolloff > 0.:
-        rolloff *= cutoff
-        array = .5 * (1 + xp.cos(np.pi * (alpha - cutoff + rolloff) / rolloff))
-        array[alpha > cutoff] = 0.
-        array = xp.where(alpha > cutoff - rolloff, array, xp.ones_like(alpha, dtype=DTYPE))
-    else:
-        array = xp.array(alpha < cutoff).astype(DTYPE)
-    return array
-
-
-def calculate_temporal_envelope(alpha: np.ndarray, wavelength: float, focal_spread: float) -> np.ndarray:
-    return DTYPE(np.exp(- (.5 * np.pi / wavelength * focal_spread * alpha ** 2) ** 2))
-
-
-def calculate_gaussian_envelope(alpha: np.ndarray, wavelength: float, gaussian_spread: float) -> np.ndarray:
-    return DTYPE(np.exp(- .5 * gaussian_spread ** 2 * alpha ** 2 / wavelength ** 2))
-
-
-def calculate_spatial_envelope(alpha, phi, wavelength, angular_spread, parameters):
-    dchi_dk = 2 * np.pi / wavelength * (
-            (parameters['C12'] * np.cos(2. * (phi - parameters['phi12'])) + parameters['C10']) * alpha +
-            (parameters['C23'] * np.cos(3. * (phi - parameters['phi23'])) +
-             parameters['C21'] * np.cos(1. * (phi - parameters['phi21']))) * alpha ** 2 +
-            (parameters['C34'] * np.cos(4. * (phi - parameters['phi34'])) +
-             parameters['C32'] * np.cos(2. * (phi - parameters['phi32'])) + parameters['C30']) * alpha ** 3 +
-            (parameters['C45'] * np.cos(5. * (phi - parameters['phi45'])) +
-             parameters['C43'] * np.cos(3. * (phi - parameters['phi43'])) +
-             parameters['C41'] * np.cos(1. * (phi - parameters['phi41']))) * alpha ** 4 +
-            (parameters['C56'] * np.cos(6. * (phi - parameters['phi56'])) +
-             parameters['C54'] * np.cos(4. * (phi - parameters['phi54'])) +
-             parameters['C52'] * np.cos(2. * (phi - parameters['phi52'])) + parameters['C50']) * alpha ** 5)
-
-    dchi_dphi = -2 * np.pi / wavelength * (
-            1 / 2. * (2. * parameters['C12'] * np.sin(2. * (phi - parameters['phi12']))) * alpha +
-            1 / 3. * (3. * parameters['C23'] * np.sin(3. * (phi - parameters['phi23'])) +
-                      1. * parameters['C21'] * np.sin(1. * (phi - parameters['phi21']))) * alpha ** 2 +
-            1 / 4. * (4. * parameters['C34'] * np.sin(4. * (phi - parameters['phi34'])) +
-                      2. * parameters['C32'] * np.sin(2. * (phi - parameters['phi32']))) * alpha ** 3 +
-            1 / 5. * (5. * parameters['C45'] * np.sin(5. * (phi - parameters['phi45'])) +
-                      3. * parameters['C43'] * np.sin(3. * (phi - parameters['phi43'])) +
-                      1. * parameters['C41'] * np.sin(1. * (phi - parameters['phi41']))) * alpha ** 4 +
-            1 / 6. * (6. * parameters['C56'] * np.sin(6. * (phi - parameters['phi56'])) +
-                      4. * parameters['C54'] * np.sin(4. * (phi - parameters['phi54'])) +
-                      2. * parameters['C52'] * np.sin(2. * (phi - parameters['phi52']))) * alpha ** 5)
-
-    return np.exp(-np.sign(angular_spread) * (angular_spread / 2) ** 2 * (dchi_dk ** 2 + dchi_dphi ** 2))
-
-
 class CTF(HasAcceleratorMixin):
 
     def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
                  angular_spread: float = 0., gaussian_spread: float = 0., energy: float = None,
-                 parameters: Mapping[str, float] = None, device=None, **kwargs):
+                 parameters: Mapping[str, float] = None, **kwargs):
 
         self.changed = Event()
-        self.cache = Cache(1)
         self._accelerator = Accelerator(energy=energy)
-        self.device_manager = DeviceManager(device)
-
-        self._semiangle_cutoff = DTYPE(semiangle_cutoff)
-        self._rolloff = DTYPE(rolloff)
-        self._focal_spread = DTYPE(focal_spread)
-        self._angular_spread = DTYPE(angular_spread)
-        self._gaussian_spread = DTYPE(gaussian_spread)
+        self._semiangle_cutoff = semiangle_cutoff
+        self._rolloff = rolloff
+        self._focal_spread = focal_spread
+        self._angular_spread = angular_spread
+        self._gaussian_spread = gaussian_spread
         self._parameters = dict(zip(polar_symbols, [0.] * len(polar_symbols)))
 
         if parameters is None:
             parameters = {}
 
         parameters.update(kwargs)
-
         self.set_parameters(parameters)
 
         def parametrization_property(key):
+
             def getter(self):
                 return self._parameters[key]
 
             def setter(self, value):
                 old = getattr(self, key)
                 self._parameters[key] = value
-                self.notify_observers({'notifier': key, 'change': old != value})
+                self.changed.notify(**{'notifier': self, 'property_name': key, 'change': old != value})
 
             return property(getter, setter)
 
@@ -217,8 +63,6 @@ class CTF(HasAcceleratorMixin):
                 setattr(self.__class__, key, parametrization_property(value))
             kwargs.pop(key, None)
 
-        self.changed.register(cache_clear_callback(self.evaluate_on_grid))
-
     @property
     def parameters(self):
         return self._parameters
@@ -228,16 +72,14 @@ class CTF(HasAcceleratorMixin):
         return - self._parameters['C10']
 
     @defocus.setter
-    @watched_property('changed')
     def defocus(self, value: float):
-        self._parameters['C10'] = DTYPE(-value)
+        self.C10 = -value
 
     @property
     def semiangle_cutoff(self) -> float:
         return self._semiangle_cutoff
 
     @semiangle_cutoff.setter
-    @watched_property('changed')
     def semiangle_cutoff(self, value: float):
         self._semiangle_cutoff = DTYPE(value)
 
@@ -246,7 +88,6 @@ class CTF(HasAcceleratorMixin):
         return self._rolloff
 
     @rolloff.setter
-    @watched_property('changed')
     def rolloff(self, value: float):
         self._rolloff = DTYPE(value)
 
@@ -255,7 +96,6 @@ class CTF(HasAcceleratorMixin):
         return self._focal_spread
 
     @focal_spread.setter
-    @watched_property('changed')
     def focal_spread(self, value: float):
         self._focal_spread = DTYPE(value)
 
@@ -264,7 +104,6 @@ class CTF(HasAcceleratorMixin):
         return self._angular_spread
 
     @angular_spread.setter
-    @watched_property('changed')
     def angular_spread(self, value: float):
         self._angular_spread = DTYPE(value)
 
@@ -273,7 +112,6 @@ class CTF(HasAcceleratorMixin):
         return self._gaussian_spread
 
     @gaussian_spread.setter
-    @watched_property('changed')
     def gaussian_spread(self, value: float):
         self._gaussian_spread = DTYPE(value)
 
@@ -293,22 +131,125 @@ class CTF(HasAcceleratorMixin):
 
         return parameters
 
-    def evaluate_aperture(self, alpha):
-        return calculate_aperture(alpha, self.semiangle_cutoff, self.rolloff)
+    def evaluate_aperture(self, alpha) -> np.ndarray:
+        xp = get_array_module(alpha)
+        if self.rolloff > 0.:
+            self.rolloff *= self.semiangle_cutoff
+            array = .5 * (1 + xp.cos(np.pi * (alpha - self.semiangle_cutoff + self.rolloff) / self.rolloff))
+            array[alpha > self.semiangle_cutoff] = 0.
+            array = xp.where(alpha > self.semiangle_cutoff - self.rolloff, array, xp.ones_like(alpha, dtype=xp.float32))
+        else:
+            array = xp.array(alpha < self.semiangle_cutoff).astype(xp.float32)
+        return array
 
-    def evaluate_temporal_envelope(self, alpha):
-        return calculate_temporal_envelope(alpha, self.wavelength, self.focal_spread)
+    def evaluate_temporal_envelope(self, alpha: np.ndarray) -> np.ndarray:
+        xp = get_array_module(alpha)
+        return xp.exp(- (.5 * xp.pi / self.wavelength * self.focal_spread * alpha ** 2) ** 2).astype(xp.float32)
+
+    def evaluate_gaussian_envelope(self, alpha: np.ndarray) -> np.ndarray:
+        xp = get_array_module(alpha)
+        return xp.exp(- .5 * self.gaussian_spread ** 2 * alpha ** 2 / self.wavelength ** 2)
 
     def evaluate_spatial_envelope(self, alpha, phi):
-        return calculate_spatial_envelope(alpha, phi, self.wavelength, self.angular_spread, self.parameters)
+        xp = get_array_module(alpha)
+        p = self.parameters
+        dchi_dk = 2 * xp.pi / self.wavelength * (
+                (p['C12'] * xp.cos(2. * (phi - p['phi12'])) + p['C10']) * alpha +
+                (p['C23'] * xp.cos(3. * (phi - p['phi23'])) +
+                 p['C21'] * xp.cos(1. * (phi - p['phi21']))) * alpha ** 2 +
+                (p['C34'] * xp.cos(4. * (phi - p['phi34'])) +
+                 p['C32'] * xp.cos(2. * (phi - p['phi32'])) + p['C30']) * alpha ** 3 +
+                (p['C45'] * xp.cos(5. * (phi - p['phi45'])) +
+                 p['C43'] * xp.cos(3. * (phi - p['phi43'])) +
+                 p['C41'] * xp.cos(1. * (phi - p['phi41']))) * alpha ** 4 +
+                (p['C56'] * xp.cos(6. * (phi - p['phi56'])) +
+                 p['C54'] * xp.cos(4. * (phi - p['phi54'])) +
+                 p['C52'] * xp.cos(2. * (phi - p['phi52'])) + p['C50']) * alpha ** 5)
 
-    def evaluate_gaussian_envelope(self, alpha):
-        return calculate_gaussian_envelope(alpha, self.wavelength, self.gaussian_spread)
+        dchi_dphi = -2 * xp.pi / self.wavelength * (
+                1 / 2. * (2. * p['C12'] * xp.sin(2. * (phi - p['phi12']))) * alpha +
+                1 / 3. * (3. * p['C23'] * xp.sin(3. * (phi - p['phi23'])) +
+                          1. * p['C21'] * xp.sin(1. * (phi - p['phi21']))) * alpha ** 2 +
+                1 / 4. * (4. * p['C34'] * xp.sin(4. * (phi - p['phi34'])) +
+                          2. * p['C32'] * xp.sin(2. * (phi - p['phi32']))) * alpha ** 3 +
+                1 / 5. * (5. * p['C45'] * xp.sin(5. * (phi - p['phi45'])) +
+                          3. * p['C43'] * xp.sin(3. * (phi - p['phi43'])) +
+                          1. * p['C41'] * xp.sin(1. * (phi - p['phi41']))) * alpha ** 4 +
+                1 / 6. * (6. * p['C56'] * xp.sin(6. * (phi - p['phi56'])) +
+                          4. * p['C54'] * xp.sin(4. * (phi - p['phi54'])) +
+                          2. * p['C52'] * xp.sin(2. * (phi - p['phi52']))) * alpha ** 5)
 
-    def evaluate_aberrations(self, alpha, phi):
-        return calculate_polar_aberrations(alpha, phi, self.wavelength, self._parameters)
+        return xp.exp(-xp.sign(self.angular_spread) * (self.angular_spread / 2) ** 2 * (dchi_dk ** 2 + dchi_dphi ** 2))
 
-    def evaluate(self, alpha, phi):
+    def evaluate_chi(self, alpha, phi) -> np.ndarray:
+        """
+        Calculates the polar expansion of the phase error up to 5th order.
+
+        See Eq. 2.22 in ref [1].
+
+        Parameters
+        ----------
+        alpha : numpy.ndarray
+            Angle between the scattered electrons and the optical axis.
+        phi : numpy.ndarray
+            Angle around the optical axis of the scattered electrons.
+        wavelength : float
+            Relativistic wavelength of wavefunction.
+        parameters : Mapping[str, float]
+            Mapping from Cnn, phinn coefficients to their corresponding values. See parameter `parameters` in class CTFBase.
+
+        Returns
+        -------
+
+        References
+        ----------
+        .. [1] Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.). Springer.
+
+        """
+        xp = get_array_module(alpha)
+        p = self.parameters
+
+        alpha2 = alpha ** 2
+
+        array = xp.zeros(alpha.shape, dtype=DTYPE)
+        if any([p[symbol] != 0. for symbol in ('C10', 'C12', 'phi12')]):
+            array += (1 / 2 * alpha2 *
+                      (p['C10'] +
+                       p['C12'] * xp.cos(2 * (phi - p['phi12']))))
+
+        if any([p[symbol] != 0. for symbol in ('C21', 'phi21', 'C23', 'phi23')]):
+            array += (1 / 3 * alpha2 * alpha *
+                      (p['C21'] * xp.cos(phi - p['phi21']) +
+                       p['C23'] * xp.cos(3 * (phi - p['phi23']))))
+
+        if any([p[symbol] != 0. for symbol in ('C30', 'C32', 'phi32', 'C34', 'phi34')]):
+            array += (1 / 4 * alpha2 ** 2 *
+                      (p['C30'] +
+                       p['C32'] * xp.cos(2 * (phi - p['phi32'])) +
+                       p['C34'] * xp.cos(4 * (phi - p['phi34']))))
+
+        if any([p[symbol] != 0. for symbol in ('C41', 'phi41', 'C43', 'phi43', 'C45', 'phi41')]):
+            array += (1 / 5 * alpha2 ** 2 * alpha *
+                      (p['C41'] * xp.cos((phi - p['phi41'])) +
+                       p['C43'] * xp.cos(3 * (phi - p['phi43'])) +
+                       p['C45'] * xp.cos(5 * (phi - p['phi45']))))
+
+        if any([p[symbol] != 0. for symbol in ('C50', 'C52', 'phi52', 'C54', 'phi54', 'C56', 'phi56')]):
+            array += (1 / 6 * alpha2 ** 3 *
+                      (p['C50'] +
+                       p['C52'] * xp.cos(2 * (phi - p['phi52'])) +
+                       p['C54'] * xp.cos(4 * (phi - p['phi54'])) +
+                       p['C56'] * xp.cos(6 * (phi - p['phi56']))))
+
+        array = 2 * xp.pi / self.wavelength * array
+        return array
+
+    def evaluate_aberrations(self, alpha, phi) -> np.ndarray:
+        xp = get_array_module(alpha)
+        complex_exponential = get_device_function(xp, 'complex_exponential')
+        return complex_exponential(-self.evaluate_chi(alpha, phi))
+
+    def evaluate(self, alpha=None, phi=None):
         array = self.evaluate_aberrations(alpha, phi)
 
         if self.semiangle_cutoff < np.inf:
@@ -325,24 +266,40 @@ class CTF(HasAcceleratorMixin):
 
         return array
 
-    @cached_method('cache')
-    def evaluate_on_grid(self, grid):
-        grid.check_is_defined()
-        self.accelerator.check_is_defined()
+    def show(self, semiangle_cutoff: float, ax=None, phi=0, n=1000, **kwargs):
+        import matplotlib.pyplot as plt
 
-        xp = self.device_manager.get_array_library()
-        kx, ky = grid.spatial_frequencies()
-        alpha_x = xp.asarray(kx) * self.wavelength
-        alpha_y = xp.asarray(ky) * self.wavelength
-        alpha = xp.sqrt(alpha_x.reshape((-1, 1)) ** 2 + alpha_y.reshape((1, -1)) ** 2)
-        phi = xp.arctan2(alpha_x.reshape((-1, 1)), alpha_y.reshape((1, -1)))
+        alpha = np.linspace(0, semiangle_cutoff, n)
 
-        return self.evaluate(alpha, phi)
+        aberrations = self.evaluate_aberrations(alpha, phi)
+        aperture = self.evaluate_aperture(alpha)
+        temporal_envelope = self.evaluate_temporal_envelope(alpha)
+        spatial_envelope = self.evaluate_spatial_envelope(alpha, phi)
+        gaussian_envelope = self.evaluate_gaussian_envelope(alpha)
+        envelope = aperture * temporal_envelope * spatial_envelope * gaussian_envelope
 
-    # def copy(self):
-    #     parameters = self._parameters
-    #
-    #     self.__class__()
+        if ax is None:
+            ax = plt.subplot()
+
+        ax.plot(alpha, aberrations.imag * envelope, label='CTF', **kwargs)
+
+        if self.semiangle_cutoff < np.inf:
+            ax.plot(alpha, aperture, label='Aperture', **kwargs)
+
+        if self.focal_spread > 0.:
+            ax.plot(alpha, temporal_envelope, label='Temporal envelope', **kwargs)
+
+        if self.angular_spread > 0.:
+            ax.plot(alpha, spatial_envelope, label='Spatial envelope', **kwargs)
+
+        if self.gaussian_spread > 0.:
+            ax.plot(alpha, gaussian_envelope, label='Gaussian envelope', **kwargs)
+
+        if not np.allclose(envelope, 1.):
+            ax.plot(alpha, envelope, label='Product envelope', **kwargs)
+
+        ax.set_xlabel('k [1 / Å]')
+        ax.legend()
 
 
 def scherzer_defocus(Cs, energy):

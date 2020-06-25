@@ -13,8 +13,7 @@ from cupyx.scipy.ndimage import convolve
 
 
 @cuda.jit
-def superpose_deltas_kernel(array :np.ndarray, positions, indices):
-
+def superpose_deltas_kernel(array: np.ndarray, positions, indices):
     i = cuda.threadIdx.x + cuda.blockIdx.x * cuda.blockDim.x
 
     if i < indices.shape[0]:
@@ -42,8 +41,6 @@ def superpose_deltas(positions, shape):
     blockspergrid = (positions.shape[0] + (threadsperblock - 1)) // threadsperblock
     superpose_deltas_kernel[blockspergrid, threadsperblock](array, positions, rounded)
     return array
-
-
 
 
 @cuda.jit
@@ -79,7 +76,7 @@ def interpolate_radial_functions_kernel(array, indices, positions, rows, cols, r
     dr = r[1] - r[0]
 
     for i in range(indices.shape[0]):
-        for j in prange(indices.shape[1]): # TODO : threadsafe, but barely worth the overhead
+        for j in prange(indices.shape[1]):  # TODO : threadsafe, but barely worth the overhead
             r_interp = math.sqrt((rows[indices[i, j]] - positions[i, 0]) ** 2 +
                                  (cols[indices[i, j]] - positions[i, 1]) ** 2)
 

@@ -1,16 +1,14 @@
 from abc import ABCMeta, abstractmethod
 
 import cupy as cp
+import mkl_fft
 import numpy as np
 
-from abtem.bases import Grid, cached_method, Cache, DeviceManager, Event, cache_clear_callback, watched_property, \
-    Accelerator
+from abtem.bases import cached_method, Cache, Event, cache_clear_callback, watched_method
+from abtem.cpu_kernels import abs2
+from abtem.device import get_array_module, get_device_function
 from abtem.measure import Calibration, calibrations_from_grid, fourier_space_offset
 from abtem.plot import show_image
-from abtem.utils import create_fftw_objects
-from abtem.config import DTYPE
-from abtem.cpu_kernels import abs2
-from copy import copy
 
 
 class AbstractDetector(metaclass=ABCMeta):
@@ -25,8 +23,6 @@ class AbstractDetector(metaclass=ABCMeta):
 
         else:
             self._save_file = None
-
-        self.device_manager = DeviceManager(device)
 
     @property
     def save_file(self) -> str:
@@ -48,17 +44,17 @@ class AbstractDetector(metaclass=ABCMeta):
 
 
 def cosine_window(x, cutoff, rolloff, attenuate='high'):
-    xp = cp.get_array_module(x)
+    xp = get_array_module(x)
 
     rolloff *= cutoff
     if attenuate == 'high':
         array = .5 * (1 + xp.cos(xp.pi * (x - cutoff - rolloff) / rolloff))
         array[x < cutoff] = 0.
-        array = xp.where(x < cutoff + rolloff, array, xp.ones_like(x, dtype=DTYPE))
+        array = xp.where(x < cutoff + rolloff, array, xp.ones_like(x, dtype=xp.float32))
     elif attenuate == 'low':
         array = .5 * (1 + xp.cos(xp.pi * (x - cutoff + rolloff) / rolloff))
         array[x > cutoff] = 0.
-        array = xp.where(x > cutoff - rolloff, array, xp.ones_like(x, dtype=DTYPE))
+        array = xp.where(x > cutoff - rolloff, array, xp.ones_like(x, dtype=xp.float32))
     else:
         raise RuntimeError('attenuate must be "high" or "low"')
 
@@ -83,7 +79,7 @@ class AnnularDetector(AbstractDetector):
         return self._inner
 
     @inner.setter
-    @watched_property('changed')
+    @watched_method('changed')
     def inner(self, value: float):
         self._inner = value
 
@@ -92,7 +88,7 @@ class AnnularDetector(AbstractDetector):
         return self._outer
 
     @outer.setter
-    @watched_property('changed')
+    @watched_method('changed')
     def outer(self, value: float):
         self._outer = value
 
@@ -101,7 +97,7 @@ class AnnularDetector(AbstractDetector):
         return self._rolloff
 
     @rolloff.setter
-    @watched_property('changed')
+    @watched_method('changed')
     def rolloff(self, value: float):
         self._rolloff = value
 
@@ -114,9 +110,7 @@ class AnnularDetector(AbstractDetector):
         return ()
 
     @cached_method('cache')
-    def get_integration_region(self, grid, wavelength):
-        xp = self.device_manager.get_array_library()
-
+    def get_integration_region(self, grid, wavelength, xp=np):
         kx, ky = grid.spatial_frequencies()
 
         alpha_x = xp.asarray(kx) * wavelength
@@ -130,21 +124,14 @@ class AnnularDetector(AbstractDetector):
             array = (alpha >= self._inner) & (alpha <= self._outer)
         return array
 
-    def detect(self, waves):
-        xp = self.device_manager.get_array_library()
+    def detect(self, waves, overwrite_x=False):
+        xp = get_array_module(waves.array)
+        fft2 = get_device_function(xp, 'fft2')
+        abs2 = get_device_function(xp, 'abs2')
 
-        array = waves.array.copy()
         integration_region = self.get_integration_region(waves.grid, waves.wavelength)
-
-        if self.device_manager.is_cuda:
-            intensity = abs2(cp.fft.fft2(array))
-        else:
-            fftw_forward, _ = create_fftw_objects(array)
-            fftw_forward()
-            intensity = abs2(array)
-
-        result = xp.sum(intensity * integration_region, axis=(1, 2)) / xp.sum(intensity, axis=(1, 2))
-        return result
+        intensity = abs2(fft2(waves.array, overwrite_x=overwrite_x))
+        return xp.sum(intensity * integration_region, axis=(1, 2)) / xp.sum(intensity, axis=(1, 2))
 
     def copy(self) -> 'AnnularDetector':
         return self.__class__(self.inner, self.outer, rolloff=self.rolloff, save_file=self.save_file)
@@ -208,7 +195,7 @@ class SegmentedDetector(AbstractDetector):
         return self._inner
 
     @inner.setter
-    @watched_property('changed')
+    @watched_method('changed')
     def inner(self, value: float):
         self._inner = value
 
@@ -217,7 +204,7 @@ class SegmentedDetector(AbstractDetector):
         return self._outer
 
     @outer.setter
-    @watched_property('changed')
+    @watched_method('changed')
     def outer(self, value: float):
         self._outer = value
 
@@ -226,7 +213,7 @@ class SegmentedDetector(AbstractDetector):
         return self._nbins_radial
 
     @nbins_radial.setter
-    @watched_property('changed')
+    @watched_method('changed')
     def nbins_radial(self, value: float):
         self._nbins_radial = value
 
@@ -235,7 +222,7 @@ class SegmentedDetector(AbstractDetector):
         return self._nbins_angular
 
     @nbins_angular.setter
-    @watched_property('changed')
+    @watched_method('changed')
     def nbins_angular(self, value: float):
         self._nbins_angular = value
 
@@ -346,18 +333,17 @@ class PixelatedDetector(AbstractDetector):
         xp = self.device_manager.get_array_library()
         self.adapt_to_waves(waves)
 
-        array = waves.array.copy()
+        array = waves.array  # .copy()
 
         if self.device_manager.is_cuda:
             intensity = abs2(cp.fft.fft2(array))
         else:
-            fftw_forward, _ = create_fftw_objects(array)
-            fftw_forward()
+            mkl_fft.fft2(array, overwrite_x=True)
             intensity = abs2(array)
 
         intensity = xp.fft.fftshift(intensity, axes=(-1, -2))
-        crop = ((intensity.shape[1] - self.shape[0]) // 2, (intensity.shape[2] - self.shape[1]) // 2)
-        intensity = intensity[:, crop[0]:crop[0] + self.shape[0], crop[1]:crop[1] + self.shape[1]]
+        # crop = ((intensity.shape[1] - self.shape[0]) // 2, (intensity.shape[2] - self.shape[1]) // 2)
+        # intensity = intensity[:, crop[0]:crop[0] + self.shape[0], crop[1]:crop[1] + self.shape[1]]
         return intensity
 
 

@@ -8,9 +8,6 @@ from ase.data import covalent_radii
 from ase.data.colors import cpk_colors
 from matplotlib.patches import Circle
 
-from abtem.transfer import calculate_polar_aberrations, calculate_aperture, calculate_temporal_envelope, \
-    calculate_spatial_envelope, calculate_gaussian_envelope
-
 cube = np.array([[[0, 0, 0], [0, 0, 1]],
                  [[0, 0, 0], [0, 1, 0]],
                  [[0, 0, 0], [1, 0, 0]],
@@ -80,40 +77,6 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
 
         for scan in scans:
             scan.add_to_mpl_plot(ax)
-
-
-def show_ctf(ctf, max_k, ax=None, phi=0, n=1000):
-    k = np.linspace(0, max_k, n)
-    alpha = k * ctf.wavelength
-    aberrations = calculate_polar_aberrations(alpha, phi, ctf.wavelength, ctf._parameters)
-    aperture = calculate_aperture(alpha, ctf.semiangle_cutoff, ctf.rolloff)
-    temporal_envelope = calculate_temporal_envelope(alpha, ctf.wavelength, ctf.focal_spread)
-    spatial_envelope = calculate_spatial_envelope(alpha, phi, ctf.wavelength, ctf.angular_spread, ctf.parameters)
-    gaussian_envelope = calculate_gaussian_envelope(alpha, ctf.wavelength, ctf.gaussian_spread)
-    envelope = aperture * temporal_envelope * spatial_envelope * gaussian_envelope
-
-    if ax is None:
-        ax = plt.subplot()
-
-    ax.plot(k, aberrations.imag * envelope, label='CTF')
-
-    if ctf.semiangle_cutoff < np.inf:
-        ax.plot(k, aperture, label='Aperture')
-
-    if ctf.focal_spread > 0.:
-        ax.plot(k, temporal_envelope, label='Temporal envelope')
-
-    if ctf.angular_spread > 0.:
-        ax.plot(k, spatial_envelope, label='Spatial envelope')
-
-    if ctf.gaussian_spread > 0.:
-        ax.plot(k, gaussian_envelope, label='Gaussian envelope')
-
-    if not np.allclose(envelope, 1.):
-        ax.plot(k, envelope, label='Product envelope')
-
-    ax.set_xlabel('k [1 / Å]')
-    ax.legend()
 
 
 def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='gray', figsize=None, scans=None,

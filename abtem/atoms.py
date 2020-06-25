@@ -1,6 +1,5 @@
 import numpy as np
 from ase import Atoms
-from scipy.cluster.hierarchy import linkage, fcluster
 
 
 def is_hexagonal(atoms):

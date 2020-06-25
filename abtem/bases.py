@@ -1,19 +1,14 @@
+from copy import copy
 from collections import OrderedDict
-from collections.abc import Iterable
 from typing import Optional, Union, Sequence
 
 import numpy as np
-
-try:
-    import cupy as cp
-except ImportError:
-    pass
 
 from abtem.config import DTYPE
 from abtem.utils import energy2wavelength, energy2sigma
 
 
-def watched_property(event):
+def watched_method(event):
     """
     Decorator for class methods that have to notify.
     """
@@ -23,12 +18,14 @@ def watched_property(event):
 
         def new_func(*args):
             instance, value = args
-            old = getattr(instance, property_name)
+            # old = getattr(instance, property_name)
             func(*args)
-            change = old != value
-            if isinstance(change, Iterable):
-                change = any(change)
-            getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': change})
+            # print(change)
+            # change = old != value
+            # if isinstance(change, Iterable):
+            #    print(change)
+            #    change = np.any(change)
+            getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': True})
 
         return new_func
 
@@ -46,9 +43,10 @@ class Event(object):
         for callback in self.callbacks:
             callback(*args, **kwargs)
 
-    def register(self, callback):
-        self.callbacks.append(callback)
-        return callback
+    def register(self, callbacks):
+        if not isinstance(callbacks, list):
+            callbacks = [callbacks]
+        self.callbacks += callbacks
 
     @classmethod
     def watched_property(cls, event_name, key):
@@ -73,15 +71,19 @@ def cache_clear_callback(target_cache):
     return callback
 
 
-def cached_method(target_cache, key_args=None):
+def cached_method(target_cache, ignore_args=False):
     def wrapper(func):
+
         def new_func(*args):
             self = args[0]
+
             cache = getattr(self, target_cache)
-            if key_args is None:
-                key = (func,) + args
+
+            if ignore_args is True:
+                key = (func,)
             else:
-                key = (func,) + tuple([args[i] for i in key_args])
+                key = (func,) + args
+
             if key in cache._cache:
                 result = cache._cache[key]
                 cache._hits += 1
@@ -155,7 +157,8 @@ class Grid:
                  endpoint: bool = False,
                  lock_extent=False,
                  lock_gpts=False,
-                 lock_sampling=False):
+                 lock_sampling=False,
+                 flexible=False):
 
         """
         Grid object.
@@ -237,7 +240,7 @@ class Grid:
         return self._extent
 
     @extent.setter
-    @watched_property('changed')
+    @watched_method('changed')
     def extent(self, extent: Union[float, Sequence[float]]):
         if self._lock_extent:
             raise RuntimeError('extent cannot be modified')
@@ -257,7 +260,7 @@ class Grid:
         return self._gpts
 
     @gpts.setter
-    @watched_property('changed')
+    @watched_method('changed')
     def gpts(self, gpts: Union[int, Sequence[int]]):
         if self._lock_gpts:
             raise RuntimeError('gpts cannot be modified')
@@ -278,7 +281,7 @@ class Grid:
         return self._sampling
 
     @sampling.setter
-    @watched_property('changed')
+    @watched_method('changed')
     def sampling(self, sampling):
         if self._lock_sampling:
             raise RuntimeError('sampling cannot be modified')
@@ -369,7 +372,7 @@ class Grid:
     @cached_method('cache')
     def coordinates(self):
         self.check_is_defined()
-        return [np.linspace(0, e, g, endpoint=self.endpoint, dtype=DTYPE) for g, e in zip(self.gpts, self.extent)]
+        return [np.linspace(0, e, g, endpoint=self.endpoint, dtype=np.float32) for g, e in zip(self.gpts, self.extent)]
 
     @cached_method('cache')
     def spatial_frequencies(self):
@@ -388,6 +391,12 @@ class HasGridMixin:
     @property
     def grid(self) -> Grid:
         return self._grid
+
+    @grid.setter
+    def grid(self, new: Grid):
+        changed_event = self._grid.changed
+        self._accelerator = new
+        self._accelerator.changed = changed_event
 
     extent = DelegatedAttribute('grid', 'extent')
     gpts = DelegatedAttribute('grid', 'gpts')
@@ -428,7 +437,7 @@ class Accelerator:
         return self._energy
 
     @energy.setter
-    @watched_property('changed')
+    @watched_method('changed')
     def energy(self, value: float):
         if self._lock_energy:
             raise RuntimeError('energy cannot be modified')
@@ -490,44 +499,11 @@ class HasAcceleratorMixin:
 
     @accelerator.setter
     def accelerator(self, new: Accelerator):
-        changed_event = self._accelerator.changed
         self._accelerator = new
-        self._accelerator.changed = changed_event
+        self._accelerator.changed = new.changed
 
     energy = DelegatedAttribute('accelerator', 'energy')
     wavelength = DelegatedAttribute('accelerator', 'wavelength')
 
-
 # def fft2_cpu(x):
 #    return mkl_fft
-
-
-class DeviceManager:
-
-    def __init__(self, device):
-        if device is None:
-            device = 'cpu'
-
-        self._device = device
-
-        # self._cpu_functions = {'fft2' : mkl_fft.fft2}
-
-    @property
-    def device(self):
-        return self._device
-
-    @property
-    def is_cuda(self):
-        return not self.device == 'cpu'
-
-    def get_function(self, name):
-        pass
-
-    def get_array_library(self):
-        if self.is_cuda:
-            return cp
-        else:
-            return np
-
-    def __copy__(self):
-        return self.__class__(self._device)

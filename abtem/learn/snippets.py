@@ -413,3 +413,35 @@ def view_as_windows(arr_in, window_shape, step):
 
     arr_out = xp.lib.stride_tricks.as_strided(arr_in, shape=new_shape, strides=strides)
     return arr_out
+
+
+def create_fftw_objects(array, allow_new_plan=True):
+    """
+    Creates FFTW object for forward and backward Fourier transforms. The input array object will be transformed in place.
+    The function tries to retrieve plans from wisdom only. If no plan exists for the input array, a new plan is created.
+
+    Parameters
+    ----------
+    array : ndarray
+        Array to be transformed. 2 dimensions or greater.
+    allow_new_plan : bool
+        If true allow creation of new plan, otherwise, raise an exception
+    """
+
+    try:
+        fftw_forward = pyfftw.FFTW(array, array, axes=(-1, -2), threads=12, flags=('FFTW_WISDOM_ONLY',))
+        fftw_backward = pyfftw.FFTW(array, array, axes=(-1, -2), direction='FFTW_BACKWARD', threads=12,
+                                    flags=('FFTW_WISDOM_ONLY',))
+
+        return fftw_forward, fftw_backward
+
+    except RuntimeError as e:
+        if ('No FFTW wisdom is known for this plan.' != str(e)) or (not allow_new_plan):
+            raise
+
+        dummy = np.zeros_like(array)  # this is necessary because FFTW overwrites input arrays
+        pyfftw.FFTW(dummy, dummy, axes=(-1, -2), threads=12, flags=('FFTW_MEASURE',))
+        pyfftw.FFTW(dummy, dummy, axes=(-1, -2), direction='FFTW_BACKWARD', threads=12, flags=('FFTW_MEASURE',))
+        return create_fftw_objects(array, allow_new_plan=False)
+
+
