@@ -7,7 +7,7 @@ from abtem.potentials import Potential
 def test_fig_5_12():
     atoms = Atoms('CSiCuAuU', positions=[(x, 25, 4) for x in np.linspace(5, 45, 5)], cell=(50, 50, 8))
 
-    potential = Potential(atoms=atoms, gpts=512, parametrization='kirkland', num_slices=1)
+    potential = Potential(atoms=atoms, gpts=512, parametrization='kirkland', slice_thickness=8)
 
     waves = PlaneWaves(energy=200e3)
 

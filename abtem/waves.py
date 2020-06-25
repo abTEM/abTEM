@@ -25,15 +25,15 @@ from abtem.utils import polargrid
 class FresnelPropagator:
 
     def __init__(self):
-        self.cache = Cache(1)  # TODO : lru
+        self.cache = Cache(1)
 
     @cached_method('cache')
     def get_array(self, waves, dz):
         xp = get_array_module(waves.array)
         complex_exponential = get_device_function(xp, 'complex_exponential')
 
-        kx = xp.fft.fftfreq(waves.grid.gpts[0], waves.grid.sampling[0]).astype(DTYPE)
-        ky = xp.fft.fftfreq(waves.grid.gpts[1], waves.grid.sampling[1]).astype(DTYPE)
+        kx = xp.fft.fftfreq(waves.grid.gpts[0], waves.grid.sampling[0]).astype(xp.float32)
+        ky = xp.fft.fftfreq(waves.grid.gpts[1], waves.grid.sampling[1]).astype(xp.float32)
         f = (complex_exponential(-(kx ** 2)[:, None] * np.pi * waves.wavelength * dz) *
              complex_exponential(-(ky ** 2)[None] * np.pi * waves.wavelength * dz))
         return f
@@ -41,6 +41,8 @@ class FresnelPropagator:
     def propagate(self, waves, dz):
         fft2_convolve = get_device_function(get_array_module(waves.array), 'fft2_convolve')
         return fft2_convolve(waves._array, self.get_array(waves, dz))
+
+#def transmit(waves, potential_slice)
 
 
 def multislice(waves: Union[Waves, SMatrix], potential: AbstractPotential, show_progress: bool = True):

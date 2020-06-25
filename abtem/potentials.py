@@ -15,7 +15,6 @@ from abtem.atoms import fill_rectangle, is_orthogonal
 from abtem.bases import Grid, HasGridMixin, Cache, cached_method, HasAcceleratorMixin, Accelerator, watched_method, \
     Event, cache_clear_callback
 from abtem.cpu_kernels import interpolate_radial_functions, complex_exponential
-from abtem.device import get_array_module
 from abtem.measure import calibrations_from_grid
 from abtem.parametrizations import kirkland, dvdr_kirkland, load_kirkland_parameters
 from abtem.parametrizations import lobato, dvdr_lobato, load_lobato_parameters
@@ -26,8 +25,6 @@ from abtem.utils import energy2sigma
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
 kappa = 4 * np.pi * eps0 / (2 * np.pi * units.Bohr * units._e * units.C)
-
-DTYPE = np.float32
 
 
 class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
@@ -93,8 +90,15 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 
         return ArrayPotential(array, slice_thicknesses, self.extent)
 
-    def show(self, **kwargs):
-        return show_image(self.calculate().array.sum(0), calibrations_from_grid(self.grid, names=['x', 'y']), **kwargs)
+    def show(self, start=None, end=None, **kwargs):
+        if (start is None) & (end is None):
+            start = 0
+            end = len(self)
+
+        if end is None:
+            end = start + 1
+        return show_image(self.calculate(start, end).array.sum(0),
+                          calibrations_from_grid(self.grid, names=['x', 'y']), **kwargs)
 
 
 class PotentialIntegrator:
@@ -136,6 +140,12 @@ class PotentialIntegrator:
         xk, wk = tanh_sinh_nodes_and_weights(step_size, order)
         f = lambda z: self._function(np.sqrt(self.r[:, None] ** 2 + (z * zm + zp) ** 2))
         return np.sum(f(xk[None]) * wk[None], axis=1) * zm
+
+
+class PotentialSlice:
+
+    def __init__(self):
+        pass
 
 
 class Potential(AbstractPotential):
@@ -208,11 +218,11 @@ class Potential(AbstractPotential):
         else:
             raise RuntimeError('parametrization {} not recognized'.format(parametrization))
 
-        self.positions_cache = Cache(len(self._atomic_numbers))
+        self.positions_cache = Cache(len(self._atomic_numbers) + 1)
         self.positions_changed_event = Event()
         self.positions_changed_event.register(cache_clear_callback(self.positions_cache))
 
-        self.integrators_cache = Cache(len(self._atomic_numbers))
+        self.integrators_cache = Cache(len(self._atomic_numbers) + 1)
 
     @watched_method('positions_changed_event')
     def displace_atoms(self, new_positons):
@@ -279,6 +289,7 @@ class Potential(AbstractPotential):
 
         v = xp.zeros(self.gpts, dtype=xp.float32)
         for number in self._atomic_numbers:
+
             integrator = self._get_integrator(number)
             positions = self._get_padded_positions(number)
 
@@ -289,8 +300,8 @@ class Potential(AbstractPotential):
                 continue
 
             vr = np.zeros((len(positions), len(integrator.r)))
-            for i, (a, b) in enumerate(np.nditer((a - positions[:, 2], b - positions[:, 2]))):
-                vr[i] = integrator.integrate(a.item(), b.item())
+            for i, (am, bm) in enumerate(np.nditer((a - positions[:, 2], b - positions[:, 2]))):
+                vr[i] = integrator.integrate(am.item(), bm.item())
 
             pixel_positions = positions[:, :2] / self.sampling
 
@@ -394,6 +405,15 @@ class ArrayPotential(AbstractPotential, HasGridMixin):
             f.create_dataset('array', data=self.array)
             f.create_dataset('slice_thicknesses', data=self._slice_thicknesses)
             f.create_dataset('extent', data=self.extent)
+
+    @classmethod
+    def read(cls, path):
+        with h5py.File(path, 'r') as f:
+            datasets = {}
+            for key in f.keys():
+                datasets[key] = f.get(key)[()]
+
+        return cls(array=datasets['array'], slice_thicknesses=datasets['slice_thicknesses'], extent=datasets['extent'])
 
     def copy(self):
         return self.__class__(array=cp.asarray(self.array), slice_thicknesses=self._slice_thicknesses.copy(),

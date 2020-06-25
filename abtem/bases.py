@@ -20,10 +20,8 @@ def watched_method(event):
             instance, value = args
             # old = getattr(instance, property_name)
             func(*args)
-            # print(change)
             # change = old != value
             # if isinstance(change, Iterable):
-            #    print(change)
             #    change = np.any(change)
             getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': True})
 
@@ -209,6 +207,8 @@ class Grid:
 
     # def __str__(self):
     #     str(' x '.join(map(str, list(np.round(self.grid.extent, 2))))) + ' Å'
+
+    #def
 
     def _validate(self, value, dtype):
         if isinstance(value, (np.ndarray, list, tuple)):
