@@ -3,7 +3,7 @@ import numpy as np
 from numba import jit, prange
 
 
-#@nb.vectorize([nb.complex64(nb.float32), nb.complex128(nb.float64)])
+# @nb.vectorize([nb.complex64(nb.float32), nb.complex128(nb.float64)])
 def complex_exponential(x):
     return np.cos(x) + 1.j * np.sin(x)
 
@@ -14,16 +14,22 @@ def abs2(x):
 
 
 @jit(nopython=True, nogil=True, parallel=True, cache=True)
-def interpolate_radial_functions(array, array_rows, array_cols, indices, disc_indices, positions, values, r):
-    assert len(array) == len(array_rows) == len(array_cols)
+def interpolate_radial_functions(array, rows, cols, indices, disc_indices, positions, values, r):
+    # assert len(array) == len(array_rows) == len(array_cols)
     dvdr = np.diff(values) / np.diff(r)
+    array = array.ravel()
+    # n = shape[0]
+    # m = shape[1]
 
     for i in range(indices.shape[0]):
-        for j in prange(disc_indices.shape[0]):  # TODO: thread safe but not efficient
+        for j in range(disc_indices.shape[0]):  # TODO: thread safe but not efficient
             k = indices[i] + disc_indices[j]
             if k < array.shape[0]:
-                r_interp = np.sqrt((array_rows[k] - positions[i, 0]) ** 2 +
-                                   (array_cols[k] - positions[i, 1]) ** 2)
+                # row = (k // m) % n # this is slower
+                # col = k % m
+
+                r_interp = np.sqrt((rows[k] - positions[i, 0]) ** 2 +
+                                   (cols[k] - positions[i, 1]) ** 2)
 
                 if r_interp < r[-1]:
                     # idx = int(np.floor((r_interp - r[0]) / dr0))

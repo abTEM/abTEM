@@ -265,6 +265,8 @@ class Potential(AbstractPotential):
 
         self.integrators_cache = Cache(len(self._atomic_numbers) + 1)
 
+        self.grid.changed.register(cache_clear_callback(self.integrators_cache))
+
     @watched_method('positions_changed_event')
     def displace_atoms(self, new_positons):
         self._atoms.positions[:] = new_positons
@@ -316,7 +318,9 @@ class Potential(AbstractPotential):
             return result
 
         r = np.geomspace(np.min(self.sampling), cutoff, int(np.ceil(cutoff / np.min(self.sampling) * 4)))
-        return PotentialIntegrator(soft_potential, r)
+        margin = np.int(np.ceil(cutoff / np.min(self.sampling)))
+        rows, cols = disc_meshgrid(margin)
+        return PotentialIntegrator(soft_potential, r), rows, cols
 
     @cached_method('positions_cache')
     def _get_padded_positions(self, number):
@@ -326,16 +330,22 @@ class Potential(AbstractPotential):
                               [0., 0.],
                               margin=cutoff).positions
 
+    def _allocate(self, xp):
+        v = xp.zeros(self.gpts, dtype=xp.float32)
+        rows, cols = xp.indices(v.shape)
+        return v, rows, cols
+
     def calculate_slice(self, i, xp=np):
         self.check_slice_idx(i)
         self.grid.check_is_defined()
         a = self.get_slice_entrance(i)
         b = self.get_slice_exit(i)
 
-        v = xp.zeros(self.gpts, dtype=xp.float32)
+        v, rows, cols = self._allocate(xp)
         for number in self._atomic_numbers:
 
-            integrator = self._get_integrator(number)
+            integrator, disc_rows, disc_cols = self._get_integrator(number)
+
             positions = self._get_padded_positions(number)
 
             positions = positions[(positions[:, 2] > a - integrator.cutoff) *
@@ -347,16 +357,14 @@ class Potential(AbstractPotential):
             vr = np.zeros((len(positions), len(integrator.r)))
             for i, (am, bm) in enumerate(np.nditer((a - positions[:, 2], b - positions[:, 2]))):
                 vr[i] = integrator.integrate(am.item(), bm.item())
+            vr = xp.asarray(vr)
 
-            pixel_positions = positions[:, :2] / self.sampling
+            pixel_positions = xp.asarray(positions[:, :2] / self.sampling)
 
-            position_indices = np.ceil(pixel_positions).astype(np.int)[:, 0] * v.shape[1] + \
-                               np.ceil(pixel_positions).astype(np.int)[:, 1]
+            position_indices = xp.ceil(pixel_positions).astype(xp.int)[:, 0] * v.shape[1] + \
+                               xp.ceil(pixel_positions).astype(xp.int)[:, 1]
 
-            disc_rows, disc_cols = disc_meshgrid(np.int(np.ceil(integrator.r[-1] / np.min(self.sampling))))
-            rows, cols = np.indices(v.shape)
-
-            interpolate_radial_functions(v.ravel(),
+            interpolate_radial_functions(v,
                                          rows.ravel(),
                                          cols.ravel(),
                                          position_indices,
@@ -364,7 +372,6 @@ class Potential(AbstractPotential):
                                          pixel_positions,
                                          vr,
                                          integrator.r / np.min(self.sampling))
-            v = v.reshape(self.gpts)
 
         return v / kappa
 
@@ -378,7 +385,7 @@ class Potential(AbstractPotential):
 
 
 def disc_meshgrid(r):
-    cols = np.zeros((2 * r + 1, 2 * r + 1), dtype=np.int32)
+    cols = np.zeros((2 * r + 1, 2 * r + 1)).astype(np.int32)
     cols[:] = np.linspace(0, 2 * r, 2 * r + 1) - r
     rows = cols.T
     inside = (rows ** 2 + cols ** 2) <= r ** 2
