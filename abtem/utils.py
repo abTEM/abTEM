@@ -1,6 +1,10 @@
+import time
+
 import numpy as np
 from ase import units
+
 from abtem.device import get_array_module
+from collections import Iterable
 
 
 def energy2mass(energy):
@@ -61,3 +65,70 @@ def split_integer(n, m):
             else:
                 v.append(pp)
         return v
+
+
+def label_to_index_generator(labels, first_label=0):
+    labels = labels.flatten()
+    labels_order = labels.argsort()
+    sorted_labels = labels[labels_order]
+    indices = np.arange(0, len(labels) + 1)[labels_order]
+    index = np.arange(first_label, np.max(labels) + 1)
+    lo = np.searchsorted(sorted_labels, index, side='left')
+    hi = np.searchsorted(sorted_labels, index, side='right')
+    for i, (l, h) in enumerate(zip(lo, hi)):
+        yield np.sort(indices[l:h])
+
+
+class Bar:
+
+    def __init__(self, name, total, enable=True, parent=None):
+        self._name = name
+        self._total = total
+        self._current = 0
+        self._last_t = None
+        self._last_finished = 0
+        self._output = ''
+        self._enable = enable
+        self._parent = parent
+
+    def reset(self):
+        self._current = 0
+        self._last_t = None
+        self._last_finished = 0
+
+    def update(self, n):
+        t = time.time()
+
+        if self._last_t is None:
+            self._last_t = t
+            self._current += n
+            percent = round(self._current / self._total * 100)
+            self._last_finished = self._current
+            self._output = f"{self._name}: {self._current} of {self._total} ({percent} %) [ETA N/A, N/A]"
+            return
+
+        self._current += n
+        dt = t - self._last_t
+
+        if (dt >= .1) or (self._current == self._total):
+            percent = round(self._current / self._total * 100)
+            iter_per_sec = (self._current - self._last_finished) / dt
+            eta = (self._total - self._current) / iter_per_sec
+            self._output = f"{self._name}: {self._current} of {self._total} ({percent} %) "
+            self._output += f"[ETA {eta:.1f} s, {iter_per_sec:.1f} / s]"
+
+            self._last_t = time.time()
+            self._last_finished = self._current
+
+    @property
+    def output(self):
+        if self._parent:
+            return ' <- '.join((self._parent.output, self._output))
+        else:
+            return self._output
+
+    def print_bar(self):
+        if not self._enable:
+            return
+
+        print(f'{self.output:<{128}}\r', end="", flush=True)

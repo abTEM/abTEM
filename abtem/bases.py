@@ -208,7 +208,7 @@ class Grid:
     # def __str__(self):
     #     str(' x '.join(map(str, list(np.round(self.grid.extent, 2))))) + ' Å'
 
-    #def
+    # def
 
     def _validate(self, value, dtype):
         if isinstance(value, (np.ndarray, list, tuple)):
@@ -377,12 +377,17 @@ class Grid:
     @cached_method('cache')
     def spatial_frequencies(self):
         self.check_is_defined()
-        return [DTYPE(np.fft.fftfreq(g, s)) for g, s in zip(self.gpts, self.sampling)]
+        return [np.fft.fftfreq(g, s).astype(np.float32) for g, s in zip(self.gpts, self.sampling)]
 
-    def __copy__(self):
-        return self.__class__(extent=self._extent.copy(), gpts=self._gpts.copy(), sampling=self._sampling.copy(),
-                              dimensions=self._dimensions, endpoint=self.endpoint, lock_extent=self._lock_extent,
-                              lock_gpts=self._lock_gpts, lock_sampling=self._lock_sampling)
+    def copy(self):
+        return self.__class__(extent=self._extent.copy(),
+                              gpts=self._gpts.copy(),
+                              sampling=self._sampling.copy(),
+                              dimensions=self._dimensions,
+                              endpoint=self.endpoint,
+                              lock_extent=self._lock_extent,
+                              lock_gpts=self._lock_gpts,
+                              lock_sampling=self._lock_sampling)
 
 
 class HasGridMixin:
@@ -486,7 +491,7 @@ class Accelerator:
         elif other.energy is None:
             other.energy = self.energy
 
-    def __copy__(self):
+    def copy(self):
         return self.__class__(self.energy)
 
 

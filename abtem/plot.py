@@ -1,12 +1,14 @@
 from collections import Iterable
 from colorsys import hls_to_rgb
 
-from abtem.cpu_kernels import abs2
 import matplotlib.pyplot as plt
 import numpy as np
 from ase.data import covalent_radii
 from ase.data.colors import cpk_colors
+from matplotlib.collections import PatchCollection
 from matplotlib.patches import Circle
+
+from abtem.cpu_kernels import abs2
 
 cube = np.array([[[0, 0, 0], [0, 0, 1]],
                  [[0, 0, 0], [0, 1, 0]],
@@ -60,8 +62,12 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
         colors = cpk_colors[atoms.numbers[order]]
         sizes = covalent_radii[atoms.numbers[order]] * scale_atoms
 
-        for position, size, color in zip(positions, sizes, colors):
-            ax.add_patch(Circle(position, size, facecolor=color, edgecolor='black'))
+        circles = []
+        for position, size in zip(positions, sizes):
+            circles.append(Circle(position, size))
+
+        coll = PatchCollection(circles, facecolors=colors, edgecolors='black')
+        ax.add_collection(coll)
 
         ax.axis('equal')
         ax.set_xlabel(plane[0])
@@ -80,7 +86,7 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
 
 
 def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='gray', figsize=None, scans=None,
-               display_func=None, discrete=False, cbar_label=None, **kwargs):
+               display_func=None, discrete=False, cbar_label=None, vmin=None, vmax=None, **kwargs):
     if display_func is None:
         if np.iscomplexobj(array):
             display_func = abs2
@@ -96,12 +102,18 @@ def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='g
         extent.append(calibration.offset)
         extent.append(calibration.offset + num_elem * calibration.sampling)
 
-    vmin = np.min(array)
-    vmax = np.max(array)
+    if vmin is None:
+        vmin = np.min(array)
+        if discrete:
+            vmin -= .5
+
+    if vmax is None:
+        vmax = np.max(array)
+        if discrete:
+            vmax += .5
+
     if discrete:
         cmap = plt.get_cmap(cmap, np.max(array) - np.min(array) + 1)
-        vmin -= .5
-        vmax += .5
 
     im = ax.imshow(array.T, extent=extent, cmap=cmap, origin='lower', vmin=vmin, vmax=vmax, **kwargs)
 

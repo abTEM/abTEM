@@ -1,17 +1,14 @@
 from __future__ import annotations
 
-from contextlib import ExitStack
 from copy import copy
 from typing import Union, Sequence
 
 import h5py
 import numpy as np
 from ase import Atoms
-from tqdm.auto import tqdm
 
 from abtem.bases import Grid, Accelerator, HasGridMixin, HasAcceleratorMixin, cache_clear_callback, Event, \
     watched_method, Cache, cached_method
-from abtem.config import DTYPE
 from abtem.detect import AbstractDetector
 from abtem.device import get_array_module, get_device_function, asnumpy
 from abtem.measure import calibrations_from_grid, Measurement
@@ -19,7 +16,7 @@ from abtem.plot import show_image
 from abtem.potentials import Potential, AbstractPotential
 from abtem.scan import AbstractScan
 from abtem.transfer import CTF
-from abtem.utils import polargrid
+from abtem.utils import polargrid, Bar
 
 
 class FresnelPropagator:
@@ -40,12 +37,27 @@ class FresnelPropagator:
 
     def propagate(self, waves, dz):
         fft2_convolve = get_device_function(get_array_module(waves.array), 'fft2_convolve')
-        return fft2_convolve(waves._array, self.get_array(waves, dz))
+        fft2_convolve(waves._array, self.get_array(waves, dz))
+        return waves
 
-#def transmit(waves, potential_slice)
+
+def transmit(waves, potential_slice):
+    xp = get_array_module(waves.array)
+    complex_exponential = get_device_function(xp, 'complex_exponential')
+
+    slice_array = potential_slice.calculate()
+    dim_padding = len(waves._array.shape) - len(slice_array.shape)
+    slice_array = slice_array.reshape((1,) * dim_padding + slice_array.shape)
+
+    if np.iscomplexobj(slice_array):
+        waves._array *= slice_array
+    else:
+        waves._array *= complex_exponential(waves.accelerator.sigma * slice_array)
+
+    return waves
 
 
-def multislice(waves: Union[Waves, SMatrix], potential: AbstractPotential, show_progress: bool = True):
+def multislice(waves: Union[Waves, SMatrix], potential: AbstractPotential, pbar: Union[bool, Bar] = True):
     """
     Propagate the wave function through a potential using the multislice
 
@@ -67,44 +79,20 @@ def multislice(waves: Union[Waves, SMatrix], potential: AbstractPotential, show_
     waves.grid.match(potential)
     waves.accelerator.check_is_defined()
     waves.grid.check_is_defined()
-    xp = get_array_module(waves.array)
-    complex_exponential = get_device_function(xp, 'complex_exponential')
 
     propagator = FresnelPropagator()
-    with tqdm(total=len(potential)) if show_progress else ExitStack() as pbar:
-        for potential_slice, dz in potential:
-            if np.iscomplexobj(potential_slice):
-                waves._array *= potential_slice[None]
-            else:
-                waves._array *= complex_exponential(waves.accelerator.sigma * potential_slice[None])
 
-            propagator.propagate(waves, dz)
+    if not isinstance(pbar, Bar):
+        pbar = Bar('Multislice', len(potential), enable=pbar)
 
-            if show_progress:
-                pbar.update(1)
+    for potential_slice in potential:
+        transmit(waves, potential_slice)
+        propagator.propagate(waves, potential_slice.thickness)
+
+        pbar.update(1)
+        pbar.print_bar()
+
     return waves
-
-
-def _scan(scanned, scan, detectors, potential=None, max_batch=1, show_progress=True):
-    try:
-        probe_generator = scanned.generate_probes(scan, potential=potential, max_batch=max_batch)
-    except TypeError:
-        probe_generator = scanned.generate_probes(scan, max_batch=max_batch)
-
-    for detector in detectors:
-        if hasattr(detector, 'adapt_to_waves'):
-            detector.adapt_to_waves(scanned)
-
-    measurements = scan.allocate_measurements(detectors)
-    with tqdm(total=len(scan)) if show_progress else ExitStack() as pbar:
-        for start, end, exit_probes in probe_generator:
-            for detector, measurement in measurements.items():
-                scan.insert_new_measurement(measurement, start, end, detector.detect(exit_probes))
-
-            if show_progress:
-                pbar.update(end - start)
-
-    return measurements
 
 
 class Waves(HasGridMixin, HasAcceleratorMixin):
@@ -129,22 +117,29 @@ class Waves(HasGridMixin, HasAcceleratorMixin):
     def __init__(self, array: np.ndarray, extent: Union[float, Sequence[float]] = None,
                  sampling: Union[float, Sequence[float]] = None, energy: float = None):
 
-        if len(array.shape) == 2:
-            array = array[None]
+        # if len(array.shape) == 2:
+        #    array = array[None]
 
         self._array = array
-        self._grid = Grid(extent=extent, gpts=array.shape[1:], sampling=sampling, lock_gpts=True)
+        self._grid = Grid(extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True)
         self._accelerator = Accelerator(energy=energy)
 
     @property
     def array(self):
         return self._array
 
-    @property
     def intensity(self):
         calibrations = [None] + calibrations_from_grid(self.grid, ['x', 'y'])
         abs2 = get_device_function(get_array_module(self.array), 'abs2')
         return Measurement(abs2(self.array), calibrations)
+
+    def diffraction_pattern(self):
+        calibrations = [None] + calibrations_from_grid(self.grid, names=['alpha_x', 'alpha_y'], units='mrad.',
+                                                       scale_factor=self.wavelength, fourier_space=True)
+        xp = get_array_module(self.array)
+        abs2 = get_device_function(xp, 'abs2')
+        fft2 = get_device_function(xp, 'fft2')
+        return Measurement(xp.fft.fftshift(abs2(fft2(self.array))), calibrations)
 
     def apply_ctf(self, ctf=None, **kwargs):
         """
@@ -178,7 +173,24 @@ class Waves(HasGridMixin, HasAcceleratorMixin):
                               energy=self.energy)
 
     def multislice(self, potential: AbstractPotential, show_progress: bool = True):
-        return multislice(self, potential, show_progress)
+        if potential.tds:
+            tds_bar = Bar('TDS', len(potential.tds))
+            multislice_bar = Bar('Multislice', len(potential), parent=tds_bar)
+
+            xp = get_array_module(self.array)
+            out_array = xp.zeros((len(potential.tds),) + self.array.shape, dtype=xp.complex64)
+            tds_waves = self.__class__(out_array, extent=self.extent, energy=self.energy)
+
+            for i, potential_config in enumerate(potential.generate_tds_potentials()):
+                tds_bar.update(1)
+                exit_waves = multislice(self.copy(), potential_config, pbar=multislice_bar)
+                tds_waves.array[i] = exit_waves.array
+
+                multislice_bar.reset()
+
+            return tds_waves
+        else:
+            return multislice(self, potential, show_progress)
 
     def write(self, path, overwrite=True) -> None:
         """
@@ -212,33 +224,20 @@ class Waves(HasGridMixin, HasAcceleratorMixin):
             raise RuntimeError()
         return self.__class__(array=self._array[item], extent=self.extent.copy(), energy=self.energy)
 
-    def __copy__(self):
+    def copy(self):
         """
         Return a copy.
-
-        Parameters
-        ----------
-        copy_array : bool
-            If true copy the underlying numpy array.
-
-        Returns
-        -------
-        Waves object
-            A copy of itself.
         """
         new_copy = self.__class__(array=self._array.copy())
-        new_copy._grid = copy(self.grid)
-        new_copy._accelerator = copy(self.accelerator)
+        new_copy._grid = self.grid.copy()
+        new_copy._accelerator = self.accelerator.copy()
         return new_copy
 
     def show(self, **kwargs):
-        xp = get_array_module(self.array)
-        array = xp.squeeze(self.array)
-        array = asnumpy(array)
-        return show_image(array, calibrations_from_grid(self.grid, names=['x', 'y']), **kwargs)
+        self.intensity().show(**kwargs)
 
 
-class PlaneWaves(HasGridMixin, HasAcceleratorMixin):
+class PlaneWave(HasGridMixin, HasAcceleratorMixin):
     """
     Plane waves object
 
@@ -258,18 +257,9 @@ class PlaneWaves(HasGridMixin, HasAcceleratorMixin):
         Energy of electrons represented by wave functions [eV]
     """
 
-    def __init__(self, num_waves: int = 1, extent=None, gpts=None, sampling=None, energy=None):
-        self._num_waves = num_waves
+    def __init__(self, extent=None, gpts=None, sampling=None, energy=None):
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
-
-    @property
-    def num_waves(self) -> int:
-        return self._num_waves
-
-    @num_waves.setter
-    def num_waves(self, value: int):
-        self._num_waves = value
 
     def multislice(self, potential, show_progress=True):
         if isinstance(potential, Atoms):
@@ -279,12 +269,11 @@ class PlaneWaves(HasGridMixin, HasAcceleratorMixin):
 
     def build(self, xp=np):
         self.grid.check_is_defined()
-        array = xp.ones((self.num_waves, self.gpts[0], self.gpts[1]), dtype=xp.float32)
+        array = xp.ones((self.gpts[0], self.gpts[1]), dtype=xp.complex64)
         return Waves(array, extent=self.extent, energy=self.energy)
 
     def copy(self):
-        return self.__class__(num_waves=self.num_waves, extent=self.extent, gpts=self.gpts, sampling=self.sampling,
-                              energy=self.energy)
+        return self.__class__(extent=self.extent, gpts=self.gpts, sampling=self.sampling, energy=self.energy)
 
 
 class Probe(HasGridMixin, HasAcceleratorMixin):
@@ -321,24 +310,30 @@ class Probe(HasGridMixin, HasAcceleratorMixin):
 
     """
 
-    def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
-                 angular_spread: float = 0., ctf_parameters: dict = None,
+    def __init__(self,
+                 semiangle_cutoff: float = np.inf,
+                 rolloff: float = 0.,
+                 focal_spread: float = 0.,
+                 angular_spread: float = 0.,
+                 ctf_parameters: dict = None,
                  normalize: bool = False,
                  extent: Union[float, Sequence[float]] = None,
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
-                 energy: float = None,
-                 **kwargs):
+                 energy: float = None, **kwargs):
 
         self._normalize = normalize
-
         self._ctf = CTF(semiangle_cutoff=semiangle_cutoff, rolloff=rolloff, focal_spread=focal_spread,
                         angular_spread=angular_spread, parameters=ctf_parameters, energy=energy, **kwargs)
-
         self._accelerator = self._ctf._accelerator
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
-
         self.cache = Cache(1)
+
+        self._ctf.changed.register(cache_clear_callback(self.cache))
+
+    @property
+    def ctf(self):
+        return self._ctf
 
     @property
     def normalize(self) -> bool:
@@ -401,30 +396,47 @@ class Probe(HasGridMixin, HasAcceleratorMixin):
 
         return Waves(array, extent=self.extent, energy=self.energy)
 
-    def multislice(self, positions: Sequence[Sequence[float]], potential: AbstractPotential,
-                   show_progress=False) -> Waves:
+    def multislice(self, positions: Sequence[Sequence[float]], potential: AbstractPotential, pbar=True) -> Waves:
         self.grid.match(potential)
-        return self.build(positions).multislice(potential, show_progress=show_progress)
+        return self.build(positions).multislice(potential, show_progress=pbar)
 
-    def generate_probes(self, scan: AbstractScan, potential: Union[AbstractPotential, Atoms], max_batch: int,
-                        show_progress=False):
-        with tqdm(total=len(scan)) if show_progress else ExitStack() as pbar:
-            for start, end, positions in scan.generate_positions(max_batch=max_batch):
-                if show_progress:
-                    pbar.update(end - start)
-
-                yield start, end, self.multislice(positions, potential)
+    def generate_probes(self, scan: AbstractScan, potential: Union[AbstractPotential, Atoms], max_batch: int):
+        for start, end, positions in scan.generate_positions(max_batch=max_batch):
+            yield start, end, self.multislice(positions, potential, pbar=False)
 
     def scan(self, scan: AbstractScan, detectors: Sequence[AbstractDetector],
              potential: Union[Atoms, AbstractPotential], max_batch=1, show_progress=True):
-        self.grid.match(potential)
-        return _scan(self, scan, detectors, potential, max_batch, show_progress)
+
+        for detector in detectors:
+            if hasattr(detector, 'adapt_to_waves'):
+                detector.adapt_to_waves(self)
+
+        measurements = scan.allocate_measurements(detectors)
+
+        probe_generator = self.generate_probes(scan, potential=potential, max_batch=max_batch)
+
+        pbar = Bar('Scan', len(scan))  # NestedBars([Bar('TDS')])
+        # print('sss')
+        for start, end, exit_probes in probe_generator:
+            for detector, measurement in measurements.items():
+                scan.insert_new_measurement(measurement, start, end, detector.detect(exit_probes))
+
+            pbar.update(end - start)
+            # print(pbar._current, pbar._total)
+        return measurements
 
     def show(self, **kwargs):
         array = self.build(self.extent / 2).array[0]
         abs2 = get_device_function(get_array_module(array), 'abs2')
         array = asnumpy(abs2(array))
         return show_image(array, calibrations_from_grid(self.grid, names=['x', 'y']), **kwargs)
+
+    def copy(self):
+        new_copy = self.__class__(normalize=self._normalize)
+        new_copy._grid = self.grid.copy()
+        new_copy._ctf = self.ctf.copy()
+        new_copy._accelerator = self._ctf._accelerator
+        return new_copy
 
 
 class SMatrix(HasGridMixin, HasAcceleratorMixin):

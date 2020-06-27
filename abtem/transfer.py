@@ -27,6 +27,11 @@ class CTF(HasAcceleratorMixin):
                  angular_spread: float = 0., gaussian_spread: float = 0., energy: float = None,
                  parameters: Mapping[str, float] = None, **kwargs):
 
+        for key in kwargs.keys():
+            if ((key not in polar_symbols) and (key not in polar_aliases.keys())):
+                print(key)
+                raise RuntimeError()
+
         self.changed = Event()
         self._accelerator = Accelerator(energy=energy)
         self._semiangle_cutoff = semiangle_cutoff
@@ -56,12 +61,10 @@ class CTF(HasAcceleratorMixin):
 
         for symbol in polar_symbols:
             setattr(self.__class__, symbol, parametrization_property(symbol))
-            kwargs.pop(symbol, None)
 
         for key, value in polar_aliases.items():
             if key != 'defocus':
                 setattr(self.__class__, key, parametrization_property(value))
-            kwargs.pop(key, None)
 
     @property
     def parameters(self):
@@ -72,6 +75,7 @@ class CTF(HasAcceleratorMixin):
         return - self._parameters['C10']
 
     @defocus.setter
+    @watched_method('changed')
     def defocus(self, value: float):
         self.C10 = -value
 
@@ -80,41 +84,47 @@ class CTF(HasAcceleratorMixin):
         return self._semiangle_cutoff
 
     @semiangle_cutoff.setter
+    @watched_method('changed')
     def semiangle_cutoff(self, value: float):
-        self._semiangle_cutoff = DTYPE(value)
+        self._semiangle_cutoff = value
 
     @property
     def rolloff(self) -> float:
         return self._rolloff
 
     @rolloff.setter
+    @watched_method('changed')
     def rolloff(self, value: float):
-        self._rolloff = DTYPE(value)
+        self._rolloff = value
 
     @property
     def focal_spread(self) -> float:
         return self._focal_spread
 
     @focal_spread.setter
+    @watched_method('changed')
     def focal_spread(self, value: float):
-        self._focal_spread = DTYPE(value)
+        self._focal_spread = value
 
     @property
     def angular_spread(self) -> float:
         return self._angular_spread
 
     @angular_spread.setter
+    @watched_method('changed')
     def angular_spread(self, value: float):
-        self._angular_spread = DTYPE(value)
+        self._angular_spread = value
 
     @property
     def gaussian_spread(self) -> float:
         return self._gaussian_spread
 
     @gaussian_spread.setter
+    @watched_method('changed')
     def gaussian_spread(self, value: float):
-        self._gaussian_spread = DTYPE(value)
+        self._gaussian_spread = value
 
+    @watched_method('changed')
     def set_parameters(self, parameters):
         for symbol, value in parameters.items():
             if symbol in self._parameters.keys():
@@ -301,9 +311,23 @@ class CTF(HasAcceleratorMixin):
         ax.set_xlabel('k [1 / Å]')
         ax.legend()
 
+    def copy(self):
+        parameters = self.parameters.copy()
+        return self.__class__(semiangle_cutoff=self.semiangle_cutoff,
+                              rolloff=self.rolloff,
+                              focal_spread=self.focal_spread,
+                              angular_spread=self.angular_spread,
+                              gaussian_spread=self.gaussian_spread,
+                              energy=self.energy,
+                              parameters=parameters)
+
 
 def scherzer_defocus(Cs, energy):
-    return 1.2 * np.sign(Cs) * np.sqrt(np.abs(Cs) * energy2wavelength(energy))
+    return np.sign(Cs) * np.sqrt(3 / 2 * np.abs(Cs) * energy2wavelength(energy))
+
+
+def point_resolution(Cs, energy):
+    return (energy2wavelength(energy) ** 3 * np.abs(Cs) / 6) ** (1 / 4)
 
 
 def polar2cartesian(polar):

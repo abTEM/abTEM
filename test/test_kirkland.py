@@ -1,6 +1,6 @@
 import numpy as np
 from ase import Atoms
-from abtem.waves import PlaneWaves
+from abtem.waves import PlaneWave
 from abtem.potentials import Potential
 
 
@@ -9,7 +9,7 @@ def test_fig_5_12():
 
     potential = Potential(atoms=atoms, gpts=512, parametrization='kirkland', slice_thickness=8)
 
-    waves = PlaneWaves(energy=200e3)
+    waves = PlaneWave(energy=200e3)
 
     waves = waves.multislice(potential, show_progress=False)
     waves = waves.apply_ctf(defocus=700, Cs=1.3e7, semiangle_cutoff=.01037)

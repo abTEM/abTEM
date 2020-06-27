@@ -1,5 +1,4 @@
 from abc import ABCMeta, abstractmethod
-from contextlib import ExitStack
 from copy import copy
 from typing import Union, Sequence
 
@@ -9,7 +8,6 @@ import numpy as np
 from ase import Atoms
 from ase import units
 from scipy.optimize import brentq
-from tqdm.auto import tqdm
 
 from abtem.atoms import fill_rectangle, is_orthogonal
 from abtem.bases import Grid, HasGridMixin, Cache, cached_method, HasAcceleratorMixin, Accelerator, watched_method, \
@@ -20,7 +18,8 @@ from abtem.parametrizations import kirkland, dvdr_kirkland, load_kirkland_parame
 from abtem.parametrizations import lobato, dvdr_lobato, load_lobato_parameters
 from abtem.plot import show_image
 from abtem.tanh_sinh import integrate, tanh_sinh_nodes_and_weights
-from abtem.utils import energy2sigma
+from abtem.temperature import AbstractTDS
+from abtem.utils import energy2sigma, Bar
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
@@ -56,10 +55,23 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
     @property
     @abstractmethod
     def thickness(self):
-        raise NotImplementedError()
+        pass
+
+    @property
+    @abstractmethod
+    def tds(self):
+        pass
+
+    @property
+    @abstractmethod
+    def generate_tds_potentials(self):
+        pass
+
+    def get_slice(self, i):
+        return PotentialSlice(self, i)
 
     @abstractmethod
-    def get_slice(self, i):
+    def calculate_slice(self, i, xp=np):
         pass
 
     def __getitem__(self, item):
@@ -69,7 +81,7 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
             raise StopIteration
         return self.get_slice(item)
 
-    def calculate(self, start=None, end=None, xp=np, show_progress=False) -> 'ArrayPotential':
+    def calculate(self, start=None, end=None, xp=np, pbar=False) -> 'ArrayPotential':
         self.grid.check_is_defined()
 
         if start is None:
@@ -78,15 +90,15 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         if end is None:
             end = self.num_slices
 
-        array = xp.zeros((self.num_slices,) + (self.gpts[0], self.gpts[1]), dtype=self.get_slice(0)[0].dtype)
+        array = xp.zeros((self.num_slices,) + (self.gpts[0], self.gpts[1]), dtype=self.get_slice(0).calculate(xp).dtype)
         slice_thicknesses = xp.zeros(self.num_slices)
 
-        with tqdm(total=end - start) if show_progress else ExitStack() as pbar:
-            for i in range(start, end):
-                array[i], slice_thicknesses[i] = self.get_slice(i)
-
-                if show_progress:
-                    pbar.update(1)
+        pbar = Bar('Potential', end - start, enable=pbar)
+        for i in range(start, end):
+            potential_slice = self.get_slice(i)
+            array[i] = potential_slice.calculate(xp)
+            slice_thicknesses[i] = potential_slice.thickness
+            pbar.update(1)
 
         return ArrayPotential(array, slice_thicknesses, self.extent)
 
@@ -94,16 +106,18 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         if (start is None) & (end is None):
             start = 0
             end = len(self)
-
+        if start is None:
+            start = 0
         if end is None:
             end = start + 1
+
         return show_image(self.calculate(start, end).array.sum(0),
                           calibrations_from_grid(self.grid, names=['x', 'y']), **kwargs)
 
 
 class PotentialIntegrator:
 
-    def __init__(self, function, r, cache_size=512, cache_key_decimals=2):
+    def __init__(self, function, r, cache_size=2048, cache_key_decimals=2):
         self._function = function
         self._r = r
         self.cache = Cache(cache_size)
@@ -142,10 +156,29 @@ class PotentialIntegrator:
         return np.sum(f(xk[None]) * wk[None], axis=1) * zm
 
 
-class PotentialSlice:
+class PotentialSlice(HasGridMixin):
 
-    def __init__(self):
-        pass
+    def __init__(self, potential: AbstractPotential, index: int):
+        self._potential = potential
+        self._index = index
+
+    @property
+    def _grid(self):
+        return self._potential.grid
+
+    @property
+    def index(self) -> int:
+        return self._index
+
+    @property
+    def thickness(self) -> float:
+        return self._potential.get_slice_thickness(self.index)
+
+    def calculate(self, xp=np):
+        return self._potential.calculate_slice(self.index, xp)
+
+    def show(self, **kwargs):
+        return show_image(self.calculate(), calibrations_from_grid(self.grid, names=['x', 'y']), **kwargs)
 
 
 class Potential(AbstractPotential):
@@ -188,23 +221,31 @@ class Potential(AbstractPotential):
                  sampling: Union[float, Sequence[float]] = None,
                  slice_thickness: float = .5,
                  parametrization: str = 'lobato',
-                 cutoff_tolerance: float = 1e-3):
+                 cutoff_tolerance: float = 1e-3,
+                 precalculate=True):
 
-        if np.abs(atoms.cell[2, 2]) < 1e-12:
+        if isinstance(atoms, AbstractTDS):
+            self._tds = atoms
+            self._atoms = next(atoms.generate_atoms())
+        elif isinstance(atoms, Atoms):
+            self._tds = None
+            self._atoms = atoms.copy()
+        else:
+            raise RuntimeError()
+
+        if np.abs(self._atoms.cell[2, 2]) < 1e-12:
             raise RuntimeError('atoms has no thickness')
 
-        if not is_orthogonal(atoms):
+        if not is_orthogonal(self._atoms):
             raise RuntimeError('atoms are non-orthogonal')
 
-        self._atoms = atoms.copy()
-        self._atoms.wrap()
-        self._thickness = atoms.cell[2, 2]
+        self._thickness = self._atoms.cell[2, 2]
 
-        self._grid = Grid(gpts=gpts, sampling=sampling, extent=np.diag(atoms.cell)[:2])
+        self._grid = Grid(gpts=gpts, sampling=sampling, extent=np.diag(self._atoms.cell)[:2])
         self._cutoff_tolerance = cutoff_tolerance
         self._parametrization = parametrization
         self._slice_thickness = slice_thickness
-        self._atomic_numbers = np.unique(atoms.numbers)
+        self._atomic_numbers = np.unique(self._atoms.numbers)
 
         if parametrization == 'lobato':
             self._parameters = load_lobato_parameters()
@@ -239,6 +280,10 @@ class Potential(AbstractPotential):
     @property
     def atoms(self):
         return self._atoms
+
+    @property
+    def tds(self):
+        return self._tds
 
     @property
     def cutoff_tolerance(self):
@@ -281,7 +326,7 @@ class Potential(AbstractPotential):
                               [0., 0.],
                               margin=cutoff).positions
 
-    def get_slice(self, i, xp=np):
+    def calculate_slice(self, i, xp=np):
         self.check_slice_idx(i)
         self.grid.check_is_defined()
         a = self.get_slice_entrance(i)
@@ -321,7 +366,15 @@ class Potential(AbstractPotential):
                                          integrator.r / np.min(self.sampling))
             v = v.reshape(self.gpts)
 
-        return v / kappa, b - a
+        return v / kappa
+
+    def generate_tds_potentials(self):
+        if self._tds is None:
+            yield self #.calculate()
+        else:
+            for atoms in self._tds.generate_atoms():
+                self.displace_atoms(atoms.positions)
+                yield self #.calculate()
 
 
 def disc_meshgrid(r):
@@ -374,6 +427,13 @@ class ArrayPotential(AbstractPotential, HasGridMixin):
         t._grid = copy(self.grid)
         return t
 
+    def generate_tds_potentials(self):
+        yield self
+
+    @property
+    def tds(self):
+        return None
+
     @property
     def array(self):
         return self._array
@@ -389,8 +449,8 @@ class ArrayPotential(AbstractPotential, HasGridMixin):
     def get_slice_thickness(self, i):
         return self._slice_thicknesses[i]
 
-    def get_slice(self, i):
-        return self._array[i], self.get_slice_thickness(i)
+    def calculate_slice(self, i, xp=np):
+        return xp.asarray(self._array[i])
 
     def repeat(self, multiples):
         assert len(multiples) == 2

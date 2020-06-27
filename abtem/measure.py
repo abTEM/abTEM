@@ -1,15 +1,16 @@
-import h5py
-import numpy as np
-
-from abtem.bases import Grid, HasGridMixin
-from abtem.plot import show_image, show_line
-from copy import copy
-from scipy.ndimage import zoom
-from abc import ABCMeta, abstractmethod
-import scipy.misc
-import imageio
-import scipy.ndimage
 from collections import Iterable
+from copy import copy
+
+import h5py
+import imageio
+import numpy as np
+import scipy.misc
+import scipy.ndimage
+from scipy.ndimage import zoom
+
+from abtem.bases import Grid
+from abtem.plot import show_image, show_line
+from abtem.device import asnumpy
 
 
 class Calibration:
@@ -92,7 +93,7 @@ class Measurement:
     def dimensions(self):
         return len(self.array.shape)
 
-    def difference(self, positive_indices, negative_indices):
+    def dpc_difference(self, positive_indices, negative_indices):
         if self.dimensions < 3:
             raise RuntimeError()
 
@@ -105,7 +106,7 @@ class Measurement:
 
         return self.__class__(differences, calibrations)
 
-    def sum(self, indices=None):
+    def dpc_sum(self, indices=None):
         if self.dimensions < 3:
             raise RuntimeError()
 
@@ -120,6 +121,15 @@ class Measurement:
                 sums = sums.sum(-1)
 
         return self.__class__(sums, calibrations)
+
+    def mean(self, axes):
+        if not isinstance(axes, Iterable):
+            axes = (axes,)
+
+        array = self.array.mean(axes)
+        calibrations = [calibration for i, calibration in enumerate(self.calibrations) if i not in axes]
+
+        return self.__class__(array, calibrations)
 
     def center_of_mass(self):
         shape = self.array.shape[2:]
@@ -206,11 +216,14 @@ class Measurement:
         return self.__class__(self._array.copy(), calibrations=calibrations)
 
     def show(self, **kwargs):
-        dims = len(self.array.shape)
+        calibrations = [calib for calib, num_elem in zip(self.calibrations, self.array.shape) if num_elem > 1]
+        array = np.squeeze(asnumpy(self.array))
+
+        dims = len(array.shape)
         cbar_label = self._name + ' [' + self._units + ']'
         if dims == 1:
-            show_line(self.array, self.calibrations[0], **kwargs)
+            return show_line(array, calibrations[0], **kwargs)
         elif dims == 2:
-            show_image(self.array, self.calibrations, cbar_label=cbar_label, **kwargs)
+            return show_image(array, calibrations, cbar_label=cbar_label, **kwargs)
         else:
             raise RuntimeError('plotting not supported for {}d measurement, use reduction operation first'.format(dims))

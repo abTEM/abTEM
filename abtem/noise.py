@@ -52,17 +52,11 @@ def apply_displacement_field(image, distortion_x, distortion_y):
 
 def add_scan_noise(image, dwell_time, flyback_time, max_frequency, rms_power, num_components=200):
     image = image.copy()
-
     time = pixel_times(dwell_time, flyback_time, image.array.T.shape)
     displacement_x, displacement_y = make_displacement_field(time, max_frequency, num_components, rms_power)
     array = apply_displacement_field(image.array[:].T, displacement_x, displacement_y)
     image.array[:] = array.T
-
     return image
-
-
-
-
 
 def bandpass_noise(inner, outer, shape, xp=None):
     if xp is None:

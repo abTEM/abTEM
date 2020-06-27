@@ -1,3 +1,4 @@
+from abc import abstractmethod, ABCMeta
 from typing import Mapping, Union
 
 import numpy as np
@@ -5,9 +6,20 @@ from ase import Atoms
 from ase.data import atomic_numbers
 
 
-class TDS:
+class AbstractTDS(metaclass=ABCMeta):
 
-    def __init__(self, atoms: Atoms, sigmas: Mapping[Union[str, int], float]):
+    @abstractmethod
+    def __len__(self):
+        pass
+
+    @abstractmethod
+    def generate_atoms(self):
+        pass
+
+
+class TDS(AbstractTDS):
+
+    def __init__(self, atoms: Atoms, num_configs, sigmas: Mapping[Union[str, int], float], seed=None):
         """
         Generates atomic configurations for thermal diffuse scattering.
 
@@ -30,25 +42,30 @@ class TDS:
 
         unique_atomic_numbers = np.unique(atoms.get_atomic_numbers())
 
-        if len(set(unique_atomic_numbers).intersection(set(self._sigmas.keys()))) != len(unique_atomic_numbers):
+        if len(set(unique_atomic_numbers).intersection(set(new_sigmas.keys()))) != len(unique_atomic_numbers):
             raise RuntimeError('provide sigma for all atomic species')
 
         self._sigmas = new_sigmas
         self._atoms = atoms
+        self._num_configs = num_configs
+        self._seed = seed
 
-    def __iter__(self):
-        return self
+    def __len__(self):
+        return self._num_configs
 
-    def __next__(self):
-        atoms = self._atoms.copy()
-        positions = atoms.get_positions()
+    def generate_atoms(self):
+        if self._seed:
+            np.random.seed(self._seed)
 
-        for number, sigma in self._sigmas.items():
-            indices = np.where(atoms.get_atomic_numbers() == number)[0]
-            positions[indices] += sigma * np.random.randn(len(indices), 3)
+        for i in range(self._num_configs):
+            atoms = self._atoms.copy()
+            positions = atoms.get_positions()
 
-        atoms.set_positions(positions)
-        atoms.wrap()
+            for number, sigma in self._sigmas.items():
+                indices = np.where(atoms.get_atomic_numbers() == number)[0]
+                positions[indices] += sigma * np.random.randn(len(indices), 3)
 
-        while True:
+            atoms.set_positions(positions)
+            atoms.wrap()
+
             yield atoms
