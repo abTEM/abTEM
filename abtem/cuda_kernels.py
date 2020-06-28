@@ -35,78 +35,61 @@ def superpose_deltas(positions, shape):
     return array
 
 
+# @cuda.jit
+# def _interpolate_radial_functions(array, array_rows, array_cols, indices, disc_indices, positions, v, r, dvdr,
+#                                   ):
+#     n = r.shape[0]
+#     dt = math.log(r[-1] / r[0]) / (n - 1)
+#
+#     x, y = cuda.grid(2)
+#     if x < indices.shape[0]:
+#         if y < disc_indices.shape[0]:
+#             k = indices[x] + disc_indices[y]
+#             if k < array.shape[0]:
+#                 r_interp = math.sqrt((array_rows[k] - positions[x, 0]) ** 2 +
+#                                      (array_cols[k] - positions[x, 1]) ** 2)
+#
+#                 idx = int(min(max(math.floor(math.log(r_interp / r[0] + 1e-7) / dt), 0), n - 1))
+#
+#                 if idx < dvdr.shape[1] - 1:
+#                     new = v[x, idx] + (r_interp - r[idx]) * dvdr[x, idx]
+#                     cuda.atomic.add(array, k, new)
+#
+
 @cuda.jit
-def _interpolate_radial_functions(array, x, y, indices, disc_indices, positions, v, r, dvdr,
+def _interpolate_radial_functions(array, x, y, position_indices, disc_indices, positions, v, r, dvdr,
                                   ):
     n = r.shape[0]
     dt = math.log(r[-1] / r[0]) / (n - 1)
 
     i, j = cuda.grid(2)
-    if i < indices.shape[0]:
+    if i < position_indices.shape[0]:
         if j < disc_indices.shape[0]:
-            k = indices[i] + disc_indices[j]
-            if k < array.shape[0]:
-                r_interp = math.sqrt((x[k] - positions[i, 0]) ** 2 +
-                                     (y[k] - positions[i, 1]) ** 2)
+            k = position_indices[i, 0] + disc_indices[j, 0]
+            l = position_indices[i, 1] + disc_indices[j, 1]
+            if ((k < array.shape[0]) & (l < array.shape[1]) & (k >= 0) & (l >= 0)):
+                r_interp = math.sqrt((x[k, l] - positions[i, 0]) ** 2 +
+                                     (y[k, l] - positions[i, 1]) ** 2)
 
                 idx = int(min(max(math.floor(math.log(r_interp / r[0] + 1e-7) / dt), 0), n - 1))
 
                 if idx < dvdr.shape[1] - 1:
                     new = v[i, idx] + (r_interp - r[idx]) * dvdr[i, idx]
-                    cuda.atomic.add(array, k, new)
+                    cuda.atomic.add(array, (k, l), new)
 
 
-def launch_interpolate_radial_functions(array, array_rows, array_cols, indices, disc_indices, positions, v, r, dvdr,
-                                        ):
+def launch_interpolate_radial_functions(array, x, y, position_indices, disc_indices, positions, v, r, dvdr):
     threadsperblock = (16, 16)
-    blockspergrid_x = math.ceil(indices.shape[0] / threadsperblock[0])
+    blockspergrid_x = math.ceil(position_indices.shape[0] / threadsperblock[0])
     blockspergrid_y = math.ceil(disc_indices.shape[0] / threadsperblock[1])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
 
-    #disc_indices = disc_indices[:,0]
-
     _interpolate_radial_functions[blockspergrid, threadsperblock](array,
-                                                                  array_rows,
-                                                                  array_cols,
-                                                                  indices,
+                                                                  x,
+                                                                  y,
+                                                                  position_indices,
                                                                   disc_indices,
                                                                   positions,
                                                                   v,
                                                                   r,
                                                                   dvdr)
-
-# def interpolate_radial_functions(func, positions, shape, cutoff, inner_cutoff=0.):
-#     xp = cp.get_array_module(positions)
-#
-#     n = xp.int(xp.ceil(cutoff - inner_cutoff))
-#     r = xp.linspace(inner_cutoff, cutoff, 2 * n)
-#     values = func(r)
-#
-#     margin = xp.int(xp.ceil(r[-1]))
-#
-#     padded_shape = (shape[0] + 2 * margin, shape[1] + 2 * margin)
-#     array = xp.zeros(padded_shape[0] * padded_shape[1], dtype=cp.float32)
-#
-#     derivatives = xp.diff(values) / xp.diff(r)
-#
-#     positions = positions + margin
-#     indices = xp.rint(positions).astype(xp.int)[:, 0] * padded_shape[0] + xp.rint(positions).astype(xp.int)[:, 1]
-#     indices = (indices[:, None] + xp.asarray(coordinates_in_disc(margin - 1, padded_shape))[None])  # .ravel()
-#
-#     rows, cols = xp.indices(padded_shape)
-#     rows = rows.ravel()
-#     cols = cols.ravel()
-#
-#     if xp is cp:
-#         indices = indices.ravel()
-#         threadsperblock = 32
-#         blockspergrid = (indices.size + (threadsperblock - 1)) // threadsperblock
-#         interpolate_radial_functions_cuda_kernel[blockspergrid, threadsperblock](array, indices, positions, rows, cols,
-#                                                                                  r, values, derivatives)
-#     else:
-#         interpolate_radial_functions_kernel(array, indices, positions, rows, cols, r, values, derivatives)
-#
-#     array = array.reshape(padded_shape)
-#     array = array[margin:-margin, margin:-margin]
-#
-#     return array

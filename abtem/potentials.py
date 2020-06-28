@@ -406,6 +406,11 @@ class Potential(AbstractPotential):
 
             position_indices = xp.ceil(xp.asarray(positions[:, :2]) / xp.asarray(self.sampling)).astype(xp.int)
 
+            positions = xp.asarray(positions, dtype=xp.float32)
+
+
+            # disc_indices = disc_indices[:, 0] * array.shape[1] + disc_indices[:, 1]
+            # position_indices = position_indices[:, 0] * array.shape[1] + position_indices[:, 1]
             interpolate_radial_functions(array,
                                          x,
                                          y,
