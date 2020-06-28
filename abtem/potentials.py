@@ -92,14 +92,16 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
             end = self.num_slices
 
         array = xp.zeros((self.num_slices,) + (self.gpts[0], self.gpts[1]), dtype=self.get_slice(0).calculate(xp).dtype)
-        slice_thicknesses = xp.zeros(self.num_slices)
+        slice_thicknesses = np.zeros(self.num_slices)
 
         pbar = Bar('Potential', end - start, enable=pbar)
         for i in range(start, end):
             potential_slice = self.get_slice(i)
+
             array[i] = potential_slice.calculate(xp)
             slice_thicknesses[i] = potential_slice.thickness
             pbar.update(1)
+            pbar.print_bar()
 
         return ArrayPotential(array, slice_thicknesses, self.extent)
 
@@ -276,7 +278,7 @@ class Potential(AbstractPotential):
         self._allocated_array = None
 
         def positions_changed_callback(*args, **kwargs):
-            self._integrators = {}
+            self._padded_positions = {}
 
         self.positions_changed = Event()
         self.positions_changed.register(positions_changed_callback)
@@ -364,6 +366,8 @@ class Potential(AbstractPotential):
             padded_shape = [n + 2 * margin for n in self.gpts]
             v = xp.zeros(padded_shape, dtype=xp.float32)
             rows, cols = xp.indices(v.shape)
+            rows = (rows * self.sampling[0]).astype(xp.float32)
+            cols = (cols * self.sampling[1]).astype(xp.float32)
             self._allocated_array = (v, margin, rows, cols)
             return self._allocated_array
         else:
@@ -380,7 +384,7 @@ class Potential(AbstractPotential):
 
         array, margin, rows, cols = self._get_allocated_array(xp)
         shape = array.shape
-        array[:] = 0
+        array[:] = 0.
         for number in self._atomic_numbers:
             integrator, disc_rows, disc_cols = self._get_integrator(number)
             disc_indices = xp.asarray(disc_rows * array.shape[1] + disc_cols)
@@ -393,15 +397,16 @@ class Potential(AbstractPotential):
             if len(positions) == 0:
                 continue
 
-            vr = np.zeros((len(positions), len(integrator.r)))
-            dvdr = np.zeros((len(positions), len(integrator.r)))
+            vr = np.zeros((len(positions), len(integrator.r)), xp.float32)
+            dvdr = np.zeros((len(positions), len(integrator.r)), xp.float32)
             for i, (am, bm) in enumerate(np.nditer((a - positions[:, 2], b - positions[:, 2]))):
                 vr[i], dvdr[i, :-1] = integrator.integrate(am.item(), bm.item())
+
             vr = xp.asarray(vr)  # TODO : should the cache be on the device? There are pros and cons.
             dvdr = xp.asarray(dvdr)
             r = xp.asarray(integrator.r)
 
-            positions = xp.asarray(positions + margin * np.min(self.sampling))
+            positions = xp.asarray(positions + margin * np.min(self.sampling), dtype=xp.float32)
 
             position_indices = xp.ceil(positions[:, 0] / self.sampling[0]).astype(xp.int) * array.shape[1] + \
                                xp.ceil(positions[:, 1] / self.sampling[1]).astype(xp.int)
@@ -414,8 +419,7 @@ class Potential(AbstractPotential):
                                          positions,
                                          vr,
                                          r,
-                                         dvdr,
-                                         xp.asarray(self.sampling))
+                                         dvdr)
 
         return array.reshape(shape)[margin:-margin, margin:-margin] / kappa
 

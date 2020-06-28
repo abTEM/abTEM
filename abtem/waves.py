@@ -44,14 +44,15 @@ class FresnelPropagator:
 def transmit(waves, potential_slice):
     xp = get_array_module(waves.array)
     complex_exponential = get_device_function(xp, 'complex_exponential')
-
-    slice_array = potential_slice.calculate()
+    #print(xp)
+    slice_array = potential_slice.calculate(xp)
     dim_padding = len(waves._array.shape) - len(slice_array.shape)
     slice_array = slice_array.reshape((1,) * dim_padding + slice_array.shape)
-
+   # print(type(slice_array))
     if np.iscomplexobj(slice_array):
         waves._array *= slice_array
     else:
+        #print(type(complex_exponential(waves.accelerator.sigma * slice_array)))
         waves._array *= complex_exponential(waves.accelerator.sigma * slice_array)
 
     return waves

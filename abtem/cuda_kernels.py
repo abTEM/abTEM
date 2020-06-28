@@ -37,7 +37,7 @@ def superpose_deltas(positions, shape):
 
 @cuda.jit
 def _interpolate_radial_functions(array, array_rows, array_cols, indices, disc_indices, positions, v, r, dvdr,
-                                  sampling):
+                                  ):
     n = r.shape[0]
     dt = math.log(r[-1] / r[0]) / (n - 1)
 
@@ -46,8 +46,8 @@ def _interpolate_radial_functions(array, array_rows, array_cols, indices, disc_i
         if y < disc_indices.shape[0]:
             k = indices[x] + disc_indices[y]
             if k < array.shape[0]:
-                r_interp = math.sqrt((array_rows[k] * sampling[0] - positions[x, 0]) ** 2 +
-                                     (array_cols[k] * sampling[1] - positions[x, 1]) ** 2)
+                r_interp = math.sqrt((array_rows[k] - positions[x, 0]) ** 2 +
+                                     (array_cols[k] - positions[x, 1]) ** 2)
 
                 idx = int(min(max(math.floor(math.log(r_interp / r[0] + 1e-7) / dt), 0), n - 1))
 
@@ -57,14 +57,14 @@ def _interpolate_radial_functions(array, array_rows, array_cols, indices, disc_i
 
 
 def launch_interpolate_radial_functions(array, array_rows, array_cols, indices, disc_indices, positions, v, r, dvdr,
-                                        sampling):
+                                        ):
     threadsperblock = (16, 16)
     blockspergrid_x = math.ceil(indices.shape[0] / threadsperblock[0])
     blockspergrid_y = math.ceil(disc_indices.shape[0] / threadsperblock[1])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
 
     _interpolate_radial_functions[blockspergrid, threadsperblock](array, array_rows, array_cols, indices, disc_indices,
-                                                                  positions, v, r, dvdr, sampling)
+                                                                  positions, v, r, dvdr)
 
 # def interpolate_radial_functions(func, positions, shape, cutoff, inner_cutoff=0.):
 #     xp = cp.get_array_module(positions)
