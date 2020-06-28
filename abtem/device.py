@@ -1,12 +1,13 @@
 import numpy as np
 import mkl_fft
-from abtem.cpu_kernels import abs2, complex_exponential
+from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions
 
 # TODO : This is a little ugly, change after mkl_fft is updated
 
 try:  # This should be the only place to get cupy, to make it a non-essential dependency
     import cupy as cp
     import cupyx.scipy.fft
+    from abtem.cuda_kernels import launch_interpolate_radial_functions
 
     get_array_module = cp.get_array_module
 
@@ -17,8 +18,11 @@ try:  # This should be the only place to get cupy, to make it a non-essential de
         return array
 
 
-    gpu_functions = {'fft2': cupyx.scipy.fft.fft2, 'ifft2': cupyx.scipy.fft.ifft2, 'fft2_convolve': fft2_convolve,
-                     'complex_exponential': lambda x: cp.exp(1.j * x)}
+    gpu_functions = {'fft2': cupyx.scipy.fft.fft2,
+                     'ifft2': cupyx.scipy.fft.ifft2,
+                     'fft2_convolve': fft2_convolve,
+                     'complex_exponential': lambda x: cp.exp(1.j * x),
+                     'interpolate_radial_functions': launch_interpolate_radial_functions}
 
     asnumpy = cp.asnumpy
 
@@ -54,8 +58,12 @@ def fft2_convolve(array, kernel, overwrite_x=True):
         raise ValueError()
 
 
-cpu_functions = {'fft2': mkl_fft.fft2, 'ifft2': mkl_fft.ifft2, 'fft2_convolve': fft2_convolve, 'abs2': abs2,
-                 'complex_exponential': complex_exponential}
+cpu_functions = {'fft2': mkl_fft.fft2,
+                 'ifft2': mkl_fft.ifft2,
+                 'fft2_convolve': fft2_convolve,
+                 'abs2': abs2,
+                 'complex_exponential': complex_exponential,
+                 'interpolate_radial_functions': interpolate_radial_functions}
 
 
 def get_device_function(xp, name):

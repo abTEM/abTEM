@@ -11,8 +11,8 @@ from scipy.optimize import brentq
 
 from abtem.atoms import fill_rectangle, is_orthogonal
 from abtem.bases import Grid, HasGridMixin, Cache, cached_method, HasAcceleratorMixin, Accelerator, watched_method, \
-    Event, cache_clear_callback
-from abtem.cpu_kernels import interpolate_radial_functions, complex_exponential
+    Event
+from abtem.cpu_kernels import complex_exponential
 from abtem.measure import calibrations_from_grid
 from abtem.parametrizations import kirkland, dvdr_kirkland, load_kirkland_parameters
 from abtem.parametrizations import lobato, dvdr_lobato, load_lobato_parameters
@@ -20,6 +20,7 @@ from abtem.plot import show_image
 from abtem.tanh_sinh import integrate, tanh_sinh_nodes_and_weights
 from abtem.temperature import AbstractTDS
 from abtem.utils import energy2sigma, Bar
+from abtem.device import get_device_function
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
@@ -140,9 +141,9 @@ class PotentialIntegrator:
         b = min(max(a, b), self.cutoff)
 
         if split < 0:  # split integral
-            result = self.cached_integrate(0, abs(a))
-
-            result = result + self.cached_integrate(0, abs(b))
+            values1, derivatives1 = self.cached_integrate(0, abs(a))
+            values2, derivatives2 = self.cached_integrate(0, abs(b))
+            result = (values1 + values2, derivatives1 + derivatives2)
 
         else:
 
@@ -157,7 +158,9 @@ class PotentialIntegrator:
         value, error_estimate, step_size, order = integrate(f, -1, 1, 1e-9)
         xk, wk = tanh_sinh_nodes_and_weights(step_size, order)
         f = lambda z: self._function(np.sqrt(self.r[:, None] ** 2 + (z * zm + zp) ** 2))
-        return np.sum(f(xk[None]) * wk[None], axis=1) * zm
+        values = np.sum(f(xk[None]) * wk[None], axis=1) * zm
+        derivatives = np.diff(values) / np.diff(self.r)
+        return values, derivatives
 
 
 class PotentialSlice(HasGridMixin):
@@ -272,13 +275,13 @@ class Potential(AbstractPotential):
         self._integrators = {}
         self._allocated_array = None
 
-        def positions_changed_callback(*args):
+        def positions_changed_callback(*args, **kwargs):
             self._integrators = {}
 
         self.positions_changed = Event()
         self.positions_changed.register(positions_changed_callback)
 
-        def grid_changed_callback(*args):
+        def grid_changed_callback(*args, **kwargs):
             self._integrators = {}
             self._allocated_array = None
 
@@ -336,7 +339,7 @@ class Potential(AbstractPotential):
                 result[r > cutoff] = 0
                 return result
 
-            r = np.geomspace(np.min(self.sampling), cutoff, int(np.ceil(cutoff / np.min(self.sampling) * 4)))
+            r = np.geomspace(np.min(self.sampling), cutoff, int(np.ceil(cutoff / np.min(self.sampling) * 10)))
             margin = np.int(np.ceil(cutoff / np.min(self.sampling)))
             rows, cols = disc_meshgrid(margin)
 
@@ -369,14 +372,18 @@ class Potential(AbstractPotential):
     def calculate_slice(self, i, xp=np):
         self.check_slice_idx(i)
         self.grid.check_is_defined()
+
+        interpolate_radial_functions = get_device_function(xp, 'interpolate_radial_functions')
+
         a = self.get_slice_entrance(i)
         b = self.get_slice_exit(i)
 
-        v, margin, rows, cols = self._get_allocated_array(xp)
-        v[:] = 0
+        array, margin, rows, cols = self._get_allocated_array(xp)
+        shape = array.shape
+        array[:] = 0
         for number in self._atomic_numbers:
-
             integrator, disc_rows, disc_cols = self._get_integrator(number)
+            disc_indices = xp.asarray(disc_rows * array.shape[1] + disc_cols)
 
             positions = self._get_padded_positions(number)
 
@@ -387,25 +394,30 @@ class Potential(AbstractPotential):
                 continue
 
             vr = np.zeros((len(positions), len(integrator.r)))
+            dvdr = np.zeros((len(positions), len(integrator.r)))
             for i, (am, bm) in enumerate(np.nditer((a - positions[:, 2], b - positions[:, 2]))):
-                vr[i] = integrator.integrate(am.item(), bm.item())
-            vr = xp.asarray(vr)
+                vr[i], dvdr[i, :-1] = integrator.integrate(am.item(), bm.item())
+            vr = xp.asarray(vr)  # TODO : should the cache be on the device? There are pros and cons.
+            dvdr = xp.asarray(dvdr)
+            r = xp.asarray(integrator.r)
 
-            pixel_positions = xp.asarray(positions[:, :2] / self.sampling) + margin
+            positions = xp.asarray(positions + margin * np.min(self.sampling))
 
-            position_indices = xp.ceil(pixel_positions).astype(xp.int)[:, 0] * v.shape[1] + \
-                               xp.ceil(pixel_positions).astype(xp.int)[:, 1]
+            position_indices = xp.ceil(positions[:, 0] / self.sampling[0]).astype(xp.int) * array.shape[1] + \
+                               xp.ceil(positions[:, 1] / self.sampling[1]).astype(xp.int)
 
-            interpolate_radial_functions(v,
+            interpolate_radial_functions(array.ravel(),
                                          rows.ravel(),
                                          cols.ravel(),
                                          position_indices,
-                                         disc_rows * v.shape[1] + disc_cols,
-                                         pixel_positions,
+                                         disc_indices,
+                                         positions,
                                          vr,
-                                         integrator.r / np.min(self.sampling))
+                                         r,
+                                         dvdr,
+                                         xp.asarray(self.sampling))
 
-        return v[margin:-margin, margin:-margin] / kappa
+        return array.reshape(shape)[margin:-margin, margin:-margin] / kappa
 
     def generate_tds_potentials(self):
         if self._tds is None:

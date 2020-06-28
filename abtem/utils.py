@@ -4,7 +4,6 @@ import numpy as np
 from ase import units
 
 from abtem.device import get_array_module
-from collections import Iterable
 
 
 def energy2mass(energy):
@@ -47,6 +46,8 @@ def polargrid(x, y):
     alpha = xp.sqrt(x.reshape((-1, 1)) ** 2 + y.reshape((1, -1)) ** 2)
     phi = xp.arctan2(x.reshape((-1, 1)), y.reshape((1, -1)))
     return alpha, phi
+
+
 
 
 def split_integer(n, m):

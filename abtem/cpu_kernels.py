@@ -13,38 +13,19 @@ def abs2(x):
     return x.real ** 2 + x.imag ** 2
 
 
-@jit(nopython=True, nogil=True, parallel=True, cache=True)
-def interpolate_radial_functions(array, array_rows, array_cols, indices, disc_indices, positions, values, r):
-    #assert len(array) == len(array_rows) == len(array_cols)
-    dvdr = np.diff(values) / np.diff(r)
+@jit(nopython=True, nogil=True, parallel=True)
+def interpolate_radial_functions(array, array_rows, array_cols, indices, disc_indices, positions, v, r, dvdr, sampling):
     array = array.ravel()
     for i in range(indices.shape[0]):
         for j in prange(disc_indices.shape[0]):
             k = indices[i] + disc_indices[j]
-            if (k < array.shape[0]) & (k >= 0):
-                r_interp = np.sqrt((array_rows[k] - positions[i, 0]) ** 2 +
-                                   (array_cols[k] - positions[i, 1]) ** 2)
+            if k < array.shape[0]:
+                r_interp = np.sqrt((array_rows[k] * sampling[0] - positions[i, 0]) ** 2 +
+                                   (array_cols[k] * sampling[1] - positions[i, 1]) ** 2)
 
-                # idx = int(np.floor((r_interp - r[0]) / dr0))
                 idx = max(np.searchsorted(r, r_interp) - 1, 0)
-                array[k] += values[i, idx] + (r_interp - r[idx]) * dvdr[i, idx]
-
-                # if idx < dvdr.shape[1]:
-                    # if idx < 0:
-                    #     print('ssss')
-                    #     array[k] += values[i, 0]
-                    #
-                    # elif idx > len(r) - 2:
-                    #     #print()
-                    #     if idx > len(r) - 1:
-                    #         print('ssss')
-                    #         array[k] += values[i, -1]
-                    #     else:
-                    #         #print('sss')
-                    #         array[k] += values[i, -2]
-                    #
-                    # else:
-
+                if idx < dvdr.shape[1] - 1:
+                    array[k] += v[i, idx] + (r_interp - r[idx]) * dvdr[i, idx]
 
 
 @jit(nopython=True, nogil=True)

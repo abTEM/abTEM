@@ -1,9 +1,9 @@
-from abtem.potentials import PotentialIntegrator
-from abtem.parametrizations import kirkland_projected, kirkland, load_kirkland_parameters, lobato, dvdr_lobato, \
-    load_lobato_parameters
 import numpy as np
-from abtem.potentials import PotentialIntegrator, Potential, kappa
 from ase import Atoms
+
+from abtem.cpu_kernels import interpolate_radial_functions
+from abtem.parametrizations import kirkland_projected, kirkland, load_kirkland_parameters
+from abtem.potentials import PotentialIntegrator, Potential, kappa, disc_meshgrid
 
 
 def test_gaussian_integral():
@@ -30,24 +30,29 @@ def test_cutoff():
     assert np.isclose(potential.function(potential._get_cutoff(6), potential.parameters[6]), tolerance)
 
 
-def test_interpolation():
-    sampling = .01
-    L = 20
-    atoms = Atoms('C', positions=[(0, 0, 1.5)], cell=(L, L, 4))
+def test_interpolation():  # just a sanity check, most of the error comes from the test itself
+    from abtem.potentials import kappa
 
-    potential = Potential(atoms, sampling=sampling, cutoff_tolerance=1e-7, slice_thickness=4)
+    sampling = .005
+    L = 20
+    atoms = Atoms('C', positions=[(0, 0, 1.5)], cell=(L, L, 10))
+
+    potential = Potential(atoms, sampling=sampling, cutoff_tolerance=1e-3, slice_thickness=10)
 
     interpolated = potential.calculate_slice(0)[0]
     integrator = potential._integrators[6][0]
-    integrated = np.sum(list(integrator.cache._cache.values()), axis=0)
 
-    r = np.linspace(0, L, len(interpolated))
+    integrated = np.sum([value[0] for value in integrator.cache._cache.values()], axis=0)
 
-    x = np.linspace(.1, 1.5, 10)
+    r = np.linspace(0, L, len(interpolated), endpoint=False)
+
+    x = np.linspace(.005, 1.5, 10)
     relative_errors = (np.interp(x, integrator.r, integrated) / kappa -
                        np.interp(x, r, interpolated)) / np.interp(x, r, interpolated)
-    # print(relative_errors)
-    assert np.all(np.abs(relative_errors) < sampling)
+
+    absolute_errors = (np.interp(x, integrator.r, integrated) / kappa - np.interp(x, r, interpolated))
+
+    assert np.all((np.abs(relative_errors) < 1e-4) + (np.abs(absolute_errors) < 1e-4))
 
 
 def test_geomspace():
@@ -61,3 +66,42 @@ def test_geomspace():
         dt = np.log(rc / sampling) / (n - 1)
         j = min(max(np.floor(np.log(rf / sampling) / dt), 0), len(r) - 1)
         assert i == j
+
+
+def interpolate_radial_functions_launcher(func, positions, shape, cutoff, inner_cutoff=0.):
+    n = np.int(np.ceil(cutoff - inner_cutoff))
+    r = np.linspace(inner_cutoff, cutoff, 2 * n)
+
+    values = func(r)
+    values = np.tile(values.reshape(1, -1), (len(positions), 1))
+    margin = np.int(np.ceil(r[-1]))
+
+    padded_shape = (shape[0] + 2 * margin, shape[1] + 2 * margin)
+    array = np.zeros((padded_shape[0], padded_shape[1]), dtype=np.float32)
+
+    positions = positions + margin
+    positions_indices = np.rint(positions).astype(np.int)[:, 0] * padded_shape[1] + \
+                        np.rint(positions).astype(np.int)[:, 1]
+
+    disc_rows, disc_cols = disc_meshgrid(margin)
+    disc_indices = disc_rows * padded_shape[1] + disc_cols
+
+    rows, cols = np.indices(padded_shape)
+    array_rows = rows.ravel()
+    array_cols = cols.ravel()
+
+    interpolate_radial_functions(array, array_rows, array_cols, positions_indices, disc_indices, positions, values, r)
+    return array[margin:-margin, margin:-margin]
+
+
+def test_interpolate():
+    sigma = 128
+    func = lambda x: np.exp(-x ** 2 / (2 * sigma ** 2))
+
+    shape = (1024, 1024)
+    positions = np.array([[0, 0]])
+    cutoff = 8 * sigma
+
+    array = interpolate_radial_functions_launcher(func, positions, shape, cutoff)
+    r = np.linspace(0, shape[0], shape[0], endpoint=False)
+    assert np.allclose(func(r), array[0], atol=1e-6)
