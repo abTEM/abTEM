@@ -14,39 +14,37 @@ def abs2(x):
 
 
 @jit(nopython=True, nogil=True, parallel=True, cache=True)
-def interpolate_radial_functions(array, rows, cols, indices, disc_indices, positions, values, r):
-    # assert len(array) == len(array_rows) == len(array_cols)
+def interpolate_radial_functions(array, array_rows, array_cols, indices, disc_indices, positions, values, r):
+    #assert len(array) == len(array_rows) == len(array_cols)
     dvdr = np.diff(values) / np.diff(r)
     array = array.ravel()
-    # n = shape[0]
-    # m = shape[1]
-
     for i in range(indices.shape[0]):
-        for j in range(disc_indices.shape[0]):  # TODO: thread safe but not efficient
+        for j in prange(disc_indices.shape[0]):
             k = indices[i] + disc_indices[j]
-            if k < array.shape[0]:
-                # row = (k // m) % n # this is slower
-                # col = k % m
+            if (k < array.shape[0]) & (k >= 0):
+                r_interp = np.sqrt((array_rows[k] - positions[i, 0]) ** 2 +
+                                   (array_cols[k] - positions[i, 1]) ** 2)
 
-                r_interp = np.sqrt((rows[k] - positions[i, 0]) ** 2 +
-                                   (cols[k] - positions[i, 1]) ** 2)
+                # idx = int(np.floor((r_interp - r[0]) / dr0))
+                idx = max(np.searchsorted(r, r_interp) - 1, 0)
+                array[k] += values[i, idx] + (r_interp - r[idx]) * dvdr[i, idx]
 
-                if r_interp < r[-1]:
-                    # idx = int(np.floor((r_interp - r[0]) / dr0))
-                    # int(np.floor(np.log(r_interp / r[0]) / log_dr0))
-                    idx = np.searchsorted(r, r_interp)
+                # if idx < dvdr.shape[1]:
+                    # if idx < 0:
+                    #     print('ssss')
+                    #     array[k] += values[i, 0]
+                    #
+                    # elif idx > len(r) - 2:
+                    #     #print()
+                    #     if idx > len(r) - 1:
+                    #         print('ssss')
+                    #         array[k] += values[i, -1]
+                    #     else:
+                    #         #print('sss')
+                    #         array[k] += values[i, -2]
+                    #
+                    # else:
 
-                    if idx < 0:
-                        array[k] += values[i, 0]
-
-                    elif idx > len(r) - 2:
-                        if idx > len(r) - 1:
-                            array[k] += values[i, -1]
-                        else:
-                            array[k] += values[i, -2]
-
-                    else:
-                        array[k] += values[i, idx] + (r_interp - r[idx]) * dvdr[i, idx]
 
 
 @jit(nopython=True, nogil=True)

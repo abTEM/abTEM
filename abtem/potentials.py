@@ -135,13 +135,17 @@ class PotentialIntegrator:
         a = round(a, self._cache_key_decimals)
         b = round(b, self._cache_key_decimals)
 
+        split = np.sign(a) * np.sign(b)
         a = max(min(a, b), -self.cutoff)
         b = min(max(a, b), self.cutoff)
-        if np.sign(a) * np.sign(b) < 0:  # split integral
+
+        if split < 0:  # split integral
             result = self.cached_integrate(0, abs(a))
+
             result = result + self.cached_integrate(0, abs(b))
 
         else:
+
             result = self.cached_integrate(a, b)
         return result
 
@@ -259,15 +263,28 @@ class Potential(AbstractPotential):
         else:
             raise RuntimeError('parametrization {} not recognized'.format(parametrization))
 
-        self.positions_cache = Cache(len(self._atomic_numbers) + 1)
-        self.positions_changed_event = Event()
-        self.positions_changed_event.register(cache_clear_callback(self.positions_cache))
+        self._cutoffs = {}
+        for number in self._atomic_numbers:
+            self._cutoffs[number] = brentq(lambda r: self.function(r, self.parameters[number])
+                                                     - self.cutoff_tolerance, 1e-7, 1000)
 
-        self.integrators_cache = Cache(len(self._atomic_numbers) + 1)
+        self._padded_positions = {}
+        self._integrators = {}
+        self._allocated_array = None
 
-        self.grid.changed.register(cache_clear_callback(self.integrators_cache))
+        def positions_changed_callback(*args):
+            self._integrators = {}
 
-    @watched_method('positions_changed_event')
+        self.positions_changed = Event()
+        self.positions_changed.register(positions_changed_callback)
+
+        def grid_changed_callback(*args):
+            self._integrators = {}
+            self._allocated_array = None
+
+        self.grid.changed.register(grid_changed_callback)
+
+    @watched_method('positions_changed')
     def displace_atoms(self, new_positons):
         self._atoms.positions[:] = new_positons
 
@@ -303,37 +320,51 @@ class Potential(AbstractPotential):
         return self.thickness / self.num_slices
 
     def _get_cutoff(self, number):
-        return brentq(lambda r: self.function(r, self.parameters[number]) - self.cutoff_tolerance, 1e-7, 1000)
+        return self._cutoffs[number]
 
-    @cached_method('integrators_cache')
     def _get_integrator(self, number):
-        cutoff = self._get_cutoff(number)
-        cutoff_value = self.function(cutoff, self.parameters[number])
-        cutoff_derivative = self._derivative(cutoff, self.parameters[number])
+        try:
+            return self._integrators[number]
+        except KeyError:
+            cutoff = self._get_cutoff(number)
+            cutoff_value = self.function(cutoff, self.parameters[number])
+            cutoff_derivative = self._derivative(cutoff, self.parameters[number])
 
-        def soft_potential(r):
-            result = np.array(self._function(r, self.parameters[number]) - cutoff_value -
-                              (r - cutoff) * cutoff_derivative)
-            result[r > cutoff] = 0
-            return result
+            def soft_potential(r):
+                result = np.array(self._function(r, self.parameters[number]) - cutoff_value -
+                                  (r - cutoff) * cutoff_derivative)
+                result[r > cutoff] = 0
+                return result
 
-        r = np.geomspace(np.min(self.sampling), cutoff, int(np.ceil(cutoff / np.min(self.sampling) * 4)))
-        margin = np.int(np.ceil(cutoff / np.min(self.sampling)))
-        rows, cols = disc_meshgrid(margin)
-        return PotentialIntegrator(soft_potential, r), rows, cols
+            r = np.geomspace(np.min(self.sampling), cutoff, int(np.ceil(cutoff / np.min(self.sampling) * 4)))
+            margin = np.int(np.ceil(cutoff / np.min(self.sampling)))
+            rows, cols = disc_meshgrid(margin)
 
-    @cached_method('positions_cache')
+            self._integrators[number] = PotentialIntegrator(soft_potential, r), rows, cols
+            return self._integrators[number]
+
     def _get_padded_positions(self, number):
-        cutoff = self._get_cutoff(number)
-        return fill_rectangle(self.atoms[self.atoms.numbers == number],
-                              self.extent,
-                              [0., 0.],
-                              margin=cutoff).positions
+        try:
+            return self._padded_positions[number]
+        except KeyError:
+            cutoff = self._get_cutoff(number)
+            self._padded_positions[number] = fill_rectangle(self.atoms[self.atoms.numbers == number],
+                                                            self.extent,
+                                                            [0., 0.],
+                                                            margin=cutoff).positions
+            return self._padded_positions[number]
 
-    def _allocate(self, xp):
-        v = xp.zeros(self.gpts, dtype=xp.float32)
-        rows, cols = xp.indices(v.shape)
-        return v, rows, cols
+    def _get_allocated_array(self, xp):
+        if self._allocated_array is None:
+            max_cutoff = max([cutoff for cutoff in self._cutoffs.values()])
+            margin = np.int(np.ceil(max_cutoff / np.min(self.sampling)))
+            padded_shape = [n + 2 * margin for n in self.gpts]
+            v = xp.zeros(padded_shape, dtype=xp.float32)
+            rows, cols = xp.indices(v.shape)
+            self._allocated_array = (v, margin, rows, cols)
+            return self._allocated_array
+        else:
+            return self._allocated_array
 
     def calculate_slice(self, i, xp=np):
         self.check_slice_idx(i)
@@ -341,7 +372,8 @@ class Potential(AbstractPotential):
         a = self.get_slice_entrance(i)
         b = self.get_slice_exit(i)
 
-        v, rows, cols = self._allocate(xp)
+        v, margin, rows, cols = self._get_allocated_array(xp)
+        v[:] = 0
         for number in self._atomic_numbers:
 
             integrator, disc_rows, disc_cols = self._get_integrator(number)
@@ -359,7 +391,7 @@ class Potential(AbstractPotential):
                 vr[i] = integrator.integrate(am.item(), bm.item())
             vr = xp.asarray(vr)
 
-            pixel_positions = xp.asarray(positions[:, :2] / self.sampling)
+            pixel_positions = xp.asarray(positions[:, :2] / self.sampling) + margin
 
             position_indices = xp.ceil(pixel_positions).astype(xp.int)[:, 0] * v.shape[1] + \
                                xp.ceil(pixel_positions).astype(xp.int)[:, 1]
@@ -373,15 +405,15 @@ class Potential(AbstractPotential):
                                          vr,
                                          integrator.r / np.min(self.sampling))
 
-        return v / kappa
+        return v[margin:-margin, margin:-margin] / kappa
 
     def generate_tds_potentials(self):
         if self._tds is None:
-            yield self #.calculate()
+            yield self  # .calculate()
         else:
             for atoms in self._tds.generate_atoms():
                 self.displace_atoms(atoms.positions)
-                yield self #.calculate()
+                yield self  # .calculate()
 
 
 def disc_meshgrid(r):

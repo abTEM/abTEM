@@ -80,7 +80,7 @@ def cached_method(target_cache, ignore_args=False):
             if ignore_args is True:
                 key = (func,)
             else:
-                key = (func,) + args
+                key = (func,) + args[1:]
 
             if key in cache._cache:
                 result = cache._cache[key]
