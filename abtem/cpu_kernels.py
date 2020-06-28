@@ -24,8 +24,8 @@ def interpolate_radial_functions(array, array_rows, array_cols, indices, disc_in
                                    (array_cols[k] * sampling[1] - positions[i, 1]) ** 2)
 
                 idx = max(np.searchsorted(r, r_interp) - 1, 0)
-                if idx < dvdr.shape[1] - 1:
-                    array[k] += v[i, idx] + (r_interp - r[idx]) * dvdr[i, idx]
+                #if idx < dvdr.shape[1] - 1:
+                array[k] += v[i, idx] + (r_interp - r[idx]) * dvdr[i, idx]
 
 
 @jit(nopython=True, nogil=True)
