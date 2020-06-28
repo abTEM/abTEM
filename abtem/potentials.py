@@ -344,8 +344,8 @@ class Potential(AbstractPotential):
             r = np.geomspace(np.min(self.sampling), cutoff, int(np.ceil(cutoff / np.min(self.sampling) * 10)))
             margin = np.int(np.ceil(cutoff / np.min(self.sampling)))
             rows, cols = disc_meshgrid(margin)
-
-            self._integrators[number] = PotentialIntegrator(soft_potential, r), rows, cols
+            disc_indices = np.hstack((rows[:, None], cols[:, None]))
+            self._integrators[number] = (PotentialIntegrator(soft_potential, r), disc_indices)
             return self._integrators[number]
 
     def _get_padded_positions(self, number):
@@ -361,14 +361,14 @@ class Potential(AbstractPotential):
 
     def _get_allocated_array(self, xp):
         if self._allocated_array is None:
-            max_cutoff = max([cutoff for cutoff in self._cutoffs.values()])
-            margin = np.int(np.ceil(max_cutoff / np.min(self.sampling)))
-            padded_shape = [n + 2 * margin for n in self.gpts]
-            v = xp.zeros(padded_shape, dtype=xp.float32)
+            # max_cutoff = max([cutoff for cutoff in self._cutoffs.values()])
+            # margin = np.int(np.ceil(max_cutoff / np.min(self.sampling)))
+            # padded_shape = [n + 2 * margin for n in self.gpts]
+            v = xp.zeros(self.gpts, dtype=xp.float32)
             rows, cols = xp.indices(v.shape)
-            rows = (rows * self.sampling[0]).astype(xp.float32)
-            cols = (cols * self.sampling[1]).astype(xp.float32)
-            self._allocated_array = (v, margin, rows, cols)
+            x = (rows * self.sampling[0]).astype(xp.float32)
+            y = (cols * self.sampling[1]).astype(xp.float32)
+            self._allocated_array = (v, x, y)
             return self._allocated_array
         else:
             return self._allocated_array
@@ -382,12 +382,11 @@ class Potential(AbstractPotential):
         a = self.get_slice_entrance(i)
         b = self.get_slice_exit(i)
 
-        array, margin, rows, cols = self._get_allocated_array(xp)
-        shape = array.shape
+        array, x, y = self._get_allocated_array(xp)
         array[:] = 0.
         for number in self._atomic_numbers:
-            integrator, disc_rows, disc_cols = self._get_integrator(number)
-            disc_indices = xp.asarray(disc_rows * array.shape[1] + disc_cols)
+            integrator, disc_indices = self._get_integrator(number)
+            disc_indices = xp.asarray(disc_indices)
 
             positions = self._get_padded_positions(number)
 
@@ -401,19 +400,15 @@ class Potential(AbstractPotential):
             dvdr = np.zeros((len(positions), len(integrator.r)), xp.float32)
             for i, (am, bm) in enumerate(np.nditer((a - positions[:, 2], b - positions[:, 2]))):
                 vr[i], dvdr[i, :-1] = integrator.integrate(am.item(), bm.item())
-
-            vr = xp.asarray(vr)  # TODO : should the cache be on the device? There are pros and cons.
+            vr = xp.asarray(vr)
             dvdr = xp.asarray(dvdr)
             r = xp.asarray(integrator.r)
 
-            positions = xp.asarray(positions + margin * np.min(self.sampling), dtype=xp.float32)
+            position_indices = xp.ceil(xp.asarray(positions[:, :2]) / xp.asarray(self.sampling)).astype(xp.int)
 
-            position_indices = xp.ceil(positions[:, 0] / self.sampling[0]).astype(xp.int) * array.shape[1] + \
-                               xp.ceil(positions[:, 1] / self.sampling[1]).astype(xp.int)
-
-            interpolate_radial_functions(array.ravel(),
-                                         rows.ravel(),
-                                         cols.ravel(),
+            interpolate_radial_functions(array,
+                                         x,
+                                         y,
                                          position_indices,
                                          disc_indices,
                                          positions,
@@ -421,7 +416,7 @@ class Potential(AbstractPotential):
                                          r,
                                          dvdr)
 
-        return array.reshape(shape)[margin:-margin, margin:-margin] / kappa
+        return array / kappa
 
     def generate_tds_potentials(self):
         if self._tds is None:

@@ -68,40 +68,43 @@ def test_geomspace():
         assert i == j
 
 
-def interpolate_radial_functions_launcher(func, positions, shape, cutoff, inner_cutoff=0.):
+def interpolate_radial_functions_launcher(func, positions, shape, cutoff, inner_cutoff):
     n = np.int(np.ceil(cutoff - inner_cutoff))
-    r = np.linspace(inner_cutoff, cutoff, 2 * n)
+    r = np.geomspace(inner_cutoff, cutoff, 100 * n)[:-1]
 
-    values = func(r)
-    values = np.tile(values.reshape(1, -1), (len(positions), 1))
-    margin = np.int(np.ceil(r[-1]))
+    v = func(r)
+    v = np.tile(v.reshape(1, -1), (len(positions), 1))
+    dvdr = np.zeros_like(v)
+    dvdr[:, :-1] = np.diff(v) / np.diff(r)
 
-    padded_shape = (shape[0] + 2 * margin, shape[1] + 2 * margin)
-    array = np.zeros((padded_shape[0], padded_shape[1]), dtype=np.float32)
+    # padded_shape = (shape[0] + 2 * margin, shape[1] + 2 * margin)
+    array = np.zeros(shape, dtype=np.float32)
 
-    positions = positions + margin
-    positions_indices = np.rint(positions).astype(np.int)[:, 0] * padded_shape[1] + \
-                        np.rint(positions).astype(np.int)[:, 1]
+    position_indices = np.rint(positions).astype(np.int)
 
-    disc_rows, disc_cols = disc_meshgrid(margin)
-    disc_indices = disc_rows * padded_shape[1] + disc_cols
+    rows, cols = disc_meshgrid(np.int(np.ceil(r[-1])))
+    disc_indices = np.hstack((rows[:, None], cols[:, None]))
 
-    rows, cols = np.indices(padded_shape)
-    array_rows = rows.ravel()
-    array_cols = cols.ravel()
+    # print(disc_indices)
 
-    interpolate_radial_functions(array, array_rows, array_cols, positions_indices, disc_indices, positions, values, r)
-    return array[margin:-margin, margin:-margin]
+    rows, cols = np.indices(shape)
+    x = rows.astype(np.float32)
+    y = cols.astype(np.float32)
+
+    interpolate_radial_functions(array, x, y, position_indices, disc_indices, positions, v, r, dvdr)
+    return array
 
 
 def test_interpolate():
     sigma = 128
     func = lambda x: np.exp(-x ** 2 / (2 * sigma ** 2))
 
-    shape = (1024, 1024)
+    shape = (2048, 2048)
     positions = np.array([[0, 0]])
-    cutoff = 8 * sigma
+    cutoff = 10 * sigma
+    inner_cutoff = 0.001
 
-    array = interpolate_radial_functions_launcher(func, positions, shape, cutoff)
-    r = np.linspace(0, shape[0], shape[0], endpoint=False)
+    array = interpolate_radial_functions_launcher(func, positions, shape, cutoff, inner_cutoff=inner_cutoff)
+    r = np.linspace(inner_cutoff, shape[0], shape[0], endpoint=False)
+
     assert np.allclose(func(r), array[0], atol=1e-6)

@@ -36,23 +36,23 @@ def superpose_deltas(positions, shape):
 
 
 @cuda.jit
-def _interpolate_radial_functions(array, array_rows, array_cols, indices, disc_indices, positions, v, r, dvdr,
+def _interpolate_radial_functions(array, x, y, indices, disc_indices, positions, v, r, dvdr,
                                   ):
     n = r.shape[0]
     dt = math.log(r[-1] / r[0]) / (n - 1)
 
-    x, y = cuda.grid(2)
-    if x < indices.shape[0]:
-        if y < disc_indices.shape[0]:
-            k = indices[x] + disc_indices[y]
+    i, j = cuda.grid(2)
+    if i < indices.shape[0]:
+        if j < disc_indices.shape[0]:
+            k = indices[i] + disc_indices[j]
             if k < array.shape[0]:
-                r_interp = math.sqrt((array_rows[k] - positions[x, 0]) ** 2 +
-                                     (array_cols[k] - positions[x, 1]) ** 2)
+                r_interp = math.sqrt((x[k] - positions[i, 0]) ** 2 +
+                                     (y[k] - positions[i, 1]) ** 2)
 
                 idx = int(min(max(math.floor(math.log(r_interp / r[0] + 1e-7) / dt), 0), n - 1))
 
                 if idx < dvdr.shape[1] - 1:
-                    new = v[x, idx] + (r_interp - r[idx]) * dvdr[x, idx]
+                    new = v[i, idx] + (r_interp - r[idx]) * dvdr[i, idx]
                     cuda.atomic.add(array, k, new)
 
 
@@ -63,8 +63,17 @@ def launch_interpolate_radial_functions(array, array_rows, array_cols, indices, 
     blockspergrid_y = math.ceil(disc_indices.shape[0] / threadsperblock[1])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
 
-    _interpolate_radial_functions[blockspergrid, threadsperblock](array, array_rows, array_cols, indices, disc_indices,
-                                                                  positions, v, r, dvdr)
+    #disc_indices = disc_indices[:,0]
+
+    _interpolate_radial_functions[blockspergrid, threadsperblock](array,
+                                                                  array_rows,
+                                                                  array_cols,
+                                                                  indices,
+                                                                  disc_indices,
+                                                                  positions,
+                                                                  v,
+                                                                  r,
+                                                                  dvdr)
 
 # def interpolate_radial_functions(func, positions, shape, cutoff, inner_cutoff=0.):
 #     xp = cp.get_array_module(positions)
