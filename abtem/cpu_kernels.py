@@ -14,16 +14,18 @@ def abs2(x):
 
 
 @jit(nopython=True, nogil=True, parallel=True)
-def interpolate_radial_functions(array, x, y, position_indices, disc_indices, positions, v, r, dvdr):
+def interpolate_radial_functions(array, disc_indices, positions, v, r, dvdr, sampling):
     n = r.shape[0]
     dt = np.log(r[-1] / r[0]) / (n - 1)
-    for i in range(position_indices.shape[0]):
+    for i in range(positions.shape[0]):
         for j in prange(disc_indices.shape[0]):
-            k = position_indices[i, 0] + disc_indices[j, 0]
-            l = position_indices[i, 1] + disc_indices[j, 1]
+            k = round(positions[i, 0] / sampling[0]) + disc_indices[j, 0]
+            l = round(positions[i, 1] / sampling[1]) + disc_indices[j, 1]
+            #k = position_indices[i, 0] + disc_indices[j, 0]
+            #l = position_indices[i, 1] + disc_indices[j, 1]
             if ((k < array.shape[0]) & (l < array.shape[1]) & (k >= 0) & (l >= 0)):
-                r_interp = np.sqrt((x[k, l] - positions[i, 0]) ** 2 +
-                                   (y[k, l] - positions[i, 1]) ** 2)
+                r_interp = np.sqrt((k * sampling[0] - positions[i, 0]) ** 2 +
+                                   (l * sampling[1] - positions[i, 1]) ** 2)
                 idx = int(np.floor(np.log(r_interp / r[0] + 1e-7) / dt))
                 if (idx < 0):
                     array[k, l] += v[i, 0]

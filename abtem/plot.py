@@ -150,6 +150,8 @@ def show_line(array, calibration, ax=None, title=None, **kwargs):
     if title is not None:
         ax.set_title(title)
 
+    return ax
+
 
 def domain_coloring(z, fade_to_white=False, saturation=1, k=.5):
     h = (np.angle(z) + np.pi) / (2 * np.pi) + 0.5

@@ -128,8 +128,7 @@ class AnnularDetector(AbstractDetector):
         xp = get_array_module(waves.array)
         fft2 = get_device_function(xp, 'fft2')
         abs2 = get_device_function(xp, 'abs2')
-
-        integration_region = self.get_integration_region(waves.grid, waves.wavelength)
+        integration_region = self.get_integration_region(waves.grid, waves.wavelength, xp)
         intensity = abs2(fft2(waves.array, overwrite_x=overwrite_x))
         return xp.sum(intensity * integration_region, axis=(1, 2)) / xp.sum(intensity, axis=(1, 2))
 

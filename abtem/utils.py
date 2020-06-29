@@ -48,8 +48,6 @@ def polargrid(x, y):
     return alpha, phi
 
 
-
-
 def split_integer(n, m):
     if n < m:
         raise RuntimeError()
@@ -86,47 +84,42 @@ class Bar:
         self._name = name
         self._total = total
         self._current = 0
-        self._last_t = None
+        self._last_t = time.time()
+        self._elapsed = 0
         self._last_finished = 0
-        self._output = ''
+        self._output = f"{self._name}: 0 of {self._total} (0 %) [Elapsed N/A, ETA N/A, N/A]"
         self._enable = enable
         self._parent = parent
 
     def reset(self):
         self._current = 0
-        self._last_t = None
+        self._last_t = time.time()
+        self._elapsed = 0
         self._last_finished = 0
 
     def update(self, n):
         t = time.time()
 
-        if self._last_t is None:
-            self._last_t = t
-            self._current += n
-            percent = round(self._current / self._total * 100)
-            self._last_finished = self._current
-            self._output = f"{self._name}: {self._current} of {self._total} ({percent} %) [ETA N/A, N/A]"
-            return
-
         self._current += n
         dt = t - self._last_t
 
         if (dt >= .1) or (self._current == self._total):
+            self._elapsed += dt
             percent = round(self._current / self._total * 100)
-            iter_per_sec = (self._current - self._last_finished) / dt
+            iter_per_sec = (self._current - self._last_finished) / (dt + 1e-7)
             eta = (self._total - self._current) / iter_per_sec
             self._output = f"{self._name}: {self._current} of {self._total} ({percent} %) "
-            self._output += f"[ETA {eta:.1f} s, {iter_per_sec:.1f} / s]"
-
+            self._output += f"[Elapsed {self._elapsed:.1f} s, ETA {eta:.1f} s, {iter_per_sec:.1f} / s]"
             self._last_t = time.time()
             self._last_finished = self._current
 
     @property
     def output(self):
         if self._parent:
-            return ' <- '.join((self._parent.output, self._output))
-        else:
-            return self._output
+            if self._parent._enable:
+                return ' <- '.join((self._parent.output, self._output))
+
+        return self._output
 
     def print_bar(self):
         if not self._enable:

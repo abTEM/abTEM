@@ -1,5 +1,8 @@
-import numpy as np
+from typing import Any
+
 import mkl_fft
+import numpy as np
+
 from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions
 
 # TODO : This is a little ugly, change after mkl_fft is updated
@@ -14,7 +17,8 @@ try:  # This should be the only place to get cupy, to make it a non-essential de
 
     def fft2_convolve(array, kernel, overwrite_x=True):
         array = cupyx.scipy.fft.fft2(array, overwrite_x=overwrite_x)
-        array = cupyx.scipy.fft.ifft2(array * kernel, overwrite_x=overwrite_x)
+        array *= kernel
+        array = cupyx.scipy.fft.ifft2(array, overwrite_x=overwrite_x)
         return array
 
 
@@ -22,6 +26,7 @@ try:  # This should be the only place to get cupy, to make it a non-essential de
                      'ifft2': cupyx.scipy.fft.ifft2,
                      'fft2_convolve': fft2_convolve,
                      'complex_exponential': lambda x: cp.exp(1.j * x),
+                     'abs2': lambda x: cp.abs(x) ** 2,
                      'interpolate_radial_functions': launch_interpolate_radial_functions}
 
     asnumpy = cp.asnumpy
@@ -75,31 +80,52 @@ def get_device_function(xp, name):
         raise RuntimeError()
 
 
-class Device:
+class HasDeviceMixin:
+    _device_definition: Any
 
-    def __init__(self, device_definition):
+    @property
+    def device_definition(self):
+        return self._device_definition
+
+    def set_device_definition(self, device_definition):
         self._device_definition = device_definition
 
-        if (device_definition == 'cpu') or isinstance(device_definition, np.ndarray):
-            self._device_type = 'cpu'
-            self._array_module = np
-            self._cupy_device = None
-        elif cp is None:
-            raise RuntimeError('cupy is not installed, only cpu calculations available')
+    def get_array_module(self):
+        if self.device_definition == 'cpu':
+            return np
 
-        if (device_definition == 'gpu') or isinstance(device_definition, cp.ndarray):
-            self._device_type = 'gpu'
-            self._array_module = np
-            self._cupy_device = None
+        if self.device_definition == 'gpu':
+            if cp is None:
+                raise RuntimeError('cupy is not installed, only cpu calculations available')
+            return cp
 
-    @property
-    def device_type(self):
-        return self._device_type
+        return get_array_module(self.device_definition)
 
-    @property
-    def array_module(self):
-        return self._array_module
-
-    @property
-    def xp(self):
-        return self.array_module
+# class Device:
+#
+#     def __init__(self, device_definition):
+#         self._device_definition = device_definition
+#
+#         if (device_definition == 'cpu') or isinstance(device_definition, np.ndarray):
+#             self._device_type = 'cpu'
+#             self._array_module = np
+#             self._cupy_device = None
+#         elif cp is None:
+#             raise RuntimeError('cupy is not installed, only cpu calculations available')
+#
+#         if (device_definition == 'gpu') or isinstance(device_definition, cp.ndarray):
+#             self._device_type = 'gpu'
+#             self._array_module = np
+#             self._cupy_device = None
+#
+#     @property
+#     def device_type(self):
+#         return self._device_type
+#
+#     @property
+#     def array_module(self):
+#         return self._array_module
+#
+#     @property
+#     def xp(self):
+#         return self.array_module

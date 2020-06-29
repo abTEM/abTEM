@@ -64,6 +64,17 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         pass
 
     @property
+    def has_tds(self):
+        return self.tds is not None
+
+    @property
+    def num_tds_configs(self):
+        if self.tds is None:
+            return 1
+        else:
+            return len(self.tds)
+
+    @property
     @abstractmethod
     def generate_tds_potentials(self):
         pass
@@ -120,11 +131,12 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 
 class PotentialIntegrator:
 
-    def __init__(self, function, r, cache_size=2048, cache_key_decimals=2):
+    def __init__(self, function, r, cache_size=2048, cache_key_decimals=2, tolerance=1e-6):
         self._function = function
         self._r = r
         self.cache = Cache(cache_size)
         self._cache_key_decimals = cache_key_decimals
+        self._tolerance = tolerance
 
     @property
     def r(self):
@@ -141,12 +153,10 @@ class PotentialIntegrator:
         split = np.sign(a) * np.sign(b)
         a = max(min(a, b), -self.cutoff)
         b = min(max(a, b), self.cutoff)
-
         if split < 0:  # split integral
             values1, derivatives1 = self.cached_integrate(0, abs(a))
             values2, derivatives2 = self.cached_integrate(0, abs(b))
             result = (values1 + values2, derivatives1 + derivatives2)
-
         else:
 
             result = self.cached_integrate(a, b)
@@ -157,7 +167,7 @@ class PotentialIntegrator:
         zm = (b - a) / 2.
         zp = (a + b) / 2.
         f = lambda z: self._function(np.sqrt(self.r[0] ** 2 + (z * zm + zp) ** 2))
-        value, error_estimate, step_size, order = integrate(f, -1, 1, 1e-9)
+        value, error_estimate, step_size, order = integrate(f, -1, 1, self._tolerance)
         xk, wk = tanh_sinh_nodes_and_weights(step_size, order)
         f = lambda z: self._function(np.sqrt(self.r[:, None] ** 2 + (z * zm + zp) ** 2))
         values = np.sum(f(xk[None]) * wk[None], axis=1) * zm
@@ -231,7 +241,8 @@ class Potential(AbstractPotential):
                  slice_thickness: float = .5,
                  parametrization: str = 'lobato',
                  cutoff_tolerance: float = 1e-3,
-                 precalculate=True):
+                 precalculate=True,
+                 storage='device'):
 
         if isinstance(atoms, AbstractTDS):
             self._tds = atoms
@@ -254,6 +265,9 @@ class Potential(AbstractPotential):
         self._cutoff_tolerance = cutoff_tolerance
         self._parametrization = parametrization
         self._slice_thickness = slice_thickness
+        self._precalculate = precalculate
+        self._storage = storage
+
         self._atomic_numbers = np.unique(self._atoms.numbers)
 
         if parametrization == 'lobato':
@@ -292,6 +306,7 @@ class Potential(AbstractPotential):
     @watched_method('positions_changed')
     def displace_atoms(self, new_positons):
         self._atoms.positions[:] = new_positons
+        self._atoms.wrap()
 
     @property
     def parameters(self):
@@ -308,6 +323,10 @@ class Potential(AbstractPotential):
     @property
     def tds(self):
         return self._tds
+
+    @property
+    def precalculate(self):
+        return self._precalculate
 
     @property
     def cutoff_tolerance(self):
@@ -359,20 +378,6 @@ class Potential(AbstractPotential):
                                                             margin=cutoff).positions
             return self._padded_positions[number]
 
-    def _get_allocated_array(self, xp):
-        if self._allocated_array is None:
-            # max_cutoff = max([cutoff for cutoff in self._cutoffs.values()])
-            # margin = np.int(np.ceil(max_cutoff / np.min(self.sampling)))
-            # padded_shape = [n + 2 * margin for n in self.gpts]
-            v = xp.zeros(self.gpts, dtype=xp.float32)
-            rows, cols = xp.indices(v.shape)
-            x = (rows * self.sampling[0]).astype(xp.float32)
-            y = (cols * self.sampling[1]).astype(xp.float32)
-            self._allocated_array = (v, x, y)
-            return self._allocated_array
-        else:
-            return self._allocated_array
-
     def calculate_slice(self, i, xp=np):
         self.check_slice_idx(i)
         self.grid.check_is_defined()
@@ -382,8 +387,7 @@ class Potential(AbstractPotential):
         a = self.get_slice_entrance(i)
         b = self.get_slice_exit(i)
 
-        array, x, y = self._get_allocated_array(xp)
-        array[:] = 0.
+        array = xp.zeros(self.gpts, dtype=xp.float32)
         for number in self._atomic_numbers:
             integrator, disc_indices = self._get_integrator(number)
             disc_indices = xp.asarray(disc_indices)
@@ -400,36 +404,30 @@ class Potential(AbstractPotential):
             dvdr = np.zeros((len(positions), len(integrator.r)), xp.float32)
             for i, (am, bm) in enumerate(np.nditer((a - positions[:, 2], b - positions[:, 2]))):
                 vr[i], dvdr[i, :-1] = integrator.integrate(am.item(), bm.item())
-            vr = xp.asarray(vr)
-            dvdr = xp.asarray(dvdr)
-            r = xp.asarray(integrator.r)
+            vr = xp.asarray(vr, dtype=xp.float32)
+            dvdr = xp.asarray(dvdr, dtype=xp.float32)
+            r = xp.asarray(integrator.r, dtype=xp.float32)
 
-            position_indices = xp.ceil(xp.asarray(positions[:, :2]) / xp.asarray(self.sampling)).astype(xp.int)
+            positions = xp.asarray(positions[:, :2], dtype=xp.float32)
+            sampling = xp.asarray(self.sampling, dtype=xp.float32)
 
-            positions = xp.asarray(positions, dtype=xp.float32)
-
-
-            # disc_indices = disc_indices[:, 0] * array.shape[1] + disc_indices[:, 1]
-            # position_indices = position_indices[:, 0] * array.shape[1] + position_indices[:, 1]
             interpolate_radial_functions(array,
-                                         x,
-                                         y,
-                                         position_indices,
                                          disc_indices,
                                          positions,
                                          vr,
                                          r,
-                                         dvdr)
+                                         dvdr,
+                                         sampling)
 
         return array / kappa
 
     def generate_tds_potentials(self):
-        if self._tds is None:
-            yield self  # .calculate()
-        else:
-            for atoms in self._tds.generate_atoms():
-                self.displace_atoms(atoms.positions)
-                yield self  # .calculate()
+        if not self.has_tds:
+            raise RuntimeError()
+
+        for atoms in self._tds.generate_atoms():
+            self.displace_atoms(atoms.positions)
+            yield self.calculate()
 
 
 def disc_meshgrid(r):

@@ -1,4 +1,3 @@
-from copy import copy
 from collections import OrderedDict
 from typing import Optional, Union, Sequence
 
@@ -509,6 +508,3 @@ class HasAcceleratorMixin:
 
     energy = DelegatedAttribute('accelerator', 'energy')
     wavelength = DelegatedAttribute('accelerator', 'wavelength')
-
-# def fft2_cpu(x):
-#    return mkl_fft
