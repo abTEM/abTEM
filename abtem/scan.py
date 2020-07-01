@@ -7,8 +7,7 @@ import numpy as np
 from matplotlib.patches import Rectangle
 
 from abtem.bases import Grid, HasGridMixin
-from abtem.detect import AbstractDetector
-from abtem.measure import Measurement, Calibration
+from abtem.measure import Calibration
 from abtem.utils import split_integer
 
 
@@ -36,21 +35,9 @@ class AbstractScan(metaclass=ABCMeta):
     def get_positions(self):
         pass
 
-    def allocate_measurements(self, detectors: Sequence[AbstractDetector]):
-        # if not isinstance(detectors, Iterable):
-        #     detectors = [detectors]
-
-        measurements = {}
-        for detector in detectors:
-            array = np.zeros(self.shape + detector.shape)
-            calibrations = self.calibrations + detector.calibrations
-            measurement = Measurement(array, calibrations=calibrations)
-
-            if isinstance(detector.save_file, str):
-                measurement = measurement.write(detector.save_file)
-            measurements[detector] = measurement
-
-        return measurements
+    @property
+    def measurements(self):
+        return self._measurements
 
     @abstractmethod
     def insert_new_measurement(self, measurement_key, start, end, new_values):
@@ -159,10 +146,10 @@ class LineScan(AbstractScan, HasGridMixin):
     def insert_new_measurement(self, measurement, start, end, new_measurement):
         if isinstance(measurement, str):
             with h5py.File(measurement, 'a') as f:
-                f['array'][start:end] += cp.asnumpy(new_measurement)
+                f['array'][start:end] = cp.asnumpy(new_measurement)
 
         else:
-            measurement.array[start:end] += cp.asnumpy(new_measurement)
+            measurement.array[start:end] = cp.asnumpy(new_measurement)
 
     def get_positions(self) -> np.ndarray:
         x = np.linspace(self.start[0], self.start[0] + self.extent * self.direction[0], self.gpts[0],
@@ -259,9 +246,9 @@ class GridScan(AbstractScan, HasGridMixin):
         for row, slic, slic_1d in zip(*unravel_slice_2d(start, end, self.shape)):
             if isinstance(measurement, str):
                 with h5py.File(measurement, 'a') as f:
-                    f['array'][row, slic] += cp.asnumpy(new_measurement[slic_1d])
+                    f['array'][row, slic] = cp.asnumpy(new_measurement[slic_1d])
             else:
-                measurement.array[row, slic] += cp.asnumpy(new_measurement[slic_1d])
+                measurement.array[row, slic] = cp.asnumpy(new_measurement[slic_1d])
 
     def add_to_mpl_plot(self, ax, alpha=.33, facecolor='r', edgecolor='r', **kwargs):
         rect = Rectangle(tuple(self.start), *self.extent, alpha=alpha, facecolor=facecolor, edgecolor=edgecolor,

@@ -3,7 +3,7 @@ from abtem.bases import cached_method, Cache
 from abtem.interpolation import interpolation_kernel, interpolate_single
 from abtem.parametrizations import project_tanh_sinh
 from abtem.potentials import PotentialBase, tanh_sinh_quadrature, QUADRATURE_PARAMETER_RATIO
-from abtem.atoms import fill_rectangle_with_atoms, orthogonalize_array
+from abtem.structures import fill_rectangle_with_atoms, orthogonalize_array
 from abtem.utils import split_integer
 from ase import units
 from numba import jit

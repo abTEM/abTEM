@@ -268,3 +268,4 @@ class BatchGenerator:
                 yield batch_start, self.batch_size
 
             batch_start = batch_end
+

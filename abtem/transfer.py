@@ -29,7 +29,6 @@ class CTF(HasAcceleratorMixin):
 
         for key in kwargs.keys():
             if ((key not in polar_symbols) and (key not in polar_aliases.keys())):
-                print(key)
                 raise RuntimeError()
 
         self.changed = Event()

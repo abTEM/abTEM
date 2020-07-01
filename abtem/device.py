@@ -3,14 +3,14 @@ from typing import Any
 import mkl_fft
 import numpy as np
 
-from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions
+from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions, window_and_collapse
 
 # TODO : This is a little ugly, change after mkl_fft is updated
 
 try:  # This should be the only place to get cupy, to make it a non-essential dependency
     import cupy as cp
     import cupyx.scipy.fft
-    from abtem.cuda_kernels import launch_interpolate_radial_functions
+    from abtem.cuda_kernels import launch_interpolate_radial_functions, launch_window_and_collapse
 
     get_array_module = cp.get_array_module
 
@@ -27,7 +27,8 @@ try:  # This should be the only place to get cupy, to make it a non-essential de
                      'fft2_convolve': fft2_convolve,
                      'complex_exponential': lambda x: cp.exp(1.j * x),
                      'abs2': lambda x: cp.abs(x) ** 2,
-                     'interpolate_radial_functions': launch_interpolate_radial_functions}
+                     'interpolate_radial_functions': launch_interpolate_radial_functions,
+                     'window_and_collapse': launch_window_and_collapse}
 
     asnumpy = cp.asnumpy
 
@@ -68,7 +69,8 @@ cpu_functions = {'fft2': mkl_fft.fft2,
                  'fft2_convolve': fft2_convolve,
                  'abs2': abs2,
                  'complex_exponential': complex_exponential,
-                 'interpolate_radial_functions': interpolate_radial_functions}
+                 'interpolate_radial_functions': interpolate_radial_functions,
+                 'window_and_collapse': window_and_collapse}
 
 
 def get_device_function(xp, name):

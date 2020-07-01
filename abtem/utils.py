@@ -4,6 +4,7 @@ import numpy as np
 from ase import units
 
 from abtem.device import get_array_module
+from tqdm.auto import tqdm
 
 
 def energy2mass(energy):
@@ -78,51 +79,26 @@ def label_to_index_generator(labels, first_label=0):
         yield np.sort(indices[l:h])
 
 
-class Bar:
-
-    def __init__(self, name, total, enable=True, parent=None):
-        self._name = name
-        self._total = total
-        self._current = 0
-        self._last_t = time.time()
-        self._elapsed = 0
-        self._last_finished = 0
-        self._output = f"{self._name}: 0 of {self._total} (0 %) [Elapsed N/A, ETA N/A, N/A]"
-        self._enable = enable
-        self._parent = parent
-
-    def reset(self):
-        self._current = 0
-        self._last_t = time.time()
-        self._elapsed = 0
-        self._last_finished = 0
-
-    def update(self, n):
-        t = time.time()
-
-        self._current += n
-        dt = t - self._last_t
-
-        if (dt >= .1) or (self._current == self._total):
-            self._elapsed += dt
-            percent = round(self._current / self._total * 100)
-            iter_per_sec = (self._current - self._last_finished) / (dt + 1e-7)
-            eta = (self._total - self._current) / iter_per_sec
-            self._output = f"{self._name}: {self._current} of {self._total} ({percent} %) "
-            self._output += f"[Elapsed {self._elapsed:.1f} s, ETA {eta:.1f} s, {iter_per_sec:.1f} / s]"
-            self._last_t = time.time()
-            self._last_finished = self._current
+class ProgressBar:
+    def __init__(self, **kwargs):
+        self._tqdm = tqdm(**kwargs)
 
     @property
-    def output(self):
-        if self._parent:
-            if self._parent._enable:
-                return ' <- '.join((self._parent.output, self._output))
+    def tqdm(self):
+        return self._tqdm
 
-        return self._output
+    @property
+    def disable(self):
+        return self.tqdm.disable
 
-    def print_bar(self):
-        if not self._enable:
-            return
+    def update(self, n):
+        if not self.disable:
+            self.tqdm.update(n)
 
-        print(f'{self.output:<{128}}\r', end="", flush=True)
+    def reset(self):
+        if not self.disable:
+            self.tqdm.reset()
+
+    def refresh(self):
+        if not self.disable:
+            self.tqdm.refresh()

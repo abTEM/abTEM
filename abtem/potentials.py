@@ -9,7 +9,7 @@ from ase import Atoms
 from ase import units
 from scipy.optimize import brentq
 
-from abtem.atoms import fill_rectangle, is_orthogonal
+from abtem.structures import fill_rectangle, is_orthogonal
 from abtem.bases import Grid, HasGridMixin, Cache, cached_method, HasAcceleratorMixin, Accelerator, watched_method, \
     Event
 from abtem.cpu_kernels import complex_exponential
@@ -19,8 +19,8 @@ from abtem.parametrizations import lobato, dvdr_lobato, load_lobato_parameters
 from abtem.plot import show_image
 from abtem.tanh_sinh import integrate, tanh_sinh_nodes_and_weights
 from abtem.temperature import AbstractTDS
-from abtem.utils import energy2sigma, Bar
-from abtem.device import get_device_function
+from abtem.utils import energy2sigma, ProgressBar
+from abtem.device import get_device_function, get_array_module
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
@@ -93,7 +93,7 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
             raise StopIteration
         return self.get_slice(item)
 
-    def calculate(self, start=None, end=None, xp=np, pbar=False) -> 'ArrayPotential':
+    def calculate(self, start=None, end=None, xp=np, pbar: Union[bool, ProgressBar] = True) -> 'ArrayPotential':
         self.grid.check_is_defined()
 
         if start is None:
@@ -105,14 +105,17 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         array = xp.zeros((self.num_slices,) + (self.gpts[0], self.gpts[1]), dtype=self.get_slice(0).calculate(xp).dtype)
         slice_thicknesses = np.zeros(self.num_slices)
 
-        pbar = Bar('Potential', end - start, enable=pbar)
+        if isinstance(pbar, bool):
+            pbar = ProgressBar(total=len(self), desc='Potential', disable=not pbar)
+
         for i in range(start, end):
             potential_slice = self.get_slice(i)
 
             array[i] = potential_slice.calculate(xp)
             slice_thicknesses[i] = potential_slice.thickness
             pbar.update(1)
-            pbar.print_bar()
+
+        pbar.refresh()
 
         return ArrayPotential(array, slice_thicknesses, self.extent)
 
@@ -241,7 +244,6 @@ class Potential(AbstractPotential):
                  slice_thickness: float = .5,
                  parametrization: str = 'lobato',
                  cutoff_tolerance: float = 1e-3,
-                 precalculate=True,
                  storage='device'):
 
         if isinstance(atoms, AbstractTDS):
@@ -265,7 +267,6 @@ class Potential(AbstractPotential):
         self._cutoff_tolerance = cutoff_tolerance
         self._parametrization = parametrization
         self._slice_thickness = slice_thickness
-        self._precalculate = precalculate
         self._storage = storage
 
         self._atomic_numbers = np.unique(self._atoms.numbers)
@@ -421,13 +422,19 @@ class Potential(AbstractPotential):
 
         return array / kappa
 
-    def generate_tds_potentials(self):
+    def generate_tds_potentials(self, xp=np, pbar: Union[ProgressBar, bool] = True):
         if not self.has_tds:
             raise RuntimeError()
 
+        if isinstance(pbar, bool):
+            pbar = ProgressBar(total=len(self), desc='Potential', disable=not pbar)
+
         for atoms in self._tds.generate_atoms():
             self.displace_atoms(atoms.positions)
-            yield self.calculate()
+            pbar.reset()
+            yield self.calculate(xp=xp, pbar=pbar)
+
+        pbar.refresh()
 
 
 def disc_meshgrid(r):
@@ -475,6 +482,9 @@ class ArrayPotential(AbstractPotential, HasGridMixin):
         self._grid = Grid(extent=extent, gpts=self.array.shape[1:], sampling=sampling, lock_gpts=True)
 
     def as_transmission_functions(self, energy):
+        xp = get_array_module(self.array)
+        complex_exponential = get_device_function(xp, 'complex_exponential')
+
         array = complex_exponential(energy2sigma(energy) * self._array)
         t = TransmissionFunctions(array, slice_thicknesses=self._slice_thicknesses, energy=energy)
         t._grid = copy(self.grid)

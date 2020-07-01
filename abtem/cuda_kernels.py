@@ -71,3 +71,65 @@ def launch_interpolate_radial_functions(array, disc_indices, positions, v, r, dv
                                                                   r,
                                                                   dvdr,
                                                                   sampling)
+
+
+# @cuda.jit
+# def _window_and_collapse(probes, S, corners, coefficients):
+#     """
+#     Function for collapsing a Prism scattering matrix into a probe wave function.
+#
+#     Parameters
+#     ----------
+#     probes : 3d numpy.ndarray
+#         The array in which the probe wave functions should be written.
+#     S : 3d numpy.ndarray
+#         Scattering matrix
+#     corners :
+#     coefficients :
+#     """
+#     N, M = S.shape[1:]
+#     L, n, m = probes.shape
+#     # L = coefficients.shape[1]
+#     i = cuda.grid(1)
+#
+#     if i < S.shape[0]:
+#         # for k in range(probes.shape[0]):
+#         for l in range(L):
+#             C = coefficients[i][l]
+#             for j in range(n):
+#                 for k in range(m):
+#                     cx, cy = corners[i]
+#                     jj = (cx + j) % N
+#                     kk = (cy + k) % M
+#                     probes[l, j, k] += S[i, jj, kk] * C
+
+@cuda.jit
+def _window_and_collapse(probes, S, corners, coefficients):
+    """
+    Function for collapsing a Prism scattering matrix into a probe wave function.
+
+    Parameters
+    ----------
+    probes : 3d numpy.ndarray
+        The array in which the probe wave functions should be written.
+    S : 3d numpy.ndarray
+        Scattering matrix
+    corners :
+    coefficients :
+    """
+    x, y, z = cuda.grid(3)
+    if (x < probes.shape[0]) & (y < probes.shape[1]) & (z < probes.shape[2]):
+        yy = (corners[x, 0] + y) % S.shape[1]
+        zz = (corners[x, 1] + z) % S.shape[2]
+        for l in range(coefficients.shape[1]):
+            probes[x, y, z] += coefficients[x, l] * S[l, yy, zz]
+
+
+def launch_window_and_collapse(probes, S, corners, coefficients):
+    threadsperblock = (2, 8, 8)
+    blockspergrid_x = math.ceil(probes.shape[0] / threadsperblock[0])
+    blockspergrid_y = math.ceil(probes.shape[1] / threadsperblock[1])
+    blockspergrid_z = math.ceil(probes.shape[2] / threadsperblock[2])
+    blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
+
+    _window_and_collapse[blockspergrid, threadsperblock](probes, S, corners, coefficients)

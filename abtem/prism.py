@@ -13,7 +13,7 @@ def import_prism_xyz(filename):
             numbers.append(int(line[0]))
             positions.append(list(map(float, line[1:4])))
 
-    return Atoms(positions=positions, numbers=numbers, cell=cell)
+    return Atoms(positions=np.array(positions), numbers=numbers, cell=cell)
 
 
 def export_prism_xyz(filename, atoms):

@@ -7,14 +7,36 @@ import numpy as np
 from abtem.bases import cached_method, Cache, Event, cache_clear_callback, watched_method
 from abtem.cpu_kernels import abs2
 from abtem.device import get_array_module, get_device_function
-from abtem.measure import Calibration, calibrations_from_grid, fourier_space_offset
+from abtem.measure import Calibration, calibrations_from_grid, fourier_space_offset, Measurement
 from abtem.plot import show_image
+import h5py
+
+
+def unravel_slice_2d(start, end, shape):
+    slices = []
+    rows = []
+    slices_1d = []
+    n = 0
+    n_accum = 0
+    for index in range(start, end):
+        index_in_row = index % shape[-1]
+        n += 1
+        if index_in_row == shape[-1] - 1:
+            slices_1d.append(slice(n_accum, n_accum + n))
+            slices.append(slice(index_in_row - n + 1, index_in_row + 1))
+            rows.append(index // shape[-1])
+            n_accum += n
+            n = 0
+    if n > 0:
+        slices_1d.append(slice(n_accum, n_accum + n))
+        slices.append(slice(index_in_row - n + 1, index_in_row + 1))
+        rows.append(index // shape[-1])
+    return rows, slices, slices_1d
 
 
 class AbstractDetector(metaclass=ABCMeta):
 
-    def __init__(self, save_file=None, device=None):
-
+    def __init__(self, save_file=None):
         if save_file is not None:
             if not save_file.endswith('.hdf5'):
                 self._save_file = save_file + '.hdf5'
@@ -28,18 +50,12 @@ class AbstractDetector(metaclass=ABCMeta):
     def save_file(self) -> str:
         return self._save_file
 
-    @property
-    @abstractmethod
-    def shape(self) -> tuple:
-        pass
-
-    @property
-    @abstractmethod
-    def calibrations(self) -> tuple:
-        pass
-
     @abstractmethod
     def detect(self, waves):
+        pass
+
+    @abstractmethod
+    def allocate_measurement(self, grid, wavelength, scan):
         pass
 
 
@@ -65,7 +81,7 @@ class AnnularDetector(AbstractDetector):
 
     def __init__(self, inner, outer, rolloff=0., save_file=None, device=None):
 
-        super().__init__(save_file=save_file, device=device)
+        super().__init__(save_file=save_file)
 
         self._inner = inner
         self._outer = outer
@@ -102,10 +118,6 @@ class AnnularDetector(AbstractDetector):
         self._rolloff = value
 
     @property
-    def shape(self) -> tuple:
-        return ()
-
-    @property
     def calibrations(self):
         return ()
 
@@ -128,9 +140,17 @@ class AnnularDetector(AbstractDetector):
         xp = get_array_module(waves.array)
         fft2 = get_device_function(xp, 'fft2')
         abs2 = get_device_function(xp, 'abs2')
+        #return np.ones(len(waves.array))
         integration_region = self.get_integration_region(waves.grid, waves.wavelength, xp)
         intensity = abs2(fft2(waves.array, overwrite_x=overwrite_x))
         return xp.sum(intensity * integration_region, axis=(1, 2)) / xp.sum(intensity, axis=(1, 2))
+
+    def allocate_measurement(self, grid, wavelength, scan):
+        array = np.zeros(scan.shape)
+        measurement = Measurement(array, calibrations=scan.calibrations)
+        if isinstance(self.save_file, str):
+            measurement = measurement.write(self.save_file)
+        return measurement
 
     def copy(self) -> 'AnnularDetector':
         return self.__class__(self.inner, self.outer, rolloff=self.rolloff, save_file=self.save_file)
@@ -163,8 +183,6 @@ def polar_labels(shape, inner=1, outer=None, nbins_angular=1, nbins_radial=None)
     bins = np.zeros(shape, dtype=int)
     bins[valid] = radial_bins[valid] * nbins_angular + angular_bins[valid]
     return bins
-
-
 
 
 class SegmentedDetector(AbstractDetector):
@@ -287,9 +305,8 @@ class PixelatedDetector(AbstractDetector):
         self._max_semiangle = max_semiangle
         self._shape = None
         self._calibrations = None
-        self.device_manager = DeviceManager(device)
 
-    def adapt_to_waves(self, waves):
+    def adapt_to_waves(self, grid, wavelength, scan):
 
         waves.grid.check_is_defined()
         waves.accelerator.check_is_defined()
