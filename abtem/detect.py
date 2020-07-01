@@ -12,6 +12,17 @@ from abtem.plot import show_image
 import h5py
 
 
+def crop_to_center(array):
+    shape = array.shape
+    w = shape[-2] // 2
+    h = shape[-1] // 2
+    left = w - w // 2
+    right = w + (w - w // 2)
+    top = h - h // 2
+    bottom = h + (h - h // 2)
+    return array[..., left:right, top:bottom]
+
+
 def unravel_slice_2d(start, end, shape):
     slices = []
     rows = []
@@ -140,7 +151,7 @@ class AnnularDetector(AbstractDetector):
         xp = get_array_module(waves.array)
         fft2 = get_device_function(xp, 'fft2')
         abs2 = get_device_function(xp, 'abs2')
-        #return np.ones(len(waves.array))
+        # return np.ones(len(waves.array))
         integration_region = self.get_integration_region(waves.grid, waves.wavelength, xp)
         intensity = abs2(fft2(waves.array, overwrite_x=overwrite_x))
         return xp.sum(intensity * integration_region, axis=(1, 2)) / xp.sum(intensity, axis=(1, 2))
@@ -300,56 +311,32 @@ class SegmentedDetector(AbstractDetector):
 
 class PixelatedDetector(AbstractDetector):
 
-    def __init__(self, max_semiangle=None, save_file=None, device=None):
-        super().__init__(save_file=save_file, device=device)
-        self._max_semiangle = max_semiangle
-        self._shape = None
-        self._calibrations = None
+    def __init__(self, save_file=None):
+        super().__init__(save_file=save_file)
 
-    def adapt_to_waves(self, grid, wavelength, scan):
+    def allocate_measurement(self, grid, wavelength, scan):
+        grid.check_is_defined()
+        shape = (grid.gpts[0] // 2, grid.gpts[1] // 2)
 
-        waves.grid.check_is_defined()
-        waves.accelerator.check_is_defined()
+        samplings = 1 / grid.extent * wavelength * 1000
+        offsets = fourier_space_offset(grid.extent / np.array(shape), shape) * wavelength * 1000
+        calibrations = (Calibration(offset=offsets[0], sampling=samplings[0], units='mrad.', name='alpha_x'),
+                        Calibration(offset=offsets[1], sampling=samplings[1], units='mrad.', name='alpha_y'))
 
-        if self.max_semiangle is None:
-            self._shape = tuple(waves.grid.gpts)
-        else:
-            angular_extent = waves.grid.gpts / waves.grid.extent * waves.accelerator.wavelength / 2
-            self._shape = tuple(np.floor(self.max_semiangle / angular_extent * waves.grid.gpts / 2.).astype(int) * 2)
-
-        samplings = 1 / waves.grid.extent * waves.accelerator.wavelength * 1000
-        offsets = fourier_space_offset(waves.grid.extent / np.array(self.shape),
-                                       self.shape) * waves.accelerator.wavelength * 1000
-        self._calibrations = (Calibration(offset=offsets[0], sampling=samplings[0], units='mrad.', name='alpha_x'),
-                              Calibration(offset=offsets[1], sampling=samplings[1], units='mrad.', name='alpha_y'))
-
-    @property
-    def calibrations(self) -> tuple:
-        return self._calibrations
-
-    @property
-    def max_semiangle(self):
-        return self._max_semiangle
-
-    @property
-    def shape(self):
-        return self._shape
+        array = np.zeros(scan.shape + shape)
+        measurement = Measurement(array, calibrations=scan.calibrations + calibrations)
+        if isinstance(self.save_file, str):
+            measurement = measurement.write(self.save_file)
+        return measurement
 
     def detect(self, waves):
-        xp = self.device_manager.get_array_library()
-        self.adapt_to_waves(waves)
+        xp = get_array_module(waves.array)
+        abs2 = get_device_function(xp, 'abs2')
+        fft2 = get_device_function(xp, 'fft2')
 
-        array = waves.array  # .copy()
-
-        if self.device_manager.is_cuda:
-            intensity = abs2(cp.fft.fft2(array))
-        else:
-            mkl_fft.fft2(array, overwrite_x=True)
-            intensity = abs2(array)
-
+        intensity = abs2(fft2(waves.array, overwrite_x=False))
         intensity = xp.fft.fftshift(intensity, axes=(-1, -2))
-        # crop = ((intensity.shape[1] - self.shape[0]) // 2, (intensity.shape[2] - self.shape[1]) // 2)
-        # intensity = intensity[:, crop[0]:crop[0] + self.shape[0], crop[1]:crop[1] + self.shape[1]]
+        intensity = crop_to_center(intensity)
         return intensity
 
 

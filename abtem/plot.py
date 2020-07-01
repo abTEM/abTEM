@@ -9,6 +9,7 @@ from matplotlib.collections import PatchCollection
 from matplotlib.patches import Circle
 
 from abtem.cpu_kernels import abs2
+from scipy.ndimage import gaussian_filter
 
 cube = np.array([[[0, 0, 0], [0, 0, 1]],
                  [[0, 0, 0], [0, 1, 0]],

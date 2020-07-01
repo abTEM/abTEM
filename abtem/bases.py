@@ -45,20 +45,6 @@ class Event(object):
             callbacks = [callbacks]
         self.callbacks += callbacks
 
-    @classmethod
-    def watched_property(cls, event_name, key):
-        actual_key = '_%s' % key
-
-        def getter(obj):
-            return getattr(obj, actual_key)
-
-        def setter(obj, value):
-            event = getattr(obj, event_name)
-            setattr(obj, actual_key, value)
-            event.notify(obj, key, value)
-
-        return property(fget=getter, fset=setter)
-
 
 def cache_clear_callback(target_cache):
     def callback(notifier, property_name, change):
@@ -204,11 +190,6 @@ class Grid:
         self.changed.register(cache_clear_callback(self.cache))
         self.changed.register(cache_clear_callback(self.cache))
 
-    # def __str__(self):
-    #     str(' x '.join(map(str, list(np.round(self.grid.extent, 2))))) + ' Å'
-
-    # def
-
     def _validate(self, value, dtype):
         if isinstance(value, (np.ndarray, list, tuple)):
             if len(value) != self._dimensions:
@@ -325,15 +306,14 @@ class Grid:
         elif self.gpts is None:
             raise RuntimeError('grid gpts is not defined')
 
-    # def spatial_frequency_limits(self):
-    #     return np.array([(-1 / (2 * d), 1 / (2 * d) - 1 / (d * p)) if (p % 2 == 0) else
-    #                      (-1 / (2 * d) + 1 / (2 * d * p), 1 / (2 * d) - 1 / (2 * d * p)) for d, p in
-    #                      zip(self.sampling, self.gpts)])
-    #
-    # @property
-    # def spatial_frequency_extent(self):
-    #     fourier_limits = self.spatial_frequency_limits
-    #     return fourier_limits[:, 1] - fourier_limits[:, 0]
+    def interpolated_grid(self, f):
+        return self.__class__(gpts=self.gpts // f,
+                              sampling=self.sampling,
+                              dimensions=self._dimensions,
+                              endpoint=self.endpoint,
+                              lock_extent=self._lock_extent,
+                              lock_gpts=self._lock_gpts,
+                              lock_sampling=self._lock_sampling)
 
     def match(self, other):
         self.check_can_match(other)

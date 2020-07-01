@@ -6,11 +6,12 @@ import imageio
 import numpy as np
 import scipy.misc
 import scipy.ndimage
+from scipy.ndimage import gaussian_filter
 from scipy.ndimage import zoom
 
 from abtem.bases import Grid
-from abtem.plot import show_image, show_line
 from abtem.device import asnumpy
+from abtem.plot import show_image, show_line
 
 
 class Calibration:
@@ -20,6 +21,9 @@ class Calibration:
         self.sampling = sampling
         self.units = units
         self.name = name
+
+    def copy(self):
+        return self.__class__(self.offset, self.sampling, self.units, self.name)
 
 
 def fourier_space_offset(sampling, gpts):
@@ -90,6 +94,14 @@ class Measurement:
         return self.__class__(new_array, new_calibrations)
 
     @property
+    def units(self):
+        return self._units
+
+    @property
+    def name(self):
+        return self._name
+
+    @property
     def dimensions(self):
         return len(self.array.shape)
 
@@ -121,6 +133,11 @@ class Measurement:
                 sums = sums.sum(-1)
 
         return self.__class__(sums, calibrations)
+
+    def blur(self, amount, **kwargs):
+        calibrations = [calibration.copy() for calibration in self.calibrations]
+        return self.__class__(gaussian_filter(self.array, amount, **kwargs), calibrations, units=self.units,
+                              name=self.name)
 
     def mean(self, axes):
         if not isinstance(axes, Iterable):
@@ -158,7 +175,7 @@ class Measurement:
             calibrations.append(copy(calibration))
             calibrations[-1].sampling = new_sampling
 
-        return self.__class__(new_array, calibrations)
+        return self.__class__(new_array, calibrations, units=self.units)
 
     def tile(self, repeats):
         new_array = np.tile(self._array, repeats)

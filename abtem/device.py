@@ -22,6 +22,7 @@ try:  # This should be the only place to get cupy, to make it a non-essential de
         return array
 
 
+
     gpu_functions = {'fft2': cupyx.scipy.fft.fft2,
                      'ifft2': cupyx.scipy.fft.ifft2,
                      'fft2_convolve': fft2_convolve,
@@ -44,9 +45,9 @@ except ImportError:
 
 def fft2_convolve(array, kernel, overwrite_x=True):
     def _fft_convolve(array, kernel, overwrite_x):
-        array = mkl_fft.fft2(array, overwrite_x=overwrite_x)
+        mkl_fft.fft2(array, overwrite_x=overwrite_x)
         array *= kernel
-        array = mkl_fft.ifft2(array, overwrite_x=overwrite_x)
+        mkl_fft.ifft2(array, overwrite_x=overwrite_x)
         return array
 
     if len(array.shape) == 2:

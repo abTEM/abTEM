@@ -427,6 +427,9 @@ class Probe(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
     def scan(self, scan: AbstractScan, detectors: Sequence[AbstractDetector],
              potential: Union[Atoms, AbstractPotential], max_batch=1, pbar: Union[ProgressBar, bool] = True):
 
+        self.grid.match(potential.grid)
+        self.grid.check_is_defined()
+
         measurements = {}
         for detector in detectors:
             measurements[detector] = detector.allocate_measurement(self.grid, self.wavelength, scan)
@@ -586,7 +589,7 @@ class SMatrix(HasGridMixin, HasAcceleratorMixin):
 
         translation = (complex_exponential(2. * np.pi * self.kx[None] * positions[:, 0, None]) *
                        complex_exponential(2. * np.pi * self.ky[None] * positions[:, 1, None]))
-        #self.ctf.evaluate(self.alpha, self.phi)[None] *
+        # self.ctf.evaluate(self.alpha, self.phi)[None] *
         coefficients = translation
 
         window = xp.zeros((len(positions),) + tuple(self.interpolated_gpts), dtype=xp.complex64)
@@ -595,10 +598,10 @@ class SMatrix(HasGridMixin, HasAcceleratorMixin):
                                xp.floor_divide(xp.asarray(self.interpolated_gpts), 2)).astype(xp.int)
 
         crop_corners = xp.remainder(crop_corners, xp.asarray(self.gpts))
-        #print(type(self.array), type(crop_corners), type(coefficients), type(window))
-        #sss
-        #print(self.array.dtype, crop_corners.dtype, coefficients.dtype)
-        #sss
+        # print(type(self.array), type(crop_corners), type(coefficients), type(window))
+        # sss
+        # print(self.array.dtype, crop_corners.dtype, coefficients.dtype)
+        # sss
         window_and_collapse(window, self.array, crop_corners, coefficients)
 
         return Waves(window, extent=self.extent, energy=self.energy)
@@ -612,7 +615,8 @@ class SMatrix(HasGridMixin, HasAcceleratorMixin):
 
         measurements = {}
         for detector in detectors:
-            measurements[detector] = detector.allocate_measurement(self.grid, self.wavelength, scan)
+            interpolated_grid = self.grid.interpolated_grid(self.interpolation)
+            measurements[detector] = detector.allocate_measurement(interpolated_grid, self.wavelength, scan)
 
         if isinstance(pbar, bool):
             pbar = ProgressBar(total=len(scan), desc='Scan', disable=not pbar)
@@ -694,9 +698,14 @@ class SMatrixBuilder(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
 
     def scan(self, scan: AbstractScan, detectors: Sequence[AbstractDetector],
              potential: Union[Atoms, AbstractPotential], max_batch=1, pbar=True):
+
+        self.grid.match(potential.grid)
+        self.grid.check_is_defined()
+
         measurements = {}
         for detector in detectors:
-            measurements[detector] = detector.allocate_measurement(self.grid, self.wavelength, scan)
+            interpolated_grid = self.grid.interpolated_grid(self.interpolation)
+            measurements[detector] = detector.allocate_measurement(interpolated_grid, self.wavelength, scan)
 
         tds_bar = ProgressBar(total=potential.num_tds_configs, desc='TDS',
                               disable=(not pbar) or (not potential.has_tds))

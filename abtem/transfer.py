@@ -32,6 +32,7 @@ class CTF(HasAcceleratorMixin):
                 raise RuntimeError()
 
         self.changed = Event()
+
         self._accelerator = Accelerator(energy=energy)
         self._semiangle_cutoff = semiangle_cutoff
         self._rolloff = rolloff
@@ -74,7 +75,6 @@ class CTF(HasAcceleratorMixin):
         return - self._parameters['C10']
 
     @defocus.setter
-    @watched_method('changed')
     def defocus(self, value: float):
         self.C10 = -value
 
