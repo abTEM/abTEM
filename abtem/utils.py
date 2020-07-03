@@ -61,9 +61,9 @@ def split_integer(n, m):
         pp = n // m
         for i in range(m):
             if i >= zp:
-                v.append(pp + 1)
+                v = [pp + 1] + v
             else:
-                v.append(pp)
+                v = [pp] + v
         return v
 
 
@@ -102,3 +102,6 @@ class ProgressBar:
     def refresh(self):
         if not self.disable:
             self.tqdm.refresh()
+
+    def close(self):
+        self.tqdm.close()

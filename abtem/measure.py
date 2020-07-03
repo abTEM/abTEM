@@ -65,7 +65,7 @@ class Measurement:
         if len(calibrations) != len(array.shape):
             raise RuntimeError()
 
-        self._array = array
+        self._array = asnumpy(array)
         self._calibrations = calibrations
         self._units = units
         self._name = name

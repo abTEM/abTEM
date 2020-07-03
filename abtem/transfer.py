@@ -143,10 +143,10 @@ class CTF(HasAcceleratorMixin):
     def evaluate_aperture(self, alpha) -> np.ndarray:
         xp = get_array_module(alpha)
         if self.rolloff > 0.:
-            self.rolloff *= self.semiangle_cutoff
-            array = .5 * (1 + xp.cos(np.pi * (alpha - self.semiangle_cutoff + self.rolloff) / self.rolloff))
+            rolloff = self.rolloff * self.semiangle_cutoff
+            array = .5 * (1 + xp.cos(np.pi * (alpha - self.semiangle_cutoff + rolloff) / rolloff))
             array[alpha > self.semiangle_cutoff] = 0.
-            array = xp.where(alpha > self.semiangle_cutoff - self.rolloff, array, xp.ones_like(alpha, dtype=xp.float32))
+            array = xp.where(alpha > self.semiangle_cutoff - rolloff, array, xp.ones_like(alpha, dtype=xp.float32))
         else:
             array = xp.array(alpha < self.semiangle_cutoff).astype(xp.float32)
         return array

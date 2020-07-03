@@ -79,6 +79,7 @@ def multislice(waves: Union[Waves, SMatrix], potential: AbstractPotential, pbar:
         Wave functions after multislice propagation through the potential.
 
     """
+
     waves.grid.match(potential)
     waves.accelerator.check_is_defined()
     waves.grid.check_is_defined()
@@ -88,6 +89,7 @@ def multislice(waves: Union[Waves, SMatrix], potential: AbstractPotential, pbar:
     if isinstance(pbar, bool):
         pbar = ProgressBar(total=len(potential), desc='Multislice', disable=not pbar)
 
+    pbar.reset()
     for potential_slice in potential:
         transmit(waves, potential_slice)
         propagator.propagate(waves, potential_slice.thickness)
@@ -340,6 +342,9 @@ class Probe(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
         self.cache = Cache(1)
 
         self._ctf.changed.register(cache_clear_callback(self.cache))
+        self._grid.changed.register(cache_clear_callback(self.cache))
+        self._accelerator.changed.register(cache_clear_callback(self.cache))
+
         self.set_device_definition(device)
 
     @property
@@ -580,33 +585,38 @@ class SMatrix(HasGridMixin, HasAcceleratorMixin):
         complex_exponential = get_device_function(xp, 'complex_exponential')
         window_and_collapse = get_device_function(xp, 'window_and_collapse')
 
-        positions = xp.array(positions, dtype=xp.float32)
+        positions = np.array(positions, dtype=xp.float32)
 
         if positions.shape == (2,):
-            positions = positions[None]
+            positions = positions
         elif (len(positions.shape) != 2) or (positions.shape[-1] != 2):
             raise RuntimeError()
 
+        W = np.floor_divide(self.interpolated_gpts, 2)
+        crop_corners = np.rint(positions / self.sampling - W).astype(np.int)
+        crop_corners = np.asarray(crop_corners, dtype=xp.int)
+        crop_corners = np.remainder(crop_corners, np.asarray(self.gpts))
+        crop_corners = xp.asarray(crop_corners)
+
+        window = xp.zeros((len(positions), self.interpolated_gpts[0], self.interpolated_gpts[1],), dtype=xp.complex64)
+
+        positions = xp.asarray(positions)
+
         translation = (complex_exponential(2. * np.pi * self.kx[None] * positions[:, 0, None]) *
                        complex_exponential(2. * np.pi * self.ky[None] * positions[:, 1, None]))
-        # self.ctf.evaluate(self.alpha, self.phi)[None] *
+
         coefficients = translation
-
-        window = xp.zeros((len(positions),) + tuple(self.interpolated_gpts), dtype=xp.complex64)
-
-        crop_corners = xp.rint(positions / xp.asarray(self.sampling) -
-                               xp.floor_divide(xp.asarray(self.interpolated_gpts), 2)).astype(xp.int)
-
-        crop_corners = xp.remainder(crop_corners, xp.asarray(self.gpts))
-        # print(type(self.array), type(crop_corners), type(coefficients), type(window))
-        # sss
-        # print(self.array.dtype, crop_corners.dtype, coefficients.dtype)
-        # sss
+        #print(coefficients.dtype, window.dtype, self.array.dtype)
+        #sss
         window_and_collapse(window, self.array, crop_corners, coefficients)
-
+        #print(window.shape, self.interpolated_gpts)
+        #window = (self.array[None] * coefficients[:,:,None,None]).sum(1)
+        #print(window.shape)
+        #sss
         return Waves(window, extent=self.extent, energy=self.energy)
 
     def generate_probes(self, scan: AbstractScan, max_batch):
+
         for start, end, positions in scan.generate_positions(max_batch=max_batch):
             yield start, end, self.collapse(positions)
 
@@ -683,18 +693,20 @@ class SMatrixBuilder(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
     def interpolation(self, value: int):
         self._interpolation = value
 
-    def generate_tds(self, potential, pbar: Union[ProgressBar, bool] = True):
+    def generate_tds(self, potential, multislice_pbar: Union[ProgressBar, bool] = True,
+                     potential_bar: Union[ProgressBar, bool] = True):
         self.grid.match(potential)
 
         if not potential.has_tds:
-            potential = potential.calculate()
-            yield self.build().multislice(potential, pbar=pbar)
+            potential1 = potential.calculate(pbar=potential_bar)
+            potential = potential.calculate(pbar=potential_bar)
+
+            yield self.build().multislice(potential, pbar=multislice_pbar)
 
         else:
-            for potential_config in potential.generate_tds_potentials():
-                pbar.reset()
-                yield self.build().multislice(potential_config, pbar=pbar)
-                pbar.refresh()
+            for potential_config in potential.generate_tds_potentials(pbar=potential_bar):
+
+                yield self.build().multislice(potential_config, pbar=multislice_pbar)
 
     def scan(self, scan: AbstractScan, detectors: Sequence[AbstractDetector],
              potential: Union[Atoms, AbstractPotential], max_batch=1, pbar=True):
@@ -711,9 +723,11 @@ class SMatrixBuilder(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
                               disable=(not pbar) or (not potential.has_tds))
         scan_bar = ProgressBar(total=len(scan), desc='Scan', disable=not pbar)
         multislice_pbar = ProgressBar(total=len(potential), desc='Multislice', disable=not pbar)
+        potential_pbar = ProgressBar(total=len(potential), desc='Potential', disable=not pbar)
 
-        for S in self.generate_tds(potential, multislice_pbar):
+        for S in self.generate_tds(potential, multislice_pbar, potential_pbar):
             scan_bar.reset()
+
             for start, end, exit_probes in S.generate_probes(scan, max_batch):
                 for detector, measurement in measurements.items():
                     scan.insert_new_measurement(measurement, start, end, detector.detect(exit_probes))
@@ -731,6 +745,7 @@ class SMatrixBuilder(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
         xp = self.get_array_module()
+
         complex_exponential = get_device_function(xp, 'complex_exponential')
 
         n_max = int(xp.ceil(self.expansion_cutoff / (self.wavelength / self.extent[0] * self.interpolation)))

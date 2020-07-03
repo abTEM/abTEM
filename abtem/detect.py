@@ -9,7 +9,7 @@ from abtem.cpu_kernels import abs2
 from abtem.device import get_array_module, get_device_function
 from abtem.measure import Calibration, calibrations_from_grid, fourier_space_offset, Measurement
 from abtem.plot import show_image
-import h5py
+from abtem.bases import Grid, Accelerator
 
 
 def crop_to_center(array):
@@ -90,16 +90,26 @@ def cosine_window(x, cutoff, rolloff, attenuate='high'):
 
 class AnnularDetector(AbstractDetector):
 
-    def __init__(self, inner, outer, rolloff=0., save_file=None, device=None):
-
+    def __init__(self, inner, outer, save_file=None):
         super().__init__(save_file=save_file)
 
         self._inner = inner
         self._outer = outer
-        self._rolloff = rolloff
-        self.cache = Cache(1)
+        self._integration_region = None
+
+        self._grid = Grid()
+        self._accelerator = Accelerator()
+        self._integration_region = None
+
+        def clear_integration_region(notifier, property_name, change):
+            # print(change)
+            if change:
+                self._integration_region = None
+
         self.changed = Event()
-        self.changed.register(cache_clear_callback(self.cache))
+        self._grid.changed.register(clear_integration_region)
+        self._accelerator.changed.register(clear_integration_region)
+        self.changed.register(clear_integration_region)
 
     @property
     def inner(self) -> float:
@@ -119,42 +129,35 @@ class AnnularDetector(AbstractDetector):
     def outer(self, value: float):
         self._outer = value
 
-    @property
-    def rolloff(self) -> float:
-        return self._rolloff
+    def get_integration_region(self, xp):
+        if (self._integration_region is not None):
+            if xp is get_array_module(self._integration_region):
+                return self._integration_region
 
-    @rolloff.setter
-    @watched_method('changed')
-    def rolloff(self, value: float):
-        self._rolloff = value
+        kx, ky = self._grid.spatial_frequencies()
 
-    @property
-    def calibrations(self):
-        return ()
-
-    @cached_method('cache')
-    def get_integration_region(self, grid, wavelength, xp=np):
-        kx, ky = grid.spatial_frequencies()
-
-        alpha_x = xp.asarray(kx) * wavelength
-        alpha_y = xp.asarray(ky) * wavelength
+        alpha_x = xp.asarray(kx) * self._accelerator.wavelength
+        alpha_y = xp.asarray(ky) * self._accelerator.wavelength
 
         alpha = xp.sqrt(alpha_x.reshape((-1, 1)) ** 2 + alpha_y.reshape((1, -1)) ** 2)
-
-        if self.rolloff > 0.:
-            array = cosine_window(alpha, self.outer, self.rolloff) * cosine_window(alpha, self.inner, self.rolloff)
-        else:
-            array = (alpha >= self._inner) & (alpha <= self._outer)
-        return array
+        alpha = crop_to_center(xp.fft.fftshift(alpha))
+        self._integration_region = (alpha >= self._inner) * (alpha <= self._outer)
+        return self._integration_region
 
     def detect(self, waves, overwrite_x=False):
+        self._grid.match(waves.grid)
+        self._accelerator.match(waves.accelerator)
+
         xp = get_array_module(waves.array)
         fft2 = get_device_function(xp, 'fft2')
         abs2 = get_device_function(xp, 'abs2')
-        # return np.ones(len(waves.array))
-        integration_region = self.get_integration_region(waves.grid, waves.wavelength, xp)
-        intensity = abs2(fft2(waves.array, overwrite_x=overwrite_x))
-        return xp.sum(intensity * integration_region, axis=(1, 2)) / xp.sum(intensity, axis=(1, 2))
+        integration_region = self.get_integration_region(xp)
+        intensity = crop_to_center(xp.fft.fftshift(fft2(waves.array, overwrite_x=False), axes=(-2, -1)))
+        intensity = abs2(intensity)
+        #import matplotlib.pyplot as plt
+
+        result = xp.sum(intensity * integration_region, axis=(1, 2)) / xp.sum(intensity, axis=(1, 2))
+        return result
 
     def allocate_measurement(self, grid, wavelength, scan):
         array = np.zeros(scan.shape)

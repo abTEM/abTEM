@@ -108,6 +108,7 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         if isinstance(pbar, bool):
             pbar = ProgressBar(total=len(self), desc='Potential', disable=not pbar)
 
+        pbar.reset()
         for i in range(start, end):
             potential_slice = self.get_slice(i)
 
@@ -116,7 +117,8 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
             pbar.update(1)
 
         pbar.refresh()
-
+        #pbar.close()
+        #pbar.reset()
         return ArrayPotential(array, slice_thicknesses, self.extent)
 
     def show(self, start=None, end=None, **kwargs):
@@ -432,9 +434,8 @@ class Potential(AbstractPotential):
         for atoms in self._tds.generate_atoms():
             self.displace_atoms(atoms.positions)
             pbar.reset()
-            yield self.calculate(xp=xp, pbar=pbar)
-
-        pbar.refresh()
+            yield self.calculate(xp=xp, pbar=False)
+            pbar.refresh()
 
 
 def disc_meshgrid(r):

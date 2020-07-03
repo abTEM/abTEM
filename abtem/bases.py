@@ -17,12 +17,13 @@ def watched_method(event):
 
         def new_func(*args):
             instance, value = args
-            # old = getattr(instance, property_name)
+            old = getattr(instance, property_name)
             func(*args)
-            # change = old != value
+            change = old != value
             # if isinstance(change, Iterable):
-            #    change = np.any(change)
-            getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': True})
+            change = np.any(change)
+            # print(instance, property_name, change)
+            getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': change})
 
         return new_func
 
@@ -140,8 +141,7 @@ class Grid:
                  endpoint: bool = False,
                  lock_extent=False,
                  lock_gpts=False,
-                 lock_sampling=False,
-                 flexible=False):
+                 lock_sampling=False):
 
         """
         Grid object.
@@ -187,7 +187,6 @@ class Grid:
         self._adjust_sampling(self.extent, self.gpts)
 
         self.cache = Cache(1)
-        self.changed.register(cache_clear_callback(self.cache))
         self.changed.register(cache_clear_callback(self.cache))
 
     def _validate(self, value, dtype):
@@ -267,7 +266,6 @@ class Grid:
             raise RuntimeError('sampling cannot be modified')
 
         sampling = self._validate(sampling, dtype=DTYPE)
-
         if self._lock_gpts:
             self._adjust_extent(self.gpts, sampling)
         elif self.extent is not None:
@@ -315,28 +313,25 @@ class Grid:
                               lock_gpts=self._lock_gpts,
                               lock_sampling=self._lock_sampling)
 
-    def match(self, other):
-        self.check_can_match(other)
+    def match(self, other, check_match=True):
+        if check_match:
+            self.check_match(other)
 
         if (self.extent is None) & (other.extent is None):
             raise RuntimeError('grid extent cannot be inferred')
-
-        elif self.extent is None:
-            self.extent = other.extent
-
         elif other.extent is None:
             other.extent = self.extent
+        elif np.any(self.extent != other.extent):
+            self.extent = other.extent
 
         if (self.gpts is None) & (other.gpts is None):
             raise RuntimeError('grid gpts cannot be inferred')
-
-        elif self.gpts is None:
-            self.gpts = other.gpts
-
         elif other.gpts is None:
             other.gpts = self.gpts
+        elif np.any(self.gpts != other.gpts):
+            self.gpts = other.gpts
 
-    def check_can_match(self, other):
+    def check_match(self, other):
         """ Throw error if the grid of another object is different from this object. """
 
         if (self.extent is not None) & (other.extent is not None) & np.any(self.extent != other.extent):
@@ -367,6 +362,22 @@ class Grid:
                               lock_extent=self._lock_extent,
                               lock_gpts=self._lock_gpts,
                               lock_sampling=self._lock_sampling)
+
+    @property
+    def x_extent(self):
+        return self.extent[0]
+
+    @x_extent.setter
+    def x_extent(self, value):
+        self.extent = (value, self.extent[1])
+
+    @property
+    def y_extent(self):
+        return self.extent[1]
+
+    @y_extent.setter
+    def y_extent(self, value):
+        self.extent = (self.extent[0], value)
 
 
 class HasGridMixin:
@@ -454,21 +465,22 @@ class Accelerator:
         if self.energy is None:
             raise RuntimeError('energy is not defined')
 
-    def check_energies_can_match(self, other: 'Accelerator'):
+    def check_match(self, other: 'Accelerator'):
         if (self.energy is not None) & (other.energy is not None) & (self.energy != other.energy):
             raise RuntimeError('inconsistent energies')
 
-    def match(self, other):
-        self.check_energies_can_match(other)
+    def match(self, other, check_match=True):
+        if check_match:
+            self.check_match(other)
 
         if (self.energy is None) & (other.energy is None):
             raise RuntimeError('energy cannot be inferred')
 
-        elif self.energy is None:
-            self.energy = other.energy
-
-        elif other.energy is None:
+        if other.energy is None:
             other.energy = self.energy
+
+        else:
+            self.energy = other.energy
 
     def copy(self):
         return self.__class__(self.energy)
