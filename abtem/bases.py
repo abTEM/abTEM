@@ -3,7 +3,6 @@ from typing import Optional, Union, Sequence
 
 import numpy as np
 
-from abtem.config import DTYPE
 from abtem.utils import energy2wavelength, energy2sigma
 
 
@@ -174,9 +173,9 @@ class Grid:
         self._lock_gpts = lock_gpts
         self._lock_sampling = lock_sampling
 
-        self._extent = self._validate(extent, dtype=DTYPE)
-        self._gpts = self._validate(gpts, dtype=np.int)
-        self._sampling = self._validate(sampling, dtype=DTYPE)
+        self._extent = self._validate(extent, dtype=float)
+        self._gpts = self._validate(gpts, dtype=int)
+        self._sampling = self._validate(sampling, dtype=float)
 
         if self.extent is None:
             self._adjust_extent(self.gpts, self.sampling)
@@ -186,17 +185,14 @@ class Grid:
 
         self._adjust_sampling(self.extent, self.gpts)
 
-        self.cache = Cache(1)
-        self.changed.register(cache_clear_callback(self.cache))
-
     def _validate(self, value, dtype):
         if isinstance(value, (np.ndarray, list, tuple)):
-            if len(value) != self._dimensions:
+            if len(value) != self.dimensions:
                 raise RuntimeError('grid value length of {} != {}'.format(len(value), self._dimensions))
-            return np.array(value).astype(dtype)
+            return tuple((map(dtype, value)))
 
         if isinstance(value, (int, float, complex)):
-            return np.full(self._dimensions, value, dtype=dtype)
+            return (dtype(value),) * self.dimensions
 
         if value is None:
             return value
@@ -215,7 +211,7 @@ class Grid:
         return self._dimensions
 
     @property
-    def extent(self) -> np.ndarray:
+    def extent(self) -> tuple:
         return self._extent
 
     @extent.setter
@@ -224,7 +220,7 @@ class Grid:
         if self._lock_extent:
             raise RuntimeError('extent cannot be modified')
 
-        extent = self._validate(extent, dtype=DTYPE)
+        extent = self._validate(extent, dtype=float)
 
         if self._lock_sampling or (self.gpts is None):
             self._adjust_gpts(extent, self.sampling)
@@ -235,7 +231,7 @@ class Grid:
         self._extent = extent
 
     @property
-    def gpts(self) -> np.ndarray:
+    def gpts(self) -> tuple:
         return self._gpts
 
     @gpts.setter
@@ -244,7 +240,7 @@ class Grid:
         if self._lock_gpts:
             raise RuntimeError('gpts cannot be modified')
 
-        gpts = self._validate(gpts, dtype=np.int)
+        gpts = self._validate(gpts, dtype=int)
 
         if self._lock_sampling:
             self._adjust_extent(gpts, self.sampling)
@@ -256,7 +252,7 @@ class Grid:
         self._gpts = gpts
 
     @property
-    def sampling(self) -> np.ndarray:
+    def sampling(self) -> tuple:
         return self._sampling
 
     @sampling.setter
@@ -265,7 +261,7 @@ class Grid:
         if self._lock_sampling:
             raise RuntimeError('sampling cannot be modified')
 
-        sampling = self._validate(sampling, dtype=DTYPE)
+        sampling = self._validate(sampling, dtype=float)
         if self._lock_gpts:
             self._adjust_extent(self.gpts, sampling)
         elif self.extent is not None:
@@ -278,23 +274,23 @@ class Grid:
     def _adjust_extent(self, gpts, sampling):
         if (gpts is not None) & (sampling is not None):
             if self._endpoint:
-                self._extent = (gpts - 1) * sampling
+                self._extent = tuple((n - 1) * d for n, d in zip(gpts, sampling))
             else:
-                self._extent = gpts * sampling
+                self._extent = tuple(n * d for n, d in zip(gpts, sampling))
 
     def _adjust_gpts(self, extent, sampling):
         if (extent is not None) & (sampling is not None):
             if self._endpoint:
-                self._gpts = np.ceil(extent / sampling).astype(np.int) + 1
+                self._gpts = tuple(int(np.ceil(l / d)) + 1 for l, d in zip(extent, sampling))
             else:
-                self._gpts = np.ceil(extent / sampling).astype(np.int)
+                self._gpts = tuple(int(np.ceil(l / d)) for l, d in zip(extent, sampling))
 
     def _adjust_sampling(self, extent, gpts):
         if (extent is not None) & (gpts is not None):
             if self._endpoint:
-                self._sampling = extent / (gpts - 1)
+                self._sampling = tuple(l / (n - 1) for l, n in zip(extent, gpts))
             else:
-                self._sampling = extent / gpts
+                self._sampling = tuple(l / n for l, n in zip(extent, gpts))
 
     def check_is_defined(self):
         """ Throw error if the grid is not defined. """
@@ -304,14 +300,13 @@ class Grid:
         elif self.gpts is None:
             raise RuntimeError('grid gpts is not defined')
 
-    def interpolated_grid(self, f):
-        return self.__class__(gpts=self.gpts // f,
-                              sampling=self.sampling,
-                              dimensions=self._dimensions,
-                              endpoint=self.endpoint,
-                              lock_extent=self._lock_extent,
-                              lock_gpts=self._lock_gpts,
-                              lock_sampling=self._lock_sampling)
+    @property
+    def antialiased_gpts(self):
+        return tuple(n // 2 for n in self.gpts)
+
+    @property
+    def antialiased_sampling(self):
+        return tuple(l / n for n, l in zip(self.antialiased_gpts, self.extent))
 
     def match(self, other, check_match=True):
         if check_match:
@@ -341,23 +336,13 @@ class Grid:
             raise RuntimeError('inconsistent grid gpts ({} != {})'.format(self.gpts, other.gpts))
 
     def snap_to_power(self, power: float = 2):
-        self.gpts = [power ** np.ceil(np.log(n) / np.log(power)) for n in self.gpts]
-
-    @cached_method('cache')
-    def coordinates(self):
-        self.check_is_defined()
-        return [np.linspace(0, e, g, endpoint=self.endpoint, dtype=np.float32) for g, e in zip(self.gpts, self.extent)]
-
-    @cached_method('cache')
-    def spatial_frequencies(self):
-        self.check_is_defined()
-        return [np.fft.fftfreq(g, s).astype(np.float32) for g, s in zip(self.gpts, self.sampling)]
+        self.gpts = tuple(power ** np.ceil(np.log(n) / np.log(power)) for n in self.gpts)
 
     def copy(self):
-        return self.__class__(extent=self._extent.copy(),
-                              gpts=self._gpts.copy(),
-                              sampling=self._sampling.copy(),
-                              dimensions=self._dimensions,
+        return self.__class__(extent=self.extent,
+                              gpts=self.gpts,
+                              sampling=self.sampling,
+                              dimensions=self.dimensions,
                               endpoint=self.endpoint,
                               lock_extent=self._lock_extent,
                               lock_gpts=self._lock_gpts,
@@ -387,12 +372,6 @@ class HasGridMixin:
     def grid(self) -> Grid:
         return self._grid
 
-    @grid.setter
-    def grid(self, new: Grid):
-        changed_event = self._grid.changed
-        self._accelerator = new
-        self._accelerator.changed = changed_event
-
     extent = DelegatedAttribute('grid', 'extent')
     gpts = DelegatedAttribute('grid', 'gpts')
     sampling = DelegatedAttribute('grid', 'sampling')
@@ -421,7 +400,7 @@ class Accelerator:
         kwargs :
         """
         if energy is not None:
-            energy = DTYPE(energy)
+            energy = float(energy)
 
         self.changed = Event()
         self._energy = energy
@@ -438,7 +417,7 @@ class Accelerator:
             raise RuntimeError('energy cannot be modified')
 
         if value is not None:
-            value = DTYPE(value)
+            value = float(value)
         self._energy = value
 
     @property
@@ -449,7 +428,7 @@ class Accelerator:
         :rtype: float
         """
         self.check_is_defined()
-        return DTYPE(energy2wavelength(self.energy))
+        return energy2wavelength(self.energy)
 
     @property
     def sigma(self) -> float:
@@ -457,7 +436,7 @@ class Accelerator:
         Interaction parameter from energy.
         """
         self.check_is_defined()
-        return DTYPE(energy2sigma(self.energy))
+        return energy2sigma(self.energy)
 
     def check_is_defined(self):
         """ Throw error if the energy is not defined. """

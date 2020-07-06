@@ -42,11 +42,37 @@ def energy2sigma(energy):
             units._hplanck * units.s * units.J) ** 2)
 
 
+def spatial_frequencies(gpts, sampling):
+    return tuple(np.fft.fftfreq(n, d).astype(np.float32) for n, d in zip(gpts, sampling))
+
+
+def coordinates(gpts, extent, endpoint):
+    return tuple(np.linspace(0, l, n, endpoint=endpoint, dtype=np.float32) for n, l in zip(gpts, extent))
+
+
 def polargrid(x, y):
     xp = get_array_module(x)
     alpha = xp.sqrt(x.reshape((-1, 1)) ** 2 + y.reshape((1, -1)) ** 2)
     phi = xp.arctan2(x.reshape((-1, 1)), y.reshape((1, -1)))
     return alpha, phi
+
+
+def cosine_window(x, cutoff, rolloff, attenuate='high'):
+    xp = get_array_module(x)
+
+    rolloff *= cutoff
+    if attenuate == 'high':
+        array = .5 * (1 + xp.cos(xp.pi * (x - cutoff - rolloff) / rolloff))
+        array[x < cutoff] = 0.
+        array = xp.where(x < cutoff + rolloff, array, xp.ones_like(x, dtype=xp.float32))
+    elif attenuate == 'low':
+        array = .5 * (1 + xp.cos(xp.pi * (x - cutoff + rolloff) / rolloff))
+        array[x > cutoff] = 0.
+        array = xp.where(x > cutoff - rolloff, array, xp.ones_like(x, dtype=xp.float32))
+    else:
+        raise RuntimeError('attenuate must be "high" or "low"')
+
+    return array
 
 
 def split_integer(n, m):
@@ -68,15 +94,16 @@ def split_integer(n, m):
 
 
 def label_to_index_generator(labels, first_label=0):
+    xp = get_array_module(labels)
     labels = labels.flatten()
     labels_order = labels.argsort()
     sorted_labels = labels[labels_order]
-    indices = np.arange(0, len(labels) + 1)[labels_order]
-    index = np.arange(first_label, np.max(labels) + 1)
-    lo = np.searchsorted(sorted_labels, index, side='left')
-    hi = np.searchsorted(sorted_labels, index, side='right')
+    indices = xp.arange(0, len(labels) + 1)[labels_order]
+    index = xp.arange(first_label, xp.max(labels) + 1)
+    lo = xp.searchsorted(sorted_labels, index, side='left')
+    hi = xp.searchsorted(sorted_labels, index, side='right')
     for i, (l, h) in enumerate(zip(lo, hi)):
-        yield np.sort(indices[l:h])
+        yield indices[l:h]
 
 
 class ProgressBar:

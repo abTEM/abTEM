@@ -93,7 +93,7 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
             raise StopIteration
         return self.get_slice(item)
 
-    def calculate(self, start=None, end=None, xp=np, pbar: Union[bool, ProgressBar] = True) -> 'ArrayPotential':
+    def calculate(self, start=None, end=None, xp=np, pbar: Union[bool, ProgressBar] = False) -> 'ArrayPotential':
         self.grid.check_is_defined()
 
         if start is None:
@@ -117,8 +117,6 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
             pbar.update(1)
 
         pbar.refresh()
-        #pbar.close()
-        #pbar.reset()
         return ArrayPotential(array, slice_thicknesses, self.extent)
 
     def show(self, start=None, end=None, **kwargs):
@@ -130,8 +128,8 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         if end is None:
             end = start + 1
 
-        return show_image(self.calculate(start, end).array.sum(0),
-                          calibrations_from_grid(self.grid, names=['x', 'y']), **kwargs)
+        calibrations = calibrations_from_grid(self.grid.gpts, self.grid.sampling, names=['x', 'y'])
+        return show_image(self.calculate(start, end).array.sum(0), calibrations, **kwargs)
 
 
 class PotentialIntegrator:
@@ -202,7 +200,8 @@ class PotentialSlice(HasGridMixin):
         return self._potential.calculate_slice(self.index, xp)
 
     def show(self, **kwargs):
-        return show_image(self.calculate(), calibrations_from_grid(self.grid, names=['x', 'y']), **kwargs)
+        calibrations = calibrations_from_grid(self.grid.gpts, self.grid.sampling, names=['x', 'y'])
+        return show_image(self.calculate(), calibrations, **kwargs)
 
 
 class Potential(AbstractPotential):
@@ -292,7 +291,6 @@ class Potential(AbstractPotential):
 
         self._padded_positions = {}
         self._integrators = {}
-        self._allocated_array = None
 
         def positions_changed_callback(*args, **kwargs):
             self._padded_positions = {}
@@ -302,7 +300,6 @@ class Potential(AbstractPotential):
 
         def grid_changed_callback(*args, **kwargs):
             self._integrators = {}
-            self._allocated_array = None
 
         self.grid.changed.register(grid_changed_callback)
 
@@ -364,6 +361,7 @@ class Potential(AbstractPotential):
                 return result
 
             r = np.geomspace(np.min(self.sampling), cutoff, int(np.ceil(cutoff / np.min(self.sampling) * 10)))
+
             margin = np.int(np.ceil(cutoff / np.min(self.sampling)))
             rows, cols = disc_meshgrid(margin)
             disc_indices = np.hstack((rows[:, None], cols[:, None]))

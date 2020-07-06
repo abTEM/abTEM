@@ -106,7 +106,7 @@ def launch_interpolate_radial_functions(array, disc_indices, positions, v, r, dv
 
 
 @cuda.jit
-def _window_and_collapse(probes, S, corners, coefficients):
+def _scale_reduce(probes, S, coefficients):
     """
     Function for collapsing a Prism scattering matrix into a probe wave function.
 
@@ -121,67 +121,58 @@ def _window_and_collapse(probes, S, corners, coefficients):
     """
     x, y, z = cuda.grid(3)
 
-    #sA = cuda.shared.array(shape=(8, 8, 8), dtype=complex64)
+    # sA = cuda.shared.array(shape=(8, 8, 8), dtype=complex64)
 
     if (x < S.shape[1]) & (y < S.shape[2]) & (z < probes.shape[0]):
-        #for i in range(coefficients.shape[0]):
-        tmp = 0.
+        # for i in range(coefficients.shape[0]):
+        # tmp = 0.
         for k in range(S.shape[0]):
-            tmp += coefficients[z, k] * S[k, x, y]
+            probes[z, x, y] += coefficients[z, k] * S[k, x, y]
 
-        probes[z, x, y] = tmp
+        # probes[z, x, y] = tmp
 
 
-def launch_window_and_collapse(probes, S, corners, coefficients):
+def launch_scale_reduce(probes, S, coefficients):
     threadsperblock = (4, 4, 16)
-    # print(S.shape)
     blockspergrid_x = math.ceil(S.shape[1] / threadsperblock[0])
     blockspergrid_y = math.ceil(S.shape[2] / threadsperblock[1])
     blockspergrid_z = math.ceil(probes.shape[0] / threadsperblock[2])
-
     blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
 
-    _window_and_collapse[blockspergrid, threadsperblock](probes, S, corners, coefficients)
+    _scale_reduce[blockspergrid, threadsperblock](probes, S, coefficients)
 
-# @cuda.jit
-# def _window_and_collapse(probes, S, corners, coefficients):
-#     """
-#     Function for collapsing a Prism scattering matrix into a probe wave function.
-#
-#     Parameters
-#     ----------
-#     probes : 3d numpy.ndarray
-#         The array in which the probe wave functions should be written.
-#     S : 3d numpy.ndarray
-#         Scattering matrix
-#     corners :
-#     coefficients :
-#     """
-#     x, y, z = cuda.grid(3)
-#
-#     tx = cuda.threadIdx.x
-#     ty = cuda.threadIdx.y
-#     tz = cuda.threadIdx.y
-#     bpgx = cuda.gridDim.x
-#     bpgy = cuda.gridDim.y
-#
-#     sA = cuda.shared.array(shape=(8, 8, 8), dtype=complex64)
-#
-#     if (x < S.shape[0]) & (y < S.shape[1]) & (z < S.shape[2]):
-#
-#         for i in range(bpgx):
-#             for j in range(bpgy):
-#                 sA[z, ]
-#
-#         probes[y, z] += coefficients[x] * S[x, y, z]
-#
-#
-# def launch_window_and_collapse(probes, S, corners, coefficients):
-#     threadsperblock = (8, 8, 8)
-#     # print(S.shape)
-#     blockspergrid_x = math.ceil(S.shape[1] / threadsperblock[0])
-#     blockspergrid_y = math.ceil(S.shape[2] / threadsperblock[1])
-#     blockspergrid_z = math.ceil(S.shape[0] / threadsperblock[2])
-#     blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
-#
-#     _window_and_collapse[blockspergrid, threadsperblock](probes, S, corners, coefficients)
+
+@cuda.jit
+def _windowed_scale_reduce(probes, S, corners, coefficients):
+    """
+    Function for collapsing a Prism scattering matrix into a probe wave function.
+
+    Parameters
+    ----------
+    probes : 3d numpy.ndarray
+        The array in which the probe wave functions should be written.
+    S : 3d numpy.ndarray
+        Scattering matrix
+    corners :
+    coefficients :
+    """
+    x, y, z = cuda.grid(3)
+
+    # sA = cuda.shared.array(shape=(8, 8, 8), dtype=complex64)
+
+    if (x < probes.shape[1]) & (y < probes.shape[2]) & (z < probes.shape[0]):
+        xx = (corners[z, 0] + x) % S.shape[1]
+        yy = (corners[z, 1] + y) % S.shape[2]
+
+        for k in range(S.shape[0]):
+            probes[z, x, y] += coefficients[z, k] * S[k, xx, yy]
+
+
+def launch_windowed_scale_reduce(probes, S, corners, coefficients):
+    threadsperblock = (4, 4, 16)
+    blockspergrid_x = math.ceil(S.shape[1] / threadsperblock[0])
+    blockspergrid_y = math.ceil(S.shape[2] / threadsperblock[1])
+    blockspergrid_z = math.ceil(probes.shape[0] / threadsperblock[2])
+    blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
+
+    _windowed_scale_reduce[blockspergrid, threadsperblock](probes, S, corners, coefficients)

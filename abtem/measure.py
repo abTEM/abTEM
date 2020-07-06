@@ -26,20 +26,17 @@ class Calibration:
         return self.__class__(self.offset, self.sampling, self.units, self.name)
 
 
-def fourier_space_offset(sampling, gpts):
-    offset = np.zeros(len(sampling))
-    for i, (d, p) in enumerate(zip(sampling, gpts)):
-        if p % 2 == 0:
-            offset[i] = -1 / (2 * d)
-        else:
-            offset[i] = -1 / (2 * d) + 1 / (2 * d * p)
-    return offset
+def fourier_space_offset(n, d):
+    if n % 2 == 0:
+        return -1 / (2 * d)
+    else:
+        return -1 / (2 * d) + 1 / (2 * d * n)
 
 
-def calibrations_from_grid(grid: Grid, names=None, units=None, fourier_space=False, scale_factor=1):
+def calibrations_from_grid(gpts, sampling, names=None, units=None, fourier_space=False, scale_factor=1):
     if names is None:
-        names = ('',) * len(grid)
-    elif len(names) != len(grid):
+        names = ('',) * len(gpts)
+    elif len(names) != len(gpts):
         raise RuntimeError()
 
     if units is None:
@@ -50,11 +47,13 @@ def calibrations_from_grid(grid: Grid, names=None, units=None, fourier_space=Fal
 
     calibrations = []
     if fourier_space:
-        for name, extent, offset in zip(names, grid.extent, fourier_space_offset(grid.sampling, grid.gpts)):
-            calibrations.append(Calibration(offset * scale_factor, 1 / extent * scale_factor, units, name))
+        for name, n, d in zip(names, gpts, sampling):
+            l = n * d
+            offset = fourier_space_offset(n, d)
+            calibrations.append(Calibration(offset * scale_factor, 1 / l * scale_factor, units, name))
     else:
-        for name, sampling in zip(names, grid.sampling):
-            calibrations.append(Calibration(0., sampling * scale_factor, units, name))
+        for name, d in zip(names, sampling):
+            calibrations.append(Calibration(0., d * scale_factor, units, name))
 
     return calibrations
 
@@ -92,6 +91,13 @@ class Measurement:
                 raise TypeError('indices must be integers or slices, not float')
 
         return self.__class__(new_array, new_calibrations)
+
+    def __len__(self):
+        return self.shape[0]
+
+    @property
+    def shape(self):
+        return self._array.shape
 
     @property
     def units(self):
@@ -139,13 +145,12 @@ class Measurement:
         return self.__class__(gaussian_filter(self.array, amount, **kwargs), calibrations, units=self.units,
                               name=self.name)
 
-    def mean(self, axes):
-        if not isinstance(axes, Iterable):
-            axes = (axes,)
+    def mean(self, axis):
+        if not isinstance(axis, Iterable):
+            axis = (axis,)
 
-        array = self.array.mean(axes)
-        calibrations = [calibration for i, calibration in enumerate(self.calibrations) if i not in axes]
-
+        array = self.array.mean(axis)
+        calibrations = list(set(self.calibrations) - set([self.calibrations[i] for i in axis]))
         return self.__class__(array, calibrations)
 
     def center_of_mass(self):
@@ -166,6 +171,8 @@ class Measurement:
         return self._calibrations
 
     def interpolate(self, new_sampling):
+        import warnings
+        warnings.filterwarnings('ignore', '.*output shape of zoom.*')
 
         scale_factors = [calibration.sampling / new_sampling for calibration in self.calibrations]
         new_array = zoom(self.array, scale_factors, mode='wrap')
@@ -241,6 +248,7 @@ class Measurement:
         if dims == 1:
             return show_line(array, calibrations[0], **kwargs)
         elif dims == 2:
+
             return show_image(array, calibrations, cbar_label=cbar_label, **kwargs)
         else:
             raise RuntimeError('plotting not supported for {}d measurement, use reduction operation first'.format(dims))

@@ -1,15 +1,15 @@
 from abc import ABCMeta, abstractmethod
 
 import cupy as cp
-import mkl_fft
 import numpy as np
 
-from abtem.bases import cached_method, Cache, Event, cache_clear_callback, watched_method
+from abtem.bases import Cache, Event, cache_clear_callback, watched_method, Grid, cached_method
 from abtem.cpu_kernels import abs2
 from abtem.device import get_array_module, get_device_function
 from abtem.measure import Calibration, calibrations_from_grid, fourier_space_offset, Measurement
 from abtem.plot import show_image
-from abtem.bases import Grid, Accelerator
+from abtem.utils import label_to_index_generator, spatial_frequencies
+import h5py
 
 
 def crop_to_center(array):
@@ -23,26 +23,35 @@ def crop_to_center(array):
     return array[..., left:right, top:bottom]
 
 
-def unravel_slice_2d(start, end, shape):
-    slices = []
-    rows = []
-    slices_1d = []
-    n = 0
-    n_accum = 0
-    for index in range(start, end):
-        index_in_row = index % shape[-1]
-        n += 1
-        if index_in_row == shape[-1] - 1:
-            slices_1d.append(slice(n_accum, n_accum + n))
-            slices.append(slice(index_in_row - n + 1, index_in_row + 1))
-            rows.append(index // shape[-1])
-            n_accum += n
-            n = 0
-    if n > 0:
-        slices_1d.append(slice(n_accum, n_accum + n))
-        slices.append(slice(index_in_row - n + 1, index_in_row + 1))
-        rows.append(index // shape[-1])
-    return rows, slices, slices_1d
+def calculate_far_field_intensity(waves, overwrite=False):
+    xp = get_array_module(waves.array)
+    fft2 = get_device_function(xp, 'fft2')
+    abs2 = get_device_function(xp, 'abs2')
+    array = fft2(waves.array, overwrite_x=overwrite)
+    intensity = crop_to_center(xp.fft.fftshift(array, axes=(-2, -1)))
+    return abs2(intensity)
+
+
+def polar_regions(gpts, sampling, wavelength, inner, outer, nbins_radial, nbins_azimuthal):
+    kx, ky = spatial_frequencies(gpts, sampling)
+
+    alpha_x = np.asarray(kx) * wavelength
+    alpha_y = np.asarray(ky) * wavelength
+
+    alpha = np.sqrt(alpha_x.reshape((-1, 1)) ** 2 + alpha_y.reshape((1, -1)) ** 2)
+
+    radial_bins = -np.ones(gpts, dtype=int)
+    valid = (alpha >= inner) & (alpha < outer)
+    radial_bins[valid] = nbins_radial * (alpha[valid] - inner) / (outer - inner)
+
+    angles = np.arctan2(alpha_x[:, None], alpha_y[None]) % (2 * np.pi)
+
+    angular_bins = np.floor(nbins_azimuthal * (angles / (2 * np.pi)))
+    angular_bins = np.clip(angular_bins, 0, nbins_azimuthal - 1).astype(np.int)
+
+    bins = -np.ones(gpts, dtype=int)
+    bins[valid] = angular_bins[valid] + radial_bins[valid] * nbins_azimuthal
+    return np.fft.fftshift(bins)
 
 
 class AbstractDetector(metaclass=ABCMeta):
@@ -70,46 +79,82 @@ class AbstractDetector(metaclass=ABCMeta):
         pass
 
 
-def cosine_window(x, cutoff, rolloff, attenuate='high'):
-    xp = get_array_module(x)
+class _PolarDetector(AbstractDetector):
 
-    rolloff *= cutoff
-    if attenuate == 'high':
-        array = .5 * (1 + xp.cos(xp.pi * (x - cutoff - rolloff) / rolloff))
-        array[x < cutoff] = 0.
-        array = xp.where(x < cutoff + rolloff, array, xp.ones_like(x, dtype=xp.float32))
-    elif attenuate == 'low':
-        array = .5 * (1 + xp.cos(xp.pi * (x - cutoff + rolloff) / rolloff))
-        array[x > cutoff] = 0.
-        array = xp.where(x > cutoff - rolloff, array, xp.ones_like(x, dtype=xp.float32))
-    else:
-        raise RuntimeError('attenuate must be "high" or "low"')
-
-    return array
-
-
-class AnnularDetector(AbstractDetector):
-
-    def __init__(self, inner, outer, save_file=None):
-        super().__init__(save_file=save_file)
-
+    def __init__(self, inner=None, outer=None, radial_steps=1, azimuthal_steps=None, save_file=None):
         self._inner = inner
         self._outer = outer
-        self._integration_region = None
 
-        self._grid = Grid()
-        self._accelerator = Accelerator()
-        self._integration_region = None
+        self._radial_steps = radial_steps
 
-        def clear_integration_region(notifier, property_name, change):
-            # print(change)
-            if change:
-                self._integration_region = None
+        if azimuthal_steps is None:
+            azimuthal_steps = 2 * np.pi
 
+        self._azimuthal_steps = azimuthal_steps
+
+        self.cache = Cache(1)
         self.changed = Event()
-        self._grid.changed.register(clear_integration_region)
-        self._accelerator.changed.register(clear_integration_region)
-        self.changed.register(clear_integration_region)
+        super().__init__(save_file=save_file)
+
+    def _get_bins(self, sampling, wavelength):
+        if self._inner is None:
+            inner = 0
+        else:
+            inner = self._inner
+
+        max_angle = 1 / np.max(sampling) * wavelength / 2
+        if self._outer is None:
+            outer = max_angle
+        elif self._outer < max_angle:
+            outer = self._outer
+        else:
+            raise RuntimeError()
+
+        nbins_radial = int(np.ceil((outer - inner) / self._radial_steps))
+        nbins_azimuthal = int(np.ceil(2 * np.pi / self._azimuthal_steps))
+        return inner, outer, nbins_radial, nbins_azimuthal
+
+    @cached_method('cache')
+    def _get_regions(self, gpts, sampling, wavelength):
+        inner, outer, nbins_radial, nbins_azimuthal = self._get_bins(sampling, wavelength)
+
+        region_labels = polar_regions(gpts, sampling, wavelength, inner, outer, nbins_radial, nbins_azimuthal)
+        region_indices = []
+        for indices in label_to_index_generator(region_labels):
+            region_indices.append(indices)
+
+        return region_indices
+
+    # def detect(self, waves):
+    #     regions = self._get_regions(waves.grid.antialiased_gpts, waves.grid.antialiased_sampling, waves.wavelength)
+    #     for i in label_to_index_generator(regions):
+    #         pass
+
+    def allocate_measurement(self, grid, wavelength, scan):
+        _, _, nbins_radial, nbins_azimuthal = self._get_bins(grid.antialiased_sampling, wavelength)
+
+        array = np.zeros(scan.shape + (nbins_radial, nbins_azimuthal), dtype=np.float32)
+        array = np.squeeze(array)
+        measurement = Measurement(array, calibrations=scan.calibrations)
+        if isinstance(self.save_file, str):
+            measurement = measurement.write(self.save_file)
+        return measurement
+
+    def show(self, grid, wavelength, **kwargs):
+        array = np.full(grid.antialiased_gpts, -1, dtype=np.int)
+        for i, indices in enumerate(self._get_regions(grid.antialiased_gpts, grid.antialiased_sampling, wavelength)):
+            array.ravel()[indices] = i
+
+        calibrations = calibrations_from_grid(grid.antialiased_gpts, grid.antialiased_sampling,
+                                              names=['alpha_x', 'alpha_y'], units='mrad.',
+                                              scale_factor=wavelength, fourier_space=True)
+        return show_image(array, calibrations, **kwargs)
+
+
+class AnnularDetector(_PolarDetector):
+
+    def __init__(self, inner, outer, save_file=None):
+        super().__init__(inner=inner, outer=outer, save_file=save_file)
 
     @property
     def inner(self) -> float:
@@ -129,80 +174,68 @@ class AnnularDetector(AbstractDetector):
     def outer(self, value: float):
         self._outer = value
 
-    def get_integration_region(self, xp):
-        if (self._integration_region is not None):
-            if xp is get_array_module(self._integration_region):
-                return self._integration_region
-
-        kx, ky = self._grid.spatial_frequencies()
-
-        alpha_x = xp.asarray(kx) * self._accelerator.wavelength
-        alpha_y = xp.asarray(ky) * self._accelerator.wavelength
-
-        alpha = xp.sqrt(alpha_x.reshape((-1, 1)) ** 2 + alpha_y.reshape((1, -1)) ** 2)
-        alpha = crop_to_center(xp.fft.fftshift(alpha))
-        self._integration_region = (alpha >= self._inner) * (alpha <= self._outer)
-        return self._integration_region
-
-    def detect(self, waves, overwrite_x=False):
-        self._grid.match(waves.grid)
-        self._accelerator.match(waves.accelerator)
-
+    def detect(self, waves):
         xp = get_array_module(waves.array)
-        fft2 = get_device_function(xp, 'fft2')
-        abs2 = get_device_function(xp, 'abs2')
-        integration_region = self.get_integration_region(xp)
-        intensity = crop_to_center(xp.fft.fftshift(fft2(waves.array, overwrite_x=False), axes=(-2, -1)))
-        intensity = abs2(intensity)
-        #import matplotlib.pyplot as plt
+        #intensity = calculate_far_field_intensity(waves, overwrite=False)
+        #indices = self._get_regions(waves.grid.antialiased_gpts, waves.grid.antialiased_sampling, waves.wavelength)[0]
+        #total = xp.sum(intensity, axis=(-2, -1))
+        total = xp.ones(len(waves.array))
+        return total #xp.sum(intensity.reshape((intensity.shape[0], -1))[:, indices], axis=-1) / total
 
-        result = xp.sum(intensity * integration_region, axis=(1, 2)) / xp.sum(intensity, axis=(1, 2))
-        return result
+    def copy(self) -> 'AnnularDetector':
+        return self.__class__(self.inner, self.outer, save_file=self.save_file)
+
+
+class AdjustableAnnularDetector(AbstractDetector):
+
+    def __init__(self, angular_step=.001, save_file=None):
+        self._angular_step = angular_step
+        self.cache = Cache(1)
+        super().__init__(save_file=save_file)
+
+    @cached_method('cache')
+    def _get_region_indices(self, gpts, sampling, wavelength):
+        outer = 1 / np.max(sampling) * wavelength / 2
+        steps = int(np.ceil(outer / self._angular_step))
+        indices = {}
+        # for i, indices in label_to_index_generator(polar_regions(gpts, sampling, wavelength, 0, outer, steps, 1)):
+        #    indices[i] =
 
     def allocate_measurement(self, grid, wavelength, scan):
-        array = np.zeros(scan.shape)
-        measurement = Measurement(array, calibrations=scan.calibrations)
+        calibration = Calibration(offset=0, sampling=self._angular_step * 1000, units='mrad.', name='Detector angle')
+
+        outer = 1 / np.max(grid.antialiased_sampling) * wavelength / 2
+        steps = int(np.ceil(outer / self._angular_step))
+
+        array = np.zeros(scan.shape + (steps,), dtype=np.float32)
+        measurement = Measurement(array, calibrations=scan.calibrations + (calibration,))
         if isinstance(self.save_file, str):
             measurement = measurement.write(self.save_file)
         return measurement
 
-    def copy(self) -> 'AnnularDetector':
-        return self.__class__(self.inner, self.outer, rolloff=self.rolloff, save_file=self.save_file)
+    def detect(self, waves):
+        xp = get_array_module(waves.array)
+        intensity = calculate_far_field_intensity(waves, overwrite=False)
+        indices = self._get_region_indices(waves.gpts, waves.sampling, waves.wavelength)
+
+        intensity = intensity.reshape((-1, intensity.shape[-2] * intensity.shape[-1]))
+        total = xp.sum(intensity, axis=-1)
+        result = np.zeros((len(intensity), len(indices)), dtype=np.float32)
+        for i, indices in indices.items():
+            result[:, i] = xp.sum(intensity[:, indices], axis=-1) / total
+        return result
 
     def show(self, grid, wavelength, **kwargs):
-        array = np.fft.fftshift(self.get_integration_region(grid, wavelength))
+        array = self._calculate_regions(grid, wavelength)
         calibrations = calibrations_from_grid(grid, names=['alpha_x', 'alpha_y'], units='mrad.',
                                               scale_factor=wavelength, fourier_space=True)
         return show_image(array, calibrations, **kwargs)
 
 
-def polar_labels(shape, inner=1, outer=None, nbins_angular=1, nbins_radial=None):
-    if outer is None:
-        outer = min(shape) // 2
-    if nbins_radial is None:
-        nbins_radial = outer - inner
-    sx, sy = shape
-    X, Y = np.ogrid[0:sx, 0:sy]
-
-    r = np.hypot(X - sx / 2, Y - sy / 2)
-    radial_bins = -np.ones(shape, dtype=int)
-    valid = (r > inner) & (r < outer)
-    radial_bins[valid] = nbins_radial * (r[valid] - inner) / (outer - inner)
-
-    angles = np.arctan2(X - sx // 2, Y - sy // 2) % (2 * np.pi)
-
-    angular_bins = np.floor(nbins_angular * (angles / (2 * np.pi)))
-    angular_bins = np.clip(angular_bins, 0, nbins_angular - 1).astype(np.int)
-
-    bins = np.zeros(shape, dtype=int)
-    bins[valid] = radial_bins[valid] * nbins_angular + angular_bins[valid]
-    return bins
-
-
 class SegmentedDetector(AbstractDetector):
 
-    def __init__(self, inner, outer, nbins_radial, nbins_angular=1, save_file=None, device=None):
-        super().__init__(save_file=save_file, device=device)
+    def __init__(self, inner, outer, nbins_radial, nbins_angular=1, save_file=None):
+        super().__init__(save_file=save_file)
         self._inner = inner
         self._outer = outer
         self._nbins_radial = nbins_radial
@@ -257,30 +290,6 @@ class SegmentedDetector(AbstractDetector):
         angular_sampling = 2 * np.pi / self.nbins_angular
         return (Calibration(offset=self.inner * 1000, sampling=radial_sampling, units='mrad'),
                 Calibration(offset=0, sampling=angular_sampling, units='rad'))
-
-    @cached_method('cache')
-    def get_integration_region(self, grid, wavelength):
-        xp = self.device_manager.get_array_library()
-        kx, ky = grid.spatial_frequencies()
-
-        alpha_x = xp.asarray(kx) * wavelength
-        alpha_y = xp.asarray(ky) * wavelength
-
-        alpha = xp.sqrt(alpha_x.reshape((-1, 1)) ** 2 + alpha_y.reshape((1, -1)) ** 2)
-
-        radial_bins = -xp.ones(grid.gpts, dtype=int)
-        valid = (alpha > self.inner) & (alpha < self.outer)
-        radial_bins[valid] = self.nbins_radial * (alpha[valid] - self.inner) / (self.outer - self.inner)
-
-        angles = xp.arctan2(alpha_x[:, None], alpha_y[None]) % (2 * np.pi)
-
-        angular_bins = xp.floor(self.nbins_angular * (angles / (2 * np.pi)))
-        angular_bins = xp.clip(angular_bins, 0, self.nbins_angular - 1).astype(np.int)
-
-        bins = -xp.ones(grid.gpts, dtype=int)
-        bins[valid] = angular_bins[valid] + radial_bins[valid] * self.nbins_angular
-
-        return bins
 
     def detect(self, waves):
         labels = self.get_integration_region(waves.grid, waves.wavelength)
@@ -343,32 +352,25 @@ class PixelatedDetector(AbstractDetector):
         return intensity
 
 
-class WavefunctionDetector:
+class WavefunctionDetector(AbstractDetector):
 
-    def __init__(self, save_file=None, device=None):
-        super().__init__(save_file=save_file, device=device)
-        self._shape = None
-        self._calibrations = None
-        self.device_manager = DeviceManager(device)
+    def __init__(self, save_file=None):
+        super().__init__(save_file=save_file)
 
-    def adapt_to_waves(self, waves):
-        waves.grid.check_is_defined()
+    def allocate_measurement(self, grid, wavelength, scan):
+        grid.check_is_defined()
+        shape = (grid.gpts[0] // 2, grid.gpts[1] // 2)
 
-        self._shape = waves.gpts
+        samplings = 1 / grid.extent * wavelength * 1000
+        offsets = fourier_space_offset(grid.extent / np.array(shape), shape) * wavelength * 1000
+        calibrations = (Calibration(offset=offsets[0], sampling=samplings[0], units='mrad.', name='alpha_x'),
+                        Calibration(offset=offsets[1], sampling=samplings[1], units='mrad.', name='alpha_y'))
 
-        samplings = 1 / waves.grid.extent * waves.accelerator.wavelength * 1000
-        offsets = fourier_space_offset(waves.grid.extent / np.array(self.shape),
-                                       self.shape) * waves.accelerator.wavelength * 1000
-        self._calibrations = (Calibration(offset=offsets[0], sampling=samplings[0], units='mrad.', name='alpha_x'),
-                              Calibration(offset=offsets[1], sampling=samplings[1], units='mrad.', name='alpha_y'))
-
-    @property
-    def calibrations(self) -> tuple:
-        return self._calibrations
-
-    @property
-    def shape(self):
-        return self._shape
+        array = np.zeros(scan.shape + shape, dtype=np.complex64)
+        measurement = Measurement(array, calibrations=scan.calibrations + calibrations)
+        if isinstance(self.save_file, str):
+            measurement = measurement.write(self.save_file)
+        return measurement
 
     def detect(self, waves):
         return waves.array

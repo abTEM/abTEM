@@ -116,7 +116,7 @@ class LineScan(AbstractScan, HasGridMixin):
 
     @property
     def shape(self):
-        return (self.gpts[0].item(),)
+        return (self.gpts[0],)
 
     @property
     def calibrations(self) -> tuple:
@@ -152,9 +152,9 @@ class LineScan(AbstractScan, HasGridMixin):
             measurement.array[start:end] = cp.asnumpy(new_measurement)
 
     def get_positions(self) -> np.ndarray:
-        x = np.linspace(self.start[0], self.start[0] + self.extent * self.direction[0], self.gpts[0],
+        x = np.linspace(self.start[0], self.start[0] + np.array(self.extent) * self.direction[0], self.gpts[0],
                         endpoint=self.grid.endpoint)
-        y = np.linspace(self.start[1], self.start[1] + self.extent * self.direction[1], self.gpts[0],
+        y = np.linspace(self.start[1], self.start[1] + np.array(self.extent) * self.direction[1], self.gpts[0],
                         endpoint=self.grid.endpoint)
         return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 

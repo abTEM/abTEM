@@ -140,7 +140,7 @@ def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='g
 
 
 def show_line(array, calibration, ax=None, title=None, **kwargs):
-    x = np.linspace(calibration.offset, calibration.offset + len(array) * calibration.sampling, len(array))
+    x = np.linspace(calibration.offset, calibration.offset + len(array) * calibration.sampling[0], len(array))
 
     if ax is None:
         ax = plt.subplot()

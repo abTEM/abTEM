@@ -76,7 +76,7 @@ def interpolate_radial_functions(array, disc_indices, positions, v, r, dvdr, sam
 
 
 @jit(nopython=True, nogil=True, parallel=True, fastmath=True)
-def window_and_collapse(probes: np.ndarray, S: np.ndarray, corners, coefficients):
+def windowed_scale_reduce(probes: np.ndarray, S: np.ndarray, corners, coefficients):
     """
     Function for collapsing a Prism scattering matrix into a probe wave function.
 
@@ -89,12 +89,34 @@ def window_and_collapse(probes: np.ndarray, S: np.ndarray, corners, coefficients
     corners :
     coefficients :
     """
-    N, M = S.shape[1:]
+
     for k in prange(probes.shape[0]):
-        cx, cy = corners[k]
         for i in prange(probes.shape[1]):
-            ii = (cx + i) % N
+            ii = (corners[k, 0] + i) % S.shape[1]
             for j in prange(probes.shape[2]):
-                jj = (cy + j) % M
-                #for l in range(coefficients.shape[1]):
-                probes[k, i, j] = (S[:, ii, jj] * coefficients[k][:]).sum()
+                jj = (corners[k, 1] + j) % S.shape[2]
+                # for l in prange(coefficients.shape[1]):
+                #    probes[k, i, j] += (coefficients[k][l] * S[l, ii, jj])
+                probes[k, i, j] = (coefficients[k] * S[:, ii, jj]).sum()
+
+
+@jit(nopython=True, nogil=True, parallel=True, fastmath=True)
+def scale_reduce(probes: np.ndarray, S: np.ndarray, coefficients):
+    """
+    Function for collapsing a Prism scattering matrix into a probe wave function.
+
+    Parameters
+    ----------
+    probes : 3d numpy.ndarray
+        The array in which the probe wave functions should be written.
+    S : 3d numpy.ndarray
+        Scattering matrix
+    corners :
+    coefficients :
+    """
+    for i in prange(S.shape[1]):
+        for j in prange(S.shape[2]):
+            for l in range(S.shape[0]):
+                #s = S[l, i, j]
+                for k in prange(probes.shape[0]):
+                    probes[k, i, j] += (coefficients[k, l] * S[l, i, j])#.sum()

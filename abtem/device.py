@@ -3,14 +3,16 @@ from typing import Any
 import mkl_fft
 import numpy as np
 
-from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions, window_and_collapse
+from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions, scale_reduce, \
+    windowed_scale_reduce
 
 # TODO : This is a little ugly, change after mkl_fft is updated
 
 try:  # This should be the only place to get cupy, to make it a non-essential dependency
     import cupy as cp
     import cupyx.scipy.fft
-    from abtem.cuda_kernels import launch_interpolate_radial_functions, launch_window_and_collapse
+    from abtem.cuda_kernels import launch_interpolate_radial_functions, launch_scale_reduce, \
+        launch_windowed_scale_reduce
 
     get_array_module = cp.get_array_module
 
@@ -22,14 +24,14 @@ try:  # This should be the only place to get cupy, to make it a non-essential de
         return array
 
 
-
     gpu_functions = {'fft2': cupyx.scipy.fft.fft2,
                      'ifft2': cupyx.scipy.fft.ifft2,
                      'fft2_convolve': fft2_convolve,
                      'complex_exponential': lambda x: cp.exp(1.j * x),
                      'abs2': lambda x: cp.abs(x) ** 2,
                      'interpolate_radial_functions': launch_interpolate_radial_functions,
-                     'window_and_collapse': launch_window_and_collapse}
+                     'scale_reduce': launch_scale_reduce,
+                     'windowed_scale_reduce': launch_windowed_scale_reduce}
 
     asnumpy = cp.asnumpy
 
@@ -50,28 +52,52 @@ def fft2_convolve(array, kernel, overwrite_x=True):
         mkl_fft.ifft2(array, overwrite_x=overwrite_x)
         return array
 
+    if not overwrite_x:
+        array = array.copy()
+
     if len(array.shape) == 2:
-        return _fft_convolve(array, kernel, overwrite_x)
+        return _fft_convolve(array, kernel, overwrite_x=True)
     elif (len(array.shape) == 3) & overwrite_x:
         for i in range(len(array)):
             _fft_convolve(array[i], kernel, overwrite_x=True)
         return array
-    elif (len(array.shape) == 3) & (not overwrite_x):
-        new_array = np.zeros_like(array)
-        for i in range(len(array)):
-            new_array[i] = _fft_convolve(array[i], kernel, overwrite_x=False)
-        return new_array
     else:
         raise ValueError()
 
 
-cpu_functions = {'fft2': mkl_fft.fft2,
-                 'ifft2': mkl_fft.ifft2,
+def fft2(array, overwrite_x):
+    if not overwrite_x:
+        array = array.copy()
+
+    if len(array.shape) == 2:
+        return mkl_fft.fft2(array, overwrite_x=True)
+    elif (len(array.shape) == 3):
+        for i in range(array.shape[0]):
+            mkl_fft.fft2(array[i], overwrite_x=True)
+        return array
+    else:
+        raise NotImplementedError()
+
+
+def ifft2(array, overwrite_x):
+    if len(array.shape) == 2:
+        return mkl_fft.ifft2(array, overwrite_x=overwrite_x)
+    elif len(array.shape) == 3:
+        for i in range(array.shape[0]):
+            array = mkl_fft.ifft2(array, overwrite_x=overwrite_x)
+        return array
+    else:
+        raise NotImplementedError()
+
+
+cpu_functions = {'fft2': fft2,
+                 'ifft2': ifft2,
                  'fft2_convolve': fft2_convolve,
                  'abs2': abs2,
                  'complex_exponential': complex_exponential,
                  'interpolate_radial_functions': interpolate_radial_functions,
-                 'window_and_collapse': window_and_collapse}
+                 'scale_reduce': scale_reduce,
+                 'windowed_scale_reduce': windowed_scale_reduce}
 
 
 def get_device_function(xp, name):
@@ -103,32 +129,3 @@ class HasDeviceMixin:
             return cp
 
         return get_array_module(self.device_definition)
-
-# class Device:
-#
-#     def __init__(self, device_definition):
-#         self._device_definition = device_definition
-#
-#         if (device_definition == 'cpu') or isinstance(device_definition, np.ndarray):
-#             self._device_type = 'cpu'
-#             self._array_module = np
-#             self._cupy_device = None
-#         elif cp is None:
-#             raise RuntimeError('cupy is not installed, only cpu calculations available')
-#
-#         if (device_definition == 'gpu') or isinstance(device_definition, cp.ndarray):
-#             self._device_type = 'gpu'
-#             self._array_module = np
-#             self._cupy_device = None
-#
-#     @property
-#     def device_type(self):
-#         return self._device_type
-#
-#     @property
-#     def array_module(self):
-#         return self._array_module
-#
-#     @property
-#     def xp(self):
-#         return self.array_module
