@@ -12,11 +12,11 @@ from abtem.bases import Grid, Accelerator, HasGridMixin, HasAcceleratorMixin, ca
 from abtem.detect import AbstractDetector, crop_to_center
 from abtem.device import get_array_module, get_device_function, asnumpy, HasDeviceMixin
 from abtem.measure import calibrations_from_grid, Measurement
-from abtem.plot import show_image
+from abtem.plot import show_image, show_line
 from abtem.potentials import Potential, AbstractPotential
 from abtem.scan import AbstractScan
 from abtem.transfer import CTF
-from abtem.utils import polargrid, ProgressBar, cosine_window, spatial_frequencies
+from abtem.utils import polargrid, ProgressBar, cosine_window, spatial_frequencies, coordinates
 
 
 class FresnelPropagator:
@@ -184,7 +184,7 @@ class Waves(HasGridMixin, HasAcceleratorMixin):
         alpha, phi = polargrid(xp.asarray(kx * self.wavelength), xp.asarray(ky * self.wavelength))
         kernel = ctf.evaluate(alpha, phi)
         return self.__class__(fft2_convolve(self.array, kernel, overwrite_x=False),
-                              extent=self.extent.copy(),
+                              extent=self.extent,
                               energy=self.energy)
 
     def multislice(self, potential: AbstractPotential, pbar: Union[ProgressBar, bool] = True):
@@ -440,6 +440,8 @@ class Probe(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
         self.grid.match(potential.grid)
         self.grid.check_is_defined()
 
+        scan.set_positions()
+
         measurements = {}
         for detector in detectors:
             measurements[detector] = detector.allocate_measurement(self.grid, self.wavelength, scan)
@@ -464,11 +466,19 @@ class Probe(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
 
         return measurements
 
-    def show(self, **kwargs):
-        array = self.build(self.extent / 2).array[0]
+    def show(self, profile=False, **kwargs):
+        array = self.build((self.extent[0] / 2, self.extent[1] / 2)).array[0]
         abs2 = get_device_function(get_array_module(array), 'abs2')
         array = asnumpy(abs2(array))
-        return show_image(array, calibrations_from_grid(self.grid, names=['x', 'y']), **kwargs)
+        if profile:
+            array = array[array.shape[0] // 2, :]
+            calibration = calibrations_from_grid(gpts=(self.grid.gpts[1],),
+                                                 sampling=(self.grid.sampling[1],),
+                                                 names=['x'])[0]
+            show_line(array, calibration, **kwargs)
+        else:
+            calibrations = calibrations_from_grid(gpts=self.grid.gpts, sampling=self.grid.sampling, names=['x', 'y'])
+            return show_image(array, calibrations, **kwargs)
 
     def copy(self):
         new_copy = self.__class__(normalize=self._normalize)
@@ -560,16 +570,12 @@ class SMatrix(HasGridMixin, HasAcceleratorMixin):
         return self._interpolation
 
     @property
-    def interpolated_gpts(self):
-        return self.gpts // self.interpolation
-
-    @property
-    def interpolated_extent(self):
-        return self.interpolated_gpts * self.sampling
+    def interpolated_grid(self):
+        return Grid(gpts=self.gpts // self.interpolation, sampling=self.sampling, lock_gpts=True)
 
     def _evaluate_ctf(self, xp):
-        alpha = np.sqrt(self._kx ** 2 + self._ky ** 2) * self.wavelength
-        phi = np.arctan2(self._kx, self._ky)
+        alpha = xp.sqrt(self._kx ** 2 + self._ky ** 2) * self.wavelength
+        phi = xp.arctan2(self._kx, self._ky)
         return self._ctf.evaluate(alpha, phi)
 
     def multislice(self, potential: AbstractPotential, pbar: bool = True):
@@ -588,13 +594,14 @@ class SMatrix(HasGridMixin, HasAcceleratorMixin):
         elif (len(positions.shape) != 2) or (positions.shape[-1] != 2):
             raise RuntimeError()
 
-        W = np.floor_divide(self.interpolated_gpts, 2)
+        interpolated_gpts = np.array(self.gpts) // self.interpolation
+        W = np.floor_divide(interpolated_gpts, 2)
         corners = np.rint(positions / self.sampling - W).astype(np.int)
         corners = np.asarray(corners, dtype=xp.int)
         corners = np.remainder(corners, np.asarray(self.gpts))
         corners = xp.asarray(corners)
 
-        window = xp.zeros((len(positions), self.interpolated_gpts[0], self.interpolated_gpts[1],), dtype=xp.complex64)
+        window = xp.zeros((len(positions), interpolated_gpts[0], interpolated_gpts[1],), dtype=xp.complex64)
 
         positions = xp.asarray(positions)
 
@@ -606,6 +613,10 @@ class SMatrix(HasGridMixin, HasAcceleratorMixin):
         if self.interpolation > 1:
             windowed_scale_reduce(window, self.array, corners, coefficients)
         else:
+            # print(self.array.shape, coefficients.shape)
+            # sss
+            # window = (self.array[None] * coefficients[:, :, None, None]).sum(0)
+
             scale_reduce(window, self.array, coefficients)
 
         # windowed_scale_reduce(window, self.array, crop_corners, coefficients)
@@ -621,8 +632,7 @@ class SMatrix(HasGridMixin, HasAcceleratorMixin):
 
         measurements = {}
         for detector in detectors:
-            interpolated_grid = self.grid.interpolated_grid(self.interpolation)
-            measurements[detector] = detector.allocate_measurement(interpolated_grid, self.wavelength, scan)
+            measurements[detector] = detector.allocate_measurement(self.interpolated_grid, self.wavelength, scan)
 
         if isinstance(pbar, bool):
             pbar = ProgressBar(total=len(scan), desc='Scan', disable=not pbar)
@@ -689,6 +699,11 @@ class SMatrixBuilder(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
     def interpolation(self, value: int):
         self._interpolation = value
 
+    @property
+    def interpolated_grid(self):
+        interpolated_gpts = tuple(n // self.interpolation for n in self.gpts)
+        return Grid(gpts=interpolated_gpts, sampling=self.sampling, lock_gpts=True)
+
     def generate_tds(self, potential, multislice_pbar: Union[ProgressBar, bool] = True,
                      potential_bar: Union[ProgressBar, bool] = True):
         self.grid.match(potential)
@@ -709,8 +724,7 @@ class SMatrixBuilder(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
 
         measurements = {}
         for detector in detectors:
-            interpolated_grid = self.grid.interpolated_grid(self.interpolation)
-            measurements[detector] = detector.allocate_measurement(interpolated_grid, self.wavelength, scan)
+            measurements[detector] = detector.allocate_measurement(self.interpolated_grid, self.wavelength, scan)
 
         tds_bar = ProgressBar(total=potential.num_tds_configs, desc='TDS',
                               disable=(not pbar) or (not potential.has_tds))
@@ -757,7 +771,7 @@ class SMatrixBuilder(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
         kx = kx[mask]
         ky = ky[mask]
 
-        x, y = self.grid.coordinates()
+        x, y = coordinates(extent=self.extent, gpts=self.gpts, endpoint=self.grid.endpoint)
         x = xp.asarray(x)
         y = xp.asarray(y)
 

@@ -120,9 +120,6 @@ def _scale_reduce(probes, S, coefficients):
     coefficients :
     """
     x, y, z = cuda.grid(3)
-
-    # sA = cuda.shared.array(shape=(8, 8, 8), dtype=complex64)
-
     if (x < S.shape[1]) & (y < S.shape[2]) & (z < probes.shape[0]):
         # for i in range(coefficients.shape[0]):
         # tmp = 0.

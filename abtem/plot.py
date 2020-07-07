@@ -71,8 +71,8 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
         ax.add_collection(coll)
 
         ax.axis('equal')
-        ax.set_xlabel(plane[0])
-        ax.set_ylabel(plane[1])
+        ax.set_xlabel(plane[0] + ' [Å]')
+        ax.set_ylabel(plane[1] + ' [Å]')
 
         if numbering:
             for i, (position, size) in enumerate(zip(positions, sizes)):
@@ -140,7 +140,7 @@ def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='g
 
 
 def show_line(array, calibration, ax=None, title=None, **kwargs):
-    x = np.linspace(calibration.offset, calibration.offset + len(array) * calibration.sampling[0], len(array))
+    x = np.linspace(calibration.offset, calibration.offset + len(array) * calibration.sampling, len(array))
 
     if ax is None:
         ax = plt.subplot()

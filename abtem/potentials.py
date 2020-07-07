@@ -18,7 +18,7 @@ from abtem.parametrizations import kirkland, dvdr_kirkland, load_kirkland_parame
 from abtem.parametrizations import lobato, dvdr_lobato, load_lobato_parameters
 from abtem.plot import show_image
 from abtem.tanh_sinh import integrate, tanh_sinh_nodes_and_weights
-from abtem.temperature import AbstractTDS
+from abtem.temperature import AbstractFrozenPhonons, FrozenPhonons
 from abtem.utils import energy2sigma, ProgressBar
 from abtem.device import get_device_function, get_array_module
 
@@ -42,6 +42,11 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 
     @property
     @abstractmethod
+    def thickness(self):
+        pass
+
+    @property
+    @abstractmethod
     def num_slices(self):
         pass
 
@@ -51,11 +56,6 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 
     @abstractmethod
     def get_slice_thickness(self, i):
-        pass
-
-    @property
-    @abstractmethod
-    def thickness(self):
         pass
 
     @property
@@ -239,7 +239,7 @@ class Potential(AbstractPotential):
     """
 
     def __init__(self,
-                 atoms: Atoms = None,
+                 atoms: Union[Atoms, AbstractFrozenPhonons] = None,
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
                  slice_thickness: float = .5,
@@ -247,7 +247,7 @@ class Potential(AbstractPotential):
                  cutoff_tolerance: float = 1e-3,
                  storage='device'):
 
-        if isinstance(atoms, AbstractTDS):
+        if isinstance(atoms, AbstractFrozenPhonons):
             self._tds = atoms
             self._atoms = next(atoms.generate_atoms())
         elif isinstance(atoms, Atoms):

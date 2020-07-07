@@ -6,7 +6,7 @@ from ase import Atoms
 from ase.data import atomic_numbers
 
 
-class AbstractTDS(metaclass=ABCMeta):
+class AbstractFrozenPhonons(metaclass=ABCMeta):
 
     @abstractmethod
     def __len__(self):
@@ -17,7 +17,7 @@ class AbstractTDS(metaclass=ABCMeta):
         pass
 
 
-class TDS(AbstractTDS):
+class FrozenPhonons(AbstractFrozenPhonons):
 
     def __init__(self, atoms: Atoms, num_configs, sigmas: Mapping[Union[str, int], float], seed=None):
         """
