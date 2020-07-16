@@ -13,25 +13,13 @@ from abtem.utils import split_integer
 
 class AbstractScan(metaclass=ABCMeta):
 
-    def __init__(self, fractional=False):
+    def __init__(self):
+        self._measurements = None
         self._batches = None
-        self._fractional = fractional
-
-    def check_is_fractional(self):
-        raise RuntimeError()
-
-    @abstractmethod
-    def to_absolute(self, grid):
-        pass
 
     @property
-    def __len__(self):
-        return self.num_positions
-
-    @property
-    @abstractmethod
     def num_positions(self):
-        pass
+        return len(self.get_positions())
 
     @property
     @abstractmethod
@@ -47,11 +35,18 @@ class AbstractScan(metaclass=ABCMeta):
     def get_positions(self):
         pass
 
+    @property
+    def measurements(self):
+        return self._measurements
+
     @abstractmethod
     def insert_new_measurement(self, measurement_key, start, end, new_values):
         pass
 
-    def generate_positions(self, max_batch=1):
+    def __len__(self):
+        return self.num_positions
+
+    def generate_positions(self, max_batch):
         positions = self.get_positions()
         self._partition_batches(max_batch)
 
@@ -92,11 +87,11 @@ class CustomScan(AbstractScan):
         return self._positions
 
 
-class LineScan(AbstractScan):
+class LineScan(AbstractScan, HasGridMixin):
 
     def __init__(self, start: Sequence[float], end: Sequence[float],
-                 num_steps: Union[int, Sequence[int]] = None,
-                 step_size: Union[float, Sequence[float]] = None, endpoint: bool = True):
+                 gpts: Union[int, Sequence[int]] = None,
+                 sampling: Union[float, Sequence[float]] = None, endpoint: bool = True):
 
         super().__init__()
 
@@ -106,7 +101,7 @@ class LineScan(AbstractScan):
         if (start.shape != (2,)) | (end.shape != (2,)):
             raise ValueError('scan start/end has wrong shape')
 
-        self._grid = Grid(gpts=num_steps, sampling=step_size, endpoint=endpoint, dimensions=1)
+        self._grid = Grid(gpts=gpts, sampling=sampling, endpoint=endpoint, dimensions=1)
         self._start = start
         self._direction, self.extent = self._direction_and_extent(start, end)
 
@@ -116,16 +111,16 @@ class LineScan(AbstractScan):
         return direction, extent
 
     @property
-    def num_steps(self):
-        return self._grid.gpts[0]
+    def num_measurements(self):
+        return self.gpts[0]
 
     @property
     def shape(self):
-        return self._grid.gpts
+        return (self.gpts[0],)
 
     @property
     def calibrations(self) -> tuple:
-        return (Calibration(offset=0, sampling=self._grid.sampling, units='Å', name='x'),)
+        return (Calibration(offset=0, sampling=self.sampling, units='Å', name='x'),)
 
     @property
     def start(self) -> np.ndarray:
@@ -157,17 +152,17 @@ class LineScan(AbstractScan):
             measurement.array[start:end] = cp.asnumpy(new_measurement)
 
     def get_positions(self) -> np.ndarray:
-        x = np.linspace(self.start[0], self.start[0] + np.array(self.extent) * self.direction[0], self._grid.gpts[0],
-                        endpoint=self._grid.endpoint)
-        y = np.linspace(self.start[1], self.start[1] + np.array(self.extent) * self.direction[1], self._grid.gpts[0],
-                        endpoint=self._grid.endpoint)
+        x = np.linspace(self.start[0], self.start[0] + np.array(self.extent) * self.direction[0], self.gpts[0],
+                        endpoint=self.grid.endpoint)
+        y = np.linspace(self.start[1], self.start[1] + np.array(self.extent) * self.direction[1], self.gpts[0],
+                        endpoint=self.grid.endpoint)
         return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
     def add_to_mpl_plot(self, ax, linestyle='-', color='r', **kwargs):
         ax.plot([self.start[0], self.end[0]], [self.start[1], self.end[1]], linestyle=linestyle, color=color, **kwargs)
 
     def __copy__(self):
-        return self.__class__(start=self.start, end=self.end, gpts=self._grid.gpts, endpoint=self._grid.endpoint)
+        return self.__class__(start=self.start, end=self.end, gpts=self.gpts, endpoint=self.grid.endpoint)
 
 
 def unravel_slice_2d(start, end, shape):
@@ -192,37 +187,31 @@ def unravel_slice_2d(start, end, shape):
     return rows, slices, slices_1d
 
 
-class GridScan(AbstractScan):
+class GridScan(AbstractScan, HasGridMixin):
 
-    def __init__(self, start, end, num_steps=None, step_size=None, endpoint=False, fractional=False):
+    def __init__(self, start, end, gpts=None, sampling=None, endpoint=False):
         super().__init__()
 
         self._start = np.array(start)
-        self._end = np.array(end)
-        self._num_steps = num_steps
-        self._step_size = step_size
+        end = np.array(end)
 
         if (self._start.shape != (2,)) | (end.shape != (2,)):
             raise ValueError('scan start/end has wrong shape')
 
-        super().__init__(fractional=fractional)
+        self._grid = Grid(extent=end - start, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint)
 
     @property
-    def extent(self):
-        return self._
+    def num_measurements(self):
+        return np.prod(self.gpts)
 
     @property
-    def num_steps(self):
-        return Grid()
-
-    @property
-    def step_size(self):
-        return self._step_size
+    def shape(self):
+        return tuple(self.gpts)
 
     @property
     def calibrations(self) -> tuple:
-        return (Calibration(offset=0, sampling=self._grid.sampling[0], units='Å', name='x'),
-                Calibration(offset=0, sampling=self._grid.sampling[1], units='Å', name='y'))
+        return (Calibration(offset=0, sampling=self.sampling[0], units='Å', name='x'),
+                Calibration(offset=0, sampling=self.sampling[1], units='Å', name='y'))
 
     @property
     def start(self) -> np.ndarray:
@@ -246,10 +235,9 @@ class GridScan(AbstractScan):
         width = abs(self.start[1] - self.end[1])
         return height * width
 
-    def get_positions(self, grid=None) -> np.ndarray:
-
-        x = np.linspace(self.start[0], self.end[0], self._grid.gpts[0], endpoint=self._grid.endpoint)
-        y = np.linspace(self.start[1], self.end[1], self._grid.gpts[1], endpoint=self._grid.endpoint)
+    def get_positions(self) -> np.ndarray:
+        x = np.linspace(self.start[0], self.end[0], self.gpts[0], endpoint=self.grid.endpoint)
+        y = np.linspace(self.start[1], self.end[1], self.gpts[1], endpoint=self.grid.endpoint)
         x, y = np.meshgrid(x, y, indexing='ij')
         return np.stack((np.reshape(x, (-1,)),
                          np.reshape(y, (-1,))), axis=1)
@@ -268,4 +256,4 @@ class GridScan(AbstractScan):
         ax.add_patch(rect)
 
     def __copy__(self):
-        return self.__class__(start=self.start, end=self.end, num_steps=self.num_steps, endpoint=self._grid.endpoint)
+        return self.__class__(start=self.start, end=self.end, gpts=self.gpts, endpoint=self.grid.endpoint)

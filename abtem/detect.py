@@ -3,7 +3,7 @@ from abc import ABCMeta, abstractmethod
 import cupy as cp
 import numpy as np
 
-from abtem.bases import Cache, Event, cache_clear_callback, watched_method, Grid, cached_method
+from abtem.bases import Cache, Event, cache_clear_callback, watched_property, Grid, cached_method
 from abtem.cpu_kernels import abs2
 from abtem.device import get_array_module, get_device_function
 from abtem.measure import Calibration, calibrations_from_grid, fourier_space_offset, Measurement
@@ -103,6 +103,7 @@ class _PolarDetector(AbstractDetector):
             inner = self._inner
 
         max_angle = 1 / np.max(sampling) * wavelength / 2
+
         if self._outer is None:
             outer = max_angle
         elif self._outer < max_angle:
@@ -159,14 +160,14 @@ class _PolarDetector(AbstractDetector):
 class AnnularDetector(_PolarDetector):
 
     def __init__(self, inner, outer, save_file=None):
-        super().__init__(inner=inner, outer=outer, save_file=save_file)
+        super().__init__(inner=inner, outer=outer, radial_steps=outer - inner, save_file=save_file)
 
     @property
     def inner(self) -> float:
         return self._inner
 
     @inner.setter
-    @watched_method('changed')
+    @watched_property('changed')
     def inner(self, value: float):
         self._inner = value
 
@@ -175,7 +176,7 @@ class AnnularDetector(_PolarDetector):
         return self._outer
 
     @outer.setter
-    @watched_method('changed')
+    @watched_property('changed')
     def outer(self, value: float):
         self._outer = value
 
@@ -222,7 +223,7 @@ class SegmentedDetector(AbstractDetector):
         return self._inner
 
     @inner.setter
-    @watched_method('changed')
+    @watched_property('changed')
     def inner(self, value: float):
         self._inner = value
 
@@ -231,7 +232,7 @@ class SegmentedDetector(AbstractDetector):
         return self._outer
 
     @outer.setter
-    @watched_method('changed')
+    @watched_property('changed')
     def outer(self, value: float):
         self._outer = value
 
@@ -240,7 +241,7 @@ class SegmentedDetector(AbstractDetector):
         return self._nbins_radial
 
     @nbins_radial.setter
-    @watched_method('changed')
+    @watched_property('changed')
     def nbins_radial(self, value: float):
         self._nbins_radial = value
 
@@ -249,7 +250,7 @@ class SegmentedDetector(AbstractDetector):
         return self._nbins_angular
 
     @nbins_angular.setter
-    @watched_method('changed')
+    @watched_property('changed')
     def nbins_angular(self, value: float):
         self._nbins_angular = value
 
@@ -327,23 +328,45 @@ class PixelatedDetector(AbstractDetector):
 
 class WavefunctionDetector(AbstractDetector):
 
-    def __init__(self, save_file=None):
+    def __init__(self, save_file=None, fourier_space=False):
         super().__init__(save_file=save_file)
+        self._fourier_space = fourier_space
 
     def allocate_measurement(self, grid, wavelength, scan):
         grid.check_is_defined()
-        shape = (grid.gpts[0] // 2, grid.gpts[1] // 2)
+        shape = (grid.gpts[0], grid.gpts[1])
 
-        samplings = 1 / grid.extent * wavelength * 1000
-        offsets = fourier_space_offset(grid.extent / np.array(shape), shape) * wavelength * 1000
-        calibrations = (Calibration(offset=offsets[0], sampling=samplings[0], units='mrad.', name='alpha_x'),
-                        Calibration(offset=offsets[1], sampling=samplings[1], units='mrad.', name='alpha_y'))
+        if self._fourier_space:
+            offsets = (fourier_space_offset(grid.extent[0] / shape[0], shape[0]) * wavelength * 1000,
+                       fourier_space_offset(grid.extent[1] / shape[1], shape[1]) * wavelength * 1000)
+            shape = (shape[0] // 2, shape[1] // 2)
+            sampling = (1 / grid.extent[0] * wavelength * 1000, 1 / grid.extent[1] * wavelength * 1000)
+        else:
+            offsets = (0, 0)
+            sampling = grid.sampling
 
-        array = np.zeros(scan.shape + shape, dtype=np.complex64)
-        measurement = Measurement(array, calibrations=scan.calibrations + calibrations)
+        calibrations = (Calibration(offset=offsets[0], sampling=sampling[0], units='mrad.', name='alpha_x'),
+                        Calibration(offset=offsets[1], sampling=sampling[1], units='mrad.', name='alpha_y'))
+
+        # array = np.zeros(scan.shape + shape, dtype=np.complex64)
+        # measurement = Measurement(array, calibrations=scan.calibrations + calibrations)
         if isinstance(self.save_file, str):
-            measurement = measurement.write(self.save_file)
-        return measurement
+            with h5py.File(self.save_file, 'w') as f:
+                f.create_dataset('array', scan.shape + shape, dtype=np.complex64)
+                f.create_dataset('offset', data=[calibration.offset for calibration in calibrations])
+                f.create_dataset('sampling', data=[calibration.sampling for calibration in calibrations])
+                units = [calibration.units.encode('utf-8') for calibration in calibrations]
+                f.create_dataset('units', (len(units),), 'S10', units)
+                names = [calibration.name.encode('utf-8') for calibration in calibrations]
+                f.create_dataset('name', (len(names),), 'S10', names)
+
+            # measurement = measurement.write(self.save_file)
+        return self.save_file
 
     def detect(self, waves):
-        return waves.array
+        if self._fourier_space:
+            xp = get_array_module(waves.array)
+            fft2 = get_device_function(xp, 'fft2')
+            return crop_to_center(fft2(waves.array))
+        else:
+            return waves.array

@@ -10,6 +10,21 @@ def watched_method(event):
     """
     Decorator for class methods that have to notify.
     """
+    def wrapper(func):
+        property_name = func.__name__
+        def new_func(*args, **kwargs):
+            instance = args[0]
+            result = func(*args, **kwargs)
+            getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': True})
+            return result
+        return new_func
+    return wrapper
+
+
+def watched_property(event):
+    """
+    Decorator for class methods that have to notify.
+    """
 
     def wrapper(func):
         property_name = func.__name__
@@ -17,12 +32,13 @@ def watched_method(event):
         def new_func(*args):
             instance, value = args
             old = getattr(instance, property_name)
-            func(*args)
+            result = func(*args)
             change = old != value
             # if isinstance(change, Iterable):
             change = np.any(change)
             # print(instance, property_name, change)
             getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': change})
+            return result
 
         return new_func
 

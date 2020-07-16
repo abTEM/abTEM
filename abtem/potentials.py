@@ -11,7 +11,7 @@ from scipy.optimize import brentq
 
 from abtem.structures import fill_rectangle, is_orthogonal
 from abtem.bases import Grid, HasGridMixin, Cache, cached_method, HasAcceleratorMixin, Accelerator, watched_method, \
-    Event
+    Event, watched_property
 from abtem.cpu_kernels import complex_exponential
 from abtem.measure import calibrations_from_grid
 from abtem.parametrizations import kirkland, dvdr_kirkland, load_kirkland_parameters
@@ -134,7 +134,7 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 
 class PotentialIntegrator:
 
-    def __init__(self, function, r, cache_size=2048, cache_key_decimals=2, tolerance=1e-6):
+    def __init__(self, function, r, cache_size=4096, cache_key_decimals=2, tolerance=1e-9):
         self._function = function
         self._r = r
         self.cache = Cache(cache_size)
@@ -156,12 +156,12 @@ class PotentialIntegrator:
         split = np.sign(a) * np.sign(b)
         a = max(min(a, b), -self.cutoff)
         b = min(max(a, b), self.cutoff)
+        # print(a,b)
         if split < 0:  # split integral
             values1, derivatives1 = self.cached_integrate(0, abs(a))
             values2, derivatives2 = self.cached_integrate(0, abs(b))
             result = (values1 + values2, derivatives1 + derivatives2)
         else:
-
             result = self.cached_integrate(a, b)
         return result
 
@@ -172,6 +172,7 @@ class PotentialIntegrator:
         f = lambda z: self._function(np.sqrt(self.r[0] ** 2 + (z * zm + zp) ** 2))
         value, error_estimate, step_size, order = integrate(f, -1, 1, self._tolerance)
         xk, wk = tanh_sinh_nodes_and_weights(step_size, order)
+        # print(step_size, order)
         f = lambda z: self._function(np.sqrt(self.r[:, None] ** 2 + (z * zm + zp) ** 2))
         values = np.sum(f(xk[None]) * wk[None], axis=1) * zm
         derivatives = np.diff(values) / np.diff(self.r)
@@ -247,30 +248,10 @@ class Potential(AbstractPotential):
                  cutoff_tolerance: float = 1e-3,
                  storage='device'):
 
-        if isinstance(atoms, AbstractFrozenPhonons):
-            self._tds = atoms
-            self._atoms = next(atoms.generate_atoms())
-        elif isinstance(atoms, Atoms):
-            self._tds = None
-            self._atoms = atoms.copy()
-        else:
-            raise RuntimeError()
-
-        if np.abs(self._atoms.cell[2, 2]) < 1e-12:
-            raise RuntimeError('atoms has no thickness')
-
-        if not is_orthogonal(self._atoms):
-            raise RuntimeError('atoms are non-orthogonal')
-
-        self._thickness = self._atoms.cell[2, 2]
-
-        self._grid = Grid(gpts=gpts, sampling=sampling, extent=np.diag(self._atoms.cell)[:2])
         self._cutoff_tolerance = cutoff_tolerance
         self._parametrization = parametrization
         self._slice_thickness = slice_thickness
         self._storage = storage
-
-        self._atomic_numbers = np.unique(self._atoms.numbers)
 
         if parametrization == 'lobato':
             self._parameters = load_lobato_parameters()
@@ -284,10 +265,7 @@ class Potential(AbstractPotential):
         else:
             raise RuntimeError('parametrization {} not recognized'.format(parametrization))
 
-        self._cutoffs = {}
-        for number in self._atomic_numbers:
-            self._cutoffs[number] = brentq(lambda r: self.function(r, self.parameters[number])
-                                                     - self.cutoff_tolerance, 1e-7, 1000)
+        self._grid = Grid(gpts=gpts, sampling=sampling)
 
         self._padded_positions = {}
         self._integrators = {}
@@ -302,11 +280,39 @@ class Potential(AbstractPotential):
             self._integrators = {}
 
         self.grid.changed.register(grid_changed_callback)
+        self.set_atoms(atoms)
+
+        self.changed = Event()
 
     @watched_method('positions_changed')
     def displace_atoms(self, new_positons):
         self._atoms.positions[:] = new_positons
         self._atoms.wrap()
+
+    @watched_method('positions_changed')
+    def set_atoms(self, atoms):
+        if isinstance(atoms, AbstractFrozenPhonons):
+            self._tds = atoms
+            self._atoms = next(atoms.generate_atoms())
+        else:  # isinstance(atoms, Atoms):
+            self._tds = None
+            self._atoms = atoms.copy()
+        # else:
+        #    raise RuntimeError()
+
+        if np.abs(self._atoms.cell[2, 2]) < 1e-12:
+            raise RuntimeError('atoms has no thickness')
+
+        if not is_orthogonal(self._atoms):
+            raise RuntimeError('atoms are non-orthogonal')
+
+        self._thickness = self._atoms.cell[2, 2]
+        self.extent = np.diag(self._atoms.cell)[:2]
+
+        self._cutoffs = {}
+        for number in np.unique(self._atoms.numbers):
+            self._cutoffs[number] = brentq(lambda r: self.function(r, self.parameters[number])
+                                                     - self.cutoff_tolerance, 1e-7, 1000)
 
     @property
     def parameters(self):
@@ -325,10 +331,6 @@ class Potential(AbstractPotential):
         return self._tds
 
     @property
-    def precalculate(self):
-        return self._precalculate
-
-    @property
     def cutoff_tolerance(self):
         return self._cutoff_tolerance
 
@@ -339,6 +341,15 @@ class Potential(AbstractPotential):
     @property
     def num_slices(self):
         return int(np.ceil(self.thickness / self._slice_thickness))
+
+    @property
+    def slice_thickness(self):
+        return self._slice_thickness
+
+    @slice_thickness.setter
+    @watched_property('changed')
+    def slice_thickness(self, value):
+        self._slice_thickness = value
 
     def get_slice_thickness(self, i):
         return self.thickness / self.num_slices
@@ -389,7 +400,7 @@ class Potential(AbstractPotential):
         b = self.get_slice_exit(i)
 
         array = xp.zeros(self.gpts, dtype=xp.float32)
-        for number in self._atomic_numbers:
+        for number in self._cutoffs.keys():
             integrator, disc_indices = self._get_integrator(number)
             disc_indices = xp.asarray(disc_indices)
 
@@ -401,8 +412,8 @@ class Potential(AbstractPotential):
             if len(positions) == 0:
                 continue
 
-            vr = np.zeros((len(positions), len(integrator.r)), xp.float32)
-            dvdr = np.zeros((len(positions), len(integrator.r)), xp.float32)
+            vr = np.zeros((len(positions), len(integrator.r)), np.float32)
+            dvdr = np.zeros((len(positions), len(integrator.r)), np.float32)
             for i, (am, bm) in enumerate(np.nditer((a - positions[:, 2], b - positions[:, 2]))):
                 vr[i], dvdr[i, :-1] = integrator.integrate(am.item(), bm.item())
             vr = xp.asarray(vr, dtype=xp.float32)
@@ -432,7 +443,7 @@ class Potential(AbstractPotential):
         for atoms in self._tds.generate_atoms():
             self.displace_atoms(atoms.positions)
             pbar.reset()
-            yield self.calculate(xp=xp, pbar=False)
+            yield self.calculate(xp=xp, pbar=pbar)
             pbar.refresh()
 
 

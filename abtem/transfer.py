@@ -3,11 +3,10 @@ from typing import Mapping
 
 import numpy as np
 
-from abtem.bases import HasAcceleratorMixin, Accelerator, watched_method, Event, cache_clear_callback, \
-    cached_method, Cache, Grid
+from abtem.bases import HasAcceleratorMixin, Accelerator, watched_method, watched_property, Event
 from abtem.config import DTYPE
-from abtem.utils import energy2wavelength, polargrid
 from abtem.device import get_array_module, get_device_function
+from abtem.utils import energy2wavelength
 
 polar_symbols = ('C10', 'C12', 'phi12',
                  'C21', 'phi21', 'C23', 'phi23',
@@ -83,7 +82,7 @@ class CTF(HasAcceleratorMixin):
         return self._semiangle_cutoff
 
     @semiangle_cutoff.setter
-    @watched_method('changed')
+    @watched_property('changed')
     def semiangle_cutoff(self, value: float):
         self._semiangle_cutoff = value
 
@@ -92,7 +91,7 @@ class CTF(HasAcceleratorMixin):
         return self._rolloff
 
     @rolloff.setter
-    @watched_method('changed')
+    @watched_property('changed')
     def rolloff(self, value: float):
         self._rolloff = value
 
@@ -101,7 +100,7 @@ class CTF(HasAcceleratorMixin):
         return self._focal_spread
 
     @focal_spread.setter
-    @watched_method('changed')
+    @watched_property('changed')
     def focal_spread(self, value: float):
         self._focal_spread = value
 
@@ -110,7 +109,7 @@ class CTF(HasAcceleratorMixin):
         return self._angular_spread
 
     @angular_spread.setter
-    @watched_method('changed')
+    @watched_property('changed')
     def angular_spread(self, value: float):
         self._angular_spread = value
 
@@ -119,7 +118,7 @@ class CTF(HasAcceleratorMixin):
         return self._gaussian_spread
 
     @gaussian_spread.setter
-    @watched_method('changed')
+    @watched_property('changed')
     def gaussian_spread(self, value: float):
         self._gaussian_spread = value
 
@@ -275,7 +274,7 @@ class CTF(HasAcceleratorMixin):
 
         return array
 
-    def show(self, semiangle_cutoff: float, ax=None, phi=0, n=1000, **kwargs):
+    def show(self, semiangle_cutoff: float, ax=None, phi=0, n=1000, title=None, **kwargs):
         import matplotlib.pyplot as plt
 
         alpha = np.linspace(0, semiangle_cutoff, n)
@@ -290,24 +289,26 @@ class CTF(HasAcceleratorMixin):
         if ax is None:
             ax = plt.subplot()
 
-        ax.plot(alpha, aberrations.imag * envelope, label='CTF', **kwargs)
+        ax.plot(alpha * 1000, aberrations.imag * envelope, label='CTF', **kwargs)
 
         if self.semiangle_cutoff < np.inf:
-            ax.plot(alpha, aperture, label='Aperture', **kwargs)
+            ax.plot(alpha * 1000, aperture, label='Aperture', **kwargs)
 
         if self.focal_spread > 0.:
-            ax.plot(alpha, temporal_envelope, label='Temporal envelope', **kwargs)
+            ax.plot(alpha * 1000, temporal_envelope, label='Temporal envelope', **kwargs)
 
         if self.angular_spread > 0.:
-            ax.plot(alpha, spatial_envelope, label='Spatial envelope', **kwargs)
+            ax.plot(alpha * 1000, spatial_envelope, label='Spatial envelope', **kwargs)
 
         if self.gaussian_spread > 0.:
-            ax.plot(alpha, gaussian_envelope, label='Gaussian envelope', **kwargs)
+            ax.plot(alpha * 1000, gaussian_envelope, label='Gaussian envelope', **kwargs)
 
         if not np.allclose(envelope, 1.):
-            ax.plot(alpha, envelope, label='Product envelope', **kwargs)
+            ax.plot(alpha * 1000, envelope, label='Product envelope', **kwargs)
 
-        ax.set_xlabel('k [1 / Å]')
+        ax.set_xlabel('alpha [mrad.]')
+        if title is not None:
+            ax.set_title(title)
         ax.legend()
 
     def copy(self):

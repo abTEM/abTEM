@@ -1,174 +1,57 @@
-import io
-import numbers
-
-import PIL.Image
-import bqplot
-import ipywidgets
+import ipywidgets as widgets
 import numpy as np
-from bqplot import LinearScale, Axis, Figure, PanZoom
+from IPython.display import display
+from bokeh import plotting, models
+from bokeh.io import show, push_notebook
 
-from abtem.utils import linspace, fftfreq
-from abtem.bases import Observable, Observer
 
-
-def link_widget(widget, o, property_name):
+def link_widget(widget, obj, property_name):
     def callback(change):
-        setattr(o, property_name, change['new'])
+        setattr(obj, property_name, change['new'])
 
     widget.observe(callback, 'value')
     return callback
 
 
-def link_widget_component(widget, o, property_name, component):
-    def callback(change):
-        value = getattr(o, property_name).copy()
-        value[component] = change['new']
-        setattr(o, property_name, value)
+class BokehImage:
 
-    widget.observe(callback, 'value')
-    return callback
+    def __init__(self, callback, push_notebook=False):
+        self._figure = plotting.Figure(plot_width=400, plot_height=400, title=None,
+                                       toolbar_location='below', tools='pan,wheel_zoom,box_zoom,reset',
+                                       match_aspect=True)
+        self._source = models.ColumnDataSource(data=dict(image=[], x=[], y=[], dw=[], dh=[]))
+        self._model = models.Image(image='image', x='x', y='y', dw='dw', dh='dh', palette='Greys256')
+        self._glyph = self._figure.add_glyph(self._source, glyph=self._model)
+        if push_notebook:
+            self._notebook_handle = show(self._figure, notebook_handle=True)
+        else:
+            self._notebook_handle = None
+        self._callback = callback
 
+    def update(self, *args, **kwargs):
+        measurement = self._callback()
+        array = measurement.array
 
-def property_slider(o, property_name, description=None, components=None, **kwargs):
-    if description is None:
-        description = property_name
-    value = getattr(o, property_name)
+        array = ((array - array.min()) / (array.max() - array.min()) * 255).astype(np.uint8)
+        self._source.data = {'image': [array],
+                             'x': [measurement.calibrations[1].offset],
+                             'y': [measurement.calibrations[0].offset],
+                             'dw': [measurement.calibrations[1].sampling * measurement.array.shape[1]],
+                             'dh': [measurement.calibrations[0].sampling * measurement.array.shape[0]]}
 
-    if isinstance(components, numbers.Number):
-        components = (components,)
-
-    if components is not None:
-        value = value[components[0]]
-
-    slider = ipywidgets.FloatSlider(description=description, value=value, **kwargs)
-
-    if components is None:
-        link_widget(slider, o, property_name)
-    else:
-        for component in components:
-            link_widget_component(slider, o, property_name, component)
-    return slider
-
-
-class UpdatingMark(Observable, Observer):
-
-    def __init__(self, observables, auto_update=True, **kwargs):
+        if self._notebook_handle:
+            push_notebook(handle=self._notebook_handle)
 
 
-        self._observables = observables
-        self._auto_update = auto_update
+def interact_object(obj, continuous_update=True, **kwargs):
+    create_callback = lambda key: lambda change: setattr(obj, key, change['new'])
+    for key, value in kwargs.items():
+        slider = widgets.FloatSlider(value=getattr(obj, key),
+                                     min=value[0],
+                                     max=value[1],
+                                     step=value[2],
+                                     description=key,
+                                     continuous_update=continuous_update)
 
-        super().__init__(**kwargs)
-
-        for observable in observables:
-            observable.register_observer(self)
-
-        self.register_observer(self)
-
-
-    def update(self):
-        raise NotImplementedError()
-
-    def notify(self, observable, message):
-        if self._auto_update:
-            self.update()
-
-
-class UpdatingLine(UpdatingMark):
-
-    def __init__(self, scales, observables, func, auto_update=True, **kwargs):
-        super().__init__(observables, auto_update=auto_update)
-        self._func = func
-        self._mark = bqplot.Lines(scales=scales, **kwargs)
-        self.update()
-
-    def update(self):
-        lineprofile = self._func()
-        #if lineprofile.space == 'direct':
-        x = linspace(lineprofile)
-        #elif lineprofile.space == 'fourier':
-        #    x = np.fft.fftshift(fftfreq(lineprofile))
-        #else:
-        #    raise RuntimeError()
-        y = lineprofile.array
-        self._mark.x = x
-        self._mark.y = y
-
-
-def array_to_png(array):
-    array = ((array - array.min()) / (array.max() - array.min()) * 255).astype(np.uint8)
-    image = PIL.Image.fromarray(np.flipud(array.T))
-    bytes_io = io.BytesIO()
-    image.save(bytes_io, format='png')
-    return ipywidgets.Image(value=bytes_io.getvalue())
-
-
-class UpdatingImage(UpdatingMark):
-
-    def __init__(self, scales, observables, func, auto_update=True, color_scale='linear', **kwargs):
-
-        self._func = func
-        self._color_scale = color_scale
-        self._mark = bqplot.Image(image=array_to_png(func().array), scales=scales, **kwargs)
-        self.update()
-
-        super().__init__(observables, auto_update=auto_update)
-
-    def update(self):
-        array = self._func().array
-
-        # if self.color_scale == 'log':
-        #     sign = np.sign(array)
-        #     array = sign * np.log(1 + .005 * np.abs(array))
-        #
-        # elif self.color_scale != 'linear':
-        #     raise RuntimeError()
-
-        self._mark.image = array_to_png(array)
-
-    #color_scale = notifying_property('_color_scale')
-
-
-class InteractiveFigure:
-
-    def __init__(self, height='400px', width='400px', margin=None, **kwargs):
-        self._scales = {'x': LinearScale(), 'y': LinearScale()}
-        self._axes = {'x': Axis(scale=self._scales['x']),
-                      'y': Axis(scale=self._scales['y'], orientation='vertical')}
-
-        panzoom = PanZoom(scales={'x': [self._scales['x']], 'y': [self._scales['y']]})
-
-        if margin is None:
-            margin = {'top': 0, 'bottom': 40, 'left': 60, 'right': 0}
-
-        self._figure = Figure(marks=[], axes=list(self._axes.values()), interaction=panzoom, fig_margin=margin,
-                              **kwargs)
-
-        self._figure.layout.height = height
-        self._figure.layout.width = width
-
-    @property
-    def scales(self):
-        return self._scales
-
-    @property
-    def axes(self):
-        return self._axes
-
-    @property
-    def figure(self):
-        return self._figure
-
-    @property
-    def marks(self):
-        return self._figure.marks
-
-    def add_line(self, observables, func, **kwargs):
-        ul = UpdatingLine(self._scales, observables, func, **kwargs)
-        self._figure.marks = self._figure.marks + [ul._mark]
-        return ul
-
-    def add_image(self, observables, func, **kwargs):
-        image = UpdatingImage(self._scales, observables, func, **kwargs)
-        self._figure.marks = self._figure.marks + [image._mark]
-        return image
+        slider.observe(create_callback(key), 'value')
+        display(slider)

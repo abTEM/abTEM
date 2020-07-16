@@ -18,9 +18,12 @@ try:  # This should be the only place to get cupy, to make it a non-essential de
 
 
     def fft2_convolve(array, kernel, overwrite_x=True):
-        array = cupyx.scipy.fft.fft2(array, overwrite_x=overwrite_x)
+        #print(array.flags)
+        #plan = cupyx.scipy.fftpack.get_fft_plan(array, axes=(-2,-1))
+
+        array = cupyx.scipy.fftpack.fft2(array, overwrite_x=overwrite_x)
         array *= kernel
-        array = cupyx.scipy.fft.ifft2(array, overwrite_x=overwrite_x)
+        array = cupyx.scipy.fftpack.ifft2(array, overwrite_x=overwrite_x)
         return array
 
 

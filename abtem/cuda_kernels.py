@@ -36,73 +36,40 @@ def launch_superpose_deltas(positions, shape):
 
 
 @cuda.jit
-def _interpolate_radial_functions(array, disc_indices, positions, v, r, dvdr, sampling):
-    n = r.shape[0]
-    dt = math.log(r[-1] / r[0]) / (n - 1)
-
+def _interpolate_radial_functions(array, disc_indices, positions, v, r, dvdr, sampling, dt):
     i, j = cuda.grid(2)
-    if i < positions.shape[0]:
-        if j < disc_indices.shape[0]:
-            k = round(positions[i, 0] / sampling[0]) + disc_indices[j, 0]
-            l = round(positions[i, 1] / sampling[1]) + disc_indices[j, 1]
-            if ((k < array.shape[0]) & (l < array.shape[1]) & (k >= 0) & (l >= 0)):
-                r_interp = math.sqrt((k * sampling[0] - positions[i, 0]) ** 2 +
-                                     (l * sampling[1] - positions[i, 1]) ** 2)
+    if (i < positions.shape[0]) & (j < disc_indices.shape[0]):
+        k = round(positions[i, 0] / sampling[0]) + disc_indices[j, 0]
+        l = round(positions[i, 1] / sampling[1]) + disc_indices[j, 1]
+        if ((k < array.shape[0]) & (l < array.shape[1]) & (k >= 0) & (l >= 0)):
+            r_interp = math.sqrt((k * sampling[0] - positions[i, 0]) ** 2 +
+                                 (l * sampling[1] - positions[i, 1]) ** 2)
 
-                idx = int(math.floor(math.log(r_interp / r[0] + 1e-7) / dt))
+            idx = int(math.log(r_interp / r[0] + 1e-7) / dt)
 
-                if idx < 0:
-                    cuda.atomic.add(array, (k, l), v[i, 0])
-                elif idx < n - 1:
-                    new = v[i, idx] + (r_interp - r[idx]) * dvdr[i, idx]
-                    cuda.atomic.add(array, (k, l), new)
+            if idx < 0:
+                cuda.atomic.add(array, (k, l), v[i, 0])
+            elif idx < r.shape[0] - 1:
+                cuda.atomic.add(array, (k, l), v[i, idx] + (r_interp - r[idx]) * dvdr[i, idx])
 
 
 def launch_interpolate_radial_functions(array, disc_indices, positions, v, r, dvdr, sampling):
-    threadsperblock = (16, 32)
+    threadsperblock = (1, 256)
     blockspergrid_x = math.ceil(positions.shape[0] / threadsperblock[0])
     blockspergrid_y = math.ceil(disc_indices.shape[0] / threadsperblock[1])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
 
+    dt = (cp.log(r[-1] / r[0]) / (r.shape[0] - 1)).item()
+    #print(type(dt))
+    #sss
     _interpolate_radial_functions[blockspergrid, threadsperblock](array,
                                                                   disc_indices,
                                                                   positions,
                                                                   v,
                                                                   r,
                                                                   dvdr,
-                                                                  sampling)
-
-
-# @cuda.jit
-# def _window_and_collapse(probes, S, corners, coefficients):
-#     """
-#     Function for collapsing a Prism scattering matrix into a probe wave function.
-#
-#     Parameters
-#     ----------
-#     probes : 3d numpy.ndarray
-#         The array in which the probe wave functions should be written.
-#     S : 3d numpy.ndarray
-#         Scattering matrix
-#     corners :
-#     coefficients :
-#     """
-#     x, y, z = cuda.grid(3)
-#     if (x < S.shape[0]) & (y < S.shape[1]) & (z < S.shape[2]):
-#         #yy = (corners[0] + y) % S.shape[1]
-#         #zz = (corners[1] + z) % S.shape[2]
-#         #probes[yy, zz] += coefficients[x] * S[x, yy, zz]
-#         probes[y, z] += coefficients[x] * S[x, y, z]
-#
-#
-# def launch_window_and_collapse(probes, S, corners, coefficients):
-#     threadsperblock = (32, 4, 4)
-#     blockspergrid_x = math.ceil(coefficients.shape[0] / threadsperblock[0])
-#     blockspergrid_y = math.ceil(probes.shape[0] / threadsperblock[1])
-#     blockspergrid_z = math.ceil(probes.shape[1] / threadsperblock[2])
-#     blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
-#
-#     _window_and_collapse[blockspergrid, threadsperblock](probes, S, corners, coefficients)
+                                                                  sampling,
+                                                                  dt)
 
 
 @cuda.jit
