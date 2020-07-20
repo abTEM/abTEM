@@ -475,6 +475,9 @@ class Probe(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
             tds_bar.update(1)
 
         tds_bar.refresh()
+        potential_pbar.close()
+        scan_bar.close()
+        tds_bar.close()
 
         return measurements
 
