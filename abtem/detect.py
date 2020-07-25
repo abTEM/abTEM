@@ -1,6 +1,5 @@
 from abc import ABCMeta, abstractmethod
 
-import cupy as cp
 import numpy as np
 
 from abtem.bases import Cache, Event, cache_clear_callback, watched_property, Grid, cached_method

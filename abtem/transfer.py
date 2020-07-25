@@ -4,7 +4,7 @@ from typing import Mapping
 import numpy as np
 
 from abtem.bases import HasAcceleratorMixin, Accelerator, watched_method, watched_property, Event
-from abtem.config import DTYPE
+
 from abtem.device import get_array_module, get_device_function
 from abtem.utils import energy2wavelength
 
@@ -219,7 +219,7 @@ class CTF(HasAcceleratorMixin):
 
         alpha2 = alpha ** 2
 
-        array = xp.zeros(alpha.shape, dtype=DTYPE)
+        array = xp.zeros(alpha.shape, dtype=np.float32)
         if any([p[symbol] != 0. for symbol in ('C10', 'C12', 'phi12')]):
             array += (1 / 2 * alpha2 *
                       (p['C10'] +

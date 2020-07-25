@@ -18,9 +18,6 @@ try:  # This should be the only place to get cupy, to make it a non-essential de
 
 
     def fft2_convolve(array, kernel, overwrite_x=True):
-        #print(array.flags)
-        #plan = cupyx.scipy.fftpack.get_fft_plan(array, axes=(-2,-1))
-
         array = cupyx.scipy.fftpack.fft2(array, overwrite_x=overwrite_x)
         array *= kernel
         array = cupyx.scipy.fftpack.ifft2(array, overwrite_x=overwrite_x)
@@ -44,7 +41,7 @@ except ImportError:
     fft2_gpu = None
     ifft2_gpu = None
     fft2_convolve_gpu = None
-    gpu_functions = {'fft2': None, 'ifft2': None, 'fft2_convolve': None}
+    gpu_functions = None
     asnumpy = np.asarray
 
 
@@ -112,23 +109,44 @@ def get_device_function(xp, name):
         raise RuntimeError()
 
 
+def get_array_module_from_device(device):
+    if device == 'cpu':
+        return np
+
+    if device == 'gpu':
+        if cp is None:
+            raise RuntimeError('cupy is not installed, only cpu calculations available')
+        return cp
+
+    return get_array_module(device)
+
+
+def copy_to_device(array, device):
+    if device == 'cpu':
+        return asnumpy(array)
+    elif device == 'gpu':
+        if cp is None:
+            raise RuntimeError('cupy is not installed, only cpu calculations available')
+        return cp.asarray(array)
+
+
 class HasDeviceMixin:
-    _device_definition: Any
+    _device: Any
 
     @property
-    def device_definition(self):
-        return self._device_definition
+    def device(self):
+        return self._device
 
-    def set_device_definition(self, device_definition):
-        self._device_definition = device_definition
+    def set_device(self, device):
+        self._device = device
 
     def get_array_module(self):
-        if self.device_definition == 'cpu':
+        if self.device == 'cpu':
             return np
 
-        if self.device_definition == 'gpu':
+        if self.device == 'gpu':
             if cp is None:
                 raise RuntimeError('cupy is not installed, only cpu calculations available')
             return cp
 
-        return get_array_module(self.device_definition)
+        return get_array_module(self.device)

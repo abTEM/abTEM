@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from copy import copy
 from typing import Union, Sequence
 
@@ -7,16 +5,16 @@ import h5py
 import numpy as np
 from ase import Atoms
 
-from abtem.bases import Grid, Accelerator, HasGridMixin, HasAcceleratorMixin, cache_clear_callback, Event, \
-    watched_property, Cache, cached_method
+from abtem.bases import Grid, Accelerator, HasGridMixin, HasAcceleratorMixin, cache_clear_callback, watched_property, \
+    Cache, cached_method
 from abtem.detect import AbstractDetector, crop_to_center
 from abtem.device import get_array_module, get_device_function, asnumpy, HasDeviceMixin
 from abtem.measure import calibrations_from_grid, Measurement
-from abtem.plot import show_image, show_line
+from abtem.plot import show_line
 from abtem.potentials import Potential, AbstractPotential
 from abtem.scan import AbstractScan
 from abtem.transfer import CTF
-from abtem.utils import polargrid, ProgressBar, cosine_window, spatial_frequencies, coordinates
+from abtem.utils import polargrid, ProgressBar, cosine_window, spatial_frequencies, coordinates, split_integer
 
 
 class FresnelPropagator:
@@ -62,7 +60,7 @@ def transmit(waves, potential_slice):
     return waves
 
 
-def multislice(waves: Union[Waves, SMatrix], potential: AbstractPotential, propagator=None,
+def multislice(waves: Union['Waves', 'SMatrix'], potential: AbstractPotential, propagator=None,
                pbar: Union[ProgressBar, bool] = True):
     """
     Propagate the wave function through a potential using the multislice
@@ -197,7 +195,7 @@ class Waves(HasGridMixin, HasAcceleratorMixin):
     def multislice(self, potential: AbstractPotential, pbar: Union[ProgressBar, bool] = True):
         propagator = FresnelPropagator()
 
-        if potential.tds:
+        if potential.frozen_phonons:
             xp = get_array_module(self.array)
             out_array = xp.zeros((len(potential.tds),) + self.array.shape, dtype=xp.complex64)
             tds_waves = self.__class__(out_array, extent=self.extent, energy=self.energy)
@@ -436,10 +434,14 @@ class Probe(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
         return multislice(self.build(positions), potential, None, pbar)
 
     def generate_probes(self, scan: AbstractScan, potential: Union[AbstractPotential, Atoms], max_batch: int):
+
         for start, end, positions in scan.generate_positions(max_batch=max_batch):
             yield start, end, self.multislice(positions, potential, pbar=False)
 
-    def generate_tds(self, scan, potential, max_batch, pbar):
+    def generate_tds_probes(self, scan, potential, max_batch, pbar):
+        tds_bar = ProgressBar(total=potential.num_tds_configs, desc='TDS',
+                              disable=(not pbar) or (not potential.has_tds))
+
         if not potential.has_tds:
             potential = potential.calculate(pbar=pbar)
             yield self.generate_probes(scan, potential, max_batch)
@@ -458,10 +460,14 @@ class Probe(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
         for detector in detectors:
             measurements[detector] = detector.allocate_measurement(self.grid, self.wavelength, scan)
 
-        tds_bar = ProgressBar(total=potential.num_tds_configs, desc='TDS',
-                              disable=(not pbar) or (not potential.has_tds))
+
         scan_bar = ProgressBar(total=len(scan), desc='Scan', disable=not pbar)
         potential_pbar = ProgressBar(total=len(potential), desc='Potential', disable=not pbar)
+
+        if isinstance(potential, 'generate_tds_configs'):
+            probe_generators = self.generate_tds_probes(scan, potential, max_batch, potential_pbar)
+        else:
+            pass
 
         for probe_generator in self.generate_tds(scan, potential, max_batch, potential_pbar):
             scan_bar.reset()
@@ -607,9 +613,9 @@ class SMatrix(HasGridMixin, HasAcceleratorMixin):
         return self._ctf.evaluate(alpha, phi)
 
     def multislice(self, potential: AbstractPotential, pbar: bool = True):
-        #import cupyx
-        #plan = cupyx.scipy.fftpack.get_fft_plan(self.array)
-        #with plan:
+        # import cupyx
+        # plan = cupyx.scipy.fftpack.get_fft_plan(self.array)
+        # with plan:
         S = multislice(self, potential, pbar=pbar)
 
         return S
@@ -737,20 +743,25 @@ class SMatrixBuilder(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
         interpolated_gpts = tuple(n // self.interpolation for n in self.gpts)
         return Grid(gpts=interpolated_gpts, sampling=self.sampling, lock_gpts=True)
 
-    def generate_tds(self, potential, multislice_pbar: Union[ProgressBar, bool] = True,
-                     potential_bar: Union[ProgressBar, bool] = True):
+    def generate_tds(self, potential,
+                     multislice_bar: Union[ProgressBar, bool] = True,
+                     potential_bar: Union[ProgressBar, bool] = True,
+                     s_matrix_bar: Union[ProgressBar, bool] = True,
+                     max_batch_planewaves=None):
+
         self.grid.match(potential)
 
         if not potential.has_tds:
             potential = potential.calculate(pbar=potential_bar)
-            yield self.build().multislice(potential, pbar=multislice_pbar)
+            for s_matrix in self.generate_s_matrix(max_batch_planewaves, s_matrix_bar):
+                yield self.build().multislice(potential, pbar=multislice_bar)
 
         else:
             for potential_config in potential.generate_tds_potentials(pbar=potential_bar):
-                yield self.build().multislice(potential_config, pbar=multislice_pbar)
+                yield self.build().multislice(potential_config, pbar=multislice_bar)
 
     def scan(self, scan: AbstractScan, detectors: Sequence[AbstractDetector],
-             potential: Union[Atoms, AbstractPotential], max_batch=1, pbar=True):
+             potential: Union[Atoms, AbstractPotential], max_batch_probes=1, max_batch_planewaves=None, pbar=True):
 
         self.grid.match(potential.grid)
         self.grid.check_is_defined()
@@ -761,14 +772,17 @@ class SMatrixBuilder(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
 
         tds_bar = ProgressBar(total=potential.num_tds_configs, desc='TDS',
                               disable=(not pbar) or (not potential.has_tds))
+        s_matrix_bar = ProgressBar(total=potential.num_tds_configs, desc='SMatrix',
+                                   disable=(not pbar) or (max_batch_planewaves is None))
         scan_bar = ProgressBar(total=len(scan), desc='Scan', disable=not pbar)
         multislice_pbar = ProgressBar(total=len(potential), desc='Multislice', disable=not pbar)
         potential_pbar = ProgressBar(total=len(potential), desc='Potential', disable=not pbar)
 
-        for S in self.generate_tds(potential, multislice_pbar, potential_pbar):
+        for S in self.generate_tds(potential, multislice_pbar, potential_pbar, s_matrix_bar,
+                                   max_batch_planewaves=max_batch_planewaves):
             scan_bar.reset()
 
-            for start, end, exit_probes in S.generate_probes(scan, max_batch):
+            for start, end, exit_probes in S.generate_probes(scan, max_batch_probes):
                 for detector, measurement in measurements.items():
                     scan.insert_new_measurement(measurement, start, end, detector.detect(exit_probes))
 
@@ -778,13 +792,9 @@ class SMatrixBuilder(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
             tds_bar.update(1)
 
         tds_bar.refresh()
-
         return measurements
 
-    def generate_s_matrix(self, max_batch):
-        pass
-
-    def build(self) -> SMatrix:
+    def generate_s_matrix(self, max_batch, pbar):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
         xp = self.get_array_module()
@@ -811,14 +821,28 @@ class SMatrixBuilder(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
         x = xp.asarray(x)
         y = xp.asarray(y)
 
-        array = (complex_exponential(-2 * np.pi * kx[:, None, None] * x[None, :, None]) *
-                 complex_exponential(-2 * np.pi * ky[:, None, None] * y[None, None, :]))
+        n = len(kx)
 
-        return SMatrix(array,
-                       interpolation=self.interpolation,
-                       expansion_cutoff=self.expansion_cutoff,
-                       extent=self.extent,
-                       energy=self.energy,
-                       kx=kx,
-                       ky=ky,
-                       always_recenter=self.always_recenter)
+        if max_batch is None:
+            n_batches = 1
+        else:
+            n_batches = (n + (-n % max_batch)) // max_batch
+
+        batch_sizes = split_integer(n, n_batches)
+
+        N = 0
+        for n in batch_sizes:
+            array = (complex_exponential(-2 * np.pi * kx[N:N + n, None, None] * x[None, :, None]) *
+                     complex_exponential(-2 * np.pi * ky[N:N + n, None, None] * y[None, None, :]))
+
+            yield SMatrix(array,
+                          interpolation=self.interpolation,
+                          expansion_cutoff=self.expansion_cutoff,
+                          extent=self.extent,
+                          energy=self.energy,
+                          kx=kx,
+                          ky=ky,
+                          always_recenter=self.always_recenter)
+
+    def build(self) -> SMatrix:
+        return next(self.generate_s_matrix(None, False))

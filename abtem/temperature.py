@@ -69,3 +69,15 @@ class FrozenPhonons(AbstractFrozenPhonons):
             atoms.wrap()
 
             yield atoms
+
+
+class DummyFrozenPhonons(AbstractFrozenPhonons):
+
+    def __init__(self, atoms):
+        self._atoms = atoms.copy()
+
+    def __len__(self):
+        return 1
+
+    def generate_atoms(self):
+        return self._atoms
