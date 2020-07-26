@@ -8,10 +8,10 @@ from ase import Atoms
 from abtem.bases import Grid, Accelerator, HasGridMixin, HasAcceleratorMixin, cache_clear_callback, watched_property, \
     Cache, cached_method
 from abtem.detect import AbstractDetector, crop_to_center
-from abtem.device import get_array_module, get_device_function, asnumpy, HasDeviceMixin
+from abtem.device import get_array_module, get_device_function, asnumpy, HasDeviceMixin, get_array_module_from_device
 from abtem.measure import calibrations_from_grid, Measurement
 from abtem.plot import show_line
-from abtem.potentials import Potential, AbstractPotential
+from abtem.potentials import Potential, AbstractPotential, AbstractTDSPotentialBuilder, AbstractPotentialBuilder
 from abtem.scan import AbstractScan
 from abtem.transfer import CTF
 from abtem.utils import polargrid, ProgressBar, cosine_window, spatial_frequencies, coordinates, split_integer
@@ -48,9 +48,8 @@ class FresnelPropagator:
 def transmit(waves, potential_slice):
     xp = get_array_module(waves.array)
     complex_exponential = get_device_function(xp, 'complex_exponential')
-    slice_array = potential_slice.calculate(xp)
-    dim_padding = len(waves._array.shape) - len(slice_array.shape)
-    slice_array = slice_array.reshape((1,) * dim_padding + slice_array.shape)
+    dim_padding = len(waves._array.shape) - len(potential_slice.array.shape)
+    slice_array = potential_slice.array.reshape((1,) * dim_padding + potential_slice.array.shape)
 
     if np.iscomplexobj(slice_array):
         waves._array *= slice_array
@@ -98,7 +97,6 @@ def multislice(waves: Union['Waves', 'SMatrix'], potential: AbstractPotential, p
         pbar.update(1)
 
     pbar.refresh()
-
     return waves
 
 
@@ -155,9 +153,7 @@ class Waves(HasGridMixin, HasAcceleratorMixin):
         xp = get_array_module(self.array)
         abs2 = get_device_function(xp, 'abs2')
         fft2 = get_device_function(xp, 'fft2')
-        pattern = np.zeros((len(self.array),) + self.grid.antialiased_gpts)
-        for i in range(len(self.array)):
-            pattern[i] = asnumpy(abs2(crop_to_center(xp.fft.fftshift(fft2(self.array[i], overwrite_x=False)))))
+        pattern = asnumpy(abs2(crop_to_center(xp.fft.fftshift(fft2(self.array, overwrite_x=False)))))
         return Measurement(pattern, calibrations)
 
     def apply_ctf(self, ctf=None, **kwargs):
@@ -195,23 +191,24 @@ class Waves(HasGridMixin, HasAcceleratorMixin):
     def multislice(self, potential: AbstractPotential, pbar: Union[ProgressBar, bool] = True):
         propagator = FresnelPropagator()
 
-        if potential.frozen_phonons:
+        if isinstance(potential, AbstractTDSPotentialBuilder):
             xp = get_array_module(self.array)
-            out_array = xp.zeros((len(potential.tds),) + self.array.shape, dtype=xp.complex64)
+            N = len(potential.frozen_phonons)
+            out_array = xp.zeros((N,) + self.array.shape, dtype=xp.complex64)
             tds_waves = self.__class__(out_array, extent=self.extent, energy=self.energy)
 
-            tds_pbar = ProgressBar(total=potential.num_tds_configs, desc='TDS', disable=not pbar)
+            tds_pbar = ProgressBar(total=N, desc='TDS', disable=(not pbar) or (N == 1))
             multislice_pbar = ProgressBar(total=len(potential), desc='Multislice', disable=not pbar)
 
-            # for i, potential_config in enumerate(potential.generate_tds_potentials(xp=xp)):
-            # for i in range(potential.num_tds_configs):
-            for i, atoms in enumerate(potential.tds.generate_atoms()):
-                potential.displace_atoms(atoms.positions)
+            for i, potential in enumerate(potential.generate_frozen_phonon_potentials()):
+                multislice_pbar.reset()
 
                 exit_waves = multislice(self.copy(), potential, propagator=propagator, pbar=multislice_pbar)
                 tds_waves.array[i] = exit_waves.array
                 tds_pbar.update(1)
-                multislice_pbar.reset()
+
+            multislice_pbar.close()
+            tds_pbar.close()
 
             return tds_waves
         else:
@@ -262,7 +259,7 @@ class Waves(HasGridMixin, HasAcceleratorMixin):
         self.intensity().show(**kwargs)
 
 
-class PlaneWave(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
+class PlaneWave(HasGridMixin, HasAcceleratorMixin):
     """
     Plane waves object
 
@@ -285,7 +282,7 @@ class PlaneWave(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
     def __init__(self, extent=None, gpts=None, sampling=None, energy=None, device='cpu'):
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
-        self.set_device_definition(device)
+        self._device = device
 
     def multislice(self, potential, pbar=True):
         if isinstance(potential, Atoms):
@@ -294,7 +291,7 @@ class PlaneWave(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
         return self.build().multislice(potential, pbar=pbar)
 
     def build(self):
-        xp = self.get_array_module()
+        xp = get_array_module_from_device(self._device)
         self.grid.check_is_defined()
         array = xp.ones((self.gpts[0], self.gpts[1]), dtype=xp.complex64)
         return Waves(array, extent=self.extent, energy=self.energy)
@@ -303,7 +300,7 @@ class PlaneWave(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
         return self.__class__(extent=self.extent, gpts=self.gpts, sampling=self.sampling, energy=self.energy)
 
 
-class Probe(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
+class Probe(HasGridMixin, HasAcceleratorMixin):
     """
     Probe waves object
 
@@ -362,7 +359,7 @@ class Probe(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
         self._grid.changed.register(cache_clear_callback(self.cache))
         self._accelerator.changed.register(cache_clear_callback(self.cache))
 
-        self.set_device_definition(device)
+        self._device = device
 
     @property
     def ctf(self):
@@ -409,7 +406,7 @@ class Probe(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
     def build(self, positions: Sequence[Sequence[float]] = None) -> Waves:
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
-        xp = self.get_array_module()
+        xp = get_array_module_from_device(self._device)
         fft2 = get_device_function(xp, 'fft2')
 
         if positions is None:
@@ -434,21 +431,21 @@ class Probe(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
         return multislice(self.build(positions), potential, None, pbar)
 
     def generate_probes(self, scan: AbstractScan, potential: Union[AbstractPotential, Atoms], max_batch: int):
-
         for start, end, positions in scan.generate_positions(max_batch=max_batch):
             yield start, end, self.multislice(positions, potential, pbar=False)
 
     def generate_tds_probes(self, scan, potential, max_batch, pbar):
-        tds_bar = ProgressBar(total=potential.num_tds_configs, desc='TDS',
-                              disable=(not pbar) or (not potential.has_tds))
+        tds_bar = ProgressBar(total=len(potential.frozen_phonons), desc='TDS',
+                              disable=(not pbar) or (len(potential.frozen_phonons) == 1))
+        potential_pbar = ProgressBar(total=len(potential), desc='Potential', disable=not pbar)
 
-        if not potential.has_tds:
-            potential = potential.calculate(pbar=pbar)
-            yield self.generate_probes(scan, potential, max_batch)
+        for potential_config in potential.generate_frozen_phonon_potentials(pbar=potential_pbar):
+            yield self.generate_probes(scan, potential_config, max_batch)
+            tds_bar.update(1)
 
-        else:
-            for potential_config in potential.generate_tds_potentials(pbar=pbar):
-                yield self.generate_probes(scan, potential_config, max_batch)
+        potential_pbar.close()
+        tds_bar.refresh()
+        tds_bar.close()
 
     def scan(self, scan: AbstractScan, detectors: Sequence[AbstractDetector],
              potential: Union[Atoms, AbstractPotential], max_batch=1, pbar: Union[ProgressBar, bool] = True):
@@ -460,16 +457,17 @@ class Probe(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
         for detector in detectors:
             measurements[detector] = detector.allocate_measurement(self.grid, self.wavelength, scan)
 
-
         scan_bar = ProgressBar(total=len(scan), desc='Scan', disable=not pbar)
-        potential_pbar = ProgressBar(total=len(potential), desc='Potential', disable=not pbar)
 
-        if isinstance(potential, 'generate_tds_configs'):
-            probe_generators = self.generate_tds_probes(scan, potential, max_batch, potential_pbar)
+        if isinstance(potential, AbstractTDSPotentialBuilder):
+            probe_generators = self.generate_tds_probes(scan, potential, max_batch, pbar)
         else:
-            pass
+            if isinstance(potential, AbstractPotentialBuilder):
+                potential = potential.build(pbar=True)
 
-        for probe_generator in self.generate_tds(scan, potential, max_batch, potential_pbar):
+            probe_generators = [self.generate_probes(scan, potential, max_batch)]
+
+        for probe_generator in probe_generators:
             scan_bar.reset()
             for start, end, exit_probes in probe_generator:
                 for detector, measurement in measurements.items():
@@ -478,12 +476,8 @@ class Probe(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
                 scan_bar.update(end - start)
 
             scan_bar.refresh()
-            tds_bar.update(1)
 
-        tds_bar.refresh()
-        potential_pbar.close()
         scan_bar.close()
-        tds_bar.close()
 
         return measurements
 
@@ -498,7 +492,7 @@ class Probe(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
                                                  names=['x'])[0]
             show_line(array, calibration, **kwargs)
         else:
-            return measurement.show()
+            return measurement.show(**kwargs)
 
     def show_interactive(self):
         from abtem.interactive import BokehImage

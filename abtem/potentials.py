@@ -1,5 +1,4 @@
 from abc import ABCMeta, abstractmethod
-from copy import copy
 from typing import Union, Sequence
 
 import h5py
@@ -8,17 +7,17 @@ from ase import Atoms
 from ase import units
 from scipy.optimize import brentq
 
-from abtem.bases import Grid, HasGridMixin, Cache, cached_method, HasAcceleratorMixin, Accelerator, watched_method, \
-    Event, watched_property
+from abtem.bases import Grid, HasGridMixin, Cache, cached_method, HasAcceleratorMixin, Accelerator, Event, \
+    watched_property
 from abtem.device import get_device_function, get_array_module, HasDeviceMixin, get_array_module_from_device, \
     copy_to_device
 from abtem.measure import calibrations_from_grid
 from abtem.parametrizations import kirkland, dvdr_kirkland, load_kirkland_parameters
 from abtem.parametrizations import lobato, dvdr_lobato, load_lobato_parameters
 from abtem.plot import show_image
-from abtem.structures import fill_rectangle, is_orthogonal
+from abtem.structures import is_orthogonal
 from abtem.tanh_sinh import integrate, tanh_sinh_nodes_and_weights
-from abtem.temperature import AbstractFrozenPhonons
+from abtem.temperature import AbstractFrozenPhonons, DummyFrozenPhonons
 from abtem.utils import energy2sigma, ProgressBar
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
@@ -33,11 +32,6 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    def thickness(self):
-        pass
-
-    @property
-    @abstractmethod
     def num_slices(self):
         pass
 
@@ -46,36 +40,55 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
             raise RuntimeError('slice index {} too large for potential with {} slices'.format(i, self.num_slices))
 
     def get_slice(self, i):
-        return PotentialSlice(self, i)
+        self.check_slice_idx(i)
+        return next(self.generate_slices(i, i + 1))
 
     @abstractmethod
-    def get_slice_array(self, i):
+    def generate_slices(self, start=0, end=None):
         pass
 
     @abstractmethod
     def get_slice_thickness(self, i):
         pass
 
-    def get_slice_entrance(self, i):
-        self.check_slice_idx(i)
-        return float(sum([self.get_slice_thickness(j) for j in range(i)]))
-
-    def get_slice_exit(self, i):
-        self.check_slice_idx(i)
-        return float(sum([self.get_slice_thickness(j) for j in range(i + 1)]))
-
     def __getitem__(self, item):
-        if not isinstance(item, int):
+        if isinstance(item, int):
+            if item >= self.num_slices:
+                raise StopIteration
+            return self.get_slice(item)
+        elif isinstance(item, slice):
+            if item.start is None:
+                start = 0
+            else:
+                start = item.start
+
+            if item.stop is None:
+                stop = len(self)
+            else:
+                stop = item.stop
+
+            if item.step is None:
+                step = 1
+            else:
+                step = item.step
+
+            projected = self[start]
+            for i in range(start + 1, stop, step):
+                projected._array += self[i]._array
+                projected._thickness += self.get_slice_thickness(i)
+            return projected
+        else:
             raise TypeError('potential indices must be integers, not {}'.format(type(item)))
-        if item >= self.num_slices:
-            raise StopIteration
-        return self.get_slice(item)
+
+    def show(self, **kwargs):
+        self[:].show(**kwargs)
 
 
 class AbstractPotentialBuilder(HasDeviceMixin, AbstractPotential):
 
     def __init__(self, device, storage=None, precalculate=True):
-        self._storage = storage
+        if storage is None:
+            self._storage = device
         self._device = device
         self._precalculate = precalculate
 
@@ -90,10 +103,11 @@ class AbstractPotentialBuilder(HasDeviceMixin, AbstractPotential):
             pbar = ProgressBar(total=len(self), desc='Potential', disable=not pbar)
 
         pbar.reset()
-        for i, potential_slice in enumerate(self):
-            array[i] = copy_to_device(potential_slice.calculate(), self._storage)
+        for i, potential_slice in enumerate(self.generate_slices()):
+            array[i] = copy_to_device(potential_slice.array, self._storage)
             slice_thicknesses[i] = potential_slice.thickness
             pbar.update(1)
+
         pbar.refresh()
 
         return ArrayPotential(array, slice_thicknesses, self.extent)
@@ -109,7 +123,6 @@ class AbstractTDSPotentialBuilder(AbstractPotentialBuilder):
     def frozen_phonons(self):
         pass
 
-    @property
     @abstractmethod
     def generate_frozen_phonon_potentials(self):
         pass
@@ -160,30 +173,42 @@ class PotentialIntegrator:
         return values, derivatives
 
 
-class PotentialSlice(HasGridMixin):
+class ProjectedPotential(HasGridMixin):
 
-    def __init__(self, potential: AbstractPotential, index: int):
-        self._potential = potential
-        self._index = index
-
-    @property
-    def _grid(self):
-        return self._potential.grid
-
-    @property
-    def index(self) -> int:
-        return self._index
+    def __init__(self, array, thickness, extent=None, sampling=None):
+        self._array = array
+        self._thickness = thickness
+        self._grid = Grid(extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True)
 
     @property
     def thickness(self) -> float:
-        return self._potential.get_slice_thickness(self.index)
+        return self._thickness
 
-    def get_array(self):
-        return self._potential.get_slice_array(self.index)
+    @property
+    def array(self):
+        return self._array
 
     def show(self, **kwargs):
         calibrations = calibrations_from_grid(self.grid.gpts, self.grid.sampling, names=['x', 'y'])
-        return show_image(self.get_array(), calibrations, **kwargs)
+        return show_image(self.array, calibrations, **kwargs)
+
+
+def pad_positions(positions, extent, margin):
+    left = positions[positions[:, 0] < margin]
+    left[:, 0] += extent[0]
+    right = positions[positions[:, 0] > extent[0] - margin]
+    right[:, 0] -= extent[0]
+
+    positions = np.vstack((positions, left, right))
+
+    top = positions[positions[:, 1] < margin]
+    top[:, 1] += extent[1]
+    bottom = positions[positions[:, 1] > extent[1] - margin]
+    bottom[:, 1] -= extent[1]
+
+    positions = np.vstack((positions, top, bottom))
+
+    return positions
 
 
 class Potential(AbstractTDSPotentialBuilder):
@@ -227,7 +252,7 @@ class Potential(AbstractTDSPotentialBuilder):
                  slice_thickness: float = .5,
                  parametrization: str = 'lobato',
                  cutoff_tolerance: float = 1e-3,
-                 device=None,
+                 device='cpu',
                  storage=None):
 
         self._cutoff_tolerance = cutoff_tolerance
@@ -248,55 +273,32 @@ class Potential(AbstractTDSPotentialBuilder):
         else:
             raise RuntimeError('parametrization {} not recognized'.format(parametrization))
 
-        self._grid = Grid(gpts=gpts, sampling=sampling)
+        if isinstance(atoms, AbstractFrozenPhonons):
+            self._frozen_phonons = atoms
+        else:
+            self._frozen_phonons = DummyFrozenPhonons(atoms)
 
-        self._padded_positions = {}
+        atoms = next(iter(self._frozen_phonons))
+
+        if np.abs(atoms.cell[2, 2]) < 1e-12:
+            raise RuntimeError('atoms has no thickness')
+
+        if not is_orthogonal(atoms):
+            raise RuntimeError('atoms are non-orthogonal')
+
+        self._atoms = atoms
+        self._grid = Grid(extent=np.diag(atoms.cell)[:2], gpts=gpts, sampling=sampling)
+
+        self._cutoffs = {}
         self._integrators = {}
-
-        def positions_changed_callback(*args, **kwargs):
-            self._padded_positions = {}
-
-        self.positions_changed = Event()
-        self.positions_changed.register(positions_changed_callback)
 
         def grid_changed_callback(*args, **kwargs):
             self._integrators = {}
 
         self.grid.changed.register(grid_changed_callback)
-        self.set_atoms(atoms)
-
         self.changed = Event()
 
         super().__init__(device=device, storage=storage)
-
-    @watched_method('positions_changed')
-    def displace_atoms(self, new_positons):
-        self._atoms.positions[:] = new_positons
-        self._atoms.wrap()
-
-    @watched_method('positions_changed')
-    def set_atoms(self, atoms):
-
-        if isinstance(atoms, AbstractFrozenPhonons):
-            self._frozen_phonons = atoms
-            self._atoms = next(atoms.generate_atoms())
-        else:
-            self._frozen_phonons = None
-            self._atoms = atoms.copy()
-
-        if np.abs(self._atoms.cell[2, 2]) < 1e-12:
-            raise RuntimeError('atoms has no thickness')
-
-        if not is_orthogonal(self._atoms):
-            raise RuntimeError('atoms are non-orthogonal')
-
-        self._thickness = self._atoms.cell[2, 2]
-        self.extent = np.diag(self._atoms.cell)[:2]
-
-        self._cutoffs = {}
-        for number in np.unique(self._atoms.numbers):
-            self._cutoffs[number] = brentq(lambda r: self.function(r, self.parameters[number])
-                                                     - self.cutoff_tolerance, 1e-7, 1000)
 
     @property
     def parameters(self):
@@ -319,12 +321,8 @@ class Potential(AbstractTDSPotentialBuilder):
         return self._cutoff_tolerance
 
     @property
-    def thickness(self):
-        return self._thickness
-
-    @property
     def num_slices(self):
-        return int(np.ceil(self.thickness / self._slice_thickness))
+        return int(np.ceil(self._atoms.cell[2, 2] / self._slice_thickness))
 
     @property
     def slice_thickness(self):
@@ -336,10 +334,15 @@ class Potential(AbstractTDSPotentialBuilder):
         self._slice_thickness = value
 
     def get_slice_thickness(self, i):
-        return self.thickness / self.num_slices
+        return self._atoms.cell[2, 2] / self.num_slices
 
     def _get_cutoff(self, number):
-        return self._cutoffs[number]
+        try:
+            return self._cutoffs[number]
+        except KeyError:
+            f = lambda r: self.function(r, self.parameters[number]) - self.cutoff_tolerance
+            self._cutoffs[number] = brentq(f, 1e-7, 1000)
+            return self._cutoffs[number]
 
     def _get_integrator(self, number):
         try:
@@ -363,71 +366,70 @@ class Potential(AbstractTDSPotentialBuilder):
             self._integrators[number] = (PotentialIntegrator(soft_potential, r), disc_indices)
             return self._integrators[number]
 
-    def _get_padded_positions(self, number):
-        try:
-            return self._padded_positions[number]
-        except KeyError:
-            cutoff = self._get_cutoff(number)
-            self._padded_positions[number] = fill_rectangle(self.atoms[self.atoms.numbers == number],
-                                                            self.extent,
-                                                            [0., 0.],
-                                                            margin=cutoff).positions
-            return self._padded_positions[number]
+    def generate_slices(self, start=0, end=None):
+        if end is None:
+            end = len(self)
 
-    def calculate_slice(self, i, xp=np):
-        self.check_slice_idx(i)
         self.grid.check_is_defined()
 
+        xp = get_array_module(self._device)
         interpolate_radial_functions = get_device_function(xp, 'interpolate_radial_functions')
 
-        a = self.get_slice_entrance(i)
-        b = self.get_slice_exit(i)
+        positions = self.atoms.get_positions()
+        numbers = self.atoms.get_atomic_numbers()
+        positions = {number: positions[numbers == number] for number in np.unique(numbers)}
 
         array = xp.zeros(self.gpts, dtype=xp.float32)
-        for number in self._cutoffs.keys():
-            integrator, disc_indices = self._get_integrator(number)
-            disc_indices = xp.asarray(disc_indices)
+        a = np.sum([self.get_slice_thickness(i) for i in range(0, start)])
+        for i in range(start, end):
+            array[:] = 0.
+            b = a + self.get_slice_thickness(i)
 
-            positions = self._get_padded_positions(number)
+            for number in np.unique(numbers):
+                integrator, disc_indices = self._get_integrator(number)
+                disc_indices = xp.asarray(disc_indices)
 
-            positions = positions[(positions[:, 2] > a - integrator.cutoff) *
-                                  (positions[:, 2] < b + integrator.cutoff)]
+                slice_positions = positions[number]
 
-            if len(positions) == 0:
-                continue
+                slice_positions = slice_positions[(slice_positions[:, 2] > a - integrator.cutoff) *
+                                                  (slice_positions[:, 2] < b + integrator.cutoff)]
 
-            vr = np.zeros((len(positions), len(integrator.r)), np.float32)
-            dvdr = np.zeros((len(positions), len(integrator.r)), np.float32)
-            for i, (am, bm) in enumerate(np.nditer((a - positions[:, 2], b - positions[:, 2]))):
-                vr[i], dvdr[i, :-1] = integrator.integrate(am.item(), bm.item())
-            vr = xp.asarray(vr, dtype=xp.float32)
-            dvdr = xp.asarray(dvdr, dtype=xp.float32)
-            r = xp.asarray(integrator.r, dtype=xp.float32)
+                slice_positions = pad_positions(slice_positions, self.extent, integrator.cutoff)
 
-            positions = xp.asarray(positions[:, :2], dtype=xp.float32)
-            sampling = xp.asarray(self.sampling, dtype=xp.float32)
+                if len(slice_positions) == 0:
+                    continue
 
-            interpolate_radial_functions(array,
-                                         disc_indices,
-                                         positions,
-                                         vr,
-                                         r,
-                                         dvdr,
-                                         sampling)
+                vr = np.zeros((len(slice_positions), len(integrator.r)), np.float32)
+                dvdr = np.zeros((len(slice_positions), len(integrator.r)), np.float32)
+                for i, (am, bm) in enumerate(np.nditer((a - slice_positions[:, 2], b - slice_positions[:, 2]))):
+                    vr[i], dvdr[i, :-1] = integrator.integrate(am.item(), bm.item())
+                vr = xp.asarray(vr, dtype=xp.float32)
+                dvdr = xp.asarray(dvdr, dtype=xp.float32)
+                r = xp.asarray(integrator.r, dtype=xp.float32)
 
-        return array / kappa
+                slice_positions = xp.asarray(slice_positions[:, :2], dtype=xp.float32)
+                sampling = xp.asarray(self.sampling, dtype=xp.float32)
 
-    def generate_tds_potentials(self, xp=np, pbar: Union[ProgressBar, bool] = True):
-        if not self.has_tds:
-            raise RuntimeError()
+                interpolate_radial_functions(array,
+                                             disc_indices,
+                                             slice_positions,
+                                             vr,
+                                             r,
+                                             dvdr,
+                                             sampling)
+            a = b
 
+            yield ProjectedPotential(array / kappa, self.get_slice_thickness(i), extent=self.extent)
+
+    def generate_frozen_phonon_potentials(self, pbar: Union[ProgressBar, bool] = True):
         if isinstance(pbar, bool):
             pbar = ProgressBar(total=len(self), desc='Potential', disable=not pbar)
 
-        for atoms in self._tds.generate_atoms():
-            self.displace_atoms(atoms.positions)
+        for atoms in self.frozen_phonons:
+            self.atoms.positions[:] = atoms.positions
+            self.atoms.wrap()
             pbar.reset()
-            yield self.calculate(xp=xp, pbar=pbar)
+            yield self.build(pbar=pbar)
             pbar.refresh()
 
 
@@ -441,7 +443,9 @@ def disc_meshgrid(r):
 
 class ArrayPotential(AbstractPotential, HasGridMixin):
 
-    def __init__(self, array: np.ndarray, slice_thicknesses: Union[float, Sequence], extent: np.ndarray = None,
+    def __init__(self, array: np.ndarray,
+                 slice_thicknesses: Union[float, Sequence],
+                 extent: np.ndarray = None,
                  sampling: np.ndarray = None):
 
         """
@@ -480,24 +484,12 @@ class ArrayPotential(AbstractPotential, HasGridMixin):
         complex_exponential = get_device_function(xp, 'complex_exponential')
 
         array = complex_exponential(energy2sigma(energy) * self._array)
-        t = TransmissionFunctions(array, slice_thicknesses=self._slice_thicknesses, energy=energy)
-        t._grid = copy(self.grid)
-        return t
-
-    def generate_tds_potentials(self):
-        yield self
-
-    @property
-    def tds(self):
-        return None
+        return TransmissionFunctions(array, slice_thicknesses=self._slice_thicknesses, extent=self.extent,
+                                     energy=energy)
 
     @property
     def array(self):
         return self._array
-
-    @property
-    def thickness(self):
-        return self._slice_thicknesses.sum()
 
     @property
     def num_slices(self):
@@ -506,19 +498,21 @@ class ArrayPotential(AbstractPotential, HasGridMixin):
     def get_slice_thickness(self, i):
         return self._slice_thicknesses[i]
 
-    def calculate_slice(self, i, xp=np):
-        return xp.asarray(self._array[i])
+    def generate_slices(self, start=0, end=None):
+        if end is None:
+            end = len(self)
 
-    def repeat(self, multiples):
+        for i in range(start, end):
+            yield ProjectedPotential(self.array[i], thickness=self.get_slice_thickness(i), extent=self.extent)
+
+    def tile(self, multiples):
         assert len(multiples) == 2
-        new_array = np.tile(self._array, (1,) + multiples)
+        new_array = np.tile(self.array, (1,) + multiples)
         new_extent = multiples * self.extent
         return self.__class__(array=new_array, slice_thicknesses=self._slice_thicknesses, extent=new_extent)
 
     def write(self, path):
         with h5py.File(path, 'w') as f:
-            dset = f.create_dataset('class', (1,), dtype='S100')
-            dset[:] = np.string_('abtem.potentials.ArrayPotential')
             f.create_dataset('array', data=self.array)
             f.create_dataset('slice_thicknesses', data=self._slice_thicknesses)
             f.create_dataset('extent', data=self.extent)

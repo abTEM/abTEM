@@ -16,8 +16,6 @@ def test_fig_5_12():
 
     intensity = np.abs(waves.array) ** 2
 
-    print(intensity.min(), intensity.max())
-
     assert np.round(intensity.min(), 2) == np.float32(.72)
     assert np.round(intensity.max(), 2) == np.float32(1.03)
 

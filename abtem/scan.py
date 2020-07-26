@@ -119,7 +119,7 @@ class LineScan(AbstractScan, HasGridMixin):
 
     @property
     def calibrations(self) -> tuple:
-        return (Calibration(offset=0, sampling=self.sampling, units='Å', name='x'),)
+        return (Calibration(offset=0, sampling=self.sampling[0], units='Å', name='x'),)
 
     @property
     def start(self) -> np.ndarray:

@@ -57,7 +57,7 @@ def fft2_convolve(array, kernel, overwrite_x=True):
 
     if len(array.shape) == 2:
         return _fft_convolve(array, kernel, overwrite_x=True)
-    elif (len(array.shape) == 3) & overwrite_x:
+    elif (len(array.shape) == 3):
         for i in range(len(array)):
             _fft_convolve(array[i], kernel, overwrite_x=True)
         return array
@@ -76,10 +76,19 @@ def fft2(array, overwrite_x):
             mkl_fft.fft2(array[i], overwrite_x=True)
         return array
     else:
-        raise NotImplementedError()
+        shape = array.shape
+        array = array.reshape((-1,) + shape[1:])
+        for i in range(array.shape[0]):
+            mkl_fft.fft2(array[i], overwrite_x=True)
+
+        array = array.reshape(shape)
+        return array
 
 
 def ifft2(array, overwrite_x):
+    if not overwrite_x:
+        array = array.copy()
+
     if len(array.shape) == 2:
         return mkl_fft.ifft2(array, overwrite_x=overwrite_x)
     elif len(array.shape) == 3:
@@ -128,6 +137,8 @@ def copy_to_device(array, device):
         if cp is None:
             raise RuntimeError('cupy is not installed, only cpu calculations available')
         return cp.asarray(array)
+    else:
+        raise RuntimeError()
 
 
 class HasDeviceMixin:
