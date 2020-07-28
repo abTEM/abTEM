@@ -9,7 +9,6 @@ import scipy.ndimage
 from scipy.ndimage import gaussian_filter
 from scipy.ndimage import zoom
 
-from abtem.bases import Grid
 from abtem.device import asnumpy
 from abtem.plot import show_image, show_line
 
@@ -21,6 +20,12 @@ class Calibration:
         self.sampling = sampling
         self.units = units
         self.name = name
+
+    def __eq__(self, other):
+        return ((self.offset == other.offset) &
+                (self.sampling == other.sampling) &
+                (self.units == other.units) &
+                (self.name == other.name))
 
     def copy(self):
         return self.__class__(self.offset, self.sampling, self.units, self.name)
@@ -70,6 +75,7 @@ class Measurement:
         self._name = name
 
     def __getitem__(self, args):
+
         if isinstance(args, Iterable):
             args += (slice(None),) * (len(self.array.shape) - len(args))
         else:
@@ -87,6 +93,9 @@ class Measurement:
                 new_calibrations.append(Calibration(offset=offset,
                                                     sampling=calibration.sampling,
                                                     units=calibration.units, name=calibration.name))
+            elif isinstance(arg, Iterable):
+                new_calibrations.append(None)
+
             elif not isinstance(arg, int):
                 raise TypeError('indices must be integers or slices, not float')
 
@@ -111,46 +120,25 @@ class Measurement:
     def dimensions(self):
         return len(self.array.shape)
 
-    def dpc_difference(self, positive_indices, negative_indices):
-        if self.dimensions < 3:
-            raise RuntimeError()
+    def __sub__(self, other):
+        assert isinstance(other, self.__class__)
 
-        array = self.array.reshape(self.array.shape[:self.dimensions - 2] + (-1,))
-        calibrations = self.calibrations[:self.dimensions - 2]
+        for calibration, other_calibration in zip(self.calibrations, other.calibrations):
+            if not calibration == other_calibration:
+                raise ValueError()
 
-        differences = array[..., positive_indices] - array[..., negative_indices]
-        if len(differences.shape) == len(array.shape):
-            differences = differences.sum(-1)
-
-        return self.__class__(differences, calibrations)
-
-    def dpc_sum(self, indices=None):
-        if self.dimensions < 3:
-            raise RuntimeError()
-
-        array = self.array.reshape(self.array.shape[:self.dimensions - 2] + (-1,))
-        calibrations = self.calibrations[:self.dimensions - 2]
-
-        if indices is None:
-            sums = array.sum(-1)
-        else:
-            sums = array[..., indices]
-            if len(sums.shape) == len(array.shape):
-                sums = sums.sum(-1)
-
-        return self.__class__(sums, calibrations)
-
-    def blur(self, amount, **kwargs):
-        calibrations = [calibration.copy() for calibration in self.calibrations]
-        return self.__class__(gaussian_filter(self.array, amount, **kwargs), calibrations, units=self.units,
-                              name=self.name)
+        difference = self.array - other.array
+        return self.__class__(difference, calibrations=self.calibrations, units=self.units, name=self.name)
 
     def mean(self, axis):
         if not isinstance(axis, Iterable):
             axis = (axis,)
 
-        array = self.array.mean(axis)
-        calibrations = list(set(self.calibrations) - set([self.calibrations[i] for i in axis]))
+        array = np.mean(self.array, axis=axis)
+
+        axis = [d % len(self.calibrations) for d in axis]
+        calibrations = [self.calibrations[i] for i in range(len(self.calibrations)) if i not in axis]
+
         return self.__class__(array, calibrations)
 
     def center_of_mass(self):

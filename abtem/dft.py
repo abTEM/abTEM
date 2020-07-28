@@ -1,12 +1,12 @@
 import numpy as np
-from abtem.bases import cached_method, Cache
-from abtem.interpolation import interpolation_kernel, interpolate_single
-from abtem.parametrizations import project_tanh_sinh
-from abtem.potentials import AbstractPotential
-# from abtem.structures import fill_rectangle_with_atoms, orthogonalize_array
-from abtem.utils import split_integer
 from ase import units
 from numba import jit
+from scipy.interpolate import RegularGridInterpolator
+
+from abtem.bases import cached_method
+from abtem.interpolation import interpolate_single
+from abtem.potentials import AbstractPotentialBuilder
+from abtem.utils import split_integer
 
 
 def orthogonalize_array(array, original_cell, origin, extent, new_gpts=None):
@@ -75,7 +75,7 @@ def get_paw_corrections(a, calculator, rcgauss=0.005):
     return radial_grid.r_g, dv_g
 
 
-class GPAWPotential(AbstractPotential):
+class GPAWPotential(AbstractPotentialBuilder):
     """
     GPAW DFT potential object
 
@@ -127,61 +127,50 @@ class GPAWPotential(AbstractPotential):
     def thickness(self):
         return self._calculator.atoms.cell[2, 2]
 
-    # @cached_method()
-    # def _get_paw_correction(self, i):
-    #     r, v = get_paw_corrections(i, self._calculator, rcgauss=self._core_size)
-    #     r = r * units.Bohr
-    #
-    #     dvdr = np.diff(v) / np.diff(r)
-    #
-    #     @jit(nopython=True, nogil=True)
-    #     def interpolator(x_interp):
-    #         return interpolate_single(r, v, dvdr, x_interp)
-    #
-    #     return interpolator
-    #
-    # def get_cutoff(self, atom):
-    #     return self._calculator.density.setups[atom].xc_correction.rgd.r_g[-1] * units.Bohr
-    #
-    # @cached_method()
-    # def max_cutoff(self):
-    #     density = self._calculator.density
-    #     max_cutoff = 0.
-    #     for atom in density.D_asp.keys():
-    #         max_cutoff = max(self.get_cutoff(atom), max_cutoff)
-    #     return max_cutoff
-    #
-    # @cached_method()
-    # def _get_electrostatic_potential(self):
-    #     return self._calculator.get_electrostatic_potential()
-    #
-    # @cached_method(('sampling',))
-    # def _get_quadrature(self):
-    #     m = self._quadrature_order
-    #     h = QUADRATURE_PARAMETER_RATIO / self._quadrature_order
-    #     return tanh_sinh_quadrature(m, h)
-    #
-    # @cached_method()
-    # def get_atoms(self):
-    #     return fill_rectangle_with_atoms(self._atoms, self._origin, self.extent, margin=self.max_cutoff(),
-    #                                      return_atom_labels=True)
+    def _get_paw_correction(self, i):
+        r, v = get_paw_corrections(i, self._calculator, rcgauss=self._core_size)
+        r = r * units.Bohr
 
-    # def slice_thickness(self, i):
-    #     return self._nz[i] * self._dz
-    #
-    # def _get_slice_array(self, i):
-    #     start = np.sum(self._nz[:i], dtype=np.int)
-    #     stop = np.sum(self._nz[:i + 1], dtype=np.int)
-    #     slice_entrance = start * self._dz
-    #     slice_exit = stop * self._dz
-    #
-    #     array = self._get_electrostatic_potential()
-    #     array = array[..., start:stop].sum(axis=-1) * self._dz
-    #
-    #     array = orthogonalize_array(array, self._calculator.atoms.cell[:2, :2], self._origin, self.extent, self.gpts)
-    #     array = self._get_projected_paw_corrections(slice_entrance, slice_exit) - array
-    #     return array
-    #
+        dvdr = np.diff(v) / np.diff(r)
+
+        @jit(nopython=True, nogil=True)
+        def interpolator(x_interp):
+            return interpolate_single(r, v, dvdr, x_interp)
+
+        return interpolator
+
+    def get_cutoff(self, atom):
+        return self._calculator.density.setups[atom].xc_correction.rgd.r_g[-1] * units.Bohr
+
+    def max_cutoff(self):
+        density = self._calculator.density
+        max_cutoff = 0.
+        for atom in density.D_asp.keys():
+            max_cutoff = max(self.get_cutoff(atom), max_cutoff)
+        return max_cutoff
+
+    def _get_electrostatic_potential(self):
+        return self._calculator.get_electrostatic_potential()
+
+    def slice_thickness(self, i):
+        return self._nz[i] * self._dz
+
+    def _get_slice_array(self, i):
+        start = np.sum(self._nz[:i], dtype=np.int)
+        stop = np.sum(self._nz[:i + 1], dtype=np.int)
+        slice_entrance = start * self._dz
+        slice_exit = stop * self._dz
+
+        array = self._get_electrostatic_potential()
+        array = array[..., start:stop].sum(axis=-1) * self._dz
+
+        array = orthogonalize_array(array, self._calculator.atoms.cell[:2, :2], self._origin, self.extent, self.gpts)
+        array = self._get_projected_paw_corrections(slice_entrance, slice_exit) - array
+        return array
+
+    def build(self, start=0, end=None):
+        pass
+
     # def _get_projected_paw_corrections(self, slice_entrance, slice_exit, num_integration_samples=400):
     #
     #     max_cutoff = self.max_cutoff()

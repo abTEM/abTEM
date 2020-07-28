@@ -133,7 +133,7 @@ class _PolarDetector(AbstractDetector):
 
         if nbins_radial > 1:
             shape += (nbins_radial,)
-            calibrations += (Calibration(offset=inner * 1000, sampling=self._radial_steps, units='mrad'),)
+            calibrations += (Calibration(offset=inner * 1000, sampling=self._radial_steps * 1000, units='mrad'),)
 
         if nbins_azimuthal > 1:
             shape += (nbins_azimuthal,)
@@ -145,15 +145,17 @@ class _PolarDetector(AbstractDetector):
             measurement = measurement.write(self.save_file)
         return measurement
 
-    def show(self, grid, wavelength, **kwargs):
+    def show(self, grid, wavelength, cbar_label='Detector regions', **kwargs):
+        grid.check_is_defined()
+
         array = np.full(grid.antialiased_gpts, -1, dtype=np.int)
         for i, indices in enumerate(self._get_regions(grid.antialiased_gpts, grid.antialiased_sampling, wavelength)):
             array.ravel()[indices] = i
 
         calibrations = calibrations_from_grid(grid.antialiased_gpts, grid.antialiased_sampling,
                                               names=['alpha_x', 'alpha_y'], units='mrad.',
-                                              scale_factor=wavelength, fourier_space=True)
-        return show_image(array, calibrations, **kwargs)
+                                              scale_factor=wavelength * 1000, fourier_space=True)
+        return show_image(array, calibrations, cbar_label=cbar_label, discrete=True, **kwargs)
 
 
 class AnnularDetector(_PolarDetector):
@@ -190,7 +192,7 @@ class AnnularDetector(_PolarDetector):
         return self.__class__(self.inner, self.outer, save_file=self.save_file)
 
 
-class AdjustableAnnularDetector(_PolarDetector):
+class FlexibleAnnularDetector(_PolarDetector):
 
     def __init__(self, step_size=.001, save_file=None):
         super().__init__(radial_steps=step_size, save_file=save_file)
@@ -207,15 +209,13 @@ class AdjustableAnnularDetector(_PolarDetector):
         return result
 
 
-class SegmentedDetector(AbstractDetector):
+class SegmentedDetector(_PolarDetector):
 
-    def __init__(self, inner, outer, nbins_radial, nbins_angular=1, save_file=None):
-
-        self._inner = inner
-        self._outer = outer
-        self._nbins_radial = nbins_radial
-        self._nbins_angular = nbins_angular
-        super().__init__(save_file=save_file)
+    def __init__(self, inner, outer, nbins_radial, nbins_angular, save_file=None):
+        radial_steps = (outer - inner) / nbins_radial
+        azimuthal_steps = 2 * np.pi / nbins_angular
+        super().__init__(inner=inner, outer=outer, radial_steps=radial_steps, azimuthal_steps=azimuthal_steps,
+                         save_file=save_file)
 
     @property
     def inner(self) -> float:
@@ -236,62 +236,33 @@ class SegmentedDetector(AbstractDetector):
         self._outer = value
 
     @property
-    def nbins_radial(self) -> float:
-        return self._nbins_radial
+    def nbins_radial(self) -> int:
+        return int((self.outer - self.inner) / self._radial_steps)
 
     @nbins_radial.setter
     @watched_property('changed')
-    def nbins_radial(self, value: float):
-        self._nbins_radial = value
+    def nbins_radial(self, value: int):
+        self._radial_steps = (self.outer - self.inner) / value
 
     @property
     def nbins_angular(self) -> float:
-        return self._nbins_angular
+        return int(2 * np.pi / self._azimuthal_steps)
 
     @nbins_angular.setter
     @watched_property('changed')
     def nbins_angular(self, value: float):
-        self._nbins_angular = value
-
-    @property
-    def shape(self) -> tuple:
-        return (self.nbins_radial, self.nbins_angular)
-
-    @property
-    def calibrations(self):
-        radial_sampling = (self.outer - self.inner) / self.nbins_radial * 1000
-        angular_sampling = 2 * np.pi / self.nbins_angular
-        return (Calibration(offset=self.inner * 1000, sampling=radial_sampling, units='mrad'),
-                Calibration(offset=0, sampling=angular_sampling, units='rad'))
+        self._azimuthal_steps = 2 * np.pi / value
 
     def detect(self, waves):
-        labels = self.get_integration_region(waves.grid, waves.wavelength)
-        xp = self.device_manager.get_array_library()
-        array = waves.array.copy()
+        xp = get_array_module(waves.array)
+        intensity = calculate_far_field_intensity(waves, overwrite=False)
+        indices = self._get_regions(waves.grid.antialiased_gpts, waves.grid.antialiased_sampling, waves.wavelength)
 
-        if self.device_manager.is_cuda:
-            intensity = abs2(cp.fft.fft2(array))
-        else:
-            fftw_forward, _ = create_fftw_objects(array)
-            fftw_forward()
-            intensity = abs2(array)
-
-        intensity = intensity.reshape((len(intensity), -1))
-        result = xp.zeros((len(intensity),) + self.shape, dtype=np.float32)
-
-        total_intensity = xp.sum(intensity, axis=1)
-        for i, indices in enumerate(label_to_index_generator(labels)):
-            j = i % self.nbins_angular
-            i = i // self.nbins_angular
-            result[:, i, j] = xp.sum(intensity[:, indices], axis=1) / total_intensity
-
-        return result
-
-    def show(self, grid, wavelength, **kwargs):
-        array = np.fft.fftshift(self.get_integration_region(grid, wavelength))
-        calibrations = calibrations_from_grid(grid, names=['alpha_x', 'alpha_y'], units='mrad.',
-                                              scale_factor=wavelength, fourier_space=True)
-        return show_image(array, calibrations, discrete=True, **kwargs)
+        total = xp.sum(intensity, axis=(-2, -1))
+        result = np.zeros((len(intensity), len(indices)), dtype=np.float32)
+        for i, indices in enumerate(indices):
+            result[:, i] = xp.sum(intensity.reshape((intensity.shape[0], -1))[:, indices], axis=-1) / total
+        return result.reshape((-1, self.nbins_radial, self.nbins_angular))
 
 
 class PixelatedDetector(AbstractDetector):
@@ -303,8 +274,8 @@ class PixelatedDetector(AbstractDetector):
         grid.check_is_defined()
         shape = (grid.gpts[0] // 2, grid.gpts[1] // 2)
 
-        samplings = 1 / grid.extent * wavelength * 1000
-        offsets = fourier_space_offset(grid.extent / np.array(shape), shape) * wavelength * 1000
+        samplings = [1 / l * wavelength * 1000 for l in grid.extent]
+        offsets = [fourier_space_offset(n, d) * wavelength * 1000 for n, d in zip(grid.gpts, grid.sampling)]
         calibrations = (Calibration(offset=offsets[0], sampling=samplings[0], units='mrad.', name='alpha_x'),
                         Calibration(offset=offsets[1], sampling=samplings[1], units='mrad.', name='alpha_y'))
 
