@@ -15,7 +15,7 @@ from abtem.measure import calibrations_from_grid
 from abtem.parametrizations import kirkland, dvdr_kirkland, load_kirkland_parameters
 from abtem.parametrizations import lobato, dvdr_lobato, load_lobato_parameters
 from abtem.plot import show_image
-from abtem.structures import is_orthogonal
+from abtem.structures import is_cell_orthogonal
 from abtem.tanh_sinh import integrate, tanh_sinh_nodes_and_weights
 from abtem.temperature import AbstractFrozenPhonons, DummyFrozenPhonons
 from abtem.utils import energy2sigma, ProgressBar
@@ -86,11 +86,8 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 
 class AbstractPotentialBuilder(HasDeviceMixin, AbstractPotential):
 
-    def __init__(self, device, storage=None, precalculate=True):
-        if storage is None:
-            self._storage = device
-        self._device = device
-        self._precalculate = precalculate
+    def __init__(self, storage='cpu'):
+        self._storage = storage
 
     def build(self, pbar: Union[bool, ProgressBar] = False) -> 'ArrayPotential':
         self.grid.check_is_defined()
@@ -115,8 +112,8 @@ class AbstractPotentialBuilder(HasDeviceMixin, AbstractPotential):
 
 class AbstractTDSPotentialBuilder(AbstractPotentialBuilder):
 
-    def __init__(self, device, storage=None, precalculate=True):
-        super().__init__(device, storage, precalculate)
+    def __init__(self, storage='cpu'):
+        super().__init__(storage)
 
     @property
     @abstractmethod
@@ -193,22 +190,24 @@ class ProjectedPotential(HasGridMixin):
         return show_image(self.array, calibrations, **kwargs)
 
 
-def pad_positions(positions, extent, margin):
-    left = positions[positions[:, 0] < margin]
-    left[:, 0] += extent[0]
-    right = positions[positions[:, 0] > extent[0] - margin]
-    right[:, 0] -= extent[0]
+def pad_atoms(atoms, margin):
+    if not is_cell_orthogonal(atoms):
+        raise RuntimeError()
 
-    positions = np.vstack((positions, left, right))
+    left = atoms[atoms.positions[:, 0] < margin]
+    left.positions[:, 0] += atoms.cell[0, 0]
+    right = atoms[atoms.positions[:, 0] > atoms.cell[0, 0] - margin]
+    right.positions[:, 0] -= atoms.cell[0, 0]
 
-    top = positions[positions[:, 1] < margin]
-    top[:, 1] += extent[1]
-    bottom = positions[positions[:, 1] > extent[1] - margin]
-    bottom[:, 1] -= extent[1]
+    atoms += left + right
 
-    positions = np.vstack((positions, top, bottom))
+    top = atoms[atoms.positions[:, 1] < margin]
+    top.positions[:, 1] += atoms.cell[1, 1]
+    bottom = atoms[atoms.positions[:, 1] > atoms.cell[1, 1] - margin]
+    bottom.positions[:, 1] -= atoms.cell[1, 1]
+    atoms += top + bottom
 
-    return positions
+    return atoms
 
 
 class Potential(AbstractTDSPotentialBuilder):
@@ -283,11 +282,11 @@ class Potential(AbstractTDSPotentialBuilder):
         if np.abs(atoms.cell[2, 2]) < 1e-12:
             raise RuntimeError('atoms has no thickness')
 
-        if not is_orthogonal(atoms):
+        if not is_cell_orthogonal(atoms):
             raise RuntimeError('atoms are non-orthogonal')
 
         self._atoms = atoms
-        self._grid = Grid(extent=np.diag(atoms.cell)[:2], gpts=gpts, sampling=sampling)
+        self._grid = Grid(extent=np.diag(atoms.cell)[:2], gpts=gpts, sampling=sampling, lock_extent=True)
 
         self._cutoffs = {}
         self._integrators = {}
@@ -298,7 +297,12 @@ class Potential(AbstractTDSPotentialBuilder):
         self.grid.changed.register(grid_changed_callback)
         self.changed = Event()
 
-        super().__init__(device=device, storage=storage)
+        self._device = device
+
+        if storage is None:
+            self._storage = device
+
+        super().__init__(storage=storage)
 
     @property
     def parameters(self):
@@ -375,9 +379,8 @@ class Potential(AbstractTDSPotentialBuilder):
         xp = get_array_module(self._device)
         interpolate_radial_functions = get_device_function(xp, 'interpolate_radial_functions')
 
-        positions = self.atoms.get_positions()
-        numbers = self.atoms.get_atomic_numbers()
-        positions = {number: positions[numbers == number] for number in np.unique(numbers)}
+        atoms = self.atoms.copy()
+        indices_by_number = {number: np.where(atoms.numbers == number)[0] for number in np.unique(atoms.numbers)}
 
         array = xp.zeros(self.gpts, dtype=xp.float32)
         a = np.sum([self.get_slice_thickness(i) for i in range(0, start)])
@@ -385,29 +388,30 @@ class Potential(AbstractTDSPotentialBuilder):
             array[:] = 0.
             b = a + self.get_slice_thickness(i)
 
-            for number in np.unique(numbers):
+            for number, indices in indices_by_number.items():
+                slice_atoms = atoms[indices]
+
                 integrator, disc_indices = self._get_integrator(number)
                 disc_indices = xp.asarray(disc_indices)
 
-                slice_positions = positions[number]
+                slice_atoms = slice_atoms[(slice_atoms.positions[:, 2] > a - integrator.cutoff) *
+                                          (slice_atoms.positions[:, 2] < b + integrator.cutoff)]
 
-                slice_positions = slice_positions[(slice_positions[:, 2] > a - integrator.cutoff) *
-                                                  (slice_positions[:, 2] < b + integrator.cutoff)]
+                slice_atoms = pad_atoms(slice_atoms, integrator.cutoff)
 
-                slice_positions = pad_positions(slice_positions, self.extent, integrator.cutoff)
-
-                if len(slice_positions) == 0:
+                if len(slice_atoms) == 0:
                     continue
 
-                vr = np.zeros((len(slice_positions), len(integrator.r)), np.float32)
-                dvdr = np.zeros((len(slice_positions), len(integrator.r)), np.float32)
-                for i, (am, bm) in enumerate(np.nditer((a - slice_positions[:, 2], b - slice_positions[:, 2]))):
-                    vr[i], dvdr[i, :-1] = integrator.integrate(am.item(), bm.item())
+                vr = np.zeros((len(slice_atoms), len(integrator.r)), np.float32)
+                dvdr = np.zeros((len(slice_atoms), len(integrator.r)), np.float32)
+                for j, atom in enumerate(slice_atoms):
+                    am, bm = a - atom.z, b - atom.z
+                    vr[j], dvdr[j, :-1] = integrator.integrate(am, bm)
                 vr = xp.asarray(vr, dtype=xp.float32)
                 dvdr = xp.asarray(dvdr, dtype=xp.float32)
                 r = xp.asarray(integrator.r, dtype=xp.float32)
 
-                slice_positions = xp.asarray(slice_positions[:, :2], dtype=xp.float32)
+                slice_positions = xp.asarray(slice_atoms.positions[:, :2], dtype=xp.float32)
                 sampling = xp.asarray(self.sampling, dtype=xp.float32)
 
                 interpolate_radial_functions(array,

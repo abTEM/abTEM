@@ -482,6 +482,7 @@ class Probe(HasGridMixin, HasAcceleratorMixin):
 
         return measurements
 
+
     def show(self, profile=False, **kwargs):
         measurement = self.build((self.extent[0] / 2, self.extent[1] / 2)).intensity()
 

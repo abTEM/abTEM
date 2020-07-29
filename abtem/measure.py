@@ -63,6 +63,14 @@ def calibrations_from_grid(gpts, sampling, names=None, units=None, fourier_space
     return calibrations
 
 
+def fwhm(y):
+    peak_idx = np.argmax(y)
+    peak_value = y[peak_idx]
+    left = np.argmin(np.abs(y[:peak_idx] - peak_value / 2))
+    right = peak_idx + np.argmin(np.abs(y[peak_idx:] - peak_value / 2))
+    return right - left
+
+
 class Measurement:
 
     def __init__(self, array, calibrations, units='', name=''):

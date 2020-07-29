@@ -1,22 +1,23 @@
 import numpy as np
 from ase import units
-from numba import jit
-from scipy.interpolate import RegularGridInterpolator
+from scipy.interpolate import RegularGridInterpolator, interp1d
 
-from abtem.bases import cached_method
-from abtem.interpolation import interpolate_single
-from abtem.potentials import AbstractPotentialBuilder
+from abtem.bases import Grid
+from abtem.device import get_device_function
+from abtem.potentials import AbstractPotentialBuilder, ProjectedPotential, disc_meshgrid, pad_atoms, \
+    PotentialIntegrator
 from abtem.utils import split_integer
+from abtem.structures import orthogonalize_cell
 
 
-def orthogonalize_array(array, original_cell, origin, extent, new_gpts=None):
-    if new_gpts is None:
-        new_gpts = array.shape
+def interpolate_rectangle(array, cell, extent, gpts, origin=None):
+    if origin is None:
+        origin = (0., 0.)
 
     origin = np.array(origin)
     extent = np.array(extent)
 
-    P = np.array(original_cell)
+    P = np.array(cell)
     P_inv = np.linalg.inv(P)
     origin_t = np.dot(origin, P_inv)
     origin_t = origin_t % 1.0
@@ -24,22 +25,23 @@ def orthogonalize_array(array, original_cell, origin, extent, new_gpts=None):
     lower = np.dot(origin_t, P)
     upper = lower + extent
 
-    n, m = np.ceil(np.dot(upper, P_inv)).astype(np.int)
+    padded_array = np.zeros((array.shape[0] + 1, array.shape[1] + 1))
+    padded_array[:-1, :-1] = array
+    padded_array[-1, :] = padded_array[0, :]
+    padded_array[:, -1] = padded_array[:, 0]
 
-    tiled = np.tile(array, (n + 2, m + 2))
-    x = np.linspace(-1, n + 1, tiled.shape[0], endpoint=False)
-    y = np.linspace(-1, m + 1, tiled.shape[1], endpoint=False)
+    x = np.linspace(0, 1, padded_array.shape[0], endpoint=True)
+    y = np.linspace(0, 1, padded_array.shape[1], endpoint=True)
 
-    x_ = np.linspace(lower[0], upper[0], new_gpts[0], endpoint=False)
-    y_ = np.linspace(lower[1], upper[1], new_gpts[1], endpoint=False)
+    x_ = np.linspace(lower[0], upper[0], gpts[0], endpoint=False)
+    y_ = np.linspace(lower[1], upper[1], gpts[1], endpoint=False)
     x_, y_ = np.meshgrid(x_, y_, indexing='ij')
 
     p = np.array([x_.ravel(), y_.ravel()]).T
-    p = np.dot(p, P_inv)
+    p = np.dot(p, P_inv) % 1.0
 
-    interpolated = RegularGridInterpolator((x, y), tiled)(p)
-
-    return interpolated.reshape((new_gpts[0], new_gpts[1]))
+    interpolated = RegularGridInterpolator((x, y), padded_array)(p)
+    return interpolated.reshape((gpts[0], gpts[1]))
 
 
 def gaussian(radial_grid, alpha):
@@ -106,106 +108,102 @@ class GPAWPotential(AbstractPotentialBuilder):
         The standard deviation of the Gaussian function representing the atomic core.
     """
 
-    def __init__(self, calculator, extent=None, gpts=None, sampling=None, slice_thickness=.5, core_size=.005):
+    def __init__(self, calculator, gpts=None, sampling=None, slice_thickness=.5, core_size=.005, storage='cpu'):
+
         self._calculator = calculator
         self._core_size = core_size
 
         thickness = calculator.atoms.cell[2, 2]
-        Nz = calculator.hamiltonian.finegd.N_c[2]
-        self._num_slices = int(np.ceil(Nz / np.floor(slice_thickness / (thickness / Nz))))
+        nz = calculator.hamiltonian.finegd.N_c[2]
+        num_slices = int(np.ceil(nz / np.floor(slice_thickness / (thickness / nz))))
 
-        self._nz = split_integer(Nz, self._num_slices)
-        self._dz = thickness / Nz
+        self._voxel_height = thickness / nz
+        self._slice_vertical_voxels = split_integer(nz, num_slices)
 
-        super().__init__()
+        # TODO: implement support for non-periodic extent
+
+        self._origin = (0., 0.)
+        extent = np.diag(orthogonalize_cell(calculator.atoms.copy(), strain_error=True).cell)[:2]
+
+        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling, lock_extent=True)
+
+        super().__init__(storage)
 
     @property
     def num_slices(self):
-        return self._num_slices
+        return len(self._slice_vertical_voxels)
 
-    @property
-    def thickness(self):
-        return self._calculator.atoms.cell[2, 2]
+    def get_slice_thickness(self, i):
+        return self._slice_vertical_voxels[i] * self._voxel_height
 
-    def _get_paw_correction(self, i):
-        r, v = get_paw_corrections(i, self._calculator, rcgauss=self._core_size)
-        r = r * units.Bohr
+    def generate_slices(self, start=0, stop=None):
+        interpolate_radial_functions = get_device_function(np, 'interpolate_radial_functions')
 
-        dvdr = np.diff(v) / np.diff(r)
+        if stop is None:
+            stop = len(self)
 
-        @jit(nopython=True, nogil=True)
-        def interpolator(x_interp):
-            return interpolate_single(r, v, dvdr, x_interp)
+        valence = self._calculator.get_electrostatic_potential()
+        cell = self._calculator.atoms.cell[:2, :2]
 
-        return interpolator
+        atoms = self._calculator.atoms.copy()
+        atoms.set_tags(range(len(atoms)))
+        atoms = orthogonalize_cell(atoms)
 
-    def get_cutoff(self, atom):
-        return self._calculator.density.setups[atom].xc_correction.rgd.r_g[-1] * units.Bohr
+        indices_by_number = {number: np.where(atoms.numbers == number)[0] for number in np.unique(atoms.numbers)}
 
-    def max_cutoff(self):
-        density = self._calculator.density
-        max_cutoff = 0.
-        for atom in density.D_asp.keys():
-            max_cutoff = max(self.get_cutoff(atom), max_cutoff)
-        return max_cutoff
+        na = sum(self._slice_vertical_voxels[:start])
+        a = na * self._voxel_height
+        for i in range(start, stop):
+            nb = na + self._slice_vertical_voxels[i]
+            b = a + self._slice_vertical_voxels[i] * self._voxel_height
 
-    def _get_electrostatic_potential(self):
-        return self._calculator.get_electrostatic_potential()
+            projected_valence = valence[..., na:nb].sum(axis=-1) * self._voxel_height
+            projected_valence = interpolate_rectangle(projected_valence, cell, self.extent, self.gpts, self._origin)
 
-    def slice_thickness(self, i):
-        return self._nz[i] * self._dz
+            array = np.zeros(self.gpts, dtype=np.float32)
+            for number, indices in indices_by_number.items():
+                slice_atoms = atoms[indices]
 
-    def _get_slice_array(self, i):
-        start = np.sum(self._nz[:i], dtype=np.int)
-        stop = np.sum(self._nz[:i + 1], dtype=np.int)
-        slice_entrance = start * self._dz
-        slice_exit = stop * self._dz
+                if len(slice_atoms) == 0:
+                    continue
 
-        array = self._get_electrostatic_potential()
-        array = array[..., start:stop].sum(axis=-1) * self._dz
+                r = self._calculator.density.setups[indices[0]].xc_correction.rgd.r_g[1:] * units.Bohr
+                cutoff = r[-1]
 
-        array = orthogonalize_array(array, self._calculator.atoms.cell[:2, :2], self._origin, self.extent, self.gpts)
-        array = self._get_projected_paw_corrections(slice_entrance, slice_exit) - array
-        return array
+                margin = np.int(np.ceil(cutoff / np.min(self.sampling)))
+                rows, cols = disc_meshgrid(margin)
+                disc_indices = np.hstack((rows[:, None], cols[:, None]))
 
-    def build(self, start=0, end=None):
-        pass
+                slice_atoms = slice_atoms[(slice_atoms.positions[:, 2] > a - cutoff) *
+                                          (slice_atoms.positions[:, 2] < b + cutoff)]
 
-    # def _get_projected_paw_corrections(self, slice_entrance, slice_exit, num_integration_samples=400):
-    #
-    #     max_cutoff = self.max_cutoff()
-    #
-    #     atoms, equivalent = self.get_atoms()
-    #     positions = atoms.get_positions()
-    #
-    #     v = np.zeros(self.gpts)
-    #
-    #     idx_in_slice = np.where(((slice_entrance - max_cutoff) < positions[:, 2]) &
-    #                             ((slice_exit + max_cutoff) > positions[:, 2]))[0]
-    #
-    #     for idx in idx_in_slice:
-    #         paw_correction = self._get_paw_correction(equivalent[idx])
-    #         position = positions[idx]
-    #         cutoff = self.get_cutoff(equivalent[idx])
-    #
-    #         z0 = slice_entrance - position[2]
-    #         z1 = slice_exit - position[2]
-    #
-    #         r = np.geomspace(min(self.sampling) / 2, cutoff, int(np.ceil(cutoff / self._interpolation_sampling)))
-    #
-    #         xk, wk = self._get_quadrature()
-    #
-    #         vr = project_tanh_sinh(r, np.array([z0]), np.array([z1]), xk, wk, paw_correction)
-    #
-    #         block_margin = np.int(cutoff / min(self.sampling))
-    #         block_size = 2 * block_margin + 1
-    #
-    #         corner_positions = (np.round(position[:2] / self.sampling)).astype(np.int) - block_margin
-    #         block_positions = position[:2] - self.sampling * corner_positions
-    #
-    #         x = np.linspace(0., block_size * self.sampling[0] - self.sampling[0], block_size)
-    #         y = np.linspace(0., block_size * self.sampling[1] - self.sampling[1], block_size)
-    #
-    #         interpolation_kernel(v, r, vr[0], corner_positions, block_positions, x, y)
-    #
-    #     return - v / np.sqrt(4 * np.pi) * units.Ha
+                slice_atoms = pad_atoms(slice_atoms, cutoff)
+
+                R = np.geomspace(np.min(self.sampling), cutoff, int(np.ceil(cutoff / np.min(self.sampling) * 10)))
+
+                vr = np.zeros((len(slice_atoms), len(R)), np.float32)
+                dvdr = np.zeros((len(slice_atoms), len(R)), np.float32)
+                for j, atom in enumerate(slice_atoms):
+                    r, v = get_paw_corrections(atom.tag, self._calculator, self._core_size)
+
+                    f = interp1d(r * units.Bohr, v, fill_value=(v[0], 0), bounds_error=False)
+                    integrator = PotentialIntegrator(f, R)
+                    am, bm = a - atom.z, b - atom.z
+
+                    vr[j], dvdr[j, :-1] = integrator.integrate(am, bm)
+
+                sampling = np.asarray(self.sampling, dtype=np.float32)
+
+                interpolate_radial_functions(array,
+                                             disc_indices,
+                                             slice_atoms.positions,
+                                             vr,
+                                             R,
+                                             dvdr,
+                                             sampling)
+
+            array = -(projected_valence + array / np.sqrt(4 * np.pi) * units.Ha)
+            array -= array.min()
+            yield ProjectedPotential(array, self.get_slice_thickness(i), extent=self.extent)
+            a = b
+            na = nb
