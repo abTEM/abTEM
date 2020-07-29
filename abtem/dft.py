@@ -203,7 +203,6 @@ class GPAWPotential(AbstractPotentialBuilder):
                                              sampling)
 
             array = -(projected_valence + array / np.sqrt(4 * np.pi) * units.Ha)
-            array -= array.min()
             yield ProjectedPotential(array, self.get_slice_thickness(i), extent=self.extent)
             a = b
             na = nb
