@@ -1,17 +1,12 @@
-import numpy as np
-import pytest
-
-from abtem.waves import Propagator
+from abtem.waves import FresnelPropagator, PlaneWave
 
 
-@pytest.fixture
-def propagator():
-    return Propagator(extent=5, gpts=16, energy=60e3)
+def test_propagator_cache():
+    wave = PlaneWave(extent=10, gpts=100, energy=60e3).build()
 
+    propagator = FresnelPropagator()
+    propagator.propagate(wave, .5)
+    propagator.propagate(wave, .5)
 
-def test_propagator(propagator):
-    assert np.allclose(propagator.build(-.5) * propagator.build(.5), 1.)
-
-
-def test_propagator_cache(propagator):
-    assert propagator.build(.5) is propagator.build(.5) is propagator.cache['build'][(0.5,)]
+    assert propagator.cache._hits == 1
+    assert propagator.cache._misses == 1

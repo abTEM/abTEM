@@ -1,12 +1,12 @@
 from copy import copy
-from typing import Union, Sequence
+from typing import Union, Sequence, Tuple
 
 import h5py
 import numpy as np
 from ase import Atoms
 
 from abtem.bases import Grid, Accelerator, HasGridMixin, HasAcceleratorMixin, cache_clear_callback, watched_property, \
-    Cache, cached_method
+    Cache, cached_method, HasGridAndAcceleratorMixin
 from abtem.detect import AbstractDetector, crop_to_center
 from abtem.device import get_array_module, get_device_function, asnumpy, HasDeviceMixin, get_array_module_from_device, \
     copy_to_device
@@ -23,9 +23,9 @@ class FresnelPropagator:
     def __init__(self):
         self.cache = Cache(1)
 
-    def antialiasing_aperture(self, gpts, xp):
-        x = 1 - cosine_window(np.abs(xp.fft.fftfreq(gpts[0])), .25, .1, 'high')
-        y = 1 - cosine_window(np.abs(xp.fft.fftfreq(gpts[1])), .25, .1, 'high')
+    def antialiasing_aperture(self, gpts: Tuple[int]):
+        x = 1 - cosine_window(np.abs(np.fft.fftfreq(gpts[0])), .25, .1, 'high')
+        y = 1 - cosine_window(np.abs(np.fft.fftfreq(gpts[1])), .25, .1, 'high')
         return x[:, None] * y[None]
 
     @cached_method('cache')
@@ -35,15 +35,13 @@ class FresnelPropagator:
         ky = xp.fft.fftfreq(gpts[1], sampling[1]).astype(xp.float32)
         f = (complex_exponential(-(kx ** 2)[:, None] * np.pi * wavelength * dz) *
              complex_exponential(-(ky ** 2)[None] * np.pi * wavelength * dz))
-        f *= self.antialiasing_aperture(gpts, xp)
+        f *= xp.asarray(self.antialiasing_aperture(gpts))
         return f
 
-    def propagate(self, waves, dz):
+    def propagate(self, waves: Union['Waves', 'SMatrix', 'PartialSMatrix'], dz: float):
         p = self.get_array(waves.grid.gpts, waves.grid.sampling, dz, waves.wavelength, get_array_module(waves.array))
-
         fft2_convolve = get_device_function(get_array_module(waves.array), 'fft2_convolve')
         fft2_convolve(waves._array, p)
-        return waves
 
 
 def transmit(waves, potential_slice):
@@ -57,28 +55,20 @@ def transmit(waves, potential_slice):
     else:
         waves._array *= complex_exponential(waves.accelerator.sigma * slice_array)
 
-    return waves
 
-
-def multislice(waves: Union['Waves', 'SMatrix', 'PartialSMatrix'], potential: AbstractPotential, propagator=None,
+def multislice(waves: Union['Waves', 'SMatrix', 'PartialSMatrix'],
+               potential: AbstractPotential,
+               propagator: FresnelPropagator = None,
                pbar: Union[ProgressBar, bool] = True):
     """
     Propagate the wave function through a potential using the multislice
 
     Parameters
     ----------
-    potential : Potential object or Atoms object
-        The potential to propaget the waves through.
-    in_place : bool
-        Modify the wavefunction arrays in place.
-    show_progress : bool
-        If true create a progress bar.
 
-    Returns
-    -------
-    Waves object
-        Wave functions after multislice propagation through the potential.
 
+    potential : Potential object
+        The potential to propagate the waves through.
     """
 
     waves.grid.match(potential)
@@ -101,7 +91,7 @@ def multislice(waves: Union['Waves', 'SMatrix', 'PartialSMatrix'], potential: Ab
     return waves
 
 
-class Waves(HasGridMixin, HasAcceleratorMixin):
+class Waves(HasGridAndAcceleratorMixin):
     """
     Waves object.
 
@@ -120,36 +110,39 @@ class Waves(HasGridMixin, HasAcceleratorMixin):
         Wave function energy [eV]
     """
 
-    def __init__(self, array: np.ndarray, extent: Union[float, Sequence[float]] = None,
-                 sampling: Union[float, Sequence[float]] = None, energy: float = None):
+    def __init__(self,
+                 array: np.ndarray,
+                 extent: Union[float, Sequence[float]] = None,
+                 sampling: Union[float, Sequence[float]] = None,
+                 energy: float = None):
 
-        # if len(array.shape) == 2:
-        #    array = array[None]
+        if len(array.shape) < 2:
+            raise RuntimeError('wave function array should be have 2 dimensions or more')
 
         self._array = array
         self._grid = Grid(extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True)
         self._accelerator = Accelerator(energy=energy)
 
     @property
-    def array(self):
+    def array(self) -> np.ndarray:
         return self._array
 
-    def intensity(self):
+    def intensity(self) -> Measurement:
         calibrations = calibrations_from_grid(self.grid.gpts, self.grid.sampling, ['x', 'y'])
-        calibrations = [None] * (len(self.array.shape) - 2) + calibrations
+        calibrations = (None,) * (len(self.array.shape) - 2) + calibrations
 
         abs2 = get_device_function(get_array_module(self.array), 'abs2')
         return Measurement(abs2(self.array), calibrations)
 
-    def diffraction_pattern(self):
+    def diffraction_pattern(self) -> Measurement:
         calibrations = calibrations_from_grid(self.grid.antialiased_gpts,
                                               self.grid.antialiased_sampling,
                                               names=['alpha_x', 'alpha_y'],
                                               units='mrad.',
-                                              scale_factor=self.wavelength,
+                                              scale_factor=self.wavelength * 1000,
                                               fourier_space=True)
 
-        calibrations = [None] * (len(self.array.shape) - 2) + calibrations
+        calibrations = (None,) * (len(self.array.shape) - 2) + calibrations
 
         xp = get_array_module(self.array)
         abs2 = get_device_function(xp, 'abs2')
@@ -157,7 +150,7 @@ class Waves(HasGridMixin, HasAcceleratorMixin):
         pattern = asnumpy(abs2(crop_to_center(xp.fft.fftshift(fft2(self.array, overwrite_x=False)))))
         return Measurement(pattern, calibrations)
 
-    def apply_ctf(self, ctf=None, **kwargs):
+    def apply_ctf(self, ctf: CTF = None, **kwargs):
         """
         Apply the aberrations defined by a CTF object to wave function.
 
@@ -165,8 +158,6 @@ class Waves(HasGridMixin, HasAcceleratorMixin):
         ----------
         ctf : CTF object
             Contrast Transfer Function object to be applied
-        in_place : bool
-            If true modify the array representing the wave in place, otherwise create a copy.
         kwargs :
 
         Returns
@@ -190,6 +181,8 @@ class Waves(HasGridMixin, HasAcceleratorMixin):
                               energy=self.energy)
 
     def multislice(self, potential: AbstractPotential, pbar: Union[ProgressBar, bool] = True):
+        self.grid.match(potential)
+
         propagator = FresnelPropagator()
 
         if isinstance(potential, AbstractTDSPotentialBuilder):
@@ -201,10 +194,10 @@ class Waves(HasGridMixin, HasAcceleratorMixin):
             tds_pbar = ProgressBar(total=N, desc='TDS', disable=(not pbar) or (N == 1))
             multislice_pbar = ProgressBar(total=len(potential), desc='Multislice', disable=not pbar)
 
-            for i, potential in enumerate(potential.generate_frozen_phonon_potentials()):
+            for i, potential_config in enumerate(potential.generate_frozen_phonon_potentials(pbar=pbar)):
                 multislice_pbar.reset()
 
-                exit_waves = multislice(self.copy(), potential, propagator=propagator, pbar=multislice_pbar)
+                exit_waves = multislice(copy(self), potential_config, propagator=propagator, pbar=multislice_pbar)
                 tds_waves.array[i] = exit_waves.array
                 tds_pbar.update(1)
 
@@ -215,7 +208,7 @@ class Waves(HasGridMixin, HasAcceleratorMixin):
         else:
             return multislice(self, potential, propagator, pbar)
 
-    def write(self, path, overwrite=True) -> None:
+    def write(self, path: str) -> None:
         """
         Write Waves object to file.
 
@@ -234,7 +227,7 @@ class Waves(HasGridMixin, HasAcceleratorMixin):
             f.create_dataset('extent', data=self.extent)
 
     @classmethod
-    def read(cls, path):
+    def read(cls, path: str) -> 'Waves':
         with h5py.File(path, 'r') as f:
             datasets = {}
             for key in f.keys():
@@ -247,7 +240,7 @@ class Waves(HasGridMixin, HasAcceleratorMixin):
             raise RuntimeError()
         return self.__class__(array=self._array[item], extent=self.extent, energy=self.energy)
 
-    def copy(self):
+    def __copy__(self):
         """
         Return a copy.
         """
@@ -260,7 +253,7 @@ class Waves(HasGridMixin, HasAcceleratorMixin):
         self.intensity().show(**kwargs)
 
 
-class PlaneWave(HasGridMixin, HasAcceleratorMixin):
+class PlaneWave(HasGridAndAcceleratorMixin):
     """
     Plane waves object
 
@@ -301,7 +294,7 @@ class PlaneWave(HasGridMixin, HasAcceleratorMixin):
         return self.__class__(extent=self.extent, gpts=self.gpts, sampling=self.sampling, energy=self.energy)
 
 
-class Probe(HasGridMixin, HasAcceleratorMixin):
+class Probe(HasGridAndAcceleratorMixin):
     """
     Probe waves object
 
@@ -337,7 +330,7 @@ class Probe(HasGridMixin, HasAcceleratorMixin):
 
     def __init__(self,
                  semiangle_cutoff: float = np.inf,
-                 rolloff: float = 0.05,
+                 rolloff: float = 0.1,
                  focal_spread: float = 0.,
                  angular_spread: float = 0.,
                  ctf_parameters: dict = None,
@@ -448,7 +441,9 @@ class Probe(HasGridMixin, HasAcceleratorMixin):
         tds_bar.refresh()
         tds_bar.close()
 
-    def scan(self, scan: AbstractScan, detectors: Sequence[AbstractDetector],
+    def scan(self,
+             scan: AbstractScan,
+             detectors: Sequence[AbstractDetector],
              potential: Union[Atoms, AbstractPotential], max_batch=1, pbar: Union[ProgressBar, bool] = True):
 
         self.grid.match(potential.grid)
@@ -481,7 +476,6 @@ class Probe(HasGridMixin, HasAcceleratorMixin):
         scan_bar.close()
 
         return measurements
-
 
     def show(self, profile=False, **kwargs):
         measurement = self.build((self.extent[0] / 2, self.extent[1] / 2)).intensity()
@@ -561,28 +555,28 @@ class PartialSMatrix(HasGridMixin, HasAcceleratorMixin):
         return self._parent._accelerator
 
 
-class SMatrix(HasGridMixin, HasAcceleratorMixin):
+class SMatrix(HasGridAndAcceleratorMixin):
     """
     Scattering matrix object
 
-    The scattering matrix object represents a plane wave expansion of a scanning transmission electron microscopy probe.
+    The scattering matrix object represents a plane wave expansion of a probe.
 
     Parameters
     ----------
-    array : 3d numpy array
+    array : 3d array
         The array representation of the scattering matrix.
     interpolation : int
-
+        Interpolation factor
     expansion_cutoff : float
-        The angular cutoff of the plane wave expansion.
-    kx : sequence of floats
-        The
-    ky : sequence of floats
+        The angular cutoff of the plane wave expansion in mrad.
+    k : tuple of ndarray of float
+        The spatial frequencies
     extent : two floats, float, optional
         Lateral extent of the scattering matrix, if the unit cell of the atoms is too small it will be repeated. Units of Angstrom.
     sampling : two floats, float, optional
         Lateral sampling of the scattering matrix. Units of 1 / Angstrom.
-    energy :
+    energy : float, optional
+        Acceleration energy [eV].
     always_recenter :
     """
 
@@ -590,9 +584,7 @@ class SMatrix(HasGridMixin, HasAcceleratorMixin):
                  array: np.ndarray,
                  interpolation: int,
                  expansion_cutoff: float,
-                 kx: np.ndarray,
-                 ky: np.ndarray,
-                 position: Sequence[float] = None,
+                 k: Tuple[np.ndarray],
                  extent: Union[float, Sequence[float]] = None,
                  sampling: Union[float, Sequence[float]] = None,
                  energy: float = None,
@@ -600,15 +592,17 @@ class SMatrix(HasGridMixin, HasAcceleratorMixin):
                  ctf: CTF = None):
 
         self._array = array
-        self._position = np.array(position)
         self._interpolation = interpolation
         self._expansion_cutoff = expansion_cutoff
-        self._kx = kx
-        self._ky = ky
+        self._k = k
         self.always_recenter = always_recenter
         self._grid = Grid(extent=extent, gpts=array.shape[1:], sampling=sampling, lock_gpts=True)
 
         self._accelerator = Accelerator(energy=energy)
+
+        if ctf is None:
+            ctf = CTF(semiangle_cutoff=expansion_cutoff, rolloff=.1)
+
         self.set_ctf(ctf)
 
     def set_ctf(self, ctf: CTF = None, **kwargs):
@@ -623,20 +617,12 @@ class SMatrix(HasGridMixin, HasAcceleratorMixin):
         return self._ctf
 
     @property
-    def position(self):
-        return self._position
-
-    @property
     def array(self):
         return self._array
 
     @property
-    def kx(self) -> np.ndarray:
-        return self._kx
-
-    @property
-    def ky(self) -> np.ndarray:
-        return self._ky
+    def k(self) -> Tuple[np.ndarray]:
+        return self._k
 
     @property
     def interpolation(self) -> int:
@@ -648,8 +634,8 @@ class SMatrix(HasGridMixin, HasAcceleratorMixin):
         return Grid(gpts=interpolated_gpts, sampling=self.sampling, lock_gpts=True)
 
     def _evaluate_ctf(self, xp):
-        alpha = xp.sqrt(self._kx ** 2 + self._ky ** 2) * self.wavelength
-        phi = xp.arctan2(self._kx, self._ky)
+        alpha = xp.sqrt(self.k[0] ** 2 + self.k[1] ** 2) * self.wavelength
+        phi = xp.arctan2(self.k[0], self.k[1])
         return self._ctf.evaluate(alpha, phi)
 
     def __len__(self):
@@ -731,7 +717,7 @@ class SMatrix(HasGridMixin, HasAcceleratorMixin):
     def scan(self,
              scan: AbstractScan,
              detectors: Sequence[AbstractDetector],
-             max_batch_positions=1,
+             max_batch_probes=1,
              max_batch_expansion=None,
              pbar: Union[ProgressBar, bool] = True):
 
@@ -742,7 +728,7 @@ class SMatrix(HasGridMixin, HasAcceleratorMixin):
         if isinstance(pbar, bool):
             pbar = ProgressBar(total=len(scan), desc='Scan', disable=not pbar)
 
-        for start, end, exit_probes in self.generate_probes(scan, max_batch_positions, max_batch_expansion):
+        for start, end, exit_probes in self.generate_probes(scan, max_batch_probes, max_batch_expansion):
             for detector, measurement in measurements.items():
                 scan.insert_new_measurement(measurement, start, end, detector.detect(exit_probes))
             pbar.update(end - start)
@@ -752,7 +738,7 @@ class SMatrix(HasGridMixin, HasAcceleratorMixin):
         return measurements
 
 
-class SMatrixBuilder(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
+class SMatrixBuilder(HasGridAndAcceleratorMixin):
 
     def __init__(self,
                  expansion_cutoff: float,
@@ -841,6 +827,7 @@ class SMatrixBuilder(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
         potential_pbar.close()
 
     def multislice(self, potential, max_batch=None, pbar: Union[ProgressBar, bool] = True):
+        self.grid.match(potential)
         return self.build().multislice(potential, max_batch=max_batch, pbar=pbar)
 
     def scan(self,
@@ -900,12 +887,12 @@ class SMatrixBuilder(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
-        xp = self.get_array_module()
+        xp = get_array_module(self._device)
         storage_xp = get_array_module_from_device(self._storage)
         complex_exponential = get_device_function(xp, 'complex_exponential')
 
-        n_max = int(xp.ceil(self.expansion_cutoff / (self.wavelength / self.extent[0] * self.interpolation)))
-        m_max = int(xp.ceil(self.expansion_cutoff / (self.wavelength / self.extent[1] * self.interpolation)))
+        n_max = int(xp.ceil(self.expansion_cutoff / 1000. / (self.wavelength / self.extent[0] * self.interpolation)))
+        m_max = int(xp.ceil(self.expansion_cutoff / 1000. / (self.wavelength / self.extent[1] * self.interpolation)))
 
         n = xp.arange(-n_max, n_max + 1, dtype=xp.float32)
         w = xp.asarray(self.extent[0], dtype=xp.float32)
@@ -915,7 +902,7 @@ class SMatrixBuilder(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
         kx = n / w * xp.float32(self.interpolation)
         ky = m / h * xp.float32(self.interpolation)
 
-        mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (self.expansion_cutoff / self.wavelength) ** 2
+        mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (self.expansion_cutoff / 1000. / self.wavelength) ** 2
         kx, ky = xp.meshgrid(kx, ky, indexing='ij')
         kx = kx[mask]
         ky = ky[mask]

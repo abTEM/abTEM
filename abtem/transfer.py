@@ -28,7 +28,7 @@ class CTF(HasAcceleratorMixin):
 
         for key in kwargs.keys():
             if ((key not in polar_symbols) and (key not in polar_aliases.keys())):
-                raise RuntimeError()
+                raise ValueError('{} not a recognized parameter'.format(key))
 
         self.changed = Event()
 
@@ -141,13 +141,14 @@ class CTF(HasAcceleratorMixin):
 
     def evaluate_aperture(self, alpha) -> np.ndarray:
         xp = get_array_module(alpha)
+        semiangle_cutoff = self.semiangle_cutoff / 1000.
         if self.rolloff > 0.:
-            rolloff = self.rolloff * self.semiangle_cutoff
-            array = .5 * (1 + xp.cos(np.pi * (alpha - self.semiangle_cutoff + rolloff) / rolloff))
-            array[alpha > self.semiangle_cutoff] = 0.
-            array = xp.where(alpha > self.semiangle_cutoff - rolloff, array, xp.ones_like(alpha, dtype=xp.float32))
+            rolloff = self.rolloff * semiangle_cutoff
+            array = .5 * (1 + xp.cos(np.pi * (alpha - semiangle_cutoff + rolloff) / rolloff))
+            array[alpha > semiangle_cutoff] = 0.
+            array = xp.where(alpha > semiangle_cutoff - rolloff, array, xp.ones_like(alpha, dtype=xp.float32))
         else:
-            array = xp.array(alpha < self.semiangle_cutoff).astype(xp.float32)
+            array = xp.array(alpha < semiangle_cutoff).astype(xp.float32)
         return array
 
     def evaluate_temporal_envelope(self, alpha: np.ndarray) -> np.ndarray:
@@ -187,7 +188,8 @@ class CTF(HasAcceleratorMixin):
                           4. * p['C54'] * xp.sin(4. * (phi - p['phi54'])) +
                           2. * p['C52'] * xp.sin(2. * (phi - p['phi52']))) * alpha ** 5)
 
-        return xp.exp(-xp.sign(self.angular_spread) * (self.angular_spread / 2) ** 2 * (dchi_dk ** 2 + dchi_dphi ** 2))
+        return xp.exp(-xp.sign(self.angular_spread) * (self.angular_spread / 1000. / 2) ** 2 *
+                      (dchi_dk ** 2 + dchi_dphi ** 2))
 
     def evaluate_chi(self, alpha, phi) -> np.ndarray:
         """
@@ -257,7 +259,10 @@ class CTF(HasAcceleratorMixin):
         complex_exponential = get_device_function(xp, 'complex_exponential')
         return complex_exponential(-self.evaluate_chi(alpha, phi))
 
-    def evaluate(self, alpha=None, phi=None):
+    def evaluate(self, alpha, phi):
+        alpha = np.array(alpha)
+        phi = np.array(phi)
+
         array = self.evaluate_aberrations(alpha, phi)
 
         if self.semiangle_cutoff < np.inf:

@@ -87,16 +87,16 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
 
 
 def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='gray', figsize=None, scans=None,
-               display_func=None, discrete=False, cbar_label=None, vmin=None, vmax=None, **kwargs):
-    if display_func is None:
-        if np.iscomplexobj(array):
-            display_func = abs2
+               log_scale=False, discrete=False, cbar_label=None, vmin=None, vmax=None, **kwargs):
+
+    if np.iscomplexobj(array):
+        array = abs2(array)
 
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
 
-    if display_func is not None:
-        array = display_func(array)
+    if log_scale:
+        array = np.log(array)
 
     extent = []
     for calibration, num_elem in zip(calibrations, array.shape):

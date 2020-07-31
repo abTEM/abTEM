@@ -50,15 +50,15 @@ def calibrations_from_grid(gpts, sampling, names=None, units=None, fourier_space
         else:
             units = 'Å'
 
-    calibrations = []
+    calibrations = ()
     if fourier_space:
         for name, n, d in zip(names, gpts, sampling):
             l = n * d
             offset = fourier_space_offset(n, d)
-            calibrations.append(Calibration(offset * scale_factor, 1 / l * scale_factor, units, name))
+            calibrations += (Calibration(offset * scale_factor, 1 / l * scale_factor, units, name),)
     else:
         for name, d in zip(names, sampling):
-            calibrations.append(Calibration(0., d * scale_factor, units, name))
+            calibrations += (Calibration(0., d * scale_factor, units, name),)
 
     return calibrations
 
@@ -69,6 +69,20 @@ def fwhm(y):
     left = np.argmin(np.abs(y[:peak_idx] - peak_value / 2))
     right = peak_idx + np.argmin(np.abs(y[peak_idx:] - peak_value / 2))
     return right - left
+
+
+def center_of_mass(measurement):
+    shape = measurement.array.shape[2:]
+    center = np.array(shape) / 2 - [.5 * (shape[0] % 2), .5 * (shape[1] % 2)]
+    com = np.zeros(measurement.array.shape[:2] + (2,))
+    for i in range(measurement.array.shape[0]):
+        for j in range(measurement.array.shape[1]):
+            com[i, j] = scipy.ndimage.measurements.center_of_mass(measurement.array[i, j])
+    com = com - center[None, None]
+    com[..., 0] = com[..., 0] * measurement.calibrations[2].sampling
+    com[..., 1] = com[..., 1] * measurement.calibrations[3].sampling
+    return (Measurement(com[..., 0], measurement.calibrations[:2], units='mrad.', name='com_x'),
+            Measurement(com[..., 1], measurement.calibrations[:2], units='mrad.', name='com_y'))
 
 
 class Measurement:
@@ -149,19 +163,6 @@ class Measurement:
 
         return self.__class__(array, calibrations)
 
-    def center_of_mass(self):
-        shape = self.array.shape[2:]
-        center = np.array(shape) / 2 - [.5 * (shape[0] % 2), .5 * (shape[1] % 2)]
-        com = np.zeros(self.array.shape[:2] + (2,))
-        for i in range(self.array.shape[0]):
-            for j in range(self.array.shape[1]):
-                com[i, j] = scipy.ndimage.measurements.center_of_mass(self.array[i, j])
-        com = com - center[None, None]
-        com[..., 0] = com[..., 0] * self.calibrations[2].sampling
-        com[..., 1] = com[..., 1] * self.calibrations[3].sampling
-        return (self.__class__(com[..., 0], self.calibrations[:2], units='mrad.', name='com_x'),
-                self.__class__(com[..., 1], self.calibrations[:2], units='mrad.', name='com_y'))
-
     @property
     def calibrations(self):
         return self._calibrations
@@ -178,19 +179,11 @@ class Measurement:
             calibrations.append(copy(calibration))
             calibrations[-1].sampling = new_sampling
 
-        return self.__class__(new_array, calibrations, units=self.units)
+        return self.__class__(new_array, calibrations, name=self.name, units=self.units)
 
     def tile(self, repeats):
         new_array = np.tile(self._array, repeats)
-        return self.__class__(new_array, self.calibrations)
-
-    def poisson_noise(self, dose):
-        pixel_area = np.product([calibration.sampling for calibration in self.calibrations])
-        new_copy = copy(self)
-        array = new_copy.array
-        array[:] = array / np.sum(array) * dose * pixel_area * np.prod(array.shape)
-        array[:] = np.random.poisson(array).astype(np.float)
-        return new_copy
+        return self.__class__(new_array, self.calibrations, name=self.name, units=self.units)
 
     @property
     def array(self):

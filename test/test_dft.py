@@ -11,14 +11,14 @@ import pytest
 
 @pytest.mark.gpaw
 def test_dft():
-    atoms = read('../examples/data/graphene.traj')
+    atoms = read('data/graphene.traj')
 
     calc = GPAW(mode=PW(400), h=.1, txt=None, kpts=(4, 2, 2))
     atoms.set_calculator(calc)
     atoms.get_potential_energy()
 
-    potential_dft = GPAWPotential(calc, sampling=.05).precalculate()
-    potential_iam = Potential(atoms, sampling=.05).precalculate()
+    potential_dft = GPAWPotential(calc, sampling=.05).build()
+    potential_iam = Potential(atoms, sampling=.05).build()
 
     projected_dft = potential_dft.array.sum(0)
     projected_dft -= projected_dft.min()

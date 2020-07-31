@@ -1,17 +1,19 @@
 from abc import ABCMeta, abstractmethod
+from typing import Tuple, Union, List
 
+import h5py
 import numpy as np
 
-from abtem.bases import Cache, Event, cache_clear_callback, watched_property, Grid, cached_method
-from abtem.cpu_kernels import abs2
+from abtem.bases import Cache, Event, watched_property, cached_method, Grid
 from abtem.device import get_array_module, get_device_function
 from abtem.measure import Calibration, calibrations_from_grid, fourier_space_offset, Measurement
 from abtem.plot import show_image
+from abtem.scan import AbstractScan
 from abtem.utils import label_to_index_generator, spatial_frequencies
-import h5py
+from abtem.waves import Waves
 
 
-def crop_to_center(array):
+def crop_to_center(array: np.ndarray):
     shape = array.shape
     w = shape[-2] // 2
     h = shape[-1] // 2
@@ -22,7 +24,7 @@ def crop_to_center(array):
     return array[..., left:right, top:bottom]
 
 
-def calculate_far_field_intensity(waves, overwrite=False):
+def calculate_far_field_intensity(waves: Waves, overwrite: bool = False):
     xp = get_array_module(waves.array)
     fft2 = get_device_function(xp, 'fft2')
     abs2 = get_device_function(xp, 'abs2')
@@ -55,7 +57,7 @@ def polar_regions(gpts, sampling, wavelength, inner, outer, nbins_radial, nbins_
 
 class AbstractDetector(metaclass=ABCMeta):
 
-    def __init__(self, save_file=None):
+    def __init__(self, save_file: str = None):
         if save_file is not None:
             if not save_file.endswith('.hdf5'):
                 self._save_file = save_file + '.hdf5'
@@ -70,17 +72,19 @@ class AbstractDetector(metaclass=ABCMeta):
         return self._save_file
 
     @abstractmethod
-    def detect(self, waves):
+    def detect(self, waves) -> np.ndarray:
         pass
 
     @abstractmethod
-    def allocate_measurement(self, grid, wavelength, scan):
+    def allocate_measurement(self, grid, wavelength, scan) -> Measurement:
         pass
 
 
 class _PolarDetector(AbstractDetector):
 
-    def __init__(self, inner=None, outer=None, radial_steps=.001, azimuthal_steps=None, save_file=None):
+    def __init__(self, inner: float = None, outer: float = None, radial_steps: float = 1.,
+                 azimuthal_steps: float = None, save_file: str = None):
+
         self._inner = inner
         self._outer = outer
 
@@ -95,19 +99,20 @@ class _PolarDetector(AbstractDetector):
         self.changed = Event()
         super().__init__(save_file=save_file)
 
-    def _get_bins(self, sampling, wavelength):
+    def _get_bins(self, sampling: Tuple[float], wavelength: float) -> Tuple[float, float, int, int]:
         if self._inner is None:
             inner = 0
         else:
             inner = self._inner
 
-        max_angle = 1 / np.max(sampling) * wavelength / 2
+        max_angle = 1 / np.max(sampling) * wavelength / 2 * 1000
 
         if self._outer is None:
             outer = max_angle
-        elif self._outer < max_angle:
-            outer = self._outer
         else:
+            outer = self._outer
+
+        if outer > max_angle:
             raise RuntimeError()
 
         nbins_radial = int(np.ceil((outer - inner) / self._radial_steps))
@@ -115,17 +120,18 @@ class _PolarDetector(AbstractDetector):
         return inner, outer, nbins_radial, nbins_azimuthal
 
     @cached_method('cache')
-    def _get_regions(self, gpts, sampling, wavelength):
+    def _get_regions(self, gpts: Tuple[int], sampling: Tuple[float], wavelength: float) -> List[np.ndarray]:
         inner, outer, nbins_radial, nbins_azimuthal = self._get_bins(sampling, wavelength)
 
-        region_labels = polar_regions(gpts, sampling, wavelength, inner, outer, nbins_radial, nbins_azimuthal)
+        region_labels = polar_regions(gpts, sampling, wavelength, inner / 1000, outer / 1000, nbins_radial,
+                                      nbins_azimuthal)
         region_indices = []
         for indices in label_to_index_generator(region_labels):
             region_indices.append(indices)
 
         return region_indices
 
-    def allocate_measurement(self, grid, wavelength, scan):
+    def allocate_measurement(self, grid: Grid, wavelength: float, scan: AbstractScan) -> Measurement:
         inner, outer, nbins_radial, nbins_azimuthal = self._get_bins(grid.antialiased_sampling, wavelength)
 
         shape = scan.shape
@@ -133,7 +139,7 @@ class _PolarDetector(AbstractDetector):
 
         if nbins_radial > 1:
             shape += (nbins_radial,)
-            calibrations += (Calibration(offset=inner * 1000, sampling=self._radial_steps * 1000, units='mrad'),)
+            calibrations += (Calibration(offset=inner, sampling=self._radial_steps, units='mrad'),)
 
         if nbins_azimuthal > 1:
             shape += (nbins_azimuthal,)
@@ -145,7 +151,7 @@ class _PolarDetector(AbstractDetector):
             measurement = measurement.write(self.save_file)
         return measurement
 
-    def show(self, grid, wavelength, cbar_label='Detector regions', **kwargs):
+    def show(self, grid: Grid, wavelength: float, cbar_label: str = 'Detector regions', **kwargs):
         grid.check_is_defined()
 
         array = np.full(grid.antialiased_gpts, -1, dtype=np.int)
@@ -160,7 +166,7 @@ class _PolarDetector(AbstractDetector):
 
 class AnnularDetector(_PolarDetector):
 
-    def __init__(self, inner, outer, save_file=None):
+    def __init__(self, inner: float, outer: float, save_file: str = None):
         super().__init__(inner=inner, outer=outer, radial_steps=outer - inner, save_file=save_file)
 
     @property
@@ -181,7 +187,7 @@ class AnnularDetector(_PolarDetector):
     def outer(self, value: float):
         self._outer = value
 
-    def detect(self, waves):
+    def detect(self, waves: Waves) -> np.ndarray:
         xp = get_array_module(waves.array)
         intensity = calculate_far_field_intensity(waves, overwrite=False)
         indices = self._get_regions(waves.grid.antialiased_gpts, waves.grid.antialiased_sampling, waves.wavelength)[0]
@@ -194,10 +200,10 @@ class AnnularDetector(_PolarDetector):
 
 class FlexibleAnnularDetector(_PolarDetector):
 
-    def __init__(self, step_size=.001, save_file=None):
+    def __init__(self, step_size: float = 1., save_file: str = None):
         super().__init__(radial_steps=step_size, save_file=save_file)
 
-    def detect(self, waves):
+    def detect(self, waves) -> np.ndarray:
         xp = get_array_module(waves.array)
         intensity = calculate_far_field_intensity(waves, overwrite=False)
         indices = self._get_regions(waves.grid.antialiased_gpts, waves.grid.antialiased_sampling, waves.wavelength)
@@ -211,7 +217,7 @@ class FlexibleAnnularDetector(_PolarDetector):
 
 class SegmentedDetector(_PolarDetector):
 
-    def __init__(self, inner, outer, nbins_radial, nbins_angular, save_file=None):
+    def __init__(self, inner: float, outer: float, nbins_radial: int, nbins_angular: int, save_file: str = None):
         radial_steps = (outer - inner) / nbins_radial
         azimuthal_steps = 2 * np.pi / nbins_angular
         super().__init__(inner=inner, outer=outer, radial_steps=radial_steps, azimuthal_steps=azimuthal_steps,
@@ -253,7 +259,7 @@ class SegmentedDetector(_PolarDetector):
     def nbins_angular(self, value: float):
         self._azimuthal_steps = 2 * np.pi / value
 
-    def detect(self, waves):
+    def detect(self, waves: Waves) -> np.ndarray:
         xp = get_array_module(waves.array)
         intensity = calculate_far_field_intensity(waves, overwrite=False)
         indices = self._get_regions(waves.grid.antialiased_gpts, waves.grid.antialiased_sampling, waves.wavelength)
@@ -267,17 +273,19 @@ class SegmentedDetector(_PolarDetector):
 
 class PixelatedDetector(AbstractDetector):
 
-    def __init__(self, save_file=None):
+    def __init__(self, save_file: str = None):
         super().__init__(save_file=save_file)
 
-    def allocate_measurement(self, grid, wavelength, scan):
+    def allocate_measurement(self, grid: Grid, wavelength: float, scan: AbstractScan) -> Measurement:
         grid.check_is_defined()
         shape = (grid.gpts[0] // 2, grid.gpts[1] // 2)
 
-        samplings = [1 / l * wavelength * 1000 for l in grid.extent]
-        offsets = [fourier_space_offset(n, d) * wavelength * 1000 for n, d in zip(grid.gpts, grid.sampling)]
-        calibrations = (Calibration(offset=offsets[0], sampling=samplings[0], units='mrad.', name='alpha_x'),
-                        Calibration(offset=offsets[1], sampling=samplings[1], units='mrad.', name='alpha_y'))
+        calibrations = calibrations_from_grid(grid.antialiased_gpts,
+                                              grid.antialiased_sampling,
+                                              names=['alpha_x', 'alpha_y'],
+                                              units='mrad.',
+                                              scale_factor=wavelength * 1000,
+                                              fourier_space=True)
 
         array = np.zeros(scan.shape + shape)
         measurement = Measurement(array, calibrations=scan.calibrations + calibrations)
@@ -285,7 +293,7 @@ class PixelatedDetector(AbstractDetector):
             measurement = measurement.write(self.save_file)
         return measurement
 
-    def detect(self, waves):
+    def detect(self, waves: Waves) -> np.ndarray:
         xp = get_array_module(waves.array)
         abs2 = get_device_function(xp, 'abs2')
         fft2 = get_device_function(xp, 'fft2')
@@ -298,45 +306,18 @@ class PixelatedDetector(AbstractDetector):
 
 class WavefunctionDetector(AbstractDetector):
 
-    def __init__(self, save_file=None, fourier_space=False):
+    def __init__(self, save_file: str = None):
         super().__init__(save_file=save_file)
-        self._fourier_space = fourier_space
 
-    def allocate_measurement(self, grid, wavelength, scan):
+    def allocate_measurement(self, grid: Grid, wavelength: float, scan: AbstractScan) -> Measurement:
         grid.check_is_defined()
-        shape = (grid.gpts[0], grid.gpts[1])
+        calibrations = calibrations_from_grid(grid.gpts, grid.sampling, names=['x', 'y'], units='Å')
 
-        if self._fourier_space:
-            offsets = (fourier_space_offset(grid.extent[0] / shape[0], shape[0]) * wavelength * 1000,
-                       fourier_space_offset(grid.extent[1] / shape[1], shape[1]) * wavelength * 1000)
-            shape = (shape[0] // 2, shape[1] // 2)
-            sampling = (1 / grid.extent[0] * wavelength * 1000, 1 / grid.extent[1] * wavelength * 1000)
-        else:
-            offsets = (0, 0)
-            sampling = grid.sampling
-
-        calibrations = (Calibration(offset=offsets[0], sampling=sampling[0], units='mrad.', name='alpha_x'),
-                        Calibration(offset=offsets[1], sampling=sampling[1], units='mrad.', name='alpha_y'))
-
-        # array = np.zeros(scan.shape + shape, dtype=np.complex64)
-        # measurement = Measurement(array, calibrations=scan.calibrations + calibrations)
+        array = np.zeros(scan.shape + grid.gpts, dtype=np.complex64)
+        measurement = Measurement(array, calibrations=scan.calibrations + calibrations)
         if isinstance(self.save_file, str):
-            with h5py.File(self.save_file, 'w') as f:
-                f.create_dataset('array', scan.shape + shape, dtype=np.complex64)
-                f.create_dataset('offset', data=[calibration.offset for calibration in calibrations])
-                f.create_dataset('sampling', data=[calibration.sampling for calibration in calibrations])
-                units = [calibration.units.encode('utf-8') for calibration in calibrations]
-                f.create_dataset('units', (len(units),), 'S10', units)
-                names = [calibration.name.encode('utf-8') for calibration in calibrations]
-                f.create_dataset('name', (len(names),), 'S10', names)
+            measurement = measurement.write(self.save_file)
+        return measurement
 
-            # measurement = measurement.write(self.save_file)
-        return self.save_file
-
-    def detect(self, waves):
-        if self._fourier_space:
-            xp = get_array_module(waves.array)
-            fft2 = get_device_function(xp, 'fft2')
-            return crop_to_center(fft2(waves.array))
-        else:
-            return waves.array
+    def detect(self, waves: Waves) -> np.ndarray:
+        return waves.array

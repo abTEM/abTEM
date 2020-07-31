@@ -121,13 +121,13 @@ class AbstractTDSPotentialBuilder(AbstractPotentialBuilder):
         pass
 
     @abstractmethod
-    def generate_frozen_phonon_potentials(self):
+    def generate_frozen_phonon_potentials(self, pbar):
         pass
 
 
 class PotentialIntegrator:
 
-    def __init__(self, function, r, cache_size=4096, cache_key_decimals=2, tolerance=1e-9):
+    def __init__(self, function, r, cache_size=4096, cache_key_decimals=2, tolerance=1e-12):
         self._function = function
         self._r = r
         self.cache = Cache(cache_size)
@@ -146,10 +146,10 @@ class PotentialIntegrator:
         a = round(a, self._cache_key_decimals)
         b = round(b, self._cache_key_decimals)
 
-        split = np.sign(a) * np.sign(b)
+        split = a * b < 0
         a = max(min(a, b), -self.cutoff)
         b = min(max(a, b), self.cutoff)
-        if split < 0:  # split integral
+        if split:  # split integral
             values1, derivatives1 = self.cached_integrate(0, abs(a))
             values2, derivatives2 = self.cached_integrate(0, abs(b))
             result = (values1 + values2, derivatives1 + derivatives2)
@@ -340,7 +340,7 @@ class Potential(AbstractTDSPotentialBuilder):
     def get_slice_thickness(self, i):
         return self._atoms.cell[2, 2] / self.num_slices
 
-    def _get_cutoff(self, number):
+    def get_cutoff(self, number):
         try:
             return self._cutoffs[number]
         except KeyError:
@@ -348,26 +348,32 @@ class Potential(AbstractTDSPotentialBuilder):
             self._cutoffs[number] = brentq(f, 1e-7, 1000)
             return self._cutoffs[number]
 
-    def _get_integrator(self, number):
+    def get_soft_function(self, number):
+        cutoff = self.get_cutoff(number)
+        rolloff = .85 * cutoff
+
+        def soft_function(r):
+            result = np.zeros_like(r)
+            valid = r < cutoff
+            transition = valid * (r > rolloff)
+            result[valid] = self._function(r[valid], self.parameters[number])
+            result[transition] *= (np.cos(np.pi * (r[transition] - rolloff) / (cutoff - rolloff)) + 1.) / 2
+            return result
+
+        return soft_function
+
+    def get_integrator(self, number):
         try:
             return self._integrators[number]
         except KeyError:
-            cutoff = self._get_cutoff(number)
-            cutoff_value = self.function(cutoff, self.parameters[number])
-            cutoff_derivative = self._derivative(cutoff, self.parameters[number])
-
-            def soft_potential(r):
-                result = np.array(self._function(r, self.parameters[number]) - cutoff_value -
-                                  (r - cutoff) * cutoff_derivative)
-                result[r > cutoff] = 0
-                return result
-
+            cutoff = self.get_cutoff(number)
+            soft_function = self.get_soft_function(number)
             r = np.geomspace(np.min(self.sampling), cutoff, int(np.ceil(cutoff / np.min(self.sampling) * 10)))
 
             margin = np.int(np.ceil(cutoff / np.min(self.sampling)))
             rows, cols = disc_meshgrid(margin)
             disc_indices = np.hstack((rows[:, None], cols[:, None]))
-            self._integrators[number] = (PotentialIntegrator(soft_potential, r), disc_indices)
+            self._integrators[number] = (PotentialIntegrator(soft_function, r), disc_indices)
             return self._integrators[number]
 
     def generate_slices(self, start=0, end=None):
@@ -391,7 +397,7 @@ class Potential(AbstractTDSPotentialBuilder):
             for number, indices in indices_by_number.items():
                 slice_atoms = atoms[indices]
 
-                integrator, disc_indices = self._get_integrator(number)
+                integrator, disc_indices = self.get_integrator(number)
                 disc_indices = xp.asarray(disc_indices)
 
                 slice_atoms = slice_atoms[(slice_atoms.positions[:, 2] > a - integrator.cutoff) *
@@ -434,7 +440,9 @@ class Potential(AbstractTDSPotentialBuilder):
             self.atoms.wrap()
             pbar.reset()
             yield self.build(pbar=pbar)
-            pbar.refresh()
+
+        pbar.refresh()
+        pbar.close()
 
 
 def disc_meshgrid(r):
@@ -512,7 +520,7 @@ class ArrayPotential(AbstractPotential, HasGridMixin):
     def tile(self, multiples):
         assert len(multiples) == 2
         new_array = np.tile(self.array, (1,) + multiples)
-        new_extent = multiples * self.extent
+        new_extent = (self.extent[0] * multiples[0], self.extent[1] * multiples[1])
         return self.__class__(array=new_array, slice_thicknesses=self._slice_thicknesses, extent=new_extent)
 
     def write(self, path):

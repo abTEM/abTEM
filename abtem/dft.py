@@ -109,7 +109,6 @@ class GPAWPotential(AbstractPotentialBuilder):
     """
 
     def __init__(self, calculator, gpts=None, sampling=None, slice_thickness=.5, core_size=.005, storage='cpu'):
-
         self._calculator = calculator
         self._core_size = core_size
 

@@ -18,7 +18,7 @@ def _error_estimate(eps, value_estimates, left_summands, right_summands):
         with np.errstate(over='ignore'):
             error_estimate = max(e1 ** n, e1 ** 2, e3, e4)
         #print(e1, e2, e3, e4, error_estimate)
-        error_estimate = e4
+        error_estimate = e1
 
     return error_estimate
 

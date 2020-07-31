@@ -10,11 +10,14 @@ from abtem.measure import Calibration
 from abtem.utils import split_integer
 from abtem.device import asnumpy
 
+
 class AbstractScan(metaclass=ABCMeta):
 
     def __init__(self):
-        self._measurements = None
         self._batches = None
+
+    def __len__(self):
+        return self.num_positions
 
     @property
     def num_positions(self):
@@ -34,16 +37,9 @@ class AbstractScan(metaclass=ABCMeta):
     def get_positions(self):
         pass
 
-    @property
-    def measurements(self):
-        return self._measurements
-
     @abstractmethod
     def insert_new_measurement(self, measurement_key, start, end, new_values):
         pass
-
-    def __len__(self):
-        return self.num_positions
 
     def generate_positions(self, max_batch):
         positions = self.get_positions()
@@ -52,10 +48,6 @@ class AbstractScan(metaclass=ABCMeta):
         while len(self._batches) > 0:
             start, end = self.get_next_batch()
             yield start, end, positions[start:end]
-
-    @property
-    def batches(self):
-        return self._batches
 
     def get_next_batch(self):
         return self._batches.pop(0)
@@ -73,17 +65,32 @@ class AbstractScan(metaclass=ABCMeta):
         pass
 
 
-class CustomScan(AbstractScan):
+class PositionScan(AbstractScan):
     def __init__(self, positions):
         self._positions = positions
         super().__init__()
 
     @property
-    def num_measurements(self):
-        return len(self._positions)
+    def shape(self) -> tuple:
+        return (len(self),)
+
+    @property
+    def calibrations(self) -> tuple:
+        return (None,)
+
+    def insert_new_measurement(self, measurement, start, end, new_measurement):
+        if isinstance(measurement, str):
+            with h5py.File(measurement, 'a') as f:
+                f['array'][start:end] = asnumpy(new_measurement)
+
+        else:
+            measurement.array[start:end] = asnumpy(new_measurement)
 
     def get_positions(self):
         return self._positions
+
+    def __copy__(self):
+        return self.__class__(self._positions.copy())
 
 
 class LineScan(AbstractScan, HasGridMixin):

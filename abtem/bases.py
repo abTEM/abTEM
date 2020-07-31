@@ -10,20 +10,24 @@ def watched_method(event):
     """
     Decorator for class methods that have to notify.
     """
+
     def wrapper(func):
         property_name = func.__name__
+
         def new_func(*args, **kwargs):
             instance = args[0]
             result = func(*args, **kwargs)
             getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': True})
             return result
+
         return new_func
+
     return wrapper
 
 
 def watched_property(event):
     """
-    Decorator for class methods that have to notify.
+    Decorator for class properties that have to notify.
     """
 
     def wrapper(func):
@@ -34,9 +38,7 @@ def watched_property(event):
             old = getattr(instance, property_name)
             result = func(*args)
             change = old != value
-            # if isinstance(change, Iterable):
             change = np.any(change)
-            # print(instance, property_name, change)
             getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': change})
             return result
 
@@ -50,6 +52,10 @@ class Event(object):
     def __init__(self):
         self.callbacks = []
         self._notify_count = 0
+
+    @property
+    def notify_count(self):
+        return self._notify_count
 
     def notify(self, *args, **kwargs):
         self._notify_count += 1
@@ -83,8 +89,8 @@ def cached_method(target_cache, ignore_args=False):
             else:
                 key = (func,) + args[1:]
 
-            if key in cache._cache:
-                result = cache._cache[key]
+            if key in cache.cached:
+                result = cache.retrieve(key)
                 cache._hits += 1
             else:
                 result = func(*args)
@@ -101,24 +107,39 @@ class Cache:
 
     def __init__(self, max_size):
         self._max_size = max_size
-        self._cache = OrderedDict()
+        self._cached = OrderedDict()
         self._hits = 0
         self._misses = 0
 
+    @property
+    def cached(self):
+        return self._cached
+
+    @property
+    def hits(self):
+        return self._hits
+
+    @property
+    def misses(self):
+        return self._hits
+
     def __len__(self):
-        return len(self._cache)
+        return len(self._cached)
 
     def insert(self, key, value):
-        self._cache[key] = value
+        self._cached[key] = value
         self._check_size()
+
+    def retrieve(self, key):
+        return self._cached[key]
 
     def _check_size(self):
         if self._max_size is not None:
             while len(self) > self._max_size:
-                self._cache.popitem(last=False)
+                self._cached.popitem(last=False)
 
     def clear(self):
-        self._cache = OrderedDict()
+        self._cached = OrderedDict()
         self._hits = 0
         self._misses = 0
 
@@ -324,9 +345,8 @@ class Grid:
     def antialiased_sampling(self):
         return tuple(l / n for n, l in zip(self.antialiased_gpts, self.extent))
 
-    def match(self, other, check_match=True):
-        if check_match:
-            self.check_match(other)
+    def match(self, other):
+        self.check_match(other)
 
         if (self.extent is None) & (other.extent is None):
             raise RuntimeError('grid extent cannot be inferred')
@@ -495,3 +515,10 @@ class HasAcceleratorMixin:
 
     energy = DelegatedAttribute('accelerator', 'energy')
     wavelength = DelegatedAttribute('accelerator', 'wavelength')
+
+
+class HasGridAndAcceleratorMixin(HasGridMixin, HasAcceleratorMixin):
+
+    @property
+    def max_scattering_angle(self):
+        return 1 / np.max(self.grid.antialiased_sampling) * self.wavelength / 2 * 1000

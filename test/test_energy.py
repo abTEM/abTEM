@@ -29,22 +29,22 @@ def test_energy():
 
 
 def test_energy_raises():
-    energy1 = Accelerator(300e3)
-    energy2 = Accelerator()
+    accelerator1 = Accelerator(300e3)
+    accelerator2 = Accelerator()
 
     with pytest.raises(RuntimeError):
-        energy2.check_is_defined()
+        accelerator2.check_is_defined()
 
-    energy2.energy = 200e3
+    accelerator2.energy = 200e3
     with pytest.raises(RuntimeError):
-        energy1.check_energies_can_match(energy2)
+        accelerator1.check_match(accelerator2)
 
-    energy2.energy = energy1.energy
-    energy1.check_energies_can_match(energy2)
+    accelerator2.energy = accelerator1.energy
+    accelerator1.check_match(accelerator2)
 
-# def test_energy_notifies():
-#     with mock.patch.object(Energy, 'notify_observers') as mock_notify:
-#         energy = Energy()
-#         assert mock_notify.call_count == 0
-#         energy.energy = 200e3
-#         assert mock_notify.call_count == 1
+
+def test_accelerator_event():
+    accelerator = Accelerator(300e3)
+
+    accelerator.energy = 200e3
+    assert accelerator.changed._notify_count == 1

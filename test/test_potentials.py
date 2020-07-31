@@ -10,8 +10,7 @@ def test_create_potential():
 
     potential = Potential(atoms=atoms, sampling=.1)
 
-    assert np.all(potential.extent == [4, 6])
-    assert potential.thickness == 4.3
+    assert (potential.extent[0] == 4) & (potential.extent[1] == 6)
     assert potential.num_slices == 9
     assert potential.get_slice_thickness(0) == 4.3 / 9
 
@@ -21,17 +20,6 @@ def test_potential_raises():
         Potential(Atoms('C', positions=[(2, 2, 2)], cell=(4, 4, 0)))
 
     assert str(e.value) == 'atoms has no thickness'
-
-
-def test_padded_atoms():
-    atoms = Atoms('C', positions=[(1, 1, 1)], cell=(2, 2, 2))
-    potential = Potential(atoms, cutoff_tolerance=1e-3, sampling=.1)
-    padded_atoms = potential.get_padded_atoms()
-    assert len(padded_atoms) == 9
-
-    potential = Potential(atoms, cutoff_tolerance=1e-5, sampling=.1)
-    padded_atoms = potential.get_padded_atoms()
-    assert len(padded_atoms) == 25
 
 
 def test_potential_centered():

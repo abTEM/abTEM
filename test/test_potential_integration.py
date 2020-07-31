@@ -11,8 +11,9 @@ def test_gaussian_integral():
     f = lambda r: np.exp(-r ** 2 / (2 * sigma ** 2))
     r = np.array([0, 30])
     integrator = PotentialIntegrator(f, r)
-    value = integrator.integrate(-30, 30)
-    assert np.isclose(value[0], sigma * np.sqrt(2 * np.pi))
+    value = integrator.integrate(-50, 50)
+    print(value[0][0], sigma * np.sqrt(2 * np.pi))
+    assert np.isclose(value[0][0], sigma * np.sqrt(2 * np.pi))
 
 
 def test_projected_kirkland():
@@ -20,29 +21,30 @@ def test_projected_kirkland():
     parameters = load_kirkland_parameters()
     r = np.geomspace(.01, 10, 100)
     integrator = PotentialIntegrator(f, r)
-    assert np.allclose(integrator.integrate(-10, 10), kirkland_projected(r, parameters[6]))
+    print(integrator.integrate(-10, 10), kirkland_projected(r, parameters[6]))
+    assert np.allclose(integrator.integrate(-10, 10)[0], kirkland_projected(r, parameters[6]))
 
 
 def test_cutoff():
     tolerance = 1e-5
     atoms = Atoms([6], [(0, 0, 0)], cell=(1, 1, 1))
     potential = Potential(atoms, cutoff_tolerance=tolerance)
-    assert np.isclose(potential.function(potential._get_cutoff(6), potential.parameters[6]), tolerance)
+    assert np.isclose(potential.function(potential.get_cutoff(6), potential.parameters[6]), tolerance)
 
 
-def test_interpolation():  # just a sanity check, most of the error comes from the test itself
+def test_interpolation():  # just a sanity check
     from abtem.potentials import kappa
 
     sampling = .005
     L = 20
-    atoms = Atoms('C', positions=[(0, 0, 1.5)], cell=(L, L, 10))
+    atoms = Atoms('C', positions=[(0, 0, 1.5)], cell=(L, L, 3))
 
     potential = Potential(atoms, sampling=sampling, cutoff_tolerance=1e-3, slice_thickness=10)
 
-    interpolated = potential.calculate_slice(0)[0]
-    integrator = potential._integrators[6][0]
+    interpolated = potential.get_slice(0).array[0]
+    integrator = potential.get_integrator(6)[0]
 
-    integrated = np.sum([value[0] for value in integrator.cache._cache.values()], axis=0)
+    integrated = integrator.integrate(-1.5,1.5)[0]
 
     r = np.linspace(0, L, len(interpolated), endpoint=False)
 
@@ -84,8 +86,6 @@ def interpolate_radial_functions_launcher(func, positions, shape, cutoff, inner_
 
     rows, cols = disc_meshgrid(np.int(np.ceil(r[-1])))
     disc_indices = np.hstack((rows[:, None], cols[:, None]))
-
-    # print(disc_indices)
 
     rows, cols = np.indices(shape)
     x = rows.astype(np.float32)
