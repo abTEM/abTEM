@@ -5,6 +5,7 @@
 
 abTEM: ab initio Transmission Electron Microscopy
 ====================================================
+**This document is under construction. Please be aware and report issues.**
 
 abTEM provides a Python API for running simulations of Transmission Electron Microscopy images. It is written entirely
 in Python, which enables easy integration with first-principles codes and analysis tools accessible from Python,
@@ -15,24 +16,17 @@ abTEM works with the Atomic Simulation Environment and the density functional th
 environment for simulating images from first principles.
 
 >>> from ase import read
->>> from abTEM.waves import PlaneWaves
+>>> from abtem.waves import PlaneWave
 >>> atoms = read('SrTiO.cif')
->>> waves = PlaneWaves(sampling=0.1, energy=300e3)
->>> waves.multislice(atoms)
->>> waves.apply_ctf(defocus=200, focal_spread=40)
->>> waves.display_image(repeat=(5, 5))
+>>> wave = PlaneWave(sampling=0.01, energy=300e3)
+>>> wave.multislice(atoms)
+>>> wave.apply_ctf(defocus=200, focal_spread=40)
+>>> wave.show()
 
 .. toctree::
    :maxdepth: 1
-   :caption: Main
 
    install
-   how_to_use/introduction
-   .. tutorials/introduction
-   .. modules/api
-   .. cite
-   ../../examples/test
-
-abTEM has been developed at the Faculty of Physics of the University of Vienna, Austria. Please consult the credits page
-for information on how to cite abTEM. abTEM and its development are hosted on github. Bugs and feature requests are
-ideally submitted via the github issue tracker.
+   walkthrough/introduction
+   modules/api
+   about

@@ -6,3 +6,4 @@ API Reference Documentation
     :caption: Contents:
 
     waves
+    potentials

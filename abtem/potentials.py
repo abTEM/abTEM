@@ -218,21 +218,30 @@ class Potential(AbstractTDSPotentialBuilder):
     object. The potential is calculated in the Independent Atom Model (IAM) with a user-defined parametrization
     of the atomic potentials.
 
+    :param atoms: Atoms object defining the atomic configuration used in the IAM of the electrostatic potential.
+    :param gpts: Number of grid points describing each slice of the potential.
+    :param sampling: Lateral sampling of the potential [1 / Å].
+    :param slice_thickness: Thickness of the potential slices in Angstrom for calculating the number of slices used by
+        the multislice algorithm.
+    :param parametrization:
+    :param cutoff_tolerance:
+    :param device:
+    :param storage:
+
     Parameters
     ----------
     atoms : Atoms object
-        Atoms object defining the atomic configuration used in the IAM of the electrostatic potential.
+
     origin : two floats, float, optional
         xy-origin of the electrostatic potential relative to the xy-origin of the Atoms object. Units of Angstrom.
     extent : two floats, float, optional
-        Lateral extent of potential, if the unit cell of the atoms is too small it will be repeated. Units of Angstrom.
+        Lateral extent of potential [Å].
     gpts : two ints, int, optional
-        Number of grid points describing each slice of the potential.
+
     sampling : two floats, float, optional
-        Lateral sampling of the potential. Units of 1 / Angstrom.
+
     slice_thickness : float, optional
-        Thickness of the potential slices in Angstrom for calculating the number of slices used by the multislice
-        algorithm. Default is 0.5 Angstrom.
+ Default is 0.5 Angstrom.
     num_slices : int, optional
         Number of slices used by the multislice algorithm. If `num_slices` is set, then `slice_thickness` is disabled.
     parametrization : 'lobato' or 'kirkland'

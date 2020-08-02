@@ -374,7 +374,7 @@ class Grid:
     def snap_to_power(self, power: float = 2):
         self.gpts = tuple(power ** np.ceil(np.log(n) / np.log(power)) for n in self.gpts)
 
-    def copy(self):
+    def __copy__(self):
         return self.__class__(extent=self.extent,
                               gpts=self.gpts,
                               sampling=self.sampling,
@@ -383,22 +383,6 @@ class Grid:
                               lock_extent=self._lock_extent,
                               lock_gpts=self._lock_gpts,
                               lock_sampling=self._lock_sampling)
-
-    @property
-    def x_extent(self):
-        return self.extent[0]
-
-    @x_extent.setter
-    def x_extent(self, value):
-        self.extent = (value, self.extent[1])
-
-    @property
-    def y_extent(self):
-        return self.extent[1]
-
-    @y_extent.setter
-    def y_extent(self, value):
-        self.extent = (self.extent[0], value)
 
 
 class HasGridMixin:
@@ -415,26 +399,14 @@ class HasGridMixin:
 
 class Accelerator:
     """
-    Energy base class
+    Accelerator object
 
-    Base class for describing the energy of wavefunctions and transfer functions.
+    The accelerator describes the energy of wave functions and transfer functions.
 
-    :param energy: energy
-    :type energy: optional, float
+    :param energy: Acceleration energy [eV].
     """
 
     def __init__(self, energy: Optional[float] = None, lock_energy=False):
-        """
-        Energy base class.
-
-        The Energy object is used to represent the acceleration energy of an inheriting waves object.
-
-        Parameters
-        ----------
-        energy : float
-            Acceleration energy [eV]
-        kwargs :
-        """
         if energy is not None:
             energy = float(energy)
 
@@ -444,6 +416,9 @@ class Accelerator:
 
     @property
     def energy(self) -> float:
+        """
+        :return: Acceleration energy [eV].
+        """
         return self._energy
 
     @energy.setter
@@ -459,9 +434,7 @@ class Accelerator:
     @property
     def wavelength(self) -> float:
         """
-        Relativistic wavelength from energy.
-        :return: wavelength
-        :rtype: float
+        :return: Relativistic wavelength [Å].
         """
         self.check_is_defined()
         return energy2wavelength(self.energy)
@@ -469,7 +442,7 @@ class Accelerator:
     @property
     def sigma(self) -> float:
         """
-        Interaction parameter from energy.
+        :return: Interaction parameter.
         """
         self.check_is_defined()
         return energy2sigma(self.energy)
@@ -497,7 +470,7 @@ class Accelerator:
         else:
             self.energy = other.energy
 
-    def copy(self):
+    def __copy__(self):
         return self.__class__(self.energy)
 
 

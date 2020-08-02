@@ -10,7 +10,6 @@ from abtem.measure import Calibration, calibrations_from_grid, fourier_space_off
 from abtem.plot import show_image
 from abtem.scan import AbstractScan
 from abtem.utils import label_to_index_generator, spatial_frequencies
-from abtem.waves import Waves
 
 
 def crop_to_center(array: np.ndarray):
@@ -24,7 +23,7 @@ def crop_to_center(array: np.ndarray):
     return array[..., left:right, top:bottom]
 
 
-def calculate_far_field_intensity(waves: Waves, overwrite: bool = False):
+def calculate_far_field_intensity(waves, overwrite: bool = False):
     xp = get_array_module(waves.array)
     fft2 = get_device_function(xp, 'fft2')
     abs2 = get_device_function(xp, 'abs2')
@@ -187,7 +186,7 @@ class AnnularDetector(_PolarDetector):
     def outer(self, value: float):
         self._outer = value
 
-    def detect(self, waves: Waves) -> np.ndarray:
+    def detect(self, waves) -> np.ndarray:
         xp = get_array_module(waves.array)
         intensity = calculate_far_field_intensity(waves, overwrite=False)
         indices = self._get_regions(waves.grid.antialiased_gpts, waves.grid.antialiased_sampling, waves.wavelength)[0]
@@ -259,7 +258,7 @@ class SegmentedDetector(_PolarDetector):
     def nbins_angular(self, value: float):
         self._azimuthal_steps = 2 * np.pi / value
 
-    def detect(self, waves: Waves) -> np.ndarray:
+    def detect(self, waves) -> np.ndarray:
         xp = get_array_module(waves.array)
         intensity = calculate_far_field_intensity(waves, overwrite=False)
         indices = self._get_regions(waves.grid.antialiased_gpts, waves.grid.antialiased_sampling, waves.wavelength)
@@ -293,7 +292,7 @@ class PixelatedDetector(AbstractDetector):
             measurement = measurement.write(self.save_file)
         return measurement
 
-    def detect(self, waves: Waves) -> np.ndarray:
+    def detect(self, waves) -> np.ndarray:
         xp = get_array_module(waves.array)
         abs2 = get_device_function(xp, 'abs2')
         fft2 = get_device_function(xp, 'fft2')
@@ -319,5 +318,5 @@ class WavefunctionDetector(AbstractDetector):
             measurement = measurement.write(self.save_file)
         return measurement
 
-    def detect(self, waves: Waves) -> np.ndarray:
+    def detect(self, waves) -> np.ndarray:
         return waves.array
