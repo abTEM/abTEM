@@ -11,9 +11,9 @@ This installs ``abtem`` with its strict dependencies (see below), some functiona
 
 GPU calculations (CUDA only)
 ****************************
-GPU calculations with abTEM requires CUDA Toolkit and CuPy.
+GPU calculations with abTEM requires CUDA Toolkit 10 and CuPy.
 
-`Download <https://developer.nvidia.com/cuda-10.2-download-archive>`_ and install CUDA toolkit from NVIDIA's website. CUDA toolkit 11 is not yet supported. On windows, you may be suggested to install Visual Studio, this is **not** required to use abTEM.
+`Download <https://developer.nvidia.com/cuda-10.2-download-archive>`_ and install CUDA toolkit 10 from NVIDIA's website. CUDA toolkit 11 is not supported. On windows, you may be suggested to install Visual Studio for some features, this is *not* required to use abTEM.
 
 Install CuPy from pip::
 
@@ -45,6 +45,8 @@ This creates a new virtual environment
 
 Install CUDA toolkit and CuPy
 *****************************
+
+
 
 Install Jupyter and add the IPython kernel
 ******************************************
@@ -87,3 +89,4 @@ Only for testing:
 
 - `pytest <http://www.pytest.org/>`_
 - `hypothesis <https://hypothesis.readthedocs.io/en/latest/>`_
+

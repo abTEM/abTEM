@@ -127,7 +127,6 @@ class _PolarDetector(AbstractDetector):
         region_indices = []
         for indices in label_to_index_generator(region_labels):
             region_indices.append(indices)
-
         return region_indices
 
     def allocate_measurement(self, grid: Grid, wavelength: float, scan: AbstractScan) -> Measurement:

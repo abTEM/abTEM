@@ -153,7 +153,6 @@ class Waves(HasGridAndAcceleratorMixin):
         """
         :return: The intensity of the wave functions at the diffraction plane.
         """
-
         calibrations = calibrations_from_grid(self.grid.antialiased_gpts,
                                               self.grid.antialiased_sampling,
                                               names=['alpha_x', 'alpha_y'],

@@ -6,7 +6,5 @@ h5py
 matplotlib
 ase
 imageio
-cupy
-nodejs
 ipywidgets
 tqdm
