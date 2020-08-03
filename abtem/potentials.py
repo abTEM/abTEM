@@ -441,28 +441,23 @@ def disc_meshgrid(r):
 
 
 class ArrayPotential(AbstractPotential, HasGridMixin):
+    """
+    Array potential object.
+
+    The array potential object represents
+
+    :param array: The array representing the potential slices. The first dimension is the slice index and the last two are the
+        spatial dimensions.
+    :param slice_thicknesses: The thicknesses of the potential slices in Angstrom. If float, the thickness is the same for all slices.
+        If sequence, the length must equal the length of potential array.
+    :param extent: Lateral extent of the potential [1 / Å].
+    :param sampling: Lateral sampling of the potential [1 / Å].
+    """
 
     def __init__(self, array: np.ndarray,
                  slice_thicknesses: Union[float, Sequence],
-                 extent: np.ndarray = None,
-                 sampling: np.ndarray = None):
-
-        """
-        Precalculated potential object.
-
-        Parameters
-        ----------
-        array : 3d ndarray
-            The array representing the potential slices. The first dimension is the slice index and the last two are the
-            spatial dimensions.
-        slice_thicknesses : float, sequence of floats
-            The thicknesses of the potential slices in Angstrom. If float, the thickness is the same for all slices.
-            If sequence, the length must equal the length of potential array.
-        extent : two floats, float, optional
-            Lateral extent of potential, if the unit cell of the atoms is too small it will be repeated. Units of Angstrom.
-        sampling : two floats, float, optional
-            Lateral sampling of the potential. Units of 1 / Angstrom.
-        """
+                 extent: Union[float, Sequence[float]] = None,
+                 sampling: Union[float, Sequence[float]] = None):
 
         if len(array.shape) != 3:
             raise RuntimeError()
@@ -525,9 +520,10 @@ class ArrayPotential(AbstractPotential, HasGridMixin):
 
         return cls(array=datasets['array'], slice_thicknesses=datasets['slice_thicknesses'], extent=datasets['extent'])
 
-    def copy(self):
-        return self.__class__(array=cp.asarray(self.array), slice_thicknesses=self._slice_thicknesses.copy(),
-                              extent=self.extent.copy())
+    def __copy___(self):
+        return self.__class__(array=self.array.copy(),
+                              slice_thicknesses=self._slice_thicknesses.copy(),
+                              extent=self.extent)
 
 
 class TransmissionFunctions(ArrayPotential, HasAcceleratorMixin):

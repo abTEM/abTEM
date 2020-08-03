@@ -1,0 +1,15 @@
+numpy
+numba
+pytest
+scipy
+h5py
+matplotlib
+ase
+imageio
+ipywidgets
+docutils
+sphinx==3.1.2
+sphinx_rtd_theme
+nbsphinx
+sphinx-autodoc-typehints
+tqdm

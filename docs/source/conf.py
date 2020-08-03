@@ -12,6 +12,8 @@
 #
 import os
 import sys
+from io import open as io_open
+
 sys.path.insert(0, os.path.abspath('../../'))
 
 # -- Project information -----------------------------------------------------
@@ -21,8 +23,13 @@ copyright = '2019, Jacob Madsen'
 author = 'Jacob Madsen'
 
 # The full version, including alpha/beta/rc tags
-release = '0.1'
+__version__ = None
+src_dir = os.path.abspath(os.path.dirname(__file__))
+version_file = os.path.join('../../abtem', '_version.py')
+with io_open(version_file, mode='r') as fd:
+    exec(fd.read())
 
+release = __version__
 
 # -- General configuration ---------------------------------------------------
 
@@ -38,6 +45,7 @@ extensions = [
     'sphinx.ext.napoleon',
     'sphinx.ext.mathjax',
     'nbsphinx',
+    'sphinx_autodoc_typehints'
 ]
 
 # Add any paths that contain templates here, relative to this directory.
