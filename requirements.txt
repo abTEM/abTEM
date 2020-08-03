@@ -7,4 +7,5 @@ matplotlib
 ase
 imageio
 ipywidgets
+sphinx-autodoc-typehints
 tqdm
