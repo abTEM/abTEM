@@ -12,3 +12,4 @@ It should be noted that following this walkthrough requires a basic understandin
     :caption: Contents:
 
     01_atomic_models.ipynb
+    02_potentials.ipynb

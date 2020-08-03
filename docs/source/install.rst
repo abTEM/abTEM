@@ -1,44 +1,89 @@
 Installation
 ============
 
-Installing abinitEM
--------------------
-To install ``abinitEM`` with pip, run::
+Install with pip
+----------------
+To install ``abtem`` with pip run::
 
-    pip install abinitEM
+    pip install abtem
 
-If you want to make sure none of your existing dependencies get upgraded, you
-can also do::
+This installs ``abtem`` with its strict dependencies (see below), some functionality requires additional actions.
 
-    pip install abinitEM --no-deps
+GPU calculations (CUDA only)
+****************************
+GPU calculations with abTEM requires CUDA Toolkit and CuPy.
 
-On the other hand, if you want to install ``abinitEM`` along with all of the available optional dependencies, you can
-do::
+`Download <https://developer.nvidia.com/cuda-10.2-download-archive>`_ and install CUDA toolkit from NVIDIA's website. CUDA toolkit 11 is not yet supported. On windows, you may be suggested to install Visual Studio, this is **not** required to use abTEM.
 
-    pip install abinitEM[all]
+Install CuPy from pip::
 
-Requirements
+    pip install cupy-cuda102
+
+See `CuPy's installation guide <https://docs.cupy.dev/en/stable/install.html>`_ for more details.
+
+DFT potentials with GPAW
+************************
+GPAW can be installed from pip (note that GPAW is not officially supported on Windows)::
+
+    pip install GPAW
+
+See `GPAW's installation guide <https://wiki.fysik.dtu.dk/gpaw/>`_ for more details.
+
+Install with Anaconda
+---------------------
+The recommended installation for abTEM uses the Anaconda python distribution. First, `download and install Anaconda <`www.anaconda.com/download>`_. Then open a terminal (on Windows use the Anaconda prompt) and run:
+
+.. code-block::
+
+    conda update conda
+    conda create --name abtem python=3.8
+    conda activate abtem
+    conda install anaconda
+    pip install abtem
+
+This creates a new virtual environment
+
+Install CUDA toolkit and CuPy
+*****************************
+
+Install Jupyter and add the IPython kernel
+******************************************
+To be able to use the conda environment in a Jupyter Notebook, you have to install IPython kernel.
+
+.. code-block::
+
+    conda install jupyter
+    conda install -c anaconda ipykernel
+    python -m ipykernel install --user --name=abtem
+
+Dependencies
 ------------
-``abinitEM`` has the following strict requirements:
+Strict dependencies:
 
-- `Python <https://www.python.org/>`_ 3.6 or later
-- `Numpy <https://www.numpy.org/>`_ 1.16.0 or later
-- `Numba <https://www.numba.org/>`_ 0.46 or later
-- `pytest <http://www.pytest.org/>`_ 3.1 or later
+- `Numpy <https://www.numpy.org/>`_
+- `scipy <https://scipy.org/>`_
+- `Numba <https://www.numba.org/>`_
+- `mkl_fft <https://github.com/IntelPython/mkl_fft>`_
+- `imageio <https://imageio.github.io/>`_
+- `h5py <https://h5py.org/>`_
+- `matplotlib <https://matplotlib.org/>`_
+- `ase <https://wiki.fysik.dtu.dk/ase/>`_
+- `tqdm <https://tqdm.github.io/>`_
 
-``abinitEM`` also depends on other packages for optional features:
+Only for GPU calculations:
 
-- `Jupyter <https://jupyter.org/>`_: To work with ``abinitEM`` in notebooks.
-- `scipy <https://scipy.org/>`_: To power a variety of features in several modules.
-- `pyFFTW <https://pyfftw.readthedocs.io/>`_: To speed up FFT's
-- `h5py <https://h5py.org/>`_: To read/write objects from/to HDF5 files.
-- `numexpr <https://numexpr.readthedocs.io/en/latest/>`_: To speed up the evaluation of some mathematical expressions.
-- `matplotlib <https://matplotlib.org/>`_ 2.0 or later: To provide plotting functionality.
+- `CuPy <https://cupy.dev/>`_
 
-The custom graphical user interfaces of ``abinitEM`` depends on:
+Only for DFT potentials with GPAW:
 
-- `pillow <https://pillow.readthedocs.io/>`_
-- `bqplot <https://bqplot.readthedocs.io/>`_
-- `ipywidgets <https://ipywidgets.readthedocs.io/>`_
+- `GPAW <https://wiki.fysik.dtu.dk/gpaw/>`_
 
+Only for interactive graphical interfaces:
 
+- `Bokeh <https://docs.bokeh.org/en/latest/index.html>`_
+- `ipywidgets <https://ipywidgets.readthedocs.io/en/stable/>`_
+
+Only for testing:
+
+- `pytest <http://www.pytest.org/>`_
+- `hypothesis <https://hypothesis.readthedocs.io/en/latest/>`_

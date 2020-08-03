@@ -212,7 +212,7 @@ def pad_atoms(atoms, margin):
 
 class Potential(AbstractTDSPotentialBuilder):
     """
-    Potential object
+    Potential object.
 
     The potential object is used to calculate electrostatic potential of a set of atoms represented by an ASE atoms
     object. The potential is calculated in the Independent Atom Model (IAM) with a user-defined parametrization
@@ -223,34 +223,12 @@ class Potential(AbstractTDSPotentialBuilder):
     :param sampling: Lateral sampling of the potential [1 / Å].
     :param slice_thickness: Thickness of the potential slices in Angstrom for calculating the number of slices used by
         the multislice algorithm.
-    :param parametrization:
-    :param cutoff_tolerance:
-    :param device:
-    :param storage:
-
-    Parameters
-    ----------
-    atoms : Atoms object
-
-    origin : two floats, float, optional
-        xy-origin of the electrostatic potential relative to the xy-origin of the Atoms object. Units of Angstrom.
-    extent : two floats, float, optional
-        Lateral extent of potential [Å].
-    gpts : two ints, int, optional
-
-    sampling : two floats, float, optional
-
-    slice_thickness : float, optional
- Default is 0.5 Angstrom.
-    num_slices : int, optional
-        Number of slices used by the multislice algorithm. If `num_slices` is set, then `slice_thickness` is disabled.
-    parametrization : 'lobato' or 'kirkland'
-        The potential parametrization describes the radial dependence of the potential for each element. Two of the most
-        accurate parametrizations are available by Lobato et. al. and EJ Kirkland.
+    :param parametrization: The potential parametrization describes the radial dependence of the potential for each element.
+        Two of the most accurate parametrizations are available by Lobato et. al. and EJ Kirkland.
         See the citation guide for references.
-    cutoff_tolerance : float
-        The error tolerance used for deciding the radial cutoff distance of the potential in units of eV / e.
-        Default is 1e-3.
+    :param cutoff_tolerance: The error tolerance used for deciding the radial cutoff distance of the potential [eV / e].
+    :param device: The device used for calculating the potential.
+    :param storage: The device on which to store the created potential.
     """
 
     def __init__(self,
