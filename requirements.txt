@@ -8,6 +8,7 @@ ase
 imageio
 ipywidgets
 docutils
+sphinx
 sphinx_rtd_theme
 nbsphinx
 sphinx-autodoc-typehints
