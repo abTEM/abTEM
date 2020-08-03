@@ -7,9 +7,7 @@ ideally submitted via the github issue tracker.
 
 Citation guide
 --------------
-If you use abTEM and its implemented methods in your research, we kindly ask that you cite abTEM and any relevant related publications.
-
-.. code-block::
+If you use abTEM and its implemented methods in your research, we kindly ask that you cite abTEM and any relevant related publications::
 
     @article{abtem,
     title = {Efficient first principles simulation of electron scattering factors for transmission electron microscopy},
@@ -20,9 +18,7 @@ If you use abTEM and its implemented methods in your research, we kindly ask tha
     year = {2019},
     }
 
-The (default) potential parametrization by Ivan Lobato and Dirk Van Dyck.
-
-.. code-block::
+The (default) potential parametrization by Ivan Lobato and Dirk Van Dyck::
 
     @article{lobato-parameters,
         title = {An accurate parameterization for the scattering factors, electron densities and electrostatic potentials for neutral atoms that obey all physical constraints},
@@ -33,9 +29,7 @@ The (default) potential parametrization by Ivan Lobato and Dirk Van Dyck.
         volume = {70}
     }
 
-The potential parametrization by Earl J. Kirkland.
-
-.. code-block::
+The potential parametrization by Earl J. Kirkland::
 
     @book{kirkland-parameters,
         author = {Earl J. Kirkland},
@@ -46,9 +40,7 @@ The potential parametrization by Earl J. Kirkland.
         isbn = {978-1-4419-6532-5}
     }
 
-The PRISM algorithm by Colin Ophus.
-
-.. code-block::
+The PRISM algorithm by Colin Ophus::
 
     @article{prism,
         title = {A fast image simulation algorithm for scanning transmission electron microscopy},
@@ -59,9 +51,7 @@ The PRISM algorithm by Colin Ophus.
         volume = {3}
     }
 
-The atomic simulation environment (ASE) for setting up atomic structures.
-
-.. code-block::
+The atomic simulation environment (ASE) for setting up atomic structures::
 
     @article{ase,
         author={Ask Hjorth Larsen and Jens Jørgen Mortensen and Jakob Blomqvist and Ivano E Castelli and Rune Christensen and Marcin Dułak and Jesper Friis and Michael N Groves and Bjørk Hammer and Cory Hargus and Eric D Hermes and Paul C Jennings and Peter Bjerre Jensen and James Kermode and John R Kitchin and Esben Leonhard Kolsbjerg and Joseph Kubal and Kristen Kaasbjerg and Steen Lysgaard and Jón Bergmann Maronsson and Tristan Maxson and Thomas Olsen and Lars Pastewka and Andrew Peterson and Carsten Rostgaard and Jakob Schiøtz and Ole Schütt and Mikkel Strange and Kristian S Thygesen and Tejs Vegge and Lasse Vilhelmsen and Michael Walter and Zhenhua Zeng and Karsten W Jacobsen},
@@ -73,9 +63,7 @@ The atomic simulation environment (ASE) for setting up atomic structures.
         year = {2017},
     }
 
-GPAW for calculating DFT potentials.
-
-.. code-block::
+GPAW for calculating DFT potentials::
 
     @article{gpaw,
         author = {J. J. Mortensen and L. B. Hansen and K. W. Jacobsen},
