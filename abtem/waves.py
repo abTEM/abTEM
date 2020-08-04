@@ -328,7 +328,7 @@ class Probe(HasGridAndAcceleratorMixin):
     The probe object can represent a stack of electron probe wave function for simulating scanning transmission
     electron microscopy.
 
-    :param semiangle_cutoff: Convergence semi-angle [rad.].
+    :param semiangle_cutoff: Convergence semi-angle [mrad.].
     :param rolloff: Softens the cutoff. A value of 0 gives a hard cutoff, while 1 gives the softest possible cutoff.
     :param focal_spread: The focal spread due to, among other factors, chromatic aberrations and lens current
         instabilities.
