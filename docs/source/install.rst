@@ -7,13 +7,13 @@ To install ``abtem`` with pip run::
 
     pip install abtem
 
-This installs ``abtem`` with its strict dependencies (see below), some functionality requires additional actions.
+This installs ``abtem`` with its strict dependencies (see below); some functionality requires additional actions.
 
 GPU calculations (CUDA only)
 ****************************
-GPU calculations with abTEM requires CUDA Toolkit 10 and CuPy.
+GPU calculations with abTEM require CUDA Toolkit 10 and CuPy.
 
-`Download <https://developer.nvidia.com/cuda-10.2-download-archive>`_ and install CUDA toolkit 10 from NVIDIA's website. CUDA toolkit 11 is not supported. On windows, you may be suggested to install Visual Studio for some features, this is *not* required to use abTEM.
+`Download <https://developer.nvidia.com/cuda-10.2-download-archive>`_ and install CUDA toolkit 10 from NVIDIA's website (CUDA toolkit 11 is not supported). On Windows, you may be prompted to install Visual Studio for some features, but this is *not* required to use abTEM.
 
 Install CuPy from pip::
 
@@ -89,4 +89,3 @@ Only for testing:
 
 - `pytest <http://www.pytest.org/>`_
 - `hypothesis <https://hypothesis.readthedocs.io/en/latest/>`_
-
