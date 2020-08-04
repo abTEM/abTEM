@@ -75,14 +75,14 @@ def launch_interpolate_radial_functions(array, disc_indices, positions, v, r, dv
 @cuda.jit
 def _scale_reduce(probes, S, coefficients):
     """
-    Function for collapsing a Prism scattering matrix into a probe wave function.
+    Function for collapsing a PRISM scattering matrix into a probe wave function.
 
     Parameters
     ----------
     probes : 3d numpy.ndarray
         The array in which the probe wave functions should be written.
     S : 3d numpy.ndarray
-        Scattering matrix
+        Scattering matrix.
     corners :
     coefficients :
     """
@@ -109,14 +109,14 @@ def launch_scale_reduce(probes, S, coefficients):
 @cuda.jit
 def _windowed_scale_reduce(probes, S, corners, coefficients):
     """
-    Function for collapsing a Prism scattering matrix into a probe wave function.
+    Function for collapsing a PRISM scattering matrix into a probe wave function.
 
     Parameters
     ----------
     probes : 3d numpy.ndarray
         The array in which the probe wave functions should be written.
     S : 3d numpy.ndarray
-        Scattering matrix
+        Scattering matrix.
     corners :
     coefficients :
     """
