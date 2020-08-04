@@ -37,14 +37,14 @@ def interpolate_radial_functions(array, disc_indices, positions, v, r, dvdr, sam
 @jit(nopython=True, nogil=True, parallel=True, fastmath=True)
 def windowed_scale_reduce(probes: np.ndarray, S: np.ndarray, corners, coefficients):
     """
-    Function for collapsing a Prism scattering matrix into a probe wave function.
+    Function for collapsing a PRISM scattering matrix into a probe wave function.
 
     Parameters
     ----------
     probes : 3d numpy.ndarray
         The array in which the probe wave functions should be written.
     S : 3d numpy.ndarray
-        Scattering matrix
+        Scattering matrix.
     corners :
     coefficients :
     """
@@ -62,14 +62,14 @@ def windowed_scale_reduce(probes: np.ndarray, S: np.ndarray, corners, coefficien
 @jit(nopython=True, nogil=True, parallel=True, fastmath=True)
 def scale_reduce(probes: np.ndarray, S: np.ndarray, coefficients):
     """
-    Function for collapsing a Prism scattering matrix into a probe wave function.
+    Function for collapsing a PRISM scattering matrix into a probe wave function.
 
     Parameters
     ----------
     probes : 3d numpy.ndarray
         The array in which the probe wave functions should be written.
     S : 3d numpy.ndarray
-        Scattering matrix
+        Scattering matrix.
     corners :
     coefficients :
     """

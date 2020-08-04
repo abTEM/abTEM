@@ -121,7 +121,7 @@ def get_array_module_from_device(device):
 
     if device == 'gpu':
         if cp is None:
-            raise RuntimeError('cupy is not installed, only cpu calculations available')
+            raise RuntimeError('CuPy is not installed, only CPU calculations available')
         return cp
 
     return get_array_module(device)
@@ -132,7 +132,7 @@ def copy_to_device(array, device):
         return asnumpy(array)
     elif (device == 'gpu') or (device is cp):
         if cp is None:
-            raise RuntimeError('cupy is not installed, only cpu calculations available')
+            raise RuntimeError('CuPy is not installed, only CPU calculations available')
         return cp.asarray(array)
     else:
         raise RuntimeError()
@@ -154,7 +154,7 @@ class HasDeviceMixin:
 
         if self.device == 'gpu':
             if cp is None:
-                raise RuntimeError('cupy is not installed, only cpu calculations available')
+                raise RuntimeError('CuPy is not installed, only CPU calculations available')
             return cp
 
         return get_array_module(self.device)

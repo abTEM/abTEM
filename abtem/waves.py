@@ -23,7 +23,7 @@ class FresnelPropagator:
     Fresnel propagator class.
 
     This class is used for propagating a wave function object using the near-field approximation (Fresnel diffraction).
-    The array representing the fresnel propagator function is cached.
+    The array representing the Fresnel propagator function is cached.
     """
 
     def __init__(self):
@@ -47,7 +47,7 @@ class FresnelPropagator:
 
     def propagate(self, waves: Union['Waves', 'SMatrix', 'PartialSMatrix'], dz: float):
         """
-        Propgate wave function or scattering matrix
+        Propgate wave function or scattering matrix.
 
         :param waves: Wave function or scattering matrix to propagate.
         :param dz: Propagation distance [Å].
@@ -110,12 +110,12 @@ class Waves(HasGridAndAcceleratorMixin):
     """
     Waves object.
 
-    The waves object can define a batch arbitrary 2d wavefunctions defined by a complex numpy array.
+    The waves object can define a batch of arbitrary 2D wavefunctions defined by a complex numpy array.
 
     :param extent: Lateral extent of wavefunction [Å].
     :param gpts: Number of grid points describing the wave function.
     :param sampling: Lateral sampling of wavefunctions [1 / Å].
-    :param energy: Acceleration energy [eV].
+    :param energy: Electron energy [eV].
     """
 
     def __init__(self,
@@ -125,7 +125,7 @@ class Waves(HasGridAndAcceleratorMixin):
                  energy: float = None):
 
         if len(array.shape) < 2:
-            raise RuntimeError('wave function array should be have 2 dimensions or more')
+            raise RuntimeError('Wave function array should be have 2 dimensions or more')
 
         self._array = array
         self._grid = Grid(extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True)
@@ -155,7 +155,7 @@ class Waves(HasGridAndAcceleratorMixin):
         calibrations = calibrations_from_grid(self.grid.antialiased_gpts,
                                               self.grid.antialiased_sampling,
                                               names=['alpha_x', 'alpha_y'],
-                                              units='mrad.',
+                                              units='mrad',
                                               scale_factor=self.wavelength * 1000,
                                               fourier_space=True)
 
@@ -194,8 +194,8 @@ class Waves(HasGridAndAcceleratorMixin):
         """
         Propagate and transmit wave function through the provided potential.
 
-        :param potential: The potential to propagate the wave function through.
-        :param pbar: If true, display a progressbar.
+        :param potential: The potential through which to propagate the wave function.
+        :param pbar: If true, display a progress bar.
         :return: Wave function at the exit plane of the potential.
         """
         self.grid.match(potential)
@@ -227,7 +227,7 @@ class Waves(HasGridAndAcceleratorMixin):
 
     def write(self, path: str):
         """
-        Write wave functions to hdf5 file.
+        Write wave functions to a hdf5 file.
 
         :param path: The path to write the file.
         """
@@ -239,9 +239,9 @@ class Waves(HasGridAndAcceleratorMixin):
     @classmethod
     def read(cls, path: str) -> 'Waves':
         """
-        Read wave functions from hdf5 file.
+        Read wave functions from a hdf5 file.
 
-        :param path: The path to file.
+        :param path: The path to read the file.
         """
 
         with h5py.File(path, 'r') as f:
@@ -278,7 +278,7 @@ class PlaneWave(HasGridAndAcceleratorMixin):
     :param extent: Lateral extent of wavefunction [Å].
     :param gpts: Number of grid points describing the wave function.
     :param sampling: Lateral sampling of wavefunctions [1 / Å].
-    :param energy: Acceleration energy [eV].
+    :param energy: Electron energy [eV].
     :param device: The plane waves will be build on this device.
     """
 
@@ -298,8 +298,8 @@ class PlaneWave(HasGridAndAcceleratorMixin):
 
         The grid of the potential will be matched to the wave function.
 
-        :param potential: The potential to propagate the wave function through.
-        :param pbar: If true, display a progressbar.
+        :param potential: The potential through which to propagate the wave function.
+        :param pbar: If true, display a progress bar.
         :return: Wave function at the exit plane of the potential.
         """
         if isinstance(potential, Atoms):
@@ -328,18 +328,22 @@ class Probe(HasGridAndAcceleratorMixin):
     The probe object can represent a stack of electron probe wave function for simulating scanning transmission
     electron microscopy.
 
+<<<<<<< HEAD
     :param semiangle_cutoff: Convergence semi-angle [mrad.].
+=======
+    :param semiangle_cutoff: Convergence semi-angle [mrad].
+>>>>>>> 97df8915641cc8531f632f24e687653e7cdf83ed
     :param rolloff: Softens the cutoff. A value of 0 gives a hard cutoff, while 1 gives the softest possible cutoff.
     :param focal_spread: The focal spread due to, among other factors, chromatic aberrations and lens current
         instabilities.
     :param angular_spread:
-    :param ctf_parameters: The parameters describing the phase aberrations using polar notation or the alias.
+    :param ctf_parameters: The parameters describing the phase aberrations using polar notation or an alias.
         See the documentation of the CTF object for a description.
         Convert from cartesian to polar parameters using ´transfer.cartesian2polar´.
     :param extent: Lateral extent of wave functions [Å].
     :param gpts: Number of grid points describing the wave functions.
     :param sampling: Lateral sampling of wave functions [1 / Å].
-    :param energy: Acceleration energy [eV].
+    :param energy: Electron energy [eV].
     :param device: The probe wave functions will be build on this device.
     :param kwargs: Provide the aberration coefficients as keyword arguments.
     """
@@ -426,9 +430,9 @@ class Probe(HasGridAndAcceleratorMixin):
         """
         Build probe wave functions at the provided positions and propagate them through the potential.
 
-        :param positions: Positions of the probe wave functions
-        :param potential: The probe batch size. Larger batches are faster, but requires more memory.
-        :param pbar: If true, display progressbars.
+        :param positions: Positions of the probe wave functions.
+        :param potential: The probe batch size. Larger batches are faster, but require more memory.
+        :param pbar: If true, display progress bars.
         :return: Probe exit wave functions as a Waves object.
         """
 
@@ -463,10 +467,10 @@ class Probe(HasGridAndAcceleratorMixin):
         Raster scan the probe across the potential and record a measurement for each detector.
 
         :param scan: Scan object defining the positions of the probe wave functions.
-        :param detectors: The detectors recording the measurments.
-        :param potential: The potential to scan the probe across.
-        :param max_batch: The probe batch size. Larger batches are faster, but requires more memory.
-        :param pbar: If true, display progressbars.
+        :param detectors: The detectors recording the measurements.
+        :param potential: The potential across which to scan the probe .
+        :param max_batch: The probe batch size. Larger batches are faster, but require more memory.
+        :param pbar: If true, display progress bars.
         :return: Dictionary of measurements with keys given by the detector.
         """
 
@@ -508,7 +512,7 @@ class Probe(HasGridAndAcceleratorMixin):
         """
         Show the probe wave function.
 
-        :param profile: If true, show a 1d slice of the probe as a line profile.
+        :param profile: If true, show a 1D slice of the probe as a line profile.
         :param kwargs: Additional keyword arguments for the plot.show_line or plot.show_image functions.
             See the documentation of the respective function for a description.
         """
@@ -580,14 +584,14 @@ class SMatrix(HasGridAndAcceleratorMixin):
     The scattering matrix object represents a plane wave expansion of a probe.
 
     :param array: The array representation of the scattering matrix.
-    :param expansion_cutoff: The angular cutoff of the plane wave expansion in mrad.
+    :param expansion_cutoff: The angular cutoff of the plane wave expansion [mrad].
     :param interpolation: Interpolation factor.
     :param k: The spatial frequencies of each plane in the plane wave expansion.
     :param ctf: The probe contrast transfer function.
     :param extent: Lateral extent of wave functions [Å].
     :param gpts: Number of grid points describing the wave functions.
     :param sampling: Lateral sampling of wave functions [1 / Å].
-    :param energy: Acceleration energy [eV].
+    :param energy: Electron energy [eV].
     """
 
     def __init__(self,
@@ -647,7 +651,7 @@ class SMatrix(HasGridAndAcceleratorMixin):
     @property
     def k(self) -> Tuple[np.ndarray, np.ndarray]:
         """
-        The spatial frequencies of each plane in the plane wave expansion.
+        The spatial frequencies of each wave in the plane wave expansion.
         """
         return self._k
 
@@ -697,8 +701,8 @@ class SMatrix(HasGridAndAcceleratorMixin):
         Propagate the scattering matrix through the provided potential.
 
         :param positions: Positions of the probe wave functions
-        :param max_batch: The probe batch size. Larger batches are faster, but requires more memory.
-        :param pbar: If true, display progressbars.
+        :param max_batch: The probe batch size. Larger batches are faster, but require more memory.
+        :param pbar: If true, display progress bars.
         :return: Probe exit wave functions as a Waves object.
         """
         propagator = FresnelPropagator()
@@ -717,7 +721,7 @@ class SMatrix(HasGridAndAcceleratorMixin):
         Collapse the scattering matrix to probe wave functions centered on the provided positions.
 
         :param positions: The positions of the probe wave functions.
-        :param max_batch_expansion: The maximum number of plane waves the reduction is applied simultanously.
+        :param max_batch_expansion: The maximum number of plane waves the reduction is applied to simultanously.
         :return: Probe wave functions for the provided positions.
         """
         xp = get_array_module(self.array)
@@ -774,10 +778,10 @@ class SMatrix(HasGridAndAcceleratorMixin):
 
         :param scan: Scan object defining the positions of the probe wave functions.
         :param detectors: The detectors recording the measurments.
-        :param potential: The potential to scan the probe across.
-        :param max_batch_probes: The probe batch size. Larger batches are faster, but requires more memory.
+        :param potential: The potential across which to scan the probe.
+        :param max_batch_probes: The probe batch size. Larger batches are faster, but require more memory.
         :param max_batch_expansion: The expansion plane wave batch size.
-        :param pbar: If true, display progressbars.
+        :param pbar: If true, display progress bars.
         :return: Dictionary of measurements with keys given by the detector.
         """
 
@@ -805,13 +809,13 @@ class SMatrixBuilder(HasGridAndAcceleratorMixin):
     The scattering matrix builder object is used for creating scattering matrices and simulating STEM experiments using
     the PRISM algorithm.
 
-    :param expansion_cutoff: The angular cutoff of the plane wave expansion in mrad.
+    :param expansion_cutoff: The angular cutoff of the plane wave expansion [mrad].
     :param interpolation: Interpolation factor.
     :param ctf: The probe contrast transfer function.
     :param extent: Lateral extent of wave functions [Å].
     :param gpts: Number of grid points describing the wave functions.
     :param sampling: Lateral sampling of wave functions [1 / Å].
-    :param energy: Acceleration energy [eV].
+    :param energy: Electron energy [eV].
     :param device:
     :param storage: The device on which to store the created scattering matrices.
     """
@@ -828,7 +832,7 @@ class SMatrixBuilder(HasGridAndAcceleratorMixin):
                  storage: str = None):
 
         if not isinstance(interpolation, int):
-            raise ValueError('interpolation factor must be int')
+            raise ValueError('Interpolation factor must be int')
 
         self._interpolation = interpolation
         self._expansion_cutoff = expansion_cutoff

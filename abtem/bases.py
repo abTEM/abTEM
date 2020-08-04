@@ -182,20 +182,20 @@ class Grid:
         """
         Grid object.
 
-        The grid object represent the simulation grid on which the wave function and potential is discretized.
+        The grid object represent the simulation grid on which the wave functions and potential are discretized.
 
         Parameters
         ----------
         extent : sequence of float, float, optional
-            Grid extent in each dimension [Å]
+            Grid extent in each dimension [Å].
         gpts : sequence of int, int, optional
-            Number of grid points in each dimension
+            Number of grid points in each dimension.
         sampling : sequence of float, float, optional
-            Grid sampling in each dimension [1 / Å]
+            Grid sampling in each dimension [1 / Å].
         dimensions : int
             Number of dimensions represented by the grid.
         endpoint : bool, optional
-            If true include the grid endpoint (the dafault is False). For periodic grids the endpoint should not be
+            If true include the grid endpoint (the default is False). For periodic grids the endpoint should not be
             included.
         """
 
@@ -204,7 +204,7 @@ class Grid:
         self._endpoint = endpoint
 
         if sum([lock_extent, lock_gpts, lock_sampling]) > 1:
-            raise RuntimeError('at most one of extent, gpts, and sampling may be locked')
+            raise RuntimeError('At most one of extent, gpts, and sampling may be locked')
 
         self._lock_extent = lock_extent
         self._lock_gpts = lock_gpts
@@ -225,7 +225,7 @@ class Grid:
     def _validate(self, value, dtype):
         if isinstance(value, (np.ndarray, list, tuple)):
             if len(value) != self.dimensions:
-                raise RuntimeError('grid value length of {} != {}'.format(len(value), self._dimensions))
+                raise RuntimeError('Grid value length of {} != {}'.format(len(value), self._dimensions))
             return tuple((map(dtype, value)))
 
         if isinstance(value, (int, float, complex)):
@@ -234,7 +234,7 @@ class Grid:
         if value is None:
             return value
 
-        raise RuntimeError('invalid grid property ({})'.format(value))
+        raise RuntimeError('Invalid grid property ({})'.format(value))
 
     def __len__(self):
         return self.dimensions
@@ -255,7 +255,7 @@ class Grid:
     @watched_method('changed')
     def extent(self, extent: Union[float, Sequence[float]]):
         if self._lock_extent:
-            raise RuntimeError('extent cannot be modified')
+            raise RuntimeError('Extent cannot be modified')
 
         extent = self._validate(extent, dtype=float)
 
@@ -275,7 +275,7 @@ class Grid:
     @watched_method('changed')
     def gpts(self, gpts: Union[int, Sequence[int]]):
         if self._lock_gpts:
-            raise RuntimeError('gpts cannot be modified')
+            raise RuntimeError('Grid gpts cannot be modified')
 
         gpts = self._validate(gpts, dtype=int)
 
@@ -296,7 +296,7 @@ class Grid:
     @watched_method('changed')
     def sampling(self, sampling):
         if self._lock_sampling:
-            raise RuntimeError('sampling cannot be modified')
+            raise RuntimeError('Sampling cannot be modified')
 
         sampling = self._validate(sampling, dtype=float)
         if self._lock_gpts:
@@ -330,12 +330,12 @@ class Grid:
                 self._sampling = tuple(l / n for l, n in zip(extent, gpts))
 
     def check_is_defined(self):
-        """ Throw error if the grid is not defined. """
+        """ Raise error if the grid is not defined. """
         if self.extent is None:
-            raise RuntimeError('grid extent is not defined')
+            raise RuntimeError('Grid extent is not defined')
 
         elif self.gpts is None:
-            raise RuntimeError('grid gpts is not defined')
+            raise RuntimeError('Grid gpts are not defined')
 
     @property
     def antialiased_gpts(self):
@@ -349,27 +349,27 @@ class Grid:
         self.check_match(other)
 
         if (self.extent is None) & (other.extent is None):
-            raise RuntimeError('grid extent cannot be inferred')
+            raise RuntimeError('Grid extent cannot be inferred')
         elif other.extent is None:
             other.extent = self.extent
         elif np.any(self.extent != other.extent):
             self.extent = other.extent
 
         if (self.gpts is None) & (other.gpts is None):
-            raise RuntimeError('grid gpts cannot be inferred')
+            raise RuntimeError('Grid gpts cannot be inferred')
         elif other.gpts is None:
             other.gpts = self.gpts
         elif np.any(self.gpts != other.gpts):
             self.gpts = other.gpts
 
     def check_match(self, other):
-        """ Throw error if the grid of another object is different from this object. """
+        """ Raise error if the grid of another object is different from this object. """
 
         if (self.extent is not None) & (other.extent is not None) & np.any(self.extent != other.extent):
-            raise RuntimeError('inconsistent grid extent ({} != {})'.format(self.extent, other.extent))
+            raise RuntimeError('Inconsistent grid extent ({} != {})'.format(self.extent, other.extent))
 
         elif (self.gpts is not None) & (other.gpts is not None) & np.any(self.gpts != other.gpts):
-            raise RuntimeError('inconsistent grid gpts ({} != {})'.format(self.gpts, other.gpts))
+            raise RuntimeError('Inconsistent grid gpts ({} != {})'.format(self.gpts, other.gpts))
 
     def snap_to_power(self, power: float = 2):
         self.gpts = tuple(power ** np.ceil(np.log(n) / np.log(power)) for n in self.gpts)
@@ -399,7 +399,7 @@ class HasGridMixin:
 
 class Accelerator:
     """
-    Accelerator object
+    Accelerator object.
 
     The accelerator describes the energy of wave functions and transfer functions.
 
@@ -425,7 +425,7 @@ class Accelerator:
     @watched_method('changed')
     def energy(self, value: float):
         if self._lock_energy:
-            raise RuntimeError('energy cannot be modified')
+            raise RuntimeError('Energy cannot be modified')
 
         if value is not None:
             value = float(value)
@@ -448,21 +448,21 @@ class Accelerator:
         return energy2sigma(self.energy)
 
     def check_is_defined(self):
-        """ Throw error if the energy is not defined. """
+        """ Raise error if the energy is not defined. """
 
         if self.energy is None:
-            raise RuntimeError('energy is not defined')
+            raise RuntimeError('Energy is not defined')
 
     def check_match(self, other: 'Accelerator'):
         if (self.energy is not None) & (other.energy is not None) & (self.energy != other.energy):
-            raise RuntimeError('inconsistent energies')
+            raise RuntimeError('Inconsistent energies')
 
     def match(self, other, check_match=True):
         if check_match:
             self.check_match(other)
 
         if (self.energy is None) & (other.energy is None):
-            raise RuntimeError('energy cannot be inferred')
+            raise RuntimeError('Energy cannot be inferred')
 
         if other.energy is None:
             other.energy = self.energy
