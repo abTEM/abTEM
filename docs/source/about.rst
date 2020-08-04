@@ -7,7 +7,7 @@ ideally submitted via the github issue tracker.
 
 How to cite abTEM
 -----------------
-If you use abTEM and its implemented methods in your research, we kindly ask that you cite the relevant related publications::
+If you use abTEM and its implemented methods in your research, we kindly ask that you cite the relevant publications::
 
 abTEM implementation (tentative reference)::
 
