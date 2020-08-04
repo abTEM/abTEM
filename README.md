@@ -26,7 +26,7 @@ For detailed instructions on installing abTEM, see [the installation guide](http
 
 ## Getting started
 
-To get started using abTEM, please visit our [walkthrough]().
+To get started using abTEM, please visit our [walkthrough](https://abtem.readthedocs.io/en/latest/walkthrough/introduction.html).
 
 ## Contact
 * Chat on [gitter](https://gitter.im/abTEM/)
