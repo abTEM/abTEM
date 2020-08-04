@@ -14,7 +14,7 @@ with io_open(fndoc, mode='r', encoding='utf-8') as fd:
     README_md = fd.read()
 
 setup(
-    name='abTEM',
+    name='abtem',
     version=__version__,
     description='ab initio Transmission Electron Microscopy',
     long_description=README_md,

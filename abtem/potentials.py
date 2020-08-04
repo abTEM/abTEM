@@ -239,7 +239,7 @@ class Potential(AbstractTDSPotentialBuilder):
                  parametrization: str = 'lobato',
                  cutoff_tolerance: float = 1e-3,
                  device='cpu',
-                 storage='cpu'):
+                 storage=None):
 
         self._cutoff_tolerance = cutoff_tolerance
         self._parametrization = parametrization

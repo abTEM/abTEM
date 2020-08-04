@@ -5,11 +5,10 @@ import h5py
 import numpy as np
 from ase import Atoms
 
-from abtem.bases import Grid, Accelerator, HasGridMixin, HasAcceleratorMixin, cache_clear_callback, watched_property, \
-    Cache, cached_method, HasGridAndAcceleratorMixin
+from abtem.bases import Grid, Accelerator, cache_clear_callback, Cache, cached_method, HasGridAndAcceleratorMixin
 from abtem.detect import AbstractDetector, crop_to_center
 from abtem.device import get_array_module, get_device_function, asnumpy, get_array_module_from_device, \
-    copy_to_device, cp
+    copy_to_device
 from abtem.measure import calibrations_from_grid, Measurement
 from abtem.plot import show_line
 from abtem.potentials import Potential, AbstractPotential, AbstractTDSPotentialBuilder, AbstractPotentialBuilder, \
@@ -77,9 +76,9 @@ def transmit(waves: Union['Waves', 'SMatrix', 'PartialSMatrix'], potential_slice
     slice_array = potential_slice.array.reshape((1,) * dim_padding + potential_slice.array.shape)
 
     if np.iscomplexobj(slice_array):
-        waves._array *= slice_array
+        waves._array *= copy_to_device(slice_array, xp)
     else:
-        waves._array *= complex_exponential(waves.accelerator.sigma * slice_array)
+        waves._array *= complex_exponential(copy_to_device(waves.accelerator.sigma * slice_array, xp))
 
 
 def _multislice(waves: Union['Waves', 'SMatrix', 'PartialSMatrix'],
@@ -599,7 +598,8 @@ class SMatrix(HasGridAndAcceleratorMixin):
                  ctf: CTF = None,
                  extent: Union[float, Sequence[float]] = None,
                  sampling: Union[float, Sequence[float]] = None,
-                 energy: float = None):
+                 energy: float = None,
+                 device='cpu'):
 
         self._array = array
         self._interpolation = interpolation
@@ -613,6 +613,8 @@ class SMatrix(HasGridAndAcceleratorMixin):
             ctf = CTF(semiangle_cutoff=expansion_cutoff, rolloff=.1)
 
         self.set_ctf(ctf)
+
+        self._device = device
 
     def set_ctf(self, ctf: CTF = None, **kwargs):
         """
