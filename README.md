@@ -13,3 +13,13 @@
 abTEM provides a Python API for running simulations of Transmission Electron Microscopy images using the multislice algorithm.
 
 This program is under development and subject to changes.
+
+## Installation
+
+For detailed instructions on installing abTEM, see [the installation guide](https://abtem.readthedocs.io/en/latest/install.html).
+
+You can install abTEM using `pip`:
+
+```sh
+$ pip install abtem
+```
