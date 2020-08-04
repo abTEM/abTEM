@@ -9,16 +9,16 @@ def _error_estimate(eps, value_estimates, left_summands, right_summands):
         error_estimate = 0
 
     else:
-        e1 = abs(value_estimates[-1] - value_estimates[-2])
-        e2 = abs(value_estimates[-1] - value_estimates[-3])
-        e3 = eps * max(max(abs(left_summands)), max(abs(right_summands)))
+        #e1 = abs(value_estimates[-1] - value_estimates[-2])
+        #e2 = abs(value_estimates[-1] - value_estimates[-3])
+        #e3 = eps * max(max(abs(left_summands)), max(abs(right_summands)))
         e4 = max(abs(left_summands[-1]), abs(right_summands[-1]))
-        n = np.float((np.log(e1 + np.finfo(e1).eps) / (np.log(e2 + np.finfo(e2).eps))))
+        #n = np.float((np.log(e1 + np.finfo(e1).eps) / (np.log(e2 + np.finfo(e2).eps))))
 
-        with np.errstate(over='ignore'):
-            error_estimate = max(e1 ** n, e1 ** 2, e3, e4)
+        #with np.errstate(over='ignore'):
+        #    error_estimate = max(e1 ** n, e1 ** 2, e3, e4)
         #print(e1, e2, e3, e4, error_estimate)
-        error_estimate = e1
+        error_estimate = e4
 
     return error_estimate
 
