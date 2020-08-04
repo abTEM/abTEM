@@ -13,3 +13,7 @@ It should be noted that following this walkthrough requires a basic understandin
 
     01_atomic_models.ipynb
     02_potentials.ipynb
+    03_wave_functions.ipynb
+    04_multislice.ipynb
+    05_scan_and_detect.ipynb
+    10_DFT.ipynb
