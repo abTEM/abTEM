@@ -5,11 +5,23 @@ abTEM has been developed at the Faculty of Physics of the University of Vienna, 
 for information on how to cite abTEM. abTEM and its development are hosted on github. Bugs and feature requests are
 ideally submitted via the github issue tracker.
 
-Citation guide
---------------
-If you use abTEM and its implemented methods in your research, we kindly ask that you cite abTEM and any relevant related publications::
+How to cite abTEM
+-----------------
+If you use abTEM and its implemented methods in your research, we kindly ask that you cite the relevant related publications::
+
+abTEM implementation (tentative reference)::
 
     @article{abtem,
+    title = {abTEM: ab Initio Transmission Electron Microscopy Image Simulation},
+    author = {Jacob Madsen and Toma Susi},
+    journal = {Microscopy and Microanalysis},
+    year = {2020},
+    doi = {10.1017/S1431927620014701},
+    }
+
+ab initio electrostatic potentials from GPAW::
+
+    @article{gpawpotentials,
     title = {Efficient first principles simulation of electron scattering factors for transmission electron microscopy},
     author = {Toma Susi and Jacob Madsen and Ursula Ludacka and Jens Jørgen Mortensen and Timothy J. Pennycook and Zhongbo Lee and Jani Kotakoski and Ute Kaiser and Jannik C. Meyer},
     journal = {Ultramicroscopy},
