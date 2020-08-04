@@ -45,21 +45,18 @@ except ImportError:
     asnumpy = np.asarray
 
 
-def fft2_convolve(array, kernel, overwrite_x=True):
-    def _fft_convolve(array, kernel, overwrite_x):
-        mkl_fft.fft2(array, overwrite_x=overwrite_x)
+def fft2_convolve(array, kernel):
+    def _fft_convolve(array, kernel):
+        mkl_fft.fft2(array)
         array *= kernel
-        mkl_fft.ifft2(array, overwrite_x=overwrite_x)
+        mkl_fft.ifft2(array)
         return array
 
-    if not overwrite_x:
-        array = array.copy()
-
     if len(array.shape) == 2:
-        return _fft_convolve(array, kernel, overwrite_x=True)
+        return _fft_convolve(array, kernel)
     elif (len(array.shape) == 3):
         for i in range(len(array)):
-            _fft_convolve(array[i], kernel, overwrite_x=True)
+            _fft_convolve(array[i], kernel)
         return array
     else:
         raise ValueError()
@@ -70,16 +67,16 @@ def fft2(array, overwrite_x):
         array = array.copy()
 
     if len(array.shape) == 2:
-        return mkl_fft.fft2(array, overwrite_x=True)
+        return mkl_fft.fft2(array)
     elif (len(array.shape) == 3):
         for i in range(array.shape[0]):
-            mkl_fft.fft2(array[i], overwrite_x=True)
+            mkl_fft.fft2(array[i])
         return array
     else:
         shape = array.shape
         array = array.reshape((-1,) + shape[1:])
         for i in range(array.shape[0]):
-            mkl_fft.fft2(array[i], overwrite_x=True)
+            mkl_fft.fft2(array[i])
 
         array = array.reshape(shape)
         return array
@@ -90,10 +87,10 @@ def ifft2(array, overwrite_x):
         array = array.copy()
 
     if len(array.shape) == 2:
-        return mkl_fft.ifft2(array, overwrite_x=overwrite_x)
+        return mkl_fft.ifft2(array)
     elif len(array.shape) == 3:
         for i in range(array.shape[0]):
-            array = mkl_fft.ifft2(array, overwrite_x=overwrite_x)
+            array = mkl_fft.ifft2(array)
         return array
     else:
         raise NotImplementedError()
@@ -131,9 +128,9 @@ def get_array_module_from_device(device):
 
 
 def copy_to_device(array, device):
-    if device == 'cpu':
+    if (device == 'cpu') or (device is np):
         return asnumpy(array)
-    elif device == 'gpu':
+    elif (device == 'gpu') or (device is cp):
         if cp is None:
             raise RuntimeError('cupy is not installed, only cpu calculations available')
         return cp.asarray(array)
