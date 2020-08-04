@@ -10,9 +10,9 @@
 | [**Examples**](https://github.com/jacobjma/abTEM/tree/master/examples)
 | [**Gitter**](https://gitter.im/abTEM/)
 
-abTEM provides a Python API for running simulations of Transmission Electron Microscopy images using the multislice algorithm.
+**This program is under development and subject to changes. Please be aware and report issues.**
 
-This program is under development and subject to changes.
+abTEM provides a Python API for running simulations of Transmission Electron Microscopy images using the multislice algorithm. It is designed to work with atomistic simulation with the 
 
 ## Installation
 
@@ -23,3 +23,15 @@ You can install abTEM using `pip`:
 ```sh
 $ pip install abtem
 ```
+
+## Example
+
+## Getting started
+
+## Contact
+* Chat on [gitter](https://gitter.im/abTEM/)
+* Write the [maintainer](https://github.com/jacobjma) directly
+* Bug reports and development: [github issues](https://github.com/jacobjma/abTEM/issues)
+
+Please send us bug-reports, patches, code, ideas and questions.
+
