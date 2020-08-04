@@ -16,17 +16,17 @@ abTEM provides a Python API for running simulations of (scanning) transmission e
 
 ## Installation
 
-For detailed instructions on installing abTEM, see [the installation guide](https://abtem.readthedocs.io/en/latest/install.html).
-
 You can install abTEM using `pip`:
 
 ```sh
 $ pip install abtem
 ```
 
-## Example
+For detailed instructions on installing abTEM, see [the installation guide](https://abtem.readthedocs.io/en/latest/install.html).
 
 ## Getting started
+
+To get started using abTEM, please visit our [walkthrough]().
 
 ## Contact
 * Chat on [gitter](https://gitter.im/abTEM/)
