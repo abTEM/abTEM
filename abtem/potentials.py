@@ -37,7 +37,7 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 
     def check_slice_idx(self, i):
         if i >= self.num_slices:
-            raise RuntimeError('slice index {} too large for potential with {} slices'.format(i, self.num_slices))
+            raise RuntimeError('Slice index {} too large for potential with {} slices'.format(i, self.num_slices))
 
     def get_slice(self, i):
         self.check_slice_idx(i)
@@ -78,7 +78,7 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
                 projected._thickness += self.get_slice_thickness(i)
             return projected
         else:
-            raise TypeError('potential indices must be integers, not {}'.format(type(item)))
+            raise TypeError('Potential indices must be integers, not {}'.format(type(item)))
 
     def show(self, **kwargs):
         self[:].show(**kwargs)
@@ -214,17 +214,17 @@ class Potential(AbstractTDSPotentialBuilder):
     """
     Potential object.
 
-    The potential object is used to calculate electrostatic potential of a set of atoms represented by an ASE atoms
-    object. The potential is calculated in the Independent Atom Model (IAM) with a user-defined parametrization
+    The potential object is used to calculate the electrostatic potential of a set of atoms represented by an ASE atoms
+    object. The potential is calculated with the Independent Atom Model (IAM) using a user-defined parametrization
     of the atomic potentials.
 
     :param atoms: Atoms object defining the atomic configuration used in the IAM of the electrostatic potential.
     :param gpts: Number of grid points describing each slice of the potential.
     :param sampling: Lateral sampling of the potential [1 / Å].
-    :param slice_thickness: Thickness of the potential slices in Angstrom for calculating the number of slices used by
+    :param slice_thickness: Thickness of the potential slices in Å for calculating the number of slices used by
         the multislice algorithm.
     :param parametrization: The potential parametrization describes the radial dependence of the potential for each element.
-        Two of the most accurate parametrizations are available by Lobato et. al. and EJ Kirkland.
+        Two of the most accurate parametrizations are available by Lobato et. al. and Kirkland.
         See the citation guide for references.
     :param cutoff_tolerance: The error tolerance used for deciding the radial cutoff distance of the potential [eV / e].
     :param device: The device used for calculating the potential.
@@ -257,7 +257,7 @@ class Potential(AbstractTDSPotentialBuilder):
             self._function = kirkland  # lambda r: kirkland(r, parameters[atomic_number])
             self._derivative = dvdr_kirkland  # lambda r: dvdr_kirkland(r, parameters[atomic_number])
         else:
-            raise RuntimeError('parametrization {} not recognized'.format(parametrization))
+            raise RuntimeError('Parametrization {} not recognized'.format(parametrization))
 
         if isinstance(atoms, AbstractFrozenPhonons):
             self._frozen_phonons = atoms
@@ -267,10 +267,10 @@ class Potential(AbstractTDSPotentialBuilder):
         atoms = next(iter(self._frozen_phonons))
 
         if np.abs(atoms.cell[2, 2]) < 1e-12:
-            raise RuntimeError('atoms has no thickness')
+            raise RuntimeError('Atoms cell has no thickness')
 
         if not is_cell_orthogonal(atoms):
-            raise RuntimeError('atoms are non-orthogonal')
+            raise RuntimeError('Atoms are not orthogonal')
 
         self._atoms = atoms
         self._grid = Grid(extent=np.diag(atoms.cell)[:2], gpts=gpts, sampling=sampling, lock_extent=True)
@@ -444,12 +444,12 @@ class ArrayPotential(AbstractPotential, HasGridMixin):
     """
     Array potential object.
 
-    The array potential object represents
+    The array potential object represents slices of the electrostatic potential.
 
     :param array: The array representing the potential slices. The first dimension is the slice index and the last two are the
         spatial dimensions.
-    :param slice_thicknesses: The thicknesses of the potential slices in Angstrom. If float, the thickness is the same for all slices.
-        If sequence, the length must equal the length of potential array.
+    :param slice_thicknesses: The thicknesses of potential slices in Å. If a float, the thickness is the same for all slices.
+        If a sequence, the length must equal the length of the potential array.
     :param extent: Lateral extent of the potential [1 / Å].
     :param sampling: Lateral sampling of the potential [1 / Å].
     """

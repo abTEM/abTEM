@@ -88,16 +88,16 @@ class GPAWPotential(AbstractPotentialBuilder):
     calculator : GPAW calculator object
         A converged GPAW calculator.
     origin : two floats, float, optional
-        xy-origin of the electrostatic potential relative to the xy-origin of the Atoms object. Units of Angstrom.
+        xy-origin of the electrostatic potential relative to the xy-origin of the Atoms object [Å].
     extent : two floats, float, optional
-        Lateral extent of potential, if the unit cell of the atoms is too small it will be repeated. Units of Angstrom.
+        Lateral extent of potential, if the unit cell of the atoms is too small it will be repeated [Å].
     gpts : two ints, int, optional
         Number of grid points describing each slice of the potential.
     sampling : two floats, float, optional
-        Lateral sampling of the potential. Units of 1 / Angstrom.
+        Lateral sampling of the potential [1 / Å].
     slice_thickness : float, optional
-        Thickness of the potential slices in Angstrom for calculating the number of slices used by the multislice
-        algorithm. Default is 0.5 Angstrom.
+        Thickness of the potential slices in Å for calculating the number of slices used by the multislice
+        algorithm. Default is 0.5 Å.
     num_slices : int, optional
         Number of slices used by the multislice algorithm. If `num_slices` is set, then `slice_thickness` is disabled.
     quadrature_order : int, optional

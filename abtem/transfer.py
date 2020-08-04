@@ -200,11 +200,11 @@ class CTF(HasAcceleratorMixin):
         Parameters
         ----------
         alpha : numpy.ndarray
-            Angle between the scattered electrons and the optical axis.
+            Angle between the scattered electrons and the optical axis [mrad].
         phi : numpy.ndarray
-            Angle around the optical axis of the scattered electrons.
+            Angle around the optical axis of the scattered electrons [mrad].
         wavelength : float
-            Relativistic wavelength of wavefunction.
+            Relativistic wavelength of wavefunction [Å].
         parameters : Mapping[str, float]
             Mapping from Cnn, phinn coefficients to their corresponding values. See parameter `parameters` in class CTFBase.
 

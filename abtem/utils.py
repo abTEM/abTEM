@@ -10,9 +10,9 @@ from tqdm.auto import tqdm
 def energy2mass(energy):
     """
     Calculate relativistic mass from energy.
-    :param energy: Energy in electron volt
+    :param energy: Energy [eV].
     :type energy: float
-    :return: Relativistic mass in kg
+    :return: Relativistic mass [kg].
     :rtype: float
     """
     return (1 + units._e * energy / (units._me * units._c ** 2)) * units._me
@@ -21,9 +21,9 @@ def energy2mass(energy):
 def energy2wavelength(energy):
     """
     Calculate relativistic de Broglie wavelength from energy.
-    :param energy: Energy in electron volt
+    :param energy: Energy [eV].
     :type energy: float
-    :return: Relativistic de Broglie wavelength in Angstrom.
+    :return: Relativistic de Broglie wavelength [Å].
     :rtype: float
     """
     return units._hplanck * units._c / np.sqrt(
@@ -33,9 +33,9 @@ def energy2wavelength(energy):
 def energy2sigma(energy):
     """
     Calculate interaction parameter from energy.
-    :param energy: Energy in electron volt.
+    :param energy: Energy [Å].
     :type energy: float
-    :return: Interaction parameter in 1 / (Angstrom * eV).
+    :return: Interaction parameter [1 / (Å * eV)].
     :rtype: float
     """
     return (2 * np.pi * energy2mass(energy) * units.kg * units._e * units.C * energy2wavelength(energy) / (
@@ -70,7 +70,7 @@ def cosine_window(x, cutoff, rolloff, attenuate='high'):
         array[x > cutoff] = 0.
         array = xp.where(x > cutoff - rolloff, array, xp.ones_like(x, dtype=xp.float32))
     else:
-        raise RuntimeError('attenuate must be "high" or "low"')
+        raise RuntimeError('Attenuate must be either "high" or "low"')
 
     return array
 

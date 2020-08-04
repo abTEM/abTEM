@@ -29,7 +29,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
         """
         Generates atomic configurations for thermal diffuse scattering.
 
-        Randomly displaces the atomic positions in of an ASE Atoms object to simulate thermal vibrations.
+        Randomly displaces the atomic positions of an ASE Atoms object to emulate thermal vibrations.
 
         Parameters
         ----------
@@ -49,7 +49,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
         unique_atomic_numbers = np.unique(atoms.get_atomic_numbers())
 
         if len(set(unique_atomic_numbers).intersection(set(new_sigmas.keys()))) != len(unique_atomic_numbers):
-            raise RuntimeError('provide sigma for all atomic species')
+            raise RuntimeError('Mapping sigma not provided for all atomic species')
 
         self._sigmas = new_sigmas
         self._atoms = atoms
