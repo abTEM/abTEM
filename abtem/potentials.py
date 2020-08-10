@@ -93,6 +93,7 @@ class AbstractPotentialBuilder(HasDeviceMixin, AbstractPotential):
         self.grid.check_is_defined()
 
         storage_xp = get_array_module_from_device(self._storage)
+
         array = storage_xp.zeros((self.num_slices,) + (self.gpts[0], self.gpts[1]), dtype=np.float32)
         slice_thicknesses = np.zeros(self.num_slices)
 
@@ -287,7 +288,7 @@ class Potential(AbstractTDSPotentialBuilder):
         self._device = device
 
         if storage is None:
-            self._storage = device
+            storage = device
 
         super().__init__(storage=storage)
 
@@ -370,6 +371,7 @@ class Potential(AbstractTDSPotentialBuilder):
         self.grid.check_is_defined()
 
         xp = get_array_module(self._device)
+
         interpolate_radial_functions = get_device_function(xp, 'interpolate_radial_functions')
 
         atoms = self.atoms.copy()
