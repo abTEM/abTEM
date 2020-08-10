@@ -8,7 +8,7 @@ from abtem.potentials import AbstractPotentialBuilder, ProjectedPotential, disc_
     PotentialIntegrator
 from abtem.utils import split_integer
 from abtem.structures import orthogonalize_cell
-
+from gpaw.atom.shapefunc import shape_functions
 
 def interpolate_rectangle(array, cell, extent, gpts, origin=None):
     if origin is None:
@@ -49,32 +49,32 @@ def gaussian(radial_grid, alpha):
 
 
 def get_paw_corrections(a, calculator, rcgauss=0.005):
-    density = calculator.density
-    density.D_asp.redistribute(density.atom_partition.as_serial())
-    density.Q_aL.redistribute(density.atom_partition.as_serial())
+    dens = calculator.density
+    dens.D_asp.redistribute(dens.atom_partition.as_serial())
+    dens.Q_aL.redistribute(dens.atom_partition.as_serial())
 
-    alpha = 1 / (rcgauss / units.Bohr) ** 2
-    D_sp = density.D_asp[a]
-
-    setup = density.setups[a]
-
-    radial_grid = setup.xc_correction.rgd
-    ghat_g = gaussian(radial_grid, 1 / setup.rcgauss ** 2)
-
-    Z_g = gaussian(radial_grid, alpha) * setup.Z
-    D_q = np.dot(D_sp.sum(0), setup.xc_correction.B_pqL[:, :, 0])
-
-    dn_g = np.dot(D_q, (setup.xc_correction.n_qg - setup.xc_correction.nt_qg)) * np.sqrt(4 * np.pi)
-    dn_g += 4 * np.pi * (setup.xc_correction.nc_g - setup.xc_correction.nct_g)
+    D_sp = dens.D_asp[a]
+    #for a, D_sp in dens.D_asp.items():
+    setup = dens.setups[a]
+    c = setup.xc_correction
+    rgd = c.rgd
+    ghat_g = shape_functions(rgd,
+                             **setup.data.shape_function, lmax=0)[0]
+    Z_g = shape_functions(rgd, 'gauss', rcgauss, lmax=0)[0] * setup.Z
+    D_q = np.dot(D_sp.sum(0), c.B_pqL[:, :, 0])
+    dn_g = np.dot(D_q, (c.n_qg - c.nt_qg)) * np.sqrt(4 * np.pi)
+    dn_g += 4 * np.pi * (c.nc_g - c.nct_g)
     dn_g -= Z_g
-    dn_g -= density.Q_aL[a][0] * ghat_g * np.sqrt(4 * np.pi)
-
-    dv_g = radial_grid.poisson(dn_g) / np.sqrt(4 * np.pi)
-    dv_g[1:] /= radial_grid.r_g[1:]
+    dn_g -= dens.Q_aL[a][0] * ghat_g * np.sqrt(4 * np.pi)
+    dv_g = rgd.poisson(dn_g) / np.sqrt(4 * np.pi)
+    dv_g[1:] /= rgd.r_g[1:]
     dv_g[0] = dv_g[1]
     dv_g[-1] = 0.0
 
-    return radial_grid.r_g, dv_g
+    #dv
+    #dv_a1.append([rgd.spline(dv_g, points=POINTS)])
+
+    return rgd.r_g, dv_g
 
 
 class GPAWPotential(AbstractPotentialBuilder):
