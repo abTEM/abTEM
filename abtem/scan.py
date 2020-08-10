@@ -105,7 +105,7 @@ class LineScan(AbstractScan, HasGridMixin):
         end = np.array(end)
 
         if (start.shape != (2,)) | (end.shape != (2,)):
-            raise ValueError('scan start/end has wrong shape')
+            raise ValueError('Scan start/end has incorrect shape')
 
         self._grid = Grid(gpts=gpts, sampling=sampling, endpoint=endpoint, dimensions=1)
         self._start = start
@@ -202,7 +202,7 @@ class GridScan(AbstractScan, HasGridMixin):
         end = np.array(end)
 
         if (self._start.shape != (2,)) | (end.shape != (2,)):
-            raise ValueError('scan start/end has wrong shape')
+            raise ValueError('Scan start/end has incorrect shape')
 
         self._grid = Grid(extent=end - start, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint)
 

@@ -119,7 +119,7 @@ class Measurement:
                 new_calibrations.append(None)
 
             elif not isinstance(arg, int):
-                raise TypeError('indices must be integers or slices, not float')
+                raise TypeError('Indices must be integers or slices, not float')
 
         return self.__class__(new_array, new_calibrations)
 
@@ -240,4 +240,4 @@ class Measurement:
 
             return show_image(array, calibrations, cbar_label=cbar_label, **kwargs)
         else:
-            raise RuntimeError('plotting not supported for {}d measurement, use reduction operation first'.format(dims))
+            raise RuntimeError('Plotting not supported for {}d measurement, use reduction operation first'.format(dims))

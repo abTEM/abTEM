@@ -40,7 +40,7 @@ def standardize_cell(atoms, tol=1e-12):
     vertical_vector = np.where(np.all(np.abs(cell[:, :2]) < tol, axis=1))[0]
 
     if len(vertical_vector) != 1:
-        raise RuntimeError('invalid cell, no vertical lattice vector')
+        raise RuntimeError('Invalid cell: no vertical lattice vector')
 
     cell[[vertical_vector[0], 2]] = cell[[2, vertical_vector[0]]]
 

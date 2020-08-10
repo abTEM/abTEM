@@ -281,7 +281,7 @@ class PixelatedDetector(AbstractDetector):
         calibrations = calibrations_from_grid(grid.antialiased_gpts,
                                               grid.antialiased_sampling,
                                               names=['alpha_x', 'alpha_y'],
-                                              units='mrad.',
+                                              units='mrad',
                                               scale_factor=wavelength * 1000,
                                               fourier_space=True)
 

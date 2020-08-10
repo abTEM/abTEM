@@ -3,9 +3,11 @@ Walkthrough
 
 Welcome to the abTEM walkthrough.
 
-These tutorials are meant to give an introduction to the features of abTEM, as well as a basic introduction to image simulations in general.
+These tutorials are meant to familiarize you with the features of abTEM, as well as give a basic introduction to TEM image simulations in general.
 
-It should be noted that following this walkthrough requires a basic understanding of Python.
+It should be noted that following this walkthrough requires a basic understanding of Python syntax.
+
+Please stand by while more documents are added.
 
 .. toctree::
     :maxdepth: 1
