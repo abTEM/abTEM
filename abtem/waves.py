@@ -328,11 +328,7 @@ class Probe(HasGridAndAcceleratorMixin):
     The probe object can represent a stack of electron probe wave function for simulating scanning transmission
     electron microscopy.
 
-<<<<<<< HEAD
     :param semiangle_cutoff: Convergence semi-angle [mrad.].
-=======
-    :param semiangle_cutoff: Convergence semi-angle [mrad].
->>>>>>> 97df8915641cc8531f632f24e687653e7cdf83ed
     :param rolloff: Softens the cutoff. A value of 0 gives a hard cutoff, while 1 gives the softest possible cutoff.
     :param focal_spread: The focal spread due to, among other factors, chromatic aberrations and lens current
         instabilities.
@@ -421,6 +417,8 @@ class Probe(HasGridAndAcceleratorMixin):
 
         if len(positions.shape) == 1:
             positions = xp.expand_dims(positions, axis=0)
+
+
 
         array = fft2(self._evaluate_ctf(xp) * self._fourier_translation_operator(positions), overwrite_x=True)
 
