@@ -12,7 +12,7 @@ def test_fig_5_12():
     waves = PlaneWave(energy=200e3)
 
     waves = waves.multislice(potential, pbar=False)
-    waves = waves.apply_ctf(defocus=700, Cs=1.3e7, semiangle_cutoff=.01037)
+    waves = waves.apply_ctf(defocus=700, Cs=1.3e7, semiangle_cutoff=10.37)
 
     intensity = np.abs(waves.array) ** 2
 
