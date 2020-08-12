@@ -1,6 +1,6 @@
 from typing import Any
 
-import mkl_fft
+#import mkl_fft #Disabled for now.
 import numpy as np
 
 from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions, scale_reduce, \
