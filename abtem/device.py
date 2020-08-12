@@ -1,10 +1,14 @@
 from typing import Any
 
-#import mkl_fft #Disabled for now.
+# import mkl_fft #Disabled for now.
 import numpy as np
-
+import pyfftw
 from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions, scale_reduce, \
     windowed_scale_reduce
+
+FFTW_EFFORT = 'FFTW_MEASURE'
+FFTW_THREADS = 8
+FFTW_TIMELIMIT = 600
 
 # TODO : This is a little ugly, change after mkl_fft is updated
 
@@ -45,24 +49,57 @@ except ImportError:
     asnumpy = np.asarray
 
 
+def create_fftw_objects(array, allow_new_plan=True):
+    """
+    Creates FFTW object for forward and backward Fourier transforms. The input array will be
+    transformed in place. The function tries to retrieve FFTW plans from wisdom only.
+    If no plan exists for the input array, a new plan is cached and then retrieved.
+
+    Parameters
+    ----------
+    array : numpy ndarray
+        Numpy array to be transformed. 2 dimensions or more.
+    allow_new_plan : bool
+        If false raise an exception instead of caching a new plan.
+    """
+
+    try:
+        # try using cached FFTW plan
+        fftw_forward = pyfftw.FFTW(array, array, axes=(-1, -2),
+                                   threads=FFTW_THREADS, flags=('FFTW_WISDOM_ONLY', 'FFTW_DESTROY_INPUT'))
+        fftw_backward = pyfftw.FFTW(array, array, axes=(-1, -2),
+                                    direction='FFTW_BACKWARD', threads=FFTW_THREADS,
+                                    flags=('FFTW_WISDOM_ONLY', 'FFTW_DESTROY_INPUT'))
+        return fftw_forward, fftw_backward
+
+    except RuntimeError as e:
+        if ('No FFTW wisdom is known for this plan.' != str(e)) or (not allow_new_plan):
+            raise
+
+        # create new FFTW object, not to be used, but the plan will remain in the cache
+        dummy = pyfftw.byte_align(
+            np.zeros_like(array))  # this is necessary because FFTW overwrites the array during planning
+        pyfftw.FFTW(dummy, dummy, axes=(-1, -2), threads=FFTW_THREADS, flags=(FFTW_EFFORT, 'FFTW_DESTROY_INPUT'),
+                    planning_timelimit=FFTW_TIMELIMIT)
+        pyfftw.FFTW(dummy, dummy, axes=(-1, -2), direction='FFTW_BACKWARD', threads=FFTW_THREADS,
+                    flags=(FFTW_EFFORT, 'FFTW_DESTROY_INPUT'), planning_timelimit=FFTW_TIMELIMIT)
+        return create_fftw_objects(array, allow_new_plan=False)
+
+
 def fft2_convolve(array, kernel, overwrite_x=True):
     def _fft_convolve(array, kernel):
-        array = np.fft.fft2(array)
+        fftw_forward, fftw_backward = create_fftw_objects(array)
+        # array = np.fft.fft2(array)
+        fftw_forward()
         array *= kernel
-        array = np.fft.ifft2(array)
+        fftw_backward()
+        # array = np.fft.ifft2(array)
         return array
 
     if not overwrite_x:
         array = array.copy()
 
-    if len(array.shape) == 2:
-        return _fft_convolve(array, kernel)
-    elif (len(array.shape) == 3):
-        for i in range(len(array)):
-            array[i] = _fft_convolve(array[i], kernel)
-        return array
-    else:
-        raise ValueError()
+    return _fft_convolve(array, kernel)
 
 
 def fft2(array, overwrite_x):
@@ -131,16 +168,14 @@ def get_array_module_from_device(device):
 
 
 def copy_to_device(array, device):
-    if device == 'cpu':
+    if (device == 'cpu') or (device is None) or (device is np):
         return asnumpy(array)
-    elif device == 'gpu':
+    elif (device == 'gpu') or (device is cp):
         if cp is None:
             raise RuntimeError('cupy is not installed, only cpu calculations available')
         return cp.asarray(array)
     else:
-        #TODO: fix this
-        return array
-        #raise RuntimeError()
+        raise RuntimeError()
 
 
 class HasDeviceMixin:
