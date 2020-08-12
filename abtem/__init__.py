@@ -5,5 +5,4 @@ from abtem.potentials import Potential, ArrayPotential
 from abtem.scan import GridScan, LineScan
 from abtem.temperature import AbstractFrozenPhonons, FrozenPhonons
 from abtem.transfer import CTF
-from abtem.dft import GPAWPotential
 from abtem.waves import PlaneWave, Probe, SMatrixBuilder, Waves
