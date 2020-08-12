@@ -17,5 +17,6 @@ Please stand by while more documents are added.
     02_potentials.ipynb
     03_wave_functions.ipynb
     04_multislice.ipynb
-    05_scan_and_detect.ipynb
+    05_contrast_transfer_function.ipynb
+    06_scan_and_detect.ipynb
     10_DFT.ipynb
