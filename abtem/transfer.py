@@ -305,9 +305,9 @@ class CTF(HasAcceleratorMixin):
             ax.plot(alpha * 1000, gaussian_envelope, label='Gaussian envelope', **kwargs)
 
         if not np.allclose(envelope, 1.):
-            ax.plot(alpha * 1000, envelope, label='Product envelope', **kwargs)
+            ax.plot(alpha * 1000, envelope, '--', label='Product envelope', **kwargs)
 
-        ax.set_xlabel('alpha [mrad.]')
+        ax.set_xlabel('alpha [mrad]')
         if title is not None:
             ax.set_title(title)
         ax.legend()
