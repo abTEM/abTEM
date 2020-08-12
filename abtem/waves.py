@@ -60,7 +60,9 @@ class FresnelPropagator:
 
         fft2_convolve = get_device_function(get_array_module(waves.array), 'fft2_convolve')
 
-        fft2_convolve(waves._array, propagator_array)
+        waves._array = fft2_convolve(waves._array, propagator_array)
+
+        return waves
 
 
 def transmit(waves: Union['Waves', 'SMatrix', 'PartialSMatrix'], potential_slice: ProjectedPotential):
@@ -79,6 +81,8 @@ def transmit(waves: Union['Waves', 'SMatrix', 'PartialSMatrix'], potential_slice
         waves._array *= copy_to_device(slice_array, xp)
     else:
         waves._array *= complex_exponential(copy_to_device(waves.accelerator.sigma * slice_array, xp))
+
+    return waves
 
 
 def _multislice(waves: Union['Waves', 'SMatrix', 'PartialSMatrix'],
@@ -99,7 +103,7 @@ def _multislice(waves: Union['Waves', 'SMatrix', 'PartialSMatrix'],
     pbar.reset()
     for potential_slice in potential:
         transmit(waves, potential_slice)
-        propagator.propagate(waves, potential_slice.thickness)
+        waves = propagator.propagate(waves, potential_slice.thickness)
         pbar.update(1)
 
     pbar.refresh()

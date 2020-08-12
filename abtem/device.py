@@ -1,6 +1,6 @@
 from typing import Any
 
-import numpy.fft as mkl_fft
+import mkl_fft
 import numpy as np
 
 from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions, scale_reduce, \
@@ -45,12 +45,15 @@ except ImportError:
     asnumpy = np.asarray
 
 
-def fft2_convolve(array, kernel):
+def fft2_convolve(array, kernel, overwrite_x=True):
     def _fft_convolve(array, kernel):
-        array = mkl_fft.fft2(array)
+        array = np.fft.fft2(array)
         array *= kernel
-        array = mkl_fft.ifft2(array)
+        array = np.fft.ifft2(array)
         return array
+
+    if not overwrite_x:
+        array = array.copy()
 
     if len(array.shape) == 2:
         return _fft_convolve(array, kernel)
@@ -67,16 +70,16 @@ def fft2(array, overwrite_x):
         array = array.copy()
 
     if len(array.shape) == 2:
-        return mkl_fft.fft2(array)
+        return np.fft.fft2(array)
     elif (len(array.shape) == 3):
         for i in range(array.shape[0]):
-            array[i] = mkl_fft.fft2(array[i])
+            array[i] = np.fft.fft2(array[i])
         return array
     else:
         shape = array.shape
         array = array.reshape((-1,) + shape[1:])
         for i in range(array.shape[0]):
-            array[i] = mkl_fft.fft2(array[i])
+            array[i] = np.fft.fft2(array[i])
 
         array = array.reshape(shape)
         return array
@@ -87,10 +90,10 @@ def ifft2(array, overwrite_x):
         array = array.copy()
 
     if len(array.shape) == 2:
-        return mkl_fft.ifft2(array)
+        return np.fft.ifft2(array)
     elif len(array.shape) == 3:
         for i in range(array.shape[0]):
-            array[i] = mkl_fft.ifft2(array[i])
+            array[i] = np.fft.ifft2(array[i])
         return array
     else:
         raise NotImplementedError()
@@ -121,21 +124,23 @@ def get_array_module_from_device(device):
 
     if device == 'gpu':
         if cp is None:
-            raise RuntimeError('CuPy is not installed, only CPU calculations available')
+            raise RuntimeError('cupy is not installed, only cpu calculations available')
         return cp
 
     return get_array_module(device)
 
 
 def copy_to_device(array, device):
-    if (device == 'cpu') or (device is np):
+    if device == 'cpu':
         return asnumpy(array)
-    elif (device == 'gpu') or (device is cp):
+    elif device == 'gpu':
         if cp is None:
-            raise RuntimeError('CuPy is not installed, only CPU calculations available')
+            raise RuntimeError('cupy is not installed, only cpu calculations available')
         return cp.asarray(array)
     else:
-        raise RuntimeError()
+        #TODO: fix this
+        return array
+        #raise RuntimeError()
 
 
 class HasDeviceMixin:
@@ -154,7 +159,7 @@ class HasDeviceMixin:
 
         if self.device == 'gpu':
             if cp is None:
-                raise RuntimeError('CuPy is not installed, only CPU calculations available')
+                raise RuntimeError('cupy is not installed, only cpu calculations available')
             return cp
 
         return get_array_module(self.device)

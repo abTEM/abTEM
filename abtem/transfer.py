@@ -28,7 +28,7 @@ class CTF(HasAcceleratorMixin):
 
         for key in kwargs.keys():
             if ((key not in polar_symbols) and (key not in polar_aliases.keys())):
-                raise ValueError('{} not a recognized parameter'.format(key))
+                raise RuntimeError()
 
         self.changed = Event()
 
@@ -141,7 +141,7 @@ class CTF(HasAcceleratorMixin):
 
     def evaluate_aperture(self, alpha) -> np.ndarray:
         xp = get_array_module(alpha)
-        semiangle_cutoff = self.semiangle_cutoff / 1000.
+        semiangle_cutoff = self.semiangle_cutoff / 1000
         if self.rolloff > 0.:
             rolloff = self.rolloff * semiangle_cutoff
             array = .5 * (1 + xp.cos(np.pi * (alpha - semiangle_cutoff + rolloff) / rolloff))
@@ -188,8 +188,7 @@ class CTF(HasAcceleratorMixin):
                           4. * p['C54'] * xp.sin(4. * (phi - p['phi54'])) +
                           2. * p['C52'] * xp.sin(2. * (phi - p['phi52']))) * alpha ** 5)
 
-        return xp.exp(-xp.sign(self.angular_spread) * (self.angular_spread / 1000. / 2) ** 2 *
-                      (dchi_dk ** 2 + dchi_dphi ** 2))
+        return xp.exp(-xp.sign(self.angular_spread) * (self.angular_spread / 2) ** 2 * (dchi_dk ** 2 + dchi_dphi ** 2))
 
     def evaluate_chi(self, alpha, phi) -> np.ndarray:
         """
@@ -200,11 +199,11 @@ class CTF(HasAcceleratorMixin):
         Parameters
         ----------
         alpha : numpy.ndarray
-            Angle between the scattered electrons and the optical axis [mrad].
+            Angle between the scattered electrons and the optical axis.
         phi : numpy.ndarray
-            Angle around the optical axis of the scattered electrons [mrad].
+            Angle around the optical axis of the scattered electrons.
         wavelength : float
-            Relativistic wavelength of wavefunction [Å].
+            Relativistic wavelength of wavefunction.
         parameters : Mapping[str, float]
             Mapping from Cnn, phinn coefficients to their corresponding values. See parameter `parameters` in class CTFBase.
 
@@ -259,10 +258,7 @@ class CTF(HasAcceleratorMixin):
         complex_exponential = get_device_function(xp, 'complex_exponential')
         return complex_exponential(-self.evaluate_chi(alpha, phi))
 
-    def evaluate(self, alpha, phi):
-        alpha = np.array(alpha)
-        phi = np.array(phi)
-
+    def evaluate(self, alpha=None, phi=None):
         array = self.evaluate_aberrations(alpha, phi)
 
         if self.semiangle_cutoff < np.inf:
@@ -282,7 +278,7 @@ class CTF(HasAcceleratorMixin):
     def show(self, semiangle_cutoff: float, ax=None, phi=0, n=1000, title=None, **kwargs):
         import matplotlib.pyplot as plt
 
-        alpha = np.linspace(0, semiangle_cutoff, n)
+        alpha = np.linspace(0, semiangle_cutoff / 1000., n)
 
         aberrations = self.evaluate_aberrations(alpha, phi)
         aperture = self.evaluate_aperture(alpha)

@@ -19,8 +19,7 @@ class AbstractFrozenPhonons(metaclass=ABCMeta):
     def __iter__(self):
         return self.generate_atoms()
 
-    #def __next__(self):
-
+    # def __next__(self):
 
 
 class FrozenPhonons(AbstractFrozenPhonons):
