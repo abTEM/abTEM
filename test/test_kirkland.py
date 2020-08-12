@@ -1,7 +1,10 @@
 import numpy as np
 from ase import Atoms
-from abtem.waves import PlaneWave
+
+from abtem.detect import AnnularDetector
 from abtem.potentials import Potential
+from abtem.scan import LineScan
+from abtem.waves import PlaneWave, Probe
 
 
 def test_fig_5_12():
@@ -18,3 +21,23 @@ def test_fig_5_12():
 
     assert np.round(intensity.min(), 2) == np.float32(.72)
     assert np.round(intensity.max(), 2) == np.float32(1.03)
+
+
+def test_fig():
+    atoms = Atoms('CSiCuAuU', positions=[(x, 25, 4) for x in np.linspace(5, 45, 5)], cell=(50, 50, 8))
+
+    gpts = 2048
+
+    potential = Potential(atoms=atoms, gpts=gpts, parametrization='kirkland', slice_thickness=8)
+
+    probe = Probe(energy=200e3, defocus=700, Cs=1.3e7, semiangle_cutoff=10.37)
+
+    probe.grid.match(potential)
+
+    scan = LineScan(start=[5, 25], end=[45, 25], gpts=5)
+
+    detector = AnnularDetector(inner=40, outer=200)
+
+    measurements = probe.scan(scan, [detector], potential, pbar=False)
+
+    assert np.allclose(measurements[detector].array, [0.00010976, 0.00054356, 0.00198158, 0.00997221, 0.01098883])
