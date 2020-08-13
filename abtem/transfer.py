@@ -28,7 +28,7 @@ class CTF(HasAcceleratorMixin):
 
         for key in kwargs.keys():
             if ((key not in polar_symbols) and (key not in polar_aliases.keys())):
-                raise RuntimeError()
+                raise ValueError('{} not a recognized parameter'.format(key))
 
         self.changed = Event()
 
