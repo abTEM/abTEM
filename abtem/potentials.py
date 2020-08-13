@@ -9,8 +9,7 @@ from scipy.optimize import brentq
 
 from abtem.bases import Grid, HasGridMixin, Cache, cached_method, HasAcceleratorMixin, Accelerator, Event, \
     watched_property
-from abtem.device import get_device_function, get_array_module, HasDeviceMixin, get_array_module_from_device, \
-    copy_to_device
+from abtem.device import get_device_function, get_array_module, get_array_module_from_device, copy_to_device
 from abtem.measure import calibrations_from_grid
 from abtem.parametrizations import kirkland, dvdr_kirkland, load_kirkland_parameters
 from abtem.parametrizations import lobato, dvdr_lobato, load_lobato_parameters
@@ -84,7 +83,7 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         self[:].show(**kwargs)
 
 
-class AbstractPotentialBuilder(HasDeviceMixin, AbstractPotential):
+class AbstractPotentialBuilder(AbstractPotential):
 
     def __init__(self, storage='cpu'):
         self._storage = storage
@@ -369,8 +368,7 @@ class Potential(AbstractTDSPotentialBuilder):
             end = len(self)
 
         self.grid.check_is_defined()
-
-        xp = get_array_module(self._device)
+        xp = get_array_module_from_device(self._device)
 
         interpolate_radial_functions = get_device_function(xp, 'interpolate_radial_functions')
 
