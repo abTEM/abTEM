@@ -5,6 +5,12 @@ from scipy.special import kn
 import numpy as np
 from numba import jit, prange
 
+_ROOT = os.path.abspath(os.path.dirname(__file__))
+
+
+def get_data(path):
+    return os.path.join(_ROOT, 'data', path)
+
 
 def load_parameters(filename):
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
@@ -22,7 +28,7 @@ def load_parameters(filename):
 def load_lobato_parameters():
     parameters = {}
 
-    for key, value in load_parameters('../data/lobato.txt').items():
+    for key, value in load_parameters(get_data('lobato.txt')).items():
         a = np.array([value[key] for key in ('a1', 'a2', 'a3', 'a4', 'a5')])
         b = np.array([value[key] for key in ('b1', 'b2', 'b3', 'b4', 'b5')])
         a = np.pi ** 2 * a / b ** (3 / 2.)
@@ -64,15 +70,15 @@ def dvdr_lobato(r, p):
 @jit(nopython=True, nogil=True)
 def d2vdr2_lobato(r, p):
     d2vdr2 = (p[0, 0] * (2 * (p[1, 0] * r + 2) / (p[1, 0] * r ** 3) +
-                          2 * (p[1, 0] * r + 1) / r ** 2 + p[1, 0] ** 2) * np.exp(-p[1, 0] * r) +
-               p[0, 1] * (2 * (p[1, 1] * r + 2) / (p[1, 1] * r ** 3) +
-                          2 * (p[1, 1] * r + 1) / r ** 2 + p[1, 1] ** 2) * np.exp(-p[1, 1] * r) +
-               p[0, 2] * (2 * (p[1, 2] * r + 2) / (p[1, 2] * r ** 3) +
-                          2 * (p[1, 2] * r + 1) / r ** 2 + p[1, 2] ** 2) * np.exp(-p[1, 2] * r) +
-               p[0, 3] * (2 * (p[1, 3] * r + 2) / (p[1, 3] * r ** 3) +
-                          2 * (p[1, 3] * r + 1) / r ** 2 + p[1, 3] ** 2) * np.exp(-p[1, 3] * r) +
-               p[0, 4] * (2 * (p[1, 4] * r + 2) / (p[1, 4] * r ** 3) +
-                          2 * (p[1, 4] * r + 1) / r ** 2 + p[1, 4] ** 2) * np.exp(-p[1, 4] * r))
+                         2 * (p[1, 0] * r + 1) / r ** 2 + p[1, 0] ** 2) * np.exp(-p[1, 0] * r) +
+              p[0, 1] * (2 * (p[1, 1] * r + 2) / (p[1, 1] * r ** 3) +
+                         2 * (p[1, 1] * r + 1) / r ** 2 + p[1, 1] ** 2) * np.exp(-p[1, 1] * r) +
+              p[0, 2] * (2 * (p[1, 2] * r + 2) / (p[1, 2] * r ** 3) +
+                         2 * (p[1, 2] * r + 1) / r ** 2 + p[1, 2] ** 2) * np.exp(-p[1, 2] * r) +
+              p[0, 3] * (2 * (p[1, 3] * r + 2) / (p[1, 3] * r ** 3) +
+                         2 * (p[1, 3] * r + 1) / r ** 2 + p[1, 3] ** 2) * np.exp(-p[1, 3] * r) +
+              p[0, 4] * (2 * (p[1, 4] * r + 2) / (p[1, 4] * r ** 3) +
+                         2 * (p[1, 4] * r + 1) / r ** 2 + p[1, 4] ** 2) * np.exp(-p[1, 4] * r))
 
     return d2vdr2
 
@@ -80,7 +86,7 @@ def d2vdr2_lobato(r, p):
 def load_kirkland_parameters():
     parameters = {}
 
-    for key, value in load_parameters('../data/kirkland.txt').items():
+    for key, value in load_parameters(get_data('kirkland.txt')).items():
         a = np.array([value[key] for key in ('a1', 'a2', 'a3')])
         b = np.array([value[key] for key in ('b1', 'b2', 'b3')])
         c = np.array([value[key] for key in ('c1', 'c2', 'c3')])
