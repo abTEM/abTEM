@@ -1,30 +1,46 @@
+import matplotlib.pyplot as plt
 import numpy as np
-import pytest
+import os
 from ase.io import read
+from gpaw import GPAW
 
 from abtem.potentials import Potential
+from abtem.structures import orthogonalize_cell
+import os
+import pytest
+from abtem.dft import GPAWPotential
 
 
 @pytest.mark.gpaw
 def test_dft():
-    from gpaw import GPAW, PW
-    from abtem.dft import GPAWPotential
+    atoms = read(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data/hexagonal_graphene.cif'))
 
-    atoms = read('data/graphene.traj')
-
-    calc = GPAW(mode=PW(400), h=.1, txt=None, kpts=(4, 2, 2))
-    atoms.set_calculator(calc)
+    gpaw = GPAW(h=.1, txt=None, kpts=(3, 3, 1))
+    atoms.set_calculator(gpaw)
     atoms.get_potential_energy()
 
-    potential_dft = GPAWPotential(calc, sampling=.05).build()
-    potential_iam = Potential(atoms, sampling=.05).build()
+    dft_pot = GPAWPotential(gpaw, sampling=.02)
 
-    projected_dft = potential_dft.array.sum(0)
-    projected_dft -= projected_dft.min()
-    projected_iam = potential_iam.array.sum(0)
+    dft_array = dft_pot.build()
+
+    dft_potential = dft_array.tile((3, 2))
+
+    atoms = orthogonalize_cell(gpaw.atoms) * (3, 2, 1)
+
+    iam_potential = Potential(atoms, gpts=dft_potential.gpts, cutoff_tolerance=1e-4, device='cpu').build()
+
+    projected_iam = iam_potential.array.sum(0)
     projected_iam -= projected_iam.min()
 
-    rel_diff = (projected_iam - projected_dft) / (projected_iam + 1e-16) * 100
-    rel_diff[projected_iam < 10] = np.nan
+    projected_dft = dft_potential.array.sum(0)
+    projected_dft -= projected_dft.min()
 
-    assert np.round(np.nanmax(rel_diff) / 10, 0) * 10 == 40
+    absolute_difference = projected_iam - projected_dft
+
+    valid = np.abs(projected_iam) > 1
+    relative_difference = np.zeros_like(projected_iam)
+    relative_difference[:] = np.nan
+    relative_difference[valid] = 100 * (projected_iam[valid] - projected_dft[valid]) / projected_iam[valid]
+    
+    assert np.isclose(9.553661, absolute_difference.max(), atol=.1)
+    assert np.isclose(44.327312, relative_difference[valid].max(), atol=.1)
