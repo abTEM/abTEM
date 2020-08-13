@@ -422,8 +422,6 @@ class Probe(HasGridAndAcceleratorMixin):
         if len(positions.shape) == 1:
             positions = xp.expand_dims(positions, axis=0)
 
-
-
         array = fft2(self._evaluate_ctf(xp) * self._fourier_translation_operator(positions), overwrite_x=True)
 
         return Waves(array, extent=self.extent, energy=self.energy)
@@ -600,12 +598,12 @@ class SMatrix(HasGridAndAcceleratorMixin):
                  array: np.ndarray,
                  expansion_cutoff: float,
                  interpolation: int,
-                 k: Tuple[np.ndarray, np.ndarray],
+                 k: np.ndarray,
                  ctf: CTF = None,
                  extent: Union[float, Sequence[float]] = None,
                  sampling: Union[float, Sequence[float]] = None,
                  energy: float = None,
-                 device='cpu'):
+                 device: str = 'cpu'):
 
         self._array = array
         self._interpolation = interpolation
@@ -651,7 +649,7 @@ class SMatrix(HasGridAndAcceleratorMixin):
         return self._array
 
     @property
-    def k(self) -> Tuple[np.ndarray, np.ndarray]:
+    def k(self) -> np.ndarray:
         """
         The spatial frequencies of each wave in the plane wave expansion.
         """
@@ -674,8 +672,8 @@ class SMatrix(HasGridAndAcceleratorMixin):
 
     def _evaluate_ctf(self):
         xp = get_array_module(self._array)
-        alpha = xp.sqrt(self.k[0] ** 2 + self.k[1] ** 2) * self.wavelength
-        phi = xp.arctan2(self.k[0], self.k[1])
+        alpha = xp.sqrt(self.k[:, 0] ** 2 + self.k[:, 1] ** 2) * self.wavelength
+        phi = xp.arctan2(self.k[:, 0], self.k[:, 1])
         return self._ctf.evaluate(alpha, phi)
 
     def __len__(self) -> int:
@@ -749,8 +747,8 @@ class SMatrix(HasGridAndAcceleratorMixin):
 
         positions = xp.asarray(positions)
 
-        translation = (complex_exponential(2. * np.pi * self.k[0][None] * positions[:, 0, None]) *
-                       complex_exponential(2. * np.pi * self.k[1][None] * positions[:, 1, None]))
+        translation = (complex_exponential(2. * np.pi * self.k[:, 0][None] * positions[:, 0, None]) *
+                       complex_exponential(2. * np.pi * self.k[:, 1][None] * positions[:, 1, None]))
 
         coefficients = translation * self._evaluate_ctf()
 
@@ -985,9 +983,11 @@ class SMatrixBuilder(HasGridAndAcceleratorMixin):
             array[i] = copy_to_device(complex_exponential(-2 * np.pi * kx[i, None, None] * x[:, None]) *
                                       complex_exponential(-2 * np.pi * ky[i, None, None] * y[None, :]), self._storage)
 
+        k = xp.asarray((kx, ky)).T
+
         return SMatrix(array,
                        expansion_cutoff=self.expansion_cutoff,
                        interpolation=self.interpolation,
                        extent=self.extent,
                        energy=self.energy,
-                       k=(kx, ky))
+                       k=k)
