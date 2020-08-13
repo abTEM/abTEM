@@ -176,25 +176,3 @@ def copy_to_device(array, device):
         return cp.asarray(array)
     else:
         raise RuntimeError()
-
-
-class HasDeviceMixin:
-    _device: Any
-
-    @property
-    def device(self):
-        return self._device
-
-    def set_device(self, device):
-        self._device = device
-
-    def get_array_module(self):
-        if self.device == 'cpu':
-            return np
-
-        if self.device == 'gpu':
-            if cp is None:
-                raise RuntimeError('cupy is not installed, only cpu calculations available')
-            return cp
-
-        return get_array_module(self.device)
