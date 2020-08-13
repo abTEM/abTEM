@@ -60,7 +60,7 @@ class FresnelPropagator:
 
         fft2_convolve = get_device_function(get_array_module(waves.array), 'fft2_convolve')
 
-        waves._array = fft2_convolve(waves._array, propagator_array)
+        fft2_convolve(waves._array, propagator_array, overwrite_x=True)
 
         return waves
 
