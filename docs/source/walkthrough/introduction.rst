@@ -19,4 +19,6 @@ Please stand by while more documents are added.
     04_multislice.ipynb
     05_contrast_transfer_function.ipynb
     06_scan_and_detect.ipynb
+    07_detectors_(4D-STEM).ipynb
+    08_temperature.ipynb
     10_DFT.ipynb
