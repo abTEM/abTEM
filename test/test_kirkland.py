@@ -40,4 +40,5 @@ def test_fig():
 
     measurements = probe.scan(scan, [detector], potential, pbar=False)
 
-    assert np.allclose(measurements[detector].array, [0.00010976, 0.00054356, 0.00198158, 0.00997221, 0.01098883])
+    #assert np.allclose(measurements[detector].array, [0.00010976, 0.00054356, 0.00198158, 0.00997221, 0.01098883])
+    assert np.allclose(measurements[detector].array, [0.00010933, 0.00054426, 0.00205304, 0.00986171, 0.01197426])

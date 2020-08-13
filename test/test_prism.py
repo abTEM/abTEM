@@ -12,19 +12,19 @@ def test_prism_raises():
     with pytest.raises(ValueError) as e:
         SMatrixBuilder(.01, .5)
 
-    assert str(e.value) == 'interpolation factor must be int'
+    assert str(e.value) == 'Interpolation factor must be int'
 
     with pytest.raises(RuntimeError) as e:
         prism = SMatrixBuilder(10, 1)
         prism.build()
 
-    assert str(e.value) == 'grid extent is not defined'
+    assert str(e.value) == 'Grid extent is not defined'
 
     with pytest.raises(RuntimeError) as e:
         prism = SMatrixBuilder(10, 1, extent=10, gpts=100)
         prism.build()
 
-    assert str(e.value) == 'energy is not defined'
+    assert str(e.value) == 'Energy is not defined'
 
 
 def test_prism_match_probe():

@@ -40,12 +40,12 @@ def test_ctf_raises():
 
     ctf = CTF()
     with pytest.raises(RuntimeError) as e:
-        ctf.evaluate(0, 0)
+        ctf.evaluate(np.array([0]), np.array([0]))
 
-    assert str(e.value) == 'energy is not defined'
+    assert str(e.value) == 'Energy is not defined'
 
     ctf.energy = 200e3
-    ctf.evaluate(0, 0)
+    ctf.evaluate(np.array([0]), np.array([0]))
 
 
 def test_ctf_event():

@@ -16,7 +16,7 @@ def test_linescan_raises():
     with pytest.raises(ValueError) as e:
         LineScan(start=0, end=1)
 
-    assert str(e.value) == 'scan start/end has wrong shape'
+    assert str(e.value) == 'Scan start/end has incorrect shape'
 
 
 def test_line_scan():
@@ -40,7 +40,7 @@ def test_gridscan_raises():
     with pytest.raises(ValueError) as e:
         GridScan(start=0, end=1)
 
-    assert str(e.value) == 'scan start/end has wrong shape'
+    assert str(e.value) == 'Scan start/end has incorrect shape'
 
 
 def test_grid_scan():

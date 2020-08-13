@@ -19,7 +19,7 @@ def test_potential_raises():
     with pytest.raises(RuntimeError) as e:
         Potential(Atoms('C', positions=[(2, 2, 2)], cell=(4, 4, 0)))
 
-    assert str(e.value) == 'atoms has no thickness'
+    assert str(e.value) == 'Atoms cell has no thickness'
 
 
 def test_potential_centered():

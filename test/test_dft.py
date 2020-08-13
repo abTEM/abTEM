@@ -1,16 +1,15 @@
 import numpy as np
-from abtem.dft import GPAWPotential
-from abtem.potentials import Potential
-from ase.io import read
-try:
-    from gpaw import GPAW, PW
-except:
-    pass
 import pytest
+from ase.io import read
+
+from abtem.potentials import Potential
 
 
 @pytest.mark.gpaw
 def test_dft():
+    from gpaw import GPAW, PW
+    from abtem.dft import GPAWPotential
+
     atoms = read('data/graphene.traj')
 
     calc = GPAW(mode=PW(400), h=.1, txt=None, kpts=(4, 2, 2))

@@ -96,13 +96,13 @@ def test_multislice_raises():
     with pytest.raises(RuntimeError) as e:
         waves.multislice(potential, pbar=False)
 
-    assert str(e.value) == 'inconsistent grid extent ((4.0, 4.0) != (5.0, 5.0))'
+    assert str(e.value) == 'Inconsistent grid extent ((4.0, 4.0) != (5.0, 5.0))'
 
     waves = Waves(array, extent=5)
     with pytest.raises(RuntimeError) as e:
         waves.multislice(potential, pbar=False)
 
-    assert str(e.value) == 'energy is not defined'
+    assert str(e.value) == 'Energy is not defined'
 
     waves.energy = 60e3
     waves.multislice(potential, pbar=False)
@@ -120,7 +120,7 @@ def test_plane_waves_raises():
     with pytest.raises(RuntimeError) as e:
         plane_waves.multislice(DummyPotential(extent=5), pbar=False)
 
-    assert str(e.value) == 'grid gpts cannot be inferred'
+    assert str(e.value) == 'Grid gpts cannot be inferred'
 
 
 def test_plane_waves_multislice():
@@ -153,14 +153,14 @@ def test_probe_waves_raises():
     with pytest.raises(RuntimeError) as e:
         probe.build()
 
-    assert str(e.value) == 'grid extent is not defined'
+    assert str(e.value) == 'Grid extent is not defined'
 
     probe.extent = 10
     probe.gpts = 100
     with pytest.raises(RuntimeError) as e:
         probe.build()
 
-    assert str(e.value) == 'energy is not defined'
+    assert str(e.value) == 'Energy is not defined'
 
     probe.energy = 60e3
     probe.build()
@@ -203,3 +203,6 @@ def test_probe_waves_grid_scan():
 
     assert detector._detect_count == 100
     assert np.all(measurements[detector].array == 1.)
+
+
+# TODO:export test
