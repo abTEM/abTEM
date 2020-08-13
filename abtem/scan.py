@@ -107,6 +107,9 @@ class LineScan(AbstractScan, HasGridMixin):
         if (start.shape != (2,)) | (end.shape != (2,)):
             raise ValueError('Scan start/end has incorrect shape')
 
+        if (gpts is None) & (sampling is None):
+            raise RuntimeError('Grid gpts or sampling must be set')
+
         self._grid = Grid(gpts=gpts, sampling=sampling, endpoint=endpoint, dimensions=1)
         self._start = start
         self._direction, self.extent = self._direction_and_extent(start, end)
@@ -203,6 +206,9 @@ class GridScan(AbstractScan, HasGridMixin):
 
         if (self._start.shape != (2,)) | (end.shape != (2,)):
             raise ValueError('Scan start/end has incorrect shape')
+
+        if (gpts is None) & (sampling is None):
+            raise RuntimeError('Grid gpts or sampling must be set')
 
         self._grid = Grid(extent=end - start, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint)
 
