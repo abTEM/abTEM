@@ -1,14 +1,13 @@
-import matplotlib.pyplot as plt
-import numpy as np
 import os
+
+import numpy as np
+import pytest
 from ase.io import read
 from gpaw import GPAW
 
+from abtem.dft import GPAWPotential
 from abtem.potentials import Potential
 from abtem.structures import orthogonalize_cell
-import os
-import pytest
-from abtem.dft import GPAWPotential
 
 
 @pytest.mark.gpaw
@@ -41,6 +40,6 @@ def test_dft():
     relative_difference = np.zeros_like(projected_iam)
     relative_difference[:] = np.nan
     relative_difference[valid] = 100 * (projected_iam[valid] - projected_dft[valid]) / projected_iam[valid]
-    
+
     assert np.isclose(9.553661, absolute_difference.max(), atol=.1)
     assert np.isclose(44.327312, relative_difference[valid].max(), atol=.1)
