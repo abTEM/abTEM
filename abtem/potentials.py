@@ -127,7 +127,7 @@ class AbstractTDSPotentialBuilder(AbstractPotentialBuilder):
 
 class PotentialIntegrator:
 
-    def __init__(self, function, r, cache_size=4096, cache_key_decimals=2, tolerance=1e-12):
+    def __init__(self, function, r, cache_size=4096, cache_key_decimals=2, tolerance=1e-6):
         self._function = function
         self._r = r
         self.cache = Cache(cache_size)
