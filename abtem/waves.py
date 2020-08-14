@@ -8,7 +8,7 @@ from ase import Atoms
 from abtem.bases import Grid, Accelerator, cache_clear_callback, Cache, cached_method, HasGridAndAcceleratorMixin
 from abtem.detect import AbstractDetector, crop_to_center
 from abtem.device import get_array_module, get_device_function, asnumpy, get_array_module_from_device, \
-    copy_to_device
+    copy_to_device, get_available_memory
 from abtem.measure import calibrations_from_grid, Measurement
 from abtem.plot import show_line
 from abtem.potentials import Potential, AbstractPotential, AbstractTDSPotentialBuilder, AbstractPotentialBuilder, \
@@ -16,6 +16,7 @@ from abtem.potentials import Potential, AbstractPotential, AbstractTDSPotentialB
 from abtem.scan import AbstractScan
 from abtem.transfer import CTF
 from abtem.utils import polargrid, ProgressBar, cosine_window, spatial_frequencies, coordinates, split_integer
+import psutil
 
 
 class FresnelPropagator:
@@ -440,6 +441,12 @@ class Probe(HasGridAndAcceleratorMixin):
         return _multislice(self.build(positions), potential, None, pbar)
 
     def _generate_probes(self, scan: AbstractScan, potential: Union[AbstractPotential, Atoms], max_batch: int):
+
+        if not isinstance(max_batch, int):
+            memory_per_wave = 2 * 4 * np.prod(self.gpts)
+            available_memory = get_available_memory(self._device)
+            max_batch = min(int(available_memory * .5 / memory_per_wave), 64)
+
         for start, end, positions in scan.generate_positions(max_batch=max_batch):
             yield start, end, self.multislice(positions, potential, pbar=False)
 
@@ -460,7 +467,7 @@ class Probe(HasGridAndAcceleratorMixin):
              scan: AbstractScan,
              detectors: Union[AbstractDetector, Sequence[AbstractDetector]],
              potential: Union[Atoms, AbstractPotential],
-             max_batch: int = 1,
+             max_batch: int = None,
              pbar: bool = True) -> dict:
 
         """
