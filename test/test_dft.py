@@ -3,15 +3,16 @@ import os
 import numpy as np
 import pytest
 from ase.io import read
-from gpaw import GPAW
 
-from abtem.dft import GPAWPotential
 from abtem.potentials import Potential
 from abtem.structures import orthogonalize_cell
 
 
 @pytest.mark.gpaw
 def test_dft():
+    from gpaw import GPAW
+    from abtem.dft import GPAWPotential
+
     atoms = read(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data/hexagonal_graphene.cif'))
 
     gpaw = GPAW(h=.1, txt=None, kpts=(3, 3, 1))
