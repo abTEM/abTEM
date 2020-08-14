@@ -15,6 +15,15 @@ def test_scherzer():
     assert np.isclose(ctf.evaluate_chi(alpha, 0.), 0, atol=1e-6)
 
 
+def test_scherzer_kwargs():
+    Cs = np.random.rand() * 1e5
+    defocus = scherzer_defocus(Cs, 80e3)
+    alpha = (6 * energy2wavelength(80e3) / Cs) ** (1 / 4.)
+
+    ctf = CTF(energy=80e3, defocus=defocus, Cs=Cs)
+    assert np.isclose(ctf.evaluate_chi(alpha, 0.), 0, atol=1e-6)
+
+
 def test_aperture():
     ctf = CTF(semiangle_cutoff=20, rolloff=0., energy=80e3)
     assert ctf.evaluate_aperture(.021) == 0
