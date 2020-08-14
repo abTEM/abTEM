@@ -1,4 +1,4 @@
-from collections import Iterable
+from collections.abc import Iterable
 from copy import copy
 
 import h5py
@@ -6,7 +6,6 @@ import imageio
 import numpy as np
 import scipy.misc
 import scipy.ndimage
-from scipy.ndimage import gaussian_filter
 from scipy.ndimage import zoom
 
 from abtem.device import asnumpy
