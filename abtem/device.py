@@ -5,6 +5,7 @@ import numpy as np
 import pyfftw
 from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions, scale_reduce, \
     windowed_scale_reduce
+import psutil
 
 FFTW_EFFORT = 'FFTW_MEASURE'
 FFTW_THREADS = 8
@@ -102,24 +103,31 @@ def fft2_convolve(array, kernel, overwrite_x=True):
     return _fft_convolve(array, kernel)
 
 
+# def fft2(array, overwrite_x):
+#     if not overwrite_x:
+#         array = array.copy()
+#
+#     if len(array.shape) == 2:
+#         return np.fft.fft2(array)
+#     elif (len(array.shape) == 3):
+#         for i in range(array.shape[0]):
+#             array[i] = np.fft.fft2(array[i])
+#         return array
+#     else:
+#         shape = array.shape
+#         array = array.reshape((-1,) + shape[1:])
+#         for i in range(array.shape[0]):
+#             array[i] = np.fft.fft2(array[i])
+#
+#         array = array.reshape(shape)
+#         return array
+
 def fft2(array, overwrite_x):
     if not overwrite_x:
         array = array.copy()
 
-    if len(array.shape) == 2:
-        return np.fft.fft2(array)
-    elif (len(array.shape) == 3):
-        for i in range(array.shape[0]):
-            array[i] = np.fft.fft2(array[i])
-        return array
-    else:
-        shape = array.shape
-        array = array.reshape((-1,) + shape[1:])
-        for i in range(array.shape[0]):
-            array[i] = np.fft.fft2(array[i])
-
-        array = array.reshape(shape)
-        return array
+    fftw_forward, fftw_backward = create_fftw_objects(array)
+    return fftw_forward()
 
 
 def ifft2(array, overwrite_x):
@@ -176,3 +184,12 @@ def copy_to_device(array, device):
         return cp.asarray(array)
     else:
         raise RuntimeError()
+
+
+def get_available_memory(device: str) -> float:
+    if device == 'cpu':
+        return psutil.virtual_memory().available
+    else:
+        if device == 'gpu':
+            device = cp.cuda.Device(0)
+        return device.mem_info[0]
