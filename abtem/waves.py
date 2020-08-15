@@ -16,7 +16,6 @@ from abtem.potentials import Potential, AbstractPotential, AbstractTDSPotentialB
 from abtem.scan import AbstractScan
 from abtem.transfer import CTF
 from abtem.utils import polargrid, ProgressBar, cosine_window, spatial_frequencies, coordinates, split_integer
-import psutil
 
 
 class FresnelPropagator:
@@ -139,7 +138,7 @@ class Waves(HasGridAndAcceleratorMixin):
     @property
     def array(self) -> np.ndarray:
         """
-        :return: Array representing the wave functions.
+        Array representing the wave functions.
         """
         return self._array
 
@@ -271,6 +270,11 @@ class Waves(HasGridAndAcceleratorMixin):
         return new_copy
 
     def show(self, **kwargs):
+        """
+        Show the wave function.
+
+        :param kwargs:
+        """
         self.intensity().show(**kwargs)
 
 
@@ -377,7 +381,7 @@ class Probe(HasGridAndAcceleratorMixin):
     @property
     def ctf(self) -> CTF:
         """
-        Probe contrast transfer function.
+        :return Probe contrast transfer function.
         """
         return self._ctf
 
@@ -544,7 +548,7 @@ class Probe(HasGridAndAcceleratorMixin):
         return new_copy
 
 
-class PartialSMatrix(HasGridAndAcceleratorMixin):
+class _PartialSMatrix(HasGridAndAcceleratorMixin):
 
     def __init__(self, start: int, stop: int, parent: 'SMatrix'):
         self._start = start
@@ -684,6 +688,9 @@ class SMatrix(HasGridAndAcceleratorMixin):
         return self._ctf.evaluate(alpha, phi)
 
     def __len__(self) -> int:
+        """
+        Number of plane waves in expansion.
+        """
         return len(self._array)
 
     def _generate_partial(self, max_batch: int = None, pbar: bool = True):
@@ -696,7 +703,7 @@ class SMatrix(HasGridAndAcceleratorMixin):
         batch_sizes = split_integer(len(self), n_batches)
         N = 0
         for batch_size in batch_sizes:
-            yield PartialSMatrix(N, N + batch_size, self)
+            yield _PartialSMatrix(N, N + batch_size, self)
             N += batch_size
             batch_pbar.update(batch_size)
 
@@ -856,6 +863,9 @@ class SMatrixBuilder(HasGridAndAcceleratorMixin):
 
     @property
     def expansion_cutoff(self) -> float:
+        """
+        Plane wave expansion cutoff.
+        """
         return self._expansion_cutoff
 
     @expansion_cutoff.setter
@@ -864,6 +874,9 @@ class SMatrixBuilder(HasGridAndAcceleratorMixin):
 
     @property
     def interpolation(self) -> int:
+        """
+        Interpolation factor.
+        """
         return self._interpolation
 
     @interpolation.setter
@@ -872,6 +885,9 @@ class SMatrixBuilder(HasGridAndAcceleratorMixin):
 
     @property
     def interpolated_grid(self) -> Grid:
+        """
+        The grid of the interpolated probe wave functions.
+        """
         interpolated_gpts = tuple(n // self.interpolation for n in self.gpts)
         return Grid(gpts=interpolated_gpts, sampling=self.sampling, lock_gpts=True)
 
@@ -900,6 +916,14 @@ class SMatrixBuilder(HasGridAndAcceleratorMixin):
         potential_pbar.close()
 
     def multislice(self, potential: AbstractPotential, max_batch: int = None, pbar: Union[ProgressBar, bool] = True):
+        """
+        Build scattering matrix and propagate the scattering matrix through the provided potential.
+
+        :param positions: Positions of the probe wave functions
+        :param max_batch: The probe batch size. Larger batches are faster, but require more memory.
+        :param pbar: If true, display progress bars.
+        :return: Probe exit wave functions as a Waves object.
+        """
         self.grid.match(potential)
         return self.build().multislice(potential, max_batch=max_batch, pbar=pbar)
 
@@ -910,6 +934,17 @@ class SMatrixBuilder(HasGridAndAcceleratorMixin):
              max_batch_probes: int = 1,
              max_batch_expansion: int = None,
              pbar: bool = True):
+        """
+        Build the scattering matrix. Raster scan the probe across the potential and record a measurement for each detector.
+
+        :param scan: Scan object defining the positions of the probe wave functions.
+        :param detectors: The detectors recording the measurments.
+        :param potential: The potential across which to scan the probe.
+        :param max_batch_probes: The probe batch size. Larger batches are faster, but require more memory.
+        :param max_batch_expansion: The expansion plane wave batch size.
+        :param pbar: If true, display progress bars.
+        :return: Dictionary of measurements with keys given by the detector.
+        """
 
         self.grid.match(potential.grid)
         self.grid.check_is_defined()
@@ -957,6 +992,10 @@ class SMatrixBuilder(HasGridAndAcceleratorMixin):
         return measurements
 
     def build(self) -> SMatrix:
+        """
+        Build the scattering matrix.
+        """
+
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
