@@ -8,7 +8,10 @@ from abtem.potentials import AbstractPotentialBuilder, ProjectedPotential, disc_
     PotentialIntegrator
 from abtem.utils import split_integer
 from abtem.structures import orthogonalize_cell
-from gpaw.atom.shapefunc import shape_functions
+try:
+    from gpaw.atom.shapefunc import shape_functions
+except:
+    raise RuntimeError('This functionality of abTEM requires GPAW, see https://wiki.fysik.dtu.dk/gpaw/.')
 
 
 def interpolate_rectangle(array, cell, extent, gpts, origin=None):
