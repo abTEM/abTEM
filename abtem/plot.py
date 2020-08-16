@@ -1,4 +1,4 @@
-from collections import Iterable
+from collections.abc import Iterable
 from colorsys import hls_to_rgb
 
 import matplotlib.pyplot as plt
