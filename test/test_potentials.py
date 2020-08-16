@@ -3,6 +3,7 @@ import pytest
 from ase import Atoms
 
 from abtem.potentials import Potential
+from abtem.device import asnumpy, cp
 
 
 def test_create_potential():
@@ -36,3 +37,34 @@ def test_potential_centered():
     assert np.allclose(potential1[0].array[:, gpts_y // 2], np.roll(potential2[0].array[:, gpts_y // 2], gpts_x // 2))
     assert np.allclose(potential2[0].array[:, gpts_y // 2][1:], (potential2[0].array[:, gpts_y // 2])[::-1][:-1])
     assert np.allclose(potential2[0].array[gpts_x // 2][1:], potential2[0].array[gpts_x // 2][::-1][:-1])
+
+
+def test_potential_build():
+    atoms = Atoms('CO', positions=[(2, 3, 1), (3, 2, 3)], cell=(4, 6, 4.3))
+    potential = Potential(atoms=atoms, sampling=.1)
+    array_potential = potential.build()
+    assert np.all(array_potential[2].array == potential[2].array)
+
+
+@pytest.mark.gpu
+def test_potential_build_gpu():
+    atoms = Atoms('CO', positions=[(2, 3, 1), (3, 2, 3)], cell=(4, 6, 4.3))
+    potential = Potential(atoms=atoms, sampling=.1, device='gpu')
+
+    array_potential = potential.build()
+    assert np.all(asnumpy(array_potential[2].array == potential[2].array))
+
+    potential = Potential(atoms=atoms, sampling=.1, device='cpu')
+    assert np.allclose(asnumpy(array_potential[2].array), potential[2].array)
+
+
+@pytest.mark.gpu
+def test_potential_storage():
+    atoms = Atoms('CO', positions=[(2, 3, 1), (3, 2, 3)], cell=(4, 6, 4.3))
+
+    potential = Potential(atoms=atoms, sampling=.1, device='gpu')
+    assert type(potential.build().array) is cp.ndarray
+
+    potential = Potential(atoms=atoms, sampling=.1, device='gpu', storage='cpu')
+
+    assert type(potential.build().array) is np.ndarray
