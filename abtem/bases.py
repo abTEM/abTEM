@@ -1,53 +1,15 @@
 from collections import OrderedDict
-from typing import Optional, Union, Sequence
+from typing import Optional, Union, Sequence, Any
 
 import numpy as np
 
 from abtem.utils import energy2wavelength, energy2sigma
 
 
-def watched_method(event):
-    """
-    Decorator for class methods that have to notify.
-    """
-
-    def wrapper(func):
-        property_name = func.__name__
-
-        def new_func(*args, **kwargs):
-            instance = args[0]
-            result = func(*args, **kwargs)
-            getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': True})
-            return result
-
-        return new_func
-
-    return wrapper
-
-
-def watched_property(event):
-    """
-    Decorator for class properties that have to notify.
-    """
-
-    def wrapper(func):
-        property_name = func.__name__
-
-        def new_func(*args):
-            instance, value = args
-            old = getattr(instance, property_name)
-            result = func(*args)
-            change = old != value
-            change = np.any(change)
-            getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': change})
-            return result
-
-        return new_func
-
-    return wrapper
-
-
 class Event(object):
+    """
+    Event class for registering callbacks.
+    """
 
     def __init__(self):
         self.callbacks = []
@@ -68,6 +30,49 @@ class Event(object):
         self.callbacks += callbacks
 
 
+def watched_method(event: 'str'):
+    """
+    Decorator for class methods that have to notify.
+    :param event: Name class property with target event
+    """
+
+    def wrapper(func):
+        property_name = func.__name__
+
+        def new_func(*args, **kwargs):
+            instance = args[0]
+            result = func(*args, **kwargs)
+            getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': True})
+            return result
+
+        return new_func
+
+    return wrapper
+
+
+def watched_property(event: 'str'):
+    """
+    Decorator for class properties that have to notify and event.
+    :param event: Name class property with target event
+    """
+
+    def wrapper(func):
+        property_name = func.__name__
+
+        def new_func(*args):
+            instance, value = args
+            old = getattr(instance, property_name)
+            result = func(*args)
+            change = old != value
+            change = np.any(change)
+            getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': change})
+            return result
+
+        return new_func
+
+    return wrapper
+
+
 def cache_clear_callback(target_cache):
     def callback(notifier, property_name, change):
         if change:
@@ -76,7 +81,7 @@ def cache_clear_callback(target_cache):
     return callback
 
 
-def cached_method(target_cache, ignore_args=False):
+def cached_method(target_cache, ignore_args: bool = False):
     def wrapper(func):
 
         def new_func(*args):
@@ -104,33 +109,38 @@ def cached_method(target_cache, ignore_args=False):
 
 
 class Cache:
+    """
+    Simple class for handling a dictionary based cache. When the cache is full the first inserted
 
-    def __init__(self, max_size):
+    :param max_size:
+    """
+
+    def __init__(self, max_size: int):
         self._max_size = max_size
         self._cached = OrderedDict()
         self._hits = 0
         self._misses = 0
 
     @property
-    def cached(self):
+    def cached(self) -> dict:
         return self._cached
 
     @property
-    def hits(self):
+    def hits(self) -> int:
         return self._hits
 
     @property
-    def misses(self):
+    def misses(self) -> int:
         return self._hits
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._cached)
 
-    def insert(self, key, value):
+    def insert(self, key: Any, value: Any):
         self._cached[key] = value
         self._check_size()
 
-    def retrieve(self, key):
+    def retrieve(self, key: Any) -> Any:
         return self._cached[key]
 
     def _check_size(self):
@@ -153,7 +163,6 @@ class DelegatedAttribute:
         if instance is None:
             return self
         else:
-            # return instance.delegate.attr
             return getattr(self.delegate(instance), self.attr_name)
 
     def __set__(self, instance, value):
@@ -236,7 +245,7 @@ class Grid:
 
         raise RuntimeError('Invalid grid property ({})'.format(value))
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.dimensions
 
     @property
@@ -308,21 +317,21 @@ class Grid:
 
         self._adjust_sampling(self.extent, self.gpts)
 
-    def _adjust_extent(self, gpts, sampling):
+    def _adjust_extent(self, gpts: tuple, sampling: tuple):
         if (gpts is not None) & (sampling is not None):
             if self._endpoint:
                 self._extent = tuple((n - 1) * d for n, d in zip(gpts, sampling))
             else:
                 self._extent = tuple(n * d for n, d in zip(gpts, sampling))
 
-    def _adjust_gpts(self, extent, sampling):
+    def _adjust_gpts(self, extent: tuple, sampling: tuple):
         if (extent is not None) & (sampling is not None):
             if self._endpoint:
                 self._gpts = tuple(int(np.ceil(l / d)) + 1 for l, d in zip(extent, sampling))
             else:
                 self._gpts = tuple(int(np.ceil(l / d)) for l, d in zip(extent, sampling))
 
-    def _adjust_sampling(self, extent, gpts):
+    def _adjust_sampling(self, extent: tuple, gpts: tuple):
         if (extent is not None) & (gpts is not None):
             if self._endpoint:
                 self._sampling = tuple(l / (n - 1) for l, n in zip(extent, gpts))
@@ -338,11 +347,11 @@ class Grid:
             raise RuntimeError('Grid gpts are not defined')
 
     @property
-    def antialiased_gpts(self):
+    def antialiased_gpts(self) -> tuple:
         return tuple(n // 2 for n in self.gpts)
 
     @property
-    def antialiased_sampling(self):
+    def antialiased_sampling(self) -> tuple:
         return tuple(l / n for n, l in zip(self.antialiased_gpts, self.extent))
 
     def match(self, other):
@@ -363,7 +372,11 @@ class Grid:
             self.gpts = other.gpts
 
     def check_match(self, other):
-        """ Raise error if the grid of another object is different from this object. """
+        """
+        Raise error if the grid of another object is different from this object.
+
+        :param other:
+        """
 
         if (self.extent is not None) & (other.extent is not None) & np.any(self.extent != other.extent):
             raise RuntimeError('Inconsistent grid extent ({} != {})'.format(self.extent, other.extent))
