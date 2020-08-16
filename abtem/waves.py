@@ -6,7 +6,7 @@ import numpy as np
 from ase import Atoms
 
 from abtem.bases import Grid, Accelerator, cache_clear_callback, Cache, cached_method, HasGridAndAcceleratorMixin
-from abtem.detect import AbstractDetector, crop_to_center
+from abtem.detect import AbstractDetector, _crop_to_center
 from abtem.device import get_array_module, get_device_function, asnumpy, get_array_module_from_device, \
     copy_to_device, get_available_memory
 from abtem.measure import calibrations_from_grid, Measurement
@@ -168,7 +168,7 @@ class Waves(HasGridAndAcceleratorMixin):
         xp = get_array_module(self.array)
         abs2 = get_device_function(xp, 'abs2')
         fft2 = get_device_function(xp, 'fft2')
-        pattern = asnumpy(abs2(crop_to_center(xp.fft.fftshift(fft2(self.array, overwrite_x=False)))))
+        pattern = asnumpy(abs2(_crop_to_center(xp.fft.fftshift(fft2(self.array, overwrite_x=False)))))
         return Measurement(pattern, calibrations)
 
     def apply_ctf(self, ctf: CTF = None, **kwargs):
