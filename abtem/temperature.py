@@ -1,5 +1,5 @@
 from abc import abstractmethod, ABCMeta
-from typing import Mapping, Union
+from typing import Mapping, Union, Sequence
 
 import numpy as np
 from ase import Atoms
@@ -19,24 +19,38 @@ class AbstractFrozenPhonons(metaclass=ABCMeta):
     def __iter__(self):
         return self.generate_atoms()
 
-    # def __next__(self):
+
+class DummyFrozenPhonons(AbstractFrozenPhonons):
+
+    def __init__(self, atoms):
+        """
+        Dummy frozen phonons object.
+
+        Generates the input Atoms object. Used as a stand in for simulations without frozen phonons.
+
+        :param atoms: Generated Atoms object.
+        """
+        self._atoms = atoms.copy()
+
+    def __len__(self):
+        return 1
+
+    def generate_atoms(self):
+        yield self._atoms
 
 
 class FrozenPhonons(AbstractFrozenPhonons):
 
-    def __init__(self, atoms: Atoms, num_configs, sigmas: Mapping[Union[str, int], float], seed=None):
+    def __init__(self, atoms: Atoms, num_configs: int, sigmas: Mapping[Union[str, int], float], seed=None):
         """
-        Generates atomic configurations for thermal diffuse scattering.
+        Frozen phonons object.
 
+        Generates atomic configurations for thermal diffuse scattering.
         Randomly displaces the atomic positions of an ASE Atoms object to emulate thermal vibrations.
 
-        Parameters
-        ----------
-        atoms : ase.Atoms
-            ASE atoms object with the average atomic configuration.
-        sigmas : Mapping[Union[str, int], float]
-            Mapping from atomic species to the variance of the displacements of that atomic species. The atomic species
-            can be specified as atomic number or symbol.
+        :param Atoms with the average atomic configuration.
+        :param Mapping from atomic species to the variance of the displacements of that atomic species.
+            The atomic species can be specified as atomic number or symbol.
         """
         new_sigmas = {}
         for key, sigma in sigmas.items():
@@ -62,7 +76,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
         if self._seed:
             np.random.seed(self._seed)
 
-        for i in range(self._num_configs):
+        for i in range(len(self)):
             atoms = self._atoms.copy()
             positions = atoms.get_positions()
 
@@ -76,13 +90,18 @@ class FrozenPhonons(AbstractFrozenPhonons):
             yield atoms
 
 
-class DummyFrozenPhonons(AbstractFrozenPhonons):
+class MDFrozenPhonons(AbstractFrozenPhonons):
+    """
+    Molecular dynamics frozen phonons.
 
-    def __init__(self, atoms):
-        self._atoms = atoms.copy()
+    :param trajectory: Sequence of Atoms objects representing a thermal distribution of atomic configurations.
+    """
+    def __init__(self, trajectory: Sequence[Atoms]):
+        self._trajectory = trajectory
 
     def __len__(self):
-        return 1
+        return len(self._trajectory)
 
     def generate_atoms(self):
-        yield self._atoms
+        for i in range(len(self)):
+            yield self._trajectory[i]
