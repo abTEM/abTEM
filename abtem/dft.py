@@ -2,7 +2,7 @@ import numpy as np
 from ase import units
 from scipy.interpolate import RegularGridInterpolator, interp1d
 
-from abtem.bases import Grid
+from abtem.base_classes import Grid
 from abtem.device import get_device_function
 from abtem.potentials import AbstractPotentialBuilder, ProjectedPotential, disc_meshgrid, pad_atoms, \
     PotentialIntegrator

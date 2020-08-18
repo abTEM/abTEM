@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from abtem.bases import Grid
+from abtem.base_classes import Grid
 
 
 def test_create_grid():

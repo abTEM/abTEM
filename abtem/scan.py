@@ -5,7 +5,7 @@ import h5py
 import numpy as np
 from matplotlib.patches import Rectangle
 
-from abtem.bases import Grid, HasGridMixin
+from abtem.base_classes import Grid, HasGridMixin
 from abtem.measure import Calibration
 from abtem.utils import split_integer
 from abtem.device import asnumpy

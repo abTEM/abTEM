@@ -3,7 +3,7 @@ from typing import Tuple, List
 
 import numpy as np
 
-from abtem.bases import Cache, Event, watched_property, cached_method, Grid
+from abtem.base_classes import Cache, Event, watched_property, cached_method, Grid
 from abtem.device import get_array_module, get_device_function
 from abtem.measure import Calibration, calibrations_from_grid, Measurement
 from abtem.plot import show_image

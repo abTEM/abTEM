@@ -1,6 +1,6 @@
 import pytest
 
-from abtem.bases import Cache, cached_method
+from abtem.base_classes import Cache, cached_method
 
 
 def test_cache():

@@ -5,7 +5,7 @@ import h5py
 import numpy as np
 from ase import Atoms
 
-from abtem.bases import Grid, Accelerator, cache_clear_callback, Cache, cached_method, HasGridAndAcceleratorMixin
+from abtem.base_classes import Grid, Accelerator, cache_clear_callback, Cache, cached_method, HasGridAndAcceleratorMixin
 from abtem.detect import AbstractDetector, _crop_to_center
 from abtem.device import get_array_module, get_device_function, asnumpy, get_array_module_from_device, \
     copy_to_device, get_available_memory, HasDeviceMixin

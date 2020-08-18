@@ -3,7 +3,7 @@ from copy import copy
 import numpy as np
 import pytest
 
-from abtem.bases import Grid
+from abtem.base_classes import Grid
 from abtem.detect import AbstractDetector
 from abtem.measure import Measurement
 from abtem.potentials import AbstractPotential, ProjectedPotential

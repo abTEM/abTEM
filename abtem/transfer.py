@@ -3,7 +3,7 @@ from typing import Mapping
 
 import numpy as np
 
-from abtem.bases import HasAcceleratorMixin, Accelerator, watched_method, watched_property, Event
+from abtem.base_classes import HasAcceleratorMixin, Accelerator, watched_method, watched_property, Event
 
 from abtem.device import get_array_module, get_device_function
 from abtem.utils import energy2wavelength

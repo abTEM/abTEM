@@ -1,4 +1,4 @@
-from abtem.bases import Event, watched_method, watched_property
+from abtem.base_classes import Event, watched_method, watched_property
 
 
 def test_register_event():

@@ -7,7 +7,7 @@ from ase import Atoms
 from ase import units
 from scipy.optimize import brentq
 
-from abtem.bases import Grid, HasGridMixin, Cache, cached_method, HasAcceleratorMixin, Accelerator, Event, \
+from abtem.base_classes import Grid, HasGridMixin, Cache, cached_method, HasAcceleratorMixin, Accelerator, Event, \
     watched_property
 from abtem.device import get_device_function, get_array_module, get_array_module_from_device, copy_to_device, \
     HasDeviceMixin
