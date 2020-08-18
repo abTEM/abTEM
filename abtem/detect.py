@@ -1,18 +1,17 @@
 from abc import ABCMeta, abstractmethod
-from typing import Tuple, Union, List
+from typing import Tuple, List
 
-import h5py
 import numpy as np
 
 from abtem.bases import Cache, Event, watched_property, cached_method, Grid
 from abtem.device import get_array_module, get_device_function
-from abtem.measure import Calibration, calibrations_from_grid, fourier_space_offset, Measurement
+from abtem.measure import Calibration, calibrations_from_grid, Measurement
 from abtem.plot import show_image
 from abtem.scan import AbstractScan
 from abtem.utils import label_to_index_generator, spatial_frequencies
 
 
-def crop_to_center(array: np.ndarray):
+def _crop_to_center(array: np.ndarray):
     shape = array.shape
     w = shape[-2] // 2
     h = shape[-1] // 2
@@ -23,16 +22,16 @@ def crop_to_center(array: np.ndarray):
     return array[..., left:right, top:bottom]
 
 
-def calculate_far_field_intensity(waves, overwrite: bool = False):
+def _calculate_far_field_intensity(waves, overwrite: bool = False):
     xp = get_array_module(waves.array)
     fft2 = get_device_function(xp, 'fft2')
     abs2 = get_device_function(xp, 'abs2')
     array = fft2(waves.array, overwrite_x=overwrite)
-    intensity = crop_to_center(xp.fft.fftshift(array, axes=(-2, -1)))
+    intensity = _crop_to_center(xp.fft.fftshift(array, axes=(-2, -1)))
     return abs2(intensity)
 
 
-def polar_regions(gpts, sampling, wavelength, inner, outer, nbins_radial, nbins_azimuthal):
+def _polar_regions(gpts, sampling, wavelength, inner, outer, nbins_radial, nbins_azimuthal):
     kx, ky = spatial_frequencies(gpts, sampling)
 
     alpha_x = np.asarray(kx) * wavelength
@@ -112,7 +111,7 @@ class _PolarDetector(AbstractDetector):
             outer = self._outer
 
         if outer > max_angle:
-            raise RuntimeError()
+            raise RuntimeError('Maximum detector angle exceeds maximum simulated scattering angle.')
 
         nbins_radial = int(np.ceil((outer - inner) / self._radial_steps))
         nbins_azimuthal = int(np.ceil(2 * np.pi / self._azimuthal_steps))
@@ -122,8 +121,12 @@ class _PolarDetector(AbstractDetector):
     def _get_regions(self, gpts: Tuple[int], sampling: Tuple[float], wavelength: float) -> List[np.ndarray]:
         inner, outer, nbins_radial, nbins_azimuthal = self._get_bins(sampling, wavelength)
 
-        region_labels = polar_regions(gpts, sampling, wavelength, inner / 1000, outer / 1000, nbins_radial,
-                                      nbins_azimuthal)
+        region_labels = _polar_regions(gpts, sampling, wavelength, inner / 1000, outer / 1000, nbins_radial,
+                                       nbins_azimuthal)
+
+        if np.all(region_labels == -1):
+            raise RuntimeError('Zero-sized detector region.')
+
         region_indices = []
         for indices in label_to_index_generator(region_labels):
             region_indices.append(indices)
@@ -165,6 +168,13 @@ class _PolarDetector(AbstractDetector):
 class AnnularDetector(_PolarDetector):
 
     def __init__(self, inner: float, outer: float, save_file: str = None):
+        """
+        
+
+        :param inner:
+        :param outer:
+        :param save_file:
+        """
         super().__init__(inner=inner, outer=outer, radial_steps=outer - inner, save_file=save_file)
 
     @property
@@ -187,7 +197,7 @@ class AnnularDetector(_PolarDetector):
 
     def detect(self, waves) -> np.ndarray:
         xp = get_array_module(waves.array)
-        intensity = calculate_far_field_intensity(waves, overwrite=False)
+        intensity = _calculate_far_field_intensity(waves, overwrite=False)
         indices = self._get_regions(waves.grid.antialiased_gpts, waves.grid.antialiased_sampling, waves.wavelength)[0]
         total = xp.sum(intensity, axis=(-2, -1))
         return xp.sum(intensity.reshape((intensity.shape[0], -1))[:, indices], axis=-1) / total
@@ -203,7 +213,7 @@ class FlexibleAnnularDetector(_PolarDetector):
 
     def detect(self, waves) -> np.ndarray:
         xp = get_array_module(waves.array)
-        intensity = calculate_far_field_intensity(waves, overwrite=False)
+        intensity = _calculate_far_field_intensity(waves, overwrite=False)
         indices = self._get_regions(waves.grid.antialiased_gpts, waves.grid.antialiased_sampling, waves.wavelength)
 
         total = xp.sum(intensity, axis=(-2, -1))
@@ -259,7 +269,7 @@ class SegmentedDetector(_PolarDetector):
 
     def detect(self, waves) -> np.ndarray:
         xp = get_array_module(waves.array)
-        intensity = calculate_far_field_intensity(waves, overwrite=False)
+        intensity = _calculate_far_field_intensity(waves, overwrite=False)
         indices = self._get_regions(waves.grid.antialiased_gpts, waves.grid.antialiased_sampling, waves.wavelength)
 
         total = xp.sum(intensity, axis=(-2, -1))
@@ -298,7 +308,7 @@ class PixelatedDetector(AbstractDetector):
 
         intensity = abs2(fft2(waves.array, overwrite_x=False))
         intensity = xp.fft.fftshift(intensity, axes=(-1, -2))
-        intensity = crop_to_center(intensity)
+        intensity = _crop_to_center(intensity)
         return intensity
 
 

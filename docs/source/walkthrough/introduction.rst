@@ -21,4 +21,6 @@ Please stand by while more documents are added.
     06_scan_and_detect.ipynb
     07_detectors_(4D-STEM).ipynb
     08_temperature.ipynb
+    09_PRISM.ipynb
     10_DFT.ipynb
+    11_GPU_calculations.ipynb

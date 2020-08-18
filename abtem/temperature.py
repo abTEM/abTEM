@@ -49,7 +49,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
         Randomly displaces the atomic positions of an ASE Atoms object to emulate thermal vibrations.
 
         :param Atoms with the average atomic configuration.
-        :param Mapping from atomic species to the variance of the displacements of that atomic species.
+        :param Mapping from atomic species to the standard deviation of the displacements of that atomic species.
             The atomic species can be specified as atomic number or symbol.
         """
         new_sigmas = {}
@@ -62,7 +62,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
         unique_atomic_numbers = np.unique(atoms.get_atomic_numbers())
 
         if len(set(unique_atomic_numbers).intersection(set(new_sigmas.keys()))) != len(unique_atomic_numbers):
-            raise RuntimeError('Mapping sigma not provided for all atomic species')
+            raise RuntimeError('Displacement standard deviation not provided for all atomic species.')
 
         self._sigmas = new_sigmas
         self._atoms = atoms

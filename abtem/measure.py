@@ -151,6 +151,16 @@ class Measurement:
         difference = self.array - other.array
         return self.__class__(difference, calibrations=self.calibrations, units=self.units, name=self.name)
 
+    def __add__(self, other):
+        assert isinstance(other, self.__class__)
+
+        for calibration, other_calibration in zip(self.calibrations, other.calibrations):
+            if not calibration == other_calibration:
+                raise ValueError()
+
+        difference = self.array - other.array
+        return self.__class__(difference, calibrations=self.calibrations, units=self.units, name=self.name)
+
     def mean(self, axis):
         if not isinstance(axis, Iterable):
             axis = (axis,)

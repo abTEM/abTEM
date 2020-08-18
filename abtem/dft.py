@@ -58,7 +58,7 @@ def get_paw_corrections(a, calculator, rcgauss=0.005):
     dens.Q_aL.redistribute(dens.atom_partition.as_serial())
 
     D_sp = dens.D_asp[a]
-    # for a, D_sp in dens.D_asp.items():
+
     setup = dens.setups[a]
     c = setup.xc_correction
     rgd = c.rgd
@@ -74,9 +74,6 @@ def get_paw_corrections(a, calculator, rcgauss=0.005):
     dv_g[1:] /= rgd.r_g[1:]
     dv_g[0] = dv_g[1]
     dv_g[-1] = 0.0
-
-    # dv
-    # dv_a1.append([rgd.spline(dv_g, points=POINTS)])
 
     return rgd.r_g, dv_g
 

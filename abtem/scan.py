@@ -155,10 +155,10 @@ class LineScan(AbstractScan, HasGridMixin):
     def insert_new_measurement(self, measurement, start, end, new_measurement):
         if isinstance(measurement, str):
             with h5py.File(measurement, 'a') as f:
-                f['array'][start:end] = asnumpy(new_measurement)
+                f['array'][start:end] += asnumpy(new_measurement)
 
         else:
-            measurement.array[start:end] = asnumpy(new_measurement)
+            measurement.array[start:end] += asnumpy(new_measurement)
 
     def get_positions(self) -> np.ndarray:
         x = np.linspace(self.start[0], self.start[0] + np.array(self.extent) * self.direction[0], self.gpts[0],
@@ -258,9 +258,9 @@ class GridScan(AbstractScan, HasGridMixin):
         for row, slic, slic_1d in zip(*unravel_slice_2d(start, end, self.shape)):
             if isinstance(measurement, str):
                 with h5py.File(measurement, 'a') as f:
-                    f['array'][row, slic] = asnumpy(new_measurement[slic_1d])
+                    f['array'][row, slic] += asnumpy(new_measurement[slic_1d])
             else:
-                measurement.array[row, slic] = asnumpy(new_measurement[slic_1d])
+                measurement.array[row, slic] += asnumpy(new_measurement[slic_1d])
 
     def add_to_mpl_plot(self, ax, alpha=.33, facecolor='r', edgecolor='r', **kwargs):
         rect = Rectangle(tuple(self.start), *self.extent, alpha=alpha, facecolor=facecolor, edgecolor=edgecolor,
