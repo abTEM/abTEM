@@ -190,6 +190,21 @@ def get_available_memory(device: str) -> float:
     if device == 'cpu':
         return psutil.virtual_memory().available
     else:
+        mempool = cp.get_default_memory_pool()
+        mempool.free_all_blocks()
+
         if device == 'gpu':
             device = cp.cuda.Device(0)
         return device.mem_info[0]
+
+
+class HasDeviceMixin:
+    _device: str
+
+    @property
+    def device(self):
+        return self._device
+
+    @property
+    def calculation_device(self):
+        return self._device
