@@ -13,3 +13,5 @@ sphinx_rtd_theme
 nbsphinx
 sphinx-autodoc-typehints
 tqdm
+psutil
+pyfftw
