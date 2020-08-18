@@ -1,7 +1,7 @@
 """Module for often-used base classes."""
 from collections import OrderedDict
 from copy import copy
-from typing import Optional, Union, Sequence, Any
+from typing import Optional, Union, Sequence, Any, Callable
 
 import numpy as np
 
@@ -19,14 +19,25 @@ class Event(object):
 
     @property
     def notify_count(self):
+        """
+        Number of times this event has been notified.
+        """
         return self._notify_count
 
     def notify(self, *args, **kwargs):
+        """
+        Notify this event. All registered callbacks are called.
+        """
         self._notify_count += 1
         for callback in self.callbacks:
             callback(*args, **kwargs)
 
-    def register(self, callbacks):
+    def register(self, callbacks: Union[Callable, Sequence[Callable]]):
+        """
+        Register new callbacks.
+
+        :param callbacks: The callbacks to register.
+        """
         if not isinstance(callbacks, list):
             callbacks = [callbacks]
         self.callbacks += callbacks
@@ -35,7 +46,8 @@ class Event(object):
 def watched_method(event: 'str'):
     """
     Decorator for class methods that have to notify.
-    :param event: Name class property with target event
+
+    :param event: Name class property with target event.
     """
 
     def wrapper(func):
@@ -54,7 +66,8 @@ def watched_method(event: 'str'):
 
 def watched_property(event: 'str'):
     """
-    Decorator for class properties that have to notify and event.
+    Decorator for class properties that have to notify an event.
+
     :param event: Name class property with target event
     """
 
@@ -75,42 +88,46 @@ def watched_property(event: 'str'):
     return wrapper
 
 
-def cache_clear_callback(target_cache):
+def cache_clear_callback(target_cache: 'Cache'):
     """
-    Method for clearing the cache upon changes (JM).
+    Helper function for creating a callback that clears a target cache object.
+
+    :param The target cache object.
     """
 
-    def callback(notifier, property_name, change):
+    def callback(notifier: Any, property_name: str, change: bool):
         if change:
             target_cache.clear()
 
     return callback
 
 
-def cached_method(target_cache, ignore_args: bool = False):
+def cached_method(target_cache_property: str):
     """
-    Decorator for cached methods (JM).
+    Decorator for cached methods. The method will store the output in the cache held by the target property.
+
+    :param The property holding the target cache.
     """
 
     def wrapper(func):
 
         def new_func(*args):
-            self = args[0]
-
-            cache = getattr(self, target_cache)
-
-            if ignore_args is True:
-                key = (func,)
-            else:
-                key = (func,) + args[1:]
+            cache = getattr(args[0], target_cache_property)
+            key = (func,) + args[1:]
 
             if key in cache.cached:
+                # The decorated method has been called once with the given args.
+                # The calculation will be retrieved from cache.
+
                 result = cache.retrieve(key)
                 cache._hits += 1
             else:
+                # The method will be called and its output will be cached.
+
                 result = func(*args)
                 cache.insert(key, result)
                 cache._misses += 1
+
             return result
 
         return new_func
@@ -120,9 +137,11 @@ def cached_method(target_cache, ignore_args: bool = False):
 
 class Cache:
     """
-    Simple class for handling a dictionary-based cache. When the cache is full, the first inserted item is deleted (JM).
+    Cache object.
 
-    :param max_size:
+    Simple class for handling a dictionary-based cache. When the cache is full, the first inserted item is deleted.
+
+    :param max_size: The maximum number of values stored by this cache.
     """
 
     def __init__(self, max_size: int):
@@ -133,56 +152,65 @@ class Cache:
 
     @property
     def cached(self) -> dict:
+        """
+        Dictionary of cached data.
+        """
         return self._cached
 
     @property
     def hits(self) -> int:
+        """
+        Number of times a previously calculated object was retrieved.
+        """
         return self._hits
 
     @property
     def misses(self) -> int:
+        """
+        Number of times a new object had to be calculated.
+        """
         return self._hits
 
     def __len__(self) -> int:
+        """
+        Number of objects cached.
+        """
         return len(self._cached)
 
     def insert(self, key: Any, value: Any):
+        """
+        Insert new value into the cache.
+
+        :param key: The dictionary key of the cached object.
+        :param value: The object to cache.
+        """
         self._cached[key] = value
         self._check_size()
 
     def retrieve(self, key: Any) -> Any:
+        """
+        Retrieve object from cache.
+
+        :param key: The key of the cache item.
+        :return: The cached object.
+        """
         return self._cached[key]
 
     def _check_size(self):
+        """
+        Delete item from cache, if it is too large.
+        """
         if self._max_size is not None:
             while len(self) > self._max_size:
                 self._cached.popitem(last=False)
 
     def clear(self):
+        """
+        Clear the cache.
+        """
         self._cached = OrderedDict()
         self._hits = 0
         self._misses = 0
-
-
-class DelegatedAttribute:
-    def __init__(self, delegate_name, attr_name):
-        self.attr_name = attr_name
-        self.delegate_name = delegate_name
-
-    def __get__(self, instance, owner):
-        if instance is None:
-            return self
-        else:
-            return getattr(self.delegate(instance), self.attr_name)
-
-    def __set__(self, instance, value):
-        setattr(self.delegate(instance), self.attr_name, value)
-
-    def __delete__(self, instance):
-        delattr(self.delegate(instance), self.attr_name)
-
-    def delegate(self, instance):
-        return getattr(instance, self.delegate_name)
 
 
 class Grid:
@@ -418,7 +446,32 @@ class Grid:
                               lock_sampling=self._lock_sampling)
 
     def copy(self):
+        """
+        Make a copy.
+        """
         return copy(self)
+
+
+class DelegatedAttribute:
+
+    def __init__(self, delegate_name, attr_name):
+        self.attr_name = attr_name
+        self.delegate_name = delegate_name
+
+    def __get__(self, instance, owner):
+        if instance is None:
+            return self
+        else:
+            return getattr(self.delegate(instance), self.attr_name)
+
+    def __set__(self, instance, value):
+        setattr(self.delegate(instance), self.attr_name, value)
+
+    def __delete__(self, instance):
+        delattr(self.delegate(instance), self.attr_name)
+
+    def delegate(self, instance):
+        return getattr(instance, self.delegate_name)
 
 
 class HasGridMixin:
@@ -515,6 +568,9 @@ class Accelerator:
         return self.__class__(self.energy)
 
     def copy(self):
+        """
+        Make a copy.
+        """
         return copy(self)
 
 
