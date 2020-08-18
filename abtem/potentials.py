@@ -9,7 +9,8 @@ from scipy.optimize import brentq
 
 from abtem.bases import Grid, HasGridMixin, Cache, cached_method, HasAcceleratorMixin, Accelerator, Event, \
     watched_property
-from abtem.device import get_device_function, get_array_module, get_array_module_from_device, copy_to_device
+from abtem.device import get_device_function, get_array_module, get_array_module_from_device, copy_to_device, \
+    HasDeviceMixin
 from abtem.measure import calibrations_from_grid
 from abtem.parametrizations import kirkland, dvdr_kirkland, load_kirkland_parameters
 from abtem.parametrizations import lobato, dvdr_lobato, load_lobato_parameters
@@ -18,6 +19,7 @@ from abtem.structures import is_cell_orthogonal
 from abtem.tanh_sinh import integrate, tanh_sinh_nodes_and_weights
 from abtem.temperature import AbstractFrozenPhonons, DummyFrozenPhonons
 from abtem.utils import energy2sigma, ProgressBar
+from copy import copy
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
@@ -88,7 +90,7 @@ class AbstractPotentialBuilder(AbstractPotential):
     def __init__(self, storage='cpu'):
         self._storage = storage
 
-    def build(self, pbar: Union[bool, ProgressBar] = False) -> 'ArrayPotential':
+    def build(self, pbar: Union[bool, ProgressBar] = False) -> 'PotentialArray':
         self.grid.check_is_defined()
 
         storage_xp = get_array_module_from_device(self._storage)
@@ -107,7 +109,7 @@ class AbstractPotentialBuilder(AbstractPotential):
 
         pbar.refresh()
 
-        return ArrayPotential(array, slice_thicknesses, self.extent)
+        return PotentialArray(array, slice_thicknesses, self.extent)
 
 
 class AbstractTDSPotentialBuilder(AbstractPotentialBuilder):
@@ -210,7 +212,7 @@ def pad_atoms(atoms, margin):
     return atoms
 
 
-class Potential(AbstractTDSPotentialBuilder):
+class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
     """
     Potential object.
 
@@ -431,6 +433,9 @@ class Potential(AbstractTDSPotentialBuilder):
         pbar.refresh()
         pbar.close()
 
+    def copy(self):
+        return copy(self)
+
 
 def disc_meshgrid(r):
     cols = np.zeros((2 * r + 1, 2 * r + 1)).astype(np.int32)
@@ -440,7 +445,7 @@ def disc_meshgrid(r):
     return rows[inside], cols[inside]
 
 
-class ArrayPotential(AbstractPotential, HasGridMixin):
+class PotentialArray(AbstractPotential, HasGridMixin):
     """
     Array potential object.
 
@@ -525,8 +530,11 @@ class ArrayPotential(AbstractPotential, HasGridMixin):
                               slice_thicknesses=self._slice_thicknesses.copy(),
                               extent=self.extent)
 
+    def copy(self):
+        return copy(self)
 
-class TransmissionFunctions(ArrayPotential, HasAcceleratorMixin):
+
+class TransmissionFunctions(PotentialArray, HasAcceleratorMixin):
 
     def __init__(self, array: np.ndarray, slice_thicknesses: Union[float, Sequence], extent: np.ndarray = None,
                  sampling: np.ndarray = None, energy: float = None):
