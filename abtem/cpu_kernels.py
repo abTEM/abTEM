@@ -1,3 +1,4 @@
+"""Module for the CPU-optimization of numerical calculations using numba."""
 import numba as nb
 import numpy as np
 from numba import jit, prange
@@ -5,16 +6,25 @@ from numba import jit, prange
 
 @nb.vectorize([nb.complex64(nb.float32), nb.complex128(nb.float64)])
 def complex_exponential(x):
+    """
+    Function for calculating the complex exponential.
+    """
+
     return np.cos(x) + 1.j * np.sin(x)
 
 
 @nb.vectorize([nb.float32(nb.complex64), nb.float64(nb.complex128)])
 def abs2(x):
+    """Function for calculating the modulus of a complex number."""
     return x.real ** 2 + x.imag ** 2
 
 
 @jit(nopython=True, nogil=True, parallel=True)
 def interpolate_radial_functions(array, disc_indices, positions, v, r, dvdr, sampling):
+    """
+    Function for interpolating radial functions efficiently on a grid.
+    """
+
     n = r.shape[0]
     dt = np.log(r[-1] / r[0]) / (n - 1)
     for i in range(positions.shape[0]):
@@ -41,9 +51,9 @@ def windowed_scale_reduce(probes: np.ndarray, S: np.ndarray, corners, coefficien
 
     Parameters
     ----------
-    probes : 3d numpy.ndarray
+    probes : 3D numpy.ndarray
         The array in which the probe wave functions should be written.
-    S : 3d numpy.ndarray
+    S : 3D numpy.ndarray
         Scattering matrix.
     corners :
     coefficients :
@@ -66,16 +76,17 @@ def scale_reduce(probes: np.ndarray, S: np.ndarray, coefficients):
 
     Parameters
     ----------
-    probes : 3d numpy.ndarray
+    probes : 3D numpy.ndarray
         The array in which the probe wave functions should be written.
-    S : 3d numpy.ndarray
+    S : 3D numpy.ndarray
         Scattering matrix.
     corners :
     coefficients :
     """
+
     for i in prange(S.shape[1]):
         for j in prange(S.shape[2]):
             for l in range(S.shape[0]):
-                # s = S[l, i, j]
+                # s = S[l, i, j] JM delete?
                 for k in prange(probes.shape[0]):
-                    probes[k, i, j] += (coefficients[k, l] * S[l, i, j])  # .sum()
+                    probes[k, i, j] += (coefficients[k, l] * S[l, i, j])  # .sum() JM delete?

@@ -1,3 +1,4 @@
+"""Module for the GPU-optimization of numerical calculations using numba, CuPy, and CUDA."""
 import math
 
 import cupy as cp
@@ -37,6 +38,10 @@ def launch_superpose_deltas(positions, shape):
 
 @cuda.jit
 def _interpolate_radial_functions(array, disc_indices, positions, v, r, dvdr, sampling, dt):
+    """
+    Function for interpolating radial functions on a grid.
+    """
+
     i, j = cuda.grid(2)
     if (i < positions.shape[0]) & (j < disc_indices.shape[0]):
         k = round(positions[i, 0] / sampling[0]) + disc_indices[j, 0]
@@ -54,14 +59,18 @@ def _interpolate_radial_functions(array, disc_indices, positions, v, r, dvdr, sa
 
 
 def launch_interpolate_radial_functions(array, disc_indices, positions, v, r, dvdr, sampling):
+    """
+    Launcher for radial function interpolation (JM).
+    """
+
     threadsperblock = (1, 256)
     blockspergrid_x = math.ceil(positions.shape[0] / threadsperblock[0])
     blockspergrid_y = math.ceil(disc_indices.shape[0] / threadsperblock[1])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
 
     dt = (cp.log(r[-1] / r[0]) / (r.shape[0] - 1)).item()
-    #print(type(dt))
-    #sss
+    #print(type(dt))    JM delete?
+    #sss    JM delete?
     _interpolate_radial_functions[blockspergrid, threadsperblock](array,
                                                                   disc_indices,
                                                                   positions,
@@ -79,21 +88,21 @@ def _scale_reduce(probes, S, coefficients):
 
     Parameters
     ----------
-    probes : 3d numpy.ndarray
+    probes : 3D numpy.ndarray
         The array in which the probe wave functions should be written.
-    S : 3d numpy.ndarray
+    S : 3D numpy.ndarray
         Scattering matrix.
     corners :
     coefficients :
     """
     x, y, z = cuda.grid(3)
     if (x < S.shape[1]) & (y < S.shape[2]) & (z < probes.shape[0]):
-        # for i in range(coefficients.shape[0]):
-        # tmp = 0.
+        # for i in range(coefficients.shape[0]):    JM delete?
+        # tmp = 0.    JM delete?
         for k in range(S.shape[0]):
             probes[z, x, y] += coefficients[z, k] * S[k, x, y]
 
-        # probes[z, x, y] = tmp
+        # probes[z, x, y] = tmp    JM delete?
 
 
 def launch_scale_reduce(probes, S, coefficients):
@@ -113,16 +122,16 @@ def _windowed_scale_reduce(probes, S, corners, coefficients):
 
     Parameters
     ----------
-    probes : 3d numpy.ndarray
+    probes : 3D numpy.ndarray
         The array in which the probe wave functions should be written.
-    S : 3d numpy.ndarray
+    S : 3D numpy.ndarray
         Scattering matrix.
     corners :
     coefficients :
     """
     x, y, z = cuda.grid(3)
 
-    # sA = cuda.shared.array(shape=(8, 8, 8), dtype=complex64)
+    # sA = cuda.shared.array(shape=(8, 8, 8), dtype=complex64)    JM delete?
 
     if (x < probes.shape[1]) & (y < probes.shape[2]) & (z < probes.shape[0]):
         xx = (corners[z, 0] + x) % S.shape[1]
