@@ -1,3 +1,4 @@
+"""Module for often-used base classes."""
 from collections import OrderedDict
 from copy import copy
 from typing import Optional, Union, Sequence, Any
@@ -75,6 +76,10 @@ def watched_property(event: 'str'):
 
 
 def cache_clear_callback(target_cache):
+    """
+    Method for clearing the cache upon changes (JM).
+    """
+
     def callback(notifier, property_name, change):
         if change:
             target_cache.clear()
@@ -83,6 +88,10 @@ def cache_clear_callback(target_cache):
 
 
 def cached_method(target_cache, ignore_args: bool = False):
+    """
+    Decorator for cached methods (JM).
+    """
+
     def wrapper(func):
 
         def new_func(*args):
@@ -111,7 +120,7 @@ def cached_method(target_cache, ignore_args: bool = False):
 
 class Cache:
     """
-    Simple class for handling a dictionary based cache. When the cache is full the first inserted
+    Simple class for handling a dictionary-based cache. When the cache is full, the first inserted item is deleted (JM).
 
     :param max_size:
     """
@@ -177,6 +186,17 @@ class DelegatedAttribute:
 
 
 class Grid:
+    """
+    Grid object.
+
+    The grid object represent the simulation grid on which the wave functions and potential are discretized.
+
+    :param Grid extent in each dimension [Å].
+    :param Number of grid points in each dimension.
+    :param Grid sampling in each dimension [1 / Å].
+    :param Number of dimensions represented by the grid.
+    :param If true include the grid endpoint (the default is False). For periodic grids the endpoint should not be included.
+    """
 
     def __init__(self,
                  extent: Union[float, Sequence[float]] = None,
@@ -187,18 +207,6 @@ class Grid:
                  lock_extent=False,
                  lock_gpts=False,
                  lock_sampling=False):
-
-        """
-        Grid object.
-
-        The grid object represent the simulation grid on which the wave functions and potential are discretized.
-
-        :param Grid extent in each dimension [Å].
-        :param Number of grid points in each dimension.
-        :param Grid sampling in each dimension [1 / Å].
-        :param Number of dimensions represented by the grid.
-        :param If true include the grid endpoint (the default is False). For periodic grids the endpoint should not be included.
-        """
 
         self.changed = Event()
         self._dimensions = dimensions
@@ -365,6 +373,7 @@ class Grid:
         :param other: The other grid.
         :param check_match: Check whether grids can match without overriding already defined parameters.
         """
+
         if check_match:
             self.check_match(other)
 
@@ -426,9 +435,7 @@ class HasGridMixin:
 
 class Accelerator:
     """
-    Accelerator object.
-
-    The accelerator describes the energy of wave functions and transfer functions.
+    Accelerator object describes the energy of wave functions and transfer functions.
 
     :param energy: Acceleration energy [eV].
     """
