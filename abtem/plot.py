@@ -139,7 +139,7 @@ def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='g
     return ax, im
 
 
-def show_line(array, calibration, ax=None, title=None, **kwargs):
+def show_line(array, calibration, ax=None, title=None, legend=False, **kwargs):
     x = np.linspace(calibration.offset, calibration.offset + len(array) * calibration.sampling, len(array))
 
     if ax is None:
@@ -150,6 +150,9 @@ def show_line(array, calibration, ax=None, title=None, **kwargs):
 
     if title is not None:
         ax.set_title(title)
+
+    if legend:
+        ax.legend()
 
     return ax
 
