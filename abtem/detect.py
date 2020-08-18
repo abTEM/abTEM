@@ -1,3 +1,4 @@
+"""Module for describing the detection of transmitted waves and different detector types."""
 from abc import ABCMeta, abstractmethod
 from typing import Tuple, List
 
@@ -12,6 +13,10 @@ from abtem.utils import label_to_index_generator, spatial_frequencies
 
 
 def _crop_to_center(array: np.ndarray):
+    """
+    Function to crop an array around its center. (JM check)
+    """
+
     shape = array.shape
     w = shape[-2] // 2
     h = shape[-1] // 2
@@ -23,6 +28,10 @@ def _crop_to_center(array: np.ndarray):
 
 
 def _calculate_far_field_intensity(waves, overwrite: bool = False):
+    """
+    Function to calculate the far-field intensity of a wave.
+    """
+
     xp = get_array_module(waves.array)
     fft2 = get_device_function(xp, 'fft2')
     abs2 = get_device_function(xp, 'abs2')
@@ -32,6 +41,10 @@ def _calculate_far_field_intensity(waves, overwrite: bool = False):
 
 
 def _polar_regions(gpts, sampling, wavelength, inner, outer, nbins_radial, nbins_azimuthal):
+    """
+    Function to describe the polar segmentation of a detector.
+    """
+
     kx, ky = spatial_frequencies(gpts, sampling)
 
     alpha_x = np.asarray(kx) * wavelength
@@ -54,6 +67,9 @@ def _polar_regions(gpts, sampling, wavelength, inner, outer, nbins_radial, nbins
 
 
 class AbstractDetector(metaclass=ABCMeta):
+    """
+    Overall class to define a detector.
+    """
 
     def __init__(self, save_file: str = None):
         if save_file is not None:
@@ -79,6 +95,9 @@ class AbstractDetector(metaclass=ABCMeta):
 
 
 class _PolarDetector(AbstractDetector):
+    """
+    Class to define a polar detector, forming the basis of annular and segmented detectors.
+    """
 
     def __init__(self, inner: float = None, outer: float = None, radial_steps: float = 1.,
                  azimuthal_steps: float = None, save_file: str = None):
@@ -144,7 +163,7 @@ class _PolarDetector(AbstractDetector):
 
         if nbins_azimuthal > 1:
             shape += (nbins_azimuthal,)
-            calibrations += (Calibration(offset=0, sampling=self._azimuthal_steps, units='rad'),)
+            calibrations += (Calibration(offset=0, sampling=self._azimuthal_steps, units='rad'),) # JM verify rad/change to mrad
 
         array = np.zeros(shape, dtype=np.float32)
         measurement = Measurement(array, calibrations=calibrations)
@@ -160,21 +179,21 @@ class _PolarDetector(AbstractDetector):
             array.ravel()[indices] = i
 
         calibrations = calibrations_from_grid(grid.antialiased_gpts, grid.antialiased_sampling,
-                                              names=['alpha_x', 'alpha_y'], units='mrad.',
+                                              names=['alpha_x', 'alpha_y'], units='mrad',
                                               scale_factor=wavelength * 1000, fourier_space=True)
         return show_image(array, calibrations, cbar_label=cbar_label, discrete=True, **kwargs)
 
 
 class AnnularDetector(_PolarDetector):
+    """
+    Class to define an annular detector.
+
+    :param inner:
+    :param outer:
+    :param save_file:
+    """
 
     def __init__(self, inner: float, outer: float, save_file: str = None):
-        """
-        
-
-        :param inner:
-        :param outer:
-        :param save_file:
-        """
         super().__init__(inner=inner, outer=outer, radial_steps=outer - inner, save_file=save_file)
 
     @property
@@ -207,6 +226,9 @@ class AnnularDetector(_PolarDetector):
 
 
 class FlexibleAnnularDetector(_PolarDetector):
+    """
+    Class to define a flexible annular detector.
+    """
 
     def __init__(self, step_size: float = 1., save_file: str = None):
         super().__init__(radial_steps=step_size, save_file=save_file)
@@ -224,6 +246,9 @@ class FlexibleAnnularDetector(_PolarDetector):
 
 
 class SegmentedDetector(_PolarDetector):
+    """
+    Class to define a segmented detector.
+    """
 
     def __init__(self, inner: float, outer: float, nbins_radial: int, nbins_angular: int, save_file: str = None):
         radial_steps = (outer - inner) / nbins_radial
@@ -280,6 +305,9 @@ class SegmentedDetector(_PolarDetector):
 
 
 class PixelatedDetector(AbstractDetector):
+    """
+    Class to define a pixelated detector.
+    """
 
     def __init__(self, save_file: str = None):
         super().__init__(save_file=save_file)
@@ -313,7 +341,9 @@ class PixelatedDetector(AbstractDetector):
 
 
 class WavefunctionDetector(AbstractDetector):
-
+    """
+    Class to define a wave function detector. (JM what does this mean?)
+    """
     def __init__(self, save_file: str = None):
         super().__init__(save_file=save_file)
 
