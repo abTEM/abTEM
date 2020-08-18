@@ -1,4 +1,5 @@
 from collections import OrderedDict
+from copy import copy
 from typing import Optional, Union, Sequence, Any
 
 import numpy as np
@@ -166,7 +167,6 @@ class DelegatedAttribute:
             return getattr(self.delegate(instance), self.attr_name)
 
     def __set__(self, instance, value):
-        # instance.delegate.attr = value
         setattr(self.delegate(instance), self.attr_name, value)
 
     def __delete__(self, instance):
@@ -193,19 +193,11 @@ class Grid:
 
         The grid object represent the simulation grid on which the wave functions and potential are discretized.
 
-        Parameters
-        ----------
-        extent : sequence of float, float, optional
-            Grid extent in each dimension [Å].
-        gpts : sequence of int, int, optional
-            Number of grid points in each dimension.
-        sampling : sequence of float, float, optional
-            Grid sampling in each dimension [1 / Å].
-        dimensions : int
-            Number of dimensions represented by the grid.
-        endpoint : bool, optional
-            If true include the grid endpoint (the default is False). For periodic grids the endpoint should not be
-            included.
+        :param Grid extent in each dimension [Å].
+        :param Number of grid points in each dimension.
+        :param Grid sampling in each dimension [1 / Å].
+        :param Number of dimensions represented by the grid.
+        :param If true include the grid endpoint (the default is False). For periodic grids the endpoint should not be included.
         """
 
         self.changed = Event()
@@ -254,10 +246,16 @@ class Grid:
 
     @property
     def dimensions(self) -> int:
+        """
+        Number of dimensions represented by the grid.
+        """
         return self._dimensions
 
     @property
     def extent(self) -> tuple:
+        """
+        Grid extent in each dimension [Å].
+        """
         return self._extent
 
     @extent.setter
@@ -278,6 +276,9 @@ class Grid:
 
     @property
     def gpts(self) -> tuple:
+        """
+        Number of grid points in each dimension.
+        """
         return self._gpts
 
     @gpts.setter
@@ -339,7 +340,10 @@ class Grid:
                 self._sampling = tuple(l / n for l, n in zip(extent, gpts))
 
     def check_is_defined(self):
-        """ Raise error if the grid is not defined. """
+        """
+        Raise error if the grid is not defined.
+        """
+
         if self.extent is None:
             raise RuntimeError('Grid extent is not defined')
 
@@ -354,8 +358,15 @@ class Grid:
     def antialiased_sampling(self) -> tuple:
         return tuple(l / n for n, l in zip(self.antialiased_gpts, self.extent))
 
-    def match(self, other):
-        self.check_match(other)
+    def match(self, other: Union['Grid', 'HasGridMixin'], check_match: bool = False):
+        """
+        Set the parameters of this grid to match another grid.
+
+        :param other: The other grid.
+        :param check_match: Check whether grids can match without overriding already defined parameters.
+        """
+        if check_match:
+            self.check_match(other)
 
         if (self.extent is None) & (other.extent is None):
             raise RuntimeError('Grid extent cannot be inferred')
@@ -397,6 +408,9 @@ class Grid:
                               lock_gpts=self._lock_gpts,
                               lock_sampling=self._lock_sampling)
 
+    def copy(self):
+        return copy(self)
+
 
 class HasGridMixin:
     _grid: Grid
@@ -430,7 +444,7 @@ class Accelerator:
     @property
     def energy(self) -> float:
         """
-        :return: Acceleration energy [eV].
+        Acceleration energy [eV].
         """
         return self._energy
 
@@ -447,7 +461,7 @@ class Accelerator:
     @property
     def wavelength(self) -> float:
         """
-        :return: Relativistic wavelength [Å].
+        Relativistic wavelength [Å].
         """
         self.check_is_defined()
         return energy2wavelength(self.energy)
@@ -461,8 +475,9 @@ class Accelerator:
         return energy2sigma(self.energy)
 
     def check_is_defined(self):
-        """ Raise error if the energy is not defined. """
-
+        """
+        Raise error if the energy is not defined.
+        """
         if self.energy is None:
             raise RuntimeError('Energy is not defined')
 
@@ -470,7 +485,13 @@ class Accelerator:
         if (self.energy is not None) & (other.energy is not None) & (self.energy != other.energy):
             raise RuntimeError('Inconsistent energies')
 
-    def match(self, other, check_match=True):
+    def match(self, other, check_match=False):
+        """
+        Set the parameters of this accelerator to match another accelerator.
+
+        :param other: The other accelerator.
+        """
+
         if check_match:
             self.check_match(other)
 
@@ -485,6 +506,9 @@ class Accelerator:
 
     def __copy__(self):
         return self.__class__(self.energy)
+
+    def copy(self):
+        return copy(self)
 
 
 class HasAcceleratorMixin:
