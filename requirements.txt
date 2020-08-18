@@ -8,3 +8,5 @@ ase
 imageio
 ipywidgets
 tqdm
+pyfftw
+psutil
