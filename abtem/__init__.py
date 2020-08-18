@@ -1,3 +1,4 @@
+"""Main abTEM module."""
 from abtem import waves
 from abtem.detect import AnnularDetector, FlexibleAnnularDetector, SegmentedDetector, PixelatedDetector
 from abtem.plot import show_atoms
