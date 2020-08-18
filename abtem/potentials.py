@@ -375,6 +375,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         interpolate_radial_functions = get_device_function(xp, 'interpolate_radial_functions')
 
         atoms = self.atoms.copy()
+        atoms.wrap()
         indices_by_number = {number: np.where(atoms.numbers == number)[0] for number in np.unique(atoms.numbers)}
 
         array = xp.zeros(self.gpts, dtype=xp.float32)
