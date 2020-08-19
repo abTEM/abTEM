@@ -15,3 +15,4 @@ sphinx-autodoc-typehints
 tqdm
 psutil
 pyfftw
+gpaw
