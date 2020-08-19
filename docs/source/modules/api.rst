@@ -7,3 +7,4 @@ API Reference Documentation
 
     waves
     potentials
+    detect
