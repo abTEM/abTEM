@@ -18,10 +18,10 @@ environment for simulating images from first principles.
 >>> from ase import read
 >>> from abtem.waves import PlaneWave
 >>> atoms = read('SrTiO.cif')
->>> wave = PlaneWave(sampling=0.01, energy=300e3)
->>> wave.multislice(atoms)
->>> wave.apply_ctf(defocus=200, focal_spread=40)
->>> wave.show()
+>>> plane_wave = PlaneWave(sampling=0.01, energy=300e3)
+>>> exit_wave = plane_wave.multislice(atoms)
+>>> image_wave = exit_wave.apply_ctf(defocus=200, focal_spread=40)
+>>> image_wave.show()
 
 .. toctree::
    :maxdepth: 1
