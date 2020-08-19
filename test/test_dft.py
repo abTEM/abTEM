@@ -48,6 +48,7 @@ def test_dft():
     assert np.isclose(44.327312, relative_difference[valid].max(), atol=.1)
 
 
+@pytest.mark.gpaw
 def test_compare_abtem_to_gpaw():
     from gpaw import GPAW
     from gpaw.utilities.ps2ae import PS2AE
