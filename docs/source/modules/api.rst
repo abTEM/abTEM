@@ -9,3 +9,4 @@ API Reference Documentation
     potentials
     detect
     temperature
+    dft

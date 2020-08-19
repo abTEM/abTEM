@@ -1,40 +1,40 @@
 """Module to handle ab initio electrostatic potentials from the DFT code GPAW."""
+from typing import Sequence, Tuple, Union
+
 import numpy as np
 from ase import units
-from scipy.interpolate import RegularGridInterpolator, interp1d, interpn
+from scipy.interpolate import interp1d, interpn
 
 from abtem.base_classes import Grid
 from abtem.device import get_device_function
 from abtem.potentials import AbstractPotentialBuilder, ProjectedPotential, disc_meshgrid, pad_atoms, \
     PotentialIntegrator
-from abtem.utils import split_integer
 from abtem.structures import orthogonalize_cell
+from abtem.utils import split_integer
 
 try:
     from gpaw.atom.shapefunc import shape_functions
+    from gpaw import GPAW
 except:
     raise RuntimeError('This functionality of abTEM requires GPAW, see https://wiki.fysik.dtu.dk/gpaw/.')
 
 
-def interpolate_rectangle(array, cell, extent, gpts, origin=None):
+def interpolate_rectangle(array: np.ndarray,
+                          cell: np.ndarray,
+                          extent: Sequence[float],
+                          gpts: Sequence[int],
+                          origin=None):
     """
     Interpolation to rectangle function
 
     A function to interpolate an array to a given rectangle, here used to convert electrostatic potentials
     from non-orthogonal cells to rectangular ones for use in abTEM multislice simulations.
 
-    Parameters
-    ----------
-    array : ndarray
-        Electrostatic potential array to be interpolated.
-    cell : ndarray
-        ASE atoms simulation cell.
-    extent : float
-        Height of the rectangle in gpts (and not Å... JM?).
-    gpts : two ints, int
-        Number of GPAW grid points.
-    origin : two floats, optional
-        Origin of the rectangle. Default is (0,0).
+    :param array: Electrostatic potential array to be interpolated.
+    :param cell: ASE atoms simulation cell.
+    :param extent: Extent of the rectangle [Å].
+    :param gpts: Number of interpolation grid points.
+    :param: origin: Origin of the rectangle. Default is (0,0).
     """
 
     if origin is None:
@@ -70,7 +70,7 @@ def interpolate_rectangle(array, cell, extent, gpts, origin=None):
     return interpolated.reshape((gpts[0], gpts[1]))
 
 
-def get_paw_corrections(a, calculator, rcgauss=0.005):
+def get_paw_corrections(atom_index: int, calculator: GPAW, rcgauss: float = 0.005) -> Tuple[np.ndarray, np.ndarray]:
     """
     PAW corrections function
 
@@ -78,23 +78,19 @@ def get_paw_corrections(a, calculator, rcgauss=0.005):
     calculate the all-electron potential from a converged calculation. This is implemented independently in
     abTEM to enable dealing with non-orthogonal cells, and to allow working with slices of large potentials.
 
-    Parameters
-    ----------
-    a : int
-        Index of the atom for which the corrections are calculated.
-    calculator : GPAW calculator object
-        Converged GPAW calculation.
-    rcgauss : float, optional
-        Radius of the Gaussian smearing of the nuclear potentials [Å]. Default value is 0.005 Å.
+    :param atom_index: Index of the atom for which the corrections are calculated.
+    :param calculator: Converged GPAW calculation.
+    :param rcgauss: Radius of the Gaussian smearing of the nuclear potentials [Å]. Default value is 0.005 Å.
+    :return The evaluation points and values of the core contribution to the electronstatic potential.
     """
 
     dens = calculator.density
     dens.D_asp.redistribute(dens.atom_partition.as_serial())
     dens.Q_aL.redistribute(dens.atom_partition.as_serial())
 
-    D_sp = dens.D_asp[a]
+    D_sp = dens.D_asp[atom_index]
 
-    setup = dens.setups[a]
+    setup = dens.setups[atom_index]
     c = setup.xc_correction
     rgd = c.rgd
     ghat_g = shape_functions(rgd, **setup.data.shape_function, lmax=0)[0]
@@ -103,7 +99,7 @@ def get_paw_corrections(a, calculator, rcgauss=0.005):
     dn_g = np.dot(D_q, (c.n_qg - c.nt_qg)) * np.sqrt(4 * np.pi)
     dn_g += 4 * np.pi * (c.nc_g - c.nct_g)
     dn_g -= Z_g
-    dn_g -= dens.Q_aL[a][0] * ghat_g * np.sqrt(4 * np.pi)
+    dn_g -= dens.Q_aL[atom_index][0] * ghat_g * np.sqrt(4 * np.pi)
     dv_g = rgd.poisson(dn_g) / np.sqrt(4 * np.pi)
     dv_g[1:] /= rgd.r_g[1:]
     dv_g[0] = dv_g[1]
@@ -117,33 +113,25 @@ class GPAWPotential(AbstractPotentialBuilder):
     GPAW DFT potential object
 
     The GPAW potential object is used to calculate electrostatic potential of a converged GPAW calculator object.
-
-    Parameters
-    ----------
-    calculator : GPAW calculator object
-        A converged GPAW calculator.
-    origin : two floats, float, optional
-        xy-origin of the electrostatic potential relative to the xy-origin of the Atoms object [Å].
-    extent : two floats, float, optional
-        Lateral extent of potential, if the unit cell of the atoms is too small it will be repeated [Å].
-    gpts : two ints, int, optional
-        Number of grid points describing each slice of the potential.
-    sampling : two floats, float, optional
-        Lateral sampling of the potential [1 / Å].
-    slice_thickness : float, optional
-        Thickness of the potential slices in Å for calculating the number of slices used by the multislice
-        algorithm. Default is 0.5 Å.
-    num_slices : int, optional
-        Number of slices used by the multislice algorithm. If `num_slices` is set, then `slice_thickness` is disabled.
-    quadrature_order : int, optional
-        Order of the Tanh-Sinh quadrature for numerical integration the potential along the optical axis. Default is 40.
-    interpolation_sampling : float, optional
-        The average sampling used when calculating the radial dependence of the atomic potentials.
-    core_size : float
-        The standard deviation of the Gaussian function representing the atomic core.
+    
+    :param calculator: A converged GPAW calculator.
+    :param origin: xy-origin of the electrostatic potential relative to the xy-origin of the Atoms object [Å].
+    :param extent: Lateral extent of potential, if the unit cell of the atoms is too small it will be repeated [Å].
+    :param gpts: Number of grid points describing each slice of the potential.
+    :param sampling: Lateral sampling of the potential [1 / Å].
+    :param Thickness of the potential slices in Å for calculating the number of slices used by the multislice algorithm.
+        Default is 0.5 Å.
+    :param core_size: The standard deviation of the Gaussian function representing the atomic core.
     """
 
-    def __init__(self, calculator, gpts=None, sampling=None, slice_thickness=.5, core_size=.005, storage='cpu'):
+    def __init__(self,
+                 calculator: GPAW,
+                 gpts: Union[int, Sequence[int]] = None,
+                 sampling: Union[int, Sequence[int]] = None,
+                 slice_thickness=.5,
+                 core_size=.005,
+                 storage='cpu'):
+
         self._calculator = calculator
         self._core_size = core_size
 
