@@ -1,6 +1,7 @@
 """Module for describing the detection of transmitted waves and different detector types."""
 from abc import ABCMeta, abstractmethod
-from typing import Tuple, List
+from copy import copy
+from typing import Tuple, List, Any, TYPE_CHECKING
 
 import numpy as np
 
@@ -11,10 +12,13 @@ from abtem.plot import show_image
 from abtem.scan import AbstractScan
 from abtem.utils import label_to_index_generator, spatial_frequencies
 
+if TYPE_CHECKING:
+    from abtem.waves import Waves
+
 
 def _crop_to_center(array: np.ndarray):
     """
-    Function to crop an array around its center. (JM check)
+    Crop a an array around its center to remove the suppressed frequencies from an antialiased 2d fourier spectrum.
     """
 
     shape = array.shape
@@ -29,7 +33,7 @@ def _crop_to_center(array: np.ndarray):
 
 def _calculate_far_field_intensity(waves, overwrite: bool = False):
     """
-    Function to calculate the far-field intensity of a wave.
+    Calculate the far-field intensity of a wave.
     """
 
     xp = get_array_module(waves.array)
@@ -42,9 +46,8 @@ def _calculate_far_field_intensity(waves, overwrite: bool = False):
 
 def _polar_regions(gpts, sampling, wavelength, inner, outer, nbins_radial, nbins_azimuthal):
     """
-    Function to describe the polar segmentation of a detector.
+    Create the polar segmentation of a detector.
     """
-
     kx, ky = spatial_frequencies(gpts, sampling)
 
     alpha_x = np.asarray(kx) * wavelength
@@ -68,7 +71,7 @@ def _polar_regions(gpts, sampling, wavelength, inner, outer, nbins_radial, nbins
 
 class AbstractDetector(metaclass=ABCMeta):
     """
-    Overall class to define a detector.
+    Abstract base class for all detectors.
     """
 
     def __init__(self, save_file: str = None):
@@ -86,7 +89,7 @@ class AbstractDetector(metaclass=ABCMeta):
         return self._save_file
 
     @abstractmethod
-    def detect(self, waves) -> np.ndarray:
+    def detect(self, waves: 'Waves') -> Any:
         pass
 
     @abstractmethod
@@ -152,6 +155,13 @@ class _PolarDetector(AbstractDetector):
         return region_indices
 
     def allocate_measurement(self, grid: Grid, wavelength: float, scan: AbstractScan) -> Measurement:
+        """
+        Allocate a measurement object.
+
+        :param grid: The grid of the Waves objects that will be detected.
+        :param wavelength: The wavelength of the Waves objects that will be detected.
+        :param scan: The scan object that will define the scan dimensions the measurement.
+        """
         inner, outer, nbins_radial, nbins_azimuthal = self._get_bins(grid.antialiased_sampling, wavelength)
 
         shape = scan.shape
@@ -163,7 +173,8 @@ class _PolarDetector(AbstractDetector):
 
         if nbins_azimuthal > 1:
             shape += (nbins_azimuthal,)
-            calibrations += (Calibration(offset=0, sampling=self._azimuthal_steps, units='rad'),) # JM verify rad/change to mrad
+            calibrations += (
+                Calibration(offset=0, sampling=self._azimuthal_steps, units='rad'),)  # JM verify rad/change to mrad
 
         array = np.zeros(shape, dtype=np.float32)
         measurement = Measurement(array, calibrations=calibrations)
@@ -172,6 +183,14 @@ class _PolarDetector(AbstractDetector):
         return measurement
 
     def show(self, grid: Grid, wavelength: float, cbar_label: str = 'Detector regions', **kwargs):
+        """
+        Visualize the detector region(s) of the detector.
+
+        :param grid: The grid of the Waves objects that will be detected.
+        :param wavelength: The wavelength of the Waves objects that will be detected.
+        :param kwargs:
+        """
+
         grid.check_is_defined()
 
         array = np.full(grid.antialiased_gpts, -1, dtype=np.int)
@@ -186,11 +205,14 @@ class _PolarDetector(AbstractDetector):
 
 class AnnularDetector(_PolarDetector):
     """
-    Class to define an annular detector.
+    Annular detector object.
 
-    :param inner:
-    :param outer:
-    :param save_file:
+    The annular detector integrates the intensity of the detected wave functions between an inner and outer integration
+    limit.
+
+    :param inner: Inner integration limit [mrad].
+    :param outer: Outer integration limit [mrad].
+    :param save_file: The path to the file for saving the detector output.
     """
 
     def __init__(self, inner: float, outer: float, save_file: str = None):
@@ -198,6 +220,9 @@ class AnnularDetector(_PolarDetector):
 
     @property
     def inner(self) -> float:
+        """
+        Inner integration limit [mrad].
+        """
         return self._inner
 
     @inner.setter
@@ -207,6 +232,9 @@ class AnnularDetector(_PolarDetector):
 
     @property
     def outer(self) -> float:
+        """
+        Outer integration limit [mrad].
+        """
         return self._outer
 
     @outer.setter
@@ -214,26 +242,63 @@ class AnnularDetector(_PolarDetector):
     def outer(self, value: float):
         self._outer = value
 
-    def detect(self, waves) -> np.ndarray:
+    def detect(self, waves: 'Waves') -> np.ndarray:
+        """
+        Integrate the intensity of a the wave functions over the detector range.
+
+        :param waves: The batch of wave functions to detect.
+        :return: Detected values as a 1d array. The array has the same length as the batch size of the wave functions.
+        """
         xp = get_array_module(waves.array)
         intensity = _calculate_far_field_intensity(waves, overwrite=False)
         indices = self._get_regions(waves.grid.antialiased_gpts, waves.grid.antialiased_sampling, waves.wavelength)[0]
         total = xp.sum(intensity, axis=(-2, -1))
         return xp.sum(intensity.reshape((intensity.shape[0], -1))[:, indices], axis=-1) / total
 
-    def copy(self) -> 'AnnularDetector':
+    def __copy__(self) -> 'AnnularDetector':
         return self.__class__(self.inner, self.outer, save_file=self.save_file)
+
+    def copy(self) -> 'AnnularDetector':
+        """
+        Make a copy.
+        """
+        return copy(self)
 
 
 class FlexibleAnnularDetector(_PolarDetector):
     """
-    Class to define a flexible annular detector.
+    Flexible annular detector object.
+
+    The FlexibleAnnularDetector object allows choosing the integration limits after running the simulation by radially
+    binning the intensity.
+
+    :param step_size: The radial separation between integration regions [mrad].
+    :param save_file: The path to the file used for saving the detector output.
     """
 
     def __init__(self, step_size: float = 1., save_file: str = None):
         super().__init__(radial_steps=step_size, save_file=save_file)
 
+    @property
+    def step_size(self) -> float:
+        """
+        Step size [mrad].
+        """
+        return self._radial_steps
+
+    @step_size.setter
+    @watched_property('changed')
+    def step_size(self, value: float):
+        self._radial_steps = value
+
     def detect(self, waves) -> np.ndarray:
+        """
+        Integrate the intensity of a the wave functions over the detector range.
+
+        :param waves: The batch of wave functions to detect.
+        :return: Detected values as a 2d array. The array has shape of (batch size, number of bins).
+        """
+
         xp = get_array_module(waves.array)
         intensity = _calculate_far_field_intensity(waves, overwrite=False)
         indices = self._get_regions(waves.grid.antialiased_gpts, waves.grid.antialiased_sampling, waves.wavelength)
@@ -244,10 +309,28 @@ class FlexibleAnnularDetector(_PolarDetector):
             result[:, i] = xp.sum(intensity.reshape((intensity.shape[0], -1))[:, indices], axis=-1) / total
         return result
 
+    def __copy__(self) -> 'FlexibleAnnularDetector':
+        return self.__class__(self.step_size, save_file=self.save_file)
+
+    def copy(self) -> 'FlexibleAnnularDetector':
+        """
+        Make a copy.
+        """
+        return copy(self)
+
 
 class SegmentedDetector(_PolarDetector):
     """
-    Class to define a segmented detector.
+    Segmented detector object.
+
+    The segmented detector covers an annular angular range, and is partitioned into several integration regions divided
+    to radial and angular segments. This can be used for simulating differential phase contrast (DPC) imaging.
+
+    :param inner: Inner integration limit [mrad].
+    :param outer: Outer integration limit [mrad].
+    :param nbins_radial: Number of radial bins.
+    :param nbins_angular: Number of angular bins.
+    :param save_file: The path to the file used for saving the detector output.
     """
 
     def __init__(self, inner: float, outer: float, nbins_radial: int, nbins_angular: int, save_file: str = None):
@@ -258,6 +341,9 @@ class SegmentedDetector(_PolarDetector):
 
     @property
     def inner(self) -> float:
+        """
+        Inner integration limit [mrad].
+        """
         return self._inner
 
     @inner.setter
@@ -267,6 +353,9 @@ class SegmentedDetector(_PolarDetector):
 
     @property
     def outer(self) -> float:
+        """
+        Outer integration limit [mrad].
+        """
         return self._outer
 
     @outer.setter
@@ -276,6 +365,9 @@ class SegmentedDetector(_PolarDetector):
 
     @property
     def nbins_radial(self) -> int:
+        """
+        Number of radial bins.
+        """
         return int((self.outer - self.inner) / self._radial_steps)
 
     @nbins_radial.setter
@@ -285,6 +377,9 @@ class SegmentedDetector(_PolarDetector):
 
     @property
     def nbins_angular(self) -> float:
+        """
+        Number of angular bins.
+        """
         return int(2 * np.pi / self._azimuthal_steps)
 
     @nbins_angular.setter
@@ -293,6 +388,13 @@ class SegmentedDetector(_PolarDetector):
         self._azimuthal_steps = 2 * np.pi / value
 
     def detect(self, waves) -> np.ndarray:
+        """
+        Integrate the intensity of a the wave functions over the detector range.
+
+        :param waves: The batch of wave functions to detect.
+        :return: Detected values as a 3d array. The first dimension indexes the batch size, the second and third
+        indexes the radial and angular bins, respectively.
+        """
         xp = get_array_module(waves.array)
         intensity = _calculate_far_field_intensity(waves, overwrite=False)
         indices = self._get_regions(waves.grid.antialiased_gpts, waves.grid.antialiased_sampling, waves.wavelength)
@@ -303,16 +405,38 @@ class SegmentedDetector(_PolarDetector):
             result[:, i] = xp.sum(intensity.reshape((intensity.shape[0], -1))[:, indices], axis=-1) / total
         return result.reshape((-1, self.nbins_radial, self.nbins_angular))
 
+    def __copy__(self) -> 'SegmentedDetector':
+        return self.__class__(inner=self.inner, outer=self.outer, nbins_radial=self.nbins_radial,
+                              nbins_angular=self.nbins_angular, save_file=self.save_file)
+
+    def copy(self) -> 'SegmentedDetector':
+        """
+        Make a copy.
+        """
+        return copy(self)
+
 
 class PixelatedDetector(AbstractDetector):
     """
-    Class to define a pixelated detector.
+    Pixelated detector object.
+
+    The pixelated detector records the intensity of the Fourier-transformed exit wave function. This may be used for
+    simulating 4D-STEM.
+
+    :param save_file: The path to the file used for saving the detector output.
     """
 
     def __init__(self, save_file: str = None):
         super().__init__(save_file=save_file)
 
     def allocate_measurement(self, grid: Grid, wavelength: float, scan: AbstractScan) -> Measurement:
+        """
+        Allocate a measurement object.
+
+        :param grid: The grid of the Waves objects that will be detected.
+        :param wavelength: The wavelength of the Waves objects that will be detected.
+        :param scan: The scan object that will define the scan dimensions the measurement.
+        """
         grid.check_is_defined()
         shape = (grid.gpts[0] // 2, grid.gpts[1] // 2)
 
@@ -330,6 +454,14 @@ class PixelatedDetector(AbstractDetector):
         return measurement
 
     def detect(self, waves) -> np.ndarray:
+        """
+        Calculate the far field intensity of the wave functions. The output is cropped to include the non-suppressed
+        frequencies from the antialiased 2d fourier spectrum.
+
+        :param waves: The batch of wave functions to detect.
+        :return: Detected values as a 3d array. The first dimension indexes the batch size, the second and third
+        indexes the two components of the spatial frequency.
+        """
         xp = get_array_module(waves.array)
         abs2 = get_device_function(xp, 'abs2')
         fft2 = get_device_function(xp, 'fft2')
@@ -342,12 +474,24 @@ class PixelatedDetector(AbstractDetector):
 
 class WavefunctionDetector(AbstractDetector):
     """
-    Class to define a wave function detector. (JM what does this mean?)
+    Wave function detector object.
+
+    The wave function detector records the raw exit wave functions.
+
+    :param save_file: The path to the file used for saving the detector output.
     """
+
     def __init__(self, save_file: str = None):
         super().__init__(save_file=save_file)
 
     def allocate_measurement(self, grid: Grid, wavelength: float, scan: AbstractScan) -> Measurement:
+        """
+        Allocate a measurement object.
+
+        :param grid: The grid of the Waves objects that will be detected.
+        :param wavelength: The wavelength of the Waves objects that will be detected.
+        :param scan: The scan object that will define the scan dimensions the measurement.
+        """
         grid.check_is_defined()
         calibrations = calibrations_from_grid(grid.gpts, grid.sampling, names=['x', 'y'], units='Å')
 
@@ -358,4 +502,8 @@ class WavefunctionDetector(AbstractDetector):
         return measurement
 
     def detect(self, waves) -> np.ndarray:
+        """
+        :param waves: The batch of wave functions to detect.
+        :return: The arrays of the Waves object.
+        """
         return waves.array
