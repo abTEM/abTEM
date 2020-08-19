@@ -1,19 +1,16 @@
-from typing import Any
-
-# import mkl_fft #Disabled for now.
+from typing import Union, Callable
 import numpy as np
+import psutil
 import pyfftw
+
 from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions, scale_reduce, \
     windowed_scale_reduce
-import psutil
 
 FFTW_EFFORT = 'FFTW_MEASURE'
 FFTW_THREADS = 8
 FFTW_TIMELIMIT = 600
 
-# TODO : This is a little ugly, change after mkl_fft is updated
-
-try:  # This should be the only place to get cupy, to make it a non-essential dependency
+try:  # This should be the only place import cupy, to make it a non-essential dependency
     import cupy as cp
     import cupyx.scipy.fft
     from abtem.cuda_kernels import launch_interpolate_radial_functions, launch_scale_reduce, \
@@ -22,7 +19,10 @@ try:  # This should be the only place to get cupy, to make it a non-essential de
     get_array_module = cp.get_array_module
 
 
-    def fft2_convolve(array, kernel, overwrite_x=True):
+    def fft2_convolve(array: cp.array, kernel: cp.array, overwrite_x: bool = True):
+        """
+        2d FFT convolution using GPU.
+        """
         array = cupyx.scipy.fftpack.fft2(array, overwrite_x=overwrite_x)
         array *= kernel
         array = cupyx.scipy.fftpack.ifft2(array, overwrite_x=overwrite_x)
@@ -40,7 +40,7 @@ try:  # This should be the only place to get cupy, to make it a non-essential de
 
     asnumpy = cp.asnumpy
 
-except ImportError:
+except ImportError:  # cupy is not available
     cp = None
     get_array_module = lambda *args, **kwargs: np
     fft2_gpu = None
@@ -56,14 +56,10 @@ def create_fftw_objects(array, allow_new_plan=True):
     transformed in place. The function tries to retrieve FFTW plans from wisdom only.
     If no plan exists for the input array, a new plan is cached and then retrieved.
 
-    Parameters
-    ----------
-    array : numpy ndarray
-        Numpy array to be transformed. 2 dimensions or more.
-    allow_new_plan : bool
-        If false raise an exception instead of caching a new plan.
+    :param array: Numpy array to be transformed. 2 dimensions or more.
+    :param allow_new_plan: If false raise an exception instead of caching a new plan.
+    :return:
     """
-
     try:
         # try using cached FFTW plan
         fftw_forward = pyfftw.FFTW(array, array, axes=(-1, -2),
@@ -90,11 +86,9 @@ def create_fftw_objects(array, allow_new_plan=True):
 def fft2_convolve(array, kernel, overwrite_x=True):
     def _fft_convolve(array, kernel):
         fftw_forward, fftw_backward = create_fftw_objects(array)
-        # array = np.fft.fft2(array)
         fftw_forward()
         array *= kernel
         fftw_backward()
-        # array = np.fft.ifft2(array)
         return array
 
     if not overwrite_x:
@@ -102,25 +96,6 @@ def fft2_convolve(array, kernel, overwrite_x=True):
 
     return _fft_convolve(array, kernel)
 
-
-# def fft2(array, overwrite_x):
-#     if not overwrite_x:
-#         array = array.copy()
-#
-#     if len(array.shape) == 2:
-#         return np.fft.fft2(array)
-#     elif (len(array.shape) == 3):
-#         for i in range(array.shape[0]):
-#             array[i] = np.fft.fft2(array[i])
-#         return array
-#     else:
-#         shape = array.shape
-#         array = array.reshape((-1,) + shape[1:])
-#         for i in range(array.shape[0]):
-#             array[i] = np.fft.fft2(array[i])
-#
-#         array = array.reshape(shape)
-#         return array
 
 def fft2(array, overwrite_x):
     if not overwrite_x:
@@ -134,14 +109,8 @@ def ifft2(array, overwrite_x):
     if not overwrite_x:
         array = array.copy()
 
-    if len(array.shape) == 2:
-        return np.fft.ifft2(array)
-    elif len(array.shape) == 3:
-        for i in range(array.shape[0]):
-            array[i] = np.fft.ifft2(array[i])
-        return array
-    else:
-        raise NotImplementedError()
+    fftw_forward, fftw_backward = create_fftw_objects(array)
+    return fftw_backward()
 
 
 cpu_functions = {'fft2': fft2,
@@ -154,13 +123,19 @@ cpu_functions = {'fft2': fft2,
                  'windowed_scale_reduce': windowed_scale_reduce}
 
 
-def get_device_function(xp, name):
+def get_device_function(xp, name: str) -> Callable:
+    """
+    Return the function appropriate to the given array library.
+
+    :param xp: The array library. Must numpy or cupy.
+    :param name: Name of function.
+    """
     if xp is cp:
         return gpu_functions[name]
     elif xp is np:
         return cpu_functions[name]
     else:
-        raise RuntimeError()
+        raise RuntimeError('The array library ')
 
 
 def get_array_module_from_device(device):
@@ -169,19 +144,28 @@ def get_array_module_from_device(device):
 
     if device == 'gpu':
         if cp is None:
-            raise RuntimeError('cupy is not installed, only cpu calculations available')
+            raise RuntimeError('CuPy is not installed, only CPU calculations available')
         return cp
 
     return get_array_module(device)
 
 
 def copy_to_device(array, device):
+    """
+    Copy array to a device.
+
+    :param array: Array to be copied.
+    :param device:
+    :return:
+    """
     if (device == 'cpu') or (device is None) or (device is np):
         return asnumpy(array)
+
     elif (device == 'gpu') or (device is cp):
         if cp is None:
-            raise RuntimeError('cupy is not installed, only cpu calculations available')
+            raise RuntimeError('CuPy is not installed, only CPU calculations available')
         return cp.asarray(array)
+
     else:
         raise RuntimeError()
 
@@ -189,6 +173,7 @@ def copy_to_device(array, device):
 def get_available_memory(device: str) -> float:
     if device == 'cpu':
         return psutil.virtual_memory().available
+
     else:
         mempool = cp.get_default_memory_pool()
         mempool.free_all_blocks()
