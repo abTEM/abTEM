@@ -26,15 +26,16 @@ class AbstractFrozenPhonons(metaclass=ABCMeta):
 
 
 class DummyFrozenPhonons(AbstractFrozenPhonons):
+    """
+    Dummy frozen phonons object.
+
+    Generates the input Atoms object. Used as a stand in for simulations without frozen phonons.
+
+    :param atoms: Generated Atoms object.
+    """
 
     def __init__(self, atoms: Atoms):
-        """
-        Dummy frozen phonons object.
 
-        Generates the input Atoms object. Used as a stand in for simulations without frozen phonons.
-
-        :param atoms: Generated Atoms object.
-        """
         self._atoms = atoms.copy()
 
     def __len__(self):
@@ -51,18 +52,19 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
 
 
 class FrozenPhonons(AbstractFrozenPhonons):
+    """
+    Frozen phonons object.
+
+    Generates atomic configurations for thermal diffuse scattering.
+    Randomly displaces the atomic positions of an ASE Atoms object to emulate thermal vibrations.
+
+    :param Atoms with the average atomic configuration.
+    :param Mapping from atomic species to the standard deviation of the displacements of that atomic species.
+        The atomic species can be specified as atomic number or symbol.
+    """
 
     def __init__(self, atoms: Atoms, num_configs: int, sigmas: Mapping[Union[str, int], float], seed=None):
-        """
-        Frozen phonons object.
 
-        Generates atomic configurations for thermal diffuse scattering.
-        Randomly displaces the atomic positions of an ASE Atoms object to emulate thermal vibrations.
-
-        :param Atoms with the average atomic configuration.
-        :param Mapping from atomic species to the standard deviation of the displacements of that atomic species.
-            The atomic species can be specified as atomic number or symbol.
-        """
         new_sigmas = {}
         for key, sigma in sigmas.items():
             try:
