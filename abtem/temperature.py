@@ -4,6 +4,7 @@ from typing import Mapping, Union, Sequence
 import numpy as np
 from ase import Atoms
 from ase.data import atomic_numbers
+from copy import copy
 
 
 class AbstractFrozenPhonons(metaclass=ABCMeta):
@@ -19,10 +20,14 @@ class AbstractFrozenPhonons(metaclass=ABCMeta):
     def __iter__(self):
         return self.generate_atoms()
 
+    @abstractmethod
+    def copy(self):
+        pass
+
 
 class DummyFrozenPhonons(AbstractFrozenPhonons):
 
-    def __init__(self, atoms):
+    def __init__(self, atoms: Atoms):
         """
         Dummy frozen phonons object.
 
@@ -37,6 +42,12 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
 
     def generate_atoms(self):
         yield self._atoms
+
+    def __copy__(self):
+        return self.__class__(self._atoms.copy())
+
+    def copy(self):
+        return copy(self)
 
 
 class FrozenPhonons(AbstractFrozenPhonons):
@@ -69,6 +80,10 @@ class FrozenPhonons(AbstractFrozenPhonons):
         self._num_configs = num_configs
         self._seed = seed
 
+    @property
+    def atoms(self) -> Atoms:
+        return self._atoms
+
     def __len__(self):
         return self._num_configs
 
@@ -89,6 +104,13 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
             yield atoms
 
+    def __copy__(self):
+        return self.__class__(atoms=self.atoms.copy(), num_configs=len(self), sigma=self._sigmas.copy(),
+                              seed=self._seed)
+
+    def copy(self):
+        return copy(self)
+
 
 class MDFrozenPhonons(AbstractFrozenPhonons):
     """
@@ -96,6 +118,7 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
 
     :param trajectory: Sequence of Atoms objects representing a thermal distribution of atomic configurations.
     """
+
     def __init__(self, trajectory: Sequence[Atoms]):
         self._trajectory = trajectory
 
@@ -105,3 +128,9 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
     def generate_atoms(self):
         for i in range(len(self)):
             yield self._trajectory[i]
+
+    def __copy__(self):
+        return self.__class__(trajectory=[atoms.copy() for atoms in self._trajectory])
+
+    def copy(self):
+        return copy(self)
