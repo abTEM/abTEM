@@ -1,6 +1,6 @@
 import numpy as np
 from ase import units
-from scipy.interpolate import RegularGridInterpolator, interp1d
+from scipy.interpolate import RegularGridInterpolator, interp1d, interpn
 
 from abtem.base_classes import Grid
 from abtem.device import get_device_function
@@ -8,6 +8,7 @@ from abtem.potentials import AbstractPotentialBuilder, ProjectedPotential, disc_
     PotentialIntegrator
 from abtem.utils import split_integer
 from abtem.structures import orthogonalize_cell
+
 try:
     from gpaw.atom.shapefunc import shape_functions
 except:
@@ -44,12 +45,8 @@ def interpolate_rectangle(array, cell, extent, gpts, origin=None):
     p = np.array([x_.ravel(), y_.ravel()]).T
     p = np.dot(p, P_inv) % 1.0
 
-    interpolated = RegularGridInterpolator((x, y), padded_array)(p)
+    interpolated = interpn((x, y), padded_array, p, method='splinef2d')
     return interpolated.reshape((gpts[0], gpts[1]))
-
-
-def gaussian(radial_grid, alpha):
-    return 4 / np.sqrt(np.pi) * alpha ** 1.5 * np.exp(-alpha * radial_grid.r_g ** 2)
 
 
 def get_paw_corrections(a, calculator, rcgauss=0.005):
@@ -62,8 +59,7 @@ def get_paw_corrections(a, calculator, rcgauss=0.005):
     setup = dens.setups[a]
     c = setup.xc_correction
     rgd = c.rgd
-    ghat_g = shape_functions(rgd,
-                             **setup.data.shape_function, lmax=0)[0]
+    ghat_g = shape_functions(rgd, **setup.data.shape_function, lmax=0)[0]
     Z_g = shape_functions(rgd, 'gauss', rcgauss, lmax=0)[0] * setup.Z
     D_q = np.dot(D_sp.sum(0), c.B_pqL[:, :, 0])
     dn_g = np.dot(D_q, (c.n_qg - c.nt_qg)) * np.sqrt(4 * np.pi)
@@ -179,14 +175,15 @@ class GPAWPotential(AbstractPotentialBuilder):
 
                 slice_atoms = pad_atoms(slice_atoms, cutoff)
 
-                R = np.geomspace(np.min(self.sampling), cutoff, int(np.ceil(cutoff / np.min(self.sampling) * 10)))
+                R = np.geomspace(1e-8, cutoff, int(np.ceil(cutoff / np.min(self.sampling))) * 10)
 
                 vr = np.zeros((len(slice_atoms), len(R)), np.float32)
                 dvdr = np.zeros((len(slice_atoms), len(R)), np.float32)
                 for j, atom in enumerate(slice_atoms):
                     r, v = get_paw_corrections(atom.tag, self._calculator, self._core_size)
 
-                    f = interp1d(r * units.Bohr, v, fill_value=(v[0], 0), bounds_error=False)
+                    f = interp1d(r * units.Bohr, v, fill_value=(v[0], 0), bounds_error=False, kind='linear')
+
                     integrator = PotentialIntegrator(f, R)
                     am, bm = a - atom.z, b - atom.z
 
