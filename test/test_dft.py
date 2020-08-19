@@ -71,4 +71,4 @@ def test_compare_abtem_to_gpaw():
 
     valid = abtem_ae > 1
 
-    assert np.all(((abtem_ae[valid] - ae[valid]) / ae[valid]).max() < .0008)
+    assert np.all(((abtem_ae[valid] - ae[valid]) / ae[valid]).max() < .001)
