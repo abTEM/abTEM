@@ -11,19 +11,20 @@ from abtem.potentials import AbstractPotentialBuilder, ProjectedPotential, disc_
     PotentialIntegrator
 from abtem.structures import orthogonalize_cell
 from abtem.utils import split_integer
+import warnings
 
 try:
     from gpaw.atom.shapefunc import shape_functions
     from gpaw import GPAW
 except:
-    raise RuntimeError('This functionality of abTEM requires GPAW, see https://wiki.fysik.dtu.dk/gpaw/.')
+    warnings.warn('This functionality of abTEM requires GPAW, see https://wiki.fysik.dtu.dk/gpaw/.')
 
 
 def interpolate_rectangle(array: np.ndarray,
                           cell: np.ndarray,
                           extent: Sequence[float],
                           gpts: Sequence[int],
-                          origin=None):
+                          origin: Sequence[float] = None):
     """
     Interpolation to rectangle function
 
@@ -70,7 +71,7 @@ def interpolate_rectangle(array: np.ndarray,
     return interpolated.reshape((gpts[0], gpts[1]))
 
 
-def get_paw_corrections(atom_index: int, calculator: GPAW, rcgauss: float = 0.005) -> Tuple[np.ndarray, np.ndarray]:
+def get_paw_corrections(atom_index: int, calculator, rcgauss: float = 0.005) -> Tuple[np.ndarray, np.ndarray]:
     """
     PAW corrections function
 
@@ -113,7 +114,7 @@ class GPAWPotential(AbstractPotentialBuilder):
     GPAW DFT potential object
 
     The GPAW potential object is used to calculate electrostatic potential of a converged GPAW calculator object.
-    
+
     :param calculator: A converged GPAW calculator.
     :param origin: xy-origin of the electrostatic potential relative to the xy-origin of the Atoms object [Å].
     :param extent: Lateral extent of potential, if the unit cell of the atoms is too small it will be repeated [Å].
@@ -125,7 +126,7 @@ class GPAWPotential(AbstractPotentialBuilder):
     """
 
     def __init__(self,
-                 calculator: GPAW,
+                 calculator,
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[int, Sequence[int]] = None,
                  slice_thickness=.5,
