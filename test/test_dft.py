@@ -6,6 +6,8 @@ from ase.io import read
 
 from abtem.potentials import Potential
 from abtem.structures import orthogonalize_cell
+from ase import Atoms
+from ase import units
 
 
 @pytest.mark.gpaw
@@ -44,3 +46,29 @@ def test_dft():
 
     assert np.isclose(9.553661, absolute_difference.max(), atol=.1)
     assert np.isclose(44.327312, relative_difference[valid].max(), atol=.1)
+
+
+def test_compare_abtem_to_gpaw():
+    from gpaw import GPAW
+    from gpaw.utilities.ps2ae import PS2AE
+    from abtem.dft import GPAWPotential
+
+    atoms = Atoms('C', positions=[(0, 1, 2)], cell=(2, 2, 4), pbc=True)
+
+    calc = GPAW(h=.2, txt=None, kpts=(2, 2, 1))
+    atoms.calc = calc
+    atoms.get_potential_energy()
+
+    h = 0.01
+    t = PS2AE(calc, h=h)
+    ae = (-t.get_electrostatic_potential(rcgauss=.02 * units.Bohr) * h).sum(-1)
+    ae -= ae.min()
+
+    dft_pot = GPAWPotential(calc, gpts=ae.shape, core_size=.02, slice_thickness=4)
+    dft_array = dft_pot.build(pbar=False)
+    abtem_ae = dft_array.array.sum(0)
+    abtem_ae -= abtem_ae.min()
+
+    valid = abtem_ae > 1
+
+    assert np.all(((abtem_ae[valid] - ae[valid]) / ae[valid]).max() < .0008)
