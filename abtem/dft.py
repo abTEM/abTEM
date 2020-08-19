@@ -1,3 +1,4 @@
+"""Module to handle ab initio electrostatic potentials from the DFT code GPAW."""
 import numpy as np
 from ase import units
 from scipy.interpolate import RegularGridInterpolator, interp1d, interpn
@@ -16,6 +17,26 @@ except:
 
 
 def interpolate_rectangle(array, cell, extent, gpts, origin=None):
+    """
+    Interpolation to rectangle function
+
+    A function to interpolate an array to a given rectangle, here used to convert electrostatic potentials
+    from non-orthogonal cells to rectangular ones for use in abTEM multislice simulations.
+
+    Parameters
+    ----------
+    array : ndarray
+        Electrostatic potential array to be interpolated.
+    cell : ndarray
+        ASE atoms simulation cell.
+    extent : float
+        Height of the rectangle in gpts (and not Å... JM?).
+    gpts : two ints, int
+        Number of GPAW grid points.
+    origin : two floats, optional
+        Origin of the rectangle. Default is (0,0).
+    """
+
     if origin is None:
         origin = (0., 0.)
 
@@ -50,6 +71,23 @@ def interpolate_rectangle(array, cell, extent, gpts, origin=None):
 
 
 def get_paw_corrections(a, calculator, rcgauss=0.005):
+    """
+    PAW corrections function
+
+    Function to calculate the projector-augmented wave corrections to the electrostatic potential, needed to
+    calculate the all-electron potential from a converged calculation. This is implemented independently in
+    abTEM to enable dealing with non-orthogonal cells, and to allow working with slices of large potentials.
+
+    Parameters
+    ----------
+    a : int
+        Index of the atom for which the corrections are calculated.
+    calculator : GPAW calculator object
+        Converged GPAW calculation.
+    rcgauss : float, optional
+        Radius of the Gaussian smearing of the nuclear potentials [Å]. Default value is 0.005 Å.
+    """
+
     dens = calculator.density
     dens.D_asp.redistribute(dens.atom_partition.as_serial())
     dens.Q_aL.redistribute(dens.atom_partition.as_serial())
