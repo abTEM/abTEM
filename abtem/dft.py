@@ -120,8 +120,8 @@ class GPAWPotential(AbstractPotentialBuilder):
     :param extent: Lateral extent of potential, if the unit cell of the atoms is too small it will be repeated [Å].
     :param gpts: Number of grid points describing each slice of the potential.
     :param sampling: Lateral sampling of the potential [1 / Å].
-    :param Thickness of the potential slices in Å for calculating the number of slices used by the multislice algorithm.
-        Default is 0.5 Å.
+    :param slice_thickness: Thickness of the potential slices in Å for calculating the number of slices used by the
+        multislice algorithm. Default is 0.5 Å.
     :param core_size: The standard deviation of the Gaussian function representing the atomic core.
     """
 
