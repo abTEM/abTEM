@@ -36,7 +36,10 @@ class Event(object):
         """
         Register new callbacks.
 
-        :param callbacks: The callbacks to register.
+        Parameters
+        ----------
+        callbacks : callable
+            The callbacks to register.
         """
         if not isinstance(callbacks, list):
             callbacks = [callbacks]
@@ -47,7 +50,10 @@ def watched_method(event: 'str'):
     """
     Decorator for class methods that have to notify.
 
-    :param event: Name class property with target event.
+    Parameters
+    ----------
+    event: str
+        Name class property with target event.
     """
 
     def wrapper(func):
@@ -68,7 +74,10 @@ def watched_property(event: 'str'):
     """
     Decorator for class properties that have to notify an event.
 
-    :param event: Name class property with target event
+    Parameters
+    ----------
+    event: str
+        Name class property with target event
     """
 
     def wrapper(func):
@@ -92,7 +101,10 @@ def cache_clear_callback(target_cache: 'Cache'):
     """
     Helper function for creating a callback that clears a target cache object.
 
-    :param The target cache object.
+    Parameters
+    ----------
+    target_cache: Cache object
+        The target cache object.
     """
 
     def callback(notifier: Any, property_name: str, change: bool):
@@ -106,7 +118,10 @@ def cached_method(target_cache_property: str):
     """
     Decorator for cached methods. The method will store the output in the cache held by the target property.
 
-    :param The property holding the target cache.
+    Parameters
+    ----------
+    target_cache_property: str
+        The property holding the target cache.
     """
 
     def wrapper(func):
@@ -141,7 +156,10 @@ class Cache:
 
     Simple class for handling a dictionary-based cache. When the cache is full, the first inserted item is deleted.
 
-    :param max_size: The maximum number of values stored by this cache.
+    Parameters
+    ----------
+    max_size: int
+        The maximum number of values stored by this cache.
     """
 
     def __init__(self, max_size: int):
@@ -181,8 +199,12 @@ class Cache:
         """
         Insert new value into the cache.
 
-        :param key: The dictionary key of the cached object.
-        :param value: The object to cache.
+        Parameters
+        ----------
+        key: Any
+            The dictionary key of the cached object.
+        value: Any
+            The object to cache.
         """
         self._cached[key] = value
         self._check_size()
@@ -191,8 +213,15 @@ class Cache:
         """
         Retrieve object from cache.
 
-        :param key: The key of the cache item.
-        :return: The cached object.
+        Parameters
+        ----------
+        key: Any
+            The key of the cached item.
+
+        Returns
+        -------
+        Any
+            The cached object.
         """
         return self._cached[key]
 
@@ -219,11 +248,18 @@ class Grid:
 
     The grid object represent the simulation grid on which the wave functions and potential are discretized.
 
-    :param Grid extent in each dimension [Å].
-    :param Number of grid points in each dimension.
-    :param Grid sampling in each dimension [1 / Å].
-    :param Number of dimensions represented by the grid.
-    :param If true include the grid endpoint (the default is False). For periodic grids the endpoint should not be included.
+    Parameters
+    ----------
+    extent: two float
+        Grid extent in each dimension [Å].
+    gpts: two int
+        Number of grid points in each dimension.
+    sampling: two float
+        Grid sampling in each dimension [1 / Å].
+    dimensions: int
+        Number of dimensions represented by the grid.
+    endpoint: bool
+        If true include the grid endpoint (the default is False). For periodic grids the endpoint should not be included.
     """
 
     def __init__(self,
@@ -278,6 +314,9 @@ class Grid:
 
     @property
     def endpoint(self) -> bool:
+        """
+        Include the grid endpoint.
+        """
         return self._endpoint
 
     @property
@@ -336,6 +375,9 @@ class Grid:
 
     @property
     def sampling(self) -> tuple:
+        """
+        Grid sampling in each dimension.
+        """
         return self._sampling
 
     @sampling.setter
@@ -398,8 +440,12 @@ class Grid:
         """
         Set the parameters of this grid to match another grid.
 
-        :param other: The other grid.
-        :param check_match: Check whether grids can match without overriding already defined parameters.
+        Parameters
+        ----------
+        other: Grid object
+            The grid that should be matched.
+        check_match: bool
+            If true check whether grids can match without overriding already defined grid parameters.
         """
 
         if check_match:
@@ -423,7 +469,10 @@ class Grid:
         """
         Raise error if the grid of another object is different from this object.
 
-        :param other:
+        Parameters
+        ----------
+        other: Grid object
+            The grid that should be checked.
         """
 
         if (self.extent is not None) & (other.extent is not None) & np.any(self.extent != other.extent):
@@ -490,7 +539,10 @@ class Accelerator:
     """
     Accelerator object describes the energy of wave functions and transfer functions.
 
-    :param energy: Acceleration energy [eV].
+    Parameters
+    ----------
+    energy: float
+        Acceleration energy [eV].
     """
 
     def __init__(self, energy: Optional[float] = None, lock_energy=False):
@@ -529,7 +581,7 @@ class Accelerator:
     @property
     def sigma(self) -> float:
         """
-        :return: Interaction parameter.
+        Interaction parameter.
         """
         self.check_is_defined()
         return energy2sigma(self.energy)
@@ -542,6 +594,14 @@ class Accelerator:
             raise RuntimeError('Energy is not defined')
 
     def check_match(self, other: 'Accelerator'):
+        """
+        Raise error if the accelerator of another object is different from this object.
+
+        Parameters
+        ----------
+        other: Accelerator object
+            The accelerator that should be checked.
+        """
         if (self.energy is not None) & (other.energy is not None) & (self.energy != other.energy):
             raise RuntimeError('Inconsistent energies')
 
@@ -549,7 +609,12 @@ class Accelerator:
         """
         Set the parameters of this accelerator to match another accelerator.
 
-        :param other: The other accelerator.
+        Parameters
+        ----------
+        other: Accelerator object
+            The accelerator that should be matched.
+        check_match: bool
+            If true check whether accelerators can match without overriding an already defined energy.
         """
 
         if check_match:
