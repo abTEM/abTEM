@@ -1,5 +1,4 @@
-import time
-
+"""Module for various convenient utilities."""
 import numpy as np
 from ase import units
 
@@ -43,14 +42,32 @@ def energy2sigma(energy):
 
 
 def spatial_frequencies(gpts, sampling):
+    """
+    Calculate spatial frequencies for a given grid and sampling.
+    :param gpts: Grid points.
+    :type gpts: ndarray
+    :param: sampling: Sampling of the potential [Å].
+    :type sampling: float
+    """
     return tuple(np.fft.fftfreq(n, d).astype(np.float32) for n, d in zip(gpts, sampling))
 
 
 def coordinates(gpts, extent, endpoint):
+    """
+    Calculate coordinates for a given extent on a grid (probably a clearer way to state this JM?).
+    :param gpts: Grid points.
+    :type gpts: ndarray
+    :param extent: Size of the extent.
+    :type extent: JM
+    :param endpoint: JM
+    :type endpoint: JM
+    """
+
     return tuple(np.linspace(0, l, n, endpoint=endpoint, dtype=np.float32) for n, l in zip(gpts, extent))
 
 
 def polargrid(x, y):
+    """Calculate a polar grid for a given Cartesian grid. (correct JM?)"""
     xp = get_array_module(x)
     alpha = xp.sqrt(x.reshape((-1, 1)) ** 2 + y.reshape((1, -1)) ** 2)
     phi = xp.arctan2(x.reshape((-1, 1)), y.reshape((1, -1)))
@@ -58,6 +75,19 @@ def polargrid(x, y):
 
 
 def cosine_window(x, cutoff, rolloff, attenuate='high'):
+    """
+    Calculate a cosine window for a given 1D array. JM
+
+    :param x: JM
+    :type x: JM
+    :param cutoff: JM
+    :type cutoff: JM
+    :param rolloff: JM
+    :type rolloff: JM
+    :param attenuate: Choose either "high" or "low" attenuation. Default is "high".
+    :type attenuate: str, optional
+    """
+
     xp = get_array_module(x)
 
     rolloff *= cutoff
@@ -76,6 +106,7 @@ def cosine_window(x, cutoff, rolloff, attenuate='high'):
 
 
 def split_integer(n, m):
+    """Calculate ??? JM"""
     if n < m:
         raise RuntimeError()
 
@@ -94,6 +125,7 @@ def split_integer(n, m):
 
 
 def label_to_index_generator(labels, first_label=0):
+    """Function to return the index of a label."""
     xp = get_array_module(labels)
     labels = labels.flatten()
     labels_order = labels.argsort()
@@ -107,6 +139,7 @@ def label_to_index_generator(labels, first_label=0):
 
 
 class ProgressBar:
+    """Object to describe progress bar indicators for computations."""
     def __init__(self, **kwargs):
         self._tqdm = tqdm(**kwargs)
 

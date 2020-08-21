@@ -1,3 +1,4 @@
+"""Module to describe the contrast transfer function."""
 from collections import defaultdict
 from typing import Mapping
 
@@ -8,12 +9,15 @@ from abtem.base_classes import HasAcceleratorMixin, Accelerator, watched_method,
 from abtem.device import get_array_module, get_device_function
 from abtem.utils import energy2wavelength
 
+
+#: Symbols for the polar representation of optical aberrations.
 polar_symbols = ('C10', 'C12', 'phi12',
                  'C21', 'phi21', 'C23', 'phi23',
                  'C30', 'C32', 'phi32', 'C34', 'phi34',
                  'C41', 'phi41', 'C43', 'phi43', 'C45', 'phi45',
                  'C50', 'C52', 'phi52', 'C54', 'phi54', 'C56', 'phi56')
 
+#: Aliases for the most commonly used optical aberrations.
 polar_aliases = {'defocus': 'C10', 'astigmatism': 'C12', 'astigmatism_angle': 'phi12',
                  'coma': 'C21', 'coma_angle': 'phi21',
                  'Cs': 'C30',
@@ -21,7 +25,7 @@ polar_aliases = {'defocus': 'C10', 'astigmatism': 'C12', 'astigmatism_angle': 'p
 
 
 class CTF(HasAcceleratorMixin):
-
+    """Contrast transfer function object."""
     def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
                  angular_spread: float = 0., gaussian_spread: float = 0., energy: float = None,
                  parameters: Mapping[str, float] = None, **kwargs):
@@ -215,6 +219,7 @@ class CTF(HasAcceleratorMixin):
         .. [1] Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.). Springer.
 
         """
+
         xp = get_array_module(alpha)
         p = self.parameters
 
