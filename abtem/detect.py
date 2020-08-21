@@ -20,7 +20,6 @@ def _crop_to_center(array: np.ndarray):
     """
     Crop a an array around its center to remove the suppressed frequencies from an antialiased 2d fourier spectrum.
     """
-
     shape = array.shape
     w = shape[-2] // 2
     h = shape[-1] // 2
@@ -158,9 +157,14 @@ class _PolarDetector(AbstractDetector):
         """
         Allocate a measurement object.
 
-        :param grid: The grid of the Waves objects that will be detected.
-        :param wavelength: The wavelength of the Waves objects that will be detected.
-        :param scan: The scan object that will define the scan dimensions the measurement.
+        Parameters
+        ----------
+        grid: Grid object
+            The grid of the Waves objects that will be detected.
+        wavelength: float
+            The wavelength of the Waves objects that will be detected.
+        scan: Scan object
+            The scan object that will define the scan dimensions the measurement.
         """
         inner, outer, nbins_radial, nbins_azimuthal = self._get_bins(grid.antialiased_sampling, wavelength)
 
@@ -186,9 +190,13 @@ class _PolarDetector(AbstractDetector):
         """
         Visualize the detector region(s) of the detector.
 
-        :param grid: The grid of the Waves objects that will be detected.
-        :param wavelength: The wavelength of the Waves objects that will be detected.
-        :param kwargs:
+        Parameters
+        ----------
+        grid: Grid
+            The grid of the Waves objects that will be detected.
+        wavelength: float
+            The wavelength of the Waves objects that will be detected.
+        **kwargs: Additional keyword arguments for abtem.plot.show_image.
         """
 
         grid.check_is_defined()
