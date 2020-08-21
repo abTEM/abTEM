@@ -1,9 +1,10 @@
+"""Module for modifying ASE atoms objects for use in abTEM."""
 import numpy as np
-from ase import Atoms
 from fractions import Fraction
 
 
 def is_cell_hexagonal(atoms):
+    """Function to check whether the cell of an ASE atoms object is hexagonal."""
     cell = atoms.get_cell()
     a = cell[0]
     b = cell[1]
@@ -18,10 +19,12 @@ def is_cell_hexagonal(atoms):
 
 
 def is_cell_orthogonal(atoms, tol=1e-12):
+    """Function to check whether the cell of an ASE atoms object is orthogonal."""
     return not np.any(np.abs(atoms.cell[~np.eye(3, dtype=bool)]) > tol)
 
 
 def is_cell_valid(atoms, tol=1e-12):
+    """Function to check whether the cell of an ASE atoms object is valid."""
     if np.abs(atoms.cell[0, 0] - np.linalg.norm(atoms.cell[0])) > tol:
         return False
 
@@ -35,6 +38,7 @@ def is_cell_valid(atoms, tol=1e-12):
 
 
 def standardize_cell(atoms, tol=1e-12):
+    """Function to standardize an ASE atoms object."""
     cell = np.array(atoms.cell)
 
     vertical_vector = np.where(np.all(np.abs(cell[:, :2]) < tol, axis=1))[0]
@@ -58,6 +62,7 @@ def standardize_cell(atoms, tol=1e-12):
 
 
 def orthogonalize_cell(atoms, limit_denominator=10, tol=1e-12, strain_error=True):
+    """Function to orthogonalize the cell of an ASE atoms object."""
     if is_cell_orthogonal(atoms, tol):
         return atoms
 
