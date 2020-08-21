@@ -10,7 +10,7 @@ from abtem.device import get_array_module, get_device_function
 from abtem.utils import energy2wavelength
 
 
-#: Symbols for the polar representation of optical aberrations.
+#: Symbols for the polar representation of all optical aberrations up to the fifth order.
 polar_symbols = ('C10', 'C12', 'phi12',
                  'C21', 'phi21', 'C23', 'phi23',
                  'C30', 'C32', 'phi32', 'C34', 'phi34',
@@ -329,14 +329,17 @@ class CTF(HasAcceleratorMixin):
 
 
 def scherzer_defocus(Cs, energy):
+    """Calculate the Scherzer defocus for a given spherical aberration coefficient and electron energy."""
     return np.sign(Cs) * np.sqrt(3 / 2 * np.abs(Cs) * energy2wavelength(energy))
 
 
 def point_resolution(Cs, energy):
+    """Calculate the point resolution for a given spherical aberration coefficient and electron energy."""
     return (energy2wavelength(energy) ** 3 * np.abs(Cs) / 6) ** (1 / 4)
 
 
 def polar2cartesian(polar):
+    """Convert between polar and Cartesian coordinates."""
     polar = defaultdict(lambda: 0, polar)
 
     cartesian = {}
@@ -359,6 +362,7 @@ def polar2cartesian(polar):
 
 
 def cartesian2polar(cartesian):
+    """Convert between Cartesian and polar coordinates."""
     cartesian = defaultdict(lambda: 0, cartesian)
 
     polar = {}
