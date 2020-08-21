@@ -1,3 +1,4 @@
+"""Module to describe the detection of scattered electron waves."""
 from collections.abc import Iterable
 from copy import copy
 
@@ -13,7 +14,7 @@ from abtem.plot import show_image, show_line
 
 
 class Calibration:
-
+    """Object to handle the spatial calibration of scattered intensities."""
     def __init__(self, offset, sampling, units, name=''):
         self.offset = offset
         self.sampling = sampling
@@ -31,13 +32,47 @@ class Calibration:
 
 
 def fourier_space_offset(n, d):
+    """
+    Fourier-space offset function
+
+    Function for calculating an offset in Fourier space. JM
+
+    Parameters
+    ----------
+    n : int
+        JM
+    d : int
+        JM
+    """
+
     if n % 2 == 0:
         return -1 / (2 * d)
     else:
         return -1 / (2 * d) + 1 / (2 * d * n)
 
 
-def calibrations_from_grid(gpts, sampling, names=None, units=None, fourier_space=False, scale_factor=1):
+def calibrations_from_grid(gpts, sampling, names=None, units=None, fourier_space=False, scale_factor=1.0):
+    """
+    Calibration from grid function
+
+    Function to determine spatial calibrations for a given computational grid and sampling.
+
+    Parameters
+    ----------
+    gpts : two ints
+        Number of grid points in the x and y directions.
+    sampling : float
+        Sampling of the potential in Å.
+    names : str, optional
+        JM
+    units : str, optional
+        Units for the calibration, either Å or 1 / Å depending on whether Fourier-space is False or not.
+    fourier_space : Boolean, optional
+        Setting for calibrating either in the reciprocal or real space. Default is False.
+    scale_factor : float, optional
+        Scaling factor for the calibration. Default is 1.0.
+    """
+
     if names is None:
         names = ('',) * len(gpts)
     elif len(names) != len(gpts):
@@ -52,9 +87,9 @@ def calibrations_from_grid(gpts, sampling, names=None, units=None, fourier_space
     calibrations = ()
     if fourier_space:
         for name, n, d in zip(names, gpts, sampling):
-            l = n * d
+            r = n * d
             offset = fourier_space_offset(n, d)
-            calibrations += (Calibration(offset * scale_factor, 1 / l * scale_factor, units, name),)
+            calibrations += (Calibration(offset * scale_factor, 1 / r * scale_factor, units, name),)
     else:
         for name, d in zip(names, sampling):
             calibrations += (Calibration(0., d * scale_factor, units, name),)
@@ -63,6 +98,7 @@ def calibrations_from_grid(gpts, sampling, names=None, units=None, fourier_space
 
 
 def fwhm(y):
+    """Function for calculating the full width at half maximum value for a 1D function."""
     peak_idx = np.argmax(y)
     peak_value = y[peak_idx]
     left = np.argmin(np.abs(y[:peak_idx] - peak_value / 2))
@@ -71,6 +107,7 @@ def fwhm(y):
 
 
 def center_of_mass(measurement):
+    """Function for estimating the intensity center-of-mass for a given measurement."""
     shape = measurement.array.shape[2:]
     center = np.array(shape) / 2 - [.5 * (shape[0] % 2), .5 * (shape[1] % 2)]
     com = np.zeros(measurement.array.shape[:2] + (2,))
@@ -85,7 +122,7 @@ def center_of_mass(measurement):
 
 
 class Measurement:
-
+    """Abstract class for a measurement."""
     def __init__(self, array, calibrations, units='', name=''):
         if len(calibrations) != len(array.shape):
             raise RuntimeError()
@@ -249,4 +286,4 @@ class Measurement:
 
             return show_image(array, calibrations, cbar_label=cbar_label, **kwargs)
         else:
-            raise RuntimeError('Plotting not supported for {}d measurement, use reduction operation first'.format(dims))
+            raise RuntimeError('Plotting not supported for {}D measurement, use reduction operation first'.format(dims))
