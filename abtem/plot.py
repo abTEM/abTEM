@@ -1,16 +1,19 @@
+"""Module for plotting atoms, images, line scans, and diffraction patterns."""
 from collections.abc import Iterable
 from colorsys import hls_to_rgb
 
-import matplotlib.pyplot as plt
 import numpy as np
-from ase.data import covalent_radii
-from ase.data.colors import cpk_colors
+
+import matplotlib.pyplot as plt
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import Circle
 
-from abtem.cpu_kernels import abs2
-from scipy.ndimage import gaussian_filter
+from ase.data import covalent_radii
+from ase.data.colors import cpk_colors
 
+from abtem.cpu_kernels import abs2
+
+#: Array to facilitate the display of cell boundaries.
 cube = np.array([[[0, 0, 0], [0, 0, 1]],
                  [[0, 0, 0], [0, 1, 0]],
                  [[0, 0, 0], [1, 0, 0]],
@@ -25,7 +28,8 @@ cube = np.array([[[0, 0, 0], [0, 0, 1]],
                  [[1, 1, 0], [1, 1, 1]]])
 
 
-def plane2axes(plane):
+def _plane2axes(plane):
+    """Internal function for extracting axes from a plane."""
     axes = ()
     last_axis = [0, 1, 2]
     for axis in list(plane):
@@ -42,10 +46,33 @@ def plane2axes(plane):
 
 
 def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atoms=.5, numbering=False):
+    """
+    Show atoms function
+
+    Function to display atoms, especially in Jupyter notebooks.
+
+    Parameters
+    ----------
+    atoms : ASE atoms object
+        The atoms to be shown.
+    repeat : two ints, optional
+        Tiling of the image. Default is (1,1), ie. no tiling.
+    scans : ndarray, optional
+        List of scans to apply. Default is None.
+    plane : str
+        The projection plane.
+    ax : axes object
+        pyplot axes object.
+    scale_atoms : float
+        Scaling factor for the atom display sizes. Default is 0.5.
+    numbering : bool
+        Option to set plot numbering. Default is False.
+    """
+
     if ax is None:
         fig, ax = plt.subplots()
 
-    axes = plane2axes(plane)
+    axes = _plane2axes(plane)
 
     atoms = atoms.copy()
     cell = atoms.cell
@@ -88,6 +115,42 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
 
 def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='gray', figsize=None, scans=None,
                log_scale=False, discrete=False, cbar_label=None, vmin=None, vmax=None, **kwargs):
+    """
+    Show image function
+
+    Function to display an image.
+
+    Parameters
+    ----------
+    array : ndarray
+        Image array.
+    calibrations : ndarray
+        Spatial calibrations.
+    ax : axes object
+        pyplot axes object.
+    title : str, optional
+        Image title. Default is None.
+    colorbar : bool, optional
+        Option to show a colorbar. Default is False.
+    cmap : str, optional
+        Colormap name. Default is 'gray'.
+    figsize : float, pair of float, optional
+        Size of the figure in inches, either as a square for one number or a rectangle for two. Default is None.
+    scans : ndarray, optional
+        Array of scans. Default is None.
+    log_scale : bool, optional
+        Option to set a logarithmic intensity scale. Default is False.
+    discrete : bool, optional
+        Option to discretize intensity values to integers. Default is False.
+    cbar_label : str, optional
+        Text label for the color bar. Default is None.
+    vmin : float, optional
+        Minimum of the intensity scale. Default is None.
+    vmax : float, optional
+        Maximum of the intensity scale. Default is None.
+    kwargs :
+        Remaining keyword arguments are passed to pyplot.
+    """
 
     if np.iscomplexobj(array):
         array = abs2(array)
@@ -140,6 +203,27 @@ def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='g
 
 
 def show_line(array, calibration, ax=None, title=None, legend=False, **kwargs):
+    """
+    Show line function
+
+    Function to display a line scan.
+
+    Parameters
+    ----------
+    array : ndarray
+        Array of measurement values along a line.
+    calibration : calibration object
+        Spatial calibration for the line.
+    ax : axes object, optional
+        pyplot axes object.
+    title : str, optional
+        Title for the plot. Default is None.
+    legend : bool, optional
+        Option to display a plot legend. Default is False.
+    kwargs :
+       Remaining keyword arguments are passed to pyplot.
+    """
+
     x = np.linspace(calibration.offset, calibration.offset + len(array) * calibration.sampling, len(array))
 
     if ax is None:
@@ -157,13 +241,30 @@ def show_line(array, calibration, ax=None, title=None, legend=False, **kwargs):
     return ax
 
 
-def domain_coloring(z, fade_to_white=False, saturation=1, k=.5):
+def domain_coloring(z, fade_to_white=False, saturation=1.0, k=.5):
+    """
+    Domain coloring function.
+
+    Function to color a complex domain.
+
+    Parameters
+    ----------
+    z : complex
+        Complex number to be colored.
+    fade_to_white : bool, optional
+        Option to fade the coloring to white instead of black. Default is False.
+    saturation : float, optional
+        RGB color saturation. Default is 1.0.
+    k : float, optional
+        Scaling factor for the coloring. Default is 0.5.
+    """
+
     h = (np.angle(z) + np.pi) / (2 * np.pi) + 0.5
     if fade_to_white:
-        l = k ** np.abs(z)
+        r = k ** np.abs(z)
     else:
-        l = 1 - k ** np.abs(z)
-    c = np.vectorize(hls_to_rgb)(h, l, saturation)
+        r = 1 - k ** np.abs(z)
+    c = np.vectorize(hls_to_rgb)(h, r, saturation)
     c = np.array(c).T
 
     c = (c - c.min()) / c.ptp()
