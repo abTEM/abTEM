@@ -1,3 +1,4 @@
+"""Module to describe independent atom model parametrizations of the scattering potential."""
 import csv
 import os
 from scipy.special import kn
@@ -8,11 +9,13 @@ from numba import jit, prange
 _ROOT = os.path.abspath(os.path.dirname(__file__))
 
 
-def get_data(path):
+def _set_path(path):
+    """Internal function to set the parametrization data directory."""
     return os.path.join(_ROOT, 'data', path)
 
 
 def load_parameters(filename):
+    """Function to load parameters from a CSV file."""
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
     parameters = {}
     with open(path, 'r') as csvfile:
@@ -26,9 +29,10 @@ def load_parameters(filename):
 
 
 def load_lobato_parameters():
+    """Function to load the default Lobato parameters (doi:10.1107/S205327331401643X)."""
     parameters = {}
 
-    for key, value in load_parameters(get_data('lobato.txt')).items():
+    for key, value in load_parameters(_set_path('lobato.txt')).items():
         a = np.array([value[key] for key in ('a1', 'a2', 'a3', 'a4', 'a5')])
         b = np.array([value[key] for key in ('b1', 'b2', 'b3', 'b4', 'b5')])
         a = np.pi ** 2 * a / b ** (3 / 2.)
@@ -84,9 +88,10 @@ def d2vdr2_lobato(r, p):
 
 
 def load_kirkland_parameters():
+    """Function to load the Kirkland parameters (doi:10.1007/978-1-4419-6533-2)."""
     parameters = {}
 
-    for key, value in load_parameters(get_data('kirkland.txt')).items():
+    for key, value in load_parameters(_set_path('kirkland.txt')).items():
         a = np.array([value[key] for key in ('a1', 'a2', 'a3')])
         b = np.array([value[key] for key in ('b1', 'b2', 'b3')])
         c = np.array([value[key] for key in ('c1', 'c2', 'c3')])
@@ -142,47 +147,3 @@ def kirkland_projected_fourier(k, p):
          2 * p[0, 2] / (k ** 2 + p[1, 2] ** 2) +
          np.sqrt(np.pi / p[3, 2]) * p[2, 2] / (2. * p[3, 2]) * np.exp(-k ** 2. / (4. * p[3, 2])))
     return f
-
-
-# TODO : implement threads
-@jit(nopython=True, nogil=True, parallel=True)
-def project_tanh_sinh(r, z0, z1, xk, wk, f):
-    projected = np.zeros((len(z0), len(r)))
-
-    for i in prange(z0.shape[0]):
-        inside = (z0[i] < 0.) & (z1[i] > 0.)
-        zm = (z1[i] - z0[i]) / 2.
-        zp = (z0[i] + z1[i]) / 2.
-        for j in range(r.shape[0]):
-            for k in range(xk.shape[0]):
-                if inside:
-                    rxy = np.sqrt(r[j] ** 2. + ((xk[k] - 1) * z0[i] / 2.) ** 2.)
-                    if rxy < r[-1]:
-                        projected[i, j] -= f(rxy) * wk[k] * z0[i] / 2.
-
-                    rxy = np.sqrt(r[j] ** 2. + ((xk[k] + 1) * z1[i] / 2.) ** 2.)
-                    if rxy < r[-1]:
-                        projected[i, j] += f(rxy) * wk[k] * z1[i] / 2.
-
-                else:
-                    rxy = np.sqrt(r[j] ** 2. + (xk[k] * zm + zp) ** 2.)
-                    if rxy < r[-1]:
-                        projected[i, j] += f(rxy) * wk[k] * zm
-
-    return projected
-
-
-@jit(nopython=True, nogil=True)
-def project_riemann(r, r_cut, v_cut, dvdr_cut, z0, z1, num_samples, f, parameters):
-    projected = np.zeros((len(z0), len(r)))
-
-    for i in range(z0.shape[0]):
-        wk = (z1[i] - z0[i]) / num_samples
-        xk = np.linspace(z0[i] + wk / 2, z1[i] - wk / 2, num_samples)
-        for j in range(r.shape[0]):
-            for k in range(xk.shape[0]):
-                rxy = np.sqrt(r[j] ** 2. + xk[k] ** 2.)
-                if rxy < r_cut:
-                    projected[i, j] += f(rxy, r_cut, v_cut, dvdr_cut, parameters) * wk
-
-    return projected
