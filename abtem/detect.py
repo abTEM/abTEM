@@ -218,9 +218,14 @@ class AnnularDetector(_PolarDetector):
     The annular detector integrates the intensity of the detected wave functions between an inner and outer integration
     limit.
 
-    :param inner: Inner integration limit [mrad].
-    :param outer: Outer integration limit [mrad].
-    :param save_file: The path to the file for saving the detector output.
+    Parameters
+    ----------
+    inner: float
+        Inner integration limit [mrad].
+    outer: float
+        Outer integration limit [mrad].
+    save_file: str
+        The path to the file for saving the detector output.
     """
 
     def __init__(self, inner: float, outer: float, save_file: str = None):
@@ -280,8 +285,12 @@ class FlexibleAnnularDetector(_PolarDetector):
     The FlexibleAnnularDetector object allows choosing the integration limits after running the simulation by radially
     binning the intensity.
 
-    :param step_size: The radial separation between integration regions [mrad].
-    :param save_file: The path to the file used for saving the detector output.
+    Parameters
+    ----------
+    step_size: float
+        The radial separation between integration regions [mrad].
+    save_file: str
+        The path to the file used for saving the detector output.
     """
 
     def __init__(self, step_size: float = 1., save_file: str = None):
@@ -303,8 +312,15 @@ class FlexibleAnnularDetector(_PolarDetector):
         """
         Integrate the intensity of a the wave functions over the detector range.
 
-        :param waves: The batch of wave functions to detect.
-        :return: Detected values as a 2d array. The array has shape of (batch size, number of bins).
+        Parameters
+        ----------
+        waves: Waves object
+            The batch of wave functions to detect.
+
+        Returns
+        -------
+        2d array
+            Detected values. The array has shape of (batch size, number of bins).
         """
 
         xp = get_array_module(waves.array)
@@ -334,11 +350,18 @@ class SegmentedDetector(_PolarDetector):
     The segmented detector covers an annular angular range, and is partitioned into several integration regions divided
     to radial and angular segments. This can be used for simulating differential phase contrast (DPC) imaging.
 
-    :param inner: Inner integration limit [mrad].
-    :param outer: Outer integration limit [mrad].
-    :param nbins_radial: Number of radial bins.
-    :param nbins_angular: Number of angular bins.
-    :param save_file: The path to the file used for saving the detector output.
+    Parameters
+    ----------
+    inner: float
+        Inner integration limit [mrad].
+    outer: float
+        Outer integration limit [mrad].
+    nbins_radial: int
+        Number of radial bins.
+    nbins_angular: int
+        Number of angular bins.
+    save_file: str
+        The path to the file used for saving the detector output.
     """
 
     def __init__(self, inner: float, outer: float, nbins_radial: int, nbins_angular: int, save_file: str = None):
@@ -399,9 +422,14 @@ class SegmentedDetector(_PolarDetector):
         """
         Integrate the intensity of a the wave functions over the detector range.
 
-        :param waves: The batch of wave functions to detect.
-        :return: Detected values as a 3d array. The first dimension indexes the batch size, the second and third
-        indexes the radial and angular bins, respectively.
+        Parameters
+        ----------
+        waves: Waves object
+            The batch of wave functions to detect.
+
+        Returns:
+        3d array
+            Detected values. The first dimension indexes the batch size, the second and third indexes the radial and angular bins, respectively.
         """
         xp = get_array_module(waves.array)
         intensity = _calculate_far_field_intensity(waves, overwrite=False)
@@ -431,7 +459,10 @@ class PixelatedDetector(AbstractDetector):
     The pixelated detector records the intensity of the Fourier-transformed exit wave function. This may be used for
     simulating 4D-STEM.
 
-    :param save_file: The path to the file used for saving the detector output.
+    Parameters
+    ----------
+    save_file: str
+        The path to the file used for saving the detector output.
     """
 
     def __init__(self, save_file: str = None):
@@ -441,9 +472,14 @@ class PixelatedDetector(AbstractDetector):
         """
         Allocate a measurement object.
 
-        :param grid: The grid of the Waves objects that will be detected.
-        :param wavelength: The wavelength of the Waves objects that will be detected.
-        :param scan: The scan object that will define the scan dimensions the measurement.
+        Parameters
+        ----------
+        grid: Grid object
+            The grid of the Waves objects that will be detected.
+        wavelength: float
+            The wavelength of the Waves objects that will be detected.
+        scan: Scan object
+            The scan object that will define the scan dimensions the measurement.
         """
         grid.check_is_defined()
         shape = (grid.gpts[0] // 2, grid.gpts[1] // 2)
@@ -466,9 +502,15 @@ class PixelatedDetector(AbstractDetector):
         Calculate the far field intensity of the wave functions. The output is cropped to include the non-suppressed
         frequencies from the antialiased 2d fourier spectrum.
 
-        :param waves: The batch of wave functions to detect.
-        :return: Detected values as a 3d array. The first dimension indexes the batch size, the second and third
-        indexes the two components of the spatial frequency.
+        Parameters
+        ----------
+        waves: Waves object
+            The batch of wave functions to detect.
+
+        Returns
+        -------
+            Detected values. The first dimension indexes the batch size, the second and third indexes the two components
+            of the spatial frequency.
         """
         xp = get_array_module(waves.array)
         abs2 = get_device_function(xp, 'abs2')
@@ -486,7 +528,10 @@ class WavefunctionDetector(AbstractDetector):
 
     The wave function detector records the raw exit wave functions.
 
-    :param save_file: The path to the file used for saving the detector output.
+    Parameters
+    ----------
+    save_file: str
+        The path to the file used for saving the detector output.
     """
 
     def __init__(self, save_file: str = None):
@@ -496,9 +541,14 @@ class WavefunctionDetector(AbstractDetector):
         """
         Allocate a measurement object.
 
-        :param grid: The grid of the Waves objects that will be detected.
-        :param wavelength: The wavelength of the Waves objects that will be detected.
-        :param scan: The scan object that will define the scan dimensions the measurement.
+        Parameters
+        ----------
+        grid: Grid
+            The grid of the Waves objects that will be detected.
+        wavelength: float
+            The wavelength of the Waves objects that will be detected.
+        scan: Scan object
+            The scan object that will define the scan dimensions the measurement.
         """
         grid.check_is_defined()
         calibrations = calibrations_from_grid(grid.gpts, grid.sampling, names=['x', 'y'], units='Å')
@@ -511,7 +561,15 @@ class WavefunctionDetector(AbstractDetector):
 
     def detect(self, waves) -> np.ndarray:
         """
-        :param waves: The batch of wave functions to detect.
-        :return: The arrays of the Waves object.
+        Detect the complex wave function.
+
+        Parameters
+        ----------
+        waves: Waves object
+            The batch of wave functions to detect.
+
+        Returns:
+        3d complex array
+            The arrays of the Waves object.
         """
         return waves.array
