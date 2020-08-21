@@ -5,8 +5,10 @@ API Reference Documentation
     :maxdepth: 2
     :caption: Contents:
 
+    base_classes
     waves
     potentials
+    scan
     detect
     temperature
     dft
