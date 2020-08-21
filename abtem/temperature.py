@@ -1,3 +1,4 @@
+"""Module to describe the effect of temperature on the atomic positions."""
 from abc import abstractmethod, ABCMeta
 from typing import Mapping, Union, Sequence
 
@@ -8,7 +9,7 @@ from copy import copy
 
 
 class AbstractFrozenPhonons(metaclass=ABCMeta):
-
+    """Abstract frozen phonons object."""
     @abstractmethod
     def __len__(self):
         pass
@@ -29,7 +30,7 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
     """
     Dummy frozen phonons object.
 
-    Generates the input Atoms object. Used as a stand in for simulations without frozen phonons.
+    Generates the input Atoms object. Used as a stand-in for simulations without frozen phonons.
 
     :param atoms: Generated Atoms object.
     """
