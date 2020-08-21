@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
+from copy import copy
 
 
 def _pixel_times(dwell_time, flyback_time, shape):
@@ -58,9 +59,9 @@ def add_scan_noise(image, dwell_time, flyback_time, max_frequency, rms_power, nu
     return image
 
 
-def poisson_noise(self, dose):
-    pixel_area = np.product([calibration.sampling for calibration in self.calibrations])
-    new_copy = copy(self)
+def poisson_noise(measurement, dose):
+    pixel_area = np.product([calibration.sampling for calibration in measurement.calibrations])
+    new_copy = copy(measurement)
     array = new_copy.array
     array[:] = array / np.sum(array) * dose * pixel_area * np.prod(array.shape)
     array[:] = np.random.poisson(array).astype(np.float)
