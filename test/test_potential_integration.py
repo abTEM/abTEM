@@ -3,7 +3,7 @@ from ase import Atoms
 
 from abtem.cpu_kernels import interpolate_radial_functions
 from abtem.parametrizations import kirkland_projected, kirkland, load_kirkland_parameters
-from abtem.potentials import PotentialIntegrator, Potential, kappa, disc_meshgrid
+from abtem.potentials import PotentialIntegrator, Potential, kappa, _disc_meshgrid
 
 
 def test_gaussian_integral():
@@ -40,8 +40,8 @@ def test_interpolation():  # just a sanity check
 
     potential = Potential(atoms, sampling=sampling, cutoff_tolerance=1e-3, slice_thickness=10)
 
-    interpolated = potential.get_slice(0).array[0]
-    integrator = potential.get_integrator(6)[0]
+    interpolated = potential[0].array[0]
+    integrator = potential.get_integrator(6)
 
     integrated = integrator.integrate(-1.5,1.5)[0]
 

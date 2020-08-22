@@ -6,7 +6,7 @@ import pytest
 from abtem.base_classes import Grid
 from abtem.detect import AbstractDetector
 from abtem.measure import Measurement
-from abtem.potentials import AbstractPotential, ProjectedPotential
+from abtem.potentials import AbstractPotential, ProjectedPotentialArray
 from abtem.scan import LineScan, GridScan
 from abtem.waves import Waves, PlaneWave, Probe
 
@@ -28,7 +28,7 @@ class DummyPotential(AbstractPotential):
         for i in range(self.num_slices):
             array = np.zeros(self.gpts, dtype=np.float32)
             array[:self.gpts[0] // 2] = 1
-            yield ProjectedPotential(array, thickness=self.get_slice_thickness(i), extent=self.extent)
+            yield ProjectedPotentialArray(array, thickness=self.get_slice_thickness(i), extent=self.extent)
 
 
 @pytest.fixture

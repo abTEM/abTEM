@@ -9,7 +9,6 @@ from abtem.base_classes import HasAcceleratorMixin, Accelerator, watched_method,
 from abtem.device import get_array_module, get_device_function
 from abtem.utils import energy2wavelength
 
-
 #: Symbols for the polar representation of all optical aberrations up to the fifth order.
 polar_symbols = ('C10', 'C12', 'phi12',
                  'C21', 'phi21', 'C23', 'phi23',
@@ -25,7 +24,45 @@ polar_aliases = {'defocus': 'C10', 'astigmatism': 'C12', 'astigmatism_angle': 'p
 
 
 class CTF(HasAcceleratorMixin):
-    """Contrast transfer function object."""
+    """
+    Contrast transfer function object
+
+    The Contrast Transfer Function (CTF) describes the aberrations of the objective lens in HRTEM and specifies how the
+    condenser system shapes the probe in STEM.
+
+    abTEM implements phase aberrations up to 5th order using polar coefficients. See Eq. 2.22 in the reference [1]_.
+    Cartesian coefficients can be converted to polar using the utility function abtem.transfer.cartesian2polar.
+
+    Partial coherence is included as an envelope in the quasi-coherent approximation. See chapter 3.2 in the reference [1]_.
+
+    For a more detailed discussion with examples, see our `walkthrough
+    <https://abtem.readthedocs.io/en/latest/walkthrough/05_contrast_transfer_function.html>`_.
+
+    Parameters
+    ----------
+    semiangle_cutoff: float
+        The semiangle cutoff describes the sharp Fourier space cutoff due to the objective aperture [mrad].
+    rolloff: float
+        Softens the cutoff. A value of 0 gives a hard cutoff, while 1 gives the softest possible cutoff [Å].
+    focal_spread: float
+        The 1/e width of the focal spread due to chromatic aberration and lens current instability [mrad].
+    angular_spread: float
+        The 1/e width of the angular deviations due to source size [Å].
+    gaussian_spread:
+        The 1/e width image deflections due to vibrations and thermal magnetic noise [Å].
+    energy: float
+        The electron energy of the wave functions this contrast transfer function will be applied to [eV].
+    parameters: dict
+        Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in Angstrom.
+    kwargs:
+        Provide the aberration coefficients as keyword arguments.
+
+    References
+    ----------
+    .. [1] Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.). Springer.
+
+    """
+
     def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
                  angular_spread: float = 0., gaussian_spread: float = 0., energy: float = None,
                  parameters: Mapping[str, float] = None, **kwargs):
@@ -71,10 +108,16 @@ class CTF(HasAcceleratorMixin):
 
     @property
     def parameters(self):
+        """
+        The parameters
+        """
         return self._parameters
 
     @property
     def defocus(self) -> float:
+        """
+        The defocus [Å].
+        """
         return - self._parameters['C10']
 
     @defocus.setter
@@ -83,6 +126,9 @@ class CTF(HasAcceleratorMixin):
 
     @property
     def semiangle_cutoff(self) -> float:
+        """
+        The semi angle cutoff.
+        """
         return self._semiangle_cutoff
 
     @semiangle_cutoff.setter
@@ -92,6 +138,9 @@ class CTF(HasAcceleratorMixin):
 
     @property
     def rolloff(self) -> float:
+        """
+        The fraction of soft tapering of the cutoff.
+        """
         return self._rolloff
 
     @rolloff.setter
@@ -101,11 +150,17 @@ class CTF(HasAcceleratorMixin):
 
     @property
     def focal_spread(self) -> float:
+        """
+        The focal spread.
+        """
         return self._focal_spread
 
     @focal_spread.setter
     @watched_property('changed')
     def focal_spread(self, value: float):
+        """
+        The angular spread.
+        """
         self._focal_spread = value
 
     @property
@@ -119,6 +174,9 @@ class CTF(HasAcceleratorMixin):
 
     @property
     def gaussian_spread(self) -> float:
+        """
+        The gaussian spread.
+        """
         return self._gaussian_spread
 
     @gaussian_spread.setter
@@ -127,7 +185,15 @@ class CTF(HasAcceleratorMixin):
         self._gaussian_spread = value
 
     @watched_method('changed')
-    def set_parameters(self, parameters):
+    def set_parameters(self, parameters: dict):
+        """
+        Set the phase of the phase aberration.
+
+        Parameters
+        ----------
+        parameters: dict
+            Mapping from aberration symbols to their corresponding values.
+        """
         for symbol, value in parameters.items():
             if symbol in self._parameters.keys():
                 self._parameters[symbol] = value
@@ -143,7 +209,7 @@ class CTF(HasAcceleratorMixin):
 
         return parameters
 
-    def evaluate_aperture(self, alpha) -> np.ndarray:
+    def evaluate_aperture(self, alpha: np.ndarray) -> np.ndarray:
         xp = get_array_module(alpha)
         semiangle_cutoff = self.semiangle_cutoff / 1000
         if self.rolloff > 0.:
@@ -163,7 +229,7 @@ class CTF(HasAcceleratorMixin):
         xp = get_array_module(alpha)
         return xp.exp(- .5 * self.gaussian_spread ** 2 * alpha ** 2 / self.wavelength ** 2)
 
-    def evaluate_spatial_envelope(self, alpha, phi):
+    def evaluate_spatial_envelope(self, alpha: np.ndarray, phi: np.ndarray) -> np.ndarray:
         xp = get_array_module(alpha)
         p = self.parameters
         dchi_dk = 2 * xp.pi / self.wavelength * (
@@ -192,34 +258,10 @@ class CTF(HasAcceleratorMixin):
                           4. * p['C54'] * xp.sin(4. * (phi - p['phi54'])) +
                           2. * p['C52'] * xp.sin(2. * (phi - p['phi52']))) * alpha ** 5)
 
-        return xp.exp(-xp.sign(self.angular_spread) * (self.angular_spread / 2) ** 2 * (dchi_dk ** 2 + dchi_dphi ** 2))
+        return xp.exp(-xp.sign(self.angular_spread) * (self.angular_spread / 2 / 1000) ** 2 *
+                      (dchi_dk ** 2 + dchi_dphi ** 2))
 
-    def evaluate_chi(self, alpha, phi) -> np.ndarray:
-        """
-        Calculates the polar expansion of the phase error up to 5th order.
-
-        See Eq. 2.22 in ref [1].
-
-        Parameters
-        ----------
-        alpha : numpy.ndarray
-            Angle between the scattered electrons and the optical axis.
-        phi : numpy.ndarray
-            Angle around the optical axis of the scattered electrons.
-        wavelength : float
-            Relativistic wavelength of wavefunction.
-        parameters : Mapping[str, float]
-            Mapping from Cnn, phinn coefficients to their corresponding values. See parameter `parameters` in class CTFBase.
-
-        Returns
-        -------
-
-        References
-        ----------
-        .. [1] Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.). Springer.
-
-        """
-
+    def evaluate_chi(self, alpha: np.ndarray, phi: np.ndarray) -> np.ndarray:
         xp = get_array_module(alpha)
         p = self.parameters
 
@@ -258,12 +300,12 @@ class CTF(HasAcceleratorMixin):
         array = 2 * xp.pi / self.wavelength * array
         return array
 
-    def evaluate_aberrations(self, alpha, phi) -> np.ndarray:
+    def evaluate_aberrations(self, alpha: np.ndarray, phi: np.ndarray) -> np.ndarray:
         xp = get_array_module(alpha)
         complex_exponential = get_device_function(xp, 'complex_exponential')
         return complex_exponential(-self.evaluate_chi(alpha, phi))
 
-    def evaluate(self, alpha=None, phi=None):
+    def evaluate(self, alpha: np.ndarray, phi: np.ndarray) -> np.ndarray:
         array = self.evaluate_aberrations(alpha, phi)
 
         if self.semiangle_cutoff < np.inf:
@@ -280,10 +322,28 @@ class CTF(HasAcceleratorMixin):
 
         return array
 
-    def show(self, semiangle_cutoff: float, ax=None, phi=0, n=1000, title=None, **kwargs):
+    def show(self, max_semiangle: float, ax=None, phi: float = 0, n: int = 1000, title: str = None, **kwargs):
+        """
+        Show the contrast transfer function.
+
+        Parameters
+        ----------
+        max_semiangle: float
+            Maximum semiangle to display in the plot.
+        ax: matplotlib Axes, optional
+            If given, the plot will be added to this matplotlib axes.
+        phi: float
+            The contrast transfer function will be plotted along this angle.
+        n: int
+            Number of evaluation points to use in the plot.
+        title: str
+            The title of the plot.
+        kwargs:
+            Additional keyword arguments for the line plots.
+        """
         import matplotlib.pyplot as plt
 
-        alpha = np.linspace(0, semiangle_cutoff / 1000., n)
+        alpha = np.linspace(0, max_semiangle / 1000., n)
 
         aberrations = self.evaluate_aberrations(alpha, phi)
         aperture = self.evaluate_aperture(alpha)
@@ -329,17 +389,58 @@ class CTF(HasAcceleratorMixin):
 
 
 def scherzer_defocus(Cs, energy):
-    """Calculate the Scherzer defocus for a given spherical aberration coefficient and electron energy."""
+    """
+    Calculate the Scherzer defocus.
+
+    Parameters
+    ----------
+    Cs: float
+        Spherical aberration [Å].
+    energy: float
+        Electron energy [eV].
+
+    Returns
+    -------
+    float
+        The Scherzer defocus.
+    """
     return np.sign(Cs) * np.sqrt(3 / 2 * np.abs(Cs) * energy2wavelength(energy))
 
 
-def point_resolution(Cs, energy):
-    """Calculate the point resolution for a given spherical aberration coefficient and electron energy."""
+def point_resolution(Cs: float, energy: float):
+    """
+    Calculate the point resolution.
+
+    Parameters
+    ----------
+    Cs: float
+        Spherical aberration [Å].
+    energy: float
+        Electron energy [eV].
+
+    Returns
+    -------
+    float
+        The point resolution.
+
+    """
     return (energy2wavelength(energy) ** 3 * np.abs(Cs) / 6) ** (1 / 4)
 
 
 def polar2cartesian(polar):
-    """Convert between polar and Cartesian coordinates."""
+    """
+    Convert between polar and Cartesian aberration coefficients.
+
+    Parameters
+    ----------
+    polar: dict
+        Mapping from polar aberration symbols to their corresponding values.
+
+    Returns
+    -------
+    dict
+        Mapping from cartesian aberration symbols to their corresponding values.
+    """
     polar = defaultdict(lambda: 0, polar)
 
     cartesian = {}
@@ -362,7 +463,19 @@ def polar2cartesian(polar):
 
 
 def cartesian2polar(cartesian):
-    """Convert between Cartesian and polar coordinates."""
+    """
+    Convert between Cartesian and polar aberration coefficients.
+
+    Parameters
+    ----------
+    polar: dict
+        Mapping from Cartesian aberration symbols to their corresponding values.
+
+    Returns
+    -------
+    dict
+        Mapping from polar aberration symbols to their corresponding values.
+    """
     cartesian = defaultdict(lambda: 0, cartesian)
 
     polar = {}

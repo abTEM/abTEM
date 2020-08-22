@@ -424,17 +424,25 @@ def fwhm(measurement: Measurement):
 def center_of_mass(measurement: Measurement):
     """Function for estimating the intensity center-of-mass for a given measurement."""
 
-    if (measurement.dimensions != 3) or (measurement.dimensions != 4):
+    if (measurement.dimensions != 3) and (measurement.dimensions != 4):
         raise RuntimeError()
 
     shape = measurement.array.shape[-2:]
     center = np.array(shape) / 2 - np.array([.5 * (shape[-2] % 2), .5 * (shape[-1] % 2)])
     com = np.zeros(measurement.array.shape[:-2] + (2,))
-    for i in range(measurement.array.shape[0]):
-        for j in range(measurement.array.shape[1]):
-            com[i, j] = scipy.ndimage.measurements.center_of_mass(measurement.array[i, j])
-    com = com - center[None, None]
+
+    if measurement.dimensions == 3:
+        for i in range(measurement.array.shape[0]):
+            com[i] = scipy.ndimage.measurements.center_of_mass(measurement.array[i])
+        com = com - center[None]
+    else:
+        for i in range(measurement.array.shape[0]):
+            for j in range(measurement.array.shape[1]):
+                com[i, j] = scipy.ndimage.measurements.center_of_mass(measurement.array[i, j])
+        com = com - center[None, None]
+
     com[..., 0] = com[..., 0] * measurement.calibrations[-2].sampling
     com[..., 1] = com[..., 1] * measurement.calibrations[-1].sampling
+
     return (Measurement(com[..., 0], measurement.calibrations[:-2], units='mrad', name='com_x'),
             Measurement(com[..., 1], measurement.calibrations[:-2], units='mrad', name='com_y'))

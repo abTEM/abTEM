@@ -11,6 +11,6 @@ API Reference Documentation
     potentials
     scan
     detect
-    measure1
+    measure
     temperature
     dft
