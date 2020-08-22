@@ -12,7 +12,7 @@ from abtem.device import get_array_module, get_device_function, asnumpy, get_arr
 from abtem.measure import calibrations_from_grid, Measurement
 from abtem.plot import show_line
 from abtem.potentials import Potential, AbstractPotential, AbstractTDSPotentialBuilder, AbstractPotentialBuilder, \
-    ProjectedPotential
+    ProjectedPotentialArray
 from abtem.scan import AbstractScan
 from abtem.transfer import CTF
 from abtem.utils import polargrid, ProgressBar, cosine_window, spatial_frequencies, coordinates, split_integer
@@ -30,13 +30,14 @@ class FresnelPropagator:
         self._cache = Cache(1)
 
     @classmethod
-    def _antialiasing_aperture(cls, gpts: Tuple[int]):
+    def _antialiasing_aperture(cls, gpts: Tuple[int]) -> np.ndarray:
         x = 1 - cosine_window(np.abs(np.fft.fftfreq(gpts[0])), .25, .1, 'high')
         y = 1 - cosine_window(np.abs(np.fft.fftfreq(gpts[1])), .25, .1, 'high')
         return x[:, None] * y[None]
 
     @cached_method('_cache')
-    def _evaluate_propagator_array(self, gpts, sampling, wavelength, dz, xp):
+    def _evaluate_propagator_array(self, gpts: Tuple[int], sampling: Tuple[float], wavelength: float, dz: float,
+                                   xp) -> np.ndarray:
         complex_exponential = get_device_function(xp, 'complex_exponential')
         kx = xp.fft.fftfreq(gpts[0], sampling[0]).astype(xp.float32)
         ky = xp.fft.fftfreq(gpts[1], sampling[1]).astype(xp.float32)
@@ -45,7 +46,7 @@ class FresnelPropagator:
         f *= xp.asarray(self._antialiasing_aperture(gpts))
         return f
 
-    def propagate(self, waves: Union['Waves', 'SMatrixArray'], dz: float):
+    def propagate(self, waves: Union['Waves', 'SMatrixArray'], dz: float) -> Union['Waves', 'SMatrixArray']:
         """
         Propgate wave function or scattering matrix.
 
@@ -65,16 +66,19 @@ class FresnelPropagator:
         fft2_convolve = get_device_function(get_array_module(waves.array), 'fft2_convolve')
 
         fft2_convolve(waves._array, propagator_array, overwrite_x=True)
-
         return waves
 
 
-def transmit(waves: Union['Waves', 'SMatrixArray'], potential_slice: ProjectedPotential):
+def transmit(waves: Union['Waves', 'SMatrixArray'], potential_slice: ProjectedPotentialArray):
     """
     Transmit wave function or scattering matrix.
 
-    :param waves: Wave function or scattering matrix to propagate.
-    :param potential_slice: Projected potential to transmit the wave function through.
+    Parameters
+    ----------
+    waves: Waves object
+        Wave function or scattering matrix to propagate.
+    potential_slice: ProjectedPotential object
+        Projected potential to transmit the wave function through.
     """
     xp = get_array_module(waves.array)
     complex_exponential = get_device_function(xp, 'complex_exponential')

@@ -48,14 +48,20 @@ class AbstractScan(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def insert_new_measurement(self, measurement_key, start, end, new_values):
+    def insert_new_measurement(self, measurement, start, end, new_values):
         """
         Insert new measurement values into a Measurement object or HDF5 file.
 
-        :param measurement: Measurement object to insert new values into.
-        :param start: Start of insertion slice.
-        :param end: End of insertion slice.
-        :param new_measurement_values: New measurement values to be inserted. Length should be (end - start).
+        Parameters
+        ----------
+        measurement : Measurement object
+            The measurement to insert new values.
+        start : int
+            First index of slice.
+        end : int
+            Last index of slice.
+        new_values : ndarray
+            New measurement values to be inserted. Length should be (end - start).
         """
         pass
 
@@ -95,11 +101,19 @@ class PositionScan(AbstractScan):
 
     Defines a scan based on user-defined positions.
 
-    :param positions: The scan positions [Å].
+    Parameters
+    ----------
+    positions : list of xy-positions
+        The scan positions [Å].
     """
 
-    def __init__(self, positions):
-        self._positions = positions
+    def __init__(self, positions: np.ndarray):
+
+        self._positions = np.array(positions)
+
+        if (len(self._positions.shape) != 2) or (self._positions.shape[1] != 2):
+            raise RuntimeError('The shape of the sequence of positions must be (n, 2).')
+
         super().__init__()
 
     @property
@@ -131,11 +145,18 @@ class LineScan(AbstractScan, HasGridMixin):
 
     Defines the scan along a straight line.
 
-    :param start: Start point of the scan [Å].
-    :param end: End point of the scan [Å].
-    :param gpts: Number of scan positions.
-    :param sampling: Sampling rate of scan positions [1 / Å].
-    :param endpoint: If True, end is the last position. Otherwise, it is not included. Default is True.
+    Parameters
+    ----------
+    start : two float
+        Start point of the scan [Å].
+    end : two float
+        End point of the scan [Å].
+    gpts: int
+        Number of scan positions.
+    sampling: float
+        Sampling rate of scan positions [1 / Å].
+    endpoint: bool
+        If True, end is the last position. Otherwise, it is not included. Default is True.
     """
 
     def __init__(self, start: Sequence[float], end: Sequence[float],
@@ -223,12 +244,18 @@ class LineScan(AbstractScan, HasGridMixin):
 
     def add_to_mpl_plot(self, ax, linestyle: str = '-', color: str = 'r', **kwargs):
         """
-        Add a visualization of the scan line to a matplotlib plot.
+        Add a visualization of the scan line to a matplotlib axes.
 
-        :param ax: The axes of the matplotlib plot the visualization should be added to.
-        :param linestyle: Linestyle of scan line.
-        :param color: Color of the scan line.
-        :param kwargs: Additional options for matplotlib.pyplot.plot as keyword arguments.
+        Parameters
+        ----------
+        ax : matplotlib Axes
+            The axes of the matplotlib plot the visualization should be added to.
+        linestyle : str
+            Linestyle of scan line.
+        color : str
+            Color of the scan line.
+        **kwargs :
+            Additional options for matplotlib.pyplot.plot as keyword arguments.
         """
         ax.plot([self.start[0], self.end[0]], [self.start[1], self.end[1]], linestyle=linestyle, color=color, **kwargs)
 
@@ -264,11 +291,18 @@ class GridScan(AbstractScan, HasGridMixin):
 
     Defines the scan on a regular grid.
 
-    :param start: Start corner of the scan [Å].
-    :param end: End corner of the scan [Å].
-    :param gpts: Number of scan positions in the x- and y-direction of the scan.
-    :param sampling: Sampling rate of scan positions [1 / Å].
-    :param endpoint: If True, end is the last position. Otherwise, it is not included. Default is True.
+    Parameters
+    ----------
+    start : two float
+        Start corner of the scan [Å].
+    end : two float
+        End corner of the scan [Å].
+    gpts: two int
+        Number of scan positions in the x- and y-direction of the scan.
+    sampling: two float
+        Sampling rate of scan positions [1 / Å].
+    endpoint: bool
+        If True, end is the last position. Otherwise, it is not included. Default is True.
     """
 
     def __init__(self, start, end, gpts=None, sampling=None, endpoint=False):
@@ -297,6 +331,9 @@ class GridScan(AbstractScan, HasGridMixin):
 
     @property
     def start(self) -> np.ndarray:
+        """
+        Start corner of the scan [Å].
+        """
         return self._start
 
     @start.setter
@@ -306,13 +343,19 @@ class GridScan(AbstractScan, HasGridMixin):
 
     @property
     def end(self) -> np.ndarray:
+        """
+        End corner of the scan [Å].
+        """
         return self.start + self.extent
 
     @end.setter
     def end(self, end: Sequence[float]):
         self.extent = np.array(end) - self.start
 
-    def get_scan_area(self):
+    def get_scan_area(self) -> float:
+        """
+        Get the area of the scan.
+        """
         height = abs(self.start[0] - self.end[0])
         width = abs(self.start[1] - self.end[1])
         return height * width
@@ -333,6 +376,20 @@ class GridScan(AbstractScan, HasGridMixin):
                 measurement.array[row, slic] += asnumpy(new_measurement[slic_1d])
 
     def add_to_mpl_plot(self, ax, alpha=.33, facecolor='r', edgecolor='r', **kwargs):
+        """
+        Add a visualization of the scan area to a matplotlib axes.
+
+        Parameters
+        ----------
+        ax : matplotlib Axes
+            The axes of the matplotlib plot the visualization should be added to.
+        alpha : float
+            Transparency of the scan area visualization.
+        color : str
+            Color of the scan area visualization.
+        **kwargs :
+            Additional options for matplotlib.patches.Rectangle used for the scan area visualization as keyword arguments.
+        """
         rect = Rectangle(tuple(self.start), *self.extent, alpha=alpha, facecolor=facecolor, edgecolor=edgecolor,
                          **kwargs)
         ax.add_patch(rect)

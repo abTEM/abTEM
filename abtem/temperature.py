@@ -9,21 +9,31 @@ from copy import copy
 
 
 class AbstractFrozenPhonons(metaclass=ABCMeta):
-    """Abstract frozen phonons object."""
+    """Abstract base class for frozen phonons objects."""
+
     @abstractmethod
     def __len__(self):
         pass
 
     @abstractmethod
     def generate_atoms(self):
+        """
+        Generate frozen phonon configurations.
+        """
         pass
 
     def __iter__(self):
         return self.generate_atoms()
 
     @abstractmethod
-    def copy(self):
+    def __copy__(self):
         pass
+
+    def copy(self):
+        """
+        Make a copy.
+        """
+        return copy(self)
 
 
 class DummyFrozenPhonons(AbstractFrozenPhonons):
@@ -32,11 +42,13 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
 
     Generates the input Atoms object. Used as a stand-in for simulations without frozen phonons.
 
-    :param atoms: Generated Atoms object.
+    Parameters
+    ----------
+    atoms: ASE Atoms object
+        Generated Atoms object.
     """
 
     def __init__(self, atoms: Atoms):
-
         self._atoms = atoms.copy()
 
     def __len__(self):
@@ -48,9 +60,6 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
     def __copy__(self):
         return self.__class__(self._atoms.copy())
 
-    def copy(self):
-        return copy(self)
-
 
 class FrozenPhonons(AbstractFrozenPhonons):
     """
@@ -59,9 +68,17 @@ class FrozenPhonons(AbstractFrozenPhonons):
     Generates atomic configurations for thermal diffuse scattering.
     Randomly displaces the atomic positions of an ASE Atoms object to emulate thermal vibrations.
 
-    :param Atoms with the average atomic configuration.
-    :param Mapping from atomic species to the standard deviation of the displacements of that atomic species.
+    Parameters
+    ----------
+    atoms: ASE Atoms object
+        Atoms with the average atomic configuration.
+    num_configs: int
+        Number of frozen phonon configurations.
+    sigmas: dict
+        Mapping from atomic species to the standard deviation of the displacements of that atomic species.
         The atomic species can be specified as atomic number or symbol.
+    seed: int
+        Seed for random number generator.
     """
 
     def __init__(self, atoms: Atoms, num_configs: int, sigmas: Mapping[Union[str, int], float], seed=None):
@@ -111,15 +128,15 @@ class FrozenPhonons(AbstractFrozenPhonons):
         return self.__class__(atoms=self.atoms.copy(), num_configs=len(self), sigma=self._sigmas.copy(),
                               seed=self._seed)
 
-    def copy(self):
-        return copy(self)
-
 
 class MDFrozenPhonons(AbstractFrozenPhonons):
     """
     Molecular dynamics frozen phonons.
 
-    :param trajectory: Sequence of Atoms objects representing a thermal distribution of atomic configurations.
+    Parameters
+    ----------
+    trajectory: List of ASE Atoms objects
+        Sequence of Atoms objects representing a thermal distribution of atomic configurations.
     """
 
     def __init__(self, trajectory: Sequence[Atoms]):
@@ -134,6 +151,3 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
 
     def __copy__(self):
         return self.__class__(trajectory=[atoms.copy() for atoms in self._trajectory])
-
-    def copy(self):
-        return copy(self)

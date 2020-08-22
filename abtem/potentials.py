@@ -80,7 +80,7 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         """
         pass
 
-    def get_projected_potential(self, items):
+    def get_projected_potential(self, items) -> 'ProjectedPotentialArray':
         """
         Get projected potential for the slice or slices.
 
@@ -653,14 +653,14 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
                 if len(slice_atoms) == 0:
                     continue
 
-                vr = np.zeros((len(slice_atoms), len(integrator.r)), np.float32)
-                dvdr = np.zeros((len(slice_atoms), len(integrator.r)), np.float32)
+                vr = np.zeros((len(slice_atoms), integrator.evaluation_points.shape[0]), np.float32)
+                dvdr = np.zeros((len(slice_atoms), integrator.evaluation_points.shape[0]), np.float32)
                 for j, atom in enumerate(slice_atoms):
                     am, bm = a - atom.z, b - atom.z
                     vr[j], dvdr[j, :-1] = integrator.integrate(am, bm)
                 vr = xp.asarray(vr, dtype=xp.float32)
                 dvdr = xp.asarray(dvdr, dtype=xp.float32)
-                r = xp.asarray(integrator.r, dtype=xp.float32)
+                r = xp.asarray(integrator.evaluation_points, dtype=xp.float32)
 
                 slice_positions = xp.asarray(slice_atoms.positions[:, :2], dtype=xp.float32)
                 sampling = xp.asarray(self.sampling, dtype=xp.float32)
