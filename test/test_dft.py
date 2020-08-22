@@ -45,7 +45,7 @@ def test_dft():
     relative_difference[valid] = 100 * (projected_iam[valid] - projected_dft[valid]) / projected_iam[valid]
 
     assert np.isclose(9.553661, absolute_difference.max(), atol=.1)
-    assert np.isclose(44.327312, relative_difference[valid].max(), atol=.1)
+    assert np.isclose(43.573837, relative_difference[valid].max(), atol=.1)
 
 
 @pytest.mark.gpaw
