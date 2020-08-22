@@ -1,6 +1,7 @@
 """Module to describe the detection of scattered electron waves."""
 from collections.abc import Iterable
 from copy import copy
+from typing import Sequence
 
 import h5py
 import imageio
@@ -14,8 +15,24 @@ from abtem.plot import show_image, show_line
 
 
 class Calibration:
-    """Object to handle the spatial calibration of scattered intensities."""
-    def __init__(self, offset, sampling, units, name=''):
+    """
+    Calibration object
+
+    The calibration object represents the sampling of a uniformly sampled Measurement.
+
+    Parameters
+    ----------
+    offset: float
+        The lower bound of the sampling points.
+    sampling: float
+        The distance between sampling points.
+    units: str
+        The units of the calibration shown in plots.
+    name:
+        The name of this calibration to be shown in plots.
+    """
+
+    def __init__(self, offset: float, sampling: float, units: str, name: str = ''):
         self.offset = offset
         self.sampling = sampling
         self.units = units
@@ -27,15 +44,21 @@ class Calibration:
                 (self.units == other.units) &
                 (self.name == other.name))
 
-    def copy(self):
+    def __copy__(self):
         return self.__class__(self.offset, self.sampling, self.units, self.name)
+
+    def copy(self):
+        """
+        Make a copy.
+        """
+        return copy(self)
 
 
 def fourier_space_offset(n, d):
     """
     Fourier-space offset function
 
-    Function for calculating an offset in Fourier space. JM
+    Function for calculating an offset in Fourier space.
 
     Parameters
     ----------
@@ -51,25 +74,28 @@ def fourier_space_offset(n, d):
         return -1 / (2 * d) + 1 / (2 * d * n)
 
 
-def calibrations_from_grid(gpts, sampling, names=None, units=None, fourier_space=False, scale_factor=1.0):
+def calibrations_from_grid(gpts: Sequence[int],
+                           sampling: Sequence[float],
+                           names: Sequence[str] = None,
+                           units: str = None,
+                           fourier_space: bool = False,
+                           scale_factor: float = 1.0) -> Sequence[Calibration]:
     """
-    Calibration from grid function
-
-    Function to determine spatial calibrations for a given computational grid and sampling.
+    Returns the spatial calibrations for a given computational grid and sampling.
 
     Parameters
     ----------
-    gpts : two ints
+    gpts: list of int
         Number of grid points in the x and y directions.
-    sampling : float
+    sampling: list of float
         Sampling of the potential in Å.
-    names : str, optional
-        JM
-    units : str, optional
-        Units for the calibration, either Å or 1 / Å depending on whether Fourier-space is False or not.
-    fourier_space : Boolean, optional
+    names: list of str, optional
+        The name of this calibration.
+    units: str, optional
+        Units for the calibration.
+    fourier_space: bool, optional
         Setting for calibrating either in the reciprocal or real space. Default is False.
-    scale_factor : float, optional
+    scale_factor: float, optional
         Scaling factor for the calibration. Default is 1.0.
     """
 
@@ -97,35 +123,27 @@ def calibrations_from_grid(gpts, sampling, names=None, units=None, fourier_space
     return calibrations
 
 
-def fwhm(y):
-    """Function for calculating the full width at half maximum value for a 1D function."""
-    peak_idx = np.argmax(y)
-    peak_value = y[peak_idx]
-    left = np.argmin(np.abs(y[:peak_idx] - peak_value / 2))
-    right = peak_idx + np.argmin(np.abs(y[peak_idx:] - peak_value / 2))
-    return right - left
-
-
-def center_of_mass(measurement):
-    """Function for estimating the intensity center-of-mass for a given measurement."""
-    shape = measurement.array.shape[2:]
-    center = np.array(shape) / 2 - [.5 * (shape[0] % 2), .5 * (shape[1] % 2)]
-    com = np.zeros(measurement.array.shape[:2] + (2,))
-    for i in range(measurement.array.shape[0]):
-        for j in range(measurement.array.shape[1]):
-            com[i, j] = scipy.ndimage.measurements.center_of_mass(measurement.array[i, j])
-    com = com - center[None, None]
-    com[..., 0] = com[..., 0] * measurement.calibrations[2].sampling
-    com[..., 1] = com[..., 1] * measurement.calibrations[3].sampling
-    return (Measurement(com[..., 0], measurement.calibrations[:2], units='mrad.', name='com_x'),
-            Measurement(com[..., 1], measurement.calibrations[:2], units='mrad.', name='com_y'))
-
-
 class Measurement:
-    """Abstract class for a measurement."""
+    """
+    Measurement object.
+
+    Parameters
+    ----------
+    array: ndarray
+        The array representing the measurements. The array can be any dimension.
+    calibrations: list of Calibration objects
+        The calibration for each dimension of the measurement array.
+    units: str
+        The units of the array values to be displayed in plots.
+    name: str
+        The name of the array values to be displayed in plots.
+    """
+
     def __init__(self, array, calibrations, units='', name=''):
+
         if len(calibrations) != len(array.shape):
-            raise RuntimeError()
+            raise RuntimeError(
+                'The number of calibrations must equal the number of array dimensions. For undefined calibrations use None.')
 
         self._array = asnumpy(array)
         self._calibrations = calibrations
@@ -133,7 +151,6 @@ class Measurement:
         self._name = name
 
     def __getitem__(self, args):
-
         if isinstance(args, Iterable):
             args += (slice(None),) * (len(self.array.shape) - len(args))
         else:
@@ -164,18 +181,33 @@ class Measurement:
 
     @property
     def shape(self):
+        """
+        The shape of the measurement array.
+        """
         return self._array.shape
 
     @property
     def units(self):
+        """
+        The units of the array values to be displayed in plots.
+        """
         return self._units
 
     @property
     def name(self):
+        """
+        The name of the array values to be displayed in plots.
+        """
         return self._name
 
     @property
     def dimensions(self):
+        """
+
+        Returns
+        -------
+
+        """
         return len(self.array.shape)
 
     def __sub__(self, other):
@@ -198,20 +230,26 @@ class Measurement:
         difference = self.array - other.array
         return self.__class__(difference, calibrations=self.calibrations, units=self.units, name=self.name)
 
-    def mean(self, axis):
+    @property
+    def calibrations(self):
+        return self._calibrations
+
+    def _reduction(self, reduction_function, axis):
         if not isinstance(axis, Iterable):
             axis = (axis,)
 
-        array = np.mean(self.array, axis=axis)
+        array = reduction_function(self.array, axis=axis)
 
         axis = [d % len(self.calibrations) for d in axis]
         calibrations = [self.calibrations[i] for i in range(len(self.calibrations)) if i not in axis]
 
         return self.__class__(array, calibrations)
 
-    @property
-    def calibrations(self):
-        return self._calibrations
+    def sum(self, axis):
+        return self._reduction(np.mean, axis)
+
+    def mean(self, axis):
+        return self._reduction(np.mean, axis)
 
     def interpolate(self, new_sampling):
         import warnings
@@ -274,6 +312,12 @@ class Measurement:
             calibrations.append(copy(calibration))
         return self.__class__(self._array.copy(), calibrations=calibrations)
 
+    def copy(self):
+        """
+        Make a copy.
+        """
+        return copy(self)
+
     def show(self, **kwargs):
         calibrations = [calib for calib, num_elem in zip(self.calibrations, self.array.shape) if num_elem > 1]
         array = np.squeeze(asnumpy(self.array))
@@ -287,3 +331,31 @@ class Measurement:
             return show_image(array, calibrations, cbar_label=cbar_label, **kwargs)
         else:
             raise RuntimeError('Plotting not supported for {}D measurement, use reduction operation first'.format(dims))
+
+
+def fwhm(y):
+    """Function for calculating the full width at half maximum value for a 1D function."""
+    peak_idx = np.argmax(y)
+    peak_value = y[peak_idx]
+    left = np.argmin(np.abs(y[:peak_idx] - peak_value / 2))
+    right = peak_idx + np.argmin(np.abs(y[peak_idx:] - peak_value / 2))
+    return right - left
+
+
+def center_of_mass(measurement: Measurement):
+    """Function for estimating the intensity center-of-mass for a given measurement."""
+
+    if (measurement.dimensions != 3) or (measurement.dimensions != 4):
+        raise RuntimeError()
+
+    shape = measurement.array.shape[-2:]
+    center = np.array(shape) / 2 - np.array([.5 * (shape[-2] % 2), .5 * (shape[-1] % 2)])
+    com = np.zeros(measurement.array.shape[:-2] + (2,))
+    for i in range(measurement.array.shape[0]):
+        for j in range(measurement.array.shape[1]):
+            com[i, j] = scipy.ndimage.measurements.center_of_mass(measurement.array[i, j])
+    com = com - center[None, None]
+    com[..., 0] = com[..., 0] * measurement.calibrations[-2].sampling
+    com[..., 1] = com[..., 1] * measurement.calibrations[-1].sampling
+    return (Measurement(com[..., 0], measurement.calibrations[:-2], units='mrad', name='com_x'),
+            Measurement(com[..., 1], measurement.calibrations[:-2], units='mrad', name='com_y'))

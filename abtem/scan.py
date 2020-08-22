@@ -254,7 +254,7 @@ class LineScan(AbstractScan, HasGridMixin):
             Linestyle of scan line.
         color : str
             Color of the scan line.
-        **kwargs :
+        kwargs :
             Additional options for matplotlib.pyplot.plot as keyword arguments.
         """
         ax.plot([self.start[0], self.end[0]], [self.start[1], self.end[1]], linestyle=linestyle, color=color, **kwargs)
@@ -387,7 +387,7 @@ class GridScan(AbstractScan, HasGridMixin):
             Transparency of the scan area visualization.
         color : str
             Color of the scan area visualization.
-        **kwargs :
+        kwargs :
             Additional options for matplotlib.patches.Rectangle used for the scan area visualization as keyword arguments.
         """
         rect = Rectangle(tuple(self.start), *self.extent, alpha=alpha, facecolor=facecolor, edgecolor=edgecolor,

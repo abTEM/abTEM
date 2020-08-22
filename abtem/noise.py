@@ -2,6 +2,7 @@
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 from copy import copy
+from abtem.measure import Measurement
 
 
 def _pixel_times(dwell_time, flyback_time, shape):
@@ -76,7 +77,9 @@ def _make_displacement_field(time, max_frequency, num_components, rms_power):
     frame_mag_deviation = (1 + x_mag_deviation) * (1 + y_mag_deviation) - 1
     frame_mag_deviation = np.sqrt(np.mean(frame_mag_deviation ** 2))
 
-    profile_x *= rms_power / (235.5 * frame_mag_deviation) #JM please explain where 235.5 comes from.
+    # 235.5 = 2.355 * 100 %; 2.355 converts from 1/e width to FWHM
+
+    profile_x *= rms_power / (235.5 * frame_mag_deviation)
     profile_y *= rms_power / (235.5 * frame_mag_deviation)
 
     return profile_x, profile_y
@@ -113,7 +116,8 @@ def _apply_displacement_field(image, distortion_x, distortion_y):
     return warped.reshape(image.shape)
 
 
-def add_scan_noise(image, dwell_time, flyback_time, max_frequency, rms_power, num_components=200):
+def add_scan_noise(measurement: Measurement, dwell_time: float, flyback_time: float, max_frequency: float,
+                   rms_power: float, num_components: int = 200):
     """
     Scan noise function
 
@@ -135,19 +139,19 @@ def add_scan_noise(image, dwell_time, flyback_time, max_frequency, rms_power, nu
         Number of frequency components.
     """
 
-    image = image.copy()
-    time = _pixel_times(dwell_time, flyback_time, image.array.T.shape)
+    measurement = measurement.copy()
+    time = _pixel_times(dwell_time, flyback_time, measurement.array.T.shape)
     displacement_x, displacement_y = _make_displacement_field(time, max_frequency, num_components, rms_power)
-    array = _apply_displacement_field(image.array[:].T, displacement_x, displacement_y)
-    image.array[:] = array.T
-    return image
+    array = _apply_displacement_field(measurement.array[:].T, displacement_x, displacement_y)
+    measurement.array[:] = array.T
+    return measurement
 
 
 def poisson_noise(measurement, dose):
     """Function to describe Poisson noise for a given measurement with an irradiation dose given in electrons / Å^2."""
     pixel_area = np.product([calibration.sampling for calibration in measurement.calibrations])
-    new_copy = copy(measurement)
-    array = new_copy.array
-    array[:] = array / np.sum(array) * dose * pixel_area * np.prod(array.shape)
-    array[:] = np.random.poisson(array).astype(np.float)
-    return new_copy
+    measurement = measurement.copy()
+    array = measurement.array
+    measurement.array[:] = array / np.sum(array) * dose * pixel_area * np.prod(array.shape)
+    measurement.array[:] = np.random.poisson(array).astype(np.float)
+    return measurement

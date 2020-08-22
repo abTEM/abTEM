@@ -196,7 +196,7 @@ class _PolarDetector(AbstractDetector):
             The grid of the Waves objects that will be detected.
         wavelength: float
             The wavelength of the Waves objects that will be detected.
-        **kwargs: Additional keyword arguments for abtem.plot.show_image.
+        kwargs: Additional keyword arguments for abtem.plot.show_image.
         """
 
         grid.check_is_defined()

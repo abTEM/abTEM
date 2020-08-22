@@ -132,7 +132,7 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 
         Parameters
         ----------
-        **kwargs: Additional keyword arguments for abtem.plot.show_image.
+        kwargs: Additional keyword arguments for abtem.plot.show_image.
         """
         self[:].show(**kwargs)
 
@@ -333,7 +333,7 @@ class ProjectedPotentialArray(HasGridMixin):
 
         Parameters
         ----------
-        **kwargs: Additional keyword arguments for abtem.plot.show_image.
+        kwargs: Additional keyword arguments for abtem.plot.show_image.
         """
         calibrations = calibrations_from_grid(self.grid.gpts, self.grid.sampling, names=['x', 'y'])
         return show_image(self.array, calibrations, **kwargs)

@@ -203,7 +203,7 @@ class Waves(HasGridAndAcceleratorMixin):
         ----------
         ctf: CTF
             Contrast Transfer Function object to be applied.
-        **kwargs:
+        kwargs:
             Provide the aberration coefficients as keyword arguments.
 
         Returns
@@ -313,7 +313,7 @@ class Waves(HasGridAndAcceleratorMixin):
         """
         Show the wave function.
 
-        **kwargs:
+        kwargs:
             Additional keyword arguments for the abtem.plot.show_image function.
         """
         self.intensity().show(**kwargs)
@@ -435,7 +435,7 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
         Electron energy [eV].
     device: str
         The probe wave functions will be build on this device.
-    **kwargs:
+    kwargs:
         Provide the aberration coefficients as keyword arguments.
     """
 
@@ -650,7 +650,7 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        **kwargs: Additional keyword arguments for the abtem.plot.show_image function.
+        kwargs: Additional keyword arguments for the abtem.plot.show_image function.
         """
         self.grid.check_is_defined()
         measurement = self.build((self.extent[0] / 2, self.extent[1] / 2)).intensity()
@@ -668,7 +668,7 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        **kwargs: Additional keyword arguments for the abtem.plot.show_image function.
+        kwargs: Additional keyword arguments for the abtem.plot.show_image function.
         """
         self.grid.check_is_defined()
         measurement = self.build((self.extent[0] / 2, self.extent[1] / 2)).intensity()
@@ -995,7 +995,7 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        **kwargs:
+        kwargs:
             Additional keyword arguments for the abtem.plot.show_line function.
         """
 
@@ -1005,7 +1005,7 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        **kwargs:
+        kwargs:
             Additional keyword arguments for the abtem.plot.show_image function.
         """
         measurement = self.collapse((self.extent[0] / 2, self.extent[1] / 2)).intensity()
@@ -1056,7 +1056,7 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
         The calculations will be carried out on this device.
     storage: str
         The scattering matrix will be stored on this device.
-    **kwargs:
+    kwargs:
         The parameters of a new CTF object as keyword arguments.
     """
 
@@ -1326,7 +1326,7 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        **kwargs:
+        kwargs:
             Additional keyword arguments for the abtem.plot.show_line function.
         """
         self.build().show_profile(**kwargs)
@@ -1337,7 +1337,7 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        **kwargs:
+        kwargs:
             Additional keyword arguments for the abtem.plot.show_image function.
         """
         self.build().show(**kwargs)
