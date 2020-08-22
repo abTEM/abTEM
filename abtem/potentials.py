@@ -219,17 +219,17 @@ class PotentialIntegrator:
 
     def __init__(self,
                  function: Callable,
-                 evaluation_points: np.ndarray,
+                 r: np.ndarray,
                  cutoff: float = None,
                  cache_size: int = 4096,
                  cache_key_decimals: int = 2,
                  tolerance: float = 1e-6):
 
         self._function = function
-        self._evaluation_points = evaluation_points
+        self._r = r
 
         if cutoff is None:
-            self._cutoff = evaluation_points[-1]
+            self._cutoff = r[-1]
         else:
             self._cutoff = cutoff
 
@@ -238,8 +238,8 @@ class PotentialIntegrator:
         self._tolerance = tolerance
 
     @property
-    def evaluation_points(self):
-        return self._evaluation_points
+    def r(self):
+        return self._r
 
     @property
     def cutoff(self):
@@ -653,14 +653,14 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
                 if len(slice_atoms) == 0:
                     continue
 
-                vr = np.zeros((len(slice_atoms), integrator.evaluation_points.shape[0]), np.float32)
-                dvdr = np.zeros((len(slice_atoms), integrator.evaluation_points.shape[0]), np.float32)
+                vr = np.zeros((len(slice_atoms), integrator.r.shape[0]), np.float32)
+                dvdr = np.zeros((len(slice_atoms), integrator.r.shape[0]), np.float32)
                 for j, atom in enumerate(slice_atoms):
                     am, bm = a - atom.z, b - atom.z
                     vr[j], dvdr[j, :-1] = integrator.integrate(am, bm)
                 vr = xp.asarray(vr, dtype=xp.float32)
                 dvdr = xp.asarray(dvdr, dtype=xp.float32)
-                r = xp.asarray(integrator.evaluation_points, dtype=xp.float32)
+                r = xp.asarray(integrator.r, dtype=xp.float32)
 
                 slice_positions = xp.asarray(slice_atoms.positions[:, :2], dtype=xp.float32)
                 sampling = xp.asarray(self.sampling, dtype=xp.float32)
