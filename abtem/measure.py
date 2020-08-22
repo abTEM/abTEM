@@ -54,18 +54,16 @@ class Calibration:
         return copy(self)
 
 
-def fourier_space_offset(n, d):
+def _fourier_space_offset(n: int, d: float):
     """
-    Fourier-space offset function
-
-    Function for calculating an offset in Fourier space.
+    Calculate the Fourier space offset.
 
     Parameters
     ----------
     n : int
-        JM
-    d : int
-        JM
+        Number of sampling points.
+    d : float
+        Real space sampling density.
     """
 
     if n % 2 == 0:
@@ -97,6 +95,10 @@ def calibrations_from_grid(gpts: Sequence[int],
         Setting for calibrating either in the reciprocal or real space. Default is False.
     scale_factor: float, optional
         Scaling factor for the calibration. Default is 1.0.
+
+    Returns
+    -------
+    list of Calibrations
     """
 
     if names is None:
@@ -114,7 +116,7 @@ def calibrations_from_grid(gpts: Sequence[int],
     if fourier_space:
         for name, n, d in zip(names, gpts, sampling):
             r = n * d
-            offset = fourier_space_offset(n, d)
+            offset = _fourier_space_offset(n, d)
             calibrations += (Calibration(offset * scale_factor, 1 / r * scale_factor, units, name),)
     else:
         for name, d in zip(names, sampling):
@@ -180,6 +182,13 @@ class Measurement:
         return self.shape[0]
 
     @property
+    def array(self):
+        """
+        Array of measurements.
+        """
+        return self._array
+
+    @property
     def shape(self):
         """
         The shape of the measurement array.
@@ -203,12 +212,16 @@ class Measurement:
     @property
     def dimensions(self):
         """
-
-        Returns
-        -------
-
+        The measurement dimensions.
         """
         return len(self.array.shape)
+
+    @property
+    def calibrations(self):
+        """
+        The measurement calibrations.
+        """
+        return self._calibrations
 
     def __sub__(self, other):
         assert isinstance(other, self.__class__)
@@ -230,10 +243,6 @@ class Measurement:
         difference = self.array - other.array
         return self.__class__(difference, calibrations=self.calibrations, units=self.units, name=self.name)
 
-    @property
-    def calibrations(self):
-        return self._calibrations
-
     def _reduction(self, reduction_function, axis):
         if not isinstance(axis, Iterable):
             axis = (axis,)
@@ -246,9 +255,35 @@ class Measurement:
         return self.__class__(array, calibrations)
 
     def sum(self, axis):
+        """
+        Sum of measurment elements over a given axis.
+
+        Parameters
+        ----------
+        axis: int or tuple of ints
+            Axis or axes along which a sum is performed. If axis is negative it counts from the last to the first axis.
+
+        Returns
+        -------
+        Measurement
+            A measurement with the same shape, but with the specified axis removed.
+        """
         return self._reduction(np.mean, axis)
 
     def mean(self, axis):
+        """
+        Mean of measurment elements over a given axis.
+
+        Parameters
+        ----------
+        axis: int or tuple of ints
+            Axis or axes along which a sum is performed. If axis is negative it counts from the last to the first axis.
+
+        Returns
+        -------
+        Measurement object
+            A measurement with the same shape, but with the specified axis removed.
+        """
         return self._reduction(np.mean, axis)
 
     def interpolate(self, new_sampling):
@@ -265,16 +300,32 @@ class Measurement:
 
         return self.__class__(new_array, calibrations, name=self.name, units=self.units)
 
-    def tile(self, repeats):
-        new_array = np.tile(self._array, repeats)
-        return self.__class__(new_array, self.calibrations, name=self.name, units=self.units)
+    def tile(self, multiples):
+        """
+        Tile the measurement.
 
-    @property
-    def array(self):
-        return self._array
+        Parameters
+        ----------
+        multiples: two int
+            The number of repetitions of the measurement along each axis.
+
+        Returns
+        -------
+        Measurement object
+            The tiled potential.
+        """
+        new_array = np.tile(self._array, multiples)
+        return self.__class__(new_array, self.calibrations, name=self.name, units=self.units)
 
     @classmethod
     def read(cls, path):
+        """
+        Read measurement from a hdf5 file.
+
+        path: str
+            The path to read the file.
+        """
+
         with h5py.File(path, 'r') as f:
             datasets = {}
             for key in f.keys():
@@ -290,6 +341,13 @@ class Measurement:
         return cls(datasets['array'], calibrations)
 
     def write(self, path, mode='w'):
+        """
+        Write measurement to a hdf5 file.
+
+        path: str
+            The path to write the file.
+        """
+
         with h5py.File(path, mode) as f:
             f.create_dataset('array', data=self.array)
             f.create_dataset('offset', data=[calibration.offset for calibration in self.calibrations])
@@ -302,6 +360,16 @@ class Measurement:
         return path
 
     def save_as_image(self, path):
+        """
+        Write the measurement to an image file. The measurement array will be normalized and converted to 16-bit integers.
+
+        path: str
+            The path to write the file.
+        """
+
+        if self.dimensions != 2:
+            raise RuntimeError('Only 2d measurements can be saved as an image.')
+
         array = (self.array - self.array.min()) / self.array.ptp() * np.iinfo(np.uint16).max
         array = array.astype(np.uint16)
         imageio.imwrite(path, array.T)
@@ -319,6 +387,14 @@ class Measurement:
         return copy(self)
 
     def show(self, **kwargs):
+        """
+        Show the measurement.
+
+        Parameters
+        ----------
+        kwargs:
+            Additional keyword arguments for the abtem.plot.show_image function.
+        """
         calibrations = [calib for calib, num_elem in zip(self.calibrations, self.array.shape) if num_elem > 1]
         array = np.squeeze(asnumpy(self.array))
 
@@ -333,12 +409,15 @@ class Measurement:
             raise RuntimeError('Plotting not supported for {}D measurement, use reduction operation first'.format(dims))
 
 
-def fwhm(y):
+def fwhm(measurement: Measurement):
     """Function for calculating the full width at half maximum value for a 1D function."""
-    peak_idx = np.argmax(y)
-    peak_value = y[peak_idx]
-    left = np.argmin(np.abs(y[:peak_idx] - peak_value / 2))
-    right = peak_idx + np.argmin(np.abs(y[peak_idx:] - peak_value / 2))
+
+    array = measurement.array
+
+    peak_idx = np.argmax(array)
+    peak_value = array[peak_idx]
+    left = np.argmin(np.abs(array[:peak_idx] - peak_value / 2))
+    right = peak_idx + np.argmin(np.abs(array[peak_idx:] - peak_value / 2))
     return right - left
 
 

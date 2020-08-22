@@ -10,5 +10,6 @@ API Reference Documentation
     potentials
     scan
     detect
+    measure
     temperature
     dft
