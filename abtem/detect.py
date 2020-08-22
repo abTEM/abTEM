@@ -12,8 +12,8 @@ from abtem.plot import show_image
 from abtem.scan import AbstractScan
 from abtem.utils import label_to_index_generator, spatial_frequencies
 
-if TYPE_CHECKING:
-    from abtem.waves import Waves
+#if TYPE_CHECKING:
+#    from abtem.waves import Waves
 
 
 def _crop_to_center(array: np.ndarray):
@@ -88,7 +88,7 @@ class AbstractDetector(metaclass=ABCMeta):
         return self._save_file
 
     @abstractmethod
-    def detect(self, waves: 'Waves') -> Any:
+    def detect(self, waves) -> Any:
         pass
 
     @abstractmethod
@@ -255,7 +255,7 @@ class AnnularDetector(_PolarDetector):
     def outer(self, value: float):
         self._outer = value
 
-    def detect(self, waves: 'Waves') -> np.ndarray:
+    def detect(self, waves) -> np.ndarray:
         """
         Integrate the intensity of a the wave functions over the detector range.
 
