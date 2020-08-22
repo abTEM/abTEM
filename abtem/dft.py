@@ -7,7 +7,7 @@ from scipy.interpolate import interp1d, interpn
 
 from abtem.base_classes import Grid
 from abtem.device import get_device_function
-from abtem.potentials import AbstractPotentialBuilder, ProjectedPotential, disc_meshgrid, pad_atoms, \
+from abtem.potentials import AbstractPotentialBuilder, ProjectedPotentialArray, _disc_meshgrid, pad_atoms, \
     PotentialIntegrator
 from abtem.structures import orthogonalize_cell
 from abtem.utils import split_integer
@@ -79,10 +79,19 @@ def get_paw_corrections(atom_index: int, calculator, rcgauss: float = 0.005) -> 
     calculate the all-electron potential from a converged calculation. This is implemented independently in
     abTEM to enable dealing with non-orthogonal cells, and to allow working with slices of large potentials.
 
-    :param atom_index: Index of the atom for which the corrections are calculated.
-    :param calculator: Converged GPAW calculation.
-    :param rcgauss: Radius of the Gaussian smearing of the nuclear potentials [Å]. Default value is 0.005 Å.
-    :return The evaluation points and values of the core contribution to the electronstatic potential.
+    Parameters
+    ----------
+    atom_index: int
+        Index of the atom for which the corrections are calculated.
+    calculator: GPAW object
+        Converged GPAW calculation.
+    rcgauss: float
+        Radius of the Gaussian smearing of the nuclear potentials [Å]. Default value is 0.005 Å.
+
+    Returns
+    -------
+    two 1d arrays
+        The evaluation points and values of the core contribution to the electronstatic potential.
     """
 
     dens = calculator.density
@@ -115,20 +124,30 @@ class GPAWPotential(AbstractPotentialBuilder):
 
     The GPAW potential object is used to calculate electrostatic potential of a converged GPAW calculator object.
 
-    :param calculator: A converged GPAW calculator.
-    :param origin: xy-origin of the electrostatic potential relative to the xy-origin of the Atoms object [Å].
-    :param extent: Lateral extent of potential, if the unit cell of the atoms is too small it will be repeated [Å].
-    :param gpts: Number of grid points describing each slice of the potential.
-    :param sampling: Lateral sampling of the potential [1 / Å].
-    :param slice_thickness: Thickness of the potential slices in Å for calculating the number of slices used by the
-        multislice algorithm. Default is 0.5 Å.
-    :param core_size: The standard deviation of the Gaussian function representing the atomic core.
+    Parameters
+    ----------
+    calculator: GPAW object
+        A converged GPAW calculator.
+    origin: two float, optional
+        xy-origin of the electrostatic potential relative to the xy-origin of the Atoms object [Å].
+    extent: one or two float
+        Lateral extent of potential, if the unit cell of the atoms is too small it will be repeated [Å].
+    gpts: one or two int
+        Number of grid points describing each slice of the potential.
+    sampling: one or two float
+        Lateral sampling of the potential [1 / Å].
+    slice_thickness: float
+        Thickness of the potential slices in Å for calculating the number of slices used by the multislice algorithm.
+        Default is 0.5 Å.
+    core_size: float
+        The standard deviation of the Gaussian function representing the atomic core.
     """
 
     def __init__(self,
                  calculator,
                  gpts: Union[int, Sequence[int]] = None,
-                 sampling: Union[int, Sequence[int]] = None,
+                 sampling: Union[float, Sequence[float]] = None,
+                 origin: Union[float, Sequence[float]] = None,
                  slice_thickness=.5,
                  core_size=.005,
                  storage='cpu'):
@@ -151,6 +170,18 @@ class GPAWPotential(AbstractPotentialBuilder):
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling, lock_extent=True)
 
         super().__init__(storage)
+
+    @property
+    def calculator(self):
+        return self._calculator
+
+    @property
+    def core_size(self):
+        return self._core_size
+
+    @property
+    def origin(self):
+        return self._origin
 
     @property
     def num_slices(self):
@@ -194,7 +225,7 @@ class GPAWPotential(AbstractPotentialBuilder):
                 cutoff = r[-1]
 
                 margin = np.int(np.ceil(cutoff / np.min(self.sampling)))
-                rows, cols = disc_meshgrid(margin)
+                rows, cols = _disc_meshgrid(margin)
                 disc_indices = np.hstack((rows[:, None], cols[:, None]))
 
                 slice_atoms = slice_atoms[(slice_atoms.positions[:, 2] > a - cutoff) *
@@ -227,6 +258,16 @@ class GPAWPotential(AbstractPotentialBuilder):
                                              sampling)
 
             array = -(projected_valence + array / np.sqrt(4 * np.pi) * units.Ha)
-            yield ProjectedPotential(array, self.get_slice_thickness(i), extent=self.extent)
+            yield ProjectedPotentialArray(array, self.get_slice_thickness(i), extent=self.extent)
             a = b
             na = nb
+
+    def __copy__(self):
+        slice_thickness = self.calculator.atoms.cell[2, 2] / self.num_slices
+        return self.__class__(self.calculator,
+                              gpts=self.gpts,
+                              sampling=self.sampling,
+                              origin=self.origin,
+                              slice_thickness=slice_thickness,
+                              core_size=self._storage,
+                              storage=self.core_size)
