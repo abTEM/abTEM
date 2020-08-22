@@ -7,9 +7,10 @@ API Reference Documentation
 
     base_classes
     waves
+    transfer
     potentials
     scan
     detect
-    measure
+    measure1
     temperature
     dft
