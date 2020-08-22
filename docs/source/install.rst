@@ -31,23 +31,18 @@ See `GPAW's installation guide <https://wiki.fysik.dtu.dk/gpaw/>`_ for more deta
 
 Install with Anaconda
 ---------------------
-The recommended installation for abTEM uses the Anaconda python distribution. First, `download and install Anaconda <`www.anaconda.com/download>`_. Then open a terminal (on Windows use the Anaconda prompt) and run:
-
-.. code-block::
+The recommended installation for abTEM uses the Anaconda python distribution. First, `download and install Anaconda <`www.anaconda.com/download>`_. Then open a terminal (on Windows use the Anaconda prompt) and run::
 
     conda update conda
     conda create --name abtem python=3.8
     conda activate abtem
-    conda install anaconda
     pip install abtem
 
 This creates a new virtual environment and installs abtem into it.
 
 Install CUDA toolkit and CuPy
 *****************************
-Once the CUDA driver is correctly set up, you can install CuPy from the conda-forge channel:
-
-.. code-block::
+Once the CUDA driver is correctly set up, you can install CuPy from the conda-forge channel::
 
     conda install -c conda-forge cupy
 
@@ -55,9 +50,7 @@ and conda will install pre-built CuPy and most of the optional dependencies for 
 
 Install Jupyter and add the IPython kernel
 ******************************************
-To be able to use the conda environment in a Jupyter Notebook, you have to install IPython kernel.
-
-.. code-block::
+To be able to use the conda environment in a Jupyter Notebook, you have to install IPython kernel::
 
     conda install jupyter
     conda install -c anaconda ipykernel
