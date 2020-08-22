@@ -41,12 +41,17 @@ The recommended installation for abTEM uses the Anaconda python distribution. Fi
     conda install anaconda
     pip install abtem
 
-This creates a new virtual environment
+This creates a new virtual environment and installs abtem into it.
 
 Install CUDA toolkit and CuPy
 *****************************
+Once the CUDA driver is correctly set up, you can install CuPy from the conda-forge channel:
 
+.. code-block::
 
+    conda install -c conda-forge cupy
+
+and conda will install pre-built CuPy and most of the optional dependencies for you, including CUDA toolkit.
 
 Install Jupyter and add the IPython kernel
 ******************************************
@@ -65,12 +70,13 @@ Strict dependencies:
 - `Numpy <https://www.numpy.org/>`_
 - `scipy <https://scipy.org/>`_
 - `Numba <https://www.numba.org/>`_
-- `mkl_fft <https://github.com/IntelPython/mkl_fft>`_
+- `pyfftw <https://hgomersall.github.io/pyFFTW/>`_
 - `imageio <https://imageio.github.io/>`_
 - `h5py <https://h5py.org/>`_
 - `matplotlib <https://matplotlib.org/>`_
 - `ase <https://wiki.fysik.dtu.dk/ase/>`_
 - `tqdm <https://tqdm.github.io/>`_
+- `psutil <https://github.com/giampaolo/psutil>`_
 
 Only for GPU calculations:
 
