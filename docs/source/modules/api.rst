@@ -14,3 +14,6 @@ API Reference Documentation
     measure
     temperature
     dft
+    structures
+    noise
+    plot
