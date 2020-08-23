@@ -8,3 +8,5 @@ from abtem.temperature import AbstractFrozenPhonons, FrozenPhonons
 from abtem.transfer import CTF
 from abtem.waves import PlaneWave, Probe, SMatrix, Waves
 from abtem.measure import Measurement
+
+from abtem._version import __version__
