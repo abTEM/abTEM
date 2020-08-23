@@ -178,6 +178,16 @@ class Measurement:
 
         return self.__class__(new_array, new_calibrations)
 
+    @property
+    def extent(self):
+        extent = ()
+        for i, calibration in enumerate(self.calibrations):
+            if calibration is None:
+                extent += (None, None)
+            else:
+                extent += (calibration.offset, calibration.offset + self.array.shape[i] * calibration.sampling)
+        return extent
+
     def __len__(self):
         return self.shape[0]
 
@@ -409,11 +419,16 @@ class Measurement:
             raise RuntimeError('Plotting not supported for {}D measurement, use reduction operation first'.format(dims))
 
 
+def block_zeroth_order_spot(diffraction_pattern: Measurement):
+    shape = diffraction_pattern.shape
+    diffraction_pattern._array[shape[0] // 2, shape[1] // 2] = 0.
+    return diffraction_pattern
+
+
 def fwhm(measurement: Measurement):
     """Function for calculating the full width at half maximum value for a 1D function."""
 
     array = measurement.array
-
     peak_idx = np.argmax(array)
     peak_value = array[peak_idx]
     left = np.argmin(np.abs(array[:peak_idx] - peak_value / 2))
