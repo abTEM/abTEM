@@ -14,18 +14,18 @@ from ase.data.colors import cpk_colors
 from abtem.cpu_kernels import abs2
 
 #: Array to facilitate the display of cell boundaries.
-cube = np.array([[[0, 0, 0], [0, 0, 1]],
-                 [[0, 0, 0], [0, 1, 0]],
-                 [[0, 0, 0], [1, 0, 0]],
-                 [[0, 0, 1], [0, 1, 1]],
-                 [[0, 0, 1], [1, 0, 1]],
-                 [[0, 1, 0], [1, 1, 0]],
-                 [[0, 1, 0], [0, 1, 1]],
-                 [[1, 0, 0], [1, 1, 0]],
-                 [[1, 0, 0], [1, 0, 1]],
-                 [[0, 1, 1], [1, 1, 1]],
-                 [[1, 0, 1], [1, 1, 1]],
-                 [[1, 1, 0], [1, 1, 1]]])
+_cube = np.array([[[0, 0, 0], [0, 0, 1]],
+                  [[0, 0, 0], [0, 1, 0]],
+                  [[0, 0, 0], [1, 0, 0]],
+                  [[0, 0, 1], [0, 1, 1]],
+                  [[0, 0, 1], [1, 0, 1]],
+                  [[0, 1, 0], [1, 1, 0]],
+                  [[0, 1, 0], [0, 1, 1]],
+                  [[1, 0, 0], [1, 1, 0]],
+                  [[1, 0, 0], [1, 0, 1]],
+                  [[0, 1, 1], [1, 1, 1]],
+                  [[1, 0, 1], [1, 1, 1]],
+                  [[1, 1, 0], [1, 1, 1]]])
 
 
 def _plane2axes(plane):
@@ -78,7 +78,7 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
     cell = atoms.cell
     atoms *= repeat + (1,)
 
-    for line in cube:
+    for line in _cube:
         cell_lines = np.array([np.dot(line[0], cell), np.dot(line[1], cell)])
         ax.plot(cell_lines[:, axes[0]], cell_lines[:, axes[1]], 'k-')
 

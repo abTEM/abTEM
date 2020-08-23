@@ -296,7 +296,6 @@ class Waves(HasGridAndAcceleratorMixin):
         path: str
             The path to read the file.
         """
-
         with h5py.File(path, 'r') as f:
             datasets = {}
             for key in f.keys():

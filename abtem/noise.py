@@ -1,7 +1,7 @@
 """Module for describing different kinds of noise."""
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
-from copy import copy
+
 from abtem.measure import Measurement
 
 
@@ -119,36 +119,59 @@ def _apply_displacement_field(image, distortion_x, distortion_y):
 def add_scan_noise(measurement: Measurement, dwell_time: float, flyback_time: float, max_frequency: float,
                    rms_power: float, num_components: int = 200):
     """
-    Scan noise function
-
-    Function to add scan noise to an image.
+    Add scan noise to a measurement.
 
     Parameters
     ----------
-    image : ndarray
-        Image array.
-    dwell_time : float
+    measurement: Measurement object or 2d array
+        The measurement to add noise to.
+    dwell_time: float
         Dwell time on a single pixel in s.
-    flyback_time : float
+    flyback_time: float
         Flyback time for the scanning probe at the end of each scan line in s.
-    max_frequency : float
+    max_frequency: float
         Maximum noise frequency in 1 / s.
-    rms_power : float
-        Root-mean-square power of the distortion.
-    num_components : int, optional
-        Number of frequency components.
+    rms_power: float
+        Root-mean-square power of the distortion in unit of percent.
+    num_components: int, optional
+        Number of frequency components. More components will be more 'white' but will take longer.
+
+    Returns
+    -------
+    measurement: Measurement object
+        The noisy measurement.
     """
 
     measurement = measurement.copy()
-    time = _pixel_times(dwell_time, flyback_time, measurement.array.T.shape)
+    if isinstance(measurement, Measurement):
+        array = measurement.array
+    else:
+        array = measurement
+
+    time = _pixel_times(dwell_time, flyback_time, array.T.shape)
     displacement_x, displacement_y = _make_displacement_field(time, max_frequency, num_components, rms_power)
-    array = _apply_displacement_field(measurement.array[:].T, displacement_x, displacement_y)
-    measurement.array[:] = array.T
+    array = _apply_displacement_field(array[:].T, displacement_x, displacement_y)
+    array[:] = array.T
     return measurement
 
 
-def poisson_noise(measurement, dose):
-    """Function to describe Poisson noise for a given measurement with an irradiation dose given in electrons / Å^2."""
+def poisson_noise(measurement: Measurement, dose: float):
+    """
+    Add Poisson noise to a measurment.
+
+    Parameters
+    ----------
+    measurement: Measurement object
+        The measurement to add noise to.
+    dose: float
+        The irradiation dose in electrons per Å^2.
+
+    Returns
+    -------
+    measurement: Measurement object
+        The noisy measurement.
+    """
+
     pixel_area = np.product([calibration.sampling for calibration in measurement.calibrations])
     measurement = measurement.copy()
     array = measurement.array

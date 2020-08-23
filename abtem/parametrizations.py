@@ -123,15 +123,6 @@ def dvdr_kirkland(r, p):
     return dvdr
 
 
-@jit(nopython=True, nogil=True, fastmath=True)
-def kirkland_soft(r, r_cut, v_cut, dvdr_cut, p):
-    v = (p[0, 0] * np.exp(-p[1, 0] * r) / r + p[2, 0] * np.exp(-p[3, 0] * r ** 2.) +
-         p[0, 1] * np.exp(-p[1, 1] * r) / r + p[2, 1] * np.exp(-p[3, 1] * r ** 2.) +
-         p[0, 2] * np.exp(-p[1, 2] * r) / r + p[2, 2] * np.exp(-p[3, 2] * r ** 2.))
-
-    return v - v_cut - (r - r_cut) * dvdr_cut
-
-
 def kirkland_projected(r, p):
     v = (2 * p[0, 0] * kn(0, p[1, 0] * r) + np.sqrt(np.pi / p[3, 0]) * p[2, 0] * np.exp(-p[3, 0] * r ** 2.) +
          2 * p[0, 1] * kn(0, p[1, 1] * r) + np.sqrt(np.pi / p[3, 1]) * p[2, 1] * np.exp(-p[3, 1] * r ** 2.) +
