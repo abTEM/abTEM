@@ -547,7 +547,7 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         array = fft2(self._evaluate_ctf(xp) * self._fourier_translation_operator(positions), overwrite_x=True)
 
-        return Waves(xp.squeeze(array), extent=self.extent, energy=self.energy)
+        return Waves(array, extent=self.extent, energy=self.energy)
 
     def multislice(self, positions: Sequence[Sequence[float]], potential: AbstractPotential, pbar=True) -> Waves:
         """
