@@ -11,38 +11,32 @@ from abtem.device import asnumpy, cp
 
 def test_prism_raises():
     with pytest.raises(ValueError) as e:
-        SMatrix(.01, .5)
+        SMatrix(.01, 80e3, .5)
 
     assert str(e.value) == 'Interpolation factor must be int'
 
     with pytest.raises(RuntimeError) as e:
-        prism = SMatrix(10, 1)
+        prism = SMatrix(10, 80e3, 1)
         prism.build()
 
     assert str(e.value) == 'Grid extent is not defined'
 
-    with pytest.raises(RuntimeError) as e:
-        prism = SMatrix(10, 1, extent=10, gpts=100)
-        prism.build()
-
-    assert str(e.value) == 'Energy is not defined'
-
 
 def test_prism_match_probe():
-    S_builder = SMatrix(30., 1, extent=5, gpts=101, energy=60e3)
+    S_builder = SMatrix(30., 60e3, 1, extent=5, gpts=101)
     probe = Probe(extent=5, gpts=101, energy=60e3, semiangle_cutoff=30., rolloff=0.)
     assert np.allclose(probe.build([(0., 0.)]).array, S_builder.build().collapse([(0., 0.)]).array, atol=2e-5)
 
 
 def test_prism_translate():
-    S_builder = SMatrix(30, 1, extent=5, gpts=50, energy=60e3)
+    S_builder = SMatrix(30, 60e3, 1, extent=5, gpts=50)
     probe = Probe(extent=5, gpts=50, energy=60e3, semiangle_cutoff=30, rolloff=0)
     assert np.allclose(probe.build(np.array([(2.5, 2.5)])).array,
                        S_builder.build().collapse([(2.5, 2.5)]).array, atol=1e-5)
 
 
 def test_prism_interpolation():
-    S_builder = SMatrix(30, 2, extent=10, gpts=100, energy=60e3)
+    S_builder = SMatrix(30, 60e3, 2, extent=10, gpts=100)
     probe = Probe(extent=5, gpts=50, energy=60e3, semiangle_cutoff=30, rolloff=0)
     assert np.allclose(probe.build(np.array([(2.5, 2.5)])).array,
                        S_builder.build().collapse([(2.5, 2.5)]).array, atol=1e-5)
@@ -50,7 +44,7 @@ def test_prism_interpolation():
 
 def test_prism_multislice():
     potential = Potential(Atoms('C', positions=[(0, 0, 2)], cell=(5, 5, 4)))
-    S = SMatrix(30, 1, extent=5, gpts=500, energy=60e3)
+    S = SMatrix(30, 60e3, 1, extent=5, gpts=500)
     probe = Probe(extent=5, gpts=500, energy=60e3, semiangle_cutoff=30, rolloff=0.)
     assert np.allclose(probe.build(np.array([[2.5, 2.5]])).multislice(potential, pbar=False).array,
                        S.multislice(potential, pbar=False).collapse([(2.5, 2.5)]).array, atol=2e-5)
@@ -61,7 +55,7 @@ def test_probe_waves_line_scan():
     linescan = LineScan(start=[0, 0], end=[2.5, 2.5], gpts=10)
     detector = AnnularDetector(inner=80, outer=200)
 
-    S_builder = SMatrix(30, 1, energy=80e3, gpts=500)
+    S_builder = SMatrix(30, 80e3, 1, gpts=500)
     S = S_builder.multislice(potential, pbar=False)
     probe = Probe(semiangle_cutoff=30, energy=80e3, gpts=500)
 
@@ -74,7 +68,7 @@ def test_probe_waves_line_scan():
 def test_prism_batch():
     potential = Potential(Atoms('C', positions=[(2.5, 2.5, 2)], cell=(5, 5, 4)))
 
-    S_builder = SMatrix(30, 1, energy=80e3, gpts=500)
+    S_builder = SMatrix(30, 80e3, 1, gpts=500)
     S1 = S_builder.multislice(potential, pbar=False)
     S2 = S_builder.multislice(potential, max_batch=5, pbar=False)
 
@@ -85,12 +79,12 @@ def test_prism_batch():
 def test_prism_gpu():
     potential = Potential(Atoms('C', positions=[(2.5, 2.5, 2)], cell=(5, 5, 4)))
 
-    S_builder = SMatrix(30, 1, energy=80e3, gpts=500, device='cpu')
+    S_builder = SMatrix(30, 80e3, 1, gpts=500, device='cpu')
     S_cpu = S_builder.multislice(potential, pbar=False)
 
     assert type(S_cpu.array) is np.ndarray
 
-    S_builder = SMatrix(30, 1, energy=80e3, gpts=500, device='gpu')
+    S_builder = SMatrix(30, 80e3, 1, gpts=500, device='gpu')
     S_gpu = S_builder.multislice(potential, pbar=False)
 
     assert type(S_gpu.array) is cp.ndarray
@@ -101,7 +95,7 @@ def test_prism_gpu():
 def test_prism_storage():
     potential = Potential(Atoms('C', positions=[(2.5, 2.5, 2)], cell=(5, 5, 4)))
 
-    S_builder = SMatrix(30, 1, energy=80e3, gpts=500, device='gpu', storage='cpu')
+    S_builder = SMatrix(30, 80e3, 1, gpts=500, device='gpu', storage='cpu')
     S_gpu = S_builder.multislice(potential, pbar=False)
 
     assert type(S_gpu.array) is np.ndarray

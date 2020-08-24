@@ -1,14 +1,24 @@
+import os
+
 import numpy as np
 from ase.io import read
 
-from abtem.potentials import Potential, PotentialArray
-from abtem.waves import Probe, Waves
-from abtem.measure import Measurement, calibrations_from_grid
-from abtem.scan import LineScan
 from abtem.detect import PixelatedDetector
+from abtem.measure import Measurement, calibrations_from_grid
+from abtem.potentials import Potential, PotentialArray
+from abtem.scan import LineScan
+from abtem.waves import Probe, Waves
+
+_ROOT = os.path.abspath(os.path.dirname(__file__))
+
+
+def _set_path(path):
+    """Internal function to set the parametrization data directory."""
+    return os.path.join(_ROOT, 'data', path)
+
 
 def test_export_import_potential(tmp_path):
-    atoms = read('data/orthogonal_graphene.cif')
+    atoms = read(_set_path('orthogonal_graphene.cif'))
 
     d = tmp_path / 'sub'
     d.mkdir()
@@ -56,7 +66,7 @@ def test_scan_to_file(tmp_path):
     d.mkdir()
     path = d / 'measurement2.hdf5'
 
-    atoms = read('data/orthogonal_graphene.cif')
+    atoms = read(_set_path('orthogonal_graphene.cif'))
     potential = Potential(atoms=atoms, sampling=.05)
 
     probe = Probe(energy=200e3, semiangle_cutoff=30)
