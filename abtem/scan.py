@@ -14,7 +14,7 @@ from abtem.utils import split_integer
 
 
 class AbstractScan(metaclass=ABCMeta):
-
+    """Abstract class to describe scans."""
     def __init__(self):
         self._batches = None
 
@@ -28,24 +28,18 @@ class AbstractScan(metaclass=ABCMeta):
     @property
     @abstractmethod
     def shape(self) -> tuple:
-        """
-        The shape the scan.
-        """
+        """The shape the scan."""
         pass
 
     @property
     @abstractmethod
     def calibrations(self) -> tuple:
-        """
-        The measurement calibrations associated with the scan.
-        """
+        """The measurement calibrations associated with the scan."""
         pass
 
     @abstractmethod
     def get_positions(self):
-        """
-        Get the scan positions as numpy array.
-        """
+        """Get the scan positions as numpy array."""
         pass
 
     @abstractmethod
@@ -56,7 +50,7 @@ class AbstractScan(metaclass=ABCMeta):
         Parameters
         ----------
         measurement : Measurement object
-            The measurement to insert new values.
+            The measurement to which new values are inserted.
         start : int
             First index of slice.
         end : int
@@ -90,9 +84,7 @@ class AbstractScan(metaclass=ABCMeta):
         pass
 
     def copy(self):
-        """
-        Make a copy.
-        """
+        """Make a copy."""
         return copy(self)
 
 
@@ -100,12 +92,12 @@ class PositionScan(AbstractScan):
     """
     Position scan object.
 
-    Defines a scan based on user-defined positions.
+    Defines a scan based on user-provided positions.
 
     Parameters
     ----------
-    positions : list of xy-positions
-        The scan positions [Å].
+    positions : list
+        A list of xy scan positions [Å].
     """
 
     def __init__(self, positions: np.ndarray):
@@ -119,11 +111,11 @@ class PositionScan(AbstractScan):
 
     @property
     def shape(self) -> tuple:
-        return (len(self),)
+        return len(self),
 
     @property
     def calibrations(self) -> tuple:
-        return (None,)
+        return None,
 
     def insert_new_measurement(self, measurement, start, end, new_measurement):
         if isinstance(measurement, str):
@@ -144,10 +136,10 @@ class PositionScan(AbstractScan):
         ----------
         ax: matplotlib Axes
             The axes of the matplotlib plot the visualization should be added to.
-        linestyle: str
-            Style of scan position markers.
-        color: str
-            Color of the scan position markers.
+        marker: str, optional
+            Style of scan position markers. Default is '-'.
+        color: str, optional
+            Color of the scan position markers. Default is 'r'.
         kwargs:
             Additional options for matplotlib.pyplot.plot as keyword arguments.
         """
@@ -161,7 +153,7 @@ class LineScan(AbstractScan, HasGridMixin):
     """
     Line scan object.
 
-    Defines the scan along a straight line.
+    Defines a scan along a straight line.
 
     Parameters
     ----------
@@ -197,18 +189,19 @@ class LineScan(AbstractScan, HasGridMixin):
         self._start = start
         self._direction, self.extent = self._direction_and_extent(start, end)
 
-    def _direction_and_extent(self, start, end):
+    @staticmethod
+    def _direction_and_extent(start: np.ndarray, end: np.ndarray):
         extent = np.linalg.norm((end - start), axis=0)
         direction = (end - start) / extent
         return direction, extent
 
     @property
     def shape(self) -> Tuple[int]:
-        return (self.gpts[0],)
+        return self.gpts[0],
 
     @property
     def calibrations(self) -> Tuple[Calibration]:
-        return (Calibration(offset=0, sampling=self.sampling[0], units='Å', name='x'),)
+        return Calibration(offset=0, sampling=self.sampling[0], units='Å', name='x'),
 
     @property
     def start(self) -> np.ndarray:
@@ -231,13 +224,11 @@ class LineScan(AbstractScan, HasGridMixin):
 
     @end.setter
     def end(self, end: Sequence[float]):
-        self._direction, self.extent = self._direction_and_extent(self.start, end)
+        self._direction, self.extent = self._direction_and_extent(self.start, np.ndarray(end))
 
     @property
     def direction(self) -> np.ndarray:
-        """
-        Direction of the scan line.
-        """
+        """Direction of the scan line."""
         return self._direction
 
     def insert_new_measurement(self,
@@ -262,26 +253,47 @@ class LineScan(AbstractScan, HasGridMixin):
 
     def add_to_mpl_plot(self, ax, linestyle: str = '-', color: str = 'r', **kwargs):
         """
-        Add a visualization of the scan line to a matplotlib plot.
+        Add a visualization of a scan line to a matplotlib plot.
 
         Parameters
         ----------
         ax : matplotlib Axes
             The axes of the matplotlib plot the visualization should be added to.
-        linestyle : str
-            Linestyle of scan line.
-        color : str
-            Color of the scan line.
+        linestyle : str, optional
+            Linestyle of scan line. Default is '-'.
+        color : str, optional
+            Color of the scan line. Default is 'r'.
         kwargs :
             Additional options for matplotlib.pyplot.plot as keyword arguments.
         """
+
         ax.plot([self.start[0], self.end[0]], [self.start[1], self.end[1]], linestyle=linestyle, color=color, **kwargs)
 
     def __copy__(self):
         return self.__class__(start=self.start, end=self.end, gpts=self.gpts, endpoint=self.grid.endpoint)
 
 
-def unravel_slice_2d(start: int, end: int, shape: Tuple[int, int]):
+def _unravel_slice_2d(start: int, end: int, shape: Tuple[int, int]):
+    """
+    Unravel slice 2d private function
+
+    Function to handle periodic boundary conditions for scans crossing cell boundaries.
+
+    Parameters
+    ----------
+    start: int
+        Start of the slice of the 2D array.
+    end: int
+        End of the slice of the 2D array.
+    shape:
+        Shape of the 2D array.
+
+    Returns
+    -------
+    list of slice objects
+        A Python list of the slice objects.
+    """
+
     slices = []
     rows = []
     slices_1d = []
@@ -307,7 +319,7 @@ class GridScan(AbstractScan, HasGridMixin):
     """
     Grid scan object.
 
-    Defines the scan on a regular grid.
+    Defines a scan on a regular grid.
 
     Parameters
     ----------
@@ -349,9 +361,7 @@ class GridScan(AbstractScan, HasGridMixin):
 
     @property
     def start(self) -> np.ndarray:
-        """
-        Start corner of the scan [Å].
-        """
+        """Start corner of the scan [Å]."""
         return self._start
 
     @start.setter
@@ -361,9 +371,7 @@ class GridScan(AbstractScan, HasGridMixin):
 
     @property
     def end(self) -> np.ndarray:
-        """
-        End corner of the scan [Å].
-        """
+        """End corner of the scan [Å]."""
         return self.start + self.extent
 
     @end.setter
@@ -371,9 +379,7 @@ class GridScan(AbstractScan, HasGridMixin):
         self.extent = np.array(end) - self.start
 
     def get_scan_area(self) -> float:
-        """
-        Get the area of the scan.
-        """
+        """Get the area of the scan."""
         height = abs(self.start[0] - self.end[0])
         width = abs(self.start[1] - self.end[1])
         return height * width
@@ -386,7 +392,7 @@ class GridScan(AbstractScan, HasGridMixin):
                          np.reshape(y, (-1,))), axis=1)
 
     def insert_new_measurement(self, measurement, start, end, new_measurement):
-        for row, slic, slic_1d in zip(*unravel_slice_2d(start, end, self.shape)):
+        for row, slic, slic_1d in zip(*_unravel_slice_2d(start, end, self.shape)):
             if isinstance(measurement, str):
                 with h5py.File(measurement, 'a') as f:
                     f['array'][row, slic] += asnumpy(new_measurement[slic_1d])
@@ -401,12 +407,14 @@ class GridScan(AbstractScan, HasGridMixin):
         ----------
         ax : matplotlib Axes
             The axes of the matplotlib plot the visualization should be added to.
-        alpha : float
-            Transparency of the scan area visualization.
-        color : str
+        alpha : float, optional
+            Transparency of the scan area visualization. Default is 0.33.
+        facecolor : str, optional
             Color of the scan area visualization.
+        edgecolor : str, optional
+            Color of the edge of the scan area visualization.
         kwargs :
-            Additional options for matplotlib.patches.Rectangle used for the scan area visualization as keyword arguments.
+            Additional options for matplotlib.patches.Rectangle used for scan area visualization as keyword arguments.
         """
         rect = Rectangle(tuple(self.start), *self.extent, alpha=alpha, facecolor=facecolor, edgecolor=edgecolor,
                          **kwargs)
