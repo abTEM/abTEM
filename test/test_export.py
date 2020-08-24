@@ -3,14 +3,16 @@ from ase.io import read
 
 from abtem.potentials import Potential, PotentialArray
 from abtem.waves import Probe, Waves
-
+from abtem.measure import Measurement, calibrations_from_grid
+from abtem.scan import LineScan
+from abtem.detect import PixelatedDetector
 
 def test_export_import_potential(tmp_path):
     atoms = read('data/orthogonal_graphene.cif')
 
     d = tmp_path / 'sub'
     d.mkdir()
-    path = d / 'srtio3_110_potential.hdf5'
+    path = d / 'potential.hdf5'
 
     potential = Potential(atoms, sampling=.05)
     precalculated_potential = potential.build(pbar=False)
@@ -32,3 +34,45 @@ def test_export_import_waves(tmp_path):
     assert np.allclose(waves.array, imported_waves.array)
     assert np.allclose(waves.extent, imported_waves.extent)
     assert np.allclose(waves.energy, imported_waves.energy)
+
+
+def test_export_import_measurement(tmp_path):
+    d = tmp_path / 'sub'
+    d.mkdir()
+    path = d / 'measurement.hdf5'
+
+    calibrations = calibrations_from_grid((512, 256), (.1, .3), ['x', 'y'], 'Å')
+
+    measurement = Measurement(np.random.rand(512, 256), calibrations)
+    measurement.write(path)
+    imported_measurement = Measurement.read(path)
+    assert np.allclose(measurement.array, imported_measurement.array)
+    assert measurement.calibrations[0] == imported_measurement.calibrations[0]
+    assert measurement.calibrations[1] == imported_measurement.calibrations[1]
+
+
+def test_scan_to_file(tmp_path):
+    d = tmp_path / 'sub'
+    d.mkdir()
+    path = d / 'measurement2.hdf5'
+
+    atoms = read('data/orthogonal_graphene.cif')
+    potential = Potential(atoms=atoms, sampling=.05)
+
+    probe = Probe(energy=200e3, semiangle_cutoff=30)
+
+    probe.grid.match(potential)
+
+    scan = LineScan(start=[0, 0], end=[0, potential.extent[1]], gpts=20)
+
+    detector = PixelatedDetector()
+    export_detector = PixelatedDetector(save_file=path)
+
+    measurements = probe.scan(scan, [detector, export_detector], potential, pbar=False)
+
+    measurement = measurements[detector]
+    imported_measurement = Measurement.read(measurements[export_detector])
+
+    assert np.allclose(measurement.array, imported_measurement.array)
+    assert measurement.calibrations[0] == imported_measurement.calibrations[0]
+    assert measurement.calibrations[1] == imported_measurement.calibrations[1]

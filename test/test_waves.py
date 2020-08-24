@@ -205,5 +205,3 @@ def test_probe_waves_grid_scan():
 
     assert detector._detect_count == 100
     assert np.all(measurements[detector].array == 1.)
-
-# TODO:export test
