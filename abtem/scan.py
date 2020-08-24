@@ -1,3 +1,4 @@
+"""Module for describing different types of scans."""
 from abc import ABCMeta, abstractmethod
 from copy import copy
 from typing import Union, Sequence, Tuple

@@ -1,3 +1,4 @@
+"""Module to describe electron waves and their propagation."""
 from copy import copy
 from typing import Union, Sequence, Tuple
 

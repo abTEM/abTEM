@@ -1,3 +1,4 @@
+"""Module to efficiently handle numerical integrals with singularities by a double exponential Tanh–Sinh quadrature."""
 import numpy as np
 import scipy.special
 from typing import Callable, Sequence
@@ -9,9 +10,8 @@ def _error_estimate(eps: float,
                     right_summands: Sequence[float]):
 
     # TODO: improve error estimate using the potential derivatives
-
     """
-    Estimate the error made by
+    Internal function to estimate the error made by the quadrature.
 
     Parameters
     ----------
@@ -27,6 +27,7 @@ def _error_estimate(eps: float,
     float
         The estimated error of the integration value (upper bound).
     """
+
     if len(value_estimates) < 3:
         error_estimate = 1
 
@@ -48,6 +49,7 @@ def _error_estimate(eps: float,
 
 
 def _solve_expx_x_logx(tau, tol, max_steps=10):
+    """Internal function to numerically calculate an auxilliary function."""
     x = np.log(2 / np.pi * np.log(np.pi / tau))
 
     def f0(x):
@@ -164,6 +166,7 @@ def tanh_sinh_nodes_and_weights(step_size: float, order: int):
     array, array
         Nodes and weights
     """
+
     xk = np.zeros(2 * order + 1, dtype=np.float)
     wk = np.zeros(2 * order + 1, dtype=np.float)
     for i, k in enumerate(range(-order, order + 1)):
