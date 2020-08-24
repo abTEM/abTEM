@@ -14,9 +14,7 @@ from abtem.utils import spatial_frequencies
 
 
 def _crop_to_center(array: np.ndarray):
-    """
-    Crop a an array around its center to remove the suppressed frequencies from an antialiased 2d fourier spectrum.
-    """
+    """Crop an array around its center to remove the suppressed frequencies from an antialiased 2D fourier spectrum."""
     shape = array.shape
     w = shape[-2] // 2
     h = shape[-1] // 2
@@ -28,10 +26,7 @@ def _crop_to_center(array: np.ndarray):
 
 
 def _calculate_far_field_intensity(waves, overwrite: bool = False):
-    """
-    Calculate the far-field intensity of a wave.
-    """
-
+    """Calculate the far-field intensity of a wave."""
     xp = get_array_module(waves.array)
     fft2 = get_device_function(xp, 'fft2')
     abs2 = get_device_function(xp, 'abs2')
@@ -41,9 +36,7 @@ def _calculate_far_field_intensity(waves, overwrite: bool = False):
 
 
 def _polar_regions(gpts, sampling, wavelength, inner, outer, nbins_radial, nbins_azimuthal):
-    """
-    Create the polar segmentation of a detector.
-    """
+    """Create the polar segmentation of a detector."""
     kx, ky = spatial_frequencies(gpts, sampling)
 
     alpha_x = np.asarray(kx) * wavelength
@@ -66,10 +59,7 @@ def _polar_regions(gpts, sampling, wavelength, inner, outer, nbins_radial, nbins
 
 
 class AbstractDetector(metaclass=ABCMeta):
-    """
-    Abstract base class for all detectors.
-    """
-
+    """Abstract base class for all detectors."""
     def __init__(self, save_file: str = None):
         if save_file is not None:
             save_file = str(save_file)
@@ -84,9 +74,7 @@ class AbstractDetector(metaclass=ABCMeta):
 
     @property
     def save_file(self) -> str:
-        """
-        The path to the file for saving the detector output.
-        """
+        """The path to the file for saving the detector output."""
         return self._save_file
 
     @abstractmethod
@@ -99,10 +87,7 @@ class AbstractDetector(metaclass=ABCMeta):
 
 
 class _PolarDetector(AbstractDetector):
-    """
-    Class to define a polar detector, forming the basis of annular and segmented detectors.
-    """
-
+    """Class to define a polar detector, forming the basis of annular and segmented detectors."""
     def __init__(self, inner: float = None, outer: float = None, radial_steps: float = 1.,
                  azimuthal_steps: float = None, save_file: str = None):
 
@@ -185,6 +170,7 @@ class _PolarDetector(AbstractDetector):
         Measurement object or str
             The allocated measurement or path to hdf5 file with the measurement data.
         """
+
         inner, outer, nbins_radial, nbins_azimuthal = self._get_bins(grid.antialiased_sampling, wavelength)
 
         shape = scan.shape
@@ -215,6 +201,8 @@ class _PolarDetector(AbstractDetector):
             The grid of the Waves objects that will be detected.
         wavelength : float
             The wavelength of the Waves objects that will be detected.
+        cbar_label : str
+            Label for the colorbar. Default is 'Detector regions'.
         kwargs :
             Additional keyword arguments for abtem.plot.show_image.
         """
@@ -253,9 +241,7 @@ class AnnularDetector(_PolarDetector):
 
     @property
     def inner(self) -> float:
-        """
-        Inner integration limit [mrad].
-        """
+        """Inner integration limit [mrad]."""
         return self._inner
 
     @inner.setter
@@ -265,9 +251,7 @@ class AnnularDetector(_PolarDetector):
 
     @property
     def outer(self) -> float:
-        """
-        Outer integration limit [mrad].
-        """
+        """Outer integration limit [mrad]."""
         return self._outer
 
     @outer.setter
@@ -287,8 +271,9 @@ class AnnularDetector(_PolarDetector):
         Returns
         -------
         1d array
-            Detected values as a 1d array. The array has the same length as the batch size of the wave functions.
+            Detected values as a 1D array. The array has the same length as the batch size of the wave functions.
         """
+
         xp = get_array_module(waves.array)
         intensity = _calculate_far_field_intensity(waves, overwrite=False)
         indices = self._get_regions(waves.grid.antialiased_gpts, waves.grid.antialiased_sampling, waves.wavelength)[0]
@@ -299,9 +284,7 @@ class AnnularDetector(_PolarDetector):
         return self.__class__(self.inner, self.outer, save_file=self.save_file)
 
     def copy(self) -> 'AnnularDetector':
-        """
-        Make a copy.
-        """
+        """Make a copy."""
         return copy(self)
 
 
@@ -399,9 +382,7 @@ class SegmentedDetector(_PolarDetector):
 
     @property
     def inner(self) -> float:
-        """
-        Inner integration limit [mrad].
-        """
+        """Inner integration limit [mrad]."""
         return self._inner
 
     @inner.setter
@@ -411,9 +392,7 @@ class SegmentedDetector(_PolarDetector):
 
     @property
     def outer(self) -> float:
-        """
-        Outer integration limit [mrad].
-        """
+        """Outer integration limit [mrad]."""
         return self._outer
 
     @outer.setter
@@ -423,9 +402,7 @@ class SegmentedDetector(_PolarDetector):
 
     @property
     def nbins_radial(self) -> int:
-        """
-        Number of radial bins.
-        """
+        """Number of radial bins."""
         return int((self.outer - self.inner) / self._radial_steps)
 
     @nbins_radial.setter
@@ -434,10 +411,8 @@ class SegmentedDetector(_PolarDetector):
         self._radial_steps = (self.outer - self.inner) / value
 
     @property
-    def nbins_angular(self) -> float:
-        """
-        Number of angular bins.
-        """
+    def nbins_angular(self) -> int:
+        """Number of angular bins."""
         return int(2 * np.pi / self._azimuthal_steps)
 
     @nbins_angular.setter
@@ -460,6 +435,7 @@ class SegmentedDetector(_PolarDetector):
             Detected values. The first dimension indexes the batch size, the second and third indexes the radial and
             angular bins, respectively.
         """
+
         xp = get_array_module(waves.array)
         intensity = _calculate_far_field_intensity(waves, overwrite=False)
         indices = self._get_regions(waves.grid.antialiased_gpts, waves.grid.antialiased_sampling, waves.wavelength)
@@ -475,9 +451,7 @@ class SegmentedDetector(_PolarDetector):
                               nbins_angular=self.nbins_angular, save_file=self.save_file)
 
     def copy(self) -> 'SegmentedDetector':
-        """
-        Make a copy.
-        """
+        """Make a copy."""
         return copy(self)
 
 
@@ -515,6 +489,7 @@ class PixelatedDetector(AbstractDetector):
         Measurement object or str
             The allocated measurement or path to hdf5 file with the measurement data.
         """
+
         grid.check_is_defined()
         shape = (grid.gpts[0] // 2, grid.gpts[1] // 2)
 
@@ -534,7 +509,7 @@ class PixelatedDetector(AbstractDetector):
     def detect(self, waves) -> np.ndarray:
         """
         Calculate the far field intensity of the wave functions. The output is cropped to include the non-suppressed
-        frequencies from the antialiased 2d fourier spectrum.
+        frequencies from the antialiased 2D fourier spectrum.
 
         Parameters
         ----------
@@ -546,6 +521,7 @@ class PixelatedDetector(AbstractDetector):
             Detected values. The first dimension indexes the batch size, the second and third indexes the two components
             of the spatial frequency.
         """
+
         xp = get_array_module(waves.array)
         abs2 = get_device_function(xp, 'abs2')
         fft2 = get_device_function(xp, 'fft2')
@@ -558,7 +534,7 @@ class PixelatedDetector(AbstractDetector):
 
 class WavefunctionDetector(AbstractDetector):
     """
-    Wave function detector object.
+    Wave function detector object
 
     The wave function detector records the raw exit wave functions.
 
@@ -589,6 +565,7 @@ class WavefunctionDetector(AbstractDetector):
         Measurement object or str
             The allocated measurement or path to hdf5 file with the measurement data.
         """
+
         grid.check_is_defined()
         calibrations = calibrations_from_grid(grid.gpts, grid.sampling, names=['x', 'y'], units='Å')
 

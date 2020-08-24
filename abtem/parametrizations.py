@@ -4,7 +4,7 @@ import os
 from scipy.special import kn
 
 import numpy as np
-from numba import jit, prange
+from numba import jit
 
 _ROOT = os.path.abspath(os.path.dirname(__file__))
 

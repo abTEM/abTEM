@@ -11,12 +11,13 @@ from abtem.potentials import AbstractPotentialBuilder, ProjectedPotentialArray, 
     PotentialIntegrator
 from abtem.structures import orthogonalize_cell
 from abtem.utils import split_integer
+
 import warnings
 
 try:
     from gpaw.atom.shapefunc import shape_functions
     from gpaw import GPAW
-except:
+except ImportError:
     warnings.warn('This functionality of abTEM requires GPAW, see https://wiki.fysik.dtu.dk/gpaw/.')
 
 
@@ -35,7 +36,7 @@ def interpolate_rectangle(array: np.ndarray,
     :param cell: ASE atoms simulation cell.
     :param extent: Extent of the rectangle [Å].
     :param gpts: Number of interpolation grid points.
-    :param: origin: Origin of the rectangle. Default is (0,0).
+    :param origin: Origin of the rectangle. Default is (0,0).
     """
 
     if origin is None:
@@ -130,8 +131,6 @@ class GPAWPotential(AbstractPotentialBuilder):
         A converged GPAW calculator.
     origin: two float, optional
         xy-origin of the electrostatic potential relative to the xy-origin of the Atoms object [Å].
-    extent: one or two float
-        Lateral extent of potential, if the unit cell of the atoms is too small it will be repeated [Å].
     gpts: one or two int
         Number of grid points describing each slice of the potential.
     sampling: one or two float
@@ -147,7 +146,7 @@ class GPAWPotential(AbstractPotentialBuilder):
                  calculator,
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
-                 origin: Union[float, Sequence[float]] = None,
+                 #origin: Union[float, Sequence[float]] = None,
                  slice_thickness=.5,
                  core_size=.005,
                  storage='cpu'):
@@ -165,7 +164,7 @@ class GPAWPotential(AbstractPotentialBuilder):
         # TODO: implement support for non-periodic extent
 
         self._origin = (0., 0.)
-        extent = np.diag(orthogonalize_cell(calculator.atoms.copy(), strain_error=True).cell)[:2]
+        extent = np.diag(orthogonalize_cell(calculator.atoms.copy()).cell)[:2]
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling, lock_extent=True)
 
@@ -267,7 +266,7 @@ class GPAWPotential(AbstractPotentialBuilder):
         return self.__class__(self.calculator,
                               gpts=self.gpts,
                               sampling=self.sampling,
-                              origin=self.origin,
+                              #origin=self.origin,
                               slice_thickness=slice_thickness,
-                              core_size=self._storage,
-                              storage=self.core_size)
+                              core_size=self.core_size,
+                              storage=self._storage)

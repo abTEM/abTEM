@@ -101,8 +101,11 @@ def integrate(f: Callable, a: float, b: float, eps: float, max_steps: int = 20):
         The quadrature order used to obtain the final integral value.
     """
 
-    f_left = lambda s: f(a + s)
-    f_right = lambda s: f(b - s)
+    def f_left(s):
+        return f(a + s)
+
+    def f_right(s):
+        return f(b - s)
     interval = b - a
 
     def lambertw(x, k):

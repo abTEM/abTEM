@@ -1,13 +1,15 @@
 """Module to describe the detection of scattered electron waves."""
 from collections.abc import Iterable
 from copy import copy
-from typing import Sequence
+from typing import Sequence, Tuple
 
 import h5py
 import imageio
+
 import numpy as np
 import scipy.misc
 import scipy.ndimage
+
 from scipy.ndimage import zoom
 from scipy.interpolate import interpn
 from abtem.device import asnumpy
@@ -77,7 +79,7 @@ def calibrations_from_grid(gpts: Sequence[int],
                            names: Sequence[str] = None,
                            units: str = None,
                            fourier_space: bool = False,
-                           scale_factor: float = 1.0) -> Sequence[Calibration]:
+                           scale_factor: float = 1.0) -> Tuple[Calibration]:
     """
     Returns the spatial calibrations for a given computational grid and sampling.
 
@@ -98,7 +100,7 @@ def calibrations_from_grid(gpts: Sequence[int],
 
     Returns
     -------
-    calibrations: List of Calibrations
+    calibrations: Tuple of Calibrations
     """
 
     if names is None:
@@ -148,7 +150,7 @@ class Measurement:
 
         if len(calibrations) != len(array.shape):
             raise RuntimeError(
-                'The number of calibrations must equal the number of array dimensions. For undefined calibrations use None.')
+                'The number of calibrations must equal the number of array dimensions. For undefined use None.')
 
         self._array = asnumpy(array)
         self._calibrations = calibrations
@@ -374,7 +376,7 @@ class Measurement:
 
     def save_as_image(self, path):
         """
-        Write the measurement to an image file. The measurement array will be normalized and converted to 16-bit integers.
+        Write the measurement array to an image file. The array will be normalized and converted to 16-bit integers.
 
         path: str
             The path to write the file.
@@ -434,8 +436,11 @@ def _line_intersect_rectangle(point0, point1, lower_corner, upper_corner):
 
     m = (point1[1] - point0[1]) / (point1[0] - point0[0])
 
-    y = lambda x: m * (x - point0[0]) + point0[1]
-    x = lambda y: (y - point0[1]) / m + point0[0]
+    def y(x):
+        return m * (x - point0[0]) + point0[1]
+
+    def x(y):
+        return (y - point0[1]) / m + point0[0]
 
     if y(0) < lower_corner[1]:
         intersect0 = (x(lower_corner[1]), y(x(lower_corner[1])))

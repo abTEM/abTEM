@@ -79,7 +79,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
         If dict, a displacement standard deviation should be provided for each species. The atomic species can be
         specified as atomic number or symbol.
         If list or array, a displacement standard deviation should be provided for each atom.
-    direction: str
+    directions: str
         The displacement directions of the atoms as a string; for example 'xy' for displacement in the x- and
         y-direction.
     seed: int
@@ -101,7 +101,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
             elif len(sigmas_array) != len(atoms):
                 raise RuntimeError('The displacement standard deviation must be provided for all atoms.')
 
-        except:
+        except TypeError:
             sigmas_array = np.zeros(len(atoms), dtype=np.float)
             new_sigmas = {}
             for key, sigma in sigmas.items():
@@ -160,7 +160,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
             yield atoms
 
     def __copy__(self):
-        return self.__class__(atoms=self.atoms.copy(), num_configs=len(self), sigma=self._sigmas.copy(),
+        return self.__class__(atoms=self.atoms.copy(), num_configs=len(self), sigmas=self._sigmas.copy(),
                               seed=self._seed)
 
 

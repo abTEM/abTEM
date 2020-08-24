@@ -57,17 +57,17 @@ def interpolate_radial_functions(array: np.ndarray,
     for i in range(positions.shape[0]):
         for j in prange(disc_indices.shape[0]):
             k = int(round(positions[i, 0] / sampling[0]) + disc_indices[j, 0])
-            l = int(round(positions[i, 1] / sampling[1]) + disc_indices[j, 1])
+            m = int(round(positions[i, 1] / sampling[1]) + disc_indices[j, 1])
 
-            if ((k < array.shape[0]) & (l < array.shape[1]) & (k >= 0) & (l >= 0)):
+            if (k < array.shape[0]) & (m < array.shape[1]) & (k >= 0) & (m >= 0):
                 r_interp = np.sqrt((k * sampling[0] - positions[i, 0]) ** 2 +
-                                   (l * sampling[1] - positions[i, 1]) ** 2)
+                                   (m * sampling[1] - positions[i, 1]) ** 2)
 
                 idx = int(np.floor(np.log(r_interp / r[0] + 1e-7) / dt))
-                if (idx < 0):
-                    array[k, l] += v[i, 0]
-                elif (idx < n - 1):
-                    array[k, l] += v[i, idx] + (r_interp - r[idx]) * dvdr[i, idx]
+                if idx < 0:
+                    array[k, m] += v[i, 0]
+                elif idx < n - 1:
+                    array[k, m] += v[i, idx] + (r_interp - r[idx]) * dvdr[i, idx]
 
 
 @jit(nopython=True, nogil=True, parallel=True, fastmath=True)
@@ -121,6 +121,6 @@ def scale_reduce(probes: np.ndarray, S: np.ndarray, coefficients: np.ndarray):
     """
     for i in prange(S.shape[1]):
         for j in prange(S.shape[2]):
-            for l in range(S.shape[0]):
-                for k in prange(probes.shape[0]):
-                    probes[k, i, j] += (coefficients[k, l] * S[l, i, j])
+            for m in range(S.shape[0]):
+                for n in prange(probes.shape[0]):
+                    probes[n, i, j] += (coefficients[n, m] * S[m, i, j])

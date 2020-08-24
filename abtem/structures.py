@@ -12,12 +12,12 @@ def is_cell_hexagonal(atoms: Atoms):
     """
     cell = atoms.get_cell()
 
-    A = np.linalg.norm(cell[0], axis=0)
-    B = np.linalg.norm(cell[1], axis=0)
-    C = np.linalg.norm(cell[2], axis=0)
-    angle = np.arccos(np.dot(cell[0], cell[1]) / (A * B))
+    a = np.linalg.norm(cell[0], axis=0)
+    b = np.linalg.norm(cell[1], axis=0)
+    c = np.linalg.norm(cell[2], axis=0)
+    angle = np.arccos(np.dot(cell[0], cell[1]) / (a * b))
 
-    return (np.isclose(A, B) & (np.isclose(angle, np.pi / 3) | np.isclose(angle, 2 * np.pi / 3)) & (C == cell[2, 2]))
+    return np.isclose(a, b) & (np.isclose(angle, np.pi / 3) | np.isclose(angle, 2 * np.pi / 3)) & (c == cell[2, 2])
 
 
 def is_cell_orthogonal(atoms: Atoms, tol: float = 1e-12):
@@ -132,8 +132,8 @@ def orthogonalize_cell(atoms: Atoms, limit_denominator: int = 10, return_strain=
     new_cell = atoms.cell.copy()
     new_cell[1, 0] = new_cell[0, 0]
 
-    A = np.linalg.solve(atoms.cell[:2, :2], new_cell[:2, :2])
-    _, strain_tensor = polar(A, side='left')
+    a = np.linalg.solve(atoms.cell[:2, :2], new_cell[:2, :2])
+    _, strain_tensor = polar(a, side='left')
     strain_tensor[0, 0] -= 1
     strain_tensor[1, 1] -= 1
 

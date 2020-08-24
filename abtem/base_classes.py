@@ -107,6 +107,7 @@ def cache_clear_callback(target_cache: 'Cache'):
         The target cache object.
     """
 
+    # noinspection PyUnusedLocal
     def callback(notifier: Any, property_name: str, change: bool):
         if change:
             target_cache.clear()
@@ -259,7 +260,7 @@ class Grid:
     dimensions : int
         Number of dimensions represented by the grid.
     endpoint : bool
-        If true include the grid endpoint (the default is False). For periodic grids the endpoint should not be included.
+        If true include the grid endpoint. Default is False. For periodic grids the endpoint should not be included.
     """
 
     def __init__(self,
@@ -406,16 +407,16 @@ class Grid:
     def _adjust_gpts(self, extent: tuple, sampling: tuple):
         if (extent is not None) & (sampling is not None):
             if self._endpoint:
-                self._gpts = tuple(int(np.ceil(l / d)) + 1 for l, d in zip(extent, sampling))
+                self._gpts = tuple(int(np.ceil(r / d)) + 1 for r, d in zip(extent, sampling))
             else:
-                self._gpts = tuple(int(np.ceil(l / d)) for l, d in zip(extent, sampling))
+                self._gpts = tuple(int(np.ceil(r / d)) for r, d in zip(extent, sampling))
 
     def _adjust_sampling(self, extent: tuple, gpts: tuple):
         if (extent is not None) & (gpts is not None):
             if self._endpoint:
-                self._sampling = tuple(l / (n - 1) for l, n in zip(extent, gpts))
+                self._sampling = tuple(r / (n - 1) for r, n in zip(extent, gpts))
             else:
-                self._sampling = tuple(l / n for l, n in zip(extent, gpts))
+                self._sampling = tuple(r / n for r, n in zip(extent, gpts))
 
     def check_is_defined(self):
         """
@@ -482,6 +483,7 @@ class Grid:
             raise RuntimeError('Inconsistent grid gpts ({} != {})'.format(self.gpts, other.gpts))
 
     def snap_to_power(self, n: int = 2):
+        # TODO check function.
         """
         Round the grid gpts up to the nearest value that is a power of n. Fourier transforms are faster for arrays of
         whose size can be factored into small primes (2, 3, 5 and 7).
@@ -491,6 +493,7 @@ class Grid:
         n : int
             The gpts will be a power of this number.
         """
+
         self.gpts = tuple(n ** np.ceil(np.log(n) / np.log(n)) for n in self.gpts)
 
     def __copy__(self):
