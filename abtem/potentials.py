@@ -1,12 +1,15 @@
-"""Module to calculate potentials using the indepoendent atom model."""
+"""Module to calculate potentials using the independent atom model."""
 
 from abc import ABCMeta, abstractmethod
 from typing import Union, Sequence, Callable, Generator
 
 import h5py
 import numpy as np
+from copy import copy
+
 from ase import Atoms
 from ase import units
+
 from scipy.optimize import brentq
 
 from abtem.base_classes import Grid, HasGridMixin, Cache, cached_method, HasAcceleratorMixin, Accelerator, Event, \
@@ -21,7 +24,6 @@ from abtem.structures import is_cell_orthogonal
 from abtem.tanh_sinh import integrate, tanh_sinh_nodes_and_weights
 from abtem.temperature import AbstractFrozenPhonons, DummyFrozenPhonons
 from abtem.utils import energy2sigma, ProgressBar
-from copy import copy
 
 # Vacuum permitivity in ASE units
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
@@ -32,7 +34,9 @@ kappa = 4 * np.pi * eps0 / (2 * np.pi * units.Bohr * units._e * units.C)
 
 class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
     """
-    Abstract base class for all potentials.
+    Potential abstract base class
+
+    Base class common for all potentials.
     """
 
     def __len__(self):
@@ -41,12 +45,11 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
     @property
     @abstractmethod
     def num_slices(self):
-        """
-        The number of projected potential slices.
-        """
+        """The number of projected potential slices."""
         pass
 
     def check_slice_idx(self, i):
+        """Raises an error if i is greater than the number of slices."""
         if i >= self.num_slices:
             raise RuntimeError('Slice index {} too large for potential with {} slices'.format(i, self.num_slices))
 
@@ -66,6 +69,7 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         -------
         generator of ProjectedPotential objects
         """
+
         pass
 
     @abstractmethod
@@ -76,8 +80,9 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         Parameters
         ----------
         i: int
-            Slice index
+            Slice index.
         """
+
         pass
 
     def get_projected_potential(self, items) -> 'ProjectedPotentialArray':
@@ -87,7 +92,8 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         Parameters
         ----------
         items: int or slice
-            The potential slice(s) to include in the projection.
+            The potential slice(s) (either a single index or a range, ie. a Python slice [start:end]) to include in the
+            projection.
 
         Returns
         -------
@@ -132,25 +138,26 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 
         Parameters
         ----------
-        kwargs: Additional keyword arguments for abtem.plot.show_image.
+        kwargs:
+            Additional keyword arguments for abtem.plot.show_image.
         """
+
         self[:].show(**kwargs)
 
     def copy(self):
-        """
-        Make a copy.
-        """
+        """Make a copy."""
         return copy(self)
 
 
 class AbstractPotentialBuilder(AbstractPotential):
+    """Potential builder abstract class."""
 
     def __init__(self, storage='cpu'):
         self._storage = storage
 
     def build(self, pbar: Union[bool, ProgressBar] = False) -> 'PotentialArray':
         """
-        Precalcaulate this potential as a potential array.
+        Precalcaulate the potential as a potential array.
 
         Parameters
         ----------
@@ -161,6 +168,7 @@ class AbstractPotentialBuilder(AbstractPotential):
         -------
         PotentialArray object
         """
+
         self.grid.check_is_defined()
 
         storage_xp = get_array_module_from_device(self._storage)
@@ -183,6 +191,7 @@ class AbstractPotentialBuilder(AbstractPotential):
 
 
 class AbstractTDSPotentialBuilder(AbstractPotentialBuilder):
+    """Thermal diffuse scattering builder abstract class."""
 
     def __init__(self, storage='cpu'):
         super().__init__(storage)
@@ -207,13 +216,13 @@ class PotentialIntegrator:
         Radial function to integrate.
     evaluation_points: array of float
         The evaluation points of the integrals.
-    cutoff: float
+    cutoff: float, optional
         The radial function is assumed to be zero outside this threshold.
-    cache_size: int
+    cache_size: int, optional
         The maximum number of integrals that will be cached.
-    cache_key_decimals: int
+    cache_key_decimals: int, optional
         The number of decimals used in the cache keys.
-    tolerance: float
+    tolerance: float, optional
         The absolute error tolerance of the integrals.
     """
 
@@ -261,6 +270,7 @@ class PotentialIntegrator:
         1d array
             The evaulated integrals.
         """
+
         a = round(a, self._cache_key_decimals)
         b = round(b, self._cache_key_decimals)
 
@@ -290,11 +300,11 @@ class PotentialIntegrator:
 
 class ProjectedPotentialArray(HasGridMixin):
     """
-    Projected potential array object
+    Projected potential array object.
 
     Parameters
     ----------
-    array: 2d array
+    array: 2D array
         The array describing the potential array [eV / e * Å]
     thickness: float
         The thickness of the projected potential.
@@ -315,16 +325,12 @@ class ProjectedPotentialArray(HasGridMixin):
 
     @property
     def thickness(self) -> float:
-        """
-        The thickness of the projected potential [Å].
-        """
+        """The thickness of the projected potential [Å]."""
         return self._thickness
 
     @property
     def array(self):
-        """
-        The array describing the potential array [eV / e * Å]
-        """
+        """The array describing the potential array [eV / e * Å]."""
         return self._array
 
     def show(self, **kwargs):
@@ -333,8 +339,10 @@ class ProjectedPotentialArray(HasGridMixin):
 
         Parameters
         ----------
-        kwargs: Additional keyword arguments for abtem.plot.show_image.
+        kwargs:
+            Additional keyword arguments for abtem.plot.show_image.
         """
+
         calibrations = calibrations_from_grid(self.grid.gpts, self.grid.sampling, names=['x', 'y'])
         return show_image(self.array, calibrations, **kwargs)
 
@@ -353,9 +361,9 @@ def pad_atoms(atoms: Atoms, margin: float):
     Returns
     -------
     ASE Atoms object
-        Padded atoms
-
+        Padded atoms.
     """
+
     if not is_cell_orthogonal(atoms):
         raise RuntimeError('The cell of the atoms must be orthogonal.')
 
@@ -375,6 +383,7 @@ def pad_atoms(atoms: Atoms, margin: float):
 
 
 def _disc_meshgrid(r):
+    """Internal function to return all indices inside a disk with a given radius."""
     cols = np.zeros((2 * r + 1, 2 * r + 1)).astype(np.int32)
     cols[:] = np.linspace(0, 2 * r, 2 * r + 1) - r
     rows = cols.T
@@ -394,23 +403,23 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
     ----------
     atoms: Atoms or FrozenPhonons object
         Atoms or FrozenPhonons defining the atomic configuration(s) used in the IAM of the electrostatic potential(s).
-    gpts: one or two int
+    gpts: one or two int, optional
         Number of grid points describing each slice of the potential.
-    sampling: one
+    sampling: one or two float, optional
         Lateral sampling of the potential [1 / Å].
-    slice_thickness: float
+    slice_thickness: float, optional
         Thickness of the potential slices in Å for calculating the number of slices used by the multislice algorithm.
         Default is 0.5 Å.
-    parametrization: 'lobato' or 'kirkland'
-        The potential parametrization describes the radial dependence of the potential for each element.
-        Two of the most accurate parametrizations are available by Lobato et. al. and Kirkland.
+    parametrization: 'lobato' or 'kirkland', optional
+        The potential parametrization describes the radial dependence of the potential for each element. Two of the
+        most accurate parametrizations are available by Lobato et. al. and Kirkland. The abTEM default is 'lobato'.
         See the citation guide for references.
-    cutoff_tolerance: float
+    cutoff_tolerance: float, optional
         The error tolerance used for deciding the radial cutoff distance of the potential [eV / e].
-    device: str
-        The device used for calculating the potential.
-    storage: str
-        The device on which to store the created potential.
+    device: str, optional
+        The device used for calculating the potential. The default is 'cpu'.
+    storage: str, optional
+        The device on which to store the created potential. The default is 'None', defaulting to the chosen device.
     """
 
     def __init__(self,
@@ -477,58 +486,42 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
     @property
     def parametrization(self):
-        """
-        The potential parametrization.
-        """
+        """The potential parametrization."""
         return self._parameters
 
     @property
     def parameters(self):
-        """
-        The parameters of the potential parametrization.
-        """
+        """The parameters of the potential parametrization."""
         return self._parameters
 
     @property
     def function(self):
-        """
-        The potential function of the parametrization.
-        """
+        """The potential function of the parametrization."""
         return self._function
 
     @property
     def atoms(self):
-        """
-        Atoms object defining the atomic configuration.
-        """
+        """Atoms object defining the atomic configuration."""
         return self._atoms
 
     @property
     def frozen_phonons(self):
-        """
-        FrozenPhonons object defining the atomic configuration(s).
-        """
+        """FrozenPhonons object defining the atomic configuration(s)."""
         return self._frozen_phonons
 
     @property
     def cutoff_tolerance(self):
-        """
-        The error tolerance used for deciding the radial cutoff distance of the potential [eV / e].
-        """
+        """The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]."""
         return self._cutoff_tolerance
 
     @property
     def num_slices(self):
-        """
-        The number of projected potential slices.
-        """
+        """The number of projected potential slices."""
         return int(np.ceil(self._atoms.cell[2, 2] / self._slice_thickness))
 
     @property
     def slice_thickness(self):
-        """
-        The thickness of the projected potential slices.
-        """
+        """The thickness of the projected potential slices."""
         return self._slice_thickness
 
     @slice_thickness.setter
@@ -541,7 +534,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
     def get_cutoff(self, number: int) -> float:
         """
-        Get the cutoff distance for atomic number given an error tolerance.
+        Cutoff distance for atomic number given an error tolerance.
 
         Parameters
         ----------
@@ -553,6 +546,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         cutoff: float
             The potential cutoff.
         """
+
         try:
             return self._cutoffs[number]
         except KeyError:
@@ -562,7 +556,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
     def get_tapered_function(self, number: int) -> Callable:
         """
-        Get the the tapered potential function for atomic number.
+        Tapered potential function for atomic number.
 
         Parameters
         ----------
@@ -573,6 +567,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         -------
         callable
         """
+
         cutoff = self.get_cutoff(number)
         rolloff = .85 * cutoff
 
@@ -588,7 +583,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
     def get_integrator(self, number: int) -> PotentialIntegrator:
         """
-        Get the potential integrator for atomic number.
+        Potential integrator for atomic number.
 
         Parameters
         ----------
@@ -599,6 +594,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         -------
         PotentialIntegrator object
         """
+
         try:
             return self._integrators[number]
         except KeyError:
@@ -611,6 +607,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
             return self._integrators[number]
 
     def _get_radial_interpolation_points(self, number):
+        """Internal function for the indices of the radial interpolation points."""
         try:
             return self._disc_indices[number]
         except:
@@ -678,6 +675,20 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
             yield ProjectedPotentialArray(array / kappa, self.get_slice_thickness(i), extent=self.extent)
 
     def generate_frozen_phonon_potentials(self, pbar: Union[ProgressBar, bool] = True):
+        """
+        Function to generate scattering potentials for a set of frozen phonon configurations.
+
+        Parameters
+        ----------
+        pbar: bool, optional
+            Display a progress bar. Default is True.
+
+        Returns
+        -------
+        generator
+            Generator of potentials.
+        """
+
         if isinstance(pbar, bool):
             pbar = ProgressBar(total=len(self), desc='Potential', disable=not pbar)
 
@@ -708,7 +719,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
 
     Parameters
     ----------
-    array: 3d array
+    array: 3D array
         The array representing the potential slices. The first dimension is the slice index and the last two are the
         spatial dimensions.
     slice_thicknesses: float
@@ -752,6 +763,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         -------
         TransmissionFunctions object
         """
+
         xp = get_array_module(self.array)
         complex_exponential = get_device_function(xp, 'complex_exponential')
 
@@ -761,9 +773,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
 
     @property
     def array(self):
-        """
-        The potential array.
-        """
+        """The potential array."""
         return self._array
 
     @property
@@ -794,6 +804,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         PotentialArray object
             The tiled potential.
         """
+
         assert len(multiples) == 2
         new_array = np.tile(self.array, (1,) + multiples)
         new_extent = (self.extent[0] * multiples[0], self.extent[1] * multiples[1])
@@ -821,6 +832,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
 
 
 class TransmissionFunctions(PotentialArray, HasAcceleratorMixin):
+    """Class to describe transmission functions."""
 
     def __init__(self,
                  array: np.ndarray,
@@ -828,6 +840,5 @@ class TransmissionFunctions(PotentialArray, HasAcceleratorMixin):
                  extent: Union[float, Sequence[float]] = None,
                  sampling: Union[float, Sequence[float]] = None,
                  energy: float = None):
-
         self._accelerator = Accelerator(energy=energy)
         super().__init__(array, slice_thicknesses, extent, sampling)
