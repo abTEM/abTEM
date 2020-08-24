@@ -135,6 +135,23 @@ class PositionScan(AbstractScan):
     def get_positions(self):
         return self._positions
 
+    def add_to_mpl_plot(self, ax, marker: str = '-', color: str = 'r', **kwargs):
+        """
+        Add a visualization of the scan positions to a matplotlib plot.
+
+        Parameters
+        ----------
+        ax: matplotlib Axes
+            The axes of the matplotlib plot the visualization should be added to.
+        linestyle: str
+            Style of scan position markers.
+        color: str
+            Color of the scan position markers.
+        kwargs:
+            Additional options for matplotlib.pyplot.plot as keyword arguments.
+        """
+        ax.plot(*self.get_positions().T, marker=marker, color=color, **kwargs)
+
     def __copy__(self):
         return self.__class__(self._positions.copy())
 
@@ -244,7 +261,7 @@ class LineScan(AbstractScan, HasGridMixin):
 
     def add_to_mpl_plot(self, ax, linestyle: str = '-', color: str = 'r', **kwargs):
         """
-        Add a visualization of the scan line to a matplotlib axes.
+        Add a visualization of the scan line to a matplotlib plot.
 
         Parameters
         ----------
@@ -377,7 +394,7 @@ class GridScan(AbstractScan, HasGridMixin):
 
     def add_to_mpl_plot(self, ax, alpha=.33, facecolor='r', edgecolor='r', **kwargs):
         """
-        Add a visualization of the scan area to a matplotlib axes.
+        Add a visualization of the scan area to a matplotlib plot.
 
         Parameters
         ----------

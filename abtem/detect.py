@@ -85,6 +85,9 @@ class AbstractDetector(metaclass=ABCMeta):
 
     @property
     def save_file(self) -> str:
+        """
+        The path to the file for saving the detector output.
+        """
         return self._save_file
 
     @abstractmethod
@@ -155,16 +158,21 @@ class _PolarDetector(AbstractDetector):
 
     def allocate_measurement(self, grid: Grid, wavelength: float, scan: AbstractScan) -> Measurement:
         """
-        Allocate a measurement object.
+        Allocate a Measurement object or an hdf5 file.
 
         Parameters
         ----------
-        grid: Grid object
+        grid : Grid object
             The grid of the Waves objects that will be detected.
-        wavelength: float
+        wavelength : float
             The wavelength of the Waves objects that will be detected.
-        scan: Scan object
+        scan : Scan object
             The scan object that will define the scan dimensions the measurement.
+
+        Returns
+        -------
+        Measurement object or str
+            The allocated measurement or path to hdf5 file with the measurement data.
         """
         inner, outer, nbins_radial, nbins_azimuthal = self._get_bins(grid.antialiased_sampling, wavelength)
 
@@ -192,11 +200,12 @@ class _PolarDetector(AbstractDetector):
 
         Parameters
         ----------
-        grid: Grid
+        grid : Grid
             The grid of the Waves objects that will be detected.
-        wavelength: float
+        wavelength : float
             The wavelength of the Waves objects that will be detected.
-        kwargs: Additional keyword arguments for abtem.plot.show_image.
+        kwargs :
+            Additional keyword arguments for abtem.plot.show_image.
         """
 
         grid.check_is_defined()
@@ -259,8 +268,15 @@ class AnnularDetector(_PolarDetector):
         """
         Integrate the intensity of a the wave functions over the detector range.
 
-        :param waves: The batch of wave functions to detect.
-        :return: Detected values as a 1d array. The array has the same length as the batch size of the wave functions.
+        Parameters
+        ----------
+        waves: Waves object
+            The batch of wave functions to detect.
+
+        Returns
+        -------
+        1d array
+            Detected values as a 1d array. The array has the same length as the batch size of the wave functions.
         """
         xp = get_array_module(waves.array)
         intensity = _calculate_far_field_intensity(waves, overwrite=False)
@@ -427,9 +443,11 @@ class SegmentedDetector(_PolarDetector):
         waves: Waves object
             The batch of wave functions to detect.
 
-        Returns:
+        Returns
+        -------
         3d array
-            Detected values. The first dimension indexes the batch size, the second and third indexes the radial and angular bins, respectively.
+            Detected values. The first dimension indexes the batch size, the second and third indexes the radial and
+            angular bins, respectively.
         """
         xp = get_array_module(waves.array)
         intensity = _calculate_far_field_intensity(waves, overwrite=False)
@@ -470,7 +488,7 @@ class PixelatedDetector(AbstractDetector):
 
     def allocate_measurement(self, grid: Grid, wavelength: float, scan: AbstractScan) -> Measurement:
         """
-        Allocate a measurement object.
+        Allocate a Measurement object or an hdf5 file.
 
         Parameters
         ----------
@@ -480,6 +498,11 @@ class PixelatedDetector(AbstractDetector):
             The wavelength of the Waves objects that will be detected.
         scan: Scan object
             The scan object that will define the scan dimensions the measurement.
+
+        Returns
+        -------
+        Measurement object or str
+            The allocated measurement or path to hdf5 file with the measurement data.
         """
         grid.check_is_defined()
         shape = (grid.gpts[0] // 2, grid.gpts[1] // 2)
@@ -539,7 +562,7 @@ class WavefunctionDetector(AbstractDetector):
 
     def allocate_measurement(self, grid: Grid, wavelength: float, scan: AbstractScan) -> Measurement:
         """
-        Allocate a measurement object.
+        Allocate a Measurement object or an hdf5 file.
 
         Parameters
         ----------
@@ -549,6 +572,11 @@ class WavefunctionDetector(AbstractDetector):
             The wavelength of the Waves objects that will be detected.
         scan: Scan object
             The scan object that will define the scan dimensions the measurement.
+
+        Returns
+        -------
+        Measurement object or str
+            The allocated measurement or path to hdf5 file with the measurement data.
         """
         grid.check_is_defined()
         calibrations = calibrations_from_grid(grid.gpts, grid.sampling, names=['x', 'y'], units='Å')
@@ -568,7 +596,8 @@ class WavefunctionDetector(AbstractDetector):
         waves: Waves object
             The batch of wave functions to detect.
 
-        Returns:
+        Returns
+        -------
         3d complex array
             The arrays of the Waves object.
         """

@@ -28,7 +28,7 @@ class Calibration:
         The distance between sampling points.
     units: str
         The units of the calibration shown in plots.
-    name:
+    name: str
         The name of this calibration to be shown in plots.
     """
 
@@ -98,7 +98,7 @@ def calibrations_from_grid(gpts: Sequence[int],
 
     Returns
     -------
-    list of Calibrations
+    calibrations: List of Calibrations
     """
 
     if names is None:

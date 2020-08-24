@@ -52,7 +52,7 @@ def watched_method(event: 'str'):
 
     Parameters
     ----------
-    event: str
+    event : str
         Name class property with target event.
     """
 
@@ -76,7 +76,7 @@ def watched_property(event: 'str'):
 
     Parameters
     ----------
-    event: str
+    event : str
         Name class property with target event
     """
 
@@ -103,7 +103,7 @@ def cache_clear_callback(target_cache: 'Cache'):
 
     Parameters
     ----------
-    target_cache: Cache object
+    target_cache : Cache object
         The target cache object.
     """
 
@@ -120,7 +120,7 @@ def cached_method(target_cache_property: str):
 
     Parameters
     ----------
-    target_cache_property: str
+    target_cache_property : str
         The property holding the target cache.
     """
 
@@ -158,7 +158,7 @@ class Cache:
 
     Parameters
     ----------
-    max_size: int
+    max_size : int
         The maximum number of values stored by this cache.
     """
 
@@ -201,9 +201,9 @@ class Cache:
 
         Parameters
         ----------
-        key: Any
+        key : Any
             The dictionary key of the cached object.
-        value: Any
+        value : Any
             The object to cache.
         """
         self._cached[key] = value
@@ -250,15 +250,15 @@ class Grid:
 
     Parameters
     ----------
-    extent: two float
+    extent : two float
         Grid extent in each dimension [Å].
-    gpts: two int
+    gpts : two int
         Number of grid points in each dimension.
-    sampling: two float
+    sampling : two float
         Grid sampling in each dimension [1 / Å].
-    dimensions: int
+    dimensions : int
         Number of dimensions represented by the grid.
-    endpoint: bool
+    endpoint : bool
         If true include the grid endpoint (the default is False). For periodic grids the endpoint should not be included.
     """
 
@@ -376,7 +376,7 @@ class Grid:
     @property
     def sampling(self) -> tuple:
         """
-        Grid sampling in each dimension.
+        Grid sampling in each dimension [1 / Å].
         """
         return self._sampling
 
@@ -442,9 +442,9 @@ class Grid:
 
         Parameters
         ----------
-        other: Grid object
+        other : Grid object
             The grid that should be matched.
-        check_match: bool
+        check_match : bool
             If true check whether grids can match without overriding already defined grid parameters.
         """
 
@@ -471,7 +471,7 @@ class Grid:
 
         Parameters
         ----------
-        other: Grid object
+        other : Grid object
             The grid that should be checked.
         """
 
@@ -481,8 +481,17 @@ class Grid:
         elif (self.gpts is not None) & (other.gpts is not None) & np.any(self.gpts != other.gpts):
             raise RuntimeError('Inconsistent grid gpts ({} != {})'.format(self.gpts, other.gpts))
 
-    def snap_to_power(self, power: float = 2):
-        self.gpts = tuple(power ** np.ceil(np.log(n) / np.log(power)) for n in self.gpts)
+    def snap_to_power(self, n: int = 2):
+        """
+        Round the grid gpts up to the nearest value that is a power of n. Fourier transforms are faster for arrays of
+        whose size can be factored into small primes (2, 3, 5 and 7).
+
+        Parameters
+        ----------
+        n : int
+
+        """
+        self.gpts = tuple(n ** np.ceil(np.log(n) / np.log(n)) for n in self.gpts)
 
     def __copy__(self):
         return self.__class__(extent=self.extent,

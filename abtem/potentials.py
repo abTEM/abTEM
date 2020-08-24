@@ -541,7 +541,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
     def get_cutoff(self, number: int) -> float:
         """
-        Get the cutoff distance for atomic number.
+        Get the cutoff distance for atomic number given an error tolerance.
 
         Parameters
         ----------
@@ -550,7 +550,8 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
         Returns
         -------
-        float
+        cutoff: float
+            The potential cutoff.
         """
         try:
             return self._cutoffs[number]
