@@ -49,7 +49,7 @@ def _error_estimate(eps: float,
 
 
 def _solve_expx_x_logx(tau, tol, max_steps=10):
-    """Internal function to numerically calculate an auxilliary function."""
+    """Internal function to numerically calculate an auxiliary function."""
     x = np.log(2 / np.pi * np.log(np.pi / tau))
 
     def f0(x):
