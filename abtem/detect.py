@@ -1,7 +1,7 @@
 """Module for describing the detection of transmitted waves and different detector types."""
 from abc import ABCMeta, abstractmethod
 from copy import copy
-from typing import Tuple, List, Any, TYPE_CHECKING
+from typing import Tuple, List, Any
 
 import numpy as np
 
@@ -10,10 +10,7 @@ from abtem.device import get_array_module, get_device_function
 from abtem.measure import Calibration, calibrations_from_grid, Measurement
 from abtem.plot import show_image
 from abtem.scan import AbstractScan
-from abtem.utils import label_to_index_generator, spatial_frequencies
-
-#if TYPE_CHECKING:
-#    from abtem.waves import Waves
+from abtem.utils import spatial_frequencies
 
 
 def _crop_to_center(array: np.ndarray):
@@ -75,6 +72,8 @@ class AbstractDetector(metaclass=ABCMeta):
 
     def __init__(self, save_file: str = None):
         if save_file is not None:
+            save_file = str(save_file)
+
             if not save_file.endswith('.hdf5'):
                 self._save_file = save_file + '.hdf5'
             else:
@@ -141,6 +140,18 @@ class _PolarDetector(AbstractDetector):
         nbins_azimuthal = int(np.ceil(2 * np.pi / self._azimuthal_steps))
         return inner, outer, nbins_radial, nbins_azimuthal
 
+    @classmethod
+    def _label_to_index(cls, labels):
+        labels = labels.flatten()
+        labels_order = labels.argsort()
+        sorted_labels = labels[labels_order]
+        indices = np.arange(0, len(labels) + 1)[labels_order]
+        index = np.arange(0, np.max(labels) + 1)
+        lo = np.searchsorted(sorted_labels, index, side='left')
+        hi = np.searchsorted(sorted_labels, index, side='right')
+        for i, (l, h) in enumerate(zip(lo, hi)):
+            yield indices[l:h]
+
     @cached_method('cache')
     def _get_regions(self, gpts: Tuple[int], sampling: Tuple[float], wavelength: float) -> List[np.ndarray]:
         inner, outer, nbins_radial, nbins_azimuthal = self._get_bins(sampling, wavelength)
@@ -152,7 +163,7 @@ class _PolarDetector(AbstractDetector):
             raise RuntimeError('Zero-sized detector region.')
 
         region_indices = []
-        for indices in label_to_index_generator(region_labels):
+        for indices in self._label_to_index(region_labels):
             region_indices.append(indices)
         return region_indices
 

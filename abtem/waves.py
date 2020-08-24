@@ -2,6 +2,7 @@ from copy import copy
 from typing import Union, Sequence, Tuple
 
 import h5py
+import matplotlib.pyplot as plt
 import numpy as np
 from ase import Atoms
 
@@ -9,18 +10,18 @@ from abtem.base_classes import Grid, Accelerator, cache_clear_callback, Cache, c
 from abtem.detect import AbstractDetector, _crop_to_center
 from abtem.device import get_array_module, get_device_function, asnumpy, get_array_module_from_device, \
     copy_to_device, get_available_memory, HasDeviceMixin
-from abtem.measure import calibrations_from_grid, Measurement
-from abtem.plot import show_line
+from abtem.measure import calibrations_from_grid, Measurement, _line_intersect_rectangle, interpolate_line, \
+    calculate_fwhm
 from abtem.potentials import Potential, AbstractPotential, AbstractTDSPotentialBuilder, AbstractPotentialBuilder, \
     ProjectedPotentialArray
 from abtem.scan import AbstractScan
 from abtem.transfer import CTF
-from abtem.utils import polargrid, ProgressBar, cosine_window, spatial_frequencies, coordinates, split_integer
+from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, split_integer
 
 
 class FresnelPropagator:
     """
-    Fresnel propagator class.
+    Fresnel propagator object.
 
     This class is used for propagating a wave function object using the near-field approximation (Fresnel diffraction).
     The array representing the Fresnel propagator function is cached.
@@ -30,9 +31,18 @@ class FresnelPropagator:
         self._cache = Cache(1)
 
     @classmethod
+    def _cosine_window(cls, x, cutoff=.25, rolloff=.1):
+        xp = get_array_module(x)
+        rolloff *= cutoff
+        array = .5 * (1 + xp.cos(xp.pi * (x - cutoff - rolloff) / rolloff))
+        array[x < cutoff] = 0.
+        array = xp.where(x < cutoff + rolloff, array, xp.ones_like(x, dtype=xp.float32))
+        return array
+
+    @classmethod
     def _antialiasing_aperture(cls, gpts: Tuple[int]) -> np.ndarray:
-        x = 1 - cosine_window(np.abs(np.fft.fftfreq(gpts[0])), .25, .1, 'high')
-        y = 1 - cosine_window(np.abs(np.fft.fftfreq(gpts[1])), .25, .1, 'high')
+        x = 1 - cls._cosine_window(np.abs(np.fft.fftfreq(gpts[0])), .25, .1)
+        y = 1 - cls._cosine_window(np.abs(np.fft.fftfreq(gpts[1])), .25, .1)
         return x[:, None] * y[None]
 
     @cached_method('_cache')
@@ -48,14 +58,19 @@ class FresnelPropagator:
 
     def propagate(self, waves: Union['Waves', 'SMatrixArray'], dz: float) -> Union['Waves', 'SMatrixArray']:
         """
-        Propgate wave function or scattering matrix.
+        Propgate wave functions or scattering matrix.
 
         Parameters
         ----------
-        waves: Waves or SMatrixArray object
+        waves : Waves or SMatrixArray object
             Wave function or scattering matrix to propagate.
-        dz: float
+        dz : float
             Propagation distance [Å].
+
+        Returns
+        -------
+        Waves or SMatrixArray object
+            The propagated wave functions.
         """
         propagator_array = self._evaluate_propagator_array(waves.grid.gpts,
                                                            waves.grid.sampling,
@@ -69,16 +84,22 @@ class FresnelPropagator:
         return waves
 
 
-def transmit(waves: Union['Waves', 'SMatrixArray'], potential_slice: ProjectedPotentialArray):
+def transmit(waves: Union['Waves', 'SMatrixArray'], potential_slice: ProjectedPotentialArray) -> \
+        Union['Waves', 'SMatrixArray']:
     """
     Transmit wave function or scattering matrix.
 
     Parameters
     ----------
-    waves: Waves object
+    waves : Waves object
         Wave function or scattering matrix to propagate.
-    potential_slice: ProjectedPotential object
+    potential_slice : ProjectedPotential object
         Projected potential to transmit the wave function through.
+
+    Returns
+    -------
+    Waves or SMatrixArray object
+        The transmitted wave functions.
     """
     xp = get_array_module(waves.array)
     complex_exponential = get_device_function(xp, 'complex_exponential')
@@ -126,13 +147,13 @@ class Waves(HasGridAndAcceleratorMixin):
 
     Parameters
     ----------
-    extent: one or two float
-        Lateral extent of wavefunction [Å].
-    gpts: one or two int
+    extent : one or two float
+        Lateral extent of wave function [Å].
+    gpts : one or two int
         Number of grid points describing the wave function.
-    sampling: one or two float
-        Lateral sampling of wavefunctions [1 / Å].
-    energy: float
+    sampling : one or two float
+        Lateral sampling of wave functions [1 / Å].
+    energy : float
         Electron energy [eV].
     """
 
@@ -177,7 +198,7 @@ class Waves(HasGridAndAcceleratorMixin):
 
         Returns
         -------
-        Measurement
+        Measurement object
             The intensity of the diffraction patterns.
         """
         calibrations = calibrations_from_grid(self.grid.antialiased_gpts,
@@ -201,14 +222,14 @@ class Waves(HasGridAndAcceleratorMixin):
 
         Parameters
         ----------
-        ctf: CTF
+        ctf : CTF
             Contrast Transfer Function object to be applied.
-        kwargs:
+        kwargs :
             Provide the aberration coefficients as keyword arguments.
 
         Returns
         -------
-        Wave object
+        Waves object
             The wave functions with aberrations applied.
         """
         xp = get_array_module(self.array)
@@ -219,7 +240,7 @@ class Waves(HasGridAndAcceleratorMixin):
 
         ctf.accelerator.match(self.accelerator)
         kx, ky = spatial_frequencies(self.grid.gpts, self.grid.sampling)
-        alpha, phi = polargrid(xp.asarray(kx * self.wavelength), xp.asarray(ky * self.wavelength))
+        alpha, phi = polar_coordinates(xp.asarray(kx * self.wavelength), xp.asarray(ky * self.wavelength))
         kernel = ctf.evaluate(alpha, phi)
 
         return self.__class__(fft2_convolve(self.array, kernel, overwrite_x=False),
@@ -235,14 +256,14 @@ class Waves(HasGridAndAcceleratorMixin):
 
         Parameters
         ----------
-        potential: Potential
+        potential : Potential
             The potential through which to propagate the wave function.
-        pbar: bool
+        pbar : bool
             If true, display a progress bar.
 
         Returns
         -------
-        Wave object
+        Waves object
             Wave function at the exit plane of the potential.
         """
         self.grid.match(potential)
@@ -280,7 +301,7 @@ class Waves(HasGridAndAcceleratorMixin):
         """
         Write wave functions to a hdf5 file.
 
-        path: str
+        path : str
             The path to write the file.
         """
         with h5py.File(path, 'w') as f:
@@ -293,7 +314,7 @@ class Waves(HasGridAndAcceleratorMixin):
         """
         Read wave functions from a hdf5 file.
 
-        path: str
+        path : str
             The path to read the file.
         """
         with h5py.File(path, 'r') as f:
@@ -312,7 +333,7 @@ class Waves(HasGridAndAcceleratorMixin):
         """
         Show the wave function.
 
-        kwargs:
+        kwargs :
             Additional keyword arguments for the abtem.plot.show_image function.
         """
         self.intensity().show(**kwargs)
@@ -325,7 +346,7 @@ class Waves(HasGridAndAcceleratorMixin):
 
     def copy(self):
         """
-        Return a copy.
+        Make a copy.
         """
         return copy(self)
 
@@ -338,15 +359,15 @@ class PlaneWave(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
     Parameters
     ----------
-    extent: two float
+    extent : two float
         Lateral extent of wavefunction [Å].
-    gpts: two int
+    gpts : two int
         Number of grid points describing the wave function.
-    sampling: two float
+    sampling : two float
         Lateral sampling of wavefunctions [1 / Å].
-    energy: float
+    energy : float
         Electron energy [eV].
-    device: str
+    device : str
         The plane waves will be build on this device.
     """
 
@@ -368,9 +389,9 @@ class PlaneWave(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        potential: Potential or Atoms object
+        potential : Potential or Atoms object
             The potential through which to propagate the wave function.
-        pbar: bool
+        pbar : bool
             If true, display a progress bar.
 
         Returns
@@ -414,27 +435,27 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
     Parameters
     ----------
-    semiangle_cutoff: float
+    semiangle_cutoff : float
         Convergence semi-angle [mrad.].
-    rolloff: float
+    rolloff : float
         Softens the cutoff. A value of 0 gives a hard cutoff, while 1 gives the softest possible cutoff.
-    focal_spread: float
+    focal_spread : float
         The focal spread of the probe.
-    angular_spread: float
+    angular_spread : float
         The angular spread of the probe
-    ctf_parameters: dict
+    ctf_parameters : dict
         The parameters describing the phase aberrations using polar notation or an alias.
-    extent: two float, optional
+    extent : two float, optional
         Lateral extent of wave functions [Å].
-    gpts: two int, optional
+    gpts : two int, optional
         Number of grid points describing the wave functions.
-    sampling: two float, optional
+    sampling : two float, optional
         Lateral sampling of wave functions [1 / Å].
-    energy: float, optional
+    energy : float, optional
         Electron energy [eV].
-    device: str
+    device : str
         The probe wave functions will be build on this device.
-    kwargs:
+    kwargs :
         Provide the aberration coefficients as keyword arguments.
     """
 
@@ -493,7 +514,7 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
     @cached_method('_ctf_cache')
     def _evaluate_ctf(self, xp):
         kx, ky = spatial_frequencies(self.grid.gpts, self.grid.sampling)
-        alpha, phi = polargrid(xp.asarray(kx * self.wavelength), xp.asarray(ky * self.wavelength))
+        alpha, phi = polar_coordinates(xp.asarray(kx * self.wavelength), xp.asarray(ky * self.wavelength))
         return self._ctf.evaluate(alpha, phi)
 
     def build(self, positions: Sequence[Sequence[float]] = None) -> Waves:
@@ -502,7 +523,7 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        positions: Array of xy-positions
+        positions : array of xy-positions
             Positions of the probe wave functions
 
         Returns
@@ -525,7 +546,8 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
             positions = xp.expand_dims(positions, axis=0)
 
         array = fft2(self._evaluate_ctf(xp) * self._fourier_translation_operator(positions), overwrite_x=True)
-        return Waves(array, extent=self.extent, energy=self.energy)
+
+        return Waves(xp.squeeze(array), extent=self.extent, energy=self.energy)
 
     def multislice(self, positions: Sequence[Sequence[float]], potential: AbstractPotential, pbar=True) -> Waves:
         """
@@ -533,11 +555,11 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        positions: Array of xy-positions
+        positions : array of xy-positions
             Positions of the probe wave functions.
-        potential: Potential or Atoms object
+        potential : Potential or Atoms object
             The probe batch size. Larger batches are faster, but require more memory.
-        pbar: bool
+        pbar : bool
             If true, display progress bars.
 
         Returns
@@ -586,15 +608,15 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        scan: Scan object
+        scan : Scan object
             Scan object defining the positions of the probe wave functions.
-        detectors: List of detector objects
+        detectors : List of detector objects
             The detectors recording the measurements.
-        potential: Potential
+        potential : Potential
             The potential to scan the probe over.
-        max_batch: int
+        max_batch : int
             The probe batch size. Larger batches are faster, but require more memory.
-        pbar: bool
+        pbar : bool
             If true, display progress bars.
 
         Returns
@@ -643,23 +665,29 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
         scan_bar.close()
         return measurements
 
-    def show_profile(self, **kwargs):
+    def show_profile(self, angle=0., **kwargs):
         """
         Show the profile of the probe wave function.
 
         Parameters
         ----------
-        kwargs: Additional keyword arguments for the abtem.plot.show_image function.
+        kwargs : Additional keyword arguments for the abtem.plot.show_image function.
         """
         self.grid.check_is_defined()
         measurement = self.build((self.extent[0] / 2, self.extent[1] / 2)).intensity()
 
-        array = measurement.array[0]
-        array = array[array.shape[0] // 2, :]
-        calibration = calibrations_from_grid(gpts=(self.grid.gpts[1],),
-                                             sampling=(self.grid.sampling[1],),
-                                             names=['x'])[0]
-        show_line(array, calibration, **kwargs)
+        point0 = np.array((self.extent[0] / 2, self.extent[1] / 2))
+        point1 = point0 + np.array([np.cos(angle), np.sin(angle)])
+
+        point0, point1 = _line_intersect_rectangle(point0, point1, (0., 0.), self.extent)
+
+        line_measurement = interpolate_line(measurement, point0, point1)
+
+        fwhm = calculate_fwhm(line_measurement)
+
+        ax = line_measurement.show(**kwargs)
+        plt.text(0.05, 0.95, 'FWHM: {:.3f} Å'.format(fwhm), horizontalalignment='left', verticalalignment='top',
+                 transform=ax.transAxes)
 
     def show(self, **kwargs):
         """
@@ -667,7 +695,7 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        kwargs: Additional keyword arguments for the abtem.plot.show_image function.
+        kwargs : Additional keyword arguments for the abtem.plot.show_image function.
         """
         self.grid.check_is_defined()
         measurement = self.build((self.extent[0] / 2, self.extent[1] / 2)).intensity()
@@ -696,25 +724,25 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
     Parameters
     ----------
-    array: 3d array
+    array : 3d array
         The array representation of the scattering matrix.
-    expansion_cutoff: float
+    expansion_cutoff : float
         The angular cutoff of the plane wave expansion [mrad].
-    interpolation: one or two int
+    interpolation : one or two int
         Interpolation factor.
-    k: 2d array
+    k : 2d array
         The spatial frequencies of each plane in the plane wave expansion.
-    ctf: CTF object
+    ctf : CTF object
         The probe contrast transfer function.
-    extent: one or two float
+    extent : one or two float
         Lateral extent of wave functions [Å].
-    gpts: one or two int
+    gpts : one or two int
         Number of grid points describing the wave functions.
-    sampling: one or two float
+    sampling : one or two float
         Lateral sampling of wave functions [1 / Å].
-    energy: float
+    energy : float
         Electron energy [eV].
-    device: str
+    device : str
         The calculations will be carried out on this device.
     """
 
@@ -846,11 +874,11 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        positions: Array of xy-positions
+        positions : array of xy-positions
             Positions of the probe wave functions
-        max_batch: int
+        max_batch : int
             The probe batch size. Larger batches are faster, but require more memory.
-        pbar: bool
+        pbar : bool
             If true, display progress bars.
 
         Returns
@@ -882,14 +910,14 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        positions: List of xy-positions
+        positions : array of xy-positions
             The positions of the probe wave functions.
-        max_batch_expansion: int, optional
+        max_batch_expansion : int, optional
             The maximum number of plane waves the reduction is applied to simultanously.
 
         Returns
         -------
-        Wave object
+        Waves object
             Probe wave functions for the provided positions.
         """
         xp = get_array_module(self.array)
@@ -953,17 +981,17 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        scan: Scan object
+        scan : Scan object
             Scan defining the positions of the probe wave functions.
-        detectors: List of Detector objects
+        detectors : List of Detector objects
             The detectors recording the measurements.
-        potential:
+        potential : Potential object
             The potential to scan the probe over.
-        max_batch_probes: int
+        max_batch_probes : int
             The probe batch size. Larger batches are faster, but require more memory.
-        max_batch_expansion: int
+        max_batch_expansion : int
             The expansion plane wave batch size.
-        pbar: bool
+        pbar : bool
             If true, display progress bars.
 
         Returns
@@ -994,7 +1022,7 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        kwargs:
+        kwargs :
             Additional keyword arguments for the abtem.plot.show_line function.
         """
 
@@ -1004,7 +1032,7 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        kwargs:
+        kwargs :
             Additional keyword arguments for the abtem.plot.show_image function.
         """
         measurement = self.collapse((self.extent[0] / 2, self.extent[1] / 2)).intensity()
@@ -1037,25 +1065,25 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
     Parameters
     ----------
-    expansion_cutoff: float
+    expansion_cutoff : float
         The angular cutoff of the plane wave expansion [mrad].
-    interpolation: ont or two int
+    interpolation : one or two int
         Interpolation factor.
     ctf: CTF object
         The probe contrast transfer function.
-    extent: one or two float
+    extent : one or two float
         Lateral extent of wave functions [Å].
-    gpts: one or two int
+    gpts : one or two int
         Number of grid points describing the wave functions.
-    sampling: one or two float
+    sampling : one or two float
         Lateral sampling of wave functions [1 / Å].
-    energy: float
+    energy : float
         Electron energy [eV].
-    device: str
+    device : str
         The calculations will be carried out on this device.
-    storage: str
+    storage : str
         The scattering matrix will be stored on this device.
-    kwargs:
+    kwargs :
         The parameters of a new CTF object as keyword arguments.
     """
 
@@ -1164,11 +1192,11 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        positions: Array of xy-positions
+        positions : array of xy-positions
             Positions of the probe wave functions
-        max_batch: int, optional
+        max_batch : int, optional
             The probe batch size. Larger batches are faster, but require more memory.
-        pbar: bool
+        pbar : bool
             If true, display progress bars.
 
         Returns
@@ -1191,17 +1219,17 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        scan: Scan object
+        scan : Scan object
             Scan defining the positions of the probe wave functions.
-        detectors: List of Detector objects
+        detectors : List of Detector objects
             The detectors recording the measurements.
-        potential:
+        potential : Potential object
             The potential to scan the probe over.
-        max_batch_probes: int
+        max_batch_probes : int
             The probe batch size. Larger batches are faster, but require more memory.
-        max_batch_expansion: int
+        max_batch_expansion : int
             The expansion plane wave batch size.
-        pbar: bool
+        pbar : bool
             If true, display progress bars.
 
         Returns
@@ -1297,9 +1325,8 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
         kx = kx[mask]
         ky = ky[mask]
 
-        x, y = coordinates(extent=self.extent, gpts=self.gpts, endpoint=self.grid.endpoint)
-        x = xp.asarray(x)
-        y = xp.asarray(y)
+        x = xp.linspace(0, self.extent[0], self.gpts[0], endpoint=self.grid.endpoint, dtype=xp.float32)
+        y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint, dtype=xp.float32)
 
         array = storage_xp.zeros((len(kx),) + (self.gpts[0], self.gpts[1]), dtype=np.complex64)
 
@@ -1325,7 +1352,7 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        kwargs:
+        kwargs :
             Additional keyword arguments for the abtem.plot.show_line function.
         """
         self.build().show_profile(**kwargs)
@@ -1336,7 +1363,7 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         Parameters
         ----------
-        kwargs:
+        kwargs :
             Additional keyword arguments for the abtem.plot.show_image function.
         """
         self.build().show(**kwargs)

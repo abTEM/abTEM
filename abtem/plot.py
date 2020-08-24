@@ -45,7 +45,7 @@ def _plane2axes(plane):
     return axes + (last_axis[0],)
 
 
-def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atoms=.5, numbering=False):
+def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atoms=.5, title=None, numbering=False):
     """
     Show atoms function
 
@@ -100,6 +100,8 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
         ax.axis('equal')
         ax.set_xlabel(plane[0] + ' [Å]')
         ax.set_ylabel(plane[1] + ' [Å]')
+
+        ax.set_title(title)
 
         if numbering:
             for i, (position, size) in enumerate(zip(positions, sizes)):

@@ -489,7 +489,7 @@ class Grid:
         Parameters
         ----------
         n : int
-
+            The gpts will be a power of this number.
         """
         self.gpts = tuple(n ** np.ceil(np.log(n) / np.log(n)) for n in self.gpts)
 
@@ -542,6 +542,9 @@ class HasGridMixin:
     extent = DelegatedAttribute('grid', 'extent')
     gpts = DelegatedAttribute('grid', 'gpts')
     sampling = DelegatedAttribute('grid', 'sampling')
+
+    def match_grid(self, other, check_match=False):
+        self.grid.match(other, check_match=check_match)
 
 
 class Accelerator:

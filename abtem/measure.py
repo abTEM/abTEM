@@ -9,7 +9,7 @@ import numpy as np
 import scipy.misc
 import scipy.ndimage
 from scipy.ndimage import zoom
-
+from scipy.interpolate import interpn
 from abtem.device import asnumpy
 from abtem.plot import show_image, show_line
 
@@ -142,6 +142,9 @@ class Measurement:
     """
 
     def __init__(self, array, calibrations, units='', name=''):
+
+        if not isinstance(calibrations, Iterable):
+            calibrations = [calibrations]
 
         if len(calibrations) != len(array.shape):
             raise RuntimeError(
@@ -425,7 +428,62 @@ def block_zeroth_order_spot(diffraction_pattern: Measurement):
     return diffraction_pattern
 
 
-def fwhm(measurement: Measurement):
+def _line_intersect_rectangle(point0, point1, lower_corner, upper_corner):
+    if point0[0] == point1[0]:
+        return (point0[0], lower_corner[1]), (point0[0], upper_corner[1])
+
+    m = (point1[1] - point0[1]) / (point1[0] - point0[0])
+
+    y = lambda x: m * (x - point0[0]) + point0[1]
+    x = lambda y: (y - point0[1]) / m + point0[0]
+
+    if y(0) < lower_corner[1]:
+        intersect0 = (x(lower_corner[1]), y(x(lower_corner[1])))
+    else:
+        intersect0 = (0, y(lower_corner[0]))
+
+    if y(upper_corner[0]) > upper_corner[1]:
+        intersect1 = (x(upper_corner[1]), y(x(upper_corner[1])))
+    else:
+        intersect1 = (upper_corner[0], y(upper_corner[0]))
+
+    return intersect0, intersect1
+
+
+def interpolate_line(measurement: Measurement, start, end, gpts=None, sampling=None):
+    from abtem.scan import LineScan
+
+    if not (measurement.dimensions == 2):
+        raise RuntimeError()
+
+    if (measurement.calibrations[0] is None) or (measurement.calibrations[1] is None):
+        raise RuntimeError()
+
+    if measurement.calibrations[0].units != measurement.calibrations[1].units:
+        raise RuntimeError()
+
+    if (gpts is None) & (sampling is None):
+        sampling = (measurement.calibrations[0].sampling + measurement.calibrations[1].sampling) / 2.
+
+    x = np.linspace(measurement.calibrations[0].offset,
+                    measurement.shape[0] * measurement.calibrations[0].sampling,
+                    measurement.shape[0])
+    y = np.linspace(measurement.calibrations[1].offset,
+                    measurement.shape[1] * measurement.calibrations[1].sampling,
+                    measurement.shape[1])
+
+    line_scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling)
+
+    interpolated_array = interpn((x, y), measurement.array, line_scan.get_positions())
+
+    return Measurement(interpolated_array,
+                       Calibration(offset=0,
+                                   sampling=line_scan.sampling[0],
+                                   units=measurement.calibrations[0].units,
+                                   name=measurement.calibrations[0].name))
+
+
+def calculate_fwhm(measurement: Measurement):
     """Function for calculating the full width at half maximum value for a 1D function."""
 
     array = measurement.array
@@ -433,13 +491,21 @@ def fwhm(measurement: Measurement):
     peak_value = array[peak_idx]
     left = np.argmin(np.abs(array[:peak_idx] - peak_value / 2))
     right = peak_idx + np.argmin(np.abs(array[peak_idx:] - peak_value / 2))
-    return right - left
+
+    fwhm = right - left
+    if measurement.calibrations[0] is not None:
+        fwhm = fwhm * measurement.calibrations[0].sampling
+
+    return fwhm
 
 
 def center_of_mass(measurement: Measurement):
     """Function for estimating the intensity center-of-mass for a given measurement."""
 
     if (measurement.dimensions != 3) and (measurement.dimensions != 4):
+        raise RuntimeError()
+
+    if not (measurement.calibrations[-1].units == measurement.calibrations[-2].units):
         raise RuntimeError()
 
     shape = measurement.array.shape[-2:]
