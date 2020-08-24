@@ -1,5 +1,4 @@
 """Module to calculate potentials using the independent atom model."""
-
 from abc import ABCMeta, abstractmethod
 from typing import Union, Sequence, Callable, Generator
 
@@ -151,7 +150,6 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 
 class AbstractPotentialBuilder(AbstractPotential):
     """Potential builder abstract class."""
-
     def __init__(self, storage='cpu'):
         self._storage = storage
 
@@ -214,7 +212,7 @@ class PotentialIntegrator:
     ----------
     function: callable
         Radial function to integrate.
-    evaluation_points: array of float
+    r: array of float
         The evaluation points of the integrals.
     cutoff: float, optional
         The radial function is assumed to be zero outside this threshold.
@@ -289,10 +287,14 @@ class PotentialIntegrator:
     def _do_integrate(self, a, b):
         zm = (b - a) / 2.
         zp = (a + b) / 2.
-        f = lambda z: self._function(np.sqrt(self.r[0] ** 2 + (z * zm + zp) ** 2))
+
+        def f(z):
+            return self._function(np.sqrt(self.r[0] ** 2 + (z * zm + zp) ** 2))
         value, error_estimate, step_size, order = integrate(f, -1, 1, self._tolerance)
         xk, wk = tanh_sinh_nodes_and_weights(step_size, order)
-        f = lambda z: self._function(np.sqrt(self.r[:, None] ** 2 + (z * zm + zp) ** 2))
+
+        def f(z):
+            return self._function(np.sqrt(self.r[:, None] ** 2 + (z * zm + zp) ** 2))
         values = np.sum(f(xk[None]) * wk[None], axis=1) * zm
         derivatives = np.diff(values) / np.diff(self.r)
         return values, derivatives
@@ -550,7 +552,8 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         try:
             return self._cutoffs[number]
         except KeyError:
-            f = lambda r: self.function(r, self.parameters[number]) - self.cutoff_tolerance
+            def f(r):
+                return self.function(r, self.parameters[number]) - self.cutoff_tolerance
             self._cutoffs[number] = brentq(f, 1e-7, 1000)
             return self._cutoffs[number]
 
@@ -610,7 +613,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         """Internal function for the indices of the radial interpolation points."""
         try:
             return self._disc_indices[number]
-        except:
+        except KeyError:
             cutoff = self.get_cutoff(number)
             margin = np.int(np.ceil(cutoff / np.min(self.sampling)))
             rows, cols = _disc_meshgrid(margin)
@@ -725,9 +728,9 @@ class PotentialArray(AbstractPotential, HasGridMixin):
     slice_thicknesses: float
         The thicknesses of potential slices in Å. If a float, the thickness is the same for all slices.
         If a sequence, the length must equal the length of the potential array.
-    extent: one or two float
+    extent: one or two float, optional
         Lateral extent of the potential [Å].
-    sampling: one or two float
+    sampling: one or two float, optional
         Lateral sampling of the potential [1 / Å].
     """
 

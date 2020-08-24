@@ -65,6 +65,8 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
         pyplot axes object.
     scale_atoms : float
         Scaling factor for the atom display sizes. Default is 0.5.
+    title : str
+        Title of the displayed image. Default is None.
     numbering : bool
         Option to set plot numbering. Default is False.
     """
@@ -126,7 +128,7 @@ def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='g
     ----------
     array : ndarray
         Image array.
-    calibrations : ndarray
+    calibrations : tuple of calibration objects.
         Spatial calibrations.
     ax : axes object
         pyplot axes object.
@@ -251,7 +253,7 @@ def domain_coloring(z, fade_to_white=False, saturation=1.0, k=.5):
 
     Parameters
     ----------
-    z : complex
+    z : ndarray, complex
         Complex number to be colored.
     fade_to_white : bool, optional
         Option to fade the coloring to white instead of black. Default is False.
