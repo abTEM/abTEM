@@ -28,7 +28,7 @@ def interpolate_radial_functions(array: np.ndarray,
                                  v: np.ndarray,
                                  r: np.ndarray,
                                  dvdr: np.ndarray,
-                                 sampling: Sequence[float, float]):
+                                 sampling: Sequence[float]):
     """
     Interpolate radial functions in 2d at specified positions. The radial functions are assumed to be spaced evenly on a
     log grid.
