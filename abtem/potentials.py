@@ -16,7 +16,7 @@ from abtem.base_classes import Grid, HasGridMixin, Cache, cached_method, HasAcce
 from abtem.device import get_device_function, get_array_module, get_array_module_from_device, copy_to_device, \
     HasDeviceMixin
 from abtem.measure import calibrations_from_grid
-from abtem.parametrizations import kirkland, dvdr_kirkland, load_kirkland_parameters
+from abtem.parametrizations import kirkland, dvdr_kirkland, load_kirkland_parameters, kirkland_projected_fourier
 from abtem.parametrizations import lobato, dvdr_lobato, load_lobato_parameters
 from abtem.plot import show_image
 from abtem.structures import is_cell_orthogonal
@@ -150,6 +150,7 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 
 class AbstractPotentialBuilder(AbstractPotential):
     """Potential builder abstract class."""
+
     def __init__(self, storage='cpu'):
         self._storage = storage
 
@@ -290,11 +291,13 @@ class PotentialIntegrator:
 
         def f(z):
             return self._function(np.sqrt(self.r[0] ** 2 + (z * zm + zp) ** 2))
+
         value, error_estimate, step_size, order = integrate(f, -1, 1, self._tolerance)
         xk, wk = tanh_sinh_nodes_and_weights(step_size, order)
 
         def f(z):
             return self._function(np.sqrt(self.r[:, None] ** 2 + (z * zm + zp) ** 2))
+
         values = np.sum(f(xk[None]) * wk[None], axis=1) * zm
         derivatives = np.diff(values) / np.diff(self.r)
         return values, derivatives
@@ -393,6 +396,18 @@ def _disc_meshgrid(r):
     return rows[inside], cols[inside]
 
 
+def superpose_deltas(positions, array):
+    shape = array.shape
+    xp = get_array_module(array)
+    rounded = xp.floor(positions).astype(xp.int32)
+    rows, cols = rounded[:, 0], rounded[:, 1]
+
+    array[rows, cols] += (1 - (positions[:, 0] - rows)) * (1 - (positions[:, 1] - cols))
+    array[(rows + 1) % shape[0], cols] += (positions[:, 0] - rows) * (1 - (positions[:, 1] - cols))
+    array[rows, (cols + 1) % shape[1]] += (1 - (positions[:, 0] - rows)) * (positions[:, 1] - cols)
+    array[(rows + 1) % shape[0], (cols + 1) % shape[1]] += (rows - positions[:, 0]) * (cols - positions[:, 1])
+
+
 class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
     """
     Potential object.
@@ -416,8 +431,12 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         The potential parametrization describes the radial dependence of the potential for each element. Two of the
         most accurate parametrizations are available by Lobato et. al. and Kirkland. The abTEM default is 'lobato'.
         See the citation guide for references.
+    projection: 'finite' or 'infinite'
+        If 'finite' the 3d potential is numerically integrated between the slice boundaries. If 'infinite' the infinite
+        potential projection of each atom will be assigned to a single slice.
     cutoff_tolerance: float, optional
-        The error tolerance used for deciding the radial cutoff distance of the potential [eV / e].
+        The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]. The cutoff is only
+        relevant for potentials using the 'finite' projection scheme.
     device: str, optional
         The device used for calculating the potential. The default is 'cpu'.
     storage: str, optional
@@ -430,6 +449,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
                  sampling: Union[float, Sequence[float]] = None,
                  slice_thickness: float = .5,
                  parametrization: str = 'lobato',
+                 projection: str = 'finite',
                  cutoff_tolerance: float = 1e-3,
                  device='cpu',
                  storage=None):
@@ -440,17 +460,25 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
         self._storage = storage
 
-        if parametrization == 'lobato':
+        if parametrization.lower() == 'lobato':
             self._parameters = load_lobato_parameters()
             self._function = lobato
             self._derivative = dvdr_lobato
 
-        elif parametrization == 'kirkland':
+        elif parametrization.lower() == 'kirkland':
             self._parameters = load_kirkland_parameters()
             self._function = kirkland
             self._derivative = dvdr_kirkland
         else:
             raise RuntimeError('Parametrization {} not recognized'.format(parametrization))
+
+        if projection == 'infinite':
+            if parametrization.lower() != 'kirkland':
+                raise RuntimeError('Infinite projections are only implemented for the Kirkland parametrization')
+        elif (projection != 'finite'):
+            raise RuntimeError('Projection must be "finite" or "infinite"')
+
+        self._projection = projection
 
         if isinstance(atoms, AbstractFrozenPhonons):
             self._frozen_phonons = atoms
@@ -490,6 +518,11 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
     def parametrization(self):
         """The potential parametrization."""
         return self._parameters
+
+    @property
+    def projection(self):
+        """The projection method."""
+        return self._projection
 
     @property
     def parameters(self):
@@ -554,6 +587,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         except KeyError:
             def f(r):
                 return self.function(r, self.parameters[number]) - self.cutoff_tolerance
+
             self._cutoffs[number] = brentq(f, 1e-7, 1000)
             return self._cutoffs[number]
 
@@ -603,8 +637,8 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         except KeyError:
             cutoff = self.get_cutoff(number)
             soft_function = self.get_tapered_function(number)
-            inner_cutoff = np.min(self.sampling)
-            num_points = int(np.ceil(cutoff / np.min(self.sampling) * 10))
+            inner_cutoff = np.min(self.sampling) / 5.
+            num_points = int(np.ceil(cutoff / np.min(self.sampling) * 5.))
             r = np.geomspace(inner_cutoff, cutoff, num_points)
             self._integrators[number] = PotentialIntegrator(soft_function, r, cutoff)
             return self._integrators[number]
@@ -621,10 +655,61 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
             return self._disc_indices[number]
 
     def generate_slices(self, start=0, end=None) -> Generator:
+        self.grid.check_is_defined()
+
         if end is None:
             end = len(self)
 
-        self.grid.check_is_defined()
+        if self.projection == 'finite':
+            return self._generate_slices_finite(start=start, end=end)
+        else:
+            return self._generate_slices_infinite(start=start, end=end)
+
+    def _generate_slices_infinite(self, start=0, end=None) -> Generator:
+        xp = get_array_module_from_device(self._device)
+        atoms = self.atoms.copy()
+        atoms.wrap()
+        indices_by_number = {number: np.where(atoms.numbers == number)[0] for number in np.unique(atoms.numbers)}
+
+        kx = xp.fft.fftfreq(self.gpts[0], self.sampling[0])
+        ky = xp.fft.fftfreq(self.gpts[1], self.sampling[1])
+        kx, ky = xp.meshgrid(kx, ky, indexing='ij')
+        k = xp.sqrt(kx ** 2 + ky ** 2)
+
+        sinc = xp.sinc(xp.sqrt((kx * self.sampling[0]) ** 2 + (kx * self.sampling[1]) ** 2))
+
+        scattering_factors = {}
+        for atomic_number in indices_by_number.keys():
+            f = kirkland_projected_fourier(k, self.parameters[atomic_number])
+            scattering_factors[atomic_number] = (f / (sinc * self.sampling[0] * self.sampling[1] * kappa)).astype(
+                xp.complex64)
+
+        array = xp.zeros((len(indices_by_number),) + self.gpts, dtype=xp.complex64)
+        a = np.sum([self.get_slice_thickness(i) for i in range(0, start)])
+
+        fft2_convolve = get_device_function(xp, 'fft2_convolve')
+
+        for i in range(start, end):
+            array[:] = 0.
+            b = a + self.get_slice_thickness(i)
+
+            for j, (number, indices) in indices_by_number.items():
+                slice_atoms = atoms[indices]
+                slice_atoms = slice_atoms[(slice_atoms.positions[:, 2] > a) *
+                                          (slice_atoms.positions[:, 2] < b)]
+
+                positions = xp.asarray(slice_atoms.positions[:, :2] / self.sampling)
+
+                superpose_deltas(positions, array[j])
+                fft2_convolve(array[j], scattering_factors[number])
+
+            # array += cupyx.scipy.fft.ifft2(cupyx.scipy.fft.ifft2(new_array, overwrite_x=True) *
+            #                               scattering_factors[number], overwrite_x=True).real
+
+            a = b
+            yield ProjectedPotentialArray(array.real.sum(0), self.get_slice_thickness(i), extent=self.extent)
+
+    def _generate_slices_finite(self, start=0, end=None) -> Generator:
         xp = get_array_module_from_device(self._device)
 
         interpolate_radial_functions = get_device_function(xp, 'interpolate_radial_functions')

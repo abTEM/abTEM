@@ -118,7 +118,7 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
 
 
 def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='gray', figsize=None, scans=None,
-               log_scale=False, discrete=False, cbar_label=None, vmin=None, vmax=None, **kwargs):
+               log_scale=False, discrete=False, cbar_label=None, vmin=None, vmax=None, power=1, **kwargs):
     """
     Show image function
 
@@ -164,6 +164,9 @@ def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='g
 
     if log_scale:
         array = np.log(array)
+
+    if power != 1.:
+        array = array ** power
 
     extent = []
     for calibration, num_elem in zip(calibrations, array.shape):

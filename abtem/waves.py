@@ -21,6 +21,14 @@ from abtem.transfer import CTF
 from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, split_integer
 
 
+class AntialiasFilter:
+
+    def __init__(self, cutoff=None):
+        if cutoff is None:
+            self._cutoff = 2. / 3.
+        self._cutoff = cutoff
+
+
 class FresnelPropagator:
     """
     Fresnel propagator object.
@@ -252,7 +260,7 @@ class Waves(HasGridAndAcceleratorMixin):
 
     def multislice(self,
                    potential: AbstractPotential,
-                   #reduce_tds: str = None,
+                   # reduce_tds: str = None,
                    pbar: Union[ProgressBar, bool] = True) -> 'Waves':
         """
         Propagate and transmit wave function through the provided potential.
@@ -1005,7 +1013,7 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
         return measurements
 
     def show_profile(self, **kwargs):
-        #TODO implement function
+        # TODO implement function
         """
         Show the profile of the probe wave function.
 

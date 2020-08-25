@@ -7,17 +7,18 @@ from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_func
     windowed_scale_reduce
 
 FFTW_EFFORT = 'FFTW_MEASURE'
-FFTW_THREADS = 8
+FFTW_THREADS = 12
 FFTW_TIMELIMIT = 600
 
 try:  # This should be the only place import cupy, to make it a non-essential dependency
     import cupy as cp
     import cupyx.scipy.fft
     from abtem.cuda_kernels import launch_interpolate_radial_functions, launch_scale_reduce, \
-        launch_windowed_scale_reduce
+        launch_windowed_scale_reduce, launch_superpose_deltas
 
     get_array_module = cp.get_array_module
 
+    # plan = cupyx.scipy.fftpack.get_fft_plan(array.astype(xp.complex64), axes=(-1, -2))
 
     def fft2_convolve(array: cp.array, kernel: cp.array, overwrite_x: bool = True):
         """
@@ -36,7 +37,8 @@ try:  # This should be the only place import cupy, to make it a non-essential de
                      'abs2': lambda x: cp.abs(x) ** 2,
                      'interpolate_radial_functions': launch_interpolate_radial_functions,
                      'scale_reduce': launch_scale_reduce,
-                     'windowed_scale_reduce': launch_windowed_scale_reduce}
+                     'windowed_scale_reduce': launch_windowed_scale_reduce,
+                     'superpose_deltas': launch_superpose_deltas}
 
     asnumpy = cp.asnumpy
 

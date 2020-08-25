@@ -482,19 +482,18 @@ class Grid:
         elif (self.gpts is not None) & (other.gpts is not None) & np.any(self.gpts != other.gpts):
             raise RuntimeError('Inconsistent grid gpts ({} != {})'.format(self.gpts, other.gpts))
 
-    def snap_to_power(self, n: int = 2):
-        # TODO check function.
+    def snap_to_power(self, power: int = 2):
         """
         Round the grid gpts up to the nearest value that is a power of n. Fourier transforms are faster for arrays of
         whose size can be factored into small primes (2, 3, 5 and 7).
 
         Parameters
         ----------
-        n : int
+        power : int
             The gpts will be a power of this number.
         """
 
-        self.gpts = tuple(n ** np.ceil(np.log(n) / np.log(n)) for n in self.gpts)
+        self.gpts = tuple(power ** np.ceil(np.log(n) / np.log(power)) for n in self.gpts)
 
     def __copy__(self):
         return self.__class__(extent=self.extent,
