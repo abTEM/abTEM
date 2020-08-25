@@ -131,10 +131,12 @@ def kirkland_projected(r, p):
 
 
 def kirkland_projected_fourier(k, p):
-    f = (2 * p[0, 0] / (k ** 2 + p[1, 0] ** 2) +
-         np.sqrt(np.pi / p[3, 0]) * p[2, 0] / (2. * p[3, 0]) * np.exp(-k ** 2. / (4. * p[3, 0])) +
-         2 * p[0, 1] / (k ** 2 + p[1, 1] ** 2) +
-         np.sqrt(np.pi / p[3, 1]) * p[2, 1] / (2. * p[3, 1]) * np.exp(-k ** 2. / (4. * p[3, 1])) +
-         2 * p[0, 2] / (k ** 2 + p[1, 2] ** 2) +
-         np.sqrt(np.pi / p[3, 2]) * p[2, 2] / (2. * p[3, 2]) * np.exp(-k ** 2. / (4. * p[3, 2])))
+    f = (4 * np.pi * p[0, 0] / (4 * np.pi ** 2 * k ** 2 + p[1, 0] ** 2) +
+         np.sqrt(np.pi / p[3, 0]) * p[2, 0] * np.pi / p[3, 0] * np.exp(-np.pi ** 2 * k ** 2. / p[3, 0]) +
+
+         4 * np.pi * p[0, 1] / (4 * np.pi ** 2 * k ** 2 + p[1, 1] ** 2) +
+         np.sqrt(np.pi / p[3, 1]) * p[2, 1] * np.pi / p[3, 1] * np.exp(-np.pi ** 2 * k ** 2. / p[3, 1]) +
+
+         4 * np.pi * p[0, 2] / (4 * np.pi ** 2 * k ** 2 + p[1, 2] ** 2) +
+         np.sqrt(np.pi / p[3, 2]) * p[2, 2] * np.pi / p[3, 2] * np.exp(-np.pi ** 2 * k ** 2. / p[3, 2]))
     return f
