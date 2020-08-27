@@ -693,7 +693,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
             array[:] = 0.
             b = a + self.get_slice_thickness(i)
 
-            for j, (number, indices) in indices_by_number.items():
+            for j, (number, indices) in enumerate(indices_by_number.items()):
                 slice_atoms = atoms[indices]
                 slice_atoms = slice_atoms[(slice_atoms.positions[:, 2] > a) *
                                           (slice_atoms.positions[:, 2] < b)]
@@ -701,10 +701,8 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
                 positions = xp.asarray(slice_atoms.positions[:, :2] / self.sampling)
 
                 superpose_deltas(positions, array[j])
-                fft2_convolve(array[j], scattering_factors[number])
 
-            # array += cupyx.scipy.fft.ifft2(cupyx.scipy.fft.ifft2(new_array, overwrite_x=True) *
-            #                               scattering_factors[number], overwrite_x=True).real
+                fft2_convolve(array[j], scattering_factors[number])
 
             a = b
             yield ProjectedPotentialArray(array.real.sum(0), self.get_slice_thickness(i), extent=self.extent)

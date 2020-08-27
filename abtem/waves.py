@@ -23,10 +23,53 @@ from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, spl
 
 class AntialiasFilter:
 
-    def __init__(self, cutoff=None):
-        if cutoff is None:
-            self._cutoff = 2. / 3.
+    def __init__(self, cutoff=2 / 3., dk=0.25, fmin=0.01):
         self._cutoff = cutoff
+        self._dk = dk
+        self._fmin = fmin
+        self._cache = Cache(1)
+
+    @cached_method('_cache')
+    def _get_mask(self, gpts, sampling):
+        kx, ky = spatial_frequencies(gpts, sampling)
+        k2 = kx[:, None] ** 2 + ky[None] ** 2
+        kx_max = 1 / sampling[0] / 2
+        ky_max = 1 / sampling[1] / 2
+        kmax = min(kx_max, ky_max)
+        kcut = kmax * self._cutoff
+        alpha = np.log(1 / self._fmin - 1) / ((kcut + self._dk) ** 2 - kcut ** 2)
+        return 1 / (1 + np.exp(alpha * (k2 - kcut ** 2)))
+
+    def bandlimit(self, array, sampling):
+        fft2_convolve = get_device_function(get_array_module(array), 'fft2_convolve')
+        fft2_convolve(array, self._get_mask(array.shape[-2:], sampling), overwrite_x=True)
+
+    def _crop_amount(self, gpts, sampling):
+        kx_max = 1 / sampling[0] / 2
+        ky_max = 1 / sampling[1] / 2
+        kmax = min(kx_max, ky_max)
+        kcut = kmax * self._cutoff
+
+        right = gpts[0] // 2 - int(np.ceil(gpts[0] * sampling[0] * (kcut - self._dk) / np.sqrt(2)))
+        top = gpts[1] // 2 - int(np.ceil(gpts[1] * sampling[1] * (kcut - self._dk) / np.sqrt(2)))
+
+        if (gpts[0] % 2) == 0:
+            left = right + 1
+        else:
+            right += 1
+            left = right
+
+        if (gpts[1] % 2) == 0:
+            bottom = top + 1
+        else:
+            top += 1
+            bottom = top
+
+        return left, right, top, bottom
+
+    def crop_to_valid(self, array, sampling):
+        left, right, top, bottom = self._crop_amount(array.shape[-2:], sampling)
+        return array[left:-right, bottom:-top]
 
 
 class FresnelPropagator:
@@ -684,7 +727,7 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
         """
 
         self.grid.check_is_defined()
-        measurement = self.build((self.extent[0] / 2, self.extent[1] / 2)).intensity()
+        measurement = self.build((self.extent[0] / 2, self.extent[1] / 2)).intensity()[0]
 
         point0 = np.array((self.extent[0] / 2, self.extent[1] / 2))
         point1 = point0 + np.array([np.cos(np.pi * angle / 180), np.sin(np.pi * angle / 180)])
