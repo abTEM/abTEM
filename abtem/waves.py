@@ -8,7 +8,8 @@ import numpy as np
 
 from ase import Atoms
 
-from abtem.base_classes import Grid, Accelerator, cache_clear_callback, Cache, cached_method, HasGridAndAcceleratorMixin
+from abtem.base_classes import Grid, Accelerator, cache_clear_callback, Cache, cached_method, \
+    HasGridAndAcceleratorMixin, AntialiasFilter
 from abtem.detect import AbstractDetector, _crop_to_center
 from abtem.device import get_array_module, get_device_function, asnumpy, get_array_module_from_device, \
     copy_to_device, get_available_memory, HasDeviceMixin
@@ -19,57 +20,6 @@ from abtem.potentials import Potential, AbstractPotential, AbstractTDSPotentialB
 from abtem.scan import AbstractScan
 from abtem.transfer import CTF
 from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, split_integer
-
-
-class AntialiasFilter:
-
-    def __init__(self, cutoff=2 / 3., dk=0.25, fmin=0.01):
-        self._cutoff = cutoff
-        self._dk = dk
-        self._fmin = fmin
-        self._cache = Cache(1)
-
-    @cached_method('_cache')
-    def _get_mask(self, gpts, sampling):
-        kx, ky = spatial_frequencies(gpts, sampling)
-        k2 = kx[:, None] ** 2 + ky[None] ** 2
-        kx_max = 1 / sampling[0] / 2
-        ky_max = 1 / sampling[1] / 2
-        kmax = min(kx_max, ky_max)
-        kcut = kmax * self._cutoff
-        alpha = np.log(1 / self._fmin - 1) / ((kcut + self._dk) ** 2 - kcut ** 2)
-        return 1 / (1 + np.exp(alpha * (k2 - kcut ** 2)))
-
-    def bandlimit(self, array, sampling):
-        fft2_convolve = get_device_function(get_array_module(array), 'fft2_convolve')
-        fft2_convolve(array, self._get_mask(array.shape[-2:], sampling), overwrite_x=True)
-
-    def _crop_amount(self, gpts, sampling):
-        kx_max = 1 / sampling[0] / 2
-        ky_max = 1 / sampling[1] / 2
-        kmax = min(kx_max, ky_max)
-        kcut = kmax * self._cutoff
-
-        right = gpts[0] // 2 - int(np.ceil(gpts[0] * sampling[0] * (kcut - self._dk) / np.sqrt(2)))
-        top = gpts[1] // 2 - int(np.ceil(gpts[1] * sampling[1] * (kcut - self._dk) / np.sqrt(2)))
-
-        if (gpts[0] % 2) == 0:
-            left = right + 1
-        else:
-            right += 1
-            left = right
-
-        if (gpts[1] % 2) == 0:
-            bottom = top + 1
-        else:
-            top += 1
-            bottom = top
-
-        return left, right, top, bottom
-
-    def crop_to_valid(self, array, sampling):
-        left, right, top, bottom = self._crop_amount(array.shape[-2:], sampling)
-        return array[left:-right, bottom:-top]
 
 
 class FresnelPropagator:
@@ -83,30 +33,19 @@ class FresnelPropagator:
     def __init__(self):
         self._cache = Cache(1)
 
-    @classmethod
-    def _cosine_window(cls, x, cutoff=.25, rolloff=.1):
-        xp = get_array_module(x)
-        rolloff *= cutoff
-        array = .5 * (1 + xp.cos(xp.pi * (x - cutoff - rolloff) / rolloff))
-        array[x < cutoff] = 0.
-        array = xp.where(x < cutoff + rolloff, array, xp.ones_like(x, dtype=xp.float32))
-        return array
-
-    @classmethod
-    def _antialiasing_aperture(cls, gpts: Tuple[int]) -> np.ndarray:
-        x = 1 - cls._cosine_window(np.abs(np.fft.fftfreq(gpts[0])), .25, .1)
-        y = 1 - cls._cosine_window(np.abs(np.fft.fftfreq(gpts[1])), .25, .1)
-        return x[:, None] * y[None]
-
     @cached_method('_cache')
-    def _evaluate_propagator_array(self, gpts: Tuple[int], sampling: Tuple[float], wavelength: float, dz: float,
+    def _evaluate_propagator_array(self, gpts: Tuple[int, int],
+                                   sampling: Tuple[float, float],
+                                   wavelength: float,
+                                   dz: float,
                                    xp) -> np.ndarray:
         complex_exponential = get_device_function(xp, 'complex_exponential')
         kx = xp.fft.fftfreq(gpts[0], sampling[0]).astype(xp.float32)
         ky = xp.fft.fftfreq(gpts[1], sampling[1]).astype(xp.float32)
         f = (complex_exponential(-(kx ** 2)[:, None] * np.pi * wavelength * dz) *
              complex_exponential(-(ky ** 2)[None] * np.pi * wavelength * dz))
-        f *= xp.asarray(self._antialiasing_aperture(gpts))
+        antialias_filter = AntialiasFilter(gpts=gpts, sampling=sampling)
+        f *= antialias_filter._get_mask(xp)
         return f
 
     def propagate(self, waves: Union['Waves', 'SMatrixArray'], dz: float) -> Union['Waves', 'SMatrixArray']:
@@ -138,8 +77,9 @@ class FresnelPropagator:
         return waves
 
 
-def transmit(waves: Union['Waves', 'SMatrixArray'], potential_slice: ProjectedPotentialArray) -> \
-        Union['Waves', 'SMatrixArray']:
+def transmit(waves: Union['Waves', 'SMatrixArray'],
+             potential_slice: ProjectedPotentialArray,
+             antialias_filter: AntialiasFilter) -> Union['Waves', 'SMatrixArray']:
     """
     Transmit wave function or scattering matrix.
 
@@ -158,15 +98,19 @@ def transmit(waves: Union['Waves', 'SMatrixArray'], potential_slice: ProjectedPo
 
     xp = get_array_module(waves.array)
     complex_exponential = get_device_function(xp, 'complex_exponential')
-    dim_padding = len(waves._array.shape) - len(potential_slice.array.shape)
-    slice_array = potential_slice.array.reshape((1,) * dim_padding + potential_slice.array.shape)
 
-    if np.iscomplexobj(slice_array):
-        waves._array *= copy_to_device(slice_array, xp)
-    else:
-        waves._array *= complex_exponential(copy_to_device(waves.accelerator.sigma * slice_array, xp))
+    dim_padding = len(waves._array.shape) - len(potential_slice.array.shape)
+
+    t = potential_slice.array.reshape((1,) * dim_padding + potential_slice.array.shape)
+
+    t = complex_exponential(waves.accelerator.sigma * copy_to_device(t, xp))
+
+    antialias_filter.bandlimit(t)
+
+    waves._array *= t
 
     return waves
+
 
 
 def _multislice(waves: Union['Waves', 'SMatrixArray'],
@@ -184,9 +128,11 @@ def _multislice(waves: Union['Waves', 'SMatrixArray'],
     if isinstance(pbar, bool):
         pbar = ProgressBar(total=len(potential), desc='Multislice', disable=not pbar)
 
+    antialias_filter = AntialiasFilter(gpts=waves.gpts, sampling=waves.sampling)
+
     pbar.reset()
     for potential_slice in potential:
-        transmit(waves, potential_slice)
+        transmit(waves, potential_slice, antialias_filter)
         waves = propagator.propagate(waves, potential_slice.thickness)
         pbar.update(1)
 
@@ -896,10 +842,14 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
         return min(int(available_memory / memory_per_wave), len(self))
 
     def _max_batch_probes(self):
+        if get_array_module(self.array) is np:
+            return 1
+
         max_batch_plane_waves = self._max_batch_expansion()
         memory_per_wave = 2 * 4 * np.prod(self.interpolated_grid.gpts)
         memory_per_plane_wave_batch = 2 * 4 * np.prod(self.gpts) * max_batch_plane_waves
         available_memory = .4 * get_available_memory(self._device) - memory_per_plane_wave_batch
+
         return max(min(int(available_memory / memory_per_wave), 1024), 1)
 
     def multislice(self,
@@ -961,7 +911,7 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
             Probe wave functions for the provided positions.
         """
 
-        xp = get_array_module(self.array)
+        xp = get_array_module_from_device(self.device)  # get_array_module(self.array)
         complex_exponential = get_device_function(xp, 'complex_exponential')
         scale_reduce = get_device_function(xp, 'scale_reduce')
         windowed_scale_reduce = get_device_function(xp, 'windowed_scale_reduce')
@@ -988,6 +938,7 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
                        complex_exponential(2. * np.pi * k[:, 1][None] * positions[:, 1, None]))
 
         coefficients = translation * self._evaluate_ctf()
+        # print(type(window), window.shape)
 
         for start, end, partial_s_matrix in self._generate_partial(max_batch_expansion, pbar=False):
             partial_coefficients = coefficients[:, start:end]
@@ -995,7 +946,14 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
             if self.interpolation > 1:
                 windowed_scale_reduce(window, partial_s_matrix.array, corners, partial_coefficients)
             else:
+                # partial_s_matrix.array.reshape(partial_s_matrix.array.shape[0], -1)
+                # xp.dot(partial_coefficients, partial_s_matrix.array.reshape(partial_s_matrix.array.shape[0], -1), window)
                 scale_reduce(window, partial_s_matrix.array, partial_coefficients)
+
+                # windowed_scale_reduce(window, partial_s_matrix.array, corners, partial_coefficients)
+                # window = (partial_s_matrix.array[None] * partial_coefficients[:, :, None, None]).sum(1)
+                # for i in range(len(positions)):
+                #    scale_reduce(window[i, None], partial_s_matrix.array, partial_coefficients[i, None])
 
         return Waves(window, extent=interpolated_grid.extent, energy=self.energy)
 
@@ -1309,7 +1267,6 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
                     new_measurement = detector.detect(exit_probes)
 
                     if isinstance(potential, AbstractTDSPotentialBuilder):
-                        # TODO : this should be more efficient
                         new_measurement /= len(potential.frozen_phonons)
 
                     scan.insert_new_measurement(measurement, start, end, new_measurement)

@@ -5,7 +5,8 @@ from typing import Optional, Union, Sequence, Any, Callable
 
 import numpy as np
 
-from abtem.utils import energy2wavelength, energy2sigma
+from abtem.device import copy_to_device, get_array_module, get_device_function
+from abtem.utils import energy2wavelength, energy2sigma, spatial_frequencies
 
 
 class Event(object):
@@ -674,3 +675,85 @@ class HasGridAndAcceleratorMixin(HasGridMixin, HasAcceleratorMixin):
     @property
     def max_scattering_angle(self):
         return 1 / np.max(self.grid.antialiased_sampling) * self.wavelength / 2 * 1000
+
+
+class AntialiasFilter(HasGridMixin):
+
+    def __init__(self, gpts=None, sampling=None, extent=None, cutoff=2 / 3., rolloff=.1):
+        self._cutoff = cutoff
+        self._rolloff = rolloff
+        self._mask_cache = Cache(1)
+        self._crop_cache = Cache(1)
+
+        self._grid = Grid(gpts=gpts, sampling=sampling, extent=extent)
+        self._grid.changed.register(cache_clear_callback(self._mask_cache))
+        self._grid.changed.register(cache_clear_callback(self._crop_cache))
+
+    @property
+    def antialiased_gpts(self) -> tuple:
+        return tuple(n // 2 for n in self.gpts)
+
+    @property
+    def antialiased_sampling(self) -> tuple:
+        return tuple(l / n for n, l in zip(self.antialiased_gpts, self.extent))
+
+    @property
+    def antialiased_extent(self) -> tuple:
+        return self.extent
+
+    @cached_method('_mask_cache')
+    def _get_mask(self, xp):
+        self.grid.check_is_defined()
+        kx, ky = spatial_frequencies(self.gpts, self.sampling)
+        kx = copy_to_device(kx, xp)
+        ky = copy_to_device(ky, xp)
+        k = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
+        kmax = min(1 / self.sampling[0] / 2, 1 / self.sampling[1] / 2)
+        kcut = kmax * self._cutoff
+        array = .5 * (1 + xp.cos(np.pi * (k - kcut + self._rolloff) / self._rolloff))
+        array[k > kcut] = 0.
+        array = xp.where(k > kcut - self._rolloff, array, xp.ones_like(k, dtype=xp.float32))
+        return array
+
+    def bandlimit(self, array):
+        xp = get_array_module(array)
+        fft2_convolve = get_device_function(xp, 'fft2_convolve')
+        fft2_convolve(array, self._get_mask(xp), overwrite_x=True)
+
+    @cached_method('_crop_cache')
+    def _crop_amounts(self, include='valid'):
+        kmax = min(1 / self.sampling[0] / 2, 1 / self.sampling[1] / 2)
+        kcut = kmax * self._cutoff - self._rolloff
+
+        if include == 'valid':
+            right = self.gpts[0] // 2 - int(np.ceil(self.extent[0] * kcut / np.sqrt(2)))
+            top = self.gpts[1] // 2 - int(np.ceil(self.extent[1] * kcut / np.sqrt(2)))
+        elif include == 'limit':
+            right = self.gpts[0] // 2 - int(np.ceil(self.extent[0] * kcut))
+            top = self.gpts[1] // 2 - int(np.ceil(self.extent[1] * kcut))
+        else:
+            raise RuntimeError()
+
+        if (self.gpts[0] % 2) == 0:
+            left = right + 1
+        else:
+            right += 1
+            left = right
+
+        if (self.gpts[1] % 2) == 0:
+            bottom = top + 1
+        else:
+            top += 1
+            bottom = top
+
+        return left, right, top, bottom
+
+    def antialiased_grid(self, include='valid'):
+        left, right, bottom, top = self._crop_amounts(include)
+        new_gpts = (self.gpts[0] - left - right, self.gpts[0] - top - bottom)
+        new_sampling = (self.gpts[0] * self.sampling[0] / new_gpts[0], self.gpts[1] * self.sampling[1] / new_gpts[1])
+        return new_gpts, new_sampling
+
+    def crop(self, array, include='valid'):
+        left, right, top, bottom = self._crop_amounts(include)
+        return array[..., left:-right, bottom:-top]
