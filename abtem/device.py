@@ -18,6 +18,7 @@ try:  # This should be the only place import cupy, to make it a non-essential de
 
     get_array_module = cp.get_array_module
 
+
     # plan = cupyx.scipy.fftpack.get_fft_plan(array.astype(xp.complex64), axes=(-1, -2))
 
     def fft2_convolve(array: cp.array, kernel: cp.array, overwrite_x: bool = True):
@@ -30,9 +31,27 @@ try:  # This should be the only place import cupy, to make it a non-essential de
         return array
 
 
-    gpu_functions = {'fft2': cupyx.scipy.fft.fft2,
-                     'ifft2': cupyx.scipy.fft.ifft2,
+    def fft2(array, overwrite_x=True):
+        return cupyx.scipy.fft.fft2(array, overwrite_x=overwrite_x)
+
+
+    def ifft2(array, overwrite_x=True):
+        return cupyx.scipy.fft.ifft2(array, overwrite_x=overwrite_x)
+
+
+    def pin_array(array):
+        print(array.dtype, array.shape)
+        mem = cp.cuda.alloc_pinned_memory(array.nbytes)
+
+        src = np.frombuffer(mem, array.dtype, array.size).reshape(array.shape)
+        src[...] = array
+        return src
+
+
+    gpu_functions = {'fft2': fft2,
+                     'ifft2': ifft2,
                      'fft2_convolve': fft2_convolve,
+                     'pin_array': pin_array,
                      'complex_exponential': lambda x: cp.exp(1.j * x),
                      'abs2': lambda x: cp.abs(x) ** 2,
                      'interpolate_radial_functions': launch_interpolate_radial_functions,
@@ -45,9 +64,6 @@ try:  # This should be the only place import cupy, to make it a non-essential de
 except ImportError:  # cupy is not available
     cp = None
     get_array_module = lambda *args, **kwargs: np
-    fft2_gpu = None
-    ifft2_gpu = None
-    fft2_convolve_gpu = None
     gpu_functions = None
     asnumpy = np.asarray
 
@@ -99,7 +115,7 @@ def fft2_convolve(array, kernel, overwrite_x=True):
     return _fft_convolve(array, kernel)
 
 
-def fft2(array, overwrite_x):
+def fft2(array, overwrite_x=True):
     if not overwrite_x:
         array = array.copy()
 
@@ -107,7 +123,7 @@ def fft2(array, overwrite_x):
     return fftw_forward()
 
 
-def ifft2(array, overwrite_x):
+def ifft2(array, overwrite_x=True):
     if not overwrite_x:
         array = array.copy()
 
@@ -119,6 +135,7 @@ cpu_functions = {'fft2': fft2,
                  'ifft2': ifft2,
                  'fft2_convolve': fft2_convolve,
                  'abs2': abs2,
+                 'pin_array': lambda x: x,
                  'complex_exponential': complex_exponential,
                  'interpolate_radial_functions': interpolate_radial_functions,
                  'scale_reduce': scale_reduce,
@@ -132,7 +149,7 @@ def get_device_function(xp, name: str) -> Callable:
     :param xp: The array library. Must numpy or cupy.
     :param name: Name of function.
     """
-    if xp is cp:
+    if (xp is cp):
         return gpu_functions[name]
     elif xp is np:
         return cpu_functions[name]
@@ -183,6 +200,18 @@ def get_available_memory(device: str) -> float:
         if device == 'gpu':
             device = cp.cuda.Device(0)
         return device.mem_info[0]
+
+
+class DataStream:
+
+    def __init__(self, non_blocking=False):
+        if cp is None:
+            self._stream = None
+        else:
+            self._stream = cp.cuda.Stream(non_blocking=non_blocking)
+
+    def stream(self, a, b):
+        a[:batch_size].set(self._array[start:end], stream=self._stream)
 
 
 class HasDeviceMixin:

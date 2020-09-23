@@ -6,7 +6,7 @@ from typing import Optional, Union, Sequence, Any, Callable
 import numpy as np
 
 from abtem.device import copy_to_device, get_array_module, get_device_function
-from abtem.utils import energy2wavelength, energy2sigma, spatial_frequencies
+from abtem.utils import energy2wavelength, energy2sigma, spatial_frequencies, fft_interpolation_masks
 
 
 class Event(object):
@@ -276,7 +276,11 @@ class Grid:
 
         self.changed = Event()
         self._dimensions = dimensions
-        self._endpoint = endpoint
+
+        if isinstance(endpoint, bool):
+            endpoint = (endpoint,) * 2
+
+        self._endpoint = tuple(endpoint)
 
         if sum([lock_extent, lock_gpts, lock_sampling]) > 1:
             raise RuntimeError('At most one of extent, gpts, and sampling may be locked')
@@ -315,7 +319,7 @@ class Grid:
         return self.dimensions
 
     @property
-    def endpoint(self) -> bool:
+    def endpoint(self) -> tuple:
         """
         Include the grid endpoint.
         """
@@ -400,24 +404,16 @@ class Grid:
 
     def _adjust_extent(self, gpts: tuple, sampling: tuple):
         if (gpts is not None) & (sampling is not None):
-            if self._endpoint:
-                self._extent = tuple((n - 1) * d for n, d in zip(gpts, sampling))
-            else:
-                self._extent = tuple(n * d for n, d in zip(gpts, sampling))
+            self._extent = tuple((n - 1) * d if e else n * d for n, d, e in zip(gpts, sampling, self._endpoint))
 
     def _adjust_gpts(self, extent: tuple, sampling: tuple):
         if (extent is not None) & (sampling is not None):
-            if self._endpoint:
-                self._gpts = tuple(int(np.ceil(r / d)) + 1 for r, d in zip(extent, sampling))
-            else:
-                self._gpts = tuple(int(np.ceil(r / d)) for r, d in zip(extent, sampling))
+            self._gpts = tuple(int(np.ceil(r / d)) + 1 if e else int(np.ceil(r / d))
+                               for r, d, e in zip(extent, sampling, self._endpoint))
 
     def _adjust_sampling(self, extent: tuple, gpts: tuple):
         if (extent is not None) & (gpts is not None):
-            if self._endpoint:
-                self._sampling = tuple(r / (n - 1) for r, n in zip(extent, gpts))
-            else:
-                self._sampling = tuple(r / n for r, n in zip(extent, gpts))
+            self._sampling = tuple(r / (n - 1) if e else r / n for r, n, e in zip(extent, gpts, self._endpoint))
 
     def check_is_defined(self):
         """
@@ -689,71 +685,64 @@ class AntialiasFilter(HasGridMixin):
         self._grid.changed.register(cache_clear_callback(self._mask_cache))
         self._grid.changed.register(cache_clear_callback(self._crop_cache))
 
-    @property
-    def antialiased_gpts(self) -> tuple:
-        return tuple(n // 2 for n in self.gpts)
-
-    @property
-    def antialiased_sampling(self) -> tuple:
-        return tuple(l / n for n, l in zip(self.antialiased_gpts, self.extent))
-
-    @property
-    def antialiased_extent(self) -> tuple:
-        return self.extent
+    def cutoff_freq(self):
+        self.grid.check_is_defined()
+        return min(1 / self.sampling[0] / 2, 1 / self.sampling[1] / 2) * self._cutoff
 
     @cached_method('_mask_cache')
-    def _get_mask(self, xp):
+    def get_mask(self, xp):
         self.grid.check_is_defined()
         kx, ky = spatial_frequencies(self.gpts, self.sampling)
         kx = copy_to_device(kx, xp)
         ky = copy_to_device(ky, xp)
         k = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
-        kmax = min(1 / self.sampling[0] / 2, 1 / self.sampling[1] / 2)
-        kcut = kmax * self._cutoff
-        array = .5 * (1 + xp.cos(np.pi * (k - kcut + self._rolloff) / self._rolloff))
-        array[k > kcut] = 0.
-        array = xp.where(k > kcut - self._rolloff, array, xp.ones_like(k, dtype=xp.float32))
+        kcut = self.cutoff_freq()
+
+        if self._rolloff > 0.:
+            array = .5 * (1 + xp.cos(np.pi * (k - kcut + self._rolloff) / self._rolloff))
+            array[k > kcut] = 0.
+            array = xp.where(k > kcut - self._rolloff, array, xp.ones_like(k, dtype=xp.float32))
+        else:
+            array = xp.array(k < kcut).astype(xp.float32)
         return array
 
     def bandlimit(self, array):
         xp = get_array_module(array)
         fft2_convolve = get_device_function(xp, 'fft2_convolve')
-        fft2_convolve(array, self._get_mask(xp), overwrite_x=True)
+        fft2_convolve(array, self.get_mask(xp), overwrite_x=True)
 
     @cached_method('_crop_cache')
-    def _crop_amounts(self, include='valid'):
+    def _crop_indices(self, xp, include='valid'):
+        new_shape = self.cropped_gpts(include)
+        mask1, _ = fft_interpolation_masks(self.gpts, new_shape, xp)
+        return xp.where(mask1)
+
+    def downsample(self, array, include='valid'):
+        xp = get_array_module(array)
+        fft2 = get_device_function(xp, 'fft2')
+        ifft2 = get_device_function(xp, 'ifft2')
+
+        if np.iscomplexobj(array):
+            return ifft2(self.crop(fft2(array), include))
+        else:
+            return ifft2(self.crop(fft2(array), include)).real
+
+    def cropped_gpts(self, include='valid'):
         kmax = min(1 / self.sampling[0] / 2, 1 / self.sampling[1] / 2)
         kcut = kmax * self._cutoff - self._rolloff
 
         if include == 'valid':
-            right = self.gpts[0] // 2 - int(np.ceil(self.extent[0] * kcut / np.sqrt(2)))
-            top = self.gpts[1] // 2 - int(np.ceil(self.extent[1] * kcut / np.sqrt(2)))
+            nx = int(np.floor(2 * self.extent[0] * kcut / np.sqrt(2)))
+            ny = int(np.floor(2 * self.extent[0] * kcut / np.sqrt(2)))
         elif include == 'limit':
-            right = self.gpts[0] // 2 - int(np.ceil(self.extent[0] * kcut))
-            top = self.gpts[1] // 2 - int(np.ceil(self.extent[1] * kcut))
+            nx = int(np.ceil(2 * self.extent[0] * kcut))
+            ny = int(np.ceil(2 * self.extent[1] * kcut))
         else:
             raise RuntimeError()
-
-        if (self.gpts[0] % 2) == 0:
-            left = right + 1
-        else:
-            right += 1
-            left = right
-
-        if (self.gpts[1] % 2) == 0:
-            bottom = top + 1
-        else:
-            top += 1
-            bottom = top
-
-        return left, right, top, bottom
-
-    def antialiased_grid(self, include='valid'):
-        left, right, bottom, top = self._crop_amounts(include)
-        new_gpts = (self.gpts[0] - left - right, self.gpts[0] - top - bottom)
-        new_sampling = (self.gpts[0] * self.sampling[0] / new_gpts[0], self.gpts[1] * self.sampling[1] / new_gpts[1])
-        return new_gpts, new_sampling
+        return (nx, ny)
 
     def crop(self, array, include='valid'):
-        left, right, top, bottom = self._crop_amounts(include)
-        return array[..., left:-right, bottom:-top]
+        xp = get_array_module(array)
+        indices = self._crop_indices(xp, include)
+        new_shape = self.cropped_gpts(include)
+        return array[..., indices[0], indices[1]].reshape(array.shape[:-2] + new_shape)

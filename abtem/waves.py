@@ -17,7 +17,7 @@ from abtem.measure import calibrations_from_grid, Measurement, _line_intersect_r
     calculate_fwhm
 from abtem.potentials import Potential, AbstractPotential, AbstractTDSPotentialBuilder, AbstractPotentialBuilder, \
     ProjectedPotentialArray
-from abtem.scan import AbstractScan
+from abtem.scan import AbstractScan, GridScan
 from abtem.transfer import CTF
 from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, split_integer, periodic_crop
 
@@ -714,14 +714,6 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
         return copy(self)
 
 
-def periodic_crop(array, corner, new_shape):
-    xp = get_array_module(array)
-    x = xp.arange(corner[0], corner[0] + new_shape[0], dtype=xp.int) % array.shape[-1]
-    y = xp.arange(corner[1], corner[1] + new_shape[1], dtype=xp.int) % array.shape[-2]
-    x, y = xp.meshgrid(x, y)
-    return array[..., x.ravel(), y.ravel()]
-
-
 class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
     """
     Scattering matrix array object.
@@ -760,6 +752,8 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
                  ctf: CTF = None,
                  extent: Union[float, Sequence[float]] = None,
                  sampling: Union[float, Sequence[float]] = None,
+                 periodic: bool = True,
+                 offset: Sequence[float] = None,
                  device: str = 'cpu'):
 
         self._array = array
@@ -774,6 +768,11 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
             ctf = CTF(semiangle_cutoff=expansion_cutoff, rolloff=.1)
 
         self.ctf = ctf
+
+        self._periodic = periodic
+        if offset is None:
+            self._offset = np.array([0., 0.], dtype=np.float32)
+
         self._device = device
 
     @property
@@ -807,6 +806,10 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
         return self._interpolation
 
     @property
+    def periodic(self):
+        return self._periodic
+
+    @property
     def interpolated_grid(self) -> Grid:
         """The grid of the interpolated scattering matrix."""
         interpolated_gpts = tuple(n // self.interpolation for n in self.gpts)
@@ -816,13 +819,20 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
         """Number of plane waves in expansion."""
         return len(self._array)
 
+    def _raise_not_periodic(self):
+        raise RuntimeError('not implemented for non-periodic/cropped scattering matrices')
+
     def downsample(self, max_angle='limit'):
+        if not self.periodic:
+            self._raise_not_periodic()
+
         antialias_filter = AntialiasFilter(gpts=self.gpts, extent=self.extent)
+
         xp = get_array_module(self.array)
 
         new_array = xp.zeros((len(self.array),) + antialias_filter.cropped_gpts(max_angle), dtype=self.array.dtype)
-
         max_batch = self._max_batch_expansion()
+
         for start, end, partial_s_matrix in self._generate_partial(max_batch, pbar=False):
             new_array[start:end] = copy_to_device(antialias_filter.downsample(partial_s_matrix.array, max_angle), xp)
 
@@ -833,7 +843,18 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
                               ctf=self.ctf,
                               extent=self.extent,
                               energy=self.energy,
+                              periodic=self.periodic,
+                              offset=self._offset,
                               device=self.device)
+
+    def crop_to_scan(self, scan):
+
+        if not isinstance(scan, GridScan):
+            raise NotImplementedError()
+
+        # offset =
+
+        # new_array =
 
     def _max_batch_expansion(self):
         memory_per_wave = 2 * 4 * self.gpts[0] * self.gpts[1]
@@ -849,10 +870,6 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
         available_memory = .4 * get_available_memory(self._device) - memory_per_plane_wave_batch
         return max(min(int(available_memory / memory_per_wave), 1024), 1)
 
-    def gpu_streaming(self):
-        xp = get_array_module_from_device(self._device)
-        return xp != get_array_module(self.array)
-
     def _generate_partial(self, max_batch: int = None, pbar: bool = True):
         if max_batch is None:
             n_batches = 1
@@ -864,7 +881,7 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         xp = get_array_module_from_device(self._device)
 
-        if self.gpu_streaming():
+        if xp != get_array_module(self.array):
             stream = xp.cuda.Stream(non_blocking=False)
             partial_array = xp.empty((batch_sizes[0],) + self.gpts, dtype=xp.complex64)
 
@@ -915,6 +932,9 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
             Probe exit wave functions for the provided positions.
         """
 
+        if not self.periodic:
+            self._raise_not_periodic()
+
         if not isinstance(max_batch, int):
             max_batch = self._max_batch_expansion()
 
@@ -946,6 +966,22 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
         return (complex_exponential(2. * np.pi * k[:, 0][None] * positions[:, 0, None]) *
                 complex_exponential(2. * np.pi * k[:, 1][None] * positions[:, 1, None]))
 
+    def _get_requisite_crop(self, positions, return_per_position=False):
+        interp_gpts = self.interpolated_grid.gpts
+
+        offset = (interp_gpts[0] // 2, interp_gpts[1] // 2)
+        corners = np.rint(positions / self.sampling - offset).astype(np.int)
+        upper_corners = corners + np.asarray(interp_gpts)
+
+        crop_corner = (np.min(corners[:, 0]).item(), np.min(corners[:, 1]).item())
+        size = (np.max(upper_corners[:, 0]).item() - crop_corner[0],
+                np.max(upper_corners[:, 1]).item() - crop_corner[1])
+
+        if return_per_position:
+            return crop_corner, size, corners
+        else:
+            return crop_corner, size
+
     def collapse(self, positions: Sequence[float], max_batch_expansion: int = None) -> Waves:
         """
         Collapse the scattering matrix to probe wave functions centered on the provided positions.
@@ -962,6 +998,8 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
         Waves object
             Probe wave functions for the provided positions.
         """
+        if not self.periodic:
+            pass
 
         if max_batch_expansion is None:
             max_batch_expansion = self._max_batch_expansion()
@@ -980,18 +1018,25 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
             interp_gpts = self.interpolated_grid.gpts
             offset = (interp_gpts[0] // 2, interp_gpts[1] // 2)
             lower = np.rint(positions / self.sampling - offset).astype(np.int)
-            upper = lower + np.asarray(interp_gpts)
 
+            #print(positions, self.sampling)
+            #print(interp_gpts, positions / self.sampling)
+
+            upper = lower + np.asarray(interp_gpts)
             corner = (np.min(lower[:, 0]).item(), np.min(lower[:, 1]).item())
             new_shape = (np.max(upper[:, 0]).item() - corner[0], np.max(upper[:, 1]).item() - corner[1])
 
+            #print(corner, new_shape)
+
             window = xp.tensordot(coefficients, periodic_crop(self.array, corner, new_shape), axes=[(1,), (0,)])
+            #window = xp.tensordot(coefficients, self.array, axes=[(1,), (0,)])
 
             for i in range(len(lower)):
-                start = lower[i] - corner
-                window[i, :interp_gpts[0], :interp_gpts[1]] = periodic_crop(window[i], start, interp_gpts)
+               start = lower[i] - corner
+               window[i, :interp_gpts[0], :interp_gpts[1]] = periodic_crop(window[i], start, interp_gpts)
 
-            window = window[:, :interp_gpts[0], :interp_gpts[1]].copy()
+
+            window = window[:, :interp_gpts[0], :interp_gpts[1]]
 
         elif max_batch_expansion >= len(self):
             for start, end, partial_s_matrix in self._generate_partial(max_batch_expansion, pbar=False):
@@ -1001,55 +1046,6 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
         else:
             window = xp.tensordot(coefficients, self.array, axes=[(1,), (0,)])
 
-        # if (max_batch_expansion >= len(self)) and (not self.gpu_streaming()):
-        #     # zero-copy
-        #
-        #     if self.interpolation > 1:
-        #         interp_gpts = self.interpolated_grid.gpts
-        #         offset = (interp_gpts[0] // 2, interp_gpts[1] // 2)
-        #         lower = np.rint(positions / self.sampling - offset).astype(np.int)
-        #         # lower = np.remainder(lower, np.asarray(self.gpts))
-        #         # lower = xp.asarray(lower)
-        #         upper = lower + np.asarray(interp_gpts)
-        #
-        #         corner = (np.min(lower[:, 0]).item(), np.min(lower[:, 1]).item())
-        #         new_shape = (np.max(upper[:, 0]).item() - corner[0], np.max(upper[:, 1]).item() - corner[1])
-        #
-        #         # if new_shape[0] > 200:
-        #         #     print(positions)
-        #         #     print(corner, upper, np.max(upper[:, 0]).item())
-        #         #     print(new_shape)
-        #         #     ssss
-        #         window = xp.tensordot(coefficients, periodic_crop(self.array, corner, new_shape), axes=[(1,), (0,)])
-        #         #
-        #         for i in range(len(lower)):
-        #             start = lower[i] - corner
-        #             #     #print(start)
-        #             #     #print(interp_gpts)
-        #             #     #x = xp.arange(s[0], s[0] + interp_gpts[0], dtype=xp.int) % window[i].shape[-1]
-        #             #     #y = xp.arange(s[1], s[1] + interp_gpts[1], dtype=xp.int) % window[i].shape[-2]
-        #             #
-        #             #     #x, y = xp.meshgrid(x, y, indexing='ij')
-        #             #     periodic_crop(window[i], start, interp_gpts)
-        #             window[i, :interp_gpts[0], :interp_gpts[1]] = periodic_crop(window[i], start, interp_gpts)
-        #         #
-        #         window = window[:, :interp_gpts[0], :interp_gpts[1]].copy()
-        #
-        #     else:
-        #         window = xp.tensordot(coefficients, self.array, axes=[(1,), (0,)])
-        # else:
-        #     for start, end, partial_s_matrix in self._generate_partial(max_batch_expansion, pbar=False):
-        #         partial_coefficients = coefficients[:, start:end]
-        #
-        #         if self.interpolation > 1:
-        #             raise NotImplementedError()
-        #             # windowed_scale_reduce(window.reshape(window_shape), partial_s_matrix.array, corners,
-        #             #                       partial_coefficients)
-        #         else:
-        #             window = xp.tensordot(coefficients, partial_s_matrix.array, axes=[(1,), (0,)])
-        #         # xp.dot(partial_coefficients, partial_s_matrix.array.reshape(len(partial_s_matrix), -1), out=window)
-
-        # window = xp.zeros((len(positions),) + self.gpts, dtype=xp.complex64)
         return Waves(window, extent=self.interpolated_grid.extent, energy=self.energy)
 
     def _generate_probes(self, scan: AbstractScan, max_batch_probes, max_batch_expansion):
@@ -1092,9 +1088,12 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
             Dictionary of measurements with keys given by the detector.
         """
 
-        measurements = {}
-        for detector in detectors:
-            measurements[detector] = detector.allocate_measurement(self.interpolated_grid, self.wavelength, scan)
+        if isinstance(detectors, dict):
+            measurements = detectors
+        else:
+            measurements = {}
+            for detector in detectors:
+                measurements[detector] = detector.allocate_measurement(self.interpolated_grid, self.wavelength, scan)
 
         if isinstance(pbar, bool):
             pbar = ProgressBar(total=len(scan), desc='Scan', disable=not pbar)
@@ -1406,22 +1405,18 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
         kx = kx[mask]
         ky = ky[mask]
 
-        x = xp.linspace(0, self.extent[0], self.gpts[0], endpoint=self.grid.endpoint, dtype=xp.float32)
-        y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint, dtype=xp.float32)
+        x = xp.linspace(0, self.extent[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=xp.float32)
+        y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=xp.float32)
 
         shape = (len(kx),) + self.gpts
+
         # if (self._device == 'gpu') & (self._storage == 'cpu'):
         #     size = shape[0] * shape[1] * shape[2]
         #     mem = xp.cuda.alloc_pinned_memory(size * 2 * 4)
         #     array = np.frombuffer(mem, np.complex64, size).reshape(shape)
-        #
-        # else:
+
         array = storage_xp.zeros(shape, dtype=np.complex64)
 
-        # print(type(self.gpts[0] * self.gpts[1]), type(np.prod(self.gpts)))
-        # print(self.gpts[0] * self.gpts[1] * len(kx) * 2 * 4, array.size * 2 * 4)
-        # print(array.nbytes *1e-9, array.size * 2 * 4 * 1e-9, 2 * 4 * np.prod(self.gpts) * len(kx) * 1e-9)
-        #
         # import cupy as cp
         # print(array.dtype, array.shape)
         # mem = cp.cuda.alloc_pinned_memory(array.nbytes)
@@ -1429,10 +1424,6 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
         # src = np.frombuffer(mem, array.dtype, array.size).reshape(array.shape)
         # src[...] = array
         # return src
-
-        # sss
-        # pin_array = get_device_function(xp, 'pin_array')
-        # self._array = pin_array(self._array)
 
         for i in range(len(kx)):
             array[i] = copy_to_device(complex_exponential(-2 * np.pi * kx[i, None, None] * x[:, None]) *

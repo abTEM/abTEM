@@ -1,6 +1,7 @@
 """Main abTEM module."""
 from abtem import waves
-from abtem.detect import AnnularDetector, FlexibleAnnularDetector, SegmentedDetector, PixelatedDetector
+from abtem.detect import AnnularDetector, FlexibleAnnularDetector, SegmentedDetector, PixelatedDetector, \
+    WavefunctionDetector
 from abtem.plot import show_atoms
 from abtem.potentials import Potential, PotentialArray
 from abtem.scan import GridScan, LineScan

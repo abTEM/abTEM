@@ -102,8 +102,19 @@ def _windowed_scale_reduce(probes: cp.ndarray, S: cp.ndarray, corners: cp.ndarra
     x, y, z = cuda.grid(3)
 
     if (x < probes.shape[1]) & (y < probes.shape[2]) & (z < probes.shape[0]):
-        xx = (corners[z, 0] + x) % S.shape[1]
-        yy = (corners[z, 1] + y) % S.shape[2]
+        xx = (corners[z, 0] + x)
+        if xx < 0:
+            xx += S.shape[1]
+        elif xx >= S.shape[1]:
+            xx -= S.shape[1]
+
+        yy = (corners[z, 1] + y)
+        if yy < 0:
+            yy += S.shape[2]
+        elif yy >= S.shape[2]:
+            yy -= S.shape[2]
+        # xx = (corners[z, 0] + x) % S.shape[1]
+        # yy = (corners[z, 1] + y) % S.shape[2]
 
         for k in range(S.shape[0]):
             probes[z, x, y] += coefficients[z, k] * S[k, xx, yy]
@@ -170,7 +181,7 @@ def launch_scale_reduce(probes: cp.ndarray, S: cp.ndarray, coefficients: cp.ndar
 
     # TODO : improve threadsperblock
 
-    threadsperblock = (4, 4, 16)
+    threadsperblock = (8, 8, 1)
     blockspergrid_x = math.ceil(S.shape[1] / threadsperblock[0])
     blockspergrid_y = math.ceil(S.shape[2] / threadsperblock[1])
     blockspergrid_z = math.ceil(probes.shape[0] / threadsperblock[2])

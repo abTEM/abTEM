@@ -89,6 +89,63 @@ def polar_coordinates(x, y):
     return alpha, phi
 
 
+def fft_interpolation_masks(shape1, shape2, xp=np, epsilon=1e-7):
+    kx1 = xp.fft.fftfreq(shape1[0], 1 / shape1[0])
+    ky1 = xp.fft.fftfreq(shape1[1], 1 / shape1[1])
+
+    kx2 = xp.fft.fftfreq(shape2[0], 1 / shape2[0])
+    ky2 = xp.fft.fftfreq(shape2[1], 1 / shape2[1])
+
+    kx_min = max(xp.min(kx1), xp.min(kx2)) - epsilon
+    kx_max = min(xp.max(kx1), xp.max(kx2)) + epsilon
+    ky_min = max(xp.min(ky1), xp.min(ky2)) - epsilon
+    ky_max = min(xp.max(ky1), xp.max(ky2)) + epsilon
+
+    kx1, ky1 = xp.meshgrid(kx1, ky1, indexing='ij')
+    kx2, ky2 = xp.meshgrid(kx2, ky2, indexing='ij')
+
+    mask1 = (kx1 <= kx_max) & (kx1 >= kx_min) & (ky1 <= ky_max) & (ky1 >= ky_min)
+    mask2 = (kx2 <= kx_max) & (kx2 >= kx_min) & (ky2 <= ky_max) & (ky2 >= ky_min)
+    return mask1, mask2
+
+
+# def is_points_in_box(points, box):
+
+def periodic_crop(array, corners, new_shape):
+    xp = get_array_module(array)
+
+    if ((corners[0] > 0) &
+            (corners[1] > 0) &
+            (corners[0] + new_shape[0] < array.shape[-2]) &
+            (corners[1] + new_shape[1] < array.shape[-1])):
+        array = array[..., corners[0]:corners[0] + new_shape[0], corners[1]:corners[1] + new_shape[1]]
+        return array
+
+    x = xp.arange(corners[0], corners[0] + new_shape[0], dtype=xp.int) % array.shape[-2]
+    y = xp.arange(corners[1], corners[1] + new_shape[1], dtype=xp.int) % array.shape[-1]
+
+    x, y = xp.meshgrid(x, y, indexing='ij')
+    array = array[..., x.ravel(), y.ravel()].reshape(array.shape[:-2] + new_shape)
+    return array
+
+
+def fft_crop(array, new_shape):
+    assert np.iscomplexobj(array)
+    xp = get_array_module(array)
+    mask_in, mask_out = fft_interpolation_masks(array.shape, new_shape)
+    new_array = xp.zeros(new_shape, dtype=np.complex64)
+    new_array[..., mask_out] = array[..., mask_in]
+    return new_array
+
+
+def fft_interpolate_2d(array, new_shape):
+    xp = get_array_module(array)
+    if np.iscomplexobj(array):
+        return xp.fft.ifft2(xp.fft.fft2(fft_crop(array, new_shape)))
+    else:
+        return xp.fft.ifft2(xp.fft.fft2(fft_crop(array, new_shape))).real
+
+
 def split_integer(n: int, m: int):
     """
     Split an n integer into m (almost) equal integers, such that the sum of smaller integers equals n.
@@ -124,6 +181,7 @@ def split_integer(n: int, m: int):
 
 class ProgressBar:
     """Object to describe progress bar indicators for computations."""
+
     def __init__(self, **kwargs):
         self._tqdm = tqdm(**kwargs)
 

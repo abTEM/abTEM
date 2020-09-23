@@ -5,7 +5,7 @@ from typing import Tuple, List, Any
 
 import numpy as np
 
-from abtem.base_classes import Cache, Event, watched_property, cached_method, Grid
+from abtem.base_classes import Cache, Event, watched_property, cached_method, Grid, AntialiasFilter
 from abtem.device import get_array_module, get_device_function
 from abtem.measure import Calibration, calibrations_from_grid, Measurement
 from abtem.plot import show_image
@@ -55,11 +55,12 @@ def _polar_regions(gpts, sampling, wavelength, inner, outer, nbins_radial, nbins
 
     bins = -np.ones(gpts, dtype=int)
     bins[valid] = angular_bins[valid] + radial_bins[valid] * nbins_azimuthal
-    return np.fft.fftshift(bins)
+    return bins
 
 
 class AbstractDetector(metaclass=ABCMeta):
     """Abstract base class for all detectors."""
+
     def __init__(self, save_file: str = None):
         if save_file is not None:
             save_file = str(save_file)
@@ -88,6 +89,7 @@ class AbstractDetector(metaclass=ABCMeta):
 
 class _PolarDetector(AbstractDetector):
     """Class to define a polar detector, forming the basis of annular and segmented detectors."""
+
     def __init__(self, inner: float = None, outer: float = None, radial_steps: float = 1.,
                  azimuthal_steps: float = None, save_file: str = None):
 
@@ -141,7 +143,12 @@ class _PolarDetector(AbstractDetector):
     def _get_regions(self, gpts: Tuple[int], sampling: Tuple[float], wavelength: float) -> List[np.ndarray]:
         inner, outer, nbins_radial, nbins_azimuthal = self._get_bins(sampling, wavelength)
 
-        region_labels = _polar_regions(gpts, sampling, wavelength, inner / 1000, outer / 1000, nbins_radial,
+        region_labels = _polar_regions(gpts,
+                                       sampling,
+                                       wavelength,
+                                       inner / 1000,
+                                       outer / 1000,
+                                       nbins_radial,
                                        nbins_azimuthal)
 
         if np.all(region_labels == -1):
@@ -259,6 +266,18 @@ class AnnularDetector(_PolarDetector):
     def outer(self, value: float):
         self._outer = value
 
+    def _integrate(self, array, sampling, wavelength, normalize=True):
+        xp = get_array_module(array)
+
+        indices = self._get_regions(array.shape[-2:], sampling, wavelength)[0]
+
+        values = xp.sum(array.reshape(array.shape[:-2] + (-1,))[..., indices], axis=-1)
+
+        if normalize:
+            return values / xp.sum(array, axis=(-2, -1))
+        else:
+            return values
+
     def detect(self, waves) -> np.ndarray:
         """
         Integrate the intensity of a the wave functions over the detector range.
@@ -275,10 +294,15 @@ class AnnularDetector(_PolarDetector):
         """
 
         xp = get_array_module(waves.array)
-        intensity = _calculate_far_field_intensity(waves, overwrite=False)
-        indices = self._get_regions(waves.grid.antialiased_gpts, waves.grid.antialiased_sampling, waves.wavelength)[0]
-        total = xp.sum(intensity, axis=(-2, -1))
-        return xp.sum(intensity.reshape((intensity.shape[0], -1))[:, indices], axis=-1) / total
+        fft2 = get_device_function(xp, 'fft2')
+        abs2 = get_device_function(xp, 'abs2')
+
+        # TODO : crop before integrating.
+        intensity = abs2(fft2(waves.array, overwrite_x=True))
+        # antialias_filter = AntialiasFilter()
+        # antialias_filter.grid.match(waves)
+
+        return self._integrate(intensity, waves.sampling, waves.wavelength)
 
     def __copy__(self) -> 'AnnularDetector':
         return self.__class__(self.inner, self.outer, save_file=self.save_file)

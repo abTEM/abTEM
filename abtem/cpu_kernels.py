@@ -120,7 +120,7 @@ def scale_reduce(probes: np.ndarray, S: np.ndarray, coefficients: np.ndarray):
         matrix.
     """
     for i in prange(S.shape[1]):
-        for j in prange(S.shape[2]):
+        for j in range(S.shape[2]):
             for m in range(S.shape[0]):
-                for n in prange(probes.shape[0]):
+                for n in range(probes.shape[0]):
                     probes[n, i, j] += (coefficients[n, m] * S[m, i, j])

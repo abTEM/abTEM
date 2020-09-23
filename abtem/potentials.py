@@ -185,6 +185,7 @@ class AbstractPotentialBuilder(AbstractPotential):
             pbar.update(1)
 
         pbar.refresh()
+        pbar.close()
 
         return PotentialArray(array, slice_thicknesses, self.extent)
 
@@ -637,7 +638,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         except KeyError:
             cutoff = self.get_cutoff(number)
             soft_function = self.get_tapered_function(number)
-            inner_cutoff = np.min(self.sampling) / 5.
+            inner_cutoff = np.min(self.sampling)
             num_points = int(np.ceil(cutoff / np.min(self.sampling) * 5.))
             r = np.geomspace(inner_cutoff, cutoff, num_points)
             self._integrators[number] = PotentialIntegrator(soft_function, r, cutoff)
