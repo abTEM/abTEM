@@ -17,3 +17,8 @@ def test_propagator_cache():
 
     assert propagator._cache._hits == 1
     assert propagator._cache._misses == 2
+
+
+def testbandlimit_propagator():
+    p = FresnelPropagator()
+    p = p._evaluate_propagator_array((256, 256), (.02, .02), 80e3, .5, np)

@@ -1,12 +1,14 @@
+import os
+
 import numpy as np
 import pytest
-from ase import Atoms
-
 from abtem.detect import AnnularDetector
-from abtem.potentials import Potential
-from abtem.scan import LineScan
-from abtem.waves import Probe, SMatrix
 from abtem.device import asnumpy, cp
+from abtem.potentials import Potential
+from abtem.scan import LineScan, GridScan
+from abtem.waves import Probe, SMatrix
+from ase import Atoms
+from ase.io import read
 
 
 def test_prism_raises():
@@ -23,8 +25,8 @@ def test_prism_raises():
 
 
 def test_prism_match_probe():
-    S_builder = SMatrix(30., 60e3, 1, extent=5, gpts=101)
-    probe = Probe(extent=5, gpts=101, energy=60e3, semiangle_cutoff=30., rolloff=0.)
+    S_builder = SMatrix(30., 60e3, 1, extent=5, gpts=50)
+    probe = Probe(extent=5, gpts=50, energy=60e3, semiangle_cutoff=30., rolloff=0.)
     assert np.allclose(probe.build([(0., 0.)]).array, S_builder.build().collapse([(0., 0.)]).array, atol=2e-5)
 
 
@@ -65,6 +67,25 @@ def test_probe_waves_line_scan():
     assert np.allclose(measurements[detector].array, prism_measurements[detector].array, atol=1e-6)
 
 
+def test_interpolation_scan():
+    atoms = Atoms('C', positions=[(2.5, 2.5, 2)], cell=(5, 5, 4))
+    potential = Potential(atoms)
+    linescan = LineScan(start=[0, 0], end=[2.5, 2.5], gpts=10)
+    detector = AnnularDetector(inner=80, outer=200)
+
+    probe = Probe(semiangle_cutoff=30, energy=80e3, gpts=250)
+    measurements = probe.scan(linescan, [detector], potential, max_batch=50, pbar=False)
+
+    S_builder = SMatrix(30, 80e3, 2, gpts=500)
+    atoms = Atoms('C', positions=[(2.5, 2.5, 2)], cell=(5, 5, 4))
+    atoms *= (2, 2, 1)
+    potential = Potential(atoms)
+    S = S_builder.multislice(potential, pbar=False)
+    prism_measurements = S.scan(linescan, [detector], max_batch_probes=10, pbar=False)
+
+    assert np.allclose(measurements[detector].array, prism_measurements[detector].array, atol=1e-6)
+
+
 def test_prism_batch():
     potential = Potential(Atoms('C', positions=[(2.5, 2.5, 2)], cell=(5, 5, 4)))
 
@@ -73,6 +94,29 @@ def test_prism_batch():
     S2 = S_builder.multislice(potential, max_batch=5, pbar=False)
 
     assert np.allclose(S1.array, S2.array)
+
+
+def test_downsample():
+    S = SMatrix(expansion_cutoff=10, interpolation=2, energy=300e3, extent=10, sampling=.05)
+    S = S.build().downsample()
+
+    S2 = SMatrix(expansion_cutoff=10, interpolation=2, energy=300e3, extent=10, gpts=S.gpts)
+    S2 = S2.build()
+
+    assert np.allclose(S.array - S2.array, 0., atol=5e-6)
+
+
+def test_crop():
+    S = SMatrix(expansion_cutoff=30, interpolation=3, energy=300e3, extent=10, sampling=.02).build()
+    gridscan = GridScan(start=[0, 0], end=S.extent, gpts=64)
+
+    scans = gridscan.partition_scan((2, 2))
+    cropped = S.crop_to_scan(scans[0])
+
+    assert cropped.gpts != S.gpts
+
+    position = (4.9, 0.)
+    assert np.allclose(S.collapse(position).array - cropped.collapse(position).array, 0.)
 
 
 @pytest.mark.gpu
@@ -99,3 +143,29 @@ def test_prism_storage():
     S_gpu = S_builder.multislice(potential, pbar=False)
 
     assert type(S_gpu.array) is np.ndarray
+
+
+@pytest.mark.gpu
+def test_cropped_scan():
+    atoms = read(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data/amorphous_carbon.cif'))
+    potential = Potential(atoms, gpts=512, slice_thickness=1, device='gpu', projection='infinite',
+                          parametrization='kirkland', storage='gpu').build(pbar=True)
+    detector = AnnularDetector(inner=40, outer=60)
+    gridscan = GridScan(start=[0, 0], end=potential.extent, gpts=16)
+
+    S = SMatrix(expansion_cutoff=20, interpolation=4, energy=300e3, device='gpu', storage='cpu')  # .build()
+
+    S = S.multislice(potential, pbar=True)
+    S = S.downsample('limit')
+
+    measurements = S.scan(gridscan, [detector], max_batch_probes=64)
+
+    scans = gridscan.partition_scan((2, 2))
+    cropped_measurements = {detector: detector.allocate_measurement(S.grid, S.wavelength, gridscan)}
+
+    for scan in scans:
+        cropped = S.crop_to_scan(scan)
+        cropped = cropped.transfer('gpu')
+        cropped_measurements = cropped.scan(scan, cropped_measurements, pbar=False)
+
+    assert np.allclose(cropped_measurements[detector].array, measurements[detector].array)

@@ -94,7 +94,3 @@ def test_grid_match():
         grid1.check_match(grid2)
 
     assert str(e.value) == 'Inconsistent grid gpts ((10, 10) != (50, 50))'
-
-    #grid1.match(grid2)
-    #grid1.check_match(grid2)
-
