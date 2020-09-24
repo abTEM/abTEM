@@ -78,6 +78,7 @@ def create_fftw_objects(array, allow_new_plan=True):
     :param allow_new_plan: If false raise an exception instead of caching a new plan.
     :return:
     """
+
     try:
         # try using cached FFTW plan
         fftw_forward = pyfftw.FFTW(array, array, axes=(-1, -2),
@@ -88,17 +89,28 @@ def create_fftw_objects(array, allow_new_plan=True):
         return fftw_forward, fftw_backward
 
     except RuntimeError as e:
-        if ('No FFTW wisdom is known for this plan.' != str(e)) or (not allow_new_plan):
+        if (not allow_new_plan):
             raise
+        # if ('No FFTW wisdom is known for this plan.' != str(e)) or (not allow_new_plan):
+        #    raise
 
         # create new FFTW object, not to be used, but the plan will remain in the cache
-        dummy = pyfftw.byte_align(
-            np.zeros_like(array))  # this is necessary because FFTW overwrites the array during planning
-        pyfftw.FFTW(dummy, dummy, axes=(-1, -2), threads=FFTW_THREADS, flags=(FFTW_EFFORT, 'FFTW_DESTROY_INPUT'),
+        dummy = pyfftw.byte_align(np.zeros_like(array))
+        # this is necessary because FFTW overwrites the array during planning
+
+        pyfftw.FFTW(dummy, dummy,
+                    axes=(-1, -2),
+                    threads=FFTW_THREADS,
+                    flags=(FFTW_EFFORT, 'FFTW_DESTROY_INPUT'),
                     planning_timelimit=FFTW_TIMELIMIT)
-        pyfftw.FFTW(dummy, dummy, axes=(-1, -2), direction='FFTW_BACKWARD', threads=FFTW_THREADS,
-                    flags=(FFTW_EFFORT, 'FFTW_DESTROY_INPUT'), planning_timelimit=FFTW_TIMELIMIT)
-        return create_fftw_objects(array, allow_new_plan=False)
+
+        pyfftw.FFTW(dummy, dummy, axes=(-1, -2),
+                    direction='FFTW_BACKWARD',
+                    threads=FFTW_THREADS,
+                    flags=(FFTW_EFFORT, 'FFTW_DESTROY_INPUT'),
+                    planning_timelimit=FFTW_TIMELIMIT)
+
+        return create_fftw_objects(array, False)
 
 
 def fft2_convolve(array, kernel, overwrite_x=True):

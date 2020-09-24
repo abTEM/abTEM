@@ -341,7 +341,14 @@ class GridScan(AbstractScan, HasGridMixin):
         If True, end is the last position. Otherwise, it is not included. Default is True.
     """
 
-    def __init__(self, start, end, gpts=None, sampling=None, endpoint=False, batch_partition='squares'):
+    def __init__(self,
+                 start,
+                 end,
+                 gpts=None,
+                 sampling=None,
+                 endpoint=False,
+                 batch_partition='squares',
+                 measurement_shift=None):
 
         super().__init__()
 
@@ -360,6 +367,8 @@ class GridScan(AbstractScan, HasGridMixin):
         self._batch_partition = batch_partition
 
         self._grid = Grid(extent=end - start, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint)
+
+        self._measurement_shift = measurement_shift
 
     @property
     def shape(self):
@@ -408,6 +417,10 @@ class GridScan(AbstractScan, HasGridMixin):
     def insert_new_measurement(self, measurement, indices, new_measurement):
         x, y = np.unravel_index(indices, self.shape)
 
+        if self._measurement_shift is not None:
+            x += self._measurement_shift[0]
+            y += self._measurement_shift[1]
+
         if isinstance(measurement, str):
             for unique, inverse in zip(*np.unique(x, return_inverse=True)):
                 with h5py.File(measurement, 'a') as f:
@@ -438,7 +451,12 @@ class GridScan(AbstractScan, HasGridMixin):
                     if endpoint[1]:
                         end[1] -= self.sampling[1]
 
-                scan = self.__class__(start, end, sampling=self.sampling, endpoint=endpoint, batch_partition='squares')
+                scan = self.__class__(start,
+                                      end,
+                                      sampling=self.sampling,
+                                      endpoint=endpoint,
+                                      batch_partition='squares',
+                                      measurement_shift=(Sx[i], Sy[j]))
                 scans.append(scan)
 
         return scans

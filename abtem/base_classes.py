@@ -723,7 +723,9 @@ class AntialiasFilter(HasGridMixin):
         ifft2 = get_device_function(xp, 'ifft2')
 
         if np.iscomplexobj(array):
-            return ifft2(self.crop(fft2(array), include))
+            array = self.crop(fft2(array), include)
+            norm = array.shape[-1] * array.shape[-2] / (self.gpts[0] * self.gpts[1])
+            return ifft2(array * norm, overwrite_x=True)
         else:
             return ifft2(self.crop(fft2(array), include)).real
 
