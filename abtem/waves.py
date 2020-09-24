@@ -754,7 +754,7 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
                  sampling: Union[float, Sequence[float]] = None,
                  periodic: bool = True,
                  offset: Sequence[float] = None,
-                 crop_shape: Tuple[int, int] = None,
+                 cropped_shape: Tuple[int, int] = None,
                  device: str = 'cpu'):
 
         self._array = array
@@ -774,14 +774,14 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
         self._periodic = periodic
 
         if offset is None:
-            self._offset = (0., 0.)
+            offset = (0, 0)
 
-        self._offset = np.array(offset, dtype=np.float32)
+        self._offset = np.array(offset, dtype=np.int)
 
-        if (crop_shape is None) & (interpolation is not None):
-            crop_shape = (self.gpts[0] // interpolation, self.gpts[1] // interpolation)
+        if (cropped_shape is None) & (interpolation is not None):
+            cropped_shape = (self.gpts[0] // interpolation, self.gpts[1] // interpolation)
 
-        self._crop_shape = crop_shape
+        self._cropped_shape = cropped_shape
 
         self._device = device
 
@@ -816,14 +816,16 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
     @property
     def cropped_grid(self):
-        return Grid(gpts=self.crop_shape, sampling=self.sampling, lock_gpts=True)
+        return Grid(gpts=self.cropped_shape, sampling=self.sampling, lock_gpts=True)
 
     @property
-    def crop_shape(self) -> Tuple[int, int]:
+    def cropped_shape(self) -> Tuple[int, int]:
         """The grid of the interpolated scattering matrix."""
-        return self._crop_shape
-        # interpolated_gpts = tuple(n // self.interpolation for n in self.gpts)
-        # return Grid(gpts=interpolated_gpts, sampling=self.sampling, lock_gpts=True)
+        return self._cropped_shape
+
+    @property
+    def offset(self):
+        return self._offset
 
     def __len__(self) -> int:
         """Number of plane waves in expansion."""
@@ -846,7 +848,7 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
         for start, end, partial_s_matrix in self._generate_partial(max_batch, pbar=False):
             new_array[start:end] = copy_to_device(antialias_filter.downsample(partial_s_matrix.array, max_angle), xp)
 
-        crop_shape = tuple(n // (n // self.crop_shape[i]) for i, n in enumerate(self.gpts))
+        cropped_shape = tuple(n // (n // self.cropped_shape[i]) for i, n in enumerate(self.gpts))
 
         return self.__class__(array=new_array,
                               expansion_cutoff=self._expansion_cutoff,
@@ -856,7 +858,7 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
                               energy=self.energy,
                               periodic=self.periodic,
                               offset=self._offset,
-                              crop_shape=crop_shape,
+                              cropped_shape=cropped_shape,
                               device=self.device)
 
     def crop_to_scan(self, scan):
@@ -865,9 +867,6 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
             raise NotImplementedError()
 
         crop_corner, size = self._get_requisite_crop(np.array([scan.start, scan.end]))
-
-        offset = (crop_corner[0] * self.sampling[0], crop_corner[1] * self.sampling[1])
-
         new_array = periodic_crop(self.array, crop_corner, size)
 
         return self.__class__(array=new_array,
@@ -878,7 +877,8 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
                               sampling=self.sampling,
                               energy=self.energy,
                               periodic=False,
-                              offset=offset,
+                              offset=crop_corner,
+                              cropped_shape=self.cropped_shape,
                               device=self.device)
 
     def _max_batch_expansion(self):
@@ -888,9 +888,9 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
     def _max_batch_probes(self):
         max_batch_plane_waves = self._max_batch_expansion()
-        memory_per_wave = 2 * 4 * self.crop_shape[0] * self.crop_shape[1]
+        memory_per_wave = 2 * 4 * self.cropped_shape[0] * self.cropped_shape[1]
         memory_per_plane_wave_batch = 2 * 4 * self.gpts[0] * self.gpts[1] * max_batch_plane_waves
-        available_memory = .4 * get_available_memory(self._device) - memory_per_plane_wave_batch
+        available_memory = .25 * get_available_memory(self._device) - memory_per_plane_wave_batch
         return max(min(int(available_memory / memory_per_wave), 1024), 1)
 
     def _generate_partial(self, max_batch: int = None, pbar: bool = True):
@@ -990,11 +990,12 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
                 complex_exponential(2. * np.pi * k[:, 1][None] * positions[:, 1, None]))
 
     def _get_requisite_crop(self, positions: Sequence[float], return_per_position: bool = False):
-        offset = (self.crop_shape[0] // 2, self.crop_shape[1] // 2)
+        offset = (self.cropped_shape[0] // 2, self.cropped_shape[1] // 2)
         corners = np.rint(np.array(positions) / self.sampling - offset).astype(np.int)
-        upper_corners = corners + np.asarray(self.crop_shape)
+        upper_corners = corners + np.asarray(self.cropped_shape)
 
         crop_corner = (np.min(corners[:, 0]).item(), np.min(corners[:, 1]).item())
+
         size = (np.max(upper_corners[:, 0]).item() - crop_corner[0],
                 np.max(upper_corners[:, 1]).item() - crop_corner[1])
 
@@ -1020,12 +1021,12 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
             Probe wave functions for the provided positions.
         """
         # if not self.periodic:
-        #    positions -= 2*self._offset
+        #    positions -= np.array((2.5, 2.5))
 
         if max_batch_expansion is None:
             max_batch_expansion = self._max_batch_expansion()
 
-        xp = get_array_module_from_device(self.device)  # get_array_module(self.array)
+        xp = get_array_module_from_device(self.device)
         positions = np.array(positions, dtype=xp.float32)
 
         if positions.shape == (2,):
@@ -1035,18 +1036,22 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         coefficients = self._translation(positions) * self._evaluate_ctf()
 
-        if self.crop_shape != self.gpts:
+        if self.cropped_shape != self.gpts:
             crop_corner, size, corners = self._get_requisite_crop(positions, return_per_position=True)
+
+            if self._offset is not None:
+                corners -= self._offset
+                crop_corner = (crop_corner[0] - self._offset[0], crop_corner[1] - self._offset[1])
 
             array = copy_to_device(periodic_crop(self.array, crop_corner, size), device=self._device)
             window = xp.tensordot(coefficients, array, axes=[(1,), (0,)])
 
             corners -= crop_corner
             for i in range(len(corners)):
-                window[i, :self.crop_shape[0], :self.crop_shape[1]] = periodic_crop(window[i], corners[i],
-                                                                                    self.crop_shape)
+                window[i, :self.cropped_shape[0], :self.cropped_shape[1]] = periodic_crop(window[i], corners[i],
+                                                                                          self.cropped_shape)
 
-            window = window[:, :self.crop_shape[0], :self.crop_shape[1]].copy()
+            window = window[:, :self.cropped_shape[0], :self.cropped_shape[1]].copy()
 
         elif max_batch_expansion >= len(self):
             for start, end, partial_s_matrix in self._generate_partial(max_batch_expansion, pbar=False):
@@ -1141,14 +1146,25 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
         measurement = self.collapse((self.extent[0] / 2, self.extent[1] / 2)).intensity()
         measurement.show(**kwargs)
 
-    def __copy__(self):
-        return self.__class__(array=self.array.copy(),
+    def transfer(self, device):
+        return self.__class__(array=copy_to_device(self.array, device),
                               expansion_cutoff=self._expansion_cutoff,
-                              interpolation=self.interpolation,
                               k=self.k.copy(),
                               ctf=self.ctf,
                               extent=self.extent,
-                              crop_shape=self.crop_shape,
+                              offset=self.offset,
+                              cropped_shape=self.cropped_shape,
+                              energy=self.energy,
+                              device=self.device)
+
+    def __copy__(self, device=None):
+        return self.__class__(array=self.array.copy(),
+                              expansion_cutoff=self._expansion_cutoff,
+                              k=self.k.copy(),
+                              ctf=self.ctf,
+                              extent=self.extent,
+                              offset=self.offset,
+                              cropped_shape=self.cropped_shape,
                               energy=self.energy,
                               device=self.device)
 
@@ -1270,6 +1286,7 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
 
         for potential_config in potential.generate_frozen_phonon_potentials(pbar=potential_pbar):
             S = self.multislice(potential_config, max_batch=max_batch_expansion, pbar=multislice_pbar)
+
             yield S._generate_probes(scan, max_batch_probes, max_batch_expansion)
 
         multislice_pbar.refresh()
@@ -1419,22 +1436,28 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
         x = xp.linspace(0, self.extent[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=xp.float32)
         y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=xp.float32)
 
+        # pin_memory = False
+        #
+        # if pin_memory & (self._storage == 'cpu'):
+        #     # def mapped_malloc(size):
+        #     #     mem = cp.cuda.PinnedMemory(size, cp.cuda.runtime.hostAllocMapped)
+        #     #     return cp.cuda.PinnedMemoryPointer(mem, 0)
+        #     #
+        #     # mapped_pinned_mem_pool = cp.cuda.PinnedMemoryPool(mapped_malloc)
+        #     #
+        #     # cp.cuda.set_pinned_memory_allocator(mapped_malloc)
+        #     #
+        #     # mem = cp.cuda.alloc_pinned_memory(size * 2 * 4)
+        #     #
+        #     # array = np.frombuffer(mem, np.complex64, size).reshape(shape)
+        #     import numba as nb
+        #     array = nb.cuda.pinned_array(shape, dtype=np.complex64, order='C')
+        #
+        # else:
+
         shape = (len(kx),) + self.gpts
-
-        # if (self._device == 'gpu') & (self._storage == 'cpu'):
-        #     size = shape[0] * shape[1] * shape[2]
-        #     mem = xp.cuda.alloc_pinned_memory(size * 2 * 4)
-        #     array = np.frombuffer(mem, np.complex64, size).reshape(shape)
-
         array = storage_xp.zeros(shape, dtype=np.complex64)
 
-        # import cupy as cp
-        # print(array.dtype, array.shape)
-        # mem = cp.cuda.alloc_pinned_memory(array.nbytes)
-        #
-        # src = np.frombuffer(mem, array.dtype, array.size).reshape(array.shape)
-        # src[...] = array
-        # return src
 
         for i in range(len(kx)):
             array[i] = copy_to_device(complex_exponential(-2 * np.pi * kx[i, None, None] * x[:, None]) *

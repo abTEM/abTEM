@@ -19,8 +19,6 @@ try:  # This should be the only place import cupy, to make it a non-essential de
     get_array_module = cp.get_array_module
 
 
-    # plan = cupyx.scipy.fftpack.get_fft_plan(array.astype(xp.complex64), axes=(-1, -2))
-
     def fft2_convolve(array: cp.array, kernel: cp.array, overwrite_x: bool = True):
         """
         2d FFT convolution using GPU.

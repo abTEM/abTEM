@@ -446,17 +446,18 @@ class GridScan(AbstractScan, HasGridMixin):
                     if endpoint[0]:
                         end[0] -= self.sampling[0]
 
-                if (j + 1 == splits[1]):
+                if j + 1 == splits[1]:
                     endpoint[1] = self.grid.endpoint[1]
                     if endpoint[1]:
                         end[1] -= self.sampling[1]
 
                 scan = self.__class__(start,
                                       end,
-                                      sampling=self.sampling,
+                                      gpts=(nx, ny),
                                       endpoint=endpoint,
                                       batch_partition='squares',
                                       measurement_shift=(Sx[i], Sy[j]))
+
                 scans.append(scan)
 
         return scans
@@ -481,7 +482,7 @@ class GridScan(AbstractScan, HasGridMixin):
         Sy = np.concatenate(([0], np.cumsum(Ny)))
 
         for i, nx in enumerate(Nx):
-            for j, ny in enumerate(Nx):
+            for j, ny in enumerate(Ny):
                 x = np.arange(Sx[i], Sx[i] + nx, dtype=np.int)
                 y = np.arange(Sy[j], Sy[j] + ny, dtype=np.int)
                 self._batches.append((x[:, None] + y[None] * self.gpts[0]).ravel())
