@@ -278,7 +278,7 @@ class AnnularDetector(_PolarDetector):
         else:
             return values
 
-    def detect(self, waves) -> np.ndarray:
+    def detect(self, waves, normalize=True) -> np.ndarray:
         """
         Integrate the intensity of a the wave functions over the detector range.
 
@@ -302,7 +302,7 @@ class AnnularDetector(_PolarDetector):
         # antialias_filter = AntialiasFilter()
         # antialias_filter.grid.match(waves)
 
-        return self._integrate(intensity, waves.sampling, waves.wavelength)
+        return self._integrate(intensity, waves.sampling, waves.wavelength, normalize)
 
     def __copy__(self) -> 'AnnularDetector':
         return self.__class__(self.inner, self.outer, save_file=self.save_file)

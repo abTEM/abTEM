@@ -8,6 +8,8 @@ from abtem.base_classes import HasAcceleratorMixin, Accelerator, watched_method,
 
 from abtem.device import get_array_module, get_device_function
 from abtem.utils import energy2wavelength
+from abtem.measure import Measurement, Calibration
+from abtem.plot import PlotableMixin
 
 #: Symbols for the polar representation of all optical aberrations up to the fifth order.
 polar_symbols = ('C10', 'C12', 'phi12',
@@ -23,7 +25,7 @@ polar_aliases = {'defocus': 'C10', 'astigmatism': 'C12', 'astigmatism_angle': 'p
                  'C5': 'C50'}
 
 
-class CTF(HasAcceleratorMixin):
+class CTF(HasAcceleratorMixin, PlotableMixin):
     """
     Contrast transfer function object
 
@@ -63,7 +65,7 @@ class CTF(HasAcceleratorMixin):
 
     """
 
-    def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 0., focal_spread: float = 0.,
+    def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 0.1, focal_spread: float = 0.,
                  angular_spread: float = 0., gaussian_spread: float = 0., energy: float = None,
                  parameters: Mapping[str, float] = None, **kwargs):
 
@@ -217,7 +219,7 @@ class CTF(HasAcceleratorMixin):
         return xp.exp(- .5 * self.gaussian_spread ** 2 * alpha ** 2 / self.wavelength ** 2)
 
     def evaluate_spatial_envelope(self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]) -> \
-                                  Union[float, np.ndarray]:
+            Union[float, np.ndarray]:
         xp = get_array_module(alpha)
         p = self.parameters
         dchi_dk = 2 * xp.pi / self.wavelength * (
@@ -254,6 +256,7 @@ class CTF(HasAcceleratorMixin):
         p = self.parameters
 
         alpha2 = alpha ** 2
+        alpha = xp.array(alpha)
 
         array = xp.zeros(alpha.shape, dtype=np.float32)
         if any([p[symbol] != 0. for symbol in ('C10', 'C12', 'phi12')]):
@@ -289,7 +292,7 @@ class CTF(HasAcceleratorMixin):
         return array
 
     def evaluate_aberrations(self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]) -> \
-                             Union[float, np.ndarray]:
+            Union[float, np.ndarray]:
         xp = get_array_module(alpha)
         complex_exponential = get_device_function(xp, 'complex_exponential')
         return complex_exponential(-self.evaluate_chi(alpha, phi))
@@ -311,7 +314,84 @@ class CTF(HasAcceleratorMixin):
 
         return array
 
-    def show(self, max_semiangle: float, ax=None, phi: float = 0, n: int = 1000, title: str = None, **kwargs):
+    def profiles(self, max_semiangle: float = None, phi: float = 0.):
+        if max_semiangle is None:
+            if self._semiangle_cutoff == np.inf:
+                max_semiangle = 50
+            else:
+                max_semiangle = self._semiangle_cutoff * 1.6
+
+        alpha = np.linspace(0, max_semiangle / 1000., 500)
+
+        aberrations = self.evaluate_aberrations(alpha, phi)
+        aperture = self.evaluate_aperture(alpha)
+        temporal_envelope = self.evaluate_temporal_envelope(alpha)
+        spatial_envelope = self.evaluate_spatial_envelope(alpha, phi)
+        gaussian_envelope = self.evaluate_gaussian_envelope(alpha)
+        envelope = aperture * temporal_envelope * spatial_envelope * gaussian_envelope
+
+        calibration = Calibration(offset=0., sampling=(alpha[1] - alpha[0]) * 1000., units='mrad', name='alpha')
+
+        profiles = dict()
+        profiles['ctf'] = Measurement(aberrations.imag * envelope, calibrations=[calibration], name='CTF')
+
+        profiles['aperture'] = Measurement(aperture, calibrations=[calibration], name='Aperture')
+        profiles['temporal_envelope'] = Measurement(temporal_envelope,
+                                                    calibrations=[calibration],
+                                                    name='Temporal')
+        profiles['spatial_envelope'] = Measurement(spatial_envelope, calibrations=[calibration],
+                                                   name='Spatial')
+        profiles['gaussian_spread'] = Measurement(gaussian_envelope, calibrations=[calibration],
+                                                  name='Gaussian')
+        profiles['envelope'] = Measurement(envelope, calibrations=[calibration], name='Envelope')
+        return profiles
+
+    def add_to_bokeh_plot(self, p, push_notebook=False, max_semiangle=None, phi=0.):
+        from bokeh.palettes import Category10
+        if push_notebook:
+            from bokeh.io import push_notebook
+
+        profiles = self.profiles(max_semiangle, phi=phi)
+
+        lines = {}
+        for (key, profile), color in zip(profiles.items(), Category10[10]):
+            visible = not np.all(profile.array == 1.)
+            lines[key] = profile.add_to_bokeh_plot(p,
+                                                   line_color=color,
+                                                   legend_label=profile.name,
+                                                   visible=visible)
+
+        def update(notifier, property_name, change):
+            profiles = self._get_line_profile_measurements(max_semiangle)
+
+            for key, line in lines.items():
+
+                profiles[key].update_bokeh_glyph(line)
+                if np.all(profiles[key].array == 1.):
+                    line.visible = False
+                else:
+                    line.visible = True
+
+            if push_notebook:
+                push_notebook()
+
+        self.changed.register(update)
+
+        p.legend.location = 'bottom_right'
+        p.legend.click_policy = 'hide'
+        p.legend.label_text_font_size = '10pt'
+
+    def show_bokeh(self, p=None, push_notebook=False, max_semiangle=None, phi=0., **kwargs):
+        return super().show_bokeh(p=p, push_notebook=push_notebook, max_semiangle=max_semiangle, phi=phi, **kwargs)
+
+    def add_to_mpl_plot(self, ax, max_semiangle: float = None, phi: float = 0, **kwargs):
+        for key, profile in self._get_line_profile_measurements(max_semiangle, phi).items():
+            if not np.all(profile.array == 1.):
+                ax = profile.show(legend=True, ax=ax, **kwargs)
+
+        ax.legend()
+
+    def show(self, max_semiangle: float = None, phi: float = 0, ax=None, **kwargs):
         """
         Show the contrast transfer function.
 
@@ -330,42 +410,15 @@ class CTF(HasAcceleratorMixin):
         kwargs:
             Additional keyword arguments for the line plots.
         """
-
         import matplotlib.pyplot as plt
-
-        alpha = np.linspace(0, max_semiangle / 1000., n)
-
-        aberrations = self.evaluate_aberrations(alpha, phi)
-        aperture = self.evaluate_aperture(alpha)
-        temporal_envelope = self.evaluate_temporal_envelope(alpha)
-        spatial_envelope = self.evaluate_spatial_envelope(alpha, phi)
-        gaussian_envelope = self.evaluate_gaussian_envelope(alpha)
-        envelope = aperture * temporal_envelope * spatial_envelope * gaussian_envelope
 
         if ax is None:
             ax = plt.subplot()
 
-        ax.plot(alpha * 1000, aberrations.imag * envelope, label='CTF', **kwargs)
+        self.add_to_mpl_plot(max_semiangle=max_semiangle, phi=phi, ax=ax, **kwargs)
 
-        if self.semiangle_cutoff < np.inf:
-            ax.plot(alpha * 1000, aperture, label='Aperture', **kwargs)
-
-        if self.focal_spread > 0.:
-            ax.plot(alpha * 1000, temporal_envelope, label='Temporal envelope', **kwargs)
-
-        if self.angular_spread > 0.:
-            ax.plot(alpha * 1000, spatial_envelope, label='Spatial envelope', **kwargs)
-
-        if self.gaussian_spread > 0.:
-            ax.plot(alpha * 1000, gaussian_envelope, label='Gaussian envelope', **kwargs)
-
-        if not np.allclose(envelope, 1.):
-            ax.plot(alpha * 1000, envelope, '--', label='Product envelope', **kwargs)
-
-        ax.set_xlabel('alpha [mrad]')
-        if title is not None:
-            ax.set_title(title)
-        ax.legend()
+        plt.show()
+        return ax
 
     def copy(self):
         parameters = self.parameters.copy()

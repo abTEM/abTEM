@@ -29,6 +29,7 @@ class Event(object):
         """
         Notify this event. All registered callbacks are called.
         """
+
         self._notify_count += 1
         for callback in self.callbacks:
             callback(*args, **kwargs)
@@ -88,8 +89,7 @@ def watched_property(event: 'str'):
             instance, value = args
             old = getattr(instance, property_name)
             result = func(*args)
-            change = old != value
-            change = np.any(change)
+            change = np.any(old != value)
             getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': change})
             return result
 
@@ -669,34 +669,48 @@ class HasAcceleratorMixin:
 class HasGridAndAcceleratorMixin(HasGridMixin, HasAcceleratorMixin):
 
     @property
-    def max_scattering_angle(self):
-        return 1 / np.max(self.grid.antialiased_sampling) * self.wavelength / 2 * 1000
+    def max_scattering_angles(self):
+        angles = []
+        for n, l in zip(self.gpts, self.extent):
+            if n % 2 == 0:
+                angles += [(-n / (2 * l) * self.wavelength * 1e3, (n / (2 * l) - 1 / l) * self.wavelength * 1e3)]
+            else:
+                angles += [(-(n - 1) / 2 / l * self.wavelength * 1e3, (n - 1) / 2 / l * self.wavelength * 1e3)]
+
+        return angles
+
+    @property
+    def angular_sampling(self):
+        self.grid.check_is_defined()
+        self.accelerator.check_is_defined()
+        return tuple([1 / l * self.wavelength * 1e3 for l in self.extent])
+
+    def _resampled_gpts(self, new_max_angle):
+        self.grid.check_is_defined()
+        return tuple([int(2 * np.floor(new_max_angle / d)) + 1 for n, d in zip(self.gpts, self.angular_sampling)])
 
 
 class AntialiasFilter(HasGridMixin):
 
-    def __init__(self, gpts=None, sampling=None, extent=None, cutoff=2 / 3., rolloff=.1):
-        self._cutoff = cutoff
+    def __init__(self, rolloff=.1):
+        self._cutoff = 2 / 3.
         self._rolloff = rolloff
         self._mask_cache = Cache(1)
         self._crop_cache = Cache(1)
 
-        self._grid = Grid(gpts=gpts, sampling=sampling, extent=extent)
-        self._grid.changed.register(cache_clear_callback(self._mask_cache))
-        self._grid.changed.register(cache_clear_callback(self._crop_cache))
-
-    def cutoff_freq(self):
-        self.grid.check_is_defined()
-        return min(1 / self.sampling[0] / 2, 1 / self.sampling[1] / 2) * self._cutoff
+    def cutoff_freq(self, sampling):
+        return min(1 / sampling[0] / 2, 1 / sampling[1] / 2) * self._cutoff
 
     @cached_method('_mask_cache')
-    def get_mask(self, xp):
-        self.grid.check_is_defined()
-        kx, ky = spatial_frequencies(self.gpts, self.sampling)
+    def get_mask(self, gpts, sampling, xp):
+        if sampling is None:
+            sampling = (1., 1.)
+
+        kx, ky = spatial_frequencies(gpts, sampling)
         kx = copy_to_device(kx, xp)
         ky = copy_to_device(ky, xp)
         k = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
-        kcut = self.cutoff_freq()
+        kcut = self.cutoff_freq(sampling)
 
         if self._rolloff > 0.:
             array = .5 * (1 + xp.cos(np.pi * (k - kcut + self._rolloff) / self._rolloff))
@@ -706,45 +720,56 @@ class AntialiasFilter(HasGridMixin):
             array = xp.array(k < kcut).astype(xp.float32)
         return array
 
-    def bandlimit(self, array):
+    def bandlimit(self, array, sampling=None):
         xp = get_array_module(array)
         fft2_convolve = get_device_function(xp, 'fft2_convolve')
-        fft2_convolve(array, self.get_mask(xp), overwrite_x=True)
+        fft2_convolve(array, self.get_mask(array.shape[-2:], sampling, xp), overwrite_x=True)
 
     @cached_method('_crop_cache')
-    def _crop_indices(self, xp, include='valid'):
-        new_shape = self.cropped_gpts(include)
-        mask1, _ = fft_interpolation_masks(self.gpts, new_shape, xp)
+    def _crop_indices(self, gpts, sampling, xp=np, max_angle='limit'):
+        new_shape = self._cropped_gpts(gpts, sampling, max_angle)
+        mask1, _ = fft_interpolation_masks(gpts, new_shape, xp)
         return xp.where(mask1)
 
-    def downsample(self, array, include='valid'):
+    def downsample(self, array, sampling=None, max_angle='limit'):
         xp = get_array_module(array)
         fft2 = get_device_function(xp, 'fft2')
         ifft2 = get_device_function(xp, 'ifft2')
 
+        old_size = array.shape[-2] * array.shape[-1]
         if np.iscomplexobj(array):
-            array = self.crop(fft2(array), include)
-            norm = array.shape[-1] * array.shape[-2] / (self.gpts[0] * self.gpts[1])
-            return ifft2(array * norm, overwrite_x=True)
+            array = ifft2(self.crop(fft2(array, overwrite_x=False), sampling, max_angle), overwrite_x=True)
         else:
-            return ifft2(self.crop(fft2(array), include)).real
+            array = ifft2(self.crop(fft2(array, overwrite_x=False), sampling, max_angle), overwrite_x=True).real
 
-    def cropped_gpts(self, include='valid'):
-        kmax = min(1 / self.sampling[0] / 2, 1 / self.sampling[1] / 2)
-        kcut = kmax * self._cutoff - self._rolloff
+        norm = array.shape[-1] * array.shape[-2] / old_size
+        return array * norm
 
-        if include == 'valid':
-            nx = int(np.floor(2 * self.extent[0] * kcut / np.sqrt(2)))
-            ny = int(np.floor(2 * self.extent[0] * kcut / np.sqrt(2)))
-        elif include == 'limit':
-            nx = int(np.ceil(2 * self.extent[0] * kcut))
-            ny = int(np.ceil(2 * self.extent[1] * kcut))
+    def downsampled_grid(self, grid, include='limit'):
+        grid = grid.copy()
+        grid._lock_gpts = False
+        grid.gpts = self._cropped_gpts(grid.gpts, grid.sampling, include)
+        return grid
+
+    def _cropped_gpts(self, gpts, sampling, max_angle='limit'):
+        if sampling is None:
+            sampling = (1., 1.)
+
+        kcut = self.cutoff_freq(sampling) - self._rolloff
+
+        if max_angle == 'valid':
+            nx = int(np.floor(2 * gpts[0] * sampling[0] * kcut / np.sqrt(2)))
+            ny = int(np.floor(2 * gpts[1] * sampling[1] * kcut / np.sqrt(2)))
+        elif max_angle == 'limit':
+            nx = int(np.ceil(2 * gpts[0] * sampling[0] * kcut))
+            ny = int(np.ceil(2 * gpts[1] * sampling[1] * kcut))
         else:
             raise RuntimeError()
         return (nx, ny)
 
-    def crop(self, array, include='valid'):
+    def crop(self, array, sampling=None, max_angle='limit'):
         xp = get_array_module(array)
-        indices = self._crop_indices(xp, include)
-        new_shape = self.cropped_gpts(include)
+        indices = self._crop_indices(array.shape[-2:], sampling, xp, max_angle)
+        new_shape = self._cropped_gpts(array.shape[-2:], sampling, max_angle)
+
         return array[..., indices[0], indices[1]].reshape(array.shape[:-2] + new_shape)

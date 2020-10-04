@@ -2,7 +2,7 @@
 import numpy as np
 from ase import units
 
-from abtem.device import get_array_module
+from abtem.device import get_array_module, get_device_function
 from tqdm.auto import tqdm
 
 
@@ -90,11 +90,11 @@ def polar_coordinates(x, y):
 
 
 def fft_interpolation_masks(shape1, shape2, xp=np, epsilon=1e-7):
-    kx1 = xp.fft.fftfreq(shape1[0], 1 / shape1[0])
-    ky1 = xp.fft.fftfreq(shape1[1], 1 / shape1[1])
+    kx1 = xp.fft.fftfreq(shape1[-2], 1 / shape1[-2])
+    ky1 = xp.fft.fftfreq(shape1[-1], 1 / shape1[-1])
 
-    kx2 = xp.fft.fftfreq(shape2[0], 1 / shape2[0])
-    ky2 = xp.fft.fftfreq(shape2[1], 1 / shape2[1])
+    kx2 = xp.fft.fftfreq(shape2[-2], 1 / shape2[-2])
+    ky2 = xp.fft.fftfreq(shape2[-1], 1 / shape2[-1])
 
     kx_min = max(xp.min(kx1), xp.min(kx2)) - epsilon
     kx_max = min(xp.max(kx1), xp.max(kx2)) + epsilon
@@ -109,15 +109,11 @@ def fft_interpolation_masks(shape1, shape2, xp=np, epsilon=1e-7):
     return mask1, mask2
 
 
-# def is_points_in_box(points, box):
-
 def periodic_crop(array, corners, new_shape):
     xp = get_array_module(array)
 
-    if ((corners[0] > 0) &
-            (corners[1] > 0) &
-            (corners[0] + new_shape[0] < array.shape[-2]) &
-            (corners[1] + new_shape[1] < array.shape[-1])):
+    if ((corners[0] > 0) & (corners[1] > 0) & (corners[0] + new_shape[0] < array.shape[-2]) & (
+            corners[1] + new_shape[1] < array.shape[-1])):
         array = array[..., corners[0]:corners[0] + new_shape[0], corners[1]:corners[1] + new_shape[1]]
         return array
 
@@ -132,18 +128,49 @@ def periodic_crop(array, corners, new_shape):
 def fft_crop(array, new_shape):
     assert np.iscomplexobj(array)
     xp = get_array_module(array)
-    mask_in, mask_out = fft_interpolation_masks(array.shape, new_shape)
+
+    mask_in, mask_out = fft_interpolation_masks(array.shape, new_shape, xp=xp)
+
+    if len(new_shape) < len(array.shape):
+        new_shape = array.shape[:-2] + new_shape
+
     new_array = xp.zeros(new_shape, dtype=np.complex64)
-    new_array[..., mask_out] = array[..., mask_in]
+
+    # shape_pad = len(new_array.shape) - len(mask_out.shape)
+    # mask_out = mask_out.reshape((1,) * shape_pad + mask_out.shape)
+    # mask_in = mask_in.reshape((1,) * shape_pad + mask_in.shape)
+    # print(mask_out.shape, new_array.shape, array.shape, mask_in.shape)
+
+    out_indices = xp.where(mask_out)
+    in_indices = xp.where(mask_in)
+
+    # print(array.shape, new_array.shape)#, out_indices)
+    # array[..., in_indices[0], in_indices[1]]
+    new_array[..., out_indices[0], out_indices[1]] = array[..., in_indices[0], in_indices[1]]
+    # new_array[..., out_indices[0], out_indices[1]] = array[..., in_indices[0], in_indices[1]]
     return new_array
 
 
-def fft_interpolate_2d(array, new_shape):
+def fft_interpolate_2d(array, new_shape, normalization='values'):
     xp = get_array_module(array)
+    fft2 = get_device_function(xp, 'fft2')
+    ifft2 = get_device_function(xp, 'ifft2')
+
+    old_size = array.shape[-2] * array.shape[-1]
+
     if np.iscomplexobj(array):
-        return xp.fft.ifft2(xp.fft.fft2(fft_crop(array, new_shape)))
+        array = ifft2(fft_crop(fft2(array), new_shape), overwrite_x=True)
     else:
-        return xp.fft.ifft2(xp.fft.fft2(fft_crop(array, new_shape))).real
+        array = ifft2(fft_crop(fft2(array), new_shape), overwrite_x=True).real
+
+    if normalization == 'values':
+        array *= array.shape[-1] * array.shape[-2] / old_size
+    elif normalization == 'norm':
+        array *= array.shape[-1] * array.shape[-2] / old_size
+    elif (normalization != False) and (normalization != None):
+        raise RuntimeError()
+
+    return array  # * norm
 
 
 def split_integer(n: int, m: int):

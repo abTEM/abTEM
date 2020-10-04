@@ -1,17 +1,16 @@
 """Module for plotting atoms, images, line scans, and diffraction patterns."""
 from collections.abc import Iterable
-from colorsys import hls_to_rgb
 
-import numpy as np
+from numbers import Number
+from abc import ABCMeta, abstractmethod
 
 import matplotlib.pyplot as plt
-from matplotlib.collections import PatchCollection
-from matplotlib.patches import Circle
-
+import numpy as np
+from abtem.cpu_kernels import abs2
 from ase.data import covalent_radii
 from ase.data.colors import cpk_colors
-
-from abtem.cpu_kernels import abs2
+from matplotlib.collections import PatchCollection
+from matplotlib.patches import Circle
 
 #: Array to facilitate the display of cell boundaries.
 _cube = np.array([[[0, 0, 0], [0, 0, 1]],
@@ -163,7 +162,10 @@ def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='g
         fig, ax = plt.subplots(figsize=figsize)
 
     if log_scale:
-        array = np.log(array)
+        if isinstance(log_scale, Number) & (not isinstance(log_scale, bool)):
+            array = np.log(1 + log_scale * array)
+        else:
+            array = np.log(array)
 
     if power != 1.:
         array = array ** power
@@ -248,31 +250,38 @@ def show_line(array, calibration, ax=None, title=None, legend=False, **kwargs):
     return ax
 
 
-def domain_coloring(z, fade_to_white=False, saturation=1.0, k=.5):
-    """
-    Domain coloring function.
 
-    Function to color a complex domain.
 
-    Parameters
-    ----------
-    z : ndarray, complex
-        Complex number to be colored.
-    fade_to_white : bool, optional
-        Option to fade the coloring to white instead of black. Default is False.
-    saturation : float, optional
-        RGB color saturation. Default is 1.0.
-    k : float, optional
-        Scaling factor for the coloring. Default is 0.5.
-    """
+class PlotableMixin:
 
-    h = (np.angle(z) + np.pi) / (2 * np.pi) + 0.5
-    if fade_to_white:
-        r = k ** np.abs(z)
-    else:
-        r = 1 - k ** np.abs(z)
-    c = np.vectorize(hls_to_rgb)(h, r, saturation)
-    c = np.array(c).T
+    @abstractmethod
+    def add_to_bokeh_plot(self, p, *args, **kwargs):
+        pass
 
-    c = (c - c.min()) / c.ptp()
-    return c
+    def show_bokeh(self, p=None, push_notebook=False, **kwargs):
+        from bokeh import plotting
+        from bokeh.io import show
+
+        if push_notebook:
+            from bokeh.io import push_notebook
+
+        if p is None:
+            p = plotting.Figure(plot_width=300, plot_height=300)
+
+        self.add_to_bokeh_plot(p, push_notebook=push_notebook, **kwargs)
+
+        show(p, notebook_handle=push_notebook)
+        return p
+
+    @abstractmethod
+    def add_to_mpl_plot(self, *args, **kwargs):
+        pass
+
+    def show(self, ax=None, *args, **kwargs):
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            ax = plt.subplot()
+        self.add_to_mpl_plot(ax=ax, **kwargs)
+        plt.show()
+        return ax

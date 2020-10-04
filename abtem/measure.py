@@ -13,7 +13,7 @@ import scipy.ndimage
 from scipy.ndimage import zoom
 from scipy.interpolate import interpn
 from abtem.device import asnumpy
-from abtem.plot import show_image, show_line
+from abtem.plot import show_image, show_line, PlotableMixin
 
 
 class Calibration:
@@ -127,7 +127,7 @@ def calibrations_from_grid(gpts: Sequence[int],
     return calibrations
 
 
-class Measurement:
+class Measurement(PlotableMixin):
     """
     Measurement object.
 
@@ -401,7 +401,90 @@ class Measurement:
         """
         return copy(self)
 
-    def show(self, **kwargs):
+    def squeeze(self):
+        new_meaurement = self.copy()
+        calibrations = [calib for calib, num_elem in zip(self.calibrations, self.array.shape) if num_elem > 1]
+        new_meaurement._calibrations = calibrations
+        new_meaurement._array = np.squeeze(asnumpy(new_meaurement.array))
+        return new_meaurement
+
+    def interpolate_line(self, start, end, gpts=None, sampling=None):
+        from abtem.scan import LineScan
+
+        if not (self.dimensions == 2):
+            raise RuntimeError()
+
+        if (self.calibrations[0] is None) or (self.calibrations[1] is None):
+            raise RuntimeError()
+
+        if self.calibrations[0].units != self.calibrations[1].units:
+            raise RuntimeError()
+
+        if (gpts is None) & (sampling is None):
+            sampling = (self.calibrations[0].sampling + self.calibrations[1].sampling) / 2.
+
+        x = np.linspace(self.calibrations[0].offset, self.shape[0] * self.calibrations[0].sampling, self.shape[0])
+        y = np.linspace(self.calibrations[1].offset, self.shape[1] * self.calibrations[1].sampling, self.shape[1])
+
+        scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling)
+
+        interpolated_array = interpn((x, y), self.array, scan.get_positions())
+
+        calibration = Calibration(offset=0, sampling=scan.sampling[0],
+                                  units=self.calibrations[0].units,
+                                  name=self.calibrations[0].name)
+        return Measurement(interpolated_array, calibration)
+
+    def update_bokeh_glyph(self, glyph):
+        if self.dimensions == 1:
+            calibration = self.calibrations[0]
+            x = np.linspace(calibration.offset, calibration.offset + len(self) * calibration.sampling, len(self))
+            glyph.data_source.data = {'x': x, 'y': self.array}
+
+        else:
+            calibrations = self.calibrations[-2:]
+            array = self.array[(0,) * (self.dimensions - 2) + (slice(None),) * 2]
+            glyph.data_source.data = {'image': [array.T],
+                                      'x': [calibrations[-1].offset],
+                                      'y': [calibrations[-2].offset],
+                                      'dw': [calibrations[-2].sampling * self.array.shape[-2]],
+                                      'dh': [calibrations[-1].sampling * self.array.shape[-1]]}
+
+    def add_to_bokeh_plot(self, p, palette='Greys256', **kwargs):
+        from bokeh.models import ColumnDataSource
+
+        if self.dimensions == 1:
+            source = ColumnDataSource(data=dict(x=[], y=[]))
+            glyph = p.line(x='x', y='y', source=source, **kwargs)
+
+        else:
+            source = ColumnDataSource(data=dict(image=[], x=[], y=[], dw=[], dh=[]))
+            glyph = p.image(image='image', x='x', y='y', dw='dw', dh='dh', source=source, palette=palette, **kwargs)
+            p.match_aspect = True
+
+        self.update_bokeh_glyph(glyph)
+        return glyph
+
+    def show_bokeh(self, p=None, push_notebook=False, **kwargs):
+        from bokeh import plotting
+
+        if p is None:
+            if self.dimensions == 1:
+                p = plotting.Figure(plot_width=600, plot_height=400)
+            else:
+                p = plotting.Figure(plot_width=400, plot_height=400, match_aspect=True)
+
+        return super().show_bokeh(p=p, push_notebook=push_notebook, **kwargs)
+
+    def add_to_mpl_plot(self, ax, **kwargs):
+        if self.dimensions == 1:
+            show_line(self.array, self.calibrations[0], ax=ax, label=self._name, **kwargs)
+        else:
+            calibrations = self.calibrations[-2:]
+            array = self.array[(0,) * (self.dimensions - 2) + (slice(None),) * 2]
+            show_image(array, calibrations, ax=ax, cbar_label=f'{self._name} [{self._units}]', **kwargs)
+
+    def show(self, ax=None, **kwargs):
         """
         Show the measurement.
 
@@ -410,23 +493,12 @@ class Measurement:
         kwargs:
             Additional keyword arguments for the abtem.plot.show_image function.
         """
-        calibrations = [calib for calib, num_elem in zip(self.calibrations, self.array.shape) if num_elem > 1]
-        array = np.squeeze(asnumpy(self.array))
-
-        dims = len(array.shape)
-        cbar_label = self._name + ' [' + self._units + ']'
-        if dims == 1:
-            return show_line(array, calibrations[0], **kwargs)
-        elif dims == 2:
-
-            return show_image(array, calibrations, cbar_label=cbar_label, **kwargs)
-        else:
-            raise RuntimeError('Plotting not supported for {}D measurement, use reduction operation first'.format(dims))
+        return super().show(ax=ax, **kwargs)
 
 
 def block_zeroth_order_spot(diffraction_pattern: Measurement):
     shape = diffraction_pattern.shape
-    diffraction_pattern._array[shape[0] // 2, shape[1] // 2] = 0.
+    diffraction_pattern._array[..., shape[-2] // 2, shape[-1] // 2] = 0.
     return diffraction_pattern
 
 

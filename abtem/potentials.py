@@ -177,6 +177,9 @@ class AbstractPotentialBuilder(AbstractPotential):
 
         if isinstance(pbar, bool):
             pbar = ProgressBar(total=len(self), desc='Potential', disable=not pbar)
+            close_pbar = True
+        else:
+            close_pbar = False
 
         pbar.reset()
         for i, potential_slice in enumerate(self.generate_slices()):
@@ -185,7 +188,9 @@ class AbstractPotentialBuilder(AbstractPotential):
             pbar.update(1)
 
         pbar.refresh()
-        pbar.close()
+
+        if close_pbar:
+            pbar.close()
 
         return PotentialArray(array, slice_thicknesses, self.extent)
 

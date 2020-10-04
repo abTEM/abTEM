@@ -80,15 +80,18 @@ def create_fftw_objects(array, allow_new_plan=True):
     try:
         # try using cached FFTW plan
         fftw_forward = pyfftw.FFTW(array, array, axes=(-1, -2),
-                                   threads=FFTW_THREADS, flags=('FFTW_WISDOM_ONLY', 'FFTW_DESTROY_INPUT'))
+                                   threads=FFTW_THREADS,
+                                   flags=(FFTW_EFFORT, 'FFTW_WISDOM_ONLY', 'FFTW_DESTROY_INPUT'))
         fftw_backward = pyfftw.FFTW(array, array, axes=(-1, -2),
                                     direction='FFTW_BACKWARD', threads=FFTW_THREADS,
-                                    flags=('FFTW_WISDOM_ONLY', 'FFTW_DESTROY_INPUT'))
+                                    flags=(FFTW_EFFORT, 'FFTW_WISDOM_ONLY', 'FFTW_DESTROY_INPUT'))
         return fftw_forward, fftw_backward
 
     except RuntimeError as e:
         if (not allow_new_plan):
-            raise
+            fftw_forward = pyfftw.builders.fft2(array)
+            fftw_backward = pyfftw.builders.ifft2(array)
+            return fftw_forward, fftw_backward
         # if ('No FFTW wisdom is known for this plan.' != str(e)) or (not allow_new_plan):
         #    raise
 

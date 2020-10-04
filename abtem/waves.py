@@ -1,25 +1,26 @@
 """Module to describe electron waves and their propagation."""
 from copy import copy
+from numbers import Number
 from typing import Union, Sequence, Tuple
-
+from abc import ABCMeta, abstractmethod
 import h5py
-import matplotlib.pyplot as plt
 import numpy as np
-
 from ase import Atoms
 
 from abtem.base_classes import Grid, Accelerator, cache_clear_callback, Cache, cached_method, \
-    HasGridAndAcceleratorMixin, AntialiasFilter
-from abtem.detect import AbstractDetector, _crop_to_center
+    HasGridAndAcceleratorMixin, AntialiasFilter, Event
+from abtem.detect import AbstractDetector
 from abtem.device import get_array_module, get_device_function, asnumpy, get_array_module_from_device, \
-    copy_to_device, get_available_memory, HasDeviceMixin, DataStream
+    copy_to_device, get_available_memory, HasDeviceMixin
 from abtem.measure import calibrations_from_grid, Measurement, _line_intersect_rectangle, interpolate_line, \
-    calculate_fwhm
+    calculate_fwhm, block_zeroth_order_spot
+from abtem.plot import PlotableMixin
 from abtem.potentials import Potential, AbstractPotential, AbstractTDSPotentialBuilder, AbstractPotentialBuilder, \
     ProjectedPotentialArray
 from abtem.scan import AbstractScan, GridScan
 from abtem.transfer import CTF
-from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, split_integer, periodic_crop
+from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, split_integer, periodic_crop, fft_crop, \
+    fft_interpolate_2d
 
 
 class FresnelPropagator:
@@ -44,9 +45,7 @@ class FresnelPropagator:
         ky = xp.fft.fftfreq(gpts[1], sampling[1]).astype(xp.float32)
         f = (complex_exponential(-(kx ** 2)[:, None] * np.pi * wavelength * dz) *
              complex_exponential(-(ky ** 2)[None] * np.pi * wavelength * dz))
-        antialias_filter = AntialiasFilter(gpts=gpts, sampling=sampling)
-        f *= antialias_filter.get_mask(xp)
-        return f
+        return f * AntialiasFilter().get_mask(gpts, sampling, xp)
 
     def propagate(self, waves: Union['Waves', 'SMatrixArray'], dz: float) -> Union['Waves', 'SMatrixArray']:
         """
@@ -105,7 +104,7 @@ def transmit(waves: Union['Waves', 'SMatrixArray'],
     t = complex_exponential(waves.accelerator.sigma * copy_to_device(t, xp))
 
     if antialias_filter is not None:
-        antialias_filter.bandlimit(t)
+        antialias_filter.bandlimit(t, waves.sampling)
 
     waves._array *= t
     return waves
@@ -126,7 +125,7 @@ def _multislice(waves: Union['Waves', 'SMatrixArray'],
     if isinstance(pbar, bool):
         pbar = ProgressBar(total=len(potential), desc='Multislice', disable=not pbar)
 
-    antialias_filter = AntialiasFilter(gpts=waves.gpts, sampling=waves.sampling)
+    antialias_filter = AntialiasFilter()
 
     pbar.reset()
     for potential_slice in potential:
@@ -138,7 +137,7 @@ def _multislice(waves: Union['Waves', 'SMatrixArray'],
     return waves
 
 
-class Waves(HasGridAndAcceleratorMixin):
+class Waves(HasGridAndAcceleratorMixin, PlotableMixin):
     """
     Waves object
 
@@ -191,7 +190,7 @@ class Waves(HasGridAndAcceleratorMixin):
         abs2 = get_device_function(get_array_module(self.array), 'abs2')
         return Measurement(abs2(self.array), calibrations)
 
-    def diffraction_pattern(self) -> Measurement:
+    def diffraction_pattern(self, max_angle=None, block_zeroth_order=False) -> Measurement:
         """
         Calculate the intensity of the wave functions at the diffraction plane.
 
@@ -200,9 +199,27 @@ class Waves(HasGridAndAcceleratorMixin):
         Measurement object
             The intensity of the diffraction pattern(s).
         """
+        xp = get_array_module(self.array)
+        abs2 = get_device_function(xp, 'abs2')
+        fft2 = get_device_function(xp, 'fft2')
 
-        calibrations = calibrations_from_grid(self.grid.antialiased_gpts,
-                                              self.grid.antialiased_sampling,
+        array = fft2(self.array, overwrite_x=False)
+
+        if max_angle in ('valid', 'limit'):
+            antialias_filter = AntialiasFilter()
+            array = antialias_filter.crop(array, self.sampling, max_angle)
+
+        elif isinstance(max_angle, Number):
+            new_gpts = self._resampled_gpts(max_angle)
+            array = fft_crop(array, self.array.shape[:-2] + new_gpts)
+
+        elif max_angle is not None:
+            raise ValueError('max_angle must be "valid", "limit", float or None')
+
+        sampling = (self.extent[0] / array.shape[-2], self.extent[1] / array.shape[-1])
+
+        calibrations = calibrations_from_grid(array.shape[-2:],
+                                              sampling,
                                               names=['alpha_x', 'alpha_y'],
                                               units='mrad',
                                               scale_factor=self.wavelength * 1000,
@@ -210,11 +227,14 @@ class Waves(HasGridAndAcceleratorMixin):
 
         calibrations = (None,) * (len(self.array.shape) - 2) + calibrations
 
-        xp = get_array_module(self.array)
-        abs2 = get_device_function(xp, 'abs2')
-        fft2 = get_device_function(xp, 'fft2')
-        pattern = asnumpy(abs2(_crop_to_center(xp.fft.fftshift(fft2(self.array, overwrite_x=False)))))
-        return Measurement(pattern, calibrations)
+        pattern = np.fft.fftshift(asnumpy(abs2(array)))
+
+        measurement = Measurement(pattern, calibrations)
+
+        if block_zeroth_order:
+            block_zeroth_order_spot(measurement)
+
+        return measurement
 
     def apply_ctf(self, ctf: CTF = None, **kwargs):
         """
@@ -333,15 +353,23 @@ class Waves(HasGridAndAcceleratorMixin):
             raise RuntimeError()
         return self.__class__(array=self._array[item], extent=self.extent, energy=self.energy)
 
-    def show(self, **kwargs):
+    def add_to_bokeh_plot(self, p, **kwargs):
+        return self.intensity().add_to_bokeh_plot(p=p, **kwargs)
+
+    def show_bokeh(self, p=None, push_notebook=False, **kwargs):
+        return super().show_bokeh(p=p, push_notebook=push_notebook, **kwargs)
+
+    def add_to_mpl_plot(self, ax, **kwargs):
+        return self.intensity().add_to_mpl_plot(ax=ax, **kwargs)
+
+    def show(self, ax=None, **kwargs):
         """
         Show the wave function.
 
         kwargs :
             Additional keyword arguments for the abtem.plot.show_image function.
         """
-
-        self.intensity().show(**kwargs)
+        return super().show(ax, **kwargs)
 
     def __copy__(self):
         new_copy = self.__class__(array=self._array.copy())
@@ -422,7 +450,97 @@ class PlaneWave(HasGridAndAcceleratorMixin, HasDeviceMixin):
         return copy(self)
 
 
-class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
+class _Probelike(HasGridAndAcceleratorMixin, HasDeviceMixin, PlotableMixin, metaclass=ABCMeta):
+
+    def __init__(self,
+                 ctf=None,
+                 extent: Union[float, Sequence[float]] = None,
+                 gpts: Union[int, Sequence[int]] = None,
+                 sampling: Union[float, Sequence[float]] = None,
+                 lock_gpts=False,
+                 energy=None,
+                 device='cpu',
+                 **kwargs):
+
+        if ctf is None:
+            ctf = CTF(**kwargs)
+
+        if ctf.energy is None:
+            ctf.energy = energy
+
+        if (ctf.energy != energy):
+            raise RuntimeError
+
+        self._ctf = ctf
+        self._accelerator = self._ctf._accelerator
+
+        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling, lock_gpts=lock_gpts)
+        self._ctf_cache = Cache(1)
+
+        self.changed = Event()
+
+        self._ctf.changed.register(self.changed.notify)
+        self._grid.changed.register(self.changed.notify)
+        self._accelerator.changed.register(self.changed.notify)
+
+        self._device = device
+
+    def profile(self, angle: float = 0.) -> Measurement:
+        measurement = self.intensity()
+        point0 = np.array((self.extent[0] / 2, self.extent[1] / 2))
+        point1 = point0 + np.array([np.cos(np.pi * angle / 180), np.sin(np.pi * angle / 180)])
+        point0, point1 = _line_intersect_rectangle(point0, point1, (0., 0.), self.extent)
+        line_profile = interpolate_line(measurement, point0, point1)
+        return line_profile
+
+    @abstractmethod
+    def intensity(self, *args, **kwargs) -> Measurement:
+        pass
+
+    @abstractmethod
+    def scan(self, *args, **kwargs) -> dict:
+        pass
+
+    @abstractmethod
+    def multislice(self, *args, **kwargs):
+        pass
+
+    def show_profile(self, ax=None, angle=0., **kwargs):
+        measurement = self.profile(angle=angle)
+        fwhm = calculate_fwhm(measurement)
+
+        ax = measurement.show(ax=ax, **kwargs)
+        ax.annotate(f'FWHM: {fwhm:.3f} Å', xy=(0.05, .95), xycoords='axes fraction',
+                    horizontalalignment='left', verticalalignment='top')
+
+    def show(self, ax=None, profile=False, angle=0., **kwargs):
+        """
+        Show the probe wave function.
+
+        Parameters
+        ----------
+        angle : float, optional
+            Angle along which the profile is shown [deg]. Default is 0 degrees.
+        kwargs : Additional keyword arguments for the abtem.plot.show_image function.
+        """
+        self.grid.check_is_defined()
+        self.intensity().show(ax=ax, **kwargs)
+
+    def __copy__(self) -> 'Probe':
+        new_copy = self.__class__()
+        new_copy._grid = copy(self.grid)
+        new_copy._ctf = copy(self.ctf)
+        new_copy._accelerator = copy(self._ctf._accelerator)
+        return new_copy
+
+    def copy(self):
+        """
+        Make a copy.
+        """
+        return copy(self)
+
+
+class Probe(_Probelike):
     """
     Probe wave function object
 
@@ -458,11 +576,6 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
     """
 
     def __init__(self,
-                 semiangle_cutoff: float = np.inf,
-                 rolloff: float = 0.1,
-                 focal_spread: float = 0.,
-                 angular_spread: float = 0.,
-                 ctf_parameters: dict = None,
                  extent: Union[float, Sequence[float]] = None,
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
@@ -470,17 +583,9 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
                  device='cpu',
                  **kwargs):
 
-        self._ctf = CTF(semiangle_cutoff=semiangle_cutoff, rolloff=rolloff, focal_spread=focal_spread,
-                        angular_spread=angular_spread, parameters=ctf_parameters, energy=energy, **kwargs)
-        self._accelerator = self._ctf._accelerator
-        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
-        self._ctf_cache = Cache(1)
+        super().__init__(extent=extent, gpts=gpts, sampling=sampling, energy=energy, device=device, **kwargs)
 
-        self._ctf.changed.register(cache_clear_callback(self._ctf_cache))
-        self._grid.changed.register(cache_clear_callback(self._ctf_cache))
-        self._accelerator.changed.register(cache_clear_callback(self._ctf_cache))
-
-        self._device = device
+        self.changed.register(cache_clear_callback(self._ctf_cache))
 
     @property
     def ctf(self) -> CTF:
@@ -544,6 +649,11 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
         array = fft2(self._evaluate_ctf(xp) * self._fourier_translation_operator(positions), overwrite_x=True)
 
         return Waves(array, extent=self.extent, energy=self.energy)
+
+    def intensity(self, position=None):
+        if position is None:
+            position = (self.extent[0] / 2, self.extent[1] / 2)
+        return self.build(position).intensity()[0]
 
     def multislice(self, positions: Sequence[Sequence[float]], potential: AbstractPotential, pbar=True) -> Waves:
         """
@@ -660,61 +770,8 @@ class Probe(HasGridAndAcceleratorMixin, HasDeviceMixin):
         scan_bar.close()
         return measurements
 
-    def show_profile(self, angle=0., **kwargs):
-        """
-        Show the profile of the probe wave function.
 
-        Parameters
-        ----------
-        angle : float, optional
-            Angle along which the profile is shown [deg]. Default is 0 degrees.
-        kwargs :
-            Additional keyword arguments for the abtem.plot.show_image function.
-        """
-
-        self.grid.check_is_defined()
-        measurement = self.build((self.extent[0] / 2, self.extent[1] / 2)).intensity()[0]
-
-        point0 = np.array((self.extent[0] / 2, self.extent[1] / 2))
-        point1 = point0 + np.array([np.cos(np.pi * angle / 180), np.sin(np.pi * angle / 180)])
-
-        point0, point1 = _line_intersect_rectangle(point0, point1, (0., 0.), self.extent)
-
-        line_measurement = interpolate_line(measurement, point0, point1)
-
-        fwhm = calculate_fwhm(line_measurement)
-
-        ax = line_measurement.show(**kwargs)
-        plt.text(0.05, 0.95, 'FWHM: {:.3f} Å'.format(fwhm), horizontalalignment='left', verticalalignment='top',
-                 transform=ax.transAxes)
-
-    def show(self, **kwargs):
-        """
-        Show the probe wave function.
-
-        Parameters
-        ----------
-        kwargs : Additional keyword arguments for the abtem.plot.show_image function.
-        """
-        self.grid.check_is_defined()
-        measurement = self.build((self.extent[0] / 2, self.extent[1] / 2)).intensity()
-        return measurement.show(**kwargs)
-
-    def __copy__(self) -> 'Probe':
-        new_copy = self.__class__()
-        new_copy._grid = copy(self.grid)
-        new_copy._ctf = copy(self.ctf)
-        new_copy._accelerator = copy(self._ctf._accelerator)
-        return new_copy
-
-    def copy(self):
-        """
-        Make a copy.
-        """
-        return copy(self)
-
-
-class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
+class SMatrixArray(_Probelike):
     """
     Scattering matrix array object.
 
@@ -750,26 +807,22 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
                  k: np.ndarray,
                  interpolation: int = None,
                  ctf: CTF = None,
-                 extent: Union[float, Sequence[float]] = None,
                  sampling: Union[float, Sequence[float]] = None,
+                 extent: Union[float, Sequence[float]] = None,
                  periodic: bool = True,
                  offset: Sequence[float] = None,
                  cropped_shape: Tuple[int, int] = None,
                  device: str = 'cpu'):
 
-        self._array = array
+        # self._grid = Grid(extent=extent, gpts=array.shape[1:], sampling=sampling, lock_gpts=True)
+        # self._accelerator = Accelerator(energy=energy)
 
+        super().__init__(ctf=ctf, extent=extent, gpts=array.shape[1:], sampling=sampling, energy=energy, device=device,
+                         lock_gpts=True)
+
+        self._array = array
         self._expansion_cutoff = expansion_cutoff
         self._k = k
-
-        self._grid = Grid(extent=extent, gpts=array.shape[1:], sampling=sampling, lock_gpts=True)
-
-        self._accelerator = Accelerator(energy=energy)
-
-        if ctf is None:
-            ctf = CTF(semiangle_cutoff=expansion_cutoff, rolloff=.1)
-
-        self.ctf = ctf
 
         self._periodic = periodic
 
@@ -782,8 +835,6 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
             cropped_shape = (self.gpts[0] // interpolation, self.gpts[1] // interpolation)
 
         self._cropped_shape = cropped_shape
-
-        self._device = device
 
     @property
     def ctf(self) -> CTF:
@@ -834,21 +885,32 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
     def _raise_not_periodic(self):
         raise RuntimeError('not implemented for non-periodic/cropped scattering matrices')
 
-    def downsample(self, max_angle='limit'):
+    def downsample(self, max_angle='limit', normalization=None):
         if not self.periodic:
             self._raise_not_periodic()
 
-        antialias_filter = AntialiasFilter(gpts=self.gpts, extent=self.extent)
-
         xp = get_array_module(self.array)
 
-        new_array = xp.zeros((len(self.array),) + antialias_filter.cropped_gpts(max_angle), dtype=self.array.dtype)
+        if max_angle in ('valid', 'limit'):
+            antialias_filter = AntialiasFilter()
+            new_gpts = antialias_filter._cropped_gpts(self.gpts, self.sampling, max_angle)
+
+        elif isinstance(max_angle, Number):
+            new_gpts = self._resampled_gpts(max_angle)
+
+        else:
+            raise ValueError('max_angle must be "valid", "limit", float or None')
+
+        new_array = xp.zeros((len(self.array),) + new_gpts, dtype=self.array.dtype)
         max_batch = self._max_batch_expansion()
 
         for start, end, partial_s_matrix in self._generate_partial(max_batch, pbar=False):
-            new_array[start:end] = copy_to_device(antialias_filter.downsample(partial_s_matrix.array, max_angle), xp)
+            new_array[start:end] = fft_interpolate_2d(self.array, new_gpts, normalization=normalization)
 
-        cropped_shape = tuple(n // (n // self.cropped_shape[i]) for i, n in enumerate(self.gpts))
+        if self.cropped_shape == self.gpts:
+            cropped_shape = new_gpts
+        else:
+            cropped_shape = tuple(n // (self.gpts[i] // self.cropped_shape[i]) for i, n in enumerate(new_gpts))
 
         return self.__class__(array=new_array,
                               expansion_cutoff=self._expansion_cutoff,
@@ -975,19 +1037,22 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
         multislice_pbar.close()
         return self
 
-    def _evaluate_ctf(self):
+    def _get_ctf_coefficients(self):
         xp = get_array_module(self._array)
         alpha = xp.sqrt(self.k[:, 0] ** 2 + self.k[:, 1] ** 2) * self.wavelength
         phi = xp.arctan2(self.k[:, 0], self.k[:, 1])
         return self._ctf.evaluate(alpha, phi)
 
-    def _translation(self, positions: Sequence[float]):
+    def _get_translation_coefficients(self, positions: Sequence[float]):
         xp = get_array_module_from_device(self.device)
         complex_exponential = get_device_function(xp, 'complex_exponential')
         positions = xp.asarray(positions)
         k = xp.asarray(self.k)
         return (complex_exponential(2. * np.pi * k[:, 0][None] * positions[:, 0, None]) *
                 complex_exponential(2. * np.pi * k[:, 1][None] * positions[:, 1, None]))
+
+    def _get_coefficients(self, positions: Sequence[float]):
+        return self._get_translation_coefficients(positions) * self._get_ctf_coefficients()
 
     def _get_requisite_crop(self, positions: Sequence[float], return_per_position: bool = False):
         offset = (self.cropped_shape[0] // 2, self.cropped_shape[1] // 2)
@@ -1020,8 +1085,6 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
         Waves object
             Probe wave functions for the provided positions.
         """
-        # if not self.periodic:
-        #    positions -= np.array((2.5, 2.5))
 
         if max_batch_expansion is None:
             max_batch_expansion = self._max_batch_expansion()
@@ -1034,7 +1097,7 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
         elif (len(positions.shape) != 2) or (positions.shape[-1] != 2):
             raise RuntimeError()
 
-        coefficients = self._translation(positions) * self._evaluate_ctf()
+        coefficients = self._get_coefficients(positions)
 
         if self.cropped_shape != self.gpts:
             crop_corner, size, corners = self._get_requisite_crop(positions, return_per_position=True)
@@ -1062,6 +1125,9 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
             window = xp.tensordot(coefficients, copy_to_device(self.array, device=self._device), axes=[(1,), (0,)])
 
         return Waves(window, sampling=self.sampling, energy=self.energy)
+
+    def intensity(self):
+        return self.collapse((self.extent[0] / 2, self.extent[1] / 2)).intensity()[0]
 
     def _generate_probes(self, scan: AbstractScan, max_batch_probes, max_batch_expansion):
 
@@ -1122,30 +1188,6 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
         pbar.close()
         return measurements
 
-    def show_profile(self, **kwargs):
-        # TODO implement function
-        """
-        Show the profile of the probe wave function.
-
-        Parameters
-        ----------
-        kwargs :
-            Additional keyword arguments for the abtem.plot.show_line function.
-        """
-
-    def show(self, **kwargs):
-        """
-        Show the probe wave function.
-
-        Parameters
-        ----------
-        kwargs :
-            Additional keyword arguments for the abtem.plot.show_image function.
-        """
-
-        measurement = self.collapse((self.extent[0] / 2, self.extent[1] / 2)).intensity()
-        measurement.show(**kwargs)
-
     def transfer(self, device):
         return self.__class__(array=copy_to_device(self.array, device),
                               expansion_cutoff=self._expansion_cutoff,
@@ -1173,7 +1215,7 @@ class SMatrixArray(HasGridAndAcceleratorMixin, HasDeviceMixin):
         return copy(self)
 
 
-class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
+class SMatrix(_Probelike):
     """
     Scattering matrix builder class
 
@@ -1222,15 +1264,7 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
         self._interpolation = interpolation
         self._expansion_cutoff = expansion_cutoff
 
-        if ctf is None:
-            self._ctf = CTF(**kwargs)
-        else:
-            self._ctf = ctf
-
-        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
-        self._accelerator = Accelerator(energy=energy)
-
-        self._device = device
+        super().__init__(ctf=ctf, extent=extent, gpts=gpts, sampling=sampling, energy=energy, device=device, **kwargs)
 
         if storage is None:
             storage = device
@@ -1314,6 +1348,9 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
         Waves object
             Probe exit wave functions as a Waves object.
         """
+
+        if isinstance(potential, Atoms):
+            potential = Potential(potential)
 
         self.grid.match(potential)
         return self.build().multislice(potential, max_batch=max_batch, multislice_pbar=pbar, plane_waves_pbar=pbar)
@@ -1436,28 +1473,8 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
         x = xp.linspace(0, self.extent[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=xp.float32)
         y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=xp.float32)
 
-        # pin_memory = False
-        #
-        # if pin_memory & (self._storage == 'cpu'):
-        #     # def mapped_malloc(size):
-        #     #     mem = cp.cuda.PinnedMemory(size, cp.cuda.runtime.hostAllocMapped)
-        #     #     return cp.cuda.PinnedMemoryPointer(mem, 0)
-        #     #
-        #     # mapped_pinned_mem_pool = cp.cuda.PinnedMemoryPool(mapped_malloc)
-        #     #
-        #     # cp.cuda.set_pinned_memory_allocator(mapped_malloc)
-        #     #
-        #     # mem = cp.cuda.alloc_pinned_memory(size * 2 * 4)
-        #     #
-        #     # array = np.frombuffer(mem, np.complex64, size).reshape(shape)
-        #     import numba as nb
-        #     array = nb.cuda.pinned_array(shape, dtype=np.complex64, order='C')
-        #
-        # else:
-
         shape = (len(kx),) + self.gpts
         array = storage_xp.zeros(shape, dtype=np.complex64)
-
 
         for i in range(len(kx)):
             array[i] = copy_to_device(complex_exponential(-2 * np.pi * kx[i, None, None] * x[:, None]) *
@@ -1475,29 +1492,10 @@ class SMatrix(HasGridAndAcceleratorMixin, HasDeviceMixin):
                             ctf=self.ctf,
                             device=self._device)
 
-    def show_profile(self, **kwargs):
-        """
-        Show the profile of the probe wave function.
-
-        Parameters
-        ----------
-        kwargs :
-            Additional keyword arguments for the abtem.plot.show_line function.
-        """
-
-        self.build().show_profile(**kwargs)
-
-    def show(self, **kwargs):
-        """
-        Show the probe wave function.
-
-        Parameters
-        ----------
-        kwargs :
-            Additional keyword arguments for the abtem.plot.show_image function.
-        """
-
-        self.build().show(**kwargs)
+    def intensity(self, position=None):
+        if position is None:
+            position = (self.extent[0] / 2, self.extent[1] / 2)
+        return self.build().collapse(position).intensity()[0]
 
     def __copy__(self):
         return self.__class__(expansion_cutoff=self.expansion_cutoff,
