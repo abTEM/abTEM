@@ -5,15 +5,14 @@ from typing import Sequence, Tuple
 
 import h5py
 import imageio
-
 import numpy as np
 import scipy.misc
 import scipy.ndimage
-
-from scipy.ndimage import zoom
 from scipy.interpolate import interpn
+from scipy.ndimage import zoom
+
 from abtem.device import asnumpy
-from abtem.plot import show_image, show_line, PlotableMixin
+from abtem.visualize.mpl import show_measurement_2d, show_measurement_1d
 
 
 class Calibration:
@@ -127,7 +126,7 @@ def calibrations_from_grid(gpts: Sequence[int],
     return calibrations
 
 
-class Measurement(PlotableMixin):
+class Measurement:
     """
     Measurement object.
 
@@ -435,55 +434,6 @@ class Measurement(PlotableMixin):
                                   name=self.calibrations[0].name)
         return Measurement(interpolated_array, calibration)
 
-    def update_bokeh_glyph(self, glyph):
-        if self.dimensions == 1:
-            calibration = self.calibrations[0]
-            x = np.linspace(calibration.offset, calibration.offset + len(self) * calibration.sampling, len(self))
-            glyph.data_source.data = {'x': x, 'y': self.array}
-
-        else:
-            calibrations = self.calibrations[-2:]
-            array = self.array[(0,) * (self.dimensions - 2) + (slice(None),) * 2]
-            glyph.data_source.data = {'image': [array.T],
-                                      'x': [calibrations[-1].offset],
-                                      'y': [calibrations[-2].offset],
-                                      'dw': [calibrations[-2].sampling * self.array.shape[-2]],
-                                      'dh': [calibrations[-1].sampling * self.array.shape[-1]]}
-
-    def add_to_bokeh_plot(self, p, palette='Greys256', **kwargs):
-        from bokeh.models import ColumnDataSource
-
-        if self.dimensions == 1:
-            source = ColumnDataSource(data=dict(x=[], y=[]))
-            glyph = p.line(x='x', y='y', source=source, **kwargs)
-
-        else:
-            source = ColumnDataSource(data=dict(image=[], x=[], y=[], dw=[], dh=[]))
-            glyph = p.image(image='image', x='x', y='y', dw='dw', dh='dh', source=source, palette=palette, **kwargs)
-            p.match_aspect = True
-
-        self.update_bokeh_glyph(glyph)
-        return glyph
-
-    def show_bokeh(self, p=None, push_notebook=False, **kwargs):
-        from bokeh import plotting
-
-        if p is None:
-            if self.dimensions == 1:
-                p = plotting.Figure(plot_width=600, plot_height=400)
-            else:
-                p = plotting.Figure(plot_width=400, plot_height=400, match_aspect=True)
-
-        return super().show_bokeh(p=p, push_notebook=push_notebook, **kwargs)
-
-    def add_to_mpl_plot(self, ax, **kwargs):
-        if self.dimensions == 1:
-            show_line(self.array, self.calibrations[0], ax=ax, label=self._name, **kwargs)
-        else:
-            calibrations = self.calibrations[-2:]
-            array = self.array[(0,) * (self.dimensions - 2) + (slice(None),) * 2]
-            show_image(array, calibrations, ax=ax, cbar_label=f'{self._name} [{self._units}]', **kwargs)
-
     def show(self, ax=None, **kwargs):
         """
         Show the measurement.
@@ -493,7 +443,22 @@ class Measurement(PlotableMixin):
         kwargs:
             Additional keyword arguments for the abtem.plot.show_image function.
         """
-        return super().show(ax=ax, **kwargs)
+        if self.dimensions == 1:
+            return show_measurement_1d(self, ax=ax, **kwargs)
+        else:
+            return show_measurement_2d(self, ax=ax, **kwargs)
+
+
+def probe_profile(probe_measurement: Measurement, angle: float = 0.) -> Measurement:
+    calibrations = probe_measurement.calibrations
+    extent = (calibrations[-2].sampling * probe_measurement.array.shape[-2],
+              calibrations[-1].sampling * probe_measurement.array.shape[-1])
+
+    point0 = np.array((extent[0] / 2, extent[1] / 2))
+    point1 = point0 + np.array([np.cos(np.pi * angle / 180), np.sin(np.pi * angle / 180)])
+    point0, point1 = _line_intersect_rectangle(point0, point1, (0., 0.), extent)
+    line_profile = interpolate_line(probe_measurement, point0, point1)
+    return line_profile
 
 
 def block_zeroth_order_spot(diffraction_pattern: Measurement):
@@ -530,34 +495,36 @@ def _line_intersect_rectangle(point0, point1, lower_corner, upper_corner):
 def interpolate_line(measurement: Measurement, start, end, gpts=None, sampling=None):
     from abtem.scan import LineScan
 
-    if not (measurement.dimensions == 2):
+    array = np.squeeze(measurement.array)
+
+    if not (len(array.shape) == 2):
         raise RuntimeError()
 
-    if (measurement.calibrations[0] is None) or (measurement.calibrations[1] is None):
+    if (measurement.calibrations[-1] is None) or (measurement.calibrations[-2] is None):
         raise RuntimeError()
 
-    if measurement.calibrations[0].units != measurement.calibrations[1].units:
+    if measurement.calibrations[-2].units != measurement.calibrations[-1].units:
         raise RuntimeError()
 
     if (gpts is None) & (sampling is None):
-        sampling = (measurement.calibrations[0].sampling + measurement.calibrations[1].sampling) / 2.
+        sampling = (measurement.calibrations[-2].sampling + measurement.calibrations[-1].sampling) / 2.
 
-    x = np.linspace(measurement.calibrations[0].offset,
-                    measurement.shape[0] * measurement.calibrations[0].sampling,
-                    measurement.shape[0])
+    x = np.linspace(measurement.calibrations[-2].offset,
+                    measurement.shape[-2] * measurement.calibrations[-2].sampling,
+                    measurement.shape[-2])
     y = np.linspace(measurement.calibrations[1].offset,
-                    measurement.shape[1] * measurement.calibrations[1].sampling,
-                    measurement.shape[1])
+                    measurement.shape[-1] * measurement.calibrations[-1].sampling,
+                    measurement.shape[-1])
 
     line_scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling)
 
-    interpolated_array = interpn((x, y), measurement.array, line_scan.get_positions())
+    interpolated_array = interpn((x, y), array, line_scan.get_positions())
 
     return Measurement(interpolated_array,
                        Calibration(offset=0,
                                    sampling=line_scan.sampling[0],
-                                   units=measurement.calibrations[0].units,
-                                   name=measurement.calibrations[0].name))
+                                   units=measurement.calibrations[-2].units,
+                                   name=measurement.calibrations[-2].name))
 
 
 def calculate_fwhm(measurement: Measurement):

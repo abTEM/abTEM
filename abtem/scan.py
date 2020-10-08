@@ -10,7 +10,7 @@ from matplotlib.patches import Rectangle
 from abtem.base_classes import Grid, HasGridMixin
 from abtem.device import asnumpy
 from abtem.measure import Calibration, Measurement
-from abtem.utils import split_integer
+from abtem.utils import subdivide_into_batches
 
 
 class AbstractScan(metaclass=ABCMeta):
@@ -75,7 +75,7 @@ class AbstractScan(metaclass=ABCMeta):
     def _partition_batches(self, max_batch):
         n = len(self)
         n_batches = (n + (-n % max_batch)) // max_batch
-        batch_sizes = split_integer(len(self), n_batches)
+        batch_sizes = subdivide_into_batches(len(self), n_batches)
 
         self._batches = []
 
@@ -429,8 +429,8 @@ class GridScan(AbstractScan, HasGridMixin):
             measurement.array[x, y] += asnumpy(new_measurement)
 
     def partition_scan(self, splits):
-        Nx = split_integer(self.gpts[0], splits[0])
-        Ny = split_integer(self.gpts[1], splits[1])
+        Nx = subdivide_into_batches(self.gpts[0], splits[0])
+        Ny = subdivide_into_batches(self.gpts[1], splits[1])
         Sx = np.concatenate(([0], np.cumsum(Nx)))
         Sy = np.concatenate(([0], np.cumsum(Ny)))
 
@@ -474,8 +474,8 @@ class GridScan(AbstractScan, HasGridMixin):
         max_batch_x = int(np.floor(np.sqrt(max_batch)))
         max_batch_y = int(np.floor(np.sqrt(max_batch)))
 
-        Nx = split_integer(self.gpts[0], (self.gpts[0] + (-self.gpts[0] % max_batch_x)) // max_batch_x)
-        Ny = split_integer(self.gpts[1], (self.gpts[1] + (-self.gpts[1] % max_batch_y)) // max_batch_y)
+        Nx = subdivide_into_batches(self.gpts[0], (self.gpts[0] + (-self.gpts[0] % max_batch_x)) // max_batch_x)
+        Ny = subdivide_into_batches(self.gpts[1], (self.gpts[1] + (-self.gpts[1] % max_batch_y)) // max_batch_y)
 
         self._batches = []
         Sx = np.concatenate(([0], np.cumsum(Nx)))

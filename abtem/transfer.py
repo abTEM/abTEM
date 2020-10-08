@@ -76,6 +76,8 @@ class CTF(HasAcceleratorMixin, PlotableMixin):
         self.changed = Event()
 
         self._accelerator = Accelerator(energy=energy)
+        self._accelerator.changed.register(self.changed.notify)
+
         self._semiangle_cutoff = semiangle_cutoff
         self._rolloff = rolloff
         self._focal_spread = focal_spread
@@ -332,9 +334,8 @@ class CTF(HasAcceleratorMixin, PlotableMixin):
 
         calibration = Calibration(offset=0., sampling=(alpha[1] - alpha[0]) * 1000., units='mrad', name='alpha')
 
-        profiles = dict()
+        profiles = {}
         profiles['ctf'] = Measurement(aberrations.imag * envelope, calibrations=[calibration], name='CTF')
-
         profiles['aperture'] = Measurement(aperture, calibrations=[calibration], name='Aperture')
         profiles['temporal_envelope'] = Measurement(temporal_envelope,
                                                     calibrations=[calibration],
@@ -346,50 +347,48 @@ class CTF(HasAcceleratorMixin, PlotableMixin):
         profiles['envelope'] = Measurement(envelope, calibrations=[calibration], name='Envelope')
         return profiles
 
-    def add_to_bokeh_plot(self, p, push_notebook=False, max_semiangle=None, phi=0.):
-        from bokeh.palettes import Category10
-        if push_notebook:
-            from bokeh.io import push_notebook
+    def apply(self, waves, interact=False, sliders=None):
+        from abtem.visualize.bqplot import show_measurement_1d, show_measurement_2d, quick_sliders
+        import ipywidgets as widgets
 
-        profiles = self.profiles(max_semiangle, phi=phi)
+        if interact:
+            image_waves = waves.copy()
 
-        lines = {}
-        for (key, profile), color in zip(profiles.items(), Category10[10]):
-            visible = not np.all(profile.array == 1.)
-            lines[key] = profile.add_to_bokeh_plot(p,
-                                                   line_color=color,
-                                                   legend_label=profile.name,
-                                                   visible=visible)
+            def update():
+                image_waves._array[:] = waves.apply_ctf(self).array
+                return image_waves.intensity()
 
-        def update(notifier, property_name, change):
-            profiles = self._get_line_profile_measurements(max_semiangle)
+            figure, callback = show_measurement_2d(update)
 
-            for key, line in lines.items():
+            self.changed.register(callback)
+            if sliders:
+                sliders = quick_sliders(self, **sliders)
+                figure = widgets.HBox([figure, widgets.VBox(sliders)])
+            return image_waves, figure
+        else:
+            if sliders:
+                raise RuntimeError()
 
-                profiles[key].update_bokeh_glyph(line)
-                if np.all(profiles[key].array == 1.):
-                    line.visible = False
-                else:
-                    line.visible = True
+            return waves.apply_ctf(self)
 
-            if push_notebook:
-                push_notebook()
+    def interact(self, max_semiangle: float = None, phi: float = 0., sliders=None):
+        import bqplot.pyplot as plt
+        from abtem.visualize.bqplot import show_measurement_1d
+        from abtem.visualize.widgets import quick_sliders
+        import ipywidgets as widgets
 
-        self.changed.register(update)
+        figure = plt.figure(fig_margin={'top': 0, 'bottom': 50, 'left': 50, 'right': 0})
+        figure.layout.height = '250px'
+        figure.layout.width = '300px'
 
-        p.legend.location = 'bottom_right'
-        p.legend.click_policy = 'hide'
-        p.legend.label_text_font_size = '10pt'
+        _, callback = show_measurement_1d(lambda: self.profiles(max_semiangle, phi).values(), figure)
+        self.changed.register(callback)
 
-    def show_bokeh(self, p=None, push_notebook=False, max_semiangle=None, phi=0., **kwargs):
-        return super().show_bokeh(p=p, push_notebook=push_notebook, max_semiangle=max_semiangle, phi=phi, **kwargs)
-
-    def add_to_mpl_plot(self, ax, max_semiangle: float = None, phi: float = 0, **kwargs):
-        for key, profile in self._get_line_profile_measurements(max_semiangle, phi).items():
-            if not np.all(profile.array == 1.):
-                ax = profile.show(legend=True, ax=ax, **kwargs)
-
-        ax.legend()
+        if sliders:
+            sliders = quick_sliders(self, **sliders)
+            return widgets.HBox([figure, widgets.VBox(sliders)])
+        else:
+            return figure
 
     def show(self, max_semiangle: float = None, phi: float = 0, ax=None, **kwargs):
         """
@@ -415,9 +414,12 @@ class CTF(HasAcceleratorMixin, PlotableMixin):
         if ax is None:
             ax = plt.subplot()
 
-        self.add_to_mpl_plot(max_semiangle=max_semiangle, phi=phi, ax=ax, **kwargs)
+        for key, profile in self.profiles(max_semiangle, phi).items():
+            if not np.all(profile.array == 1.):
+                ax = profile.show(legend=True, ax=ax, **kwargs)
+        #self.add_to_mpl_plot(max_semiangle=max_semiangle, phi=phi, ax=ax, **kwargs)
 
-        plt.show()
+        #plt.show()
         return ax
 
     def copy(self):

@@ -151,7 +151,7 @@ def fft_crop(array, new_shape):
     return new_array
 
 
-def fft_interpolate_2d(array, new_shape, normalization='values'):
+def fft_interpolate_2d(array, new_shape, normalization='values', overwrite_x=False):
     xp = get_array_module(array)
     fft2 = get_device_function(xp, 'fft2')
     ifft2 = get_device_function(xp, 'ifft2')
@@ -159,9 +159,9 @@ def fft_interpolate_2d(array, new_shape, normalization='values'):
     old_size = array.shape[-2] * array.shape[-1]
 
     if np.iscomplexobj(array):
-        array = ifft2(fft_crop(fft2(array), new_shape), overwrite_x=True)
+        array = ifft2(fft_crop(fft2(array), new_shape), overwrite_x=overwrite_x)
     else:
-        array = ifft2(fft_crop(fft2(array), new_shape), overwrite_x=True).real
+        array = ifft2(fft_crop(fft2(array), new_shape), overwrite_x=overwrite_x).real
 
     if normalization == 'values':
         array *= array.shape[-1] * array.shape[-2] / old_size
@@ -173,7 +173,7 @@ def fft_interpolate_2d(array, new_shape, normalization='values'):
     return array  # * norm
 
 
-def split_integer(n: int, m: int):
+def subdivide_into_batches(num_items: int, num_batches: int = None, max_batch: int = None):
     """
     Split an n integer into m (almost) equal integers, such that the sum of smaller integers equals n.
 
@@ -188,22 +188,38 @@ def split_integer(n: int, m: int):
     -------
     list of int
     """
+    if (num_batches is not None) & (max_batch is not None):
+        raise RuntimeError()
 
-    if n < m:
-        raise RuntimeError('n may not be larger than m')
+    if num_batches is None:
+        if max_batch is not None:
+            num_batches = (num_items + (-num_items % max_batch)) // max_batch
+        else:
+            raise RuntimeError()
 
-    elif n % m == 0:
-        return [n // m] * m
+    if num_items < num_batches:
+        raise RuntimeError('num_batches may not be larger than num_items')
+
+    elif num_items % num_batches == 0:
+        return [num_items // num_batches] * num_batches
     else:
         v = []
-        zp = m - (n % m)
-        pp = n // m
-        for i in range(m):
+        zp = num_batches - (num_items % num_batches)
+        pp = num_items // num_batches
+        for i in range(num_batches):
             if i >= zp:
                 v = [pp + 1] + v
             else:
                 v = [pp] + v
         return v
+
+
+def generate_batches(num_items: int, num_batches: int = None, max_batch: int = None, start=0):
+    for batch in subdivide_into_batches(num_items, num_batches, max_batch):
+        end = start + batch
+        yield start, end
+
+        start = end
 
 
 class ProgressBar:

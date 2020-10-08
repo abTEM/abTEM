@@ -426,14 +426,6 @@ class Grid:
         elif self.gpts is None:
             raise RuntimeError('Grid gpts are not defined')
 
-    @property
-    def antialiased_gpts(self) -> tuple:
-        return tuple(n // 2 for n in self.gpts)
-
-    @property
-    def antialiased_sampling(self) -> tuple:
-        return tuple(l / n for n, l in zip(self.antialiased_gpts, self.extent))
-
     def match(self, other: Union['Grid', 'HasGridMixin'], check_match: bool = False):
         """
         Set the parameters of this grid to match another grid.
@@ -690,7 +682,7 @@ class HasGridAndAcceleratorMixin(HasGridMixin, HasAcceleratorMixin):
         return tuple([int(2 * np.floor(new_max_angle / d)) + 1 for n, d in zip(self.gpts, self.angular_sampling)])
 
 
-class AntialiasFilter(HasGridMixin):
+class AntialiasFilter:
 
     def __init__(self, rolloff=.1):
         self._cutoff = 2 / 3.
@@ -720,10 +712,10 @@ class AntialiasFilter(HasGridMixin):
             array = xp.array(k < kcut).astype(xp.float32)
         return array
 
-    def bandlimit(self, array, sampling=None):
-        xp = get_array_module(array)
+    def bandlimit(self, waves):
+        xp = get_array_module(waves.array)
         fft2_convolve = get_device_function(xp, 'fft2_convolve')
-        fft2_convolve(array, self.get_mask(array.shape[-2:], sampling, xp), overwrite_x=True)
+        fft2_convolve(waves.array, self.get_mask(waves.gpts, waves.sampling, xp), overwrite_x=True)
 
     @cached_method('_crop_cache')
     def _crop_indices(self, gpts, sampling, xp=np, max_angle='limit'):

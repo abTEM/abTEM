@@ -10,7 +10,7 @@ from abtem.device import get_device_function
 from abtem.potentials import AbstractPotentialBuilder, ProjectedPotentialArray, _disc_meshgrid, pad_atoms, \
     PotentialIntegrator
 from abtem.structures import orthogonalize_cell
-from abtem.utils import split_integer
+from abtem.utils import subdivide_into_batches
 
 import warnings
 
@@ -159,7 +159,7 @@ class GPAWPotential(AbstractPotentialBuilder):
         num_slices = int(np.ceil(nz / np.floor(slice_thickness / (thickness / nz))))
 
         self._voxel_height = thickness / nz
-        self._slice_vertical_voxels = split_integer(nz, num_slices)
+        self._slice_vertical_voxels = subdivide_into_batches(nz, num_slices)
 
         # TODO: implement support for non-periodic extent
 

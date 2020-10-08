@@ -83,7 +83,7 @@ class AbstractDetector(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def allocate_measurement(self, grid, wavelength, scan) -> Measurement:
+    def allocate_measurement(self, waves, scan) -> Measurement:
         pass
 
 
@@ -113,7 +113,7 @@ class _PolarDetector(AbstractDetector):
         else:
             inner = self._inner
 
-        max_angle = 1 / np.max(sampling) * wavelength / 2 * 1000
+        max_angle = 1 / np.max(sampling) * wavelength / 2 * 1e3 * 2 / 3
 
         if self._outer is None:
             outer = max_angle
@@ -159,7 +159,7 @@ class _PolarDetector(AbstractDetector):
             region_indices.append(indices)
         return region_indices
 
-    def allocate_measurement(self, grid: Grid, wavelength: float, scan: AbstractScan) -> Measurement:
+    def allocate_measurement(self, waves, scan: AbstractScan) -> Measurement:
         """
         Allocate a Measurement object or an hdf5 file.
 
@@ -178,7 +178,7 @@ class _PolarDetector(AbstractDetector):
             The allocated measurement or path to hdf5 file with the measurement data.
         """
 
-        inner, outer, nbins_radial, nbins_azimuthal = self._get_bins(grid.antialiased_sampling, wavelength)
+        inner, outer, nbins_radial, nbins_azimuthal = self._get_bins(waves.sampling, waves.wavelength)
 
         shape = scan.shape
         calibrations = scan.calibrations
@@ -216,11 +216,11 @@ class _PolarDetector(AbstractDetector):
 
         grid.check_is_defined()
 
-        array = np.full(grid.antialiased_gpts, -1, dtype=np.int)
-        for i, indices in enumerate(self._get_regions(grid.antialiased_gpts, grid.antialiased_sampling, wavelength)):
+        array = np.full(grid.gpts, -1, dtype=np.int)
+        for i, indices in enumerate(self._get_regions(grid.gpts, grid.gpts, wavelength)):
             array.ravel()[indices] = i
 
-        calibrations = calibrations_from_grid(grid.antialiased_gpts, grid.antialiased_sampling,
+        calibrations = calibrations_from_grid(grid.gpts, grid.gpts,
                                               names=['alpha_x', 'alpha_y'], units='mrad',
                                               scale_factor=wavelength * 1000, fourier_space=True)
         return show_image(array, calibrations, cbar_label=cbar_label, discrete=True, **kwargs)
@@ -492,10 +492,12 @@ class PixelatedDetector(AbstractDetector):
         The path to the file used for saving the detector output.
     """
 
-    def __init__(self, save_file: str = None):
+    def __init__(self, max_angle='valid', save_file: str = None):
+        self._max_angle = max_angle
+
         super().__init__(save_file=save_file)
 
-    def allocate_measurement(self, grid: Grid, wavelength: float, scan: AbstractScan) -> Measurement:
+    def allocate_measurement(self, waves, scan: AbstractScan) -> Measurement:
         """
         Allocate a Measurement object or an hdf5 file.
 
@@ -514,14 +516,14 @@ class PixelatedDetector(AbstractDetector):
             The allocated measurement or path to hdf5 file with the measurement data.
         """
 
-        grid.check_is_defined()
-        shape = (grid.gpts[0] // 2, grid.gpts[1] // 2)
+        waves.grid.check_is_defined()
+        shape = (waves.gpts[0] // 2, waves.gpts[1] // 2)
 
-        calibrations = calibrations_from_grid(grid.antialiased_gpts,
-                                              grid.antialiased_sampling,
+        calibrations = calibrations_from_grid(waves.gpts,
+                                              waves.sampling,
                                               names=['alpha_x', 'alpha_y'],
                                               units='mrad',
-                                              scale_factor=wavelength * 1000,
+                                              scale_factor=waves.wavelength * 1000,
                                               fourier_space=True)
 
         array = np.zeros(scan.shape + shape)
@@ -571,7 +573,7 @@ class WavefunctionDetector(AbstractDetector):
     def __init__(self, save_file: str = None):
         super().__init__(save_file=save_file)
 
-    def allocate_measurement(self, grid: Grid, wavelength: float, scan: AbstractScan) -> Measurement:
+    def allocate_measurement(self, waves, scan: AbstractScan) -> Measurement:
         """
         Allocate a Measurement object or an hdf5 file.
 
@@ -590,10 +592,10 @@ class WavefunctionDetector(AbstractDetector):
             The allocated measurement or path to hdf5 file with the measurement data.
         """
 
-        grid.check_is_defined()
-        calibrations = calibrations_from_grid(grid.gpts, grid.sampling, names=['x', 'y'], units='Å')
+        waves.grid.check_is_defined()
+        calibrations = calibrations_from_grid(waves.gpts, waves.sampling, names=['x', 'y'], units='Å')
 
-        array = np.zeros(scan.shape + grid.gpts, dtype=np.complex64)
+        array = np.zeros(scan.shape + waves.gpts, dtype=np.complex64)
         measurement = Measurement(array, calibrations=scan.calibrations + calibrations)
         if isinstance(self.save_file, str):
             measurement = measurement.write(self.save_file)
