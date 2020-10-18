@@ -1,5 +1,6 @@
 """Module to describe the detection of scattered electron waves."""
 from collections.abc import Iterable
+from abc import ABCMeta
 from copy import copy
 from typing import Sequence, Tuple
 
@@ -126,7 +127,7 @@ def calibrations_from_grid(gpts: Sequence[int],
     return calibrations
 
 
-class Measurement:
+class Measurement:  # (metaclass=ABCMeta):
     """
     Measurement object.
 
@@ -142,10 +143,18 @@ class Measurement:
         The name of the array values to be displayed in plots.
     """
 
-    def __init__(self, array, calibrations, units='', name=''):
+    def __init__(self, array, calibrations=None, units='', name=''):
+
+        if issubclass(array.__class__, self.__class__):
+            measurement = array
+
+            array = measurement.array
+            calibrations = measurement.calibrations
+            units = measurement.array
+            name = measurement.name
 
         if not isinstance(calibrations, Iterable):
-            calibrations = [calibrations]
+            calibrations = [calibrations] * len(array.shape)
 
         if len(calibrations) != len(array.shape):
             raise RuntimeError(
@@ -202,6 +211,13 @@ class Measurement:
         """
         return self._array
 
+    # @array.setter
+    # def array(self, array):
+    #     """
+    #     Array of measurements.
+    #     """
+    #     self._array[:] = array
+
     @property
     def shape(self):
         """
@@ -237,25 +253,40 @@ class Measurement:
         """
         return self._calibrations
 
-    def __sub__(self, other):
-        assert isinstance(other, self.__class__)
-
+    def check_match_calibrations(self, other):
         for calibration, other_calibration in zip(self.calibrations, other.calibrations):
             if not calibration == other_calibration:
-                raise ValueError()
+                raise ValueError('Calibration mismatch, operation not possible.')
 
-        difference = self.array - other.array
-        return self.__class__(difference, calibrations=self.calibrations, units=self.units, name=self.name)
+    def __isub__(self, other):
+        if isinstance(other, self.__class__):
+            self.check_match_calibrations(other)
+            self._array -= other.array
+        else:
+            self._array -= asnumpy(other)
+
+    def __sub__(self, other):
+        if isinstance(other, self.__class__):
+            self.check_match_calibrations(other)
+            new_array = self.array - other.array
+        else:
+            new_array = self._array - asnumpy(other)
+        return self.__class__(new_array, calibrations=self.calibrations, units=self.units, name=self.name)
+
+    def __iadd__(self, other):
+        if isinstance(other, self.__class__):
+            self.check_match_calibrations(other)
+            self._array += other.array
+        else:
+            self._array += asnumpy(other)
 
     def __add__(self, other):
-        assert isinstance(other, self.__class__)
-
-        for calibration, other_calibration in zip(self.calibrations, other.calibrations):
-            if not calibration == other_calibration:
-                raise ValueError()
-
-        difference = self.array - other.array
-        return self.__class__(difference, calibrations=self.calibrations, units=self.units, name=self.name)
+        if isinstance(other, self.__class__):
+            self.check_match_calibrations(other)
+            new_array = self.array + other.array
+        else:
+            new_array = self._array + asnumpy(other)
+        return self.__class__(new_array, calibrations=self.calibrations, units=self.units, name=self.name)
 
     def _reduction(self, reduction_function, axis):
         if not isinstance(axis, Iterable):
@@ -267,6 +298,27 @@ class Measurement:
         calibrations = [self.calibrations[i] for i in range(len(self.calibrations)) if i not in axis]
 
         return self.__class__(array, calibrations)
+
+    # def integrate(self, axes, start=0, end=None, use_units=True):
+    #
+    #     if end is None:
+    #         end = ()
+    #         for axis in axes:
+    #             end += (self.array.shape[axis],)
+    #
+    #     else:
+    #         end = list(end)
+    #         for axis in axes:
+    #             end[axis]
+    #
+    #     if not isinstance(axes, Iterable):
+    #         axes = (axes,)
+    #
+    #     if not isinstance(start, Iterable):
+    #         start = (start,) * len(axes)
+    #
+    #     if not isinstance(end, Iterable):
+    #         end = (end,) * len(axes)
 
     def sum(self, axis):
         """
@@ -351,6 +403,11 @@ class Measurement:
                                             sampling=datasets['sampling'][i],
                                             units=datasets['units'][i].decode('utf-8'),
                                             name=datasets['name'][i].decode('utf-8')))
+
+        # print(datasets['array'].shape)
+        # import matplotlib.pyplot as plt
+        # plt.imshow(datasets['array'])
+        # plt.show()
 
         return cls(datasets['array'], calibrations)
 
@@ -449,6 +506,34 @@ class Measurement:
             return show_measurement_2d(self, ax=ax, **kwargs)
 
 
+class FlexibleAnnularMeasurement(Measurement):
+
+    def __init__(self, array, spatial_sampling, angular_sampling, angular_offset=0.):
+        if not isinstance(spatial_sampling, Iterable):
+            spatial_sampling = (spatial_sampling,) * (len(array.shape) - 1)
+
+        calibrations = [Calibration(0., d, 'Å', name) for d, name in zip(spatial_sampling, ('x', 'y'))]
+        calibrations += [Calibration(angular_offset, angular_sampling, 'mrad', 'alpha')]
+
+        super().__init__(array, calibrations)
+
+    def integrate(self, start, end):
+        offset = self.calibrations[-1].offset
+        sampling = self.calibrations[-1].sampling
+
+        start = int((start - offset) / sampling)
+        stop = int((end - offset) / sampling)
+
+        array = self.array[..., start:stop].sum(-1)
+        return Measurement(array, calibrations=self.calibrations[:-1])
+
+
+class DiffractionPatterns(Measurement):
+
+    def __init__(self, array, spatial_sampling, angular_sampling):
+        pass
+
+
 def probe_profile(probe_measurement: Measurement, angle: float = 0.) -> Measurement:
     calibrations = probe_measurement.calibrations
     extent = (calibrations[-2].sampling * probe_measurement.array.shape[-2],
@@ -463,7 +548,7 @@ def probe_profile(probe_measurement: Measurement, angle: float = 0.) -> Measurem
 
 def block_zeroth_order_spot(diffraction_pattern: Measurement):
     shape = diffraction_pattern.shape
-    diffraction_pattern._array[..., shape[-2] // 2, shape[-1] // 2] = 0.
+    diffraction_pattern._array[..., shape[-2] // 2, shape[-1] // 2] = diffraction_pattern.array.min()
     return diffraction_pattern
 
 

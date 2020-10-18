@@ -110,9 +110,9 @@ class FrozenPhonons(AbstractFrozenPhonons):
                 except KeyError:
                     pass
 
-            for i, atom in enumerate(atoms):
+            for unique in np.unique(atoms.numbers):
                 try:
-                    sigmas_array[i] = new_sigmas[atom.number]
+                    sigmas_array[atoms.numbers == unique] = new_sigmas[unique]
                 except KeyError:
                     raise RuntimeError('Displacement standard deviation not provided for all atomic species.')
 

@@ -80,10 +80,12 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12):
         raise RuntimeError('Invalid cell: no vertical lattice vector')
 
     cell[[vertical_vector[0], 2]] = cell[[2, vertical_vector[0]]]
-
     r = np.arctan2(atoms.cell[0, 1], atoms.cell[0, 0]) / np.pi * 180
 
-    atoms.rotate(-r, 'z', rotate_cell=True)
+    atoms.set_cell(cell)
+
+    if r != 0.:
+        atoms.rotate(-r, 'z', rotate_cell=True)
 
     if not is_cell_valid(atoms, tol):
         raise RuntimeError('This cell cannot be made orthogonal using currently implemented methods.')

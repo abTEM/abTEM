@@ -658,40 +658,16 @@ class HasAcceleratorMixin:
     wavelength = DelegatedAttribute('accelerator', 'wavelength')
 
 
-class HasGridAndAcceleratorMixin(HasGridMixin, HasAcceleratorMixin):
-
-    @property
-    def max_scattering_angles(self):
-        angles = []
-        for n, l in zip(self.gpts, self.extent):
-            if n % 2 == 0:
-                angles += [(-n / (2 * l) * self.wavelength * 1e3, (n / (2 * l) - 1 / l) * self.wavelength * 1e3)]
-            else:
-                angles += [(-(n - 1) / 2 / l * self.wavelength * 1e3, (n - 1) / 2 / l * self.wavelength * 1e3)]
-
-        return angles
-
-    @property
-    def angular_sampling(self):
-        self.grid.check_is_defined()
-        self.accelerator.check_is_defined()
-        return tuple([1 / l * self.wavelength * 1e3 for l in self.extent])
-
-    def _resampled_gpts(self, new_max_angle):
-        self.grid.check_is_defined()
-        return tuple([int(2 * np.floor(new_max_angle / d)) + 1 for n, d in zip(self.gpts, self.angular_sampling)])
-
-
 class AntialiasFilter:
 
-    def __init__(self, rolloff=.1):
-        self._cutoff = 2 / 3.
-        self._rolloff = rolloff
-        self._mask_cache = Cache(1)
-        self._crop_cache = Cache(1)
+    cutoff = 2 / 3.
+    rolloff = .1
 
-    def cutoff_freq(self, sampling):
-        return min(1 / sampling[0] / 2, 1 / sampling[1] / 2) * self._cutoff
+    def __init__(self):
+        self._mask_cache = Cache(1)
+
+    #def cutoff_frequency(self, sampling):
+    #    return min(1 / sampling[0] / 2, 1 / sampling[1] / 2) * self._cutoff
 
     @cached_method('_mask_cache')
     def get_mask(self, gpts, sampling, xp):
@@ -702,12 +678,13 @@ class AntialiasFilter:
         kx = copy_to_device(kx, xp)
         ky = copy_to_device(ky, xp)
         k = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
-        kcut = self.cutoff_freq(sampling)
 
-        if self._rolloff > 0.:
-            array = .5 * (1 + xp.cos(np.pi * (k - kcut + self._rolloff) / self._rolloff))
+        kcut = 1 / max(sampling) / 2 * self.cutoff
+
+        if self.rolloff > 0.:
+            array = .5 * (1 + xp.cos(np.pi * (k - kcut + self.rolloff) / self.rolloff))
             array[k > kcut] = 0.
-            array = xp.where(k > kcut - self._rolloff, array, xp.ones_like(k, dtype=xp.float32))
+            array = xp.where(k > kcut - self.rolloff, array, xp.ones_like(k, dtype=xp.float32))
         else:
             array = xp.array(k < kcut).astype(xp.float32)
         return array
@@ -715,27 +692,34 @@ class AntialiasFilter:
     def bandlimit(self, waves):
         xp = get_array_module(waves.array)
         fft2_convolve = get_device_function(xp, 'fft2_convolve')
-        fft2_convolve(waves.array, self.get_mask(waves.gpts, waves.sampling, xp), overwrite_x=True)
+        return fft2_convolve(waves.array, self.get_mask(waves.gpts, waves.sampling, xp), overwrite_x=True)
 
-    @cached_method('_crop_cache')
-    def _crop_indices(self, gpts, sampling, xp=np, max_angle='limit'):
-        new_shape = self._cropped_gpts(gpts, sampling, max_angle)
-        mask1, _ = fft_interpolation_masks(gpts, new_shape, xp)
-        return xp.where(mask1)
+    # @cached_method('_crop_cache')
+    # def _crop_indices(self, gpts, sampling, xp=np, max_angle='limit'):
+    #     new_shape = self._cropped_gpts(gpts, sampling, max_angle)
+    #     mask1, _ = fft_interpolation_masks(gpts, new_shape, xp)
+    #     return xp.where(mask1)
+    # #
+    # def downsample(self, array, sampling=None, max_angle='limit'):
+    #     xp = get_array_module(array)
+    #     fft2 = get_device_function(xp, 'fft2')
+    #     ifft2 = get_device_function(xp, 'ifft2')
+    #
+    #     old_size = array.shape[-2] * array.shape[-1]
+    #     if np.iscomplexobj(array):
+    #         array = ifft2(self.crop(fft2(array, overwrite_x=False), sampling, max_angle), overwrite_x=True)
+    #     else:
+    #         array = ifft2(self.crop(fft2(array, overwrite_x=False), sampling, max_angle), overwrite_x=True).real
+    #
+    #     norm = array.shape[-1] * array.shape[-2] / old_size
+    #     return array * norm
 
-    def downsample(self, array, sampling=None, max_angle='limit'):
-        xp = get_array_module(array)
-        fft2 = get_device_function(xp, 'fft2')
-        ifft2 = get_device_function(xp, 'ifft2')
+    def gpts_inside_cutoff(self, gpts, sampling):
+        kcut = min(1 / sampling[0] / 2, 1 / sampling[1] / 2) * 2 / 3.
+        extent = (sampling[0] * gpts[0], sampling[1] * gpts[1])
+        # new_gpts = (int(np.floor(2 * extent[0] * kcut)), int(np.floor(2 * extent[1] * kcut)))
 
-        old_size = array.shape[-2] * array.shape[-1]
-        if np.iscomplexobj(array):
-            array = ifft2(self.crop(fft2(array, overwrite_x=False), sampling, max_angle), overwrite_x=True)
-        else:
-            array = ifft2(self.crop(fft2(array, overwrite_x=False), sampling, max_angle), overwrite_x=True).real
-
-        norm = array.shape[-1] * array.shape[-2] / old_size
-        return array * norm
+        new_gpts = (int(np.ceil(2 * extent[0] * kcut)), int(np.ceil(2 * extent[1] * kcut)))
 
     def downsampled_grid(self, grid, include='limit'):
         grid = grid.copy()

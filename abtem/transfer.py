@@ -5,11 +5,10 @@ from typing import Mapping, Union
 import numpy as np
 
 from abtem.base_classes import HasAcceleratorMixin, Accelerator, watched_method, watched_property, Event
-
 from abtem.device import get_array_module, get_device_function
-from abtem.utils import energy2wavelength
 from abtem.measure import Measurement, Calibration
 from abtem.plot import PlotableMixin
+from abtem.utils import energy2wavelength
 
 #: Symbols for the polar representation of all optical aberrations up to the fifth order.
 polar_symbols = ('C10', 'C12', 'phi12',
@@ -47,7 +46,7 @@ class CTF(HasAcceleratorMixin, PlotableMixin):
     rolloff: float
         Softens the cutoff. A value of 0 gives a hard cutoff, while 1 gives the softest possible cutoff [Å].
     focal_spread: float
-        The 1/e width of the focal spread due to chromatic aberration and lens current instability [mrad].
+        The 1/e width of the focal spread due to chromatic aberration and lens current instability [Å].
     angular_spread: float
         The 1/e width of the angular deviations due to source size [Å].
     gaussian_spread:
@@ -109,6 +108,10 @@ class CTF(HasAcceleratorMixin, PlotableMixin):
         for key, value in polar_aliases.items():
             if key != 'defocus':
                 setattr(self.__class__, key, parametrization_property(value))
+
+    @property
+    def nyquist_sampling(self):
+        return 1 / (4 * self.semiangle_cutoff / self.wavelength * 1e-3)
 
     @property
     def parameters(self):
@@ -203,6 +206,10 @@ class CTF(HasAcceleratorMixin, PlotableMixin):
     def evaluate_aperture(self, alpha: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
         semiangle_cutoff = self.semiangle_cutoff / 1000
+
+        if self.semiangle_cutoff == xp.inf:
+            return xp.ones_like(alpha)
+
         if self.rolloff > 0.:
             rolloff = self.rolloff * semiangle_cutoff
             array = .5 * (1 + xp.cos(np.pi * (alpha - semiangle_cutoff + rolloff) / rolloff))
@@ -348,7 +355,8 @@ class CTF(HasAcceleratorMixin, PlotableMixin):
         return profiles
 
     def apply(self, waves, interact=False, sliders=None):
-        from abtem.visualize.bqplot import show_measurement_1d, show_measurement_2d, quick_sliders
+        from abtem.visualize.bqplot import show_measurement_2d
+        from abtem.visualize.widgets import quick_sliders
         import ipywidgets as widgets
 
         if interact:
@@ -416,10 +424,8 @@ class CTF(HasAcceleratorMixin, PlotableMixin):
 
         for key, profile in self.profiles(max_semiangle, phi).items():
             if not np.all(profile.array == 1.):
-                ax = profile.show(legend=True, ax=ax, **kwargs)
-        #self.add_to_mpl_plot(max_semiangle=max_semiangle, phi=phi, ax=ax, **kwargs)
+                ax, lines = profile.show(legend=True, ax=ax, **kwargs)
 
-        #plt.show()
         return ax
 
     def copy(self):

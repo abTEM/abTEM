@@ -117,7 +117,7 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
 
 
 def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='gray', figsize=None, scans=None,
-               log_scale=False, discrete=False, cbar_label=None, vmin=None, vmax=None, power=1, **kwargs):
+               log_scale=False, discrete=False, cbar_label=None, vmin=None, vmax=None, power=1,**kwargs):
     """
     Show image function
 
@@ -248,8 +248,6 @@ def show_line(array, calibration, ax=None, title=None, legend=False, **kwargs):
         ax.legend()
 
     return ax
-
-
 
 
 class PlotableMixin:

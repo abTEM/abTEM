@@ -188,3 +188,23 @@ def launch_scale_reduce(probes: cp.ndarray, S: cp.ndarray, coefficients: cp.ndar
     blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
 
     _scale_reduce[blockspergrid, threadsperblock](probes, S, coefficients)
+
+
+@cuda.jit
+def sum_run_length_encoded(array, result, separators):
+    x = cuda.grid(1)
+    if x < result.shape[1]:
+        for i in range(result.shape[0]):
+            for j in range(separators[x], separators[x + 1]):
+                result[i, x] += array[i, j]
+
+
+def launch_sum_run_length_encoded(array, result, separators):
+    assert len(array) == len(result)
+    assert len(result.shape) == 2
+    assert result.shape[1] == len(separators) - 1
+
+    threadsperblock = (256,)
+    blockspergrid = math.ceil(result.shape[1] / threadsperblock[0])
+    blockspergrid = (blockspergrid,)
+    sum_run_length_encoded[blockspergrid, threadsperblock](array, result, separators)

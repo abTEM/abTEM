@@ -124,3 +124,11 @@ def scale_reduce(probes: np.ndarray, S: np.ndarray, coefficients: np.ndarray):
             for m in range(S.shape[0]):
                 for n in range(probes.shape[0]):
                     probes[n, i, j] += (coefficients[n, m] * S[m, i, j])
+
+
+@jit(nopython=True, nogil=True, parallel=True, fastmath=True)
+def sum_run_length_encoded(array, result, separators):
+    for x in prange(result.shape[1]):
+        for i in range(result.shape[0]):
+            for j in range(separators[x], separators[x + 1]):
+                result[i, x] += array[i, j]

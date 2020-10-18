@@ -89,6 +89,22 @@ def polar_coordinates(x, y):
     return alpha, phi
 
 
+def periodic_crop(array, corners, new_shape):
+    xp = get_array_module(array)
+
+    if ((corners[0] > 0) & (corners[1] > 0) & (corners[0] + new_shape[0] < array.shape[-2]) & (
+            corners[1] + new_shape[1] < array.shape[-1])):
+        array = array[..., corners[0]:corners[0] + new_shape[0], corners[1]:corners[1] + new_shape[1]]
+        return array
+
+    x = xp.arange(corners[0], corners[0] + new_shape[0], dtype=xp.int) % array.shape[-2]
+    y = xp.arange(corners[1], corners[1] + new_shape[1], dtype=xp.int) % array.shape[-1]
+
+    x, y = xp.meshgrid(x, y, indexing='ij')
+    array = array[..., x.ravel(), y.ravel()].reshape(array.shape[:-2] + new_shape)
+    return array
+
+
 def fft_interpolation_masks(shape1, shape2, xp=np, epsilon=1e-7):
     kx1 = xp.fft.fftfreq(shape1[-2], 1 / shape1[-2])
     ky1 = xp.fft.fftfreq(shape1[-1], 1 / shape1[-1])
@@ -106,27 +122,12 @@ def fft_interpolation_masks(shape1, shape2, xp=np, epsilon=1e-7):
 
     mask1 = (kx1 <= kx_max) & (kx1 >= kx_min) & (ky1 <= ky_max) & (ky1 >= ky_min)
     mask2 = (kx2 <= kx_max) & (kx2 >= kx_min) & (ky2 <= ky_max) & (ky2 >= ky_min)
+
     return mask1, mask2
 
 
-def periodic_crop(array, corners, new_shape):
-    xp = get_array_module(array)
-
-    if ((corners[0] > 0) & (corners[1] > 0) & (corners[0] + new_shape[0] < array.shape[-2]) & (
-            corners[1] + new_shape[1] < array.shape[-1])):
-        array = array[..., corners[0]:corners[0] + new_shape[0], corners[1]:corners[1] + new_shape[1]]
-        return array
-
-    x = xp.arange(corners[0], corners[0] + new_shape[0], dtype=xp.int) % array.shape[-2]
-    y = xp.arange(corners[1], corners[1] + new_shape[1], dtype=xp.int) % array.shape[-1]
-
-    x, y = xp.meshgrid(x, y, indexing='ij')
-    array = array[..., x.ravel(), y.ravel()].reshape(array.shape[:-2] + new_shape)
-    return array
-
-
 def fft_crop(array, new_shape):
-    assert np.iscomplexobj(array)
+    # assert np.iscomplexobj(array)
     xp = get_array_module(array)
 
     mask_in, mask_out = fft_interpolation_masks(array.shape, new_shape, xp=xp)
@@ -134,7 +135,7 @@ def fft_crop(array, new_shape):
     if len(new_shape) < len(array.shape):
         new_shape = array.shape[:-2] + new_shape
 
-    new_array = xp.zeros(new_shape, dtype=np.complex64)
+    new_array = xp.zeros(new_shape, dtype=array.dtype)
 
     # shape_pad = len(new_array.shape) - len(mask_out.shape)
     # mask_out = mask_out.reshape((1,) * shape_pad + mask_out.shape)
@@ -144,10 +145,7 @@ def fft_crop(array, new_shape):
     out_indices = xp.where(mask_out)
     in_indices = xp.where(mask_in)
 
-    # print(array.shape, new_array.shape)#, out_indices)
-    # array[..., in_indices[0], in_indices[1]]
     new_array[..., out_indices[0], out_indices[1]] = array[..., in_indices[0], in_indices[1]]
-    # new_array[..., out_indices[0], out_indices[1]] = array[..., in_indices[0], in_indices[1]]
     return new_array
 
 

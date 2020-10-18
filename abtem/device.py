@@ -4,7 +4,7 @@ import psutil
 import pyfftw
 
 from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions, scale_reduce, \
-    windowed_scale_reduce
+    windowed_scale_reduce, sum_run_length_encoded
 
 FFTW_EFFORT = 'FFTW_MEASURE'
 FFTW_THREADS = 12
@@ -13,8 +13,9 @@ FFTW_TIMELIMIT = 600
 try:  # This should be the only place import cupy, to make it a non-essential dependency
     import cupy as cp
     import cupyx.scipy.fft
+    import cupyx.scipy.ndimage as ndimage
     from abtem.cuda_kernels import launch_interpolate_radial_functions, launch_scale_reduce, \
-        launch_windowed_scale_reduce, launch_superpose_deltas
+        launch_windowed_scale_reduce, launch_superpose_deltas, launch_sum_run_length_encoded
 
     get_array_module = cp.get_array_module
 
@@ -54,6 +55,7 @@ try:  # This should be the only place import cupy, to make it a non-essential de
                      'abs2': lambda x: cp.abs(x) ** 2,
                      'interpolate_radial_functions': launch_interpolate_radial_functions,
                      'scale_reduce': launch_scale_reduce,
+                     'sum_run_length_encoded': launch_sum_run_length_encoded,
                      'windowed_scale_reduce': launch_windowed_scale_reduce,
                      'superpose_deltas': launch_superpose_deltas}
 
@@ -64,6 +66,7 @@ except ImportError:  # cupy is not available
     get_array_module = lambda *args, **kwargs: np
     gpu_functions = None
     asnumpy = np.asarray
+    import scipy.ndimage as ndimage
 
 
 def create_fftw_objects(array, allow_new_plan=True):
@@ -151,6 +154,7 @@ cpu_functions = {'fft2': fft2,
                  'pin_array': lambda x: x,
                  'complex_exponential': complex_exponential,
                  'interpolate_radial_functions': interpolate_radial_functions,
+                 'sum_run_length_encoded': sum_run_length_encoded,
                  'scale_reduce': scale_reduce,
                  'windowed_scale_reduce': windowed_scale_reduce}
 
@@ -213,18 +217,6 @@ def get_available_memory(device: str) -> float:
         if device == 'gpu':
             device = cp.cuda.Device(0)
         return device.mem_info[0]
-
-
-class DataStream:
-
-    def __init__(self, non_blocking=False):
-        if cp is None:
-            self._stream = None
-        else:
-            self._stream = cp.cuda.Stream(non_blocking=non_blocking)
-
-    def stream(self, a, b):
-        a[:batch_size].set(self._array[start:end], stream=self._stream)
 
 
 class HasDeviceMixin:

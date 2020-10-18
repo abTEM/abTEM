@@ -10,7 +10,7 @@ from matplotlib.patches import Rectangle
 from abtem.base_classes import Grid, HasGridMixin
 from abtem.device import asnumpy
 from abtem.measure import Calibration, Measurement
-from abtem.utils import subdivide_into_batches
+from abtem.utils import subdivide_into_batches, ProgressBar
 
 
 class AbstractScan(metaclass=ABCMeta):
@@ -61,13 +61,22 @@ class AbstractScan(metaclass=ABCMeta):
         """
         pass
 
-    def generate_positions(self, max_batch):
+    def generate_positions(self, max_batch, pbar=False):
         positions = self.get_positions()
         self._partition_batches(max_batch)
 
-        while len(self._batches) > 0:
+        if pbar:
+            pbar = ProgressBar(total=len(self))
+
+        for i in range(len(self._batches)):
             indices = self.get_next_batch()
             yield indices, positions[indices]
+
+            if pbar:
+                pbar.update(len(indices))
+
+        if pbar:
+            pbar.close()
 
     def get_next_batch(self):
         return self._batches.pop(0)
@@ -422,9 +431,9 @@ class GridScan(AbstractScan, HasGridMixin):
             y += self._measurement_shift[1]
 
         if isinstance(measurement, str):
-            for unique, inverse in zip(*np.unique(x, return_inverse=True)):
-                with h5py.File(measurement, 'a') as f:
-                    f['array'][unique, y[inverse]] += asnumpy(new_measurement[inverse])
+            with h5py.File(measurement, 'a') as f:
+                for unique in np.unique(x):
+                    f['array'][unique, y[unique == x]] += asnumpy(new_measurement[unique == x])
         else:
             measurement.array[x, y] += asnumpy(new_measurement)
 
@@ -485,7 +494,7 @@ class GridScan(AbstractScan, HasGridMixin):
             for j, ny in enumerate(Ny):
                 x = np.arange(Sx[i], Sx[i] + nx, dtype=np.int)
                 y = np.arange(Sy[j], Sy[j] + ny, dtype=np.int)
-                self._batches.append((x[:, None] + y[None] * self.gpts[0]).ravel())
+                self._batches.append((y[None] + x[:, None] * self.gpts[1]).ravel())
 
     def add_to_mpl_plot(self, ax, alpha=.33, facecolor='r', edgecolor='r', **kwargs):
         """
