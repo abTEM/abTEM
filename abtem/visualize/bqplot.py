@@ -7,23 +7,7 @@ from abtem.visualize.utils import format_label
 from matplotlib.colors import TABLEAU_COLORS
 
 
-def quick_sliders(obj, continuous_update=True, **kwargs):
-    create_callback = lambda key: lambda change: setattr(obj, key, change['new'])
 
-    sliders = []
-    for key, value in kwargs.items():
-        slider = widgets.FloatSlider(value=getattr(obj, key),
-                                     min=value[0],
-                                     max=value[1],
-                                     step=value[2],
-                                     description=key,
-                                     continuous_update=continuous_update)
-
-        slider.observe(create_callback(key), 'value')
-
-        sliders += [slider]
-
-    return sliders
 
 
 def update_bqplot_image(image, measurement):

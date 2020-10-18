@@ -1,16 +1,13 @@
 """Module for plotting atoms, images, line scans, and diffraction patterns."""
 from collections.abc import Iterable
 
-from numbers import Number
-from abc import ABCMeta, abstractmethod
-
 import matplotlib.pyplot as plt
 import numpy as np
-from abtem.cpu_kernels import abs2
 from ase.data import covalent_radii
-from ase.data.colors import cpk_colors
+from ase.data.colors import jmol_colors
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import Circle
+from abtem.visualize.utils import format_label
 
 #: Array to facilitate the display of cell boundaries.
 _cube = np.array([[[0, 0, 0], [0, 0, 1]],
@@ -88,7 +85,8 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
         order = np.argsort(atoms.positions[:, axes[2]])
         positions = positions[order]
 
-        colors = cpk_colors[atoms.numbers[order]]
+        colors = jmol_colors[atoms.numbers[order]]
+
         sizes = covalent_radii[atoms.numbers[order]] * scale_atoms
 
         circles = []
@@ -116,8 +114,16 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
             scan.add_to_mpl_plot(ax)
 
 
-def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='gray', figsize=None, scans=None,
-               log_scale=False, discrete=False, cbar_label=None, vmin=None, vmax=None, power=1, **kwargs):
+def show_measurement_2d(measurement,
+                        ax=None,
+                        figsize=None,
+                        colorbar=False,
+                        cmap='gray',
+                        discrete_cmap=False,
+                        vmin=None,
+                        vmax=None,
+                        power=1.,
+                        **kwargs):
     """
     Show image function
 
@@ -141,8 +147,6 @@ def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='g
         Size of the figure in inches, either as a square for one number or a rectangle for two. Default is None.
     scans : ndarray, optional
         Array of scans. Default is None.
-    log_scale : bool, optional
-        Option to set a logarithmic intensity scale. Default is False.
     discrete : bool, optional
         Option to discretize intensity values to integers. Default is False.
     cbar_label : str, optional
@@ -155,19 +159,13 @@ def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='g
         Remaining keyword arguments are passed to pyplot.
     """
 
-    if np.iscomplexobj(array):
-        array = abs2(array)
-
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
 
-    if log_scale:
-        if isinstance(log_scale, Number) & (not isinstance(log_scale, bool)):
-            array = np.log(1 + log_scale * array)
-        else:
-            array = np.log(array)
+    calibrations = measurement.calibrations[-2:]
+    array = measurement.array[(0,) * (measurement.dimensions - 2) + (slice(None),) * 2]
 
-    if power != 1.:
+    if power != 1:
         array = array ** power
 
     extent = []
@@ -177,41 +175,32 @@ def show_image(array, calibrations, ax=None, title=None, colorbar=False, cmap='g
 
     if vmin is None:
         vmin = np.min(array)
-        if discrete:
+        if discrete_cmap:
             vmin -= .5
 
     if vmax is None:
         vmax = np.max(array)
-        if discrete:
+        if discrete_cmap:
             vmax += .5
 
-    if discrete:
+    if discrete_cmap:
         cmap = plt.get_cmap(cmap, np.max(array) - np.min(array) + 1)
 
-    im = ax.imshow(array.T, extent=extent, cmap=cmap, origin='lower', vmin=vmin, vmax=vmax, **kwargs)
+    im = ax.imshow(array.T, extent=extent, cmap=cmap, origin='lower', vmin=vmin, vmax=vmax, interpolation='nearest',
+                   **kwargs)
 
     if colorbar:
-        cax = plt.colorbar(im, ax=ax, label=cbar_label)
-        if discrete:
+        cax = plt.colorbar(im, ax=ax, label=format_label(measurement))
+        if discrete_cmap:
             cax.set_ticks(ticks=np.arange(np.min(array), np.max(array) + 1))
 
-    ax.set_xlabel('{} [{}]'.format(calibrations[0].name, calibrations[0].units))
-    ax.set_ylabel('{} [{}]'.format(calibrations[1].name, calibrations[1].units))
-
-    if title is not None:
-        ax.set_title(title)
-
-    if scans is not None:
-        if not isinstance(scans, Iterable):
-            scans = [scans]
-
-        for scan in scans:
-            scan.add_to_mpl_plot(ax)
+    ax.set_xlabel(format_label(calibrations[-2]))
+    ax.set_ylabel(format_label(calibrations[-1]))
 
     return ax, im
 
 
-def show_line(array, calibration, ax=None, title=None, legend=False, **kwargs):
+def show_measurement_1d(measurement, ax=None, figsize=None, legend=False, title=None, **kwargs):
     """
     Show line function
 
@@ -233,18 +222,18 @@ def show_line(array, calibration, ax=None, title=None, legend=False, **kwargs):
        Remaining keyword arguments are passed to pyplot.
     """
 
+    calibration = measurement.calibrations[0]
+    array = measurement.array
     x = np.linspace(calibration.offset, calibration.offset + len(array) * calibration.sampling, len(array))
 
     if ax is None:
-        ax = plt.subplot()
+        fig, ax = plt.subplots(figsize=figsize)
 
-    ax.plot(x, array, **kwargs)
-    ax.set_xlabel('{} [{}]'.format(calibration.name, calibration.units))
-
-    if title is not None:
-        ax.set_title(title)
+    lines = ax.plot(x, array, label=measurement.name, **kwargs)
+    ax.set_xlabel(format_label(calibration))
+    ax.set_ylabel(format_label(measurement))
 
     if legend:
         ax.legend()
 
-    return ax
+    return ax, lines[0]
