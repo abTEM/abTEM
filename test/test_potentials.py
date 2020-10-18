@@ -34,9 +34,10 @@ def test_potential_centered():
     potential1 = Potential(atoms1, gpts=(gpts_x, gpts_y), slice_thickness=4, cutoff_tolerance=1e-2)
     potential2 = Potential(atoms2, gpts=(gpts_x, gpts_y), slice_thickness=4, cutoff_tolerance=1e-2)
 
-    assert np.allclose(potential1[0].array[:, gpts_y // 2], np.roll(potential2[0].array[:, gpts_y // 2], gpts_x // 2))
-    assert np.allclose(potential2[0].array[:, gpts_y // 2][1:], (potential2[0].array[:, gpts_y // 2])[::-1][:-1])
-    assert np.allclose(potential2[0].array[gpts_x // 2][1:], potential2[0].array[gpts_x // 2][::-1][:-1])
+    assert np.allclose(potential1[0].array[0, :, gpts_y // 2],
+                       np.roll(potential2[0].array[0, :, gpts_y // 2], gpts_x // 2))
+    assert np.allclose(potential2[0].array[0, :, gpts_y // 2][1:], (potential2[0].array[0, :, gpts_y // 2])[::-1][:-1])
+    assert np.allclose(potential2[0].array[0, gpts_x // 2][1:], potential2[0].array[0, gpts_x // 2][::-1][:-1])
 
 
 def test_potential_build():

@@ -2,7 +2,7 @@ import os
 
 import numpy as np
 import pytest
-from abtem.detect import AnnularDetector
+from abtem.detect import AnnularDetector, FlexibleAnnularDetector
 from abtem.device import asnumpy, cp
 from abtem.potentials import Potential
 from abtem.scan import LineScan, GridScan
@@ -96,14 +96,48 @@ def test_prism_batch():
     assert np.allclose(S1.array, S2.array)
 
 
-def test_downsample():
-    S = SMatrix(expansion_cutoff=10, interpolation=2, energy=300e3, extent=10, sampling=.05)
-    S = S.build().downsample()
+# def test_downsample():
+#     S = SMatrix(expansion_cutoff=10, interpolation=2, energy=300e3, extent=10, sampling=.05)
+#     S = S.build().downsample(normalization='values')
+#
+#     S2 = SMatrix(expansion_cutoff=10, interpolation=2, energy=300e3, extent=10, gpts=S.gpts)
+#     S2 = S2.build()
+#
+#     assert np.allclose(S.array - S2.array, 0., atol=5e-6)
 
-    S2 = SMatrix(expansion_cutoff=10, interpolation=2, energy=300e3, extent=10, gpts=S.gpts)
-    S2 = S2.build()
+def test_downsample_max_angle():
+    S = SMatrix(30, 80e3, 1, gpts=500)
+    potential = Potential(Atoms('C', positions=[(2.5, 2.5, 2)], cell=(5, 5, 4)))
+    S = S.multislice(potential, pbar=False)
+    pattern1 = S.collapse((0, 0)).diffraction_pattern(max_angle=64)
+    S = S.downsample(max_angle=64)
+    pattern2 = S.collapse((0, 0)).diffraction_pattern(None)
+    pattern3 = S.collapse((0, 0)).diffraction_pattern(max_angle=64)
 
-    assert np.allclose(S.array - S2.array, 0., atol=5e-6)
+    assert np.allclose(pattern1.array, pattern2.array, atol=1e-6 * pattern1.array.max(), rtol=1e-6)
+    assert np.allclose(pattern3.array, pattern2.array, atol=1e-6 * pattern1.array.max(), rtol=1e-6)
+
+
+def test_downsample_detect():
+    atoms = read('data/srtio3_100.cif')
+    atoms *= (4, 4, 1)
+
+    potential = Potential(atoms, gpts=256, device='gpu', projection='infinite', slice_thickness=.5,
+                          parametrization='kirkland', storage='gpu').build(pbar=False)
+
+    detector = FlexibleAnnularDetector()
+    end = (potential.extent[0] / 4, potential.extent[1] / 4)
+    gridscan = GridScan(start=[0, 0], end=end, sampling=.2)
+    S = SMatrix(energy=300e3, semiangle_cutoff=9.4, device='gpu', rolloff=0.05, expansion_cutoff=10)
+    S_exit = S.multislice(potential, pbar=False)
+    measurements = S_exit.scan(gridscan, [detector], pbar=False)
+    S_downsampled = S_exit.downsample()
+
+    downsampled_measurements = S_downsampled.scan(gridscan, [detector], pbar=False)
+
+    assert S_downsampled.array.shape != S_exit.array.shape
+    assert not np.all(measurements[detector].array == downsampled_measurements[detector].array)
+    assert np.allclose(measurements[detector].array, downsampled_measurements[detector].array)
 
 
 def test_crop():
@@ -161,7 +195,7 @@ def test_cropped_scan():
     measurements = S.scan(gridscan, [detector], max_batch_probes=64)
 
     scans = gridscan.partition_scan((2, 2))
-    cropped_measurements = {detector: detector.allocate_measurement(S.grid, S.wavelength, gridscan)}
+    cropped_measurements = {detector: detector.allocate_measurement(S.collapse((0,0)), gridscan)}
 
     for scan in scans:
         cropped = S.crop_to_scan(scan)

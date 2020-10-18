@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from abtem.base_classes import Grid
-
+from abtem.waves import Probe
 
 def test_create_grid():
     grid = Grid(extent=5, sampling=.2)
@@ -94,3 +94,18 @@ def test_grid_match():
         grid1.check_match(grid2)
 
     assert str(e.value) == 'Inconsistent grid gpts ((10, 10) != (50, 50))'
+
+
+# def test_scattering_angle():
+#     probe = Probe(extent=18, gpts=(250, 251), energy=80e3)
+#     probe = probe.build()
+#
+#     alpha_x = np.fft.fftfreq(probe.gpts[0], probe.sampling[0]) * probe.wavelength * 1000
+#     alpha_y = np.fft.fftfreq(probe.gpts[1], probe.sampling[1]) * probe.wavelength * 1000
+#
+#     assert np.isclose(alpha_x.min(), probe.max_scattering_angles[0][0])
+#     assert np.isclose(alpha_x.max(), probe.max_scattering_angles[0][1])
+#     assert np.isclose(alpha_y.min(), probe.max_scattering_angles[1][0])
+#     assert np.isclose(alpha_y.max(), probe.max_scattering_angles[1][1])
+    #assert np.sum(np.abs(alpha_x) < 65) == probe._resampled_gpts(65)[0]
+    #assert np.sum(np.abs(alpha_y) < 65) == probe._resampled_gpts(65)[1]

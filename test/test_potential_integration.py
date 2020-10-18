@@ -40,7 +40,7 @@ def test_interpolation():  # just a sanity check
 
     potential = Potential(atoms, sampling=sampling, cutoff_tolerance=1e-3, slice_thickness=10)
 
-    interpolated = potential[0].array[0]
+    interpolated = potential[0].array[0,0]
     integrator = potential.get_integrator(6)
 
     integrated = integrator.integrate(-1.5,1.5)[0]

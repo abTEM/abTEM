@@ -6,7 +6,7 @@ from ase.io import read
 from abtem.detect import PixelatedDetector
 from abtem.measure import Measurement, calibrations_from_grid
 from abtem.potentials import Potential, PotentialArray
-from abtem.scan import LineScan
+from abtem.scan import LineScan, GridScan
 from abtem.waves import Probe, Waves
 
 _ROOT = os.path.abspath(os.path.dirname(__file__))
@@ -61,7 +61,7 @@ def test_export_import_measurement(tmp_path):
     assert measurement.calibrations[1] == imported_measurement.calibrations[1]
 
 
-def test_scan_to_file(tmp_path):
+def test_linescan_to_file(tmp_path):
     d = tmp_path / 'sub'
     d.mkdir()
     path = d / 'measurement2.hdf5'
@@ -74,6 +74,33 @@ def test_scan_to_file(tmp_path):
     probe.grid.match(potential)
 
     scan = LineScan(start=[0, 0], end=[0, potential.extent[1]], gpts=20)
+
+    detector = PixelatedDetector()
+    export_detector = PixelatedDetector(save_file=path)
+
+    measurements = probe.scan(scan, [detector, export_detector], potential, pbar=False)
+
+    measurement = measurements[detector]
+    imported_measurement = Measurement.read(measurements[export_detector])
+
+    assert np.allclose(measurement.array, imported_measurement.array)
+    assert measurement.calibrations[0] == imported_measurement.calibrations[0]
+    assert measurement.calibrations[1] == imported_measurement.calibrations[1]
+
+
+def test_gridscan_to_file(tmp_path):
+    d = tmp_path / 'sub'
+    d.mkdir()
+    path = d / 'measurement2.hdf5'
+
+    atoms = read(_set_path('orthogonal_graphene.cif'))
+    potential = Potential(atoms=atoms, sampling=.05)
+
+    probe = Probe(energy=200e3, semiangle_cutoff=30)
+
+    probe.grid.match(potential)
+
+    scan = GridScan(start=[0, 0], end=[0, potential.extent[1]], gpts=(10,9))
 
     detector = PixelatedDetector()
     export_detector = PixelatedDetector(save_file=path)

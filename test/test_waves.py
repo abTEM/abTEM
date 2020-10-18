@@ -3,10 +3,10 @@ from copy import copy
 import numpy as np
 import pytest
 
-from abtem.base_classes import Grid
+from abtem.base_classes import Grid, AntialiasFilter
 from abtem.detect import AbstractDetector
 from abtem.measure import Measurement
-from abtem.potentials import AbstractPotential, ProjectedPotentialArray
+from abtem.potentials import AbstractPotential, PotentialArray
 from abtem.scan import LineScan, GridScan
 from abtem.waves import Waves, PlaneWave, Probe
 
@@ -24,11 +24,13 @@ class DummyPotential(AbstractPotential):
     def get_slice_thickness(self, i):
         return .5
 
-    def generate_slices(self, start=0, end=None):
+    def generate_slices(self, start=0, end=None, max_batch=1):
         for i in range(self.num_slices):
             array = np.zeros(self.gpts, dtype=np.float32)
             array[:self.gpts[0] // 2] = 1
-            yield ProjectedPotentialArray(array, thickness=self.get_slice_thickness(i), extent=self.extent)
+            yield start, end, PotentialArray(array[None],
+                                             slice_thicknesses=np.array([self.get_slice_thickness(i)]),
+                                             extent=self.extent)
 
 
 @pytest.fixture
@@ -126,7 +128,7 @@ def test_plane_waves_multislice():
 
 
 def test_create_probe_waves():
-    probe_waves = Probe(extent=10, gpts=10, energy=60e3, defocus=10, C32=30, ctf_parameters={'C10': 100})
+    probe_waves = Probe(extent=10, gpts=10, energy=60e3, defocus=10, C32=30, **{'C10': 100})
 
     waves = probe_waves.build()
 
@@ -160,6 +162,24 @@ def test_probe_waves_raises():
     probe.build()
 
 
+def test_downsample():
+    f = AntialiasFilter()
+
+    sampling = (.1, .1)
+    gpts = (228, 229)
+
+    mask = f.get_mask(gpts, sampling, np)
+    n = np.sum(mask > 0.)
+
+    array = np.fft.ifft2(mask)
+
+    waves = Waves(array, sampling=sampling, energy=80e3)
+
+    assert np.allclose(waves.downsample('valid', return_fourier_space=True).array.real, 1.)
+    assert not np.allclose(waves.downsample('limit', return_fourier_space=True).array.real, 1.)
+    assert np.sum(waves.downsample('limit', return_fourier_space=True).array.real > 1e-6) == n
+
+
 class DummyDetector(AbstractDetector):
 
     def __init__(self):
@@ -170,7 +190,7 @@ class DummyDetector(AbstractDetector):
         self._detect_count += 1
         return np.array([1.])
 
-    def allocate_measurement(self, grid, wavelength, scan):
+    def allocate_measurement(self, waves, scan):
         array = np.zeros(scan.shape, dtype=np.float32)
         return Measurement(array, calibrations=scan.calibrations)
 

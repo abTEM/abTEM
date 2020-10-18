@@ -99,12 +99,9 @@ def test_partition_measurement():
     measurements = S.scan(gridscan, [detector], pbar=False)
 
     scans = gridscan.partition_scan((2, 2))
-    partitioned_measurements = {detector: detector.allocate_measurement(S.grid, S.wavelength, gridscan)}
+    partitioned_measurements = {detector: detector.allocate_measurement(S.collapse((0, 0)), gridscan)}
 
     for scan in scans:
         partitioned_measurements = S.scan(scan, measurements, pbar=False)
 
     assert np.allclose(partitioned_measurements[detector].array, measurements[detector].array)
-
-
-
