@@ -124,8 +124,8 @@ class _WavesLike(HasGridMixin, HasAcceleratorMixin):
     @property
     def cutoff_scattering_angles(self):
         kcut = 1 / max(self.sampling) / 2 * self.antialiasing_aperture
-        kcut = (np.floor(2 * self.extent[0] * kcut) / (2 * self.extent[0]) * self.wavelength * 1e3,
-                np.floor(2 * self.extent[1] * kcut) / (2 * self.extent[1]) * self.wavelength * 1e3)
+        kcut = (np.ceil(2 * self.extent[0] * kcut) / (2 * self.extent[0]) * self.wavelength * 1e3,
+                np.ceil(2 * self.extent[1] * kcut) / (2 * self.extent[1]) * self.wavelength * 1e3)
         return kcut
 
     @property
