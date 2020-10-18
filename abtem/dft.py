@@ -7,7 +7,7 @@ from scipy.interpolate import interp1d, interpn
 
 from abtem.base_classes import Grid
 from abtem.device import get_device_function
-from abtem.potentials import AbstractPotentialBuilder, ProjectedPotentialArray, _disc_meshgrid, pad_atoms, \
+from abtem.potentials import AbstractPotentialBuilder, PotentialArray, _disc_meshgrid, pad_atoms, \
     PotentialIntegrator
 from abtem.structures import orthogonalize_cell
 from abtem.utils import subdivide_into_batches
@@ -146,7 +146,7 @@ class GPAWPotential(AbstractPotentialBuilder):
                  calculator,
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
-                 #origin: Union[float, Sequence[float]] = None,
+                 # origin: Union[float, Sequence[float]] = None,
                  slice_thickness=.5,
                  core_size=.005,
                  storage='cpu'):
@@ -168,7 +168,7 @@ class GPAWPotential(AbstractPotentialBuilder):
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling, lock_extent=True)
 
-        super().__init__(storage)
+        super().__init__(storage=storage)
 
     @property
     def calculator(self):
@@ -189,11 +189,12 @@ class GPAWPotential(AbstractPotentialBuilder):
     def get_slice_thickness(self, i):
         return self._slice_vertical_voxels[i] * self._voxel_height
 
-    def generate_slices(self, start=0, stop=None):
+    def generate_slices(self, first_slice=0, last_slice=None, max_batch=1):
+
         interpolate_radial_functions = get_device_function(np, 'interpolate_radial_functions')
 
-        if stop is None:
-            stop = len(self)
+        if last_slice is None:
+            last_slice = len(self)
 
         valence = self._calculator.get_electrostatic_potential()
         cell = self._calculator.atoms.cell[:2, :2]
@@ -204,9 +205,9 @@ class GPAWPotential(AbstractPotentialBuilder):
 
         indices_by_number = {number: np.where(atoms.numbers == number)[0] for number in np.unique(atoms.numbers)}
 
-        na = sum(self._slice_vertical_voxels[:start])
+        na = sum(self._slice_vertical_voxels[:first_slice])
         a = na * self._voxel_height
-        for i in range(start, stop):
+        for i in range(first_slice, last_slice):
             nb = na + self._slice_vertical_voxels[i]
             b = a + self._slice_vertical_voxels[i] * self._voxel_height
 
@@ -257,7 +258,9 @@ class GPAWPotential(AbstractPotentialBuilder):
                                              sampling)
 
             array = -(projected_valence + array / np.sqrt(4 * np.pi) * units.Ha)
-            yield ProjectedPotentialArray(array, self.get_slice_thickness(i), extent=self.extent)
+
+            yield i, i + 1, PotentialArray(array, np.array([self.get_slice_thickness(i)]), extent=self.extent)
+
             a = b
             na = nb
 
@@ -266,7 +269,7 @@ class GPAWPotential(AbstractPotentialBuilder):
         return self.__class__(self.calculator,
                               gpts=self.gpts,
                               sampling=self.sampling,
-                              #origin=self.origin,
+                              # origin=self.origin,
                               slice_thickness=slice_thickness,
                               core_size=self.core_size,
                               storage=self._storage)
