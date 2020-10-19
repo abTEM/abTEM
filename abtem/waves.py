@@ -217,9 +217,12 @@ class Waves(_WavesLike):
         """
 
         calibrations = calibrations_from_grid(self.grid.gpts, self.grid.sampling, ['x', 'y'])
-        calibrations = (None,) * (len(self.array.shape) - 2) + calibrations
+        # array = np.squeeze(self.array)
+        array = self.array
+
+        calibrations = (None,) * (len(array.shape) - 2) + calibrations
         abs2 = get_device_function(get_array_module(self.array), 'abs2')
-        return Measurement(abs2(self.array), calibrations)
+        return Measurement(abs2(array), calibrations)
 
     def downsample(self, max_angle='valid', return_fourier_space=False):
         xp = get_array_module(self.array)
@@ -263,9 +266,11 @@ class Waves(_WavesLike):
                                               scale_factor=self.wavelength * 1000,
                                               fourier_space=True)
 
-        calibrations = (None,) * (len(self.array.shape) - 2) + calibrations
+        # array = np.squeeze(waves.array)
+        array = waves.array
+        calibrations = (None,) * (len(array.shape) - 2) + calibrations
 
-        pattern = np.fft.fftshift(asnumpy(abs2(waves.array)), axes=(-1, -2))
+        pattern = np.fft.fftshift(asnumpy(abs2(array)), axes=(-1, -2))
 
         measurement = Measurement(pattern, calibrations)
 
