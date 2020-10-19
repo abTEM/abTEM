@@ -3,7 +3,7 @@
 [![PyPI version](https://badge.fury.io/py/abtem.svg)](https://badge.fury.io/py/abtem)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Documentation Status](https://readthedocs.org/projects/abtem/badge/?version=latest)](https://abtem.readthedocs.io/en/latest/?badge=latest)
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/jacobjma/abTEM/master)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/jacobjma/abTEM/master?filepath=examples%2Findex.ipynb)
 [![Gitter](https://badges.gitter.im/abTEM/community.svg)](https://gitter.im/abTEM/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
 
 [**Docs**](https://abtem.readthedocs.io/en/latest/index.html)
@@ -27,7 +27,12 @@ For detailed instructions on installing abTEM, see [the installation guide](http
 
 ## Getting started
 
-To get started using abTEM, please visit our [walkthrough](https://abtem.readthedocs.io/en/latest/walkthrough/introduction.html).
+To get started using abTEM, please visit our [walkthrough](https://abtem.readthedocs.io/en/latest/walkthrough/introduction.html) or check out one of the [examples](https://github.com/jacobjma/abTEM/tree/master/examples).
+
+To try abTEM in your webbrowser, click the binder link:
+
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/jacobjma/abTEM/master?filepath=examples%2Findex.ipynb)
+
 
 ## Contact
 * Chat on [gitter](https://gitter.im/abTEM/)
