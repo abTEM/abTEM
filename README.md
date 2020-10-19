@@ -27,7 +27,11 @@ For detailed instructions on installing abTEM, see [the installation guide](http
 
 ## Getting started
 
-To get started using abTEM, please visit our [walkthrough](https://abtem.readthedocs.io/en/latest/walkthrough/introduction.html).
+To get started using abTEM, please visit our [walkthrough](https://abtem.readthedocs.io/en/latest/walkthrough/introduction.html) or check out one of the [examples](https://github.com/jacobjma/abTEM/tree/master/examples).
+
+To try abTEM in your webbrowser, click the binder link: 
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/jacobjma/abTEM/master?filepath=examples%2Findex.ipynb)
+
 
 ## Contact
 * Chat on [gitter](https://gitter.im/abTEM/)
