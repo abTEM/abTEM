@@ -284,6 +284,7 @@ class PotentialIntegrator:
     def __init__(self,
                  function: Callable,
                  r: np.ndarray,
+                 max_interval,
                  cutoff: float = None,
                  cache_size: int = 4096,
                  cache_key_decimals: int = 2,
@@ -301,6 +302,15 @@ class PotentialIntegrator:
         self._cache_key_decimals = cache_key_decimals
         self._tolerance = tolerance
 
+        def f(z):
+            return self._function(np.sqrt(self.r[0] ** 2 + (z * max_interval / 2 + max_interval / 2) ** 2))
+
+        value, error_estimate, step_size, order = integrate(f, -1, 1, self._tolerance)
+        step_size = step_size
+        order = order
+
+        self._xk, self._wk = tanh_sinh_nodes_and_weights(step_size, order)
+
     @property
     def r(self):
         return self._r
@@ -309,7 +319,7 @@ class PotentialIntegrator:
     def cutoff(self):
         return self._cutoff
 
-    def integrate(self, a: float, b: float):
+    def integrate(self, z, a: float, b: float, xp):
         """
         Evaulate the integrals of the radial function at the evaluation points.
 
@@ -326,38 +336,39 @@ class PotentialIntegrator:
             The evaulated integrals.
         """
 
-        a = round(a, self._cache_key_decimals)
-        b = round(b, self._cache_key_decimals)
+        vr = np.zeros((len(z), self.r.shape[0]), np.float32)
+        dvdr = np.zeros((len(z), self.r.shape[0]), np.float32)
+
+        a = np.round(a - z, self._cache_key_decimals)
+        b = np.round(b - z, self._cache_key_decimals)
 
         split = a * b < 0
-        a = max(min(a, b), -self.cutoff)
-        b = min(max(a, b), self.cutoff)
 
-        if split:  # split the integral
-            values1, derivatives1 = self._do_integrate(0, abs(a))
-            values2, derivatives2 = self._do_integrate(0, abs(b))
-            result = (values1 + values2, derivatives1 + derivatives2)
-        else:
-            result = self._do_integrate(a, b)
-        return result
+        a, b = np.abs(a), np.abs(b)
+        a, b = np.minimum(a, b), np.minimum(np.maximum(a, b), self.cutoff)
+
+        for i, (ai, bi) in enumerate(zip(a, b)):
+            if split[i]:  # split the integral
+                values1, derivatives1 = self._do_integrate(0, ai)
+                values2, derivatives2 = self._do_integrate(0, bi)
+                result = (values1 + values2, derivatives1 + derivatives2)
+            else:
+                result = self._do_integrate(ai, bi)
+
+            vr[i] = result[0]
+            dvdr[i, :-1] = result[1]
+
+        return vr, dvdr
 
     @cached_method('_cache')
     def _do_integrate(self, a, b):
-
         zm = (b - a) / 2.
         zp = (a + b) / 2.
 
         def f(z):
-            return self._function(np.sqrt(self.r[0] ** 2 + (z * zm + zp) ** 2))
-
-        value, error_estimate, step_size, order = integrate(f, -1, 1, self._tolerance)
-
-        xk, wk = tanh_sinh_nodes_and_weights(step_size, order)
-
-        def f(z):
             return self._function(np.sqrt(self.r[:, None] ** 2 + (z * zm + zp) ** 2))
 
-        values = np.sum(f(xk[None]) * wk[None], axis=1) * zm
+        values = np.sum(f(self._xk[None]) * self._wk[None], axis=1) * zm
         derivatives = np.diff(values) / np.diff(self.r)
 
         return values, derivatives
@@ -396,8 +407,6 @@ def pad_atoms(atoms: Atoms, margin: float):
     bottom.positions[:, 1] -= atoms.cell[1, 1]
     atoms += top + bottom
     return atoms
-
-
 
 
 def superpose_deltas(positions, z, array):
@@ -645,7 +654,8 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
             inner_cutoff = np.min(self.sampling)
             num_points = int(np.ceil(cutoff / np.min(self.sampling) * 2.))
             r = np.geomspace(inner_cutoff, cutoff, num_points)
-            self._integrators[number] = PotentialIntegrator(soft_function, r, cutoff)
+            max_interval = self.slice_thickness
+            self._integrators[number] = PotentialIntegrator(soft_function, r, max_interval, cutoff)
             return self._integrators[number]
 
     def _get_radial_interpolation_points(self, number):
@@ -705,7 +715,9 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
                 slice_atoms = atoms[in_slice]
 
                 positions = xp.asarray(slice_atoms.positions[:, :2] / self.sampling)
+
                 superpose_deltas(positions, slice_idx[in_slice] - start, array[:, j])
+
                 fft2_convolve(array[:, j], scattering_factors[number])
 
             yield start, end, PotentialArray(array.real.sum(1)[:end - start], slice_thicknesses, extent=self.extent)
@@ -740,12 +752,8 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
                 if len(slice_atoms) == 0:
                     continue
 
-                vr = np.zeros((len(slice_atoms), integrator.r.shape[0]), np.float32)
-                dvdr = np.zeros((len(slice_atoms), integrator.r.shape[0]), np.float32)
+                vr, dvdr = integrator.integrate(slice_atoms.positions[:, 2], a, b, xp=xp)
 
-                for j, atom in enumerate(slice_atoms):
-                    am, bm = a - atom.z, b - atom.z
-                    vr[j], dvdr[j, :-1] = integrator.integrate(am, bm)
                 vr = xp.asarray(vr, dtype=xp.float32)
                 dvdr = xp.asarray(dvdr, dtype=xp.float32)
                 r = xp.asarray(integrator.r, dtype=xp.float32)
@@ -788,7 +796,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
             self.atoms.positions[:] = atoms.positions
             self.atoms.wrap()
             pbar.reset()
-            
+
             if self._precalculate:
                 yield self.build(pbar=pbar)
             else:

@@ -55,9 +55,12 @@ def interpolate_radial_functions(array: np.ndarray,
     n = r.shape[0]
     dt = np.log(r[-1] / r[0]) / (n - 1)
     for i in range(positions.shape[0]):
+        px = int(round(positions[i, 0] / sampling[0]))
+        py = int(round(positions[i, 1] / sampling[1]))
+
         for j in prange(disc_indices.shape[0]):
-            k = int(round(positions[i, 0] / sampling[0]) + disc_indices[j, 0])
-            m = int(round(positions[i, 1] / sampling[1]) + disc_indices[j, 1])
+            k = px + disc_indices[j, 0]
+            m = py + disc_indices[j, 1]
 
             if (k < array.shape[0]) & (m < array.shape[1]) & (k >= 0) & (m >= 0):
                 r_interp = np.sqrt((k * sampling[0] - positions[i, 0]) ** 2 +
