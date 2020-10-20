@@ -22,7 +22,7 @@ from abtem.plot import show_image
 from abtem.structures import is_cell_orthogonal
 from abtem.tanh_sinh import integrate, tanh_sinh_nodes_and_weights
 from abtem.temperature import AbstractFrozenPhonons, DummyFrozenPhonons
-from abtem.utils import energy2sigma, ProgressBar, generate_batches
+from abtem.utils import energy2sigma, ProgressBar, generate_batches, _disc_meshgrid
 
 # Vacuum permitivity in ASE units
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
@@ -332,6 +332,7 @@ class PotentialIntegrator:
         split = a * b < 0
         a = max(min(a, b), -self.cutoff)
         b = min(max(a, b), self.cutoff)
+
         if split:  # split the integral
             values1, derivatives1 = self._do_integrate(0, abs(a))
             values2, derivatives2 = self._do_integrate(0, abs(b))
@@ -342,6 +343,7 @@ class PotentialIntegrator:
 
     @cached_method('_cache')
     def _do_integrate(self, a, b):
+
         zm = (b - a) / 2.
         zp = (a + b) / 2.
 
@@ -349,6 +351,7 @@ class PotentialIntegrator:
             return self._function(np.sqrt(self.r[0] ** 2 + (z * zm + zp) ** 2))
 
         value, error_estimate, step_size, order = integrate(f, -1, 1, self._tolerance)
+
         xk, wk = tanh_sinh_nodes_and_weights(step_size, order)
 
         def f(z):
@@ -356,6 +359,7 @@ class PotentialIntegrator:
 
         values = np.sum(f(xk[None]) * wk[None], axis=1) * zm
         derivatives = np.diff(values) / np.diff(self.r)
+
         return values, derivatives
 
 
@@ -394,13 +398,6 @@ def pad_atoms(atoms: Atoms, margin: float):
     return atoms
 
 
-def _disc_meshgrid(r):
-    """Internal function to return all indices inside a disk with a given radius."""
-    cols = np.zeros((2 * r + 1, 2 * r + 1)).astype(np.int32)
-    cols[:] = np.linspace(0, 2 * r, 2 * r + 1) - r
-    rows = cols.T
-    inside = (rows ** 2 + cols ** 2) <= r ** 2
-    return rows[inside], cols[inside]
 
 
 def superpose_deltas(positions, z, array):
@@ -646,7 +643,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
             cutoff = self.get_cutoff(number)
             soft_function = self.get_tapered_function(number)
             inner_cutoff = np.min(self.sampling)
-            num_points = int(np.ceil(cutoff / np.min(self.sampling) * 5.))
+            num_points = int(np.ceil(cutoff / np.min(self.sampling) * 2.))
             r = np.geomspace(inner_cutoff, cutoff, num_points)
             self._integrators[number] = PotentialIntegrator(soft_function, r, cutoff)
             return self._integrators[number]
@@ -745,6 +742,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
                 vr = np.zeros((len(slice_atoms), integrator.r.shape[0]), np.float32)
                 dvdr = np.zeros((len(slice_atoms), integrator.r.shape[0]), np.float32)
+
                 for j, atom in enumerate(slice_atoms):
                     am, bm = a - atom.z, b - atom.z
                     vr[j], dvdr[j, :-1] = integrator.integrate(am, bm)

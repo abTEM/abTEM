@@ -14,6 +14,7 @@ from scipy.ndimage import zoom
 
 from abtem.device import asnumpy
 from abtem.visualize.mpl import show_measurement_2d, show_measurement_1d
+from abtem.utils import _disc_meshgrid
 
 
 class Calibration:
@@ -546,9 +547,15 @@ def probe_profile(probe_measurement: Measurement, angle: float = 0.) -> Measurem
     return line_profile
 
 
-def block_zeroth_order_spot(diffraction_pattern: Measurement):
+def block_zeroth_order_spot(diffraction_pattern: Measurement, r=1):
     shape = diffraction_pattern.shape
-    diffraction_pattern._array[..., shape[-2] // 2, shape[-1] // 2] = diffraction_pattern.array.min()
+
+    center = (shape[-2] // 2, shape[-1] // 2)
+    x, y = _disc_meshgrid(r)
+    x += center[0]
+    y += center[1]
+
+    diffraction_pattern._array[..., x, y] = diffraction_pattern.array.min()
     return diffraction_pattern
 
 

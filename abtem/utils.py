@@ -88,6 +88,14 @@ def polar_coordinates(x, y):
     phi = xp.arctan2(x.reshape((-1, 1)), y.reshape((1, -1)))
     return alpha, phi
 
+def _disc_meshgrid(r):
+    """Internal function to return all indices inside a disk with a given radius."""
+    cols = np.zeros((2 * r + 1, 2 * r + 1)).astype(np.int32)
+    cols[:] = np.linspace(0, 2 * r, 2 * r + 1) - r
+    rows = cols.T
+    inside = (rows ** 2 + cols ** 2) <= r ** 2
+    return rows[inside], cols[inside]
+
 
 def periodic_crop(array, corners, new_shape):
     xp = get_array_module(array)

@@ -266,7 +266,6 @@ class Waves(_WavesLike):
                                               scale_factor=self.wavelength * 1000,
                                               fourier_space=True)
 
-        # array = np.squeeze(waves.array)
         array = waves.array
         calibrations = (None,) * (len(array.shape) - 2) + calibrations
 
@@ -275,7 +274,7 @@ class Waves(_WavesLike):
         measurement = Measurement(pattern, calibrations)
 
         if block_zeroth_order:
-            block_zeroth_order_spot(measurement)
+            block_zeroth_order_spot(measurement, block_zeroth_order)
 
         return measurement
 
