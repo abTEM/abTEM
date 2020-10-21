@@ -239,7 +239,7 @@ class AbstractPotentialBuilder(AbstractPotential):
         for start, end, potential_slice in generator:
             array[start:end] = copy_to_device(potential_slice.array, self._storage)
             slice_thicknesses[start:end] = potential_slice.slice_thicknesses
-            pbar.update(1)
+            pbar.update(end - start)
 
         pbar.refresh()
 
@@ -767,14 +767,14 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
                 A = np.zeros((0,), dtype=xp.float32)
                 B = np.zeros((0,), dtype=xp.float32)
                 run_length_enconding = np.zeros((end - start + 1,), dtype=xp.int32)
-                #print(end, start)
+                # print(end, start)
                 for i, j in enumerate(range(start, end)):
                     a = slice_edges[j]
                     b = slice_edges[j + 1]
                     slice_positions = chunk_positions[(chunk_positions[:, 2] > a - integrator.cutoff) *
                                                       (chunk_positions[:, 2] < b + integrator.cutoff)]
 
-                    #if len(slice_positions) == 0:
+                    # if len(slice_positions) == 0:
                     #    continue
 
                     positions = np.vstack((positions, slice_positions))
@@ -782,10 +782,10 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
                     B = np.concatenate((B, [b] * len(slice_positions)))
 
                     run_length_enconding[i + 1] = run_length_enconding[i] + len(slice_positions)
-                    #print(i)
+                    # print(i)
 
-                #print(run_length_enconding, end, start)
-                #sss
+                # print(run_length_enconding, end, start)
+                # sss
                 vr, dvdr = integrator.integrate(positions[:, 2], A, B, xp=xp)
 
                 vr = xp.asarray(vr, dtype=xp.float32)
