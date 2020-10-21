@@ -10,18 +10,17 @@ def test_gaussian_integral():
     sigma = 3
     f = lambda r: np.exp(-r ** 2 / (2 * sigma ** 2))
     r = np.array([0, 30])
-    integrator = PotentialIntegrator(f, r)
-    value = integrator.integrate(-50, 50)
-    assert np.isclose(value[0][0], sigma * np.sqrt(2 * np.pi))
+    integrator = PotentialIntegrator(f, r, 30)
+    value = integrator.integrate(np.array([0.]), -50, 50, np)
+    assert np.isclose(value[0][0][0], sigma * np.sqrt(2 * np.pi))
 
 
 def test_projected_kirkland():
     f = lambda r: kirkland(r, parameters[6])
     parameters = load_kirkland_parameters()
     r = np.geomspace(.01, 10, 100)
-    integrator = PotentialIntegrator(f, r)
-    print(integrator.integrate(-10, 10), kirkland_projected(r, parameters[6]))
-    assert np.allclose(integrator.integrate(-10, 10)[0], kirkland_projected(r, parameters[6]))
+    integrator = PotentialIntegrator(f, r, 20)
+    assert np.allclose(integrator.integrate(np.array([0.]), -10, 10, np)[0], kirkland_projected(r, parameters[6]))
 
 
 def test_cutoff():
@@ -40,10 +39,10 @@ def test_interpolation():  # just a sanity check
 
     potential = Potential(atoms, sampling=sampling, cutoff_tolerance=1e-3, slice_thickness=10)
 
-    interpolated = potential[0].array[0,0]
+    interpolated = potential[0].array[0, 0]
     integrator = potential.get_integrator(6)
 
-    integrated = integrator.integrate(-1.5,1.5)[0]
+    integrated = integrator.integrate(np.array([0.]), -1.5, 1.5, np)[0][0]
 
     r = np.linspace(0, L, len(interpolated), endpoint=False)
 
@@ -67,7 +66,6 @@ def test_geomspace():
         dt = np.log(rc / sampling) / (n - 1)
         j = min(max(np.floor(np.log(rf / sampling) / dt), 0), len(r) - 1)
         assert i == j
-
 
 # def interpolate_radial_functions_launcher(func, positions, shape, cutoff, inner_cutoff):
 #     n = np.int(np.ceil(cutoff - inner_cutoff))

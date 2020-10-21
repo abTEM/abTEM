@@ -3,8 +3,7 @@ import numpy as np
 import psutil
 import pyfftw
 
-from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions, scale_reduce, \
-    windowed_scale_reduce, sum_run_length_encoded
+from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions, sum_run_length_encoded
 
 FFTW_EFFORT = 'FFTW_MEASURE'
 FFTW_THREADS = 12
@@ -15,7 +14,7 @@ try:  # This should be the only place import cupy, to make it a non-essential de
     import cupyx.scipy.fft
     import cupyx.scipy.ndimage as ndimage
     from abtem.cuda_kernels import launch_interpolate_radial_functions, launch_scale_reduce, \
-        launch_windowed_scale_reduce, launch_superpose_deltas, launch_sum_run_length_encoded
+        launch_sum_run_length_encoded
 
     get_array_module = cp.get_array_module
 
@@ -55,9 +54,7 @@ try:  # This should be the only place import cupy, to make it a non-essential de
                      'abs2': lambda x: cp.abs(x) ** 2,
                      'interpolate_radial_functions': launch_interpolate_radial_functions,
                      'scale_reduce': launch_scale_reduce,
-                     'sum_run_length_encoded': launch_sum_run_length_encoded,
-                     'windowed_scale_reduce': launch_windowed_scale_reduce,
-                     'superpose_deltas': launch_superpose_deltas}
+                     'sum_run_length_encoded': launch_sum_run_length_encoded}
 
     asnumpy = cp.asnumpy
 
@@ -154,9 +151,7 @@ cpu_functions = {'fft2': fft2,
                  'pin_array': lambda x: x,
                  'complex_exponential': complex_exponential,
                  'interpolate_radial_functions': interpolate_radial_functions,
-                 'sum_run_length_encoded': sum_run_length_encoded,
-                 'scale_reduce': scale_reduce,
-                 'windowed_scale_reduce': windowed_scale_reduce}
+                 'sum_run_length_encoded': sum_run_length_encoded}
 
 
 def get_device_function(xp, name: str) -> Callable:

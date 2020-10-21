@@ -1,24 +1,21 @@
 """Module to calculate potentials using the independent atom model."""
 from abc import ABCMeta, abstractmethod
+from copy import copy
 from typing import Union, Sequence, Callable, Generator
 
 import h5py
 import numpy as np
-from copy import copy
-
 from ase import Atoms
 from ase import units
-
 from scipy.optimize import brentq
 
 from abtem.base_classes import Grid, HasGridMixin, Cache, cached_method, HasAcceleratorMixin, Accelerator, Event, \
     watched_property, AntialiasFilter
 from abtem.device import get_device_function, get_array_module, get_array_module_from_device, copy_to_device, \
-    HasDeviceMixin, asnumpy
+    HasDeviceMixin, asnumpy, get_available_memory
 from abtem.measure import calibrations_from_grid, Measurement
 from abtem.parametrizations import kirkland, dvdr_kirkland, load_kirkland_parameters, kirkland_projected_fourier
 from abtem.parametrizations import lobato, dvdr_lobato, load_lobato_parameters
-from abtem.plot import show_image
 from abtem.structures import is_cell_orthogonal
 from abtem.tanh_sinh import integrate, tanh_sinh_nodes_and_weights
 from abtem.temperature import AbstractFrozenPhonons, DummyFrozenPhonons
@@ -185,8 +182,18 @@ class AbstractPotentialBuilder(AbstractPotential):
         self._precalculate = precalculate
         self._storage = storage
 
-    def build(self, pbar: Union[bool, ProgressBar] = False, energy=None, max_batch=1, first_slice=0,
-              last_slice=None) -> 'PotentialArray':
+    def _estimate_max_batch(self):
+        memory_per_wave = 2 * 4 * self.gpts[0] * self.gpts[1]
+        available_memory = .2 * get_available_memory(self._device)
+        return min(int(available_memory / memory_per_wave), len(self))
+
+    def build(self,
+              first_slice: int = 0,
+              last_slice: int = None,
+              energy: float = None,
+              max_batch: int = None,
+              pbar: Union[bool, ProgressBar] = False,
+              ) -> 'PotentialArray':
         """
         Precalcaulate the potential as a potential array.
 
@@ -205,6 +212,9 @@ class AbstractPotentialBuilder(AbstractPotential):
         if last_slice is None:
             last_slice = len(self)
 
+        if max_batch is None:
+            max_batch = self._estimate_max_batch()
+        
         storage_xp = get_array_module_from_device(self._storage)
 
         if energy is None:
@@ -338,7 +348,6 @@ class PotentialIntegrator:
 
         vr = np.zeros((len(z), self.r.shape[0]), np.float32)
         dvdr = np.zeros((len(z), self.r.shape[0]), np.float32)
-
         a = np.round(a - z, self._cache_key_decimals)
         b = np.round(b - z, self._cache_key_decimals)
 
@@ -708,7 +717,6 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
         for start, end in generate_batches(last_slice - first_slice, max_batch=max_batch, start=first_slice):
             array[:] = 0.
-            slice_thicknesses = [self.get_slice_thickness(i) for i in range(start, end)]
 
             for j, (number, indices) in enumerate(indices_by_number.items()):
                 in_slice = (slice_idx >= start) * (slice_idx < end) * (atoms.numbers == number)
@@ -720,6 +728,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
                 fft2_convolve(array[:, j], scattering_factors[number])
 
+            slice_thicknesses = [self.get_slice_thickness(i) for i in range(start, end)]
             yield start, end, PotentialArray(array.real.sum(1)[:end - start], slice_thicknesses, extent=self.extent)
 
     def _generate_slices_finite(self, first_slice=0, last_slice=None, max_batch=1) -> Generator:
@@ -731,48 +740,69 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         atoms.wrap()
         indices_by_number = {number: np.where(atoms.numbers == number)[0] for number in np.unique(atoms.numbers)}
 
-        array = xp.zeros(self.gpts, dtype=xp.float32)
-        a = np.sum([self.get_slice_thickness(i) for i in range(0, first_slice)])
-        for i in range(first_slice, last_slice):
+        start, end = next(generate_batches(last_slice - first_slice, max_batch=max_batch, start=first_slice))
+        array = xp.zeros((end - start,) + self.gpts, dtype=xp.float32)
+
+        slice_edges = np.linspace(0, self.atoms.cell[2, 2], self.num_slices + 1)
+
+        for start, end in generate_batches(last_slice - first_slice, max_batch=max_batch, start=first_slice):
             array[:] = 0.
-            b = a + self.get_slice_thickness(i)
 
             for number, indices in indices_by_number.items():
-                slice_atoms = atoms[indices]
-
+                species_atoms = atoms[indices]
                 integrator = self.get_integrator(number)
-
                 disc_indices = xp.asarray(self._get_radial_interpolation_points(number))
 
-                slice_atoms = slice_atoms[(slice_atoms.positions[:, 2] > a - integrator.cutoff) *
-                                          (slice_atoms.positions[:, 2] < b + integrator.cutoff)]
+                a = slice_edges[start]
+                b = slice_edges[end]
+                chunk_atoms = species_atoms[(species_atoms.positions[:, 2] > a - integrator.cutoff) *
+                                            (species_atoms.positions[:, 2] < b + integrator.cutoff)]
+                chunk_atoms = pad_atoms(chunk_atoms, integrator.cutoff)
+                chunk_positions = chunk_atoms.positions
 
-                slice_atoms = pad_atoms(slice_atoms, integrator.cutoff)
-
-                if len(slice_atoms) == 0:
+                if len(chunk_atoms) == 0:
                     continue
 
-                vr, dvdr = integrator.integrate(slice_atoms.positions[:, 2], a, b, xp=xp)
+                positions = np.zeros((0, 3), dtype=xp.float32)
+                A = np.zeros((0,), dtype=xp.float32)
+                B = np.zeros((0,), dtype=xp.float32)
+                rle_encoding = np.zeros((end - start + 1,), dtype=xp.int32)
+                for i, j in enumerate(range(start, end)):
+                    a = slice_edges[j]
+                    b = slice_edges[j + 1]
+                    slice_positions = chunk_positions[(chunk_positions[:, 2] > a - integrator.cutoff) *
+                                                      (chunk_positions[:, 2] < b + integrator.cutoff)]
+
+                    if len(slice_positions) == 0:
+                        continue
+
+                    positions = np.vstack((positions, slice_positions))
+                    A = np.concatenate((A, [a] * len(slice_positions)))
+                    B = np.concatenate((B, [b] * len(slice_positions)))
+
+                    rle_encoding[i + 1] = rle_encoding[i] + len(slice_positions)
+
+                vr, dvdr = integrator.integrate(positions[:, 2], A, B, xp=xp)
 
                 vr = xp.asarray(vr, dtype=xp.float32)
                 dvdr = xp.asarray(dvdr, dtype=xp.float32)
                 r = xp.asarray(integrator.r, dtype=xp.float32)
 
-                slice_positions = xp.asarray(slice_atoms.positions[:, :2], dtype=xp.float32)
                 sampling = xp.asarray(self.sampling, dtype=xp.float32)
-
                 interpolate_radial_functions(array,
+                                             rle_encoding,
                                              disc_indices,
-                                             slice_positions,
+                                             positions,
                                              vr,
                                              r,
                                              dvdr,
                                              sampling)
-            a = b
 
-            yield i, i + 1, PotentialArray(array[None] / kappa,
-                                           np.array([self.get_slice_thickness(i)]),
-                                           extent=self.extent)
+            slice_thicknesses = [self.get_slice_thickness(i) for i in range(start, end)]
+
+            yield start, end, PotentialArray(array[:end - start] / kappa,
+                                             slice_thicknesses,
+                                             extent=self.extent)
 
     def generate_frozen_phonon_potentials(self, pbar: Union[ProgressBar, bool] = True):
         """

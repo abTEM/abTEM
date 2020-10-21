@@ -23,6 +23,7 @@ def abs2(x):
 
 @jit(nopython=True, nogil=True, parallel=True)
 def interpolate_radial_functions(array: np.ndarray,
+                                 rle_encoding: np.ndarray,
                                  disc_indices: np.ndarray,
                                  positions: np.ndarray,
                                  v: np.ndarray,
@@ -54,79 +55,26 @@ def interpolate_radial_functions(array: np.ndarray,
     """
     n = r.shape[0]
     dt = np.log(r[-1] / r[0]) / (n - 1)
-    for i in range(positions.shape[0]):
-        px = int(round(positions[i, 0] / sampling[0]))
-        py = int(round(positions[i, 1] / sampling[1]))
 
-        for j in prange(disc_indices.shape[0]):
-            k = px + disc_indices[j, 0]
-            m = py + disc_indices[j, 1]
+    for p in prange(rle_encoding.shape[0] - 1): # Thread safe loop
+        for i in range(rle_encoding[p], rle_encoding[p + 1]):
+            px = int(round(positions[i, 0] / sampling[0]))
+            py = int(round(positions[i, 1] / sampling[1]))
 
-            if (k < array.shape[0]) & (m < array.shape[1]) & (k >= 0) & (m >= 0):
-                r_interp = np.sqrt((k * sampling[0] - positions[i, 0]) ** 2 +
-                                   (m * sampling[1] - positions[i, 1]) ** 2)
+            for j in range(disc_indices.shape[0]): # Thread safe loop
+                k = px + disc_indices[j, 0]
+                m = py + disc_indices[j, 1]
 
-                idx = int(np.floor(np.log(r_interp / r[0] + 1e-7) / dt))
-                if idx < 0:
-                    array[k, m] += v[i, 0]
-                elif idx < n - 1:
-                    array[k, m] += v[i, idx] + (r_interp - r[idx]) * dvdr[i, idx]
+                if (k < array.shape[1]) & (m < array.shape[2]) & (k >= 0) & (m >= 0):
+                    r_interp = np.sqrt((k * sampling[0] - positions[i, 0]) ** 2 +
+                                       (m * sampling[1] - positions[i, 1]) ** 2)
 
+                    idx = int(np.floor(np.log(r_interp / r[0] + 1e-7) / dt))
 
-@jit(nopython=True, nogil=True, parallel=True, fastmath=True)
-def windowed_scale_reduce(probes: np.ndarray, S: np.ndarray, corners: np.ndarray, coefficients: np.ndarray):
-    """
-    Collapse a PRISM scattering matrix into probe wave functions. The probes are cropped around their center to the size
-    of the given probes array.
-
-    Parameters
-    ----------
-    probes : 3d array
-        The array in which the probe wave functions should be written. The first dimension indexes the probe batch,
-        the last two dimensions indexes the spatial dimensions.
-    S : 3d array
-        The compact scattering matrix. The first dimension indexes the plane waves, the last two dimensions indexes the
-        spatial dimensions.
-    corners : 2d array of int
-        The corners of the probe windows. The first dimension indexes the probe batch, the two components of the second
-        dimension are the first and second index of the spatial dimension.
-    coefficients : 2d array of complex
-        The coefficients of the plane wave expansion of a probe at a specific position. The first dimension indexes the
-        probe batch, the second dimension indexes the coefficients corresponding to the plane waves of the scattering
-        matrix.
-    """
-
-    for k in prange(probes.shape[0]):
-        for i in prange(probes.shape[1]):
-            ii = (corners[k, 0] + i) % S.shape[1]
-            for j in prange(probes.shape[2]):
-                jj = (corners[k, 1] + j) % S.shape[2]
-                probes[k, i, j] = (coefficients[k] * S[:, ii, jj]).sum()
-
-
-@jit(nopython=True, nogil=True, parallel=True, fastmath=True)
-def scale_reduce(probes: np.ndarray, S: np.ndarray, coefficients: np.ndarray):
-    """
-    Collapse a PRISM scattering matrix into probe wave functions.
-
-    Parameters
-    ----------
-    probes : 3d array
-        The array in which the probe wave functions should be written. The first dimension indexes the probe batch,
-        the last two dimensions indexes the spatial dimensions.
-    S : 3d array
-        The compact scattering matrix. The first dimension indexes the plane waves, the last two dimensions indexes the
-        spatial dimensions.
-    coefficients : 2d array of complex
-        The coefficients of the plane wave expansion of a probe at a specific position. The first dimension indexes the
-        probe batch, the second dimension indexes the coefficients corresponding to the plane waves of the scattering
-        matrix.
-    """
-    for i in prange(S.shape[1]):
-        for j in range(S.shape[2]):
-            for m in range(S.shape[0]):
-                for n in range(probes.shape[0]):
-                    probes[n, i, j] += (coefficients[n, m] * S[m, i, j])
+                    if idx < 0:
+                        array[p, k, m] += v[i, 0]
+                    elif idx < n - 1:
+                        array[p, k, m] += v[i, idx] + (r_interp - r[idx]) * dvdr[i, idx]
 
 
 @jit(nopython=True, nogil=True, parallel=True, fastmath=True)
