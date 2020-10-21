@@ -214,7 +214,7 @@ class AbstractPotentialBuilder(AbstractPotential):
 
         if max_batch is None:
             max_batch = self._estimate_max_batch()
-        
+
         storage_xp = get_array_module_from_device(self._storage)
 
         if energy is None:
@@ -766,31 +766,35 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
                 positions = np.zeros((0, 3), dtype=xp.float32)
                 A = np.zeros((0,), dtype=xp.float32)
                 B = np.zeros((0,), dtype=xp.float32)
-                rle_encoding = np.zeros((end - start + 1,), dtype=xp.int32)
+                run_length_enconding = np.zeros((end - start + 1,), dtype=xp.int32)
+                #print(end, start)
                 for i, j in enumerate(range(start, end)):
                     a = slice_edges[j]
                     b = slice_edges[j + 1]
                     slice_positions = chunk_positions[(chunk_positions[:, 2] > a - integrator.cutoff) *
                                                       (chunk_positions[:, 2] < b + integrator.cutoff)]
 
-                    if len(slice_positions) == 0:
-                        continue
+                    #if len(slice_positions) == 0:
+                    #    continue
 
                     positions = np.vstack((positions, slice_positions))
                     A = np.concatenate((A, [a] * len(slice_positions)))
                     B = np.concatenate((B, [b] * len(slice_positions)))
 
-                    rle_encoding[i + 1] = rle_encoding[i] + len(slice_positions)
+                    run_length_enconding[i + 1] = run_length_enconding[i] + len(slice_positions)
+                    #print(i)
 
+                #print(run_length_enconding, end, start)
+                #sss
                 vr, dvdr = integrator.integrate(positions[:, 2], A, B, xp=xp)
 
                 vr = xp.asarray(vr, dtype=xp.float32)
                 dvdr = xp.asarray(dvdr, dtype=xp.float32)
                 r = xp.asarray(integrator.r, dtype=xp.float32)
-
                 sampling = xp.asarray(self.sampling, dtype=xp.float32)
+
                 interpolate_radial_functions(array,
-                                             rle_encoding,
+                                             run_length_enconding,
                                              disc_indices,
                                              positions,
                                              vr,

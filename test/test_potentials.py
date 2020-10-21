@@ -67,5 +67,4 @@ def test_potential_storage():
     assert type(potential.build().array) is cp.ndarray
 
     potential = Potential(atoms=atoms, sampling=.1, device='gpu', storage='cpu')
-
     assert type(potential.build().array) is np.ndarray

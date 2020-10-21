@@ -7,25 +7,25 @@ from numba import cuda
 
 
 @cuda.jit
-def _interpolate_radial_functions(array, disc_indices, positions, v, r, dvdr, sampling, dt):
+def _interpolate_radial_functions(array, slice_idx, disc_indices, positions, v, r, dvdr, sampling, dt):
     i, j = cuda.grid(2)
     if (i < positions.shape[0]) & (j < disc_indices.shape[0]):
         k = round(positions[i, 0] / sampling[0]) + disc_indices[j, 0]
         m = round(positions[i, 1] / sampling[1]) + disc_indices[j, 1]
 
-        if (k < array.shape[0]) & (m < array.shape[1]) & (k >= 0) & (m >= 0):
+        if (k < array.shape[1]) & (m < array.shape[2]) & (k >= 0) & (m >= 0):
             r_interp = math.sqrt((k * sampling[0] - positions[i, 0]) ** 2 +
                                  (m * sampling[1] - positions[i, 1]) ** 2)
 
             idx = int(math.log(r_interp / r[0] + 1e-7) / dt)
 
             if idx < 0:
-                cuda.atomic.add(array, (k, m), v[i, 0])
+                cuda.atomic.add(array, (slice_idx[i], k, m), v[i, 0])
             elif idx < r.shape[0] - 1:
-                cuda.atomic.add(array, (k, m), v[i, idx] + (r_interp - r[idx]) * dvdr[i, idx])
+                cuda.atomic.add(array, (slice_idx[i], k, m), v[i, idx] + (r_interp - r[idx]) * dvdr[i, idx])
 
 
-def launch_interpolate_radial_functions(array, disc_indices, positions, v, r, dvdr, sampling):
+def launch_interpolate_radial_functions(array, rle_encoding, disc_indices, positions, v, r, dvdr, sampling):
     """
     Interpolate radial functions in 2d at specified positions. The radial functions are assumed to be spaced evenly on a
     log grid.
@@ -57,7 +57,16 @@ def launch_interpolate_radial_functions(array, disc_indices, positions, v, r, dv
 
     dt = (cp.log(r[-1] / r[0]) / (r.shape[0] - 1)).item()
 
+    slice_idx = cp.zeros((rle_encoding[-1],), dtype=cp.int32)
+    for i in range(len(rle_encoding) - 1):
+        slice_idx[rle_encoding[i]:rle_encoding[i + 1]] = i
+
+
+    #print(rle_encoding)
+    #sss
+
     _interpolate_radial_functions[blockspergrid, threadsperblock](array,
+                                                                  slice_idx,
                                                                   disc_indices,
                                                                   positions,
                                                                   v,

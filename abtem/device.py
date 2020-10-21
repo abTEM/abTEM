@@ -13,8 +13,7 @@ try:  # This should be the only place import cupy, to make it a non-essential de
     import cupy as cp
     import cupyx.scipy.fft
     import cupyx.scipy.ndimage as ndimage
-    from abtem.cuda_kernels import launch_interpolate_radial_functions, launch_scale_reduce, \
-        launch_sum_run_length_encoded
+    from abtem.cuda_kernels import launch_interpolate_radial_functions, launch_sum_run_length_encoded
 
     get_array_module = cp.get_array_module
 
@@ -53,7 +52,6 @@ try:  # This should be the only place import cupy, to make it a non-essential de
                      'complex_exponential': lambda x: cp.exp(1.j * x),
                      'abs2': lambda x: cp.abs(x) ** 2,
                      'interpolate_radial_functions': launch_interpolate_radial_functions,
-                     'scale_reduce': launch_scale_reduce,
                      'sum_run_length_encoded': launch_sum_run_length_encoded}
 
     asnumpy = cp.asnumpy
@@ -202,6 +200,7 @@ def copy_to_device(array, device):
 
 
 def get_available_memory(device: str) -> float:
+
     if device == 'cpu':
         return psutil.virtual_memory().available
 
