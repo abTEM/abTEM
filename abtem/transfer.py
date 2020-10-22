@@ -379,10 +379,10 @@ class CTF(HasAcceleratorMixin, PlotableMixin):
 
             return waves.apply_ctf(self)
 
-    def interact(self, max_semiangle: float = None, phi: float = 0., sliders=None):
+    def interact(self, max_semiangle: float = None, phi: float = 0., sliders=None, throttling=False):
         import bqplot.pyplot as plt
         from abtem.visualize.bqplot import show_measurement_1d
-        from abtem.visualize.widgets import quick_sliders
+        from abtem.visualize.widgets import quick_sliders, throttle
         import ipywidgets as widgets
 
         figure = plt.figure(fig_margin={'top': 0, 'bottom': 50, 'left': 50, 'right': 0})
@@ -390,6 +390,10 @@ class CTF(HasAcceleratorMixin, PlotableMixin):
         figure.layout.width = '300px'
 
         _, callback = show_measurement_1d(lambda: self.profiles(max_semiangle, phi).values(), figure)
+
+        if throttling:
+            callback = throttle(throttling)(callback)
+
         self.changed.register(callback)
 
         if sliders:

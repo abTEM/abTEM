@@ -5,7 +5,7 @@ from bqplot_image_gl import ImageGL
 import bqplot.pyplot as plt
 from abtem.visualize.utils import format_label
 from matplotlib.colors import TABLEAU_COLORS
-
+from abtem.visualize.widgets import throttle
 
 
 
@@ -73,7 +73,7 @@ def show_measurement_2d(measurement_or_func, figure=None):
         return widgets.VBox([figure, toolbar])
 
 
-def show_measurement_1d(measurements_or_func, figure=None, **kwargs):
+def show_measurement_1d(measurements_or_func, figure=None, throttling=False, **kwargs):
     if figure is None:
         figure = plt.figure(fig_margin={'top': 0, 'bottom': 50, 'left': 50, 'right': 0})
 
@@ -101,6 +101,8 @@ def show_measurement_1d(measurements_or_func, figure=None, **kwargs):
     # figure.axes[1].label = format_label(measurement)
 
     if return_callback:
+
+        @throttle(throttling)
         def callback(*args, **kwargs):
             for line, measurement in zip(lines, measurements_or_func()):
                 x = np.linspace(calibration.offset, calibration.offset + len(array) * calibration.sampling, len(array))

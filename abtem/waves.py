@@ -771,15 +771,18 @@ class Probe(_WavesLike, HasDeviceMixin):
         measurement = self.build((self.extent[0] / 2, self.extent[1] / 2)).intensity()
         return probe_profile(measurement, angle=angle)
 
-    def interact(self, sliders=None, profile=False):
+    def interact(self, sliders=None, profile=False, throttling=False):
         from abtem.visualize.bqplot import show_measurement_1d, show_measurement_2d
-        from abtem.visualize.widgets import quick_sliders
+        from abtem.visualize.widgets import quick_sliders, throttle
         import ipywidgets as widgets
 
         if profile:
             figure, callback = show_measurement_1d(lambda: [self.profile()])
         else:
             figure, callback = show_measurement_2d(lambda: self.build().intensity())
+
+        if throttling:
+            callback = throttle(throttling)(callback)
 
         self.changed.register(callback)
 
