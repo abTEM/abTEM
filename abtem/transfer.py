@@ -354,9 +354,9 @@ class CTF(HasAcceleratorMixin, PlotableMixin):
         profiles['envelope'] = Measurement(envelope, calibrations=[calibration], name='Envelope')
         return profiles
 
-    def apply(self, waves, interact=False, sliders=None):
+    def apply(self, waves, interact=False, sliders=None, throttling=0.):
         from abtem.visualize.bqplot import show_measurement_2d
-        from abtem.visualize.widgets import quick_sliders
+        from abtem.visualize.widgets import quick_sliders, throttle
         import ipywidgets as widgets
 
         if interact:
@@ -367,6 +367,9 @@ class CTF(HasAcceleratorMixin, PlotableMixin):
                 return image_waves.intensity()
 
             figure, callback = show_measurement_2d(update)
+
+            if throttling:
+                callback = throttle(throttling)(callback)
 
             self.changed.register(callback)
             if sliders:

@@ -8,8 +8,6 @@ from matplotlib.colors import TABLEAU_COLORS
 from abtem.visualize.widgets import throttle
 
 
-
-
 def update_bqplot_image(image, measurement):
     calibrations = measurement.calibrations
 
@@ -25,6 +23,12 @@ def update_bqplot_image(image, measurement):
     image.scales['image'].min = float(array.min())
     image.scales['image'].max = float(array.max())
 
+    L = max(image.x[1], image.y[1])
+    image.scales['x'].min = image.x[0]
+    image.scales['x'].max = L
+    image.scales['y'].min = image.y[0]
+    image.scales['y'].max = L
+
 
 def show_measurement_2d(measurement_or_func, figure=None):
     try:
@@ -36,7 +40,7 @@ def show_measurement_2d(measurement_or_func, figure=None):
         return_callback = False
 
     if figure is None:
-        scales = {'x': LinearScale(), 'y': LinearScale()}
+        scales = {'x': LinearScale(allow_padding=False), 'y': LinearScale(allow_padding=False)}
 
         axis_x = Axis(scale=scales['x'])
         axis_y = Axis(scale=scales['y'], orientation='vertical')

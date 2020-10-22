@@ -76,7 +76,7 @@ def quick_sliders(obj, throttling=None, continuous_update=True, **kwargs):
     def create_callback(key):
         def callback(change):
             setattr(obj, key, change['new'])
-        
+
         if throttling:
             return throttle(throttling)(callback)
         else:
