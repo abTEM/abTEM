@@ -47,6 +47,9 @@ class Calibration:
                 (self.units == other.units) &
                 (self.name == other.name))
 
+    def coordinates(self, n):
+        return np.linspace(self.offset, n * self.sampling + self.offset, n, endpoint=False)
+
     def __copy__(self):
         return self.__class__(self.offset, self.sampling, self.units, self.name)
 
@@ -547,15 +550,16 @@ def probe_profile(probe_measurement: Measurement, angle: float = 0.) -> Measurem
     return line_profile
 
 
-def block_zeroth_order_spot(diffraction_pattern: Measurement, r=1):
-    shape = diffraction_pattern.shape
+def block_zeroth_order_spot(diffraction_pattern: Measurement, angular_radius=1):
+    alpha_x = diffraction_pattern.calibrations[-2].coordinates(diffraction_pattern.array.shape[-2])
+    alpha_y = diffraction_pattern.calibrations[-1].coordinates(diffraction_pattern.array.shape[-1])
 
-    center = (shape[-2] // 2, shape[-1] // 2)
-    x, y = _disc_meshgrid(r)
-    x += center[0]
-    y += center[1]
+    alpha_x, alpha_y = np.meshgrid(alpha_x, alpha_y, indexing='ij')
 
-    diffraction_pattern._array[..., x, y] = diffraction_pattern.array.min()
+    alpha = alpha_x ** 2 + alpha_y ** 2
+    block = alpha > angular_radius ** 2
+
+    diffraction_pattern._array *= block
     return diffraction_pattern
 
 

@@ -660,7 +660,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         except KeyError:
             cutoff = self.get_cutoff(number)
             soft_function = self.get_tapered_function(number)
-            inner_cutoff = np.min(self.sampling)
+            inner_cutoff = np.min(self.sampling) / 2.
             num_points = int(np.ceil(cutoff / np.min(self.sampling) * 2.))
             r = np.geomspace(inner_cutoff, cutoff, num_points)
             max_interval = self.slice_thickness

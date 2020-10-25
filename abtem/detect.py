@@ -5,13 +5,13 @@ from typing import Tuple, List, Any
 
 import numpy as np
 
-from abtem.base_classes import Cache, Event, watched_property, cached_method, Grid, AntialiasFilter
+from abtem.base_classes import Cache, Event, watched_property, cached_method, Grid
 from abtem.device import get_array_module, get_device_function
-from abtem.measure import Calibration, calibrations_from_grid, Measurement, FlexibleAnnularMeasurement
+from abtem.measure import Calibration, calibrations_from_grid, Measurement, FlexibleAnnularMeasurement, \
+    _fourier_space_offset
 from abtem.plot import show_image
 from abtem.scan import AbstractScan
 from abtem.utils import spatial_frequencies
-from numbers import Number
 
 
 def _crop_to_center(array: np.ndarray):
@@ -38,7 +38,9 @@ def _calculate_far_field_intensity(waves, overwrite: bool = False):
 
 def _polar_regions(gpts, angular_sampling, inner, outer, nbins_radial, nbins_azimuthal):
     """Create the polar segmentation of a detector."""
-    sampling = (1 / angular_sampling[0] / gpts[0], 1 / angular_sampling[1] / gpts[1]) * 2
+    sampling = (1 / angular_sampling[0] / gpts[0],
+                1 / angular_sampling[1] / gpts[1])
+
     kx, ky = spatial_frequencies(gpts, sampling)
 
     alpha_x = np.asarray(kx)
@@ -565,14 +567,78 @@ class PixelatedDetector(AbstractDetector):
         The path to the file used for saving the detector output.
     """
 
-    def __init__(self, max_angle='valid', save_file: str = None):
+    def __init__(self, max_angle='valid', resample=False, save_file: str = None):
         self._max_angle = max_angle
+        self._resample = resample
 
         super().__init__(save_file=save_file)
 
     @property
     def max_angle(self):
         return self._max_angle
+
+    def _bilinear_nodes_and_weight(self, old_shape, new_shape, old_angular_sampling, new_angular_sampling, xp):
+        nodes = []
+        weights = []
+
+        old_sampling = (1 / old_angular_sampling[0] / old_shape[0],
+                        1 / old_angular_sampling[1] / old_shape[1])
+
+        new_sampling = (1 / new_angular_sampling[0] / new_shape[0],
+                        1 / new_angular_sampling[1] / new_shape[1])
+
+        for n, m, r, d in zip(old_shape, new_shape, old_sampling, new_sampling):
+            k = xp.fft.fftshift(xp.fft.fftfreq(n, r).astype(xp.float32))
+            k_new = xp.fft.fftshift(xp.fft.fftfreq(m, d).astype(xp.float32))
+
+            distances = k_new[None] - k[:, None]
+            distances[distances < 0.] = np.inf
+
+            w = distances.min(0) / (k[1] - k[0])
+            w[w == np.inf] = 0.
+
+            nodes.append(distances.argmin(0))
+            weights.append(w)
+
+        v, u = nodes
+        vw, uw = weights
+        v, u, vw, uw = xp.broadcast_arrays(v[:, None], u[None, :], vw[:, None], uw[None, :])
+        return v, u, vw, uw
+
+    def _resampled_gpts(self, gpts, angular_sampling):
+        if self._resample is False:
+            return gpts, angular_sampling
+
+        if self._resample == 'uniform':
+            scale_factor = (angular_sampling[0] / max(angular_sampling),
+                            angular_sampling[1] / max(angular_sampling))
+
+            new_gpts = (int(np.ceil(gpts[0] * scale_factor[0])),
+                        int(np.ceil(gpts[1] * scale_factor[1])))
+
+            if np.abs(new_gpts[0] - new_gpts[1]) <= 2:
+                new_gpts = (min(new_gpts),) * 2
+
+            new_angular_sampling = (angular_sampling[0] / scale_factor[0],
+                                    angular_sampling[1] / scale_factor[1])
+
+        else:
+            raise RuntimeError('')
+
+        return new_gpts, new_angular_sampling
+
+    def _interpolate(self, array, angular_sampling):
+        xp = get_array_module(array)
+        interpolate_bilinear = get_device_function(xp, 'interpolate_bilinear')
+
+        new_gpts, new_angular_sampling = self._resampled_gpts(array.shape[-2:], angular_sampling)
+        v, u, vw, uw = self._bilinear_nodes_and_weight(array.shape[-2:],
+                                                       new_gpts,
+                                                       angular_sampling,
+                                                       new_angular_sampling,
+                                                       xp)
+
+        return interpolate_bilinear(array, v, u, vw, uw)
 
     def allocate_measurement(self, waves, scan: AbstractScan = None) -> Measurement:
         """
@@ -595,15 +661,26 @@ class PixelatedDetector(AbstractDetector):
 
         waves.grid.check_is_defined()
 
-        if self.max_angle is None:
-            max_angle = waves.cutoff_scattering_angles
-        else:
-            max_angle = self._max_angle
+        # if self.max_angle is None:
+        #    max_angle = waves.cutoff_scattering_angles
+        # else:
+        max_angle = self._max_angle
 
         check_max_angle_exceeded(waves, max_angle)
 
         gpts = waves.downsampled_gpts(max_angle)
-        cropped_sampling = (waves.extent[0] / gpts[0], waves.extent[1] / gpts[1])
+
+        gpts, new_angular_sampling = self._resampled_gpts(gpts, angular_sampling=waves.angular_sampling)
+
+        sampling = (1 / new_angular_sampling[0] / gpts[0] * waves.wavelength * 1000,
+                    1 / new_angular_sampling[1] / gpts[1] * waves.wavelength * 1000)
+
+        calibrations = calibrations_from_grid(gpts,
+                                              sampling,
+                                              names=['alpha_x', 'alpha_y'],
+                                              units='mrad',
+                                              scale_factor=waves.wavelength * 1000,
+                                              fourier_space=True)
 
         if scan is None:
             scan_shape = ()
@@ -616,13 +693,6 @@ class PixelatedDetector(AbstractDetector):
             scan_calibrations = scan.calibrations
 
         array = np.zeros(scan_shape + gpts)
-
-        calibrations = calibrations_from_grid(gpts,
-                                              cropped_sampling,
-                                              names=['alpha_x', 'alpha_y'],
-                                              units='mrad',
-                                              scale_factor=waves.wavelength * 1000,
-                                              fourier_space=True)
 
         measurement = Measurement(array, calibrations=scan_calibrations + calibrations)
         if isinstance(self.save_file, str):
@@ -652,6 +722,7 @@ class PixelatedDetector(AbstractDetector):
         intensity = abs2(waves.array)
 
         intensity = xp.fft.fftshift(intensity, axes=(-2, -1))
+        intensity = self._interpolate(intensity, waves.angular_sampling)
 
         return intensity
 

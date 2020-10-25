@@ -113,6 +113,7 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
         for scan in scans:
             scan.add_to_mpl_plot(ax)
 
+    return ax
 
 def show_measurement_2d(measurement,
                         ax=None,

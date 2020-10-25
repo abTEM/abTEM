@@ -4,6 +4,7 @@ import psutil
 import pyfftw
 
 from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions, sum_run_length_encoded
+from abtem.interpolate import interpolate_bilinear_cpu
 
 FFTW_EFFORT = 'FFTW_MEASURE'
 FFTW_THREADS = 12
@@ -13,7 +14,8 @@ try:  # This should be the only place import cupy, to make it a non-essential de
     import cupy as cp
     import cupyx.scipy.fft
     import cupyx.scipy.ndimage as ndimage
-    from abtem.cuda_kernels import launch_interpolate_radial_functions, launch_sum_run_length_encoded
+    from abtem.cuda_kernels import launch_interpolate_radial_functions, launch_sum_run_length_encoded, \
+        interpolate_bilinear_gpu
 
     get_array_module = cp.get_array_module
 
@@ -52,6 +54,7 @@ try:  # This should be the only place import cupy, to make it a non-essential de
                      'complex_exponential': lambda x: cp.exp(1.j * x),
                      'abs2': lambda x: cp.abs(x) ** 2,
                      'interpolate_radial_functions': launch_interpolate_radial_functions,
+                     'interpolate_bilinear': interpolate_bilinear_gpu,
                      'sum_run_length_encoded': launch_sum_run_length_encoded}
 
     asnumpy = cp.asnumpy
@@ -149,6 +152,7 @@ cpu_functions = {'fft2': fft2,
                  'pin_array': lambda x: x,
                  'complex_exponential': complex_exponential,
                  'interpolate_radial_functions': interpolate_radial_functions,
+                 'interpolate_bilinear': interpolate_bilinear_cpu,
                  'sum_run_length_encoded': sum_run_length_encoded}
 
 
@@ -200,7 +204,6 @@ def copy_to_device(array, device):
 
 
 def get_available_memory(device: str) -> float:
-
     if device == 'cpu':
         return psutil.virtual_memory().available
 

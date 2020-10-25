@@ -8,7 +8,7 @@ from abtem.base_classes import HasAcceleratorMixin, Accelerator, watched_method,
 from abtem.device import get_array_module, get_device_function
 from abtem.measure import Measurement, Calibration
 from abtem.plot import PlotableMixin
-from abtem.utils import energy2wavelength
+from abtem.utils import energy2wavelength, spatial_frequencies, polar_coordinates
 
 #: Symbols for the polar representation of all optical aberrations up to the fifth order.
 polar_symbols = ('C10', 'C12', 'phi12',
@@ -322,6 +322,15 @@ class CTF(HasAcceleratorMixin, PlotableMixin):
             array *= self.evaluate_gaussian_envelope(alpha)
 
         return array
+
+    def evaluate_on_grid(self, grid, xp=np):
+        kx, ky = spatial_frequencies(grid.gpts, grid.sampling)
+        kx = kx.reshape((1, -1, 1))
+        ky = ky.reshape((1, 1, -1))
+        kx = xp.asarray(kx)
+        ky = xp.asarray(ky)
+        alpha, phi = polar_coordinates(xp.asarray(kx * self.wavelength), xp.asarray(ky * self.wavelength))
+        return self.evaluate(alpha, phi)
 
     def profiles(self, max_semiangle: float = None, phi: float = 0.):
         if max_semiangle is None:

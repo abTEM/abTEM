@@ -123,7 +123,7 @@ class _WavesLike(HasGridMixin, HasAcceleratorMixin):
 
     @property
     def cutoff_scattering_angles(self):
-        kcut = 1 / max(self.sampling) / 2 * self.antialiasing_aperture
+        kcut = 1 / max(self.sampling) / 2 * min(self.antialiasing_aperture, 1)
         kcut = (np.ceil(2 * self.extent[0] * kcut) / (2 * self.extent[0]) * self.wavelength * 1e3,
                 np.ceil(2 * self.extent[1] * kcut) / (2 * self.extent[1]) * self.wavelength * 1e3)
         return kcut
@@ -147,22 +147,24 @@ class _WavesLike(HasGridMixin, HasAcceleratorMixin):
             gpts = self.gpts
         elif isinstance(max_angle, str):
             if max_angle == 'limit':
+                #cutoff = self.antialiasing_aperture
                 cutoff_scattering_angle = self.cutoff_scattering_angles
             elif max_angle == 'valid':
+                #cutoff = self.antialiasing_aperture / np.sqrt(2)
                 cutoff_scattering_angle = self.rectangle_cutoff_scattering_angles
             else:
                 raise RuntimeError()
 
             angular_sampling = self.angular_sampling
-
             gpts = (int(round(cutoff_scattering_angle[0] / angular_sampling[0] * 2)),
                     int(round(cutoff_scattering_angle[1] / angular_sampling[1] * 2)))
+
         elif isinstance(max_angle, Number):
             gpts = tuple([int(2 * np.floor(max_angle / d)) + 1 for n, d in zip(self.gpts, self.angular_sampling)])
         else:
             raise RuntimeError()
 
-        return gpts
+        return (min(gpts[0], self.gpts[0]), min(gpts[1], self.gpts[1]))
 
 
 class Waves(_WavesLike):
@@ -235,8 +237,8 @@ class Waves(_WavesLike):
         if gpts != self.gpts:
             array = fft_crop(array, self.array.shape[:-2] + gpts)
 
-        antialiasing_aperture = min(self.antialiasing_aperture * min(self.gpts[0] / gpts[0], self.gpts[1] / gpts[1]),
-                                    1.)
+        antialiasing_aperture = self.antialiasing_aperture * min(self.gpts[0] / gpts[0], self.gpts[1] / gpts[1])
+
         if return_fourier_space:
             return Waves(array, extent=self.extent, energy=self.energy, antialiasing_aperture=antialiasing_aperture)
         else:
@@ -259,6 +261,36 @@ class Waves(_WavesLike):
         abs2 = get_device_function(xp, 'abs2')
         waves = self.far_field(max_angle)
 
+        array = waves.array
+
+        pattern = np.fft.fftshift(asnumpy(abs2(array)), axes=(-1, -2))
+
+        # enforce_uniform = True
+        # if enforce_uniform:
+        #     from scipy.interpolate import interpn
+        #     kx, ky = spatial_frequencies(self.gpts, self.sampling)
+        #     kx = np.fft.fftshift(kx)
+        #     ky = np.fft.fftshift(ky)
+        #
+        #     min_sampling = max(self.angular_sampling)
+        #
+        #     scale_factor = (self.angular_sampling[0] / min_sampling,
+        #                     self.angular_sampling[1] / min_sampling)
+        #
+        #     new_gpts = (int(np.floor(self.gpts[0] * scale_factor[0])),
+        #                 int(np.floor(self.gpts[1] * scale_factor[1])))
+        #
+        #     kx2, ky2 = spatial_frequencies(new_gpts, self.sampling)
+        #     kx2 = np.fft.fftshift(kx2)
+        #     ky2 = np.fft.fftshift(ky2)
+        #
+        #     px, py = np.meshgrid(kx2, ky2, indexing='ij')
+        #     p = np.array([px.ravel(), py.ravel()]).T
+        #     print(pattern.shape)
+        #     print(p.shape)
+        #     pattern = interpn((kx, ky), pattern, p)
+        #     pattern = pattern.reshape(new_gpts)
+
         calibrations = calibrations_from_grid(waves.gpts,
                                               waves.sampling,
                                               names=['alpha_x', 'alpha_y'],
@@ -266,10 +298,7 @@ class Waves(_WavesLike):
                                               scale_factor=self.wavelength * 1000,
                                               fourier_space=True)
 
-        array = waves.array
         calibrations = (None,) * (len(array.shape) - 2) + calibrations
-
-        pattern = np.fft.fftshift(asnumpy(abs2(array)), axes=(-1, -2))
 
         measurement = Measurement(pattern, calibrations)
 
@@ -1031,25 +1060,32 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
 
         xp = get_array_module_from_device(self._device)
 
-        if xp != get_array_module(self.array):
-            stream = xp.cuda.Stream(non_blocking=False)
-            partial_array = xp.empty((batch_sizes[0],) + self.gpts, dtype=xp.complex64)
-
-        else:
-            stream = None
-            partial_array = None
+        # if xp != get_array_module(self.array):
+        #     stream = xp.cuda.Stream(non_blocking=False)
+        #     partial_array = xp.empty((batch_sizes[0],) + self.gpts, dtype=xp.complex64)
+        #
+        # else:
+        #     stream = None
+        #     partial_array = None
+        # partial_array = xp.empty((batch_sizes[0],) + self.gpts, dtype=xp.complex64)
 
         n = 0
         for batch_size in batch_sizes:
             start = n
             end = n + batch_size
 
-            if stream is not None:
-                partial_array[:batch_size].set(self._array[start:end], stream=stream)
-                yield start, end, Waves(partial_array[:batch_size], extent=self.extent, energy=self.energy)
-
+            if xp != get_array_module(self.array):
+                yield start, end, Waves(copy_to_device(self._array[start:end], xp),
+                                        extent=self.extent, energy=self.energy)
             else:
                 yield start, end, Waves(self._array[start:end], extent=self.extent, energy=self.energy)
+
+            # if stream is not None:
+            #     partial_array[:batch_size].set(self._array[start:end], stream=stream)
+            #     yield start, end, Waves(partial_array[:batch_size], extent=self.extent, energy=self.energy)
+            # #
+            # else:
+            #     yield start, end, Waves(self._array[start:end], extent=self.extent, energy=self.energy)
 
             n += batch_size
             pbar.update(batch_size)
@@ -1186,13 +1222,14 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
 
             window = window[:, :self.cropped_shape[0], :self.cropped_shape[1]].copy()
 
-        elif max_batch_expansion >= len(self):
+        elif max_batch_expansion <= len(self):
+            window = xp.zeros((len(positions),) + self.gpts, dtype=xp.complex64)
             for start, end, partial_s_matrix in self._generate_partial(max_batch_expansion, pbar=False):
                 partial_coefficients = coefficients[:, start:end]
-                window = xp.tensordot(partial_coefficients, partial_s_matrix.array, axes=[(1,), (0,)])
+                window += xp.tensordot(partial_coefficients, partial_s_matrix.array, axes=[(1,), (0,)])
 
         else:
-            window = xp.tensordot(coefficients, self.array, axes=[(1,), (0,)])
+            window = xp.tensordot(coefficients, copy_to_device(self.array, device=self._device), axes=[(1,), (0,)])
             # window = xp.tensordot(coefficients, copy_to_device(self.array, device=self._device), axes=[(1,), (0,)])
 
         return Waves(window, sampling=self.sampling, energy=self.energy,

@@ -30,7 +30,37 @@ def update_bqplot_image(image, measurement):
     image.scales['y'].max = L
 
 
-def show_measurement_2d(measurement_or_func, figure=None):
+def create_image_figure():
+    scale_x = LinearScale(allow_padding=False)
+    scale_y = LinearScale(allow_padding=False)
+
+    scales = {'x': scale_x, 'y': scale_y}
+
+    axis_x = Axis(scale=scales['x'])
+    axis_y = Axis(scale=scales['y'], orientation='vertical')
+
+    figure = Figure(scales=scales,
+                    axes=[axis_x, axis_y],
+                    min_aspect_ratio=1,
+                    max_aspect_ratio=1,
+                    fig_margin={'top': 0, 'bottom': 50, 'left': 50, 'right': 0})
+
+    figure.layout.height = '400px'
+    figure.layout.width = '400px'
+
+    scales_image = {'x': scale_x,
+                    'y': scale_y,
+                    'image': ColorScale(scheme='viridis')}
+    # 'image': ColorScale(colors=['black', 'white'])}
+
+    image = ImageGL(image=np.zeros((0, 0)), scales=scales_image)
+
+    figure.marks = (image,)
+
+    return figure, image
+
+
+def show_measurement_2d(measurement_or_func):
     try:
         measurement = measurement_or_func()
         return_callback = True
@@ -39,27 +69,9 @@ def show_measurement_2d(measurement_or_func, figure=None):
         measurement = measurement_or_func
         return_callback = False
 
-    if figure is None:
-        scales = {'x': LinearScale(allow_padding=False), 'y': LinearScale(allow_padding=False)}
-
-        axis_x = Axis(scale=scales['x'])
-        axis_y = Axis(scale=scales['y'], orientation='vertical')
-
-        figure = Figure(scales=scales,
-                        axes=[axis_x, axis_y],
-                        min_aspect_ratio=1,
-                        max_aspect_ratio=1,
-                        fig_margin={'top': 0, 'bottom': 50, 'left': 50, 'right': 0})
-
-        figure.layout.height = '400px'
-        figure.layout.width = '400px'
+    figure, image = create_image_figure()
 
     toolbar = Toolbar(figure=figure)
-
-    scales_image = {'x': figure.axes[0].scale, 'y': figure.axes[1].scale,
-                    'image': ColorScale(colors=['black', 'white'])}
-
-    image = ImageGL(image=np.zeros((0, 0)), scales=scales_image)
 
     figure.axes[0].label = format_label(measurement.calibrations[-2])
     figure.axes[1].label = format_label(measurement.calibrations[-1])
@@ -116,3 +128,15 @@ def show_measurement_1d(measurements_or_func, figure=None, throttling=False, **k
         return figure, callback
     else:
         return figure
+
+
+def create_reset_button(figure):
+    def reset_zoom(*args):
+        figure.axes[0].scale.min = None
+        figure.axes[1].scale.min = None
+        figure.axes[0].scale.max = None
+        figure.axes[1].scale.max = None
+
+    reset_button = widgets.Button(description='Reset')
+    reset_button.on_click(reset_zoom)
+    return reset_button
