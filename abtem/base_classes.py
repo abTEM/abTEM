@@ -605,7 +605,13 @@ class Accelerator:
         other: Accelerator object
             The accelerator that should be checked.
         """
+        #print(self.energy)
+        #print((self.energy != other.energy))
+        #if (self.energy is not None) & (other.energy is not None) & (self.energy != other.energy):
+        #    ssss
+
         if (self.energy is not None) & (other.energy is not None) & (self.energy != other.energy):
+
             raise RuntimeError('Inconsistent energies')
 
     def match(self, other, check_match=False):
