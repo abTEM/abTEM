@@ -17,7 +17,7 @@ from abtem.potentials import Potential, AbstractPotential, AbstractTDSPotentialB
 from abtem.scan import AbstractScan, GridScan
 from abtem.transfer import CTF
 from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, subdivide_into_batches, periodic_crop, \
-    fft_crop, fft_interpolate_2d
+    fft_crop
 
 
 class FresnelPropagator:
@@ -147,10 +147,8 @@ class _WavesLike(HasGridMixin, HasAcceleratorMixin):
             gpts = self.gpts
         elif isinstance(max_angle, str):
             if max_angle == 'limit':
-                #cutoff = self.antialiasing_aperture
                 cutoff_scattering_angle = self.cutoff_scattering_angles
             elif max_angle == 'valid':
-                #cutoff = self.antialiasing_aperture / np.sqrt(2)
                 cutoff_scattering_angle = self.rectangle_cutoff_scattering_angles
             else:
                 raise RuntimeError()
@@ -181,6 +179,8 @@ class Waves(_WavesLike):
         Lateral sampling of wave functions [1 / Å].
     energy : float
         Electron energy [eV].
+    antialiasing_aperture : float
+        Antialiasing aperture.
     """
 
     def __init__(self,
@@ -261,35 +261,7 @@ class Waves(_WavesLike):
         abs2 = get_device_function(xp, 'abs2')
         waves = self.far_field(max_angle)
 
-        array = waves.array
-
-        pattern = np.fft.fftshift(asnumpy(abs2(array)), axes=(-1, -2))
-
-        # enforce_uniform = True
-        # if enforce_uniform:
-        #     from scipy.interpolate import interpn
-        #     kx, ky = spatial_frequencies(self.gpts, self.sampling)
-        #     kx = np.fft.fftshift(kx)
-        #     ky = np.fft.fftshift(ky)
-        #
-        #     min_sampling = max(self.angular_sampling)
-        #
-        #     scale_factor = (self.angular_sampling[0] / min_sampling,
-        #                     self.angular_sampling[1] / min_sampling)
-        #
-        #     new_gpts = (int(np.floor(self.gpts[0] * scale_factor[0])),
-        #                 int(np.floor(self.gpts[1] * scale_factor[1])))
-        #
-        #     kx2, ky2 = spatial_frequencies(new_gpts, self.sampling)
-        #     kx2 = np.fft.fftshift(kx2)
-        #     ky2 = np.fft.fftshift(ky2)
-        #
-        #     px, py = np.meshgrid(kx2, ky2, indexing='ij')
-        #     p = np.array([px.ravel(), py.ravel()]).T
-        #     print(pattern.shape)
-        #     print(p.shape)
-        #     pattern = interpn((kx, ky), pattern, p)
-        #     pattern = pattern.reshape(new_gpts)
+        pattern = np.fft.fftshift(asnumpy(abs2(waves.array)), axes=(-1, -2))
 
         calibrations = calibrations_from_grid(waves.gpts,
                                               waves.sampling,
@@ -298,7 +270,7 @@ class Waves(_WavesLike):
                                               scale_factor=self.wavelength * 1000,
                                               fourier_space=True)
 
-        calibrations = (None,) * (len(array.shape) - 2) + calibrations
+        calibrations = (None,) * (len(pattern.shape) - 2) + calibrations
 
         measurement = Measurement(pattern, calibrations)
 
@@ -559,16 +531,6 @@ class Probe(_WavesLike, HasDeviceMixin):
 
     Parameters
     ----------
-    semiangle_cutoff : float
-        Convergence semi-angle [mrad].
-    rolloff : float
-        Softens the cutoff. A value of 0 gives a hard cutoff, while 1 gives the softest possible cutoff.
-    focal_spread : float
-        The focal spread of the probe.
-    angular_spread : float
-        The angular spread of the probe
-    ctf_parameters : dict
-        The parameters describing the phase aberrations using polar notation or an alias.
     extent : two float, optional
         Lateral extent of wave functions [Å].
     gpts : two int, optional
@@ -580,7 +542,8 @@ class Probe(_WavesLike, HasDeviceMixin):
     device : str
         The probe wave functions will be build on this device.
     kwargs :
-        Provide the aberration coefficients as keyword arguments.
+        Provide the parameters of the contrast transfer function as keyword arguments. See the documentation for the
+        CTF object.
     """
 
     def __init__(self,
@@ -1445,41 +1408,24 @@ class SMatrix(_WavesLike, HasDeviceMixin):
                              max_batch_probes: int,
                              max_batch_expansion: int,
                              potential_pbar: Union[ProgressBar, bool] = True,
-                             multislice_pbar: Union[ProgressBar, bool] = True,
                              plane_waves_pbar: Union[ProgressBar, bool] = True):
 
         if isinstance(potential_pbar, bool):
             potential_pbar = ProgressBar(total=len(potential), desc='Potential', disable=not potential_pbar)
 
-        # if isinstance(multislice_pbar, bool):
-        #    multislice_pbar = ProgressBar(total=len(potential), desc='Multislice', disable=not multislice_pbar)
-
         if isinstance(plane_waves_pbar, bool):
-            plane_waves_pbar = ProgressBar(total=len(self), desc='Plane waves', disable=not plane_waves_pbar)
-
-        # import cupy as cp
-        # from abtem.device import get_available_memory
-        # mempool = cp.get_default_memory_pool()
+            plane_waves_pbar = ProgressBar(total=len(self), desc='Multislice', disable=not plane_waves_pbar)
 
         for potential_config in potential.generate_frozen_phonon_potentials(pbar=potential_pbar):
             S = self.build()
 
             S = S.multislice(potential_config,
                              max_batch=max_batch_expansion,
-                             multislice_pbar=False,  # multislice_pbar,
+                             multislice_pbar=False,
                              plane_waves_pbar=plane_waves_pbar)
 
             S = S.downsample('limit')
-
-            # del potential_config
-            # mempool.free_all_blocks()
-
             yield S._generate_probes(scan, max_batch_probes, max_batch_expansion)
-            # del S
-            # mempool.free_all_blocks()
-
-        # multislice_pbar.refresh()
-        # multislice_pbar.close()
 
         plane_waves_pbar.refresh()
         plane_waves_pbar.close()

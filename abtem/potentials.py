@@ -51,18 +51,22 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 
     def generate_transmission_functions(self, energy, first_slice=0, last_slice=None, max_batch=1):
         """
-        Generate the potential one slice at a time.
+        Generate the transmission functions one slice at a time.
 
         Parameters
         ----------
-        start: int
-            First potential slice.
-        end: int, optional
-            Last potential slice.
+        energy: float
+            Electron energy [eV].
+        first_slice: int
+            First potential slice to generate.
+        last_slice: int, optional
+            Last potential slice generate.
+        max_batch: int
+            Maximum number of potential slices calculated in parallel.
 
         Returns
         -------
-        generator of ProjectedPotential objects
+        generator of PotentialArray objects
         """
         antialias_filter = AntialiasFilter()
 
@@ -75,18 +79,20 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
     @abstractmethod
     def generate_slices(self, first_slice=0, last_slice=None, max_batch=1):
         """
-        Generate the potential one slice at a time.
+        Generate the potential slices.
 
         Parameters
         ----------
-        start: int
-            First potential slice.
-        end: int, optional
-            Last potential slice.
+        first_slice: int
+            First potential slice to generate.
+        last_slice: int, optional
+            Last potential slice generate.
+        max_batch: int
+            Maximum number of potential slices calculated in parallel.
 
         Returns
         -------
-        generator of ProjectedPotential objects
+        generator of PotentialArray objects
         """
 
         pass
@@ -108,56 +114,6 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         for _, __, p in self.generate_slices(max_batch=1):
             yield p
 
-    def get_projected_potential(self, items) -> 'PotentialArray':
-        """
-        Get projected potential for the slice or slices.
-
-        Parameters
-        ----------
-        items: int or slice
-            The potential slice(s) (either a single index or a range, ie. a Python slice [start:end]) to include in the
-            projection.
-
-        Returns
-        -------
-        ProjectedPotential object
-            The projected potential.
-        """
-
-        if isinstance(items, int):
-            if items >= self.num_slices:
-                raise StopIteration
-            return next(self.generate_slices(items, items + 1, max_batch=1))[2]
-
-        elif isinstance(items, slice):
-            raise NotImplementedError()
-
-            if items.start is None:
-                start = 0
-            else:
-                start = items.start
-
-            if items.stop is None:
-                stop = len(self)
-            else:
-                stop = items.stop
-
-            if items.step is None:
-                step = 1
-            else:
-                step = items.step
-
-            projected = self[start]
-            for i in range(start + 1, stop, step):
-                projected._array += self[i]._array
-                projected._thickness += self.get_slice_thickness(i)
-            return projected
-        else:
-            raise TypeError('Potential must indexed with integers or slices, not {}'.format(type(items)))
-
-    def __getitem__(self, items):
-        return self.get_projected_potential(items)
-
     # def show(self, **kwargs):
     #     """
     #     Show the potential projection. This requires building all potential slices.
@@ -178,14 +134,41 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 class AbstractPotentialBuilder(AbstractPotential):
     """Potential builder abstract class."""
 
-    def __init__(self, precalculate=True, storage='cpu'):
+    def __init__(self, precalculate=True, device='cpu', storage='cpu'):
         self._precalculate = precalculate
         self._storage = storage
+        self._device = device
 
     def _estimate_max_batch(self):
         memory_per_wave = 2 * 4 * self.gpts[0] * self.gpts[1]
         available_memory = .2 * get_available_memory(self._device)
         return min(int(available_memory / memory_per_wave), len(self))
+
+    def __getitem__(self, items):
+        if isinstance(items, int):
+            if items >= self.num_slices:
+                raise StopIteration
+            return next(self.generate_slices(items, items + 1, max_batch=1))[2]
+
+        elif isinstance(items, slice):
+            if items.start is None:
+                first_slice = 0
+            else:
+                first_slice = items.start
+
+            if items.stop is None:
+                last_slice = len(self)
+            else:
+                last_slice = items.stop
+
+            if items.step is None:
+                step = 1
+            else:
+                step = items.step
+
+            return self.build(first_slice, last_slice, pbar=False)[::step]
+        else:
+            raise TypeError('Potential must indexed with integers or slices, not {}'.format(type(items)))
 
     def build(self,
               first_slice: int = 0,
@@ -199,6 +182,14 @@ class AbstractPotentialBuilder(AbstractPotential):
 
         Parameters
         ----------
+        first_slice: int
+            First potential slice to generate.
+        last_slice: int, optional
+            Last potential slice generate.
+        energy: float
+            Electron energy [eV]. If given, the transmission functions will be returned.
+        max_batch: int
+            Maximum number of potential slices calculated in parallel.
         pbar: bool
             If true, show progress bar.
 
@@ -889,6 +880,9 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         self._slice_thicknesses = slice_thicknesses
         self._grid = Grid(extent=extent, gpts=self.array.shape[-2:], sampling=sampling, lock_gpts=True)
 
+    def __getitem__(self, items):
+        return PotentialArray(self.array[items], self._slice_thicknesses[items], extent=self.extent)
+
     def as_transmission_function(self, energy, in_place=True, max_batch=1, antialias_filter=None):
         """
         Calculate the transmission functions for a specific energy.
@@ -1031,9 +1025,5 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
     def transmit(self, waves):
         self.accelerator.check_match(waves)
         xp = get_array_module(waves._array)
-
-        # if len(self.array.shape) == 2:
-        #    waves._array *= copy_to_device(self.array[None], xp)
-        # else:
         waves._array *= copy_to_device(self.array, xp)
         return waves

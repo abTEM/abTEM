@@ -7,33 +7,10 @@ import numpy as np
 
 from abtem.base_classes import Cache, Event, watched_property, cached_method, Grid
 from abtem.device import get_array_module, get_device_function
-from abtem.measure import Calibration, calibrations_from_grid, Measurement, FlexibleAnnularMeasurement, \
-    _fourier_space_offset
+from abtem.measure import Calibration, calibrations_from_grid, Measurement, FlexibleAnnularMeasurement
 from abtem.plot import show_image
 from abtem.scan import AbstractScan
 from abtem.utils import spatial_frequencies
-
-
-def _crop_to_center(array: np.ndarray):
-    """Crop an array around its center to remove the suppressed frequencies from an antialiased 2D fourier spectrum."""
-    shape = array.shape
-    w = shape[-2] // 2
-    h = shape[-1] // 2
-    left = w - w // 2
-    right = w + (w - w // 2)
-    top = h - h // 2
-    bottom = h + (h - h // 2)
-    return array[..., left:right, top:bottom]
-
-
-def _calculate_far_field_intensity(waves, overwrite: bool = False):
-    """Calculate the far-field intensity of a wave."""
-    xp = get_array_module(waves.array)
-    fft2 = get_device_function(xp, 'fft2')
-    abs2 = get_device_function(xp, 'abs2')
-    array = fft2(waves.array, overwrite_x=overwrite)
-    intensity = _crop_to_center(xp.fft.fftshift(array, axes=(-2, -1)))
-    return abs2(intensity)
 
 
 def _polar_regions(gpts, angular_sampling, inner, outer, nbins_radial, nbins_azimuthal):
