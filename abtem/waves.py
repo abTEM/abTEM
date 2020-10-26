@@ -304,7 +304,7 @@ class Waves(_WavesLike):
 
         if not ctf.accelerator.energy:
             ctf.accelerator.match(self.accelerator)
-        
+
         self.accelerator.match(ctf.accelerator, check_match=True)
 
         self.accelerator.check_is_defined()
