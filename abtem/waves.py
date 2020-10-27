@@ -1506,7 +1506,7 @@ class SMatrix(_WavesLike, HasDeviceMixin):
                                                          max_batch_probes=max_batch_probes,
                                                          max_batch_expansion=max_batch_expansion,
                                                          potential_pbar=True,
-                                                         multislice_pbar=True)
+                                                         plane_waves_pbar=True)
 
             tds_bar = ProgressBar(total=len(potential.frozen_phonons), desc='TDS',
                                   disable=(not pbar) or (len(potential.frozen_phonons) == 1))
