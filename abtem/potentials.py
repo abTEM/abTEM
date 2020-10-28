@@ -709,7 +709,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
         for start, end in generate_batches(last_slice - first_slice, max_batch=max_batch, start=first_slice):
             array[:] = 0.
-            
+
             for j, (number, indices) in enumerate(indices_by_number.items()):
                 temp[:] = 0.
                 in_slice = (slice_idx >= start) * (slice_idx < end) * (atoms.numbers == number)

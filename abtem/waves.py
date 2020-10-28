@@ -91,6 +91,9 @@ def _multislice(waves: Union['Waves', 'SMatrixArray'],
 
     if isinstance(pbar, bool):
         pbar = ProgressBar(total=len(potential), desc='Multislice', disable=not pbar)
+        close_pbar = True
+    else:
+        close_pbar = False
 
     pbar.reset()
     if max_batch == 1:
@@ -107,6 +110,9 @@ def _multislice(waves: Union['Waves', 'SMatrixArray'],
             pbar.update(end - start)
 
     pbar.refresh()
+    if close_pbar:
+        pbar.close()
+
     return waves
 
 
@@ -390,6 +396,10 @@ class Waves(_WavesLike):
                 tds_pbar.close()
 
         if result is None:
+            if isinstance(potential, AbstractPotentialBuilder):
+                if potential._precalculate:
+                    potential = potential.build(pbar=pbar)
+
             result = _multislice(self, potential, propagator, pbar, max_batch=potential_chunks)
 
             if detector:
