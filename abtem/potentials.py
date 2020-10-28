@@ -249,8 +249,8 @@ class AbstractPotentialBuilder(AbstractPotential):
 class AbstractTDSPotentialBuilder(AbstractPotentialBuilder):
     """Thermal diffuse scattering builder abstract class."""
 
-    def __init__(self, precalculate=True, storage='cpu'):
-        super().__init__(precalculate=precalculate, storage=storage)
+    def __init__(self, precalculate=True, device='cpu', storage='cpu'):
+        super().__init__(precalculate=precalculate, device=device, storage=storage)
 
     @property
     @abstractmethod
@@ -521,12 +521,10 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         self.grid.changed.register(grid_changed_callback)
         self.changed = Event()
 
-        self._device = device
-
         if storage is None:
             storage = device
 
-        super().__init__(precalculate=precalculate, storage=storage)
+        super().__init__(precalculate=precalculate, device=device, storage=storage)
 
     @property
     def parametrization(self):
@@ -682,6 +680,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
     def _generate_slices_infinite(self, first_slice=0, last_slice=None, max_batch=1) -> Generator:
         xp = get_array_module_from_device(self._device)
+
         fft2_convolve = get_device_function(xp, 'fft2_convolve')
 
         atoms = self.atoms.copy()
@@ -704,23 +703,26 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         slice_idx = np.floor(atoms.positions[:, 2] / atoms.cell[2, 2] * self.num_slices).astype(np.int)
 
         start, end = next(generate_batches(last_slice - first_slice, max_batch=max_batch, start=first_slice))
-        array = xp.zeros((end - start, len(indices_by_number),) + self.gpts, dtype=xp.complex64)
+
+        array = xp.zeros((end - start,) + self.gpts, dtype=xp.complex64)
+        temp = xp.zeros((end - start,) + self.gpts, dtype=xp.complex64)
 
         for start, end in generate_batches(last_slice - first_slice, max_batch=max_batch, start=first_slice):
             array[:] = 0.
-
+            
             for j, (number, indices) in enumerate(indices_by_number.items()):
+                temp[:] = 0.
                 in_slice = (slice_idx >= start) * (slice_idx < end) * (atoms.numbers == number)
                 slice_atoms = atoms[in_slice]
-
                 positions = xp.asarray(slice_atoms.positions[:, :2] / self.sampling)
 
-                superpose_deltas(positions, slice_idx[in_slice] - start, array[:, j])
+                superpose_deltas(positions, slice_idx[in_slice] - start, temp)
+                fft2_convolve(temp, scattering_factors[number])
 
-                fft2_convolve(array[:, j], scattering_factors[number])
+                array += temp
 
             slice_thicknesses = [self.get_slice_thickness(i) for i in range(start, end)]
-            yield start, end, PotentialArray(array.real.sum(1)[:end - start], slice_thicknesses, extent=self.extent)
+            yield start, end, PotentialArray(array.real[:end - start], slice_thicknesses, extent=self.extent)
 
     def _generate_slices_finite(self, first_slice=0, last_slice=None, max_batch=1) -> Generator:
         xp = get_array_module_from_device(self._device)
@@ -773,10 +775,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
                     B = np.concatenate((B, [b] * len(slice_positions)))
 
                     run_length_enconding[i + 1] = run_length_enconding[i] + len(slice_positions)
-                    # print(i)
 
-                # print(run_length_enconding, end, start)
-                # sss
                 vr, dvdr = integrator.integrate(positions[:, 2], A, B, xp=xp)
 
                 vr = xp.asarray(vr, dtype=xp.float32)
@@ -819,7 +818,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
         for atoms in self.frozen_phonons:
             self.atoms.positions[:] = atoms.positions
-            self.atoms.wrap()
+            # self.atoms.wrap()
             pbar.reset()
 
             if self._precalculate:

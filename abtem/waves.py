@@ -377,10 +377,12 @@ class Waves(_WavesLike):
                                              pbar=multislice_pbar,
                                              max_batch=potential_chunks)
 
+                    #print(exit_waves.array.shape, result._array.shape)
+
                     if detector:
                         result._array += asnumpy(detector.detect(exit_waves))
                     else:
-                        result._array[i] = exit_waves.array
+                        result._array[i] = xp.squeeze(exit_waves.array)
 
                     tds_pbar.update(1)
 

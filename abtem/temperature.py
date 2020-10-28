@@ -155,7 +155,6 @@ class FrozenPhonons(AbstractFrozenPhonons):
                 positions[:, direction] += self._sigmas * np.random.randn(len(positions))
 
             atoms.set_positions(positions)
-            atoms.wrap()
 
             yield atoms
 
