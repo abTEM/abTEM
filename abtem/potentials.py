@@ -881,7 +881,13 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         self._grid = Grid(extent=extent, gpts=self.array.shape[-2:], sampling=sampling, lock_gpts=True)
 
     def __getitem__(self, items):
-        return PotentialArray(self.array[items], self._slice_thicknesses[items], extent=self.extent)
+        if isinstance(items, int):
+            return PotentialArray(self.array[items][None], self._slice_thicknesses[items][None], extent=self.extent)
+
+        elif isinstance(items, slice):
+            return PotentialArray(self.array[items], self._slice_thicknesses[items], extent=self.extent)
+        else:
+            raise TypeError('Potential must indexed with integers or slices, not {}'.format(type(items)))
 
     def as_transmission_function(self, energy, in_place=True, max_batch=1, antialias_filter=None):
         """

@@ -53,7 +53,7 @@ def test_potential_build_gpu():
     potential = Potential(atoms=atoms, sampling=.1, device='gpu')
 
     array_potential = potential.build()
-    assert np.all(asnumpy(array_potential[2].array == potential[2].array))
+    assert np.all(asnumpy(array_potential[2].array) == potential[2].array)
 
     potential = Potential(atoms=atoms, sampling=.1, device='cpu')
     assert np.allclose(asnumpy(array_potential[2].array), potential[2].array)
