@@ -245,11 +245,13 @@ class GPAWPotential(AbstractPotentialBuilder):
                     integrator = PotentialIntegrator(f, R, self.get_slice_thickness(i))
                     #am, bm = a - atom.z, b - atom.z
 
-                    vr[j], dvdr[j, :-1] = integrator.integrate(a, b, atom.z, xp=np)
+                    vr[j], dvdr[j] = integrator.integrate(np.array([atom.z]), a, b, xp=np)
+
 
                 sampling = np.asarray(self.sampling, dtype=np.float32)
                 run_length_enconding = np.zeros((2,), dtype=np.int32)
-
+                run_length_enconding[1] = len(slice_atoms)
+                
                 interpolate_radial_functions(array,
                                              run_length_enconding,
                                              disc_indices,
