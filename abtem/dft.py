@@ -214,7 +214,7 @@ class GPAWPotential(AbstractPotentialBuilder):
             projected_valence = valence[..., na:nb].sum(axis=-1) * self._voxel_height
             projected_valence = interpolate_rectangle(projected_valence, cell, self.extent, self.gpts, self._origin)
 
-            array = np.zeros(self.gpts, dtype=np.float32)
+            array = np.zeros((1,) + self.gpts, dtype=np.float32)
             for number, indices in indices_by_number.items():
                 slice_atoms = atoms[indices]
 
