@@ -760,15 +760,12 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
                 A = np.zeros((0,), dtype=xp.float32)
                 B = np.zeros((0,), dtype=xp.float32)
                 run_length_enconding = np.zeros((end - start + 1,), dtype=xp.int32)
-                # print(end, start)
+
                 for i, j in enumerate(range(start, end)):
                     a = slice_edges[j]
                     b = slice_edges[j + 1]
                     slice_positions = chunk_positions[(chunk_positions[:, 2] > a - integrator.cutoff) *
                                                       (chunk_positions[:, 2] < b + integrator.cutoff)]
-
-                    # if len(slice_positions) == 0:
-                    #    continue
 
                     positions = np.vstack((positions, slice_positions))
                     A = np.concatenate((A, [a] * len(slice_positions)))

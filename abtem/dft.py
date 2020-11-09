@@ -242,14 +242,16 @@ class GPAWPotential(AbstractPotentialBuilder):
 
                     f = interp1d(r * units.Bohr, v, fill_value=(v[0], 0), bounds_error=False, kind='linear')
 
-                    integrator = PotentialIntegrator(f, R)
-                    am, bm = a - atom.z, b - atom.z
+                    integrator = PotentialIntegrator(f, R, self.get_slice_thickness(i))
+                    #am, bm = a - atom.z, b - atom.z
 
-                    vr[j], dvdr[j, :-1] = integrator.integrate(am, bm)
+                    vr[j], dvdr[j, :-1] = integrator.integrate(a, b, atom.z, xp=np)
 
                 sampling = np.asarray(self.sampling, dtype=np.float32)
+                run_length_enconding = np.zeros((2,), dtype=np.int32)
 
                 interpolate_radial_functions(array,
+                                             run_length_enconding,
                                              disc_indices,
                                              slice_atoms.positions,
                                              vr,
