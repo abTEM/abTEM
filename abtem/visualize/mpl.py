@@ -115,6 +115,7 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
 
     return ax
 
+
 def show_measurement_2d(measurement,
                         ax=None,
                         figsize=None,
@@ -124,6 +125,8 @@ def show_measurement_2d(measurement,
                         vmin=None,
                         vmax=None,
                         power=1.,
+                        log_scale=False,
+                        title=None,
                         **kwargs):
     """
     Show image function
@@ -169,6 +172,9 @@ def show_measurement_2d(measurement,
     if power != 1:
         array = array ** power
 
+    if log_scale:
+        array = np.log(array)
+
     extent = []
     for calibration, num_elem in zip(calibrations, array.shape):
         extent.append(calibration.offset)
@@ -197,6 +203,9 @@ def show_measurement_2d(measurement,
 
     ax.set_xlabel(format_label(calibrations[-2]))
     ax.set_ylabel(format_label(calibrations[-1]))
+
+    if title is not None:
+        ax.set_title(title)
 
     return ax, im
 
@@ -236,5 +245,8 @@ def show_measurement_1d(measurement, ax=None, figsize=None, legend=False, title=
 
     if legend:
         ax.legend()
+
+    if title is not None:
+        ax.set_title(title)
 
     return ax, lines[0]
