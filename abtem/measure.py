@@ -14,7 +14,7 @@ from scipy.ndimage import zoom
 
 from abtem.device import asnumpy
 from abtem.visualize.mpl import show_measurement_2d, show_measurement_1d
-from abtem.utils import _disc_meshgrid
+from abtem.utils import _disc_meshgrid, periodic_crop
 
 
 class Calibration:
@@ -667,3 +667,55 @@ def center_of_mass(measurement: Measurement):
 
     return (Measurement(com[..., 0], measurement.calibrations[:-2], units='mrad', name='com_x'),
             Measurement(com[..., 1], measurement.calibrations[:-2], units='mrad', name='com_y'))
+
+
+def integrate_disc(position: np.ndarray, measurement: Measurement, radius: float, border: str = 'wrap'):
+    """
+    Integrate the values of a 2d measurement on a disc-shaped region.
+
+    Parameters
+    ----------
+    position: two floats
+        Center of disc-shaped integration region
+    measurement: 2d measurement
+        The measurement to integrate
+    radius: float
+        Radius of disc-shaped integration region
+    border: str
+        Specify how to treat integration regions that cross the image border
+
+    Returns
+    -------
+    float
+        Integral value
+    """
+    calibrations = measurement.calibrations
+
+    new_shape = (2 * int(np.ceil(radius / calibrations[0].sampling)) + 1,
+                 2 * int(np.ceil(radius / calibrations[1].sampling)) + 1)
+
+    corner = (int(np.floor(position[0] / calibrations[0].sampling)) - new_shape[0] // 2,
+              int(np.floor(position[1] / calibrations[1].sampling)) - new_shape[0] // 2)
+
+    if border == 'wrap':
+        cropped = periodic_crop(measurement.array, corner, new_shape)
+    elif border == 'raise':
+        if ((np.any(np.array(corner) < 0)) |
+                (corner[0] + new_shape[0] > measurement.array.shape[0]) |
+                (corner[1] + new_shape[1] > measurement.array.shape[1])):
+            raise RuntimeError('The integration region is outside the image.')
+
+        cropped = periodic_crop(measurement.array, corner, new_shape)
+    else:
+        raise RuntimeError('The border must be one of')
+
+    x = np.linspace(calibrations[0].offset, calibrations[0].offset + cropped.shape[0] * calibrations[0].sampling,
+                    cropped.shape[0], endpoint=False)
+    y = np.linspace(calibrations[1].offset, calibrations[1].offset + cropped.shape[1] * calibrations[1].sampling,
+                    cropped.shape[1], endpoint=False)
+    x, y = np.meshgrid(x, y, indexing='ij')
+
+    cropped_position = position - (corner[0] * calibrations[0].sampling, corner[1] * calibrations[1].sampling)
+
+    r = np.sqrt((x - cropped_position[0]) ** 2 + (y - cropped_position[1]) ** 2)
+    return cropped[r < radius].sum()
