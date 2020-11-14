@@ -11,10 +11,10 @@ def test_flexible_annular_detector():
     atoms = read('data/srtio3_100.cif')
     atoms *= (4, 4, 1)
 
-    potential = Potential(atoms, gpts=512, device='gpu', projection='infinite', slice_thickness=.5,
-                          parametrization='kirkland', storage='gpu').build(pbar=False)
+    potential = Potential(atoms, gpts=512, projection='infinite', slice_thickness=.5,
+                          parametrization='kirkland', ).build(pbar=False)
 
-    probe = Probe(energy=300e3, semiangle_cutoff=9.4, device='gpu', rolloff=0.05)
+    probe = Probe(energy=300e3, semiangle_cutoff=9.4, rolloff=0.05)
 
     flexible_detector = FlexibleAnnularDetector()
     annular_detector = AnnularDetector(inner=30, outer=80)

@@ -122,8 +122,8 @@ def test_downsample_detect():
     atoms = read('data/srtio3_100.cif')
     atoms *= (4, 4, 1)
 
-    potential = Potential(atoms, gpts=256, device='gpu', projection='infinite', slice_thickness=.5,
-                          parametrization='kirkland', storage='gpu').build(pbar=False)
+    potential = Potential(atoms, gpts=256, projection='infinite', slice_thickness=.5,
+                          parametrization='kirkland').build(pbar=False)
 
     detector = FlexibleAnnularDetector()
     end = (potential.extent[0] / 4, potential.extent[1] / 4)
