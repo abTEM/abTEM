@@ -233,7 +233,7 @@ class GPAWPotential(AbstractPotentialBuilder):
 
                 slice_atoms = pad_atoms(slice_atoms, cutoff)
 
-                R = np.geomspace(1e-8, cutoff, int(np.ceil(cutoff / np.min(self.sampling))) * 10)
+                R = np.geomspace(np.min(self.sampling)/2, cutoff, int(np.ceil(cutoff / np.min(self.sampling))) * 10)
 
                 vr = np.zeros((len(slice_atoms), len(R)), np.float32)
                 dvdr = np.zeros((len(slice_atoms), len(R)), np.float32)
@@ -242,8 +242,7 @@ class GPAWPotential(AbstractPotentialBuilder):
 
                     f = interp1d(r * units.Bohr, v, fill_value=(v[0], 0), bounds_error=False, kind='linear')
 
-                    integrator = PotentialIntegrator(f, R, self.get_slice_thickness(i))
-                    #am, bm = a - atom.z, b - atom.z
+                    integrator = PotentialIntegrator(f, R, self.get_slice_thickness(i), tolerance=1e-6)
 
                     vr[j], dvdr[j] = integrator.integrate(np.array([atom.z]), a, b, xp=np)
 
@@ -251,7 +250,7 @@ class GPAWPotential(AbstractPotentialBuilder):
                 sampling = np.asarray(self.sampling, dtype=np.float32)
                 run_length_enconding = np.zeros((2,), dtype=np.int32)
                 run_length_enconding[1] = len(slice_atoms)
-                
+
                 interpolate_radial_functions(array,
                                              run_length_enconding,
                                              disc_indices,

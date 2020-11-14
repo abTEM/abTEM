@@ -307,8 +307,6 @@ class PotentialIntegrator:
             return self._function(np.sqrt(self.r[0] ** 2 + (z * max_interval / 2 + max_interval / 2) ** 2))
 
         value, error_estimate, step_size, order = integrate(f, -1, 1, self._tolerance)
-        step_size = step_size
-        order = order
 
         self._xk, self._wk = tanh_sinh_nodes_and_weights(step_size, order)
 
@@ -650,7 +648,8 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
             cutoff = self.get_cutoff(number)
             soft_function = self.get_tapered_function(number)
             inner_cutoff = np.min(self.sampling) / 2.
-            num_points = int(np.ceil(cutoff / np.min(self.sampling) * 2.))
+
+            num_points = int(np.ceil(cutoff / np.min(self.sampling) * 10.))
             r = np.geomspace(inner_cutoff, cutoff, num_points)
             max_interval = self.slice_thickness
             self._integrators[number] = PotentialIntegrator(soft_function, r, max_interval, cutoff)
