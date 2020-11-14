@@ -128,7 +128,7 @@ def test_downsample_detect():
     detector = FlexibleAnnularDetector()
     end = (potential.extent[0] / 4, potential.extent[1] / 4)
     gridscan = GridScan(start=[0, 0], end=end, sampling=.2)
-    S = SMatrix(energy=300e3, semiangle_cutoff=9.4, device='gpu', rolloff=0.05, expansion_cutoff=10)
+    S = SMatrix(energy=300e3, semiangle_cutoff=9.4, rolloff=0.05, expansion_cutoff=10)
     S_exit = S.multislice(potential, pbar=False)
     measurements = S_exit.scan(gridscan, [detector], pbar=False)
     S_downsampled = S_exit.downsample()
