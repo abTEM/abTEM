@@ -179,7 +179,7 @@ def fft_interpolate_2d(array, new_shape, normalization='values', overwrite_x=Fal
     elif (normalization != False) and (normalization != None):
         raise RuntimeError()
 
-    return array  # * norm
+    return array
 
 
 def subdivide_into_batches(num_items: int, num_batches: int = None, max_batch: int = None):

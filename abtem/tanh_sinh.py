@@ -45,9 +45,11 @@ def _error_estimate(eps: float,
         e2 = abs(value_estimates[-1] - value_estimates[-3])
         e3 = eps * max(max(abs(left_summands)), max(abs(right_summands)))
         e4 = max(abs(left_summands[-1]), abs(right_summands[-1]))
-        error_estimate = max(e1 ** (np.log(e1) / np.log(e2)), e1 ** 2, e3, e4)
 
-        # with np.errstate(over='ignore'):
+        with np.errstate(over='ignore'):
+            error_estimate = max(e1 ** (np.log(e1) / np.log(e2)), e1 ** 2, e3, e4)
+
+        #
         #    error_estimate = max(e1 ** n, e1 ** 2, e3, e4)
         #error_estimate = max(e1, e4)
 

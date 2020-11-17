@@ -269,16 +269,16 @@ class Grid:
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
                  dimensions: int = 2,
-                 endpoint: bool = False,
-                 lock_extent=False,
-                 lock_gpts=False,
-                 lock_sampling=False):
+                 endpoint: Union[int, Sequence[bool]] = False,
+                 lock_extent: bool = False,
+                 lock_gpts: bool = False,
+                 lock_sampling: bool = False):
 
         self.changed = Event()
         self._dimensions = dimensions
 
         if isinstance(endpoint, bool):
-            endpoint = (endpoint,) * 2
+            endpoint = (endpoint,) * dimensions
 
         self._endpoint = tuple(endpoint)
 
@@ -345,7 +345,7 @@ class Grid:
         if self._lock_extent:
             raise RuntimeError('Extent cannot be modified')
 
-        extent = self._validate(extent, dtype=float)
+        extent = self._validate(extent, dtype=np.float32)
 
         if self._lock_sampling or (self.gpts is None):
             self._adjust_gpts(extent, self.sampling)
@@ -392,7 +392,7 @@ class Grid:
         if self._lock_sampling:
             raise RuntimeError('Sampling cannot be modified')
 
-        sampling = self._validate(sampling, dtype=float)
+        sampling = self._validate(sampling, dtype=np.float32)
         if self._lock_gpts:
             self._adjust_extent(self.gpts, sampling)
         elif self.extent is not None:
@@ -405,15 +405,18 @@ class Grid:
     def _adjust_extent(self, gpts: tuple, sampling: tuple):
         if (gpts is not None) & (sampling is not None):
             self._extent = tuple((n - 1) * d if e else n * d for n, d, e in zip(gpts, sampling, self._endpoint))
+            self._extent = self._validate(self._extent, float)
 
     def _adjust_gpts(self, extent: tuple, sampling: tuple):
         if (extent is not None) & (sampling is not None):
             self._gpts = tuple(int(np.ceil(r / d)) + 1 if e else int(np.ceil(r / d))
                                for r, d, e in zip(extent, sampling, self._endpoint))
 
+
     def _adjust_sampling(self, extent: tuple, gpts: tuple):
         if (extent is not None) & (gpts is not None):
             self._sampling = tuple(r / (n - 1) if e else r / n for r, n, e in zip(extent, gpts, self._endpoint))
+            self._sampling = self._validate(self._sampling, float)
 
     def check_is_defined(self):
         """
@@ -605,13 +608,12 @@ class Accelerator:
         other: Accelerator object
             The accelerator that should be checked.
         """
-        #print(self.energy)
-        #print((self.energy != other.energy))
-        #if (self.energy is not None) & (other.energy is not None) & (self.energy != other.energy):
+        # print(self.energy)
+        # print((self.energy != other.energy))
+        # if (self.energy is not None) & (other.energy is not None) & (self.energy != other.energy):
         #    ssss
 
         if (self.energy is not None) & (other.energy is not None) & (self.energy != other.energy):
-
             raise RuntimeError('Inconsistent energies')
 
     def match(self, other, check_match=False):

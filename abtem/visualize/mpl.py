@@ -178,7 +178,7 @@ def show_measurement_2d(measurement,
     extent = []
     for calibration, num_elem in zip(calibrations, array.shape):
         extent.append(calibration.offset)
-        extent.append(calibration.offset + num_elem * calibration.sampling)
+        extent.append(calibration.offset + num_elem * calibration.sampling - calibration.sampling)
 
     if vmin is None:
         vmin = np.min(array)

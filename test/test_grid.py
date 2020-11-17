@@ -9,6 +9,7 @@ def test_create_grid():
 
     assert (grid.extent[0] == 5.) & (grid.extent[1] == 5.)
     assert (grid.gpts[0] == 25) & (grid.gpts[1] == 25)
+    print(grid.sampling[0] == .2, type(grid.sampling[0]), type(.2))
     assert (grid.sampling[0] == .2) & (grid.sampling[1] == .2)
 
     grid = Grid(sampling=.2, gpts=10)
@@ -95,6 +96,13 @@ def test_grid_match():
 
     assert str(e.value) == 'Inconsistent grid gpts ((10, 10) != (50, 50))'
 
+# def test_gridscan_calibration():
+#     gridscan = GridScan(start=[0, 0],
+#                         end=[4, 4],
+#                         sampling=.7,
+#                         endpoint=False)
+#
+#     gridscan.calibrations[0].coordinates(gridscan.gpts[0]) == gridscan.get_positions()[:, 0][::7]
 
 # def test_scattering_angle():
 #     probe = Probe(extent=18, gpts=(250, 251), energy=80e3)

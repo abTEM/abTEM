@@ -217,7 +217,7 @@ class LineScan(AbstractScan, HasGridMixin):
 
     @property
     def calibrations(self) -> Tuple[Calibration]:
-        return Calibration(offset=0, sampling=self.sampling[0], units='Å', name='x'),
+        return Calibration(offset=0, sampling=self.sampling[0], units='Å', name='x', endpoint=self.grid.endpoint[0]),
 
     @property
     def start(self) -> np.ndarray:
@@ -263,7 +263,7 @@ class LineScan(AbstractScan, HasGridMixin):
         x = np.linspace(self.start[0], self.start[0] + np.array(self.extent) * self.direction[0], self.gpts[0],
                         endpoint=self.grid.endpoint[0])
         y = np.linspace(self.start[1], self.start[1] + np.array(self.extent) * self.direction[1], self.gpts[0],
-                        endpoint=self.grid.endpoint[1])
+                        endpoint=self.grid.endpoint[0])
         return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
     def add_to_mpl_plot(self, ax, linestyle: str = '-', color: str = 'r', **kwargs):
@@ -385,8 +385,10 @@ class GridScan(AbstractScan, HasGridMixin):
 
     @property
     def calibrations(self) -> tuple:
-        return (Calibration(offset=0, sampling=self.sampling[0], units='Å', name='x'),
-                Calibration(offset=0, sampling=self.sampling[1], units='Å', name='y'))
+        return (Calibration(offset=self.start[0], sampling=self.sampling[0], units='Å', name='x',
+                            endpoint=self.grid.endpoint[0]),
+                Calibration(offset=self.start[1], sampling=self.sampling[1], units='Å', name='y',
+                            endpoint=self.grid.endpoint[1]))
 
     @property
     def start(self) -> np.ndarray:

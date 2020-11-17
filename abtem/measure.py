@@ -1,6 +1,5 @@
 """Module to describe the detection of scattered electron waves."""
 from collections.abc import Iterable
-from abc import ABCMeta
 from copy import copy
 from typing import Sequence, Tuple
 
@@ -9,12 +8,14 @@ import imageio
 import numpy as np
 import scipy.misc
 import scipy.ndimage
+from scipy.interpolate import interp2d
 from scipy.interpolate import interpn
-from scipy.ndimage import zoom
 
 from abtem.device import asnumpy
+from abtem.utils import periodic_crop
 from abtem.visualize.mpl import show_measurement_2d, show_measurement_1d
-from abtem.utils import _disc_meshgrid, periodic_crop
+from abtem.base_classes import Grid
+from numbers import Number
 
 
 class Calibration:
@@ -35,11 +36,12 @@ class Calibration:
         The name of this calibration to be shown in plots.
     """
 
-    def __init__(self, offset: float, sampling: float, units: str, name: str = ''):
+    def __init__(self, offset: float, sampling: float, units: str, name: str = '', endpoint=True):
         self.offset = offset
         self.sampling = sampling
         self.units = units
         self.name = name
+        self.endpoint = endpoint
 
     def __eq__(self, other):
         return ((self.offset == other.offset) &
@@ -356,17 +358,30 @@ class Measurement:  # (metaclass=ABCMeta):
         """
         return self._reduction(np.mean, axis)
 
-    def interpolate(self, new_sampling):
-        import warnings
-        warnings.filterwarnings('ignore', '.*output shape of zoom.*')
+    def interpolate(self, new_sampling, padding='wrap', kind='quintic'):
+        endpoint = tuple([calibration.endpoint for calibration in self.calibrations])
+        sampling = tuple([calibration.sampling for calibration in self.calibrations])
+        offset = tuple([calibration.offset for calibration in self.calibrations])
 
-        scale_factors = [calibration.sampling / new_sampling for calibration in self.calibrations]
-        new_array = zoom(self.array, scale_factors, mode='wrap')
+        extent = (sampling[0] * (self.array.shape[0] - endpoint[0]),
+                  sampling[1] * (self.array.shape[1] - endpoint[1]))
+
+        new_grid = Grid(extent=extent, sampling=new_sampling, endpoint=endpoint)
+        array = np.pad(self.array, ((7,) * 2,) * 2, mode=padding)
+
+        x = self.calibrations[0].coordinates(array.shape[0]) - 7 * self.calibrations[0].sampling
+        y = self.calibrations[1].coordinates(array.shape[1]) - 7 * self.calibrations[1].sampling
+
+        interpolator = interp2d(x, y, array.T, kind=kind)
+
+        x = np.linspace(offset[0], offset[0] + extent[0], new_grid.gpts[0], endpoint=endpoint[0])
+        y = np.linspace(offset[1], offset[1] + extent[1], new_grid.gpts[1], endpoint=endpoint[1])
+        new_array = interpolator(x, y).T
 
         calibrations = []
-        for calibration in self.calibrations:
+        for calibration, d in zip(self.calibrations, new_grid.sampling):
             calibrations.append(copy(calibration))
-            calibrations[-1].sampling = new_sampling
+            calibrations[-1].sampling = d
 
         return self.__class__(new_array, calibrations, name=self.name, units=self.units)
 
@@ -407,11 +422,6 @@ class Measurement:  # (metaclass=ABCMeta):
                                             sampling=datasets['sampling'][i],
                                             units=datasets['units'][i].decode('utf-8'),
                                             name=datasets['name'][i].decode('utf-8')))
-
-        # print(datasets['array'].shape)
-        # import matplotlib.pyplot as plt
-        # plt.imshow(datasets['array'])
-        # plt.show()
 
         return cls(datasets['array'], calibrations)
 
@@ -669,7 +679,8 @@ def center_of_mass(measurement: Measurement):
             Measurement(com[..., 1], measurement.calibrations[:-2], units='mrad', name='com_y'))
 
 
-def integrate_disc(position: np.ndarray, measurement: Measurement, radius: float, border: str = 'wrap'):
+def integrate_disc(image: Measurement, position: np.ndarray, radius: float, return_mean: bool = True,
+                   border: str = 'wrap', interpolate: float = 0.01):
     """
     Integrate the values of a 2d measurement on a disc-shaped region.
 
@@ -681,41 +692,66 @@ def integrate_disc(position: np.ndarray, measurement: Measurement, radius: float
         The measurement to integrate
     radius: float
         Radius of disc-shaped integration region
+    return_mean: bool
+        If true return the mean, otherwise return the sum.
     border: str
-        Specify how to treat integration regions that cross the image border
+        Specify how to treat integration regions that cross the image border. The valid values and their behaviour is:
+        'wrap'
+            The measurement is extended by wrapping around to the opposite edge.
+        'raise'
+            Raise an error if the integration region crosses the measurement border.
 
     Returns
     -------
     float
         Integral value
     """
-    calibrations = measurement.calibrations
 
-    new_shape = (2 * int(np.ceil(radius / calibrations[0].sampling)) + 1,
-                 2 * int(np.ceil(radius / calibrations[1].sampling)) + 1)
+    if interpolate:
+        image = image.interpolate(interpolate)
+
+    calibrations = image.calibrations
+    offset = [calibration.offset for calibration in calibrations]
+    position = np.array(position) - offset
+
+    new_shape = (int(np.ceil(2 * radius / calibrations[0].sampling)),
+                 int(np.ceil(2 * radius / calibrations[1].sampling)))
 
     corner = (int(np.floor(position[0] / calibrations[0].sampling)) - new_shape[0] // 2,
-              int(np.floor(position[1] / calibrations[1].sampling)) - new_shape[0] // 2)
+              int(np.floor(position[1] / calibrations[1].sampling)) - new_shape[1] // 2)
 
     if border == 'wrap':
-        cropped = periodic_crop(measurement.array, corner, new_shape)
+        cropped = periodic_crop(image.array, corner, new_shape)
     elif border == 'raise':
         if ((np.any(np.array(corner) < 0)) |
-                (corner[0] + new_shape[0] > measurement.array.shape[0]) |
-                (corner[1] + new_shape[1] > measurement.array.shape[1])):
+                (corner[0] + new_shape[0] > image.array.shape[0]) |
+                (corner[1] + new_shape[1] > image.array.shape[1])):
             raise RuntimeError('The integration region is outside the image.')
 
-        cropped = periodic_crop(measurement.array, corner, new_shape)
+        cropped = periodic_crop(image.array, corner, new_shape)
     else:
         raise RuntimeError('The border must be one of')
 
-    x = np.linspace(calibrations[0].offset, calibrations[0].offset + cropped.shape[0] * calibrations[0].sampling,
-                    cropped.shape[0], endpoint=False)
-    y = np.linspace(calibrations[1].offset, calibrations[1].offset + cropped.shape[1] * calibrations[1].sampling,
-                    cropped.shape[1], endpoint=False)
+    x = np.linspace(0., cropped.shape[0] * calibrations[0].sampling, cropped.shape[0],
+                    endpoint=calibrations[0].endpoint)
+    y = np.linspace(0., cropped.shape[1] * calibrations[1].sampling, cropped.shape[1],
+                    endpoint=calibrations[0].endpoint)
     x, y = np.meshgrid(x, y, indexing='ij')
 
-    cropped_position = position - (corner[0] * calibrations[0].sampling, corner[1] * calibrations[1].sampling)
+    cropped_position = np.array(position)[:2] - (corner[0] * calibrations[0].sampling,
+                                                 corner[1] * calibrations[1].sampling)
 
     r = np.sqrt((x - cropped_position[0]) ** 2 + (y - cropped_position[1]) ** 2)
-    return cropped[r < radius].sum()
+
+    mean_sampling = (calibrations[0].sampling + calibrations[1].sampling) / 2
+
+    mask = 1 - np.clip((r - radius + mean_sampling / 2) / mean_sampling, 0, 1)
+
+    # import matplotlib.pyplot as plt
+    # plt.imshow(cropped * mask)
+    # plt.show()
+
+    if return_mean:
+        return (cropped * mask).sum() / mask.sum()
+    else:
+        return (cropped * mask).sum()
