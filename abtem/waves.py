@@ -72,7 +72,6 @@ class FresnelPropagator:
 
         fft2_convolve(waves._array, propagator_array, overwrite_x=True)
         waves._antialiasing_aperture = 2 / 3.
-
         return waves
 
 
@@ -80,7 +79,7 @@ def _multislice(waves: Union['Waves', 'SMatrixArray'],
                 potential: AbstractPotential,
                 propagator: FresnelPropagator = None,
                 pbar: Union[ProgressBar, bool] = True,
-                max_batch=1,
+                max_batch: int = 1,
                 ) -> Union['Waves', 'SMatrixArray']:
     waves.grid.match(potential)
     waves.accelerator.check_is_defined()
@@ -135,7 +134,7 @@ class _WavesLike(HasGridMixin, HasAcceleratorMixin):
         return kcut
 
     @property
-    def rectangle_cutoff_scattering_angles(self):
+    def rectangle_cutoff_scattering_angles(self) -> float:
         rolloff = AntialiasFilter.rolloff
         kcut = (1 / max(self.sampling) / 2 * self.antialiasing_aperture - rolloff) / np.sqrt(2)
         kcut = (np.floor(2 * self.extent[0] * kcut) / (2 * self.extent[0]) * self.wavelength * 1e3,
@@ -148,7 +147,7 @@ class _WavesLike(HasGridMixin, HasAcceleratorMixin):
         self.accelerator.check_is_defined()
         return tuple([1 / l * self.wavelength * 1e3 for l in self.extent])
 
-    def downsampled_gpts(self, max_angle):
+    def downsampled_gpts(self, max_angle: Union[float, str]):
         if max_angle is None:
             gpts = self.gpts
         elif isinstance(max_angle, str):
@@ -383,7 +382,7 @@ class Waves(_WavesLike):
                                              pbar=multislice_pbar,
                                              max_batch=potential_chunks)
 
-                    #print(exit_waves.array.shape, result._array.shape)
+                    # print(exit_waves.array.shape, result._array.shape)
 
                     if detector:
                         result._array += asnumpy(detector.detect(exit_waves))

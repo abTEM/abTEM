@@ -135,7 +135,6 @@ def fft_interpolation_masks(shape1, shape2, xp=np, epsilon=1e-7):
 
 
 def fft_crop(array, new_shape):
-    # assert np.iscomplexobj(array)
     xp = get_array_module(array)
 
     mask_in, mask_out = fft_interpolation_masks(array.shape, new_shape, xp=xp)
@@ -144,11 +143,6 @@ def fft_crop(array, new_shape):
         new_shape = array.shape[:-2] + new_shape
 
     new_array = xp.zeros(new_shape, dtype=array.dtype)
-
-    # shape_pad = len(new_array.shape) - len(mask_out.shape)
-    # mask_out = mask_out.reshape((1,) * shape_pad + mask_out.shape)
-    # mask_in = mask_in.reshape((1,) * shape_pad + mask_in.shape)
-    # print(mask_out.shape, new_array.shape, array.shape, mask_in.shape)
 
     out_indices = xp.where(mask_out)
     in_indices = xp.where(mask_in)

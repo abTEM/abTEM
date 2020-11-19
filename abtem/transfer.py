@@ -7,7 +7,6 @@ import numpy as np
 from abtem.base_classes import HasAcceleratorMixin, Accelerator, watched_method, watched_property, Event
 from abtem.device import get_array_module, get_device_function
 from abtem.measure import Measurement, Calibration
-from abtem.plot import PlotableMixin
 from abtem.utils import energy2wavelength, spatial_frequencies, polar_coordinates
 
 #: Symbols for the polar representation of all optical aberrations up to the fifth order.
@@ -24,7 +23,7 @@ polar_aliases = {'defocus': 'C10', 'astigmatism': 'C12', 'astigmatism_angle': 'p
                  'C5': 'C50'}
 
 
-class CTF(HasAcceleratorMixin, PlotableMixin):
+class CTF(HasAcceleratorMixin):
     """
     Contrast transfer function object
 

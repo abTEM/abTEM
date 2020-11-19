@@ -884,7 +884,8 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         else:
             raise TypeError('Potential must indexed with integers or slices, not {}'.format(type(items)))
 
-    def as_transmission_function(self, energy, in_place=True, max_batch=1, antialias_filter=None):
+    def as_transmission_function(self, energy: float, in_place: bool = True, max_batch: int = 1,
+                                 antialias_filter: AntialiasFilter = None):
         """
         Calculate the transmission functions for a specific energy.
 
@@ -895,7 +896,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
 
         Returns
         -------
-        TransmissionFunctions object
+        TransmissionFunction object
         """
 
         xp = get_array_module(self.array)
@@ -940,7 +941,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
     def thickness(self):
         return np.sum(self._slice_thicknesses)
 
-    def generate_slices(self, first_slice=0, last_slice=None, max_batch=1):
+    def generate_slices(self, first_slice: int = 0, last_slice: int = None, max_batch: int = 1):
         if last_slice is None:
             last_slice = len(self)
 
@@ -971,6 +972,14 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         return self.__class__(array=new_array, slice_thicknesses=self._slice_thicknesses, extent=new_extent)
 
     def write(self, path):
+        """
+        Write potential to file.
+
+        Parameters
+        ----------
+        path: str
+            Path to which the data is saved.
+        """
         with h5py.File(path, 'w') as f:
             f.create_dataset('array', data=self.array)
             f.create_dataset('slice_thicknesses', data=self._slice_thicknesses)
@@ -978,6 +987,18 @@ class PotentialArray(AbstractPotential, HasGridMixin):
 
     @classmethod
     def read(cls, path):
+        """
+        Read potentia from hdf5 file.
+
+        Parameters
+        ----------
+        path: str
+            The file to read.
+
+        Returns
+        -------
+        PotentialArray object
+        """
         with h5py.File(path, 'r') as f:
             datasets = {}
             for key in f.keys():
@@ -986,9 +1007,28 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         return cls(array=datasets['array'], slice_thicknesses=datasets['slice_thicknesses'], extent=datasets['extent'])
 
     def transmit(self, waves):
+        """
+        Transmit a wave function.
+
+        Parameters
+        ----------
+        waves: Waves object
+            Wave function to transmit.
+
+        Returns
+        -------
+        TransmissionFunction
+        """
         return self.as_transmission_function(waves.energy).transmit(waves)
 
     def project(self):
+        """
+        Create a 2d measurement of the projected potential.
+
+        Returns
+        -------
+        Measurement
+        """
         calibrations = calibrations_from_grid(self.grid.gpts, self.grid.sampling, names=['x', 'y'])
         array = asnumpy(self.array.sum(0))
         array -= array.min()

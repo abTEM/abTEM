@@ -1,23 +1,22 @@
 """Module for describing the detection of transmitted waves and different detector types."""
 from abc import ABCMeta, abstractmethod
 from copy import copy
-from typing import Tuple, List, Any
+from typing import Tuple, List, Any, Union
 
 import numpy as np
 
 from abtem.base_classes import Cache, Event, watched_property, cached_method, Grid
 from abtem.device import get_array_module, get_device_function
 from abtem.measure import Calibration, calibrations_from_grid, Measurement, FlexibleAnnularMeasurement
-from abtem.plot import show_image
 from abtem.scan import AbstractScan
 from abtem.utils import spatial_frequencies
+from abtem.visualize.mpl import show_measurement_2d
 
 
 def _polar_regions(gpts, angular_sampling, inner, outer, nbins_radial, nbins_azimuthal):
     """Create the polar segmentation of a detector."""
-    sampling = (1 / angular_sampling[0] / gpts[0],
-                1 / angular_sampling[1] / gpts[1])
 
+    sampling = (1 / angular_sampling[0] / gpts[0], 1 / angular_sampling[1] / gpts[1])
     kx, ky = spatial_frequencies(gpts, sampling)
 
     alpha_x = np.asarray(kx)
@@ -207,20 +206,16 @@ class _PolarDetector(AbstractDetector):
             measurement = measurement.write(self.save_file)
         return measurement
 
-    def show(self, waves, cbar_label: str = 'Detector regions', **kwargs):
+    def show(self, waves, **kwargs):
         """
-        Visualize the detector region(s) of the detector.
+        Visualize the detector region(s) of the detector as applied to a specified wave function.
 
         Parameters
         ----------
-        grid : Grid
-            The grid of the Waves objects that will be detected.
-        wavelength : float
-            The wavelength of the Waves objects that will be detected.
-        cbar_label : str
-            Label for the colorbar. Default is 'Detector regions'.
+        waves : Waves or SMatrix object
+            The wave function the visualization will be created to match
         kwargs :
-            Additional keyword arguments for abtem.plot.show_image.
+            Additional keyword arguments for abtem.visualize.mpl.show_measurement_2d.
         """
 
         waves.grid.check_is_defined()
@@ -240,7 +235,9 @@ class _PolarDetector(AbstractDetector):
 
         array = np.fft.fftshift(array, axes=(-1, -2))
 
-        return show_image(array, calibrations, cbar_label=cbar_label, discrete=True, **kwargs)
+        measurement = Measurement(array, calibrations=calibrations, name='Detector regions')
+
+        return show_measurement_2d(measurement, discrete_cmap=True, **kwargs)
 
 
 class AnnularDetector(_PolarDetector):
@@ -295,31 +292,47 @@ class AnnularDetector(_PolarDetector):
         else:
             return values
 
-    def integrate(self, measurement):
-        if (measurement.dimensions != 3) and (measurement.dimensions != 4):
+    def integrate(self, diffraction_patterns: Measurement) -> Measurement:
+        """
+        Integrate diffraction pattern measurements on the detector region.
+
+        Parameters
+        ----------
+        diffraction_patterns : 2d, 3d or 4d Measurement object
+            The collection diffraction patterns to be integrated.
+
+        Returns
+        -------
+        Measurement
+        """
+        #if (diffraction_patterns.dimensions != 3) and (diffraction_patterns.dimensions != 4):
+        #    raise RuntimeError()
+
+        if not (diffraction_patterns.calibrations[-1].units == diffraction_patterns.calibrations[-2].units):
             raise RuntimeError()
 
-        if not (measurement.calibrations[-1].units == measurement.calibrations[-2].units):
-            raise RuntimeError()
+        sampling = (diffraction_patterns.calibrations[-2].sampling, diffraction_patterns.calibrations[-1].sampling)
 
-        sampling = (measurement.calibrations[-2].sampling, measurement.calibrations[-1].sampling)
+        calibrations = diffraction_patterns.calibrations[:-2]
+        array = np.fft.ifftshift(diffraction_patterns.array, axes=(-2, -1))
 
-        calibrations = measurement.calibrations[:-2]
-        array = np.fft.ifftshift(measurement.array, axes=(-2, -1))
-
-        cutoff_scattering_angle = min(measurement.calibrations[-2].sampling * measurement.array.shape[-2],
-                                      measurement.calibrations[-1].sampling * measurement.array.shape[-1], )
+        cutoff_scattering_angle = min(diffraction_patterns.calibrations[-2].sampling *
+                                      diffraction_patterns.array.shape[-2],
+                                      diffraction_patterns.calibrations[-1].sampling *
+                                      diffraction_patterns.array.shape[-1], )
 
         return Measurement(self._integrate_array(array, sampling, cutoff_scattering_angle), calibrations=calibrations)
 
-    def detect(self, waves, normalize=True) -> np.ndarray:
+    def detect(self, waves, normalize: bool = True) -> np.ndarray:
         """
         Integrate the intensity of a the wave functions over the detector range.
 
         Parameters
         ----------
-        waves: Waves object
+        waves : Waves object
             The batch of wave functions to detect.
+        normalize : bool
+            Normalize output by the total intensity of the wave function.
 
         Returns
         -------
@@ -540,11 +553,19 @@ class PixelatedDetector(AbstractDetector):
 
     Parameters
     ----------
-    save_file: str
+    max_angle : str or float
+        The diffraction patterns will be detected up to this angle.
+    resample : 'uniform' or False
+        If 'uniform', the diffraction patterns from rectangular cells will be downsampled to a uniform angular sampling.
+    save_file : str
         The path to the file used for saving the detector output.
     """
 
-    def __init__(self, max_angle='valid', resample=False, save_file: str = None):
+    def __init__(self,
+                 max_angle: Union[str, float] = 'valid',
+                 resample: Union[str, float] = False,
+                 save_file: str = None):
+
         self._max_angle = max_angle
         self._resample = resample
 
@@ -553,6 +574,10 @@ class PixelatedDetector(AbstractDetector):
     @property
     def max_angle(self):
         return self._max_angle
+
+    @property
+    def resample(self):
+        return self._resample
 
     def _bilinear_nodes_and_weight(self, old_shape, new_shape, old_angular_sampling, new_angular_sampling, xp):
         nodes = []
@@ -623,10 +648,8 @@ class PixelatedDetector(AbstractDetector):
 
         Parameters
         ----------
-        grid: Grid object
-            The grid of the Waves objects that will be detected.
-        wavelength: float
-            The wavelength of the Waves objects that will be detected.
+        waves : Waves or SMatrix object
+            The wave function that will define the shape of the diffraction patterns.
         scan: Scan object
             The scan object that will define the scan dimensions the measurement.
 
@@ -637,16 +660,9 @@ class PixelatedDetector(AbstractDetector):
         """
 
         waves.grid.check_is_defined()
+        check_max_angle_exceeded(waves, self.max_angle)
 
-        # if self.max_angle is None:
-        #    max_angle = waves.cutoff_scattering_angles
-        # else:
-        max_angle = self._max_angle
-
-        check_max_angle_exceeded(waves, max_angle)
-
-        gpts = waves.downsampled_gpts(max_angle)
-
+        gpts = waves.downsampled_gpts(self.max_angle)
         gpts, new_angular_sampling = self._resampled_gpts(gpts, angular_sampling=waves.angular_sampling)
 
         sampling = (1 / new_angular_sampling[0] / gpts[0] * waves.wavelength * 1000,
@@ -700,7 +716,6 @@ class PixelatedDetector(AbstractDetector):
 
         intensity = xp.fft.fftshift(intensity, axes=(-2, -1))
         intensity = self._interpolate(intensity, waves.angular_sampling)
-
         return intensity
 
 
@@ -717,7 +732,6 @@ class WavefunctionDetector(AbstractDetector):
     """
 
     def __init__(self, save_file: str = None):
-        max_detected_angle = np.inf
         super().__init__(max_detected_angle=np.inf, save_file=save_file)
 
     def allocate_measurement(self, waves, scan: AbstractScan) -> Measurement:
@@ -726,10 +740,8 @@ class WavefunctionDetector(AbstractDetector):
 
         Parameters
         ----------
-        grid: Grid
-            The grid of the Waves objects that will be detected.
-        wavelength: float
-            The wavelength of the Waves objects that will be detected.
+        waves : Waves or SMatrix object
+            The wave function that will define the shape of the diffraction patterns.
         scan: Scan object
             The scan object that will define the scan dimensions the measurement.
 

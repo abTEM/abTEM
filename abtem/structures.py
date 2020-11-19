@@ -9,6 +9,11 @@ from scipy.linalg import polar
 def is_cell_hexagonal(atoms: Atoms):
     """
     Function to check whether the cell of an ASE atoms object is hexagonal.
+
+    Parameters
+    ----------
+    atoms : ASE atoms object
+        The atoms that should be checked.
     """
     cell = atoms.get_cell()
 
@@ -23,6 +28,13 @@ def is_cell_hexagonal(atoms: Atoms):
 def is_cell_orthogonal(atoms: Atoms, tol: float = 1e-12):
     """
     Check whether an Atoms object has an orthogonal cell.
+
+    Parameters
+    ----------
+    atoms : ASE atoms object
+        The atoms that should be checked.
+    tol : float
+        Components of the lattice vectors below this value are considered to be zero.
     """
     return not np.any(np.abs(atoms.cell[~np.eye(3, dtype=bool)]) > tol)
 
@@ -33,9 +45,9 @@ def is_cell_valid(atoms: Atoms, tol: float = 1e-12) -> bool:
 
     Parameters
     ----------
-    atoms: ASE atoms object
+    atoms : ASE atoms object
         The atoms that should be checked.
-    tol: float
+    tol : float
         Components of the lattice vectors below this value are considered to be zero.
 
     Returns
@@ -62,14 +74,14 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12):
 
     Parameters
     ----------
-    atoms: ASE atoms object
+    atoms : ASE atoms object
         The atoms that should be standardized
-    tol: float
+    tol : float
         Components of the lattice vectors below this value are considered to be zero.
 
     Returns
     -------
-    atoms: ASE atoms object
+    atoms : ASE atoms object
         The standardized atoms.
     """
     cell = np.array(atoms.cell)
@@ -105,19 +117,19 @@ def orthogonalize_cell(atoms: Atoms, limit_denominator: int = 10, return_strain=
 
     Parameters
     ----------
-    atoms: ASE atoms object
+    atoms : ASE atoms object
         The non-orthogonal atoms object.
-    limit_denominator: int
+    limit_denominator : int
         The maximum denominator in the rational approximation. Increase this to allow more repetitions and hence less
         strain.
-    return_strain: bool
+    return_strain : bool
         If true, return the strain tensor that were applied to make the atoms orthogonal.
 
     Returns
     -------
-    atoms: ASE atoms object
+    atoms : ASE atoms object
         The orthogonal atoms.
-    strain_tensor: 2x2 array
+    strain_tensor : 2x2 array
         The applied strain tensor. Only provided if return_strain is true.
     """
     if is_cell_orthogonal(atoms):

@@ -1,7 +1,7 @@
 """Module to describe the detection of scattered electron waves."""
-from collections.abc import Iterable
+from collections.abc import Iterable, Callable
 from copy import copy
-from typing import Sequence, Tuple
+from typing import Sequence, Tuple, Union
 
 import h5py
 import imageio
@@ -11,11 +11,10 @@ import scipy.ndimage
 from scipy.interpolate import interp2d
 from scipy.interpolate import interpn
 
+from abtem.base_classes import Grid
 from abtem.device import asnumpy
 from abtem.utils import periodic_crop
 from abtem.visualize.mpl import show_measurement_2d, show_measurement_1d
-from abtem.base_classes import Grid
-from numbers import Number
 
 
 class Calibration:
@@ -137,6 +136,9 @@ class Measurement:  # (metaclass=ABCMeta):
     """
     Measurement object.
 
+    The measurement object is used for representing the output of a TEM simulation. For example a line profile, an image
+    or a collection of diffraction patterns.
+
     Parameters
     ----------
     array: ndarray
@@ -149,7 +151,11 @@ class Measurement:  # (metaclass=ABCMeta):
         The name of the array values to be displayed in plots.
     """
 
-    def __init__(self, array, calibrations=None, units='', name=''):
+    def __init__(self,
+                 array: np.ndarray,
+                 calibrations: Union[Calibration, Sequence[Calibration]] = None,
+                 units: str = '',
+                 name: str = ''):
 
         if issubclass(array.__class__, self.__class__):
             measurement = array
@@ -294,7 +300,7 @@ class Measurement:  # (metaclass=ABCMeta):
             new_array = self._array + asnumpy(other)
         return self.__class__(new_array, calibrations=self.calibrations, units=self.units, name=self.name)
 
-    def _reduction(self, reduction_function, axis):
+    def _reduction(self, reduction_function: Callable, axis: Union[int, Sequence[int]]):
         if not isinstance(axis, Iterable):
             axis = (axis,)
 
@@ -305,30 +311,9 @@ class Measurement:  # (metaclass=ABCMeta):
 
         return self.__class__(array, calibrations)
 
-    # def integrate(self, axes, start=0, end=None, use_units=True):
-    #
-    #     if end is None:
-    #         end = ()
-    #         for axis in axes:
-    #             end += (self.array.shape[axis],)
-    #
-    #     else:
-    #         end = list(end)
-    #         for axis in axes:
-    #             end[axis]
-    #
-    #     if not isinstance(axes, Iterable):
-    #         axes = (axes,)
-    #
-    #     if not isinstance(start, Iterable):
-    #         start = (start,) * len(axes)
-    #
-    #     if not isinstance(end, Iterable):
-    #         end = (end,) * len(axes)
-
     def sum(self, axis):
         """
-        Sum of measurment elements over a given axis.
+        Sum of measurement elements over a given axis.
 
         Parameters
         ----------
@@ -342,9 +327,9 @@ class Measurement:  # (metaclass=ABCMeta):
         """
         return self._reduction(np.mean, axis)
 
-    def mean(self, axis):
+    def mean(self, axis) -> 'Measurement':
         """
-        Mean of measurment elements over a given axis.
+        Mean of measurement elements over a given axis.
 
         Parameters
         ----------
@@ -358,7 +343,33 @@ class Measurement:  # (metaclass=ABCMeta):
         """
         return self._reduction(np.mean, axis)
 
-    def interpolate(self, new_sampling, padding='wrap', kind='quintic'):
+    def interpolate(self,
+                    new_sampling: Union[float, Sequence[float]],
+                    padding: str = 'wrap',
+                    kind: str = 'quintic') -> 'Measurement':
+        """
+        Interpolate a 2d measurement.
+
+        Parameters
+        ----------
+        new_sampling : float
+            Target measurement sampling. Same units as measurement calibrations.
+        padding : str
+            The padding mode as used by numpy.pad.
+        kind : str
+            The kind of spline interpolation to use. Default is 'quintic'.
+
+        Returns
+        -------
+        Measurement object
+            Interpolated measurement
+        """
+        if self.dimensions != 2:
+            raise RuntimeError('interpolate only implemented for 2d measurements')
+
+        if not (self.calibrations[-1].units == self.calibrations[-2].units):
+            raise RuntimeError('the units of the interpolation dimensions must match')
+
         endpoint = tuple([calibration.endpoint for calibration in self.calibrations])
         sampling = tuple([calibration.sampling for calibration in self.calibrations])
         offset = tuple([calibration.offset for calibration in self.calibrations])
@@ -367,10 +378,10 @@ class Measurement:  # (metaclass=ABCMeta):
                   sampling[1] * (self.array.shape[1] - endpoint[1]))
 
         new_grid = Grid(extent=extent, sampling=new_sampling, endpoint=endpoint)
-        array = np.pad(self.array, ((7,) * 2,) * 2, mode=padding)
+        array = np.pad(self.array, ((5,) * 2,) * 2, mode=padding)
 
-        x = self.calibrations[0].coordinates(array.shape[0]) - 7 * self.calibrations[0].sampling
-        y = self.calibrations[1].coordinates(array.shape[1]) - 7 * self.calibrations[1].sampling
+        x = self.calibrations[0].coordinates(array.shape[0]) - 5 * self.calibrations[0].sampling
+        y = self.calibrations[1].coordinates(array.shape[1]) - 5 * self.calibrations[1].sampling
 
         interpolator = interp2d(x, y, array.T, kind=kind)
 
@@ -444,7 +455,7 @@ class Measurement:  # (metaclass=ABCMeta):
 
         return path
 
-    def save_as_image(self, path):
+    def save_as_image(self, path: str):
         """
         Write the measurement array to an image file. The array will be normalized and converted to 16-bit integers.
 
@@ -522,7 +533,10 @@ class Measurement:  # (metaclass=ABCMeta):
 
 class FlexibleAnnularMeasurement(Measurement):
 
-    def __init__(self, array, spatial_sampling, angular_sampling, angular_offset=0.):
+    def __init__(self, array: np.ndarray,
+                 spatial_sampling: Union[float, Sequence[float]],
+                 angular_sampling: float,
+                 angular_offset: float = 0.):
         if not isinstance(spatial_sampling, Iterable):
             spatial_sampling = (spatial_sampling,) * (len(array.shape) - 1)
 
@@ -545,7 +559,9 @@ class FlexibleAnnularMeasurement(Measurement):
 class DiffractionPatterns(Measurement):
 
     def __init__(self, array, spatial_sampling, angular_sampling):
-        pass
+        calibrations = [Calibration(0., d, 'Å', name) for d, name in zip(spatial_sampling, ('x', 'y'))]
+
+        super().__init__(array, )
 
 
 def probe_profile(probe_measurement: Measurement, angle: float = 0.) -> Measurement:
@@ -598,7 +614,8 @@ def _line_intersect_rectangle(point0, point1, lower_corner, upper_corner):
     return intersect0, intersect1
 
 
-def interpolate_line(measurement: Measurement, start, end, gpts=None, sampling=None):
+def interpolate_line(measurement: Measurement, start: Sequence[float], end: Sequence[float],
+                     sampling: Sequence[float] = None):
     from abtem.scan import LineScan
 
     array = np.squeeze(measurement.array)
@@ -612,7 +629,7 @@ def interpolate_line(measurement: Measurement, start, end, gpts=None, sampling=N
     if measurement.calibrations[-2].units != measurement.calibrations[-1].units:
         raise RuntimeError()
 
-    if (gpts is None) & (sampling is None):
+    if (sampling is None):
         sampling = (measurement.calibrations[-2].sampling + measurement.calibrations[-1].sampling) / 2.
 
     x = np.linspace(measurement.calibrations[-2].offset,
@@ -622,7 +639,7 @@ def interpolate_line(measurement: Measurement, start, end, gpts=None, sampling=N
                     measurement.shape[-1] * measurement.calibrations[-1].sampling,
                     measurement.shape[-1])
 
-    line_scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling)
+    line_scan = LineScan(start=start, end=end, sampling=sampling)
 
     interpolated_array = interpn((x, y), array, line_scan.get_positions())
 
@@ -633,18 +650,18 @@ def interpolate_line(measurement: Measurement, start, end, gpts=None, sampling=N
                                    name=measurement.calibrations[-2].name))
 
 
-def calculate_fwhm(measurement: Measurement):
+def calculate_fwhm(probe_profile: Measurement):
     """Function for calculating the full width at half maximum value for a 1D function."""
 
-    array = measurement.array
+    array = probe_profile.array
     peak_idx = np.argmax(array)
     peak_value = array[peak_idx]
     left = np.argmin(np.abs(array[:peak_idx] - peak_value / 2))
     right = peak_idx + np.argmin(np.abs(array[peak_idx:] - peak_value / 2))
 
     fwhm = right - left
-    if measurement.calibrations[0] is not None:
-        fwhm = fwhm * measurement.calibrations[0].sampling
+    if probe_profile.calibrations[0] is not None:
+        fwhm = fwhm * probe_profile.calibrations[0].sampling
 
     return fwhm
 
@@ -680,26 +697,28 @@ def center_of_mass(measurement: Measurement):
 
 
 def integrate_disc(image: Measurement, position: np.ndarray, radius: float, return_mean: bool = True,
-                   border: str = 'wrap', interpolate: float = 0.01):
+                   border: str = 'wrap', interpolate: Union[float, bool] = 0.01) -> float:
     """
     Integrate the values of a 2d measurement on a disc-shaped region.
 
     Parameters
     ----------
-    position: two floats
+    position : two floats
         Center of disc-shaped integration region
-    measurement: 2d measurement
+    measurement : 2d measurement
         The measurement to integrate
-    radius: float
+    radius : float
         Radius of disc-shaped integration region
-    return_mean: bool
+    return_mean : bool
         If true return the mean, otherwise return the sum.
-    border: str
+    border : str
         Specify how to treat integration regions that cross the image border. The valid values and their behaviour is:
         'wrap'
             The measurement is extended by wrapping around to the opposite edge.
         'raise'
             Raise an error if the integration region crosses the measurement border.
+    interpolate: float or False
+        The image will be interpolated to this sampling. Units of Angstrom.
 
     Returns
     -------
@@ -746,10 +765,6 @@ def integrate_disc(image: Measurement, position: np.ndarray, radius: float, retu
     mean_sampling = (calibrations[0].sampling + calibrations[1].sampling) / 2
 
     mask = 1 - np.clip((r - radius + mean_sampling / 2) / mean_sampling, 0, 1)
-
-    # import matplotlib.pyplot as plt
-    # plt.imshow(cropped * mask)
-    # plt.show()
 
     if return_mean:
         return (cropped * mask).sum() / mask.sum()

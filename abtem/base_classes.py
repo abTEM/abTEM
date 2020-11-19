@@ -6,7 +6,7 @@ from typing import Optional, Union, Sequence, Any, Callable
 import numpy as np
 
 from abtem.device import copy_to_device, get_array_module, get_device_function
-from abtem.utils import energy2wavelength, energy2sigma, spatial_frequencies, fft_interpolation_masks
+from abtem.utils import energy2wavelength, energy2sigma, spatial_frequencies
 
 
 class Event(object):
@@ -412,7 +412,6 @@ class Grid:
             self._gpts = tuple(int(np.ceil(r / d)) + 1 if e else int(np.ceil(r / d))
                                for r, d, e in zip(extent, sampling, self._endpoint))
 
-
     def _adjust_sampling(self, extent: tuple, gpts: tuple):
         if (extent is not None) & (gpts is not None):
             self._sampling = tuple(r / (n - 1) if e else r / n for r, n, e in zip(extent, gpts, self._endpoint))
@@ -608,11 +607,6 @@ class Accelerator:
         other: Accelerator object
             The accelerator that should be checked.
         """
-        # print(self.energy)
-        # print((self.energy != other.energy))
-        # if (self.energy is not None) & (other.energy is not None) & (self.energy != other.energy):
-        #    ssss
-
         if (self.energy is not None) & (other.energy is not None) & (self.energy != other.energy):
             raise RuntimeError('Inconsistent energies')
 
@@ -667,6 +661,10 @@ class HasAcceleratorMixin:
 
 
 class AntialiasFilter:
+    """
+    Antialias filter object.
+    """
+
     cutoff = 2 / 3.
     rolloff = .1
 
@@ -694,6 +692,17 @@ class AntialiasFilter:
         return array
 
     def bandlimit(self, waves):
+        """
+
+        Parameters
+        ----------
+        waves
+
+        Returns
+        -------
+
+        """
         xp = get_array_module(waves.array)
         fft2_convolve = get_device_function(xp, 'fft2_convolve')
-        return fft2_convolve(waves.array, self.get_mask(waves.gpts, waves.sampling, xp), overwrite_x=True)
+        fft2_convolve(waves.array, self.get_mask(waves.gpts, waves.sampling, xp), overwrite_x=True)
+        return waves

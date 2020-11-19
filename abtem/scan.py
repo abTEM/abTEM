@@ -1,7 +1,7 @@
 """Module for describing different types of scans."""
 from abc import ABCMeta, abstractmethod
 from copy import copy
-from typing import Union, Sequence, Tuple
+from typing import Union, Sequence, Tuple, List
 
 import h5py
 import numpy as np
@@ -192,10 +192,11 @@ class LineScan(AbstractScan, HasGridMixin):
 
         super().__init__()
 
-        start = np.array(start)
-        end = np.array(end)
-
-        if (start.shape != (2,)) | (end.shape != (2,)):
+        try:
+            start = np.array(start)[:2]
+            end = np.array(end)[:2]
+            assert (start.shape == (2,)) & (end.shape == (2,))
+        except:
             raise ValueError('Scan start/end has incorrect shape')
 
         if (gpts is None) & (sampling is None):
@@ -288,48 +289,6 @@ class LineScan(AbstractScan, HasGridMixin):
         return self.__class__(start=self.start, end=self.end, gpts=self.gpts, endpoint=self.grid.endpoint)
 
 
-def _unravel_slice_2d(start: int, end: int, shape: Tuple[int, int]):
-    """
-    Unravel slice 2d private function
-
-    Function to handle periodic boundary conditions for scans crossing cell boundaries.
-
-    Parameters
-    ----------
-    start: int
-        Start of the slice of the 2D array.
-    end: int
-        End of the slice of the 2D array.
-    shape:
-        Shape of the 2D array.
-
-    Returns
-    -------
-    list of slice objects
-        A Python list of the slice objects.
-    """
-
-    slices = []
-    rows = []
-    slices_1d = []
-    n = 0
-    n_accum = 0
-    for index in range(start, end):
-        index_in_row = index % shape[-1]
-        n += 1
-        if index_in_row == shape[-1] - 1:
-            slices_1d.append(slice(n_accum, n_accum + n))
-            slices.append(slice(index_in_row - n + 1, index_in_row + 1))
-            rows.append(index // shape[-1])
-            n_accum += n
-            n = 0
-    if n > 0:
-        slices_1d.append(slice(n_accum, n_accum + n))
-        slices.append(slice(index_in_row - n + 1, index_in_row + 1))
-        rows.append(index // shape[-1])
-    return rows, slices, slices_1d
-
-
 class GridScan(AbstractScan, HasGridMixin):
     """
     Grid scan object.
@@ -342,29 +301,36 @@ class GridScan(AbstractScan, HasGridMixin):
         Start corner of the scan [Å].
     end : two float
         End corner of the scan [Å].
-    gpts: two int
+    gpts : two int
         Number of scan positions in the x- and y-direction of the scan.
-    sampling: two float
+    sampling : two float
         Sampling rate of scan positions [1 / Å].
-    endpoint: bool
-        If True, end is the last position. Otherwise, it is not included. Default is True.
+    endpoint : bool
+        If True, end is the last position. Otherwise, it is not included. Default is False.
+    batch_partition : 'squares' or 'lines'
+        Specify how to split the scan into batches. If 'squares', the scan position batches are divided into the best
+        matching squares for the batch size. If 'lines', the batches are divded into lines of scan positions.
+    measurement_shift : two int
+        The insertion indices of new measurements will be shifted by these amount in x and y. This is used for
+        correctly inserting measurement of a partioned scan.
     """
 
     def __init__(self,
-                 start,
-                 end,
-                 gpts=None,
-                 sampling=None,
-                 endpoint=False,
-                 batch_partition='squares',
-                 measurement_shift=None):
+                 start: Sequence[float],
+                 end: Sequence[float],
+                 gpts: Union[int, Sequence[int]] = None,
+                 sampling: Union[float, Sequence[float]] = None,
+                 endpoint: bool = False,
+                 batch_partition: str = 'squares',
+                 measurement_shift: Sequence[int] = None):
 
         super().__init__()
 
-        self._start = np.array(start)
-        end = np.array(end)
-
-        if (self._start.shape != (2,)) | (end.shape != (2,)):
+        try:
+            self._start = np.array(start)[:2]
+            end = np.array(end)[:2]
+            assert (self._start.shape == (2,)) & (end.shape == (2,))
+        except:
             raise ValueError('Scan start/end has incorrect shape')
 
         if (gpts is None) & (sampling is None):
@@ -374,10 +340,9 @@ class GridScan(AbstractScan, HasGridMixin):
             raise ValueError('batch partition must be "squares" or "lines"')
 
         self._batch_partition = batch_partition
+        self._measurement_shift = measurement_shift
 
         self._grid = Grid(extent=end - start, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint)
-
-        self._measurement_shift = measurement_shift
 
     @property
     def shape(self):
@@ -415,17 +380,14 @@ class GridScan(AbstractScan, HasGridMixin):
         width = abs(self.start[1] - self.end[1])
         return height * width
 
-    def get_positions(self, flatten=True) -> np.ndarray:
+    def get_positions(self) -> np.ndarray:
         x = np.linspace(self.start[0], self.end[0], self.gpts[0], endpoint=self.grid.endpoint[0])
         y = np.linspace(self.start[1], self.end[1], self.gpts[1], endpoint=self.grid.endpoint[1])
         x, y = np.meshgrid(x, y, indexing='ij')
-        if flatten:
-            return np.stack((np.reshape(x, (-1,)),
-                             np.reshape(y, (-1,))), axis=1)
-        else:
-            return np.stack((x, y), axis=-1)
+        return np.stack((np.reshape(x, (-1,)),
+                         np.reshape(y, (-1,))), axis=1)
 
-    def insert_new_measurement(self, measurement, indices, new_measurement):
+    def insert_new_measurement(self, measurement, indices: np.ndarray, new_measurement: np.ndarray):
         x, y = np.unravel_index(indices, self.shape)
 
         if self._measurement_shift is not None:
@@ -439,9 +401,21 @@ class GridScan(AbstractScan, HasGridMixin):
         else:
             measurement.array[x, y] += asnumpy(new_measurement)
 
-    def partition_scan(self, splits):
-        Nx = subdivide_into_batches(self.gpts[0], splits[0])
-        Ny = subdivide_into_batches(self.gpts[1], splits[1])
+    def partition_scan(self, partitions: Sequence[int]) -> List['GridScan']:
+        """
+        Partition the scan into smaller grid scans
+
+        Parameters
+        ----------
+        partitions : two int
+            The number of partitions to create in x and y.
+
+        Returns
+        -------
+        List of GridScan objects
+        """
+        Nx = subdivide_into_batches(self.gpts[0], partitions[0])
+        Ny = subdivide_into_batches(self.gpts[1], partitions[1])
         Sx = np.concatenate(([0], np.cumsum(Nx)))
         Sy = np.concatenate(([0], np.cumsum(Ny)))
 
@@ -452,12 +426,12 @@ class GridScan(AbstractScan, HasGridMixin):
                 end = [start[0] + nx * self.sampling[0], start[1] + ny * self.sampling[1]]
                 endpoint = [False, False]
 
-                if i + 1 == splits[0]:
+                if i + 1 == partitions[0]:
                     endpoint[0] = self.grid.endpoint[0]
                     if endpoint[0]:
                         end[0] -= self.sampling[0]
 
-                if j + 1 == splits[1]:
+                if j + 1 == partitions[1]:
                     endpoint[1] = self.grid.endpoint[1]
                     if endpoint[1]:
                         end[1] -= self.sampling[1]
@@ -470,10 +444,9 @@ class GridScan(AbstractScan, HasGridMixin):
                                       measurement_shift=(Sx[i], Sy[j]))
 
                 scans.append(scan)
-
         return scans
 
-    def _partition_batches(self, max_batch):
+    def _partition_batches(self, max_batch: int):
         if self._batch_partition == 'lines':
             super()._partition_batches(max_batch)
             return
@@ -498,7 +471,7 @@ class GridScan(AbstractScan, HasGridMixin):
                 y = np.arange(Sy[j], Sy[j] + ny, dtype=np.int)
                 self._batches.append((y[None] + x[:, None] * self.gpts[1]).ravel())
 
-    def add_to_mpl_plot(self, ax, alpha=.33, facecolor='r', edgecolor='r', **kwargs):
+    def add_to_mpl_plot(self, ax, alpha: float = .33, facecolor: str = 'r', edgecolor: str = 'r', **kwargs):
         """
         Add a visualization of the scan area to a matplotlib plot.
 
@@ -520,4 +493,8 @@ class GridScan(AbstractScan, HasGridMixin):
         ax.add_patch(rect)
 
     def __copy__(self):
-        return self.__class__(start=self.start, end=self.end, gpts=self.gpts, endpoint=self.grid.endpoint)
+        return self.__class__(start=self.start,
+                              end=self.end,
+                              gpts=self.gpts,
+                              endpoint=self.grid.endpoint,
+                              )
