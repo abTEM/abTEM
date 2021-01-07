@@ -212,7 +212,8 @@ def get_available_memory(device: str) -> float:
         mempool.free_all_blocks()
 
         if device == 'gpu':
-            device = cp.cuda.Device(0)
+            device_id = cp.cuda.get_device_id()
+            device = cp.cuda.Device(device_id)
         return device.mem_info[0]
 
 
