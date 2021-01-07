@@ -24,9 +24,9 @@ try:  # This should be the only place import cupy, to make it a non-essential de
         """
         2d FFT convolution using GPU.
         """
-        array = cupyx.scipy.fftpack.fft2(array, overwrite_x=overwrite_x)
+        array = cupyx.scipy.fft.fft2(array, overwrite_x=overwrite_x)
         array *= kernel
-        array = cupyx.scipy.fftpack.ifft2(array, overwrite_x=overwrite_x)
+        array = cupyx.scipy.fft.ifft2(array, overwrite_x=overwrite_x)
         return array
 
 
