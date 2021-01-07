@@ -4,6 +4,7 @@ from ase import units
 
 from abtem.device import get_array_module, get_device_function
 from tqdm.auto import tqdm
+import numbers
 
 
 def energy2mass(energy):
@@ -88,6 +89,7 @@ def polar_coordinates(x, y):
     phi = xp.arctan2(x.reshape((-1, 1)), y.reshape((1, -1)))
     return alpha, phi
 
+
 def _disc_meshgrid(r):
     """Internal function to return all indices inside a disk with a given radius."""
     cols = np.zeros((2 * r + 1, 2 * r + 1)).astype(np.int32)
@@ -149,6 +151,38 @@ def fft_crop(array, new_shape):
 
     new_array[..., out_indices[0], out_indices[1]] = array[..., in_indices[0], in_indices[1]]
     return new_array
+
+
+def view_as_windows(array, window_shape, step=1):
+    xp = get_array_module(array)
+    ndim = array.ndim
+
+    if isinstance(window_shape, numbers.Number):
+        window_shape = (window_shape,) * ndim
+
+    if not (len(window_shape) == ndim):
+        raise ValueError('`window_shape` is incompatible with `arr_in.shape`')
+
+    if isinstance(step, numbers.Number):
+        if step < 1:
+            raise ValueError('`step` must be >= 1')
+        step = (step,) * ndim
+    if len(step) != ndim:
+        raise ValueError("`step` is incompatible with `arr_in.shape`")
+
+    if ((xp.array(array.shape) - xp.array(window_shape)) < 0).any():
+        raise ValueError('`window_shape` is too large')
+
+    if ((xp.array(window_shape) - 1) < 0).any():
+        raise ValueError('`window_shape` is too small')
+
+    win_indices_shape = (((xp.array(array.shape) - xp.array(window_shape)) // xp.array(step)) + 1)
+    new_shape = tuple(win_indices_shape.tolist()) + window_shape
+
+    slices = tuple(slice(None, None, st) for st in step)
+    strides = tuple(array[slices].strides + array.strides)
+    array = xp.lib.stride_tricks.as_strided(array, shape=new_shape, strides=strides)
+    return array
 
 
 def fft_interpolate_2d(array, new_shape, normalization='values', overwrite_x=False):
