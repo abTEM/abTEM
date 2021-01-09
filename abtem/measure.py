@@ -429,10 +429,13 @@ class Measurement:  # (metaclass=ABCMeta):
 
         calibrations = []
         for i in range(len(datasets['offset'])):
-            calibrations.append(Calibration(offset=datasets['offset'][i],
-                                            sampling=datasets['sampling'][i],
-                                            units=datasets['units'][i].decode('utf-8'),
-                                            name=datasets['name'][i].decode('utf-8')))
+            if not datasets['is_none'][i]:
+                calibrations.append(Calibration(offset=datasets['offset'][i],
+                                                sampling=datasets['sampling'][i],
+                                                units=datasets['units'][i].decode('utf-8'),
+                                                name=datasets['name'][i].decode('utf-8')))
+            else:
+                calibrations.append(None)
 
         return cls(datasets['array'], calibrations)
 
@@ -446,12 +449,31 @@ class Measurement:  # (metaclass=ABCMeta):
 
         with h5py.File(path, mode) as f:
             f.create_dataset('array', data=self.array)
-            f.create_dataset('offset', data=[calibration.offset for calibration in self.calibrations])
-            f.create_dataset('sampling', data=[calibration.sampling for calibration in self.calibrations])
-            units = [calibration.units.encode('utf-8') for calibration in self.calibrations]
+
+            is_none = []
+            offsets = []
+            sampling = []
+            units = []
+            names = []
+            for calibration in self.calibrations:
+                if calibration is None:
+                    offsets += [0.]
+                    sampling += [0.]
+                    units += ['']
+                    names += ['']
+                    is_none += [True]
+                else:
+                    offsets += [calibration.offset]
+                    sampling += [calibration.sampling]
+                    units += [calibration.units.encode('utf-8')]
+                    names += [calibration.name.encode('utf-8')]
+                    is_none += [False]
+
+            f.create_dataset('offset', data=offsets)
+            f.create_dataset('sampling', data=sampling)
             f.create_dataset('units', (len(units),), 'S10', units)
-            names = [calibration.name.encode('utf-8') for calibration in self.calibrations]
             f.create_dataset('name', (len(names),), 'S10', names)
+            f.create_dataset('is_none', data=is_none)
 
         return path
 
