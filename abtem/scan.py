@@ -421,7 +421,7 @@ class GridScan(AbstractScan, HasGridMixin):
 
         scans = []
         for i, nx in enumerate(Nx):
-            for j, ny in enumerate(Nx):
+            for j, ny in enumerate(Ny):
                 start = [Sx[i] * self.sampling[0], Sy[j] * self.sampling[1]]
                 end = [start[0] + nx * self.sampling[0], start[1] + ny * self.sampling[1]]
                 endpoint = [False, False]
