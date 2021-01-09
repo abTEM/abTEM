@@ -399,10 +399,13 @@ class Waves(_WavesLike):
                 if potential._precalculate:
                     potential = potential.build(pbar=pbar)
 
-            result = _multislice(self, potential, propagator, pbar, max_batch=potential_chunks)
+            exit_wave = _multislice(self, potential, propagator, pbar, max_batch=potential_chunks)
 
             if detector:
-                result = detector.detect(result)
+                result = detector.allocate_measurement(self, self.array.shape[:-2])
+                result._array = asnumpy(detector.detect(exit_wave))
+            else:
+                result = exit_wave
 
         return result
 
