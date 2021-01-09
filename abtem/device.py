@@ -15,7 +15,7 @@ try:  # This should be the only place import cupy, to make it a non-essential de
     import cupyx.scipy.fft
     import cupyx.scipy.ndimage as ndimage
     from abtem.cuda_kernels import launch_interpolate_radial_functions, launch_sum_run_length_encoded, \
-        interpolate_bilinear_gpu
+        interpolate_bilinear_gpu, launch_batch_crop
 
     get_array_module = cp.get_array_module
 
@@ -55,6 +55,7 @@ try:  # This should be the only place import cupy, to make it a non-essential de
                      'abs2': lambda x: cp.abs(x) ** 2,
                      'interpolate_radial_functions': launch_interpolate_radial_functions,
                      'interpolate_bilinear': interpolate_bilinear_gpu,
+                     'batch_crop': launch_batch_crop,
                      'sum_run_length_encoded': launch_sum_run_length_encoded}
 
     asnumpy = cp.asnumpy
@@ -145,6 +146,11 @@ def ifft2(array, overwrite_x=True):
     return fftw_backward()
 
 
+def batch_crop(array, corners, new_shape):
+    array = view_as_windows(array, (1,) + new_shape, 1)
+    return array[np.arange(len(array)), corners[:, 0], corners[:, 1], 0]
+
+
 cpu_functions = {'fft2': fft2,
                  'ifft2': ifft2,
                  'fft2_convolve': fft2_convolve,
@@ -152,6 +158,7 @@ cpu_functions = {'fft2': fft2,
                  'pin_array': lambda x: x,
                  'complex_exponential': complex_exponential,
                  'interpolate_radial_functions': interpolate_radial_functions,
+                 'batch_crop': batch_crop,
                  'interpolate_bilinear': interpolate_bilinear_cpu,
                  'sum_run_length_encoded': sum_run_length_encoded}
 
