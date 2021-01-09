@@ -91,6 +91,25 @@ def launch_sum_run_length_encoded(array, result, separators):
     sum_run_length_encoded[blockspergrid, threadsperblock](array, result, separators)
 
 
+@cuda.jit
+def batch_crop(new_array, array, corners):
+    x, y, z = cuda.grid(3)
+    if (x < new_array.shape[0]) & (y < new_array.shape[1]) & (z < new_array.shape[2]):
+        new_array[x, y, z] = array[x, corners[x, 0] + y, corners[x, 1] + z]
+
+
+def launch_batch_crop(array, corners, new_shape):
+    threadsperblock = (1, 32, 32)
+    blockspergrid_x = math.ceil(corners.shape[0] / threadsperblock[0])
+    blockspergrid_y = math.ceil(new_shape[0] / threadsperblock[1])
+    blockspergrid_z = math.ceil(new_shape[1] / threadsperblock[2])
+    blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
+    result = cp.zeros((len(array),) + new_shape, dtype=array.dtype)
+    batch_crop[blockspergrid, threadsperblock](result, array, corners)
+
+    return result
+
+
 def interpolate_bilinear_gpu(x, v, u, vw, uw):
     B, H, W = x.shape
     out_H, out_W = v.shape
