@@ -1170,12 +1170,13 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
         Waves object
             Probe wave functions for the provided positions.
         """
+        xp = get_array_module_from_device(self.device)
+        batch_crop = get_device_function(xp, 'batch_crop')
 
         if max_batch_expansion is None:
             max_batch_expansion = self._max_batch_expansion()
 
-        xp = get_array_module_from_device(self.device)
-        positions = np.array(positions, dtype=xp.float32)
+        positions = xp.array(positions, dtype=xp.float32)
 
         if positions.shape == (2,):
             positions = positions[None]
@@ -1195,11 +1196,7 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
             window = xp.tensordot(coefficients, array, axes=[(1,), (0,)])
 
             corners -= crop_corner
-            for i in range(len(corners)):
-                window[i, :self.cropped_shape[0], :self.cropped_shape[1]] = periodic_crop(window[i], corners[i],
-                                                                                          self.cropped_shape)
-
-            window = window[:, :self.cropped_shape[0], :self.cropped_shape[1]].copy()
+            window = batch_crop(window, corners, self.cropped_shape)
 
         elif max_batch_expansion <= len(self):
             window = xp.zeros((len(positions),) + self.gpts, dtype=xp.complex64)
@@ -1209,7 +1206,6 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
 
         else:
             window = xp.tensordot(coefficients, copy_to_device(self.array, device=self._device), axes=[(1,), (0,)])
-            # window = xp.tensordot(coefficients, copy_to_device(self.array, device=self._device), axes=[(1,), (0,)])
 
         return Waves(window, sampling=self.sampling, energy=self.energy,
                      antialiasing_aperture=self.antialiasing_aperture)
