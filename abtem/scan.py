@@ -497,4 +497,5 @@ class GridScan(AbstractScan, HasGridMixin):
                               end=self.end,
                               gpts=self.gpts,
                               endpoint=self.grid.endpoint,
-                              )
+                              batch_partition=self._batch_partition,
+                              measurement_shift=self._measurement_shift)
