@@ -742,20 +742,21 @@ def intgrad2d(gradient, sampling=None):
 
     Parameters
     ----------
-    gradient
-
+    gradient : two np.ndarrays
+        The x- and y-components of the gradient.
     sampling : two float
-
+        Lateral sampling of the gradients. Default is 1.0.
 
     Returns
     -------
-
+    np.ndarray
+        Integrated center of mass measurement
     """
     gx, gy = gradient
     (ny, nx) = gx.shape
-    ikx = np.fft.fftfreq(nx, d=sampling)
-    iky = np.fft.fftfreq(ny, d=sampling)
-    grid_ikx, grid_iky = np.meshgrid(ikx, iky)
+    ikx = np.fft.fftfreq(nx, d=sampling[0])
+    iky = np.fft.fftfreq(ny, d=sampling[1])
+    grid_ikx, grid_iky = np.meshgrid(ikx, iky, indexing='ij')
     k = grid_ikx ** 2 + grid_iky ** 2
     k[k == 0] = 1e-12
     That = (np.fft.fft2(gx) * grid_ikx + np.fft.fft2(gy) * grid_iky) / (2j * np.pi * k)
@@ -788,6 +789,9 @@ def center_of_mass(measurement: Measurement, return_icom=False):
     com[..., 1] = com[..., 1] * measurement.calibrations[-1].sampling
 
     if return_icom:
+        if measurement.dimensions != 4:
+            raise RuntimeError()
+
         sampling = (measurement.calibrations[0].sampling, measurement.calibrations[1].sampling)
         icom = intgrad2d((com[..., 0], com[..., 1]), sampling)
         return Measurement(icom, measurement.calibrations[:-2])
