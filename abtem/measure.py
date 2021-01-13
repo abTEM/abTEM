@@ -373,7 +373,7 @@ class Measurement:  # (metaclass=ABCMeta):
 
         if axes is None:
             if self.dimensions >= 2:
-                axes = (-1, -2)
+                axes = (-2, -1)
             else:
                 axes = (-1,)
 
@@ -385,10 +385,8 @@ class Measurement:  # (metaclass=ABCMeta):
             sampling += [self.calibrations[i].sampling]
             gpts += [self.array.shape[i]]
 
-        calibrations = calibrations_from_grid(gpts=gpts, sampling=sampling)
-
+        calibrations = calibrations_from_grid(gpts=gpts, sampling=sampling, fourier_space=True)
         array = np.fft.fftshift(np.abs(array) ** 2, axes=axes)
-
         return self.__class__(array=array, calibrations=calibrations)
 
     def interpolate(self,
