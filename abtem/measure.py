@@ -8,13 +8,15 @@ import imageio
 import numpy as np
 import scipy.misc
 import scipy.ndimage
+from scipy import ndimage
 from scipy.interpolate import interp2d
 from scipy.interpolate import interpn
 
 from abtem.base_classes import Grid
 from abtem.device import asnumpy
-from abtem.utils import periodic_crop
+from abtem.utils import periodic_crop, energy2wavelength
 from abtem.visualize.mpl import show_measurement_2d, show_measurement_1d
+from ase import units
 
 
 class Calibration:
@@ -132,6 +134,14 @@ def calibrations_from_grid(gpts: Sequence[int],
     return calibrations
 
 
+def grid_from_calibration(calibration, extent=None, gpts=None):
+    if (extent is None) and (gpts is None):
+        raise RuntimeError
+
+    sampling = calibration.sampling
+    return Grid(extent=extent, gpts=gpts, sampling=sampling)
+
+
 class Measurement:  # (metaclass=ABCMeta):
     """
     Measurement object.
@@ -217,11 +227,15 @@ class Measurement:  # (metaclass=ABCMeta):
         return self.shape[0]
 
     @property
-    def array(self):
+    def array(self) -> np.ndarray:
         """
         Array of measurements.
         """
         return self._array
+
+    @property
+    def dimension(self):
+        return len(self.shape)
 
     # @array.setter
     # def array(self, array):
@@ -342,6 +356,40 @@ class Measurement:  # (metaclass=ABCMeta):
             A measurement with the same shape, but with the specified axis removed.
         """
         return self._reduction(np.mean, axis)
+
+    def diffractograms(self, axes: Tuple[int] = None):
+        """
+        Calculate the diffractograms of this measurement.
+
+        Parameters
+        ----------
+        axes : list of int
+            The axes to Fourier transform.
+
+        Returns
+        -------
+        Measurement
+        """
+
+        if axes is None:
+            if self.dimensions >= 2:
+                axes = (-1, -2)
+            else:
+                axes = (-1,)
+
+        array = np.fft.fftn(self.array, axes=axes)
+
+        sampling = []
+        gpts = []
+        for i in axes:
+            sampling += [self.calibrations[i].sampling]
+            gpts += [self.array.shape[i]]
+
+        calibrations = calibrations_from_grid(gpts=gpts, sampling=sampling)
+
+        array = np.fft.fftshift(np.abs(array) ** 2, axes=axes)
+
+        return self.__class__(array=array, calibrations=calibrations)
 
     def interpolate(self,
                     new_sampling: Union[float, Sequence[float]],
@@ -688,9 +736,32 @@ def calculate_fwhm(probe_profile: Measurement):
     return fwhm
 
 
-def center_of_mass(measurement: Measurement):
-    """Function for estimating the intensity center-of-mass for a given measurement."""
+def intgrad2d(gradient, sampling=None):
+    """
+    Perform Fourier space integration of gradient.
 
+    Parameters
+    ----------
+    gradient
+    sampling
+
+    Returns
+    -------
+
+    """
+    gx, gy = gradient
+    (ny, nx) = gx.shape
+    ikx = np.fft.fftfreq(nx, 1)
+    iky = np.fft.fftfreq(ny, 1)
+    grid_ikx, grid_iky = np.meshgrid(ikx, iky)
+    k = grid_ikx ** 2 + grid_iky ** 2
+    k[k == 0] = 1e-12
+    That = (np.fft.fft2(gx) * grid_ikx + np.fft.fft2(gy) * grid_iky) / (2j * np.pi * k)
+    T = np.real(np.fft.ifft2(That))
+    return T
+
+
+def center_of_mass(measurement: Measurement, return_icom=False):
     if (measurement.dimensions != 3) and (measurement.dimensions != 4):
         raise RuntimeError()
 
@@ -714,8 +785,32 @@ def center_of_mass(measurement: Measurement):
     com[..., 0] = com[..., 0] * measurement.calibrations[-2].sampling
     com[..., 1] = com[..., 1] * measurement.calibrations[-1].sampling
 
-    return (Measurement(com[..., 0], measurement.calibrations[:-2], units='mrad', name='com_x'),
-            Measurement(com[..., 1], measurement.calibrations[:-2], units='mrad', name='com_y'))
+    if return_icom:
+        sampling = (measurement.calibrations[0].sampling, measurement.calibrations[1].sampling)
+        icom = intgrad2d((com[..., 0], com[..., 1]), sampling)
+        return Measurement(icom, measurement.calibrations[:-2])
+    else:
+        return (Measurement(com[..., 0], measurement.calibrations[:-2], units='mrad', name='com_x'),
+                Measurement(com[..., 1], measurement.calibrations[:-2], units='mrad', name='com_y'))
+
+
+def rotational_average(measurement: Measurement):
+    array = np.squeeze(measurement.array)
+
+    n = min(array.shape[-2:])
+
+    r = np.arange(0, n, 1)[:, None]
+    angles = np.linspace(0, 2 * np.pi, n, endpoint=False)[None]
+    p = np.array([(np.cos(angles) * r).ravel(), (np.sin(angles) * r).ravel()])
+    p += np.array([array.shape[-2] // 2, array.shape[-1] // 2])[:, None]
+
+    unrolled = ndimage.map_coordinates(array, p, order=1)
+    unrolled = unrolled.reshape((r.shape[0], angles.shape[1]))
+    unrolled = unrolled.mean(1)
+    return Measurement(unrolled, Calibration(offset=0,
+                                             sampling=measurement.calibrations[-2].sampling,
+                                             units=measurement.calibrations[-2].units,
+                                             name=measurement.calibrations[-2].name))
 
 
 def integrate_disc(image: Measurement, position: np.ndarray, radius: float, return_mean: bool = True,
@@ -771,7 +866,7 @@ def integrate_disc(image: Measurement, position: np.ndarray, radius: float, retu
 
         cropped = periodic_crop(image.array, corner, new_shape)
     else:
-        raise RuntimeError('The border must be one of')
+        raise RuntimeError('border must be one of "wrap" or "raise"')
 
     x = np.linspace(0., cropped.shape[0] * calibrations[0].sampling, cropped.shape[0],
                     endpoint=calibrations[0].endpoint)
