@@ -185,7 +185,9 @@ class LineScan(AbstractScan, HasGridMixin):
         If True, end is the last position. Otherwise, it is not included. Default is True.
     """
 
-    def __init__(self, start: Sequence[float], end: Sequence[float],
+    def __init__(self,
+                 start: Sequence[float],
+                 end: Sequence[float],
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
                  endpoint: bool = True):
@@ -309,10 +311,10 @@ class GridScan(AbstractScan, HasGridMixin):
         If True, end is the last position. Otherwise, it is not included. Default is False.
     batch_partition : 'squares' or 'lines'
         Specify how to split the scan into batches. If 'squares', the scan position batches are divided into the best
-        matching squares for the batch size. If 'lines', the batches are divded into lines of scan positions.
+        matching squares for the batch size. If 'lines', the batches are divided into lines of scan positions.
     measurement_shift : two int
-        The insertion indices of new measurements will be shifted by these amount in x and y. This is used for
-        correctly inserting measurement of a partioned scan.
+        The insertion indices of new measurements will be shifted by this amount in x and y. This is used for
+        correctly inserting measurements collected from a partitioned scan.
     """
 
     def __init__(self,

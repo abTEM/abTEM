@@ -90,7 +90,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
                  atoms: Atoms,
                  num_configs: int,
                  sigmas: Union[float, Mapping[Union[str, int], float], Sequence[float]],
-                 directions: str = 'xy',
+                 directions: str = 'xyz',
                  seed=None):
 
         try:
@@ -118,10 +118,8 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
         self._sigmas = sigmas_array
 
-        directions = list(set(directions.lower()))
-
         new_directions = []
-        for direction in directions:
+        for direction in list(set(directions.lower())):
             if direction == 'x':
                 new_directions += [0]
             elif direction == 'y':
@@ -165,7 +163,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
 class MDFrozenPhonons(AbstractFrozenPhonons):
     """
-    Molecular dynamics frozen phonons.
+    Molecular dynamics frozen phonons object.
 
     Parameters
     ----------
@@ -178,6 +176,11 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
 
     def __len__(self):
         return len(self._trajectory)
+
+    def standard_deviations(self):
+        mean_positions = np.mean([atoms.positions for atoms in self], axis=0)
+        squared_deviations = [(atoms.positions - mean_positions) ** 2 for atoms in self]
+        return np.sqrt(np.sum(squared_deviations, axis=0) / (len(self) - 1))
 
     def generate_atoms(self):
         for i in range(len(self)):

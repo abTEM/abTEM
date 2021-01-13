@@ -5,6 +5,7 @@ import pyfftw
 
 from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions, sum_run_length_encoded
 from abtem.interpolate import interpolate_bilinear_cpu
+import numbers
 
 FFTW_EFFORT = 'FFTW_MEASURE'
 FFTW_THREADS = 12
@@ -144,6 +145,38 @@ def ifft2(array, overwrite_x=True):
 
     fftw_forward, fftw_backward = create_fftw_objects(array)
     return fftw_backward()
+
+
+def view_as_windows(array, window_shape, step=1):
+    xp = get_array_module(array)
+    ndim = array.ndim
+
+    if isinstance(window_shape, numbers.Number):
+        window_shape = (window_shape,) * ndim
+
+    if not (len(window_shape) == ndim):
+        raise ValueError('`window_shape` is incompatible with `arr_in.shape`')
+
+    if isinstance(step, numbers.Number):
+        if step < 1:
+            raise ValueError('`step` must be >= 1')
+        step = (step,) * ndim
+    if len(step) != ndim:
+        raise ValueError("`step` is incompatible with `arr_in.shape`")
+
+    if ((xp.array(array.shape) - xp.array(window_shape)) < 0).any():
+        raise ValueError('`window_shape` is too large')
+
+    if ((xp.array(window_shape) - 1) < 0).any():
+        raise ValueError('`window_shape` is too small')
+
+    win_indices_shape = (((xp.array(array.shape) - xp.array(window_shape)) // xp.array(step)) + 1)
+    new_shape = tuple(win_indices_shape.tolist()) + window_shape
+
+    slices = tuple(slice(None, None, st) for st in step)
+    strides = tuple(array[slices].strides + array.strides)
+    array = xp.lib.stride_tricks.as_strided(array, shape=new_shape, strides=strides)
+    return array
 
 
 def batch_crop(array, corners, new_shape):

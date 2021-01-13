@@ -243,7 +243,11 @@ class AbstractPotentialBuilder(AbstractPotential):
             return TransmissionFunction(array, slice_thicknesses=slice_thicknesses, extent=self.extent, energy=energy)
 
     def project(self):
-        return self.build().project()
+        projected = self[0]
+        max_batch = self._estimate_max_batch()
+        for _, _, projected_chunk in self.generate_slices(max_batch=max_batch):
+            projected._array += projected_chunk.array.sum(0)
+        return projected.project()
 
 
 class AbstractTDSPotentialBuilder(AbstractPotentialBuilder):
@@ -684,7 +688,13 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
         atoms = self.atoms.copy()
         atoms.wrap()
-        indices_by_number = {number: np.where(atoms.numbers == number)[0] for number in np.unique(atoms.numbers)}
+        positions = atoms.get_positions().astype(np.float32)
+        numbers = atoms.get_atomic_numbers()
+        unique = np.unique(numbers)
+        order = np.argsort(positions[:, 2])
+
+        positions = positions[order]
+        numbers = numbers[order]
 
         kx = xp.fft.fftfreq(self.gpts[0], self.sampling[0])
         ky = xp.fft.fftfreq(self.gpts[1], self.sampling[1])
@@ -694,12 +704,12 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         sinc = xp.sinc(xp.sqrt((kx * self.sampling[0]) ** 2 + (kx * self.sampling[1]) ** 2))
 
         scattering_factors = {}
-        for atomic_number in indices_by_number.keys():
+        for atomic_number in unique:
             f = kirkland_projected_fourier(k, self.parameters[atomic_number])
             scattering_factors[atomic_number] = (f / (sinc * self.sampling[0] * self.sampling[1] * kappa)).astype(
                 xp.complex64)
 
-        slice_idx = np.floor(atoms.positions[:, 2] / atoms.cell[2, 2] * self.num_slices).astype(np.int)
+        slice_idx = np.floor(positions[:, 2] / atoms.cell[2, 2] * self.num_slices).astype(np.int)
 
         start, end = next(generate_batches(last_slice - first_slice, max_batch=max_batch, start=first_slice))
 
@@ -708,17 +718,25 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
         for start, end in generate_batches(last_slice - first_slice, max_batch=max_batch, start=first_slice):
             array[:] = 0.
+            start_idx = np.searchsorted(slice_idx, start)
+            end_idx = np.searchsorted(slice_idx, end)
 
-            for j, (number, indices) in enumerate(indices_by_number.items()):
-                temp[:] = 0.
-                in_slice = (slice_idx >= start) * (slice_idx < end) * (atoms.numbers == number)
-                slice_atoms = atoms[in_slice]
-                positions = xp.asarray(slice_atoms.positions[:, :2] / self.sampling)
+            if start_idx != end_idx:
+                for j, number in enumerate(unique):
+                    temp[:] = 0.
+                    chunk_positions = positions[start_idx:end_idx]
+                    chunk_slice_idx = slice_idx[start_idx:end_idx] - start
 
-                superpose_deltas(positions, slice_idx[in_slice] - start, temp)
-                fft2_convolve(temp, scattering_factors[number])
+                    if len(unique) > 1:
+                        chunk_positions = chunk_positions[numbers[start_idx:end_idx] == number]
+                        chunk_slice_idx = chunk_slice_idx[numbers[start_idx:end_idx] == number]
 
-                array += temp
+                    chunk_positions = xp.asarray(chunk_positions[:, :2] / self.sampling)
+
+                    superpose_deltas(chunk_positions, chunk_slice_idx, temp)
+                    fft2_convolve(temp, scattering_factors[number])
+
+                    array += temp
 
             slice_thicknesses = [self.get_slice_thickness(i) for i in range(start, end)]
             yield start, end, PotentialArray(array.real[:end - start], slice_thicknesses, extent=self.extent)

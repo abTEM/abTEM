@@ -743,7 +743,9 @@ def intgrad2d(gradient, sampling=None):
     Parameters
     ----------
     gradient
-    sampling
+
+    sampling : two float
+
 
     Returns
     -------
@@ -751,8 +753,8 @@ def intgrad2d(gradient, sampling=None):
     """
     gx, gy = gradient
     (ny, nx) = gx.shape
-    ikx = np.fft.fftfreq(nx, 1)
-    iky = np.fft.fftfreq(ny, 1)
+    ikx = np.fft.fftfreq(nx, 1, sampling=sampling)
+    iky = np.fft.fftfreq(ny, 1, sampling=sampling)
     grid_ikx, grid_iky = np.meshgrid(ikx, iky)
     k = grid_ikx ** 2 + grid_iky ** 2
     k[k == 0] = 1e-12

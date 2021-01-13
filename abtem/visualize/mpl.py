@@ -210,7 +210,7 @@ def show_measurement_2d(measurement,
     return ax, im
 
 
-def show_measurement_1d(measurement, ax=None, figsize=None, legend=False, title=None, **kwargs):
+def show_measurement_1d(measurement, ax=None, figsize=None, legend=False, title=None, label=None, **kwargs):
     """
     Show line function
 
@@ -239,7 +239,10 @@ def show_measurement_1d(measurement, ax=None, figsize=None, legend=False, title=
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
 
-    lines = ax.plot(x, array, label=measurement.name, **kwargs)
+    if not label:
+        label = measurement.name
+
+    lines = ax.plot(x, array, label=label, **kwargs)
     ax.set_xlabel(format_label(calibration))
     ax.set_ylabel(format_label(measurement))
 

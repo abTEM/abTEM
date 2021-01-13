@@ -1163,7 +1163,8 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
         positions : array of xy-positions
             The positions of the probe wave functions.
         max_batch_expansion : int, optional
-            The maximum number of plane waves the reduction is applied to simultanously. Default is None.
+            The maximum number of plane waves the reduction is applied to simultanously. If set to None, the number is
+            chosen automatically based on available memory. Default is None.
 
         Returns
         -------
@@ -1176,7 +1177,7 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
         if max_batch_expansion is None:
             max_batch_expansion = self._max_batch_expansion()
 
-        positions = xp.array(positions, dtype=xp.float32)
+        positions = np.array(positions, dtype=xp.float32)
 
         if positions.shape == (2,):
             positions = positions[None]
@@ -1194,7 +1195,6 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
 
             array = copy_to_device(periodic_crop(self.array, crop_corner, size), device=self._device)
             window = xp.tensordot(coefficients, array, axes=[(1,), (0,)])
-
             corners -= crop_corner
             window = batch_crop(window, corners, self.cropped_shape)
 
@@ -1622,7 +1622,11 @@ class SMatrix(_WavesLike, HasDeviceMixin):
                             device=self._device)
 
     def profile(self, angle=0.):
+
         measurement = self.build().collapse((self.extent[0] / 2, self.extent[1] / 2)).intensity()
+
+        print(type(measurement.array))
+
         return probe_profile(measurement, angle=angle)
 
     def interact(self, sliders=None, profile=False):
