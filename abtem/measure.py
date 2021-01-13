@@ -753,7 +753,7 @@ def intgrad2d(gradient, sampling=None):
         Integrated center of mass measurement
     """
     gx, gy = gradient
-    (ny, nx) = gx.shape
+    (nx, ny) = gx.shape
     ikx = np.fft.fftfreq(nx, d=sampling[0])
     iky = np.fft.fftfreq(ny, d=sampling[1])
     grid_ikx, grid_iky = np.meshgrid(ikx, iky, indexing='ij')
