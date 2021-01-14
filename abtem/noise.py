@@ -176,7 +176,9 @@ def poisson_noise(measurement: Measurement, dose: float):
 
     measurement = measurement.copy()
     array = measurement.array
-    total_dose = dose * pixel_area * np.prod(array.shape[:2])
-    measurement.array[:] = array / np.sum(array) * total_dose
+
+    electrons_per_pixel = dose * pixel_area
+
+    measurement.array[:] = array * electrons_per_pixel
     measurement.array[:] = np.random.poisson(array).astype(np.float)
     return measurement
