@@ -172,9 +172,11 @@ def poisson_noise(measurement: Measurement, dose: float):
         The noisy measurement.
     """
 
-    pixel_area = np.product([calibration.sampling for calibration in measurement.calibrations[-2:]])
+    pixel_area = np.product([calibration.sampling for calibration in measurement.calibrations[:2]])
+
     measurement = measurement.copy()
     array = measurement.array
-    measurement.array[:] = array / np.sum(array) * dose * pixel_area * np.prod(array.shape)
+    total_dose = dose * pixel_area * np.prod(array.shape[:2])
+    measurement.array[:] = array / np.sum(array) * total_dose
     measurement.array[:] = np.random.poisson(array).astype(np.float)
     return measurement

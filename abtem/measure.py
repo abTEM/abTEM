@@ -759,10 +759,25 @@ def intgrad2d(gradient, sampling=None):
     k[k == 0] = 1e-12
     That = (np.fft.fft2(gx) * grid_ikx + np.fft.fft2(gy) * grid_iky) / (2j * np.pi * k)
     T = np.real(np.fft.ifft2(That))
+    T -= T.min()
     return T
 
 
-def center_of_mass(measurement: Measurement, return_icom=False):
+def center_of_mass(measurement: Measurement, return_icom: bool = False):
+    """
+    Calculate the center of mass of a measurement.
+
+    Parameters
+    ----------
+    measurement : Measurement
+        A collection of diffraction patterns.
+    return_icom : bool
+        If true, return the integrated center of mass.
+
+    Returns
+    -------
+    Measurement
+    """
     if (measurement.dimensions != 3) and (measurement.dimensions != 4):
         raise RuntimeError()
 
@@ -802,7 +817,6 @@ def rotational_average(measurement: Measurement):
     array = np.squeeze(measurement.array)
 
     n = min(array.shape[-2:])
-
     r = np.arange(0, n, 1)[:, None]
     angles = np.linspace(0, 2 * np.pi, n, endpoint=False)[None]
     p = np.array([(np.cos(angles) * r).ravel(), (np.sin(angles) * r).ravel()])
