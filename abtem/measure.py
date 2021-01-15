@@ -557,7 +557,7 @@ class Measurement:  # (metaclass=ABCMeta):
         new_meaurement._array = np.squeeze(asnumpy(new_meaurement.array))
         return new_meaurement
 
-    def interpolate_line(self, start, end, gpts=None, sampling=None, interpolation='splinef2d'):
+    def interpolate_line(self, start, end, gpts=None, sampling=None, width=None, interpolation='splinef2d'):
         from abtem.scan import LineScan
 
         if not (self.dimensions == 2):
@@ -577,7 +577,20 @@ class Measurement:  # (metaclass=ABCMeta):
 
         scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling)
 
-        interpolated_array = interpn((x, y), self.array, scan.get_positions(), method=interpolation)
+        if width is not None:
+            direction = scan.direction
+            perpendicular_direction = np.array([-direction[1], direction[0]])
+            n = int(np.ceil(width / scan.sampling[0]))
+            perpendicular_positions = np.linspace(-width, width, n)[:, None] * perpendicular_direction[None]
+            positions = scan.get_positions()[None] + perpendicular_positions[:, None]
+            positions = positions.reshape((-1, 2))
+            interpolated_array = interpn((x, y), self.array, positions, method=interpolation, bounds_error=False,
+                                         fill_value=0)
+            interpolated_array = interpolated_array.reshape((n, -1)).mean(0)
+
+        else:
+            interpolated_array = interpn((x, y), self.array, scan.get_positions(), method=interpolation,
+                                         bounds_error=False, fill_value=0)
 
         calibration = Calibration(offset=0, sampling=scan.sampling[0],
                                   units=self.calibrations[0].units,
