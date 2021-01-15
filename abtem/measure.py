@@ -557,7 +557,7 @@ class Measurement:  # (metaclass=ABCMeta):
         new_meaurement._array = np.squeeze(asnumpy(new_meaurement.array))
         return new_meaurement
 
-    def interpolate_line(self, start, end, gpts=None, sampling=None):
+    def interpolate_line(self, start, end, gpts=None, sampling=None, interpolation='splinef2d'):
         from abtem.scan import LineScan
 
         if not (self.dimensions == 2):
@@ -577,7 +577,7 @@ class Measurement:  # (metaclass=ABCMeta):
 
         scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling)
 
-        interpolated_array = interpn((x, y), self.array, scan.get_positions())
+        interpolated_array = interpn((x, y), self.array, scan.get_positions(), method=interpolation)
 
         calibration = Calibration(offset=0, sampling=scan.sampling[0],
                                   units=self.calibrations[0].units,

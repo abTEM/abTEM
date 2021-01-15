@@ -1642,7 +1642,8 @@ class SMatrix(_WavesLike, HasDeviceMixin):
                                       complex_exponential(-2 * np.pi * k[i, 1, None, None] * y[None, :]),
                                       self._storage)
 
-        array = array / np.sqrt((xp.abs(array.sum(0)) ** 2).sum()) / np.sqrt(np.prod(array.shape[1:]))
+        array = array / storage_xp.sqrt((storage_xp.abs(array.sum(0)) ** 2).sum()) / \
+                storage_xp.sqrt(array.shape[1] * array.shape[2])
 
         return SMatrixArray(array,
                             expansion_cutoff=self.expansion_cutoff,
