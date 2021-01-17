@@ -1,20 +1,26 @@
-import matplotlib.pyplot as plt
 import numpy as np
+from scipy.ndimage import center_of_mass
 
 from abtem.measure import Measurement, calibrations_from_grid
 from abtem.utils import fourier_translation_operator
 from abtem.waves import Probe
-from scipy.ndimage import center_of_mass
 
 
 def fft_shift(array, positions):
     return np.fft.ifft2(np.fft.fft2(array) * fourier_translation_operator(positions, array.shape))
 
 
-def _run_epie(object, probe, diffraction_patterns, positions, maxiter, alpha=1., beta=1., fix_probe=False,
-              fix_com=False,
-              return_iterations=False,
-              verbose=True):
+def _run_epie(object,
+              probe: np.ndarray,
+              diffraction_patterns: np.ndarray,
+              positions: np.ndarray,
+              maxiter: int,
+              alpha: float = 1.,
+              beta: float = 1.,
+              fix_probe: bool = False,
+              fix_com: bool = False,
+              return_iterations: bool = False,
+              verbose: bool = True):
     object = np.array(object)
     probe = np.array(probe)
     diffraction_patterns = np.array(diffraction_patterns)
@@ -88,17 +94,22 @@ def _run_epie(object, probe, diffraction_patterns, positions, maxiter, alpha=1.,
         return object, probe, SSE
 
 
-def epie(measurement: Measurement, probe_guess: Probe, maxiter: int = 5, alpha: float = 1., beta: float = 1.,
-         fix_probe=False,
-         fix_com=False,
-         return_iterations: bool = False, verbose=True):
+def epie(measurement: Measurement,
+         probe_guess: Probe,
+         maxiter: int = 5,
+         alpha: float = 1.,
+         beta: float = 1.,
+         fix_probe: bool = False,
+         fix_com: bool = False,
+         return_iterations: bool = False,
+         verbose: bool = True):
     diffraction_patterns = measurement.array.reshape((-1,) + measurement.array.shape[2:])
 
     extent = (probe_guess.wavelength * 1e3 / measurement.calibrations[2].sampling,
               probe_guess.wavelength * 1e3 / measurement.calibrations[3].sampling)
 
     sampling = (extent[0] / measurement.shape[2],
-                extent[0] / measurement.shape[3])
+                extent[1] / measurement.shape[3])
 
     x = measurement.calibrations[0].coordinates(measurement.shape[0]) / sampling[0]
     y = measurement.calibrations[1].coordinates(measurement.shape[1]) / sampling[1]
