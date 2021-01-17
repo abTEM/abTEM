@@ -243,17 +243,20 @@ def copy_to_device(array, device):
         raise RuntimeError()
 
 
-def get_available_memory(device: str) -> float:
-    if device == 'cpu':
+def get_available_memory(device_definition: str) -> float:
+    if device_definition == 'cpu':
         return psutil.virtual_memory().available
 
     else:
         mempool = cp.get_default_memory_pool()
         mempool.free_all_blocks()
 
-        if device == 'gpu':
+        if device_definition == 'gpu':
             device_id = cp.cuda.get_device_id()
             device = cp.cuda.Device(device_id)
+        else:
+            device = device_definition
+
         return device.mem_info[0]
 
 

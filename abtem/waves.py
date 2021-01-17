@@ -17,7 +17,7 @@ from abtem.potentials import Potential, AbstractPotential, AbstractTDSPotentialB
 from abtem.scan import AbstractScan, GridScan
 from abtem.transfer import CTF
 from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, subdivide_into_batches, periodic_crop, \
-    fft_crop
+    fft_crop, fourier_translation_operator
 
 
 class FresnelPropagator:
@@ -263,6 +263,7 @@ class Waves(_WavesLike):
         if gpts != self.gpts:
             array = fft_crop(array, self.array.shape[:-2] + gpts)
 
+
         antialiasing_aperture = self.antialiasing_aperture * min(self.gpts[0] / gpts[0], self.gpts[1] / gpts[1])
 
         if return_fourier_space:
@@ -271,7 +272,7 @@ class Waves(_WavesLike):
             return Waves(ifft2(array), extent=self.extent, energy=self.energy,
                          antialiasing_aperture=antialiasing_aperture)
 
-    def far_field(self, max_angle='valid', in_place=False):
+    def far_field(self, max_angle='valid'):
         return self.downsample(max_angle=max_angle, return_fourier_space=True)
 
     def diffraction_pattern(self, max_angle='valid', block_zeroth_order=False) -> Measurement:
@@ -632,19 +633,8 @@ class Probe(_WavesLike, HasDeviceMixin):
         return self._ctf
 
     def _fourier_translation_operator(self, positions):
-        xp = get_array_module(positions)
-        complex_exponential = get_device_function(xp, 'complex_exponential')
-
-        kx, ky = spatial_frequencies(self.grid.gpts, self.grid.sampling)
-        kx = kx.reshape((1, -1, 1))
-        ky = ky.reshape((1, 1, -1))
-        kx = xp.asarray(kx)
-        ky = xp.asarray(ky)
-        positions = xp.asarray(positions)
-        x = positions[:, 0].reshape((-1,) + (1, 1))
-        y = positions[:, 1].reshape((-1,) + (1, 1))
-
-        return complex_exponential(2 * np.pi * kx * x) * complex_exponential(2 * np.pi * ky * y)
+        positions /= self.sampling
+        return fourier_translation_operator(positions, self.gpts)
 
     @cached_method('_ctf_cache')
     def _evaluate_ctf(self, xp):
@@ -670,7 +660,7 @@ class Probe(_WavesLike, HasDeviceMixin):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
         xp = get_array_module_from_device(self._device)
-        fft2 = get_device_function(xp, 'fft2')
+        ifft2 = get_device_function(xp, 'ifft2')
 
         if positions is None:
             positions = xp.array((self.extent[0] / 2, self.extent[1] / 2), dtype=xp.float32)
@@ -680,7 +670,7 @@ class Probe(_WavesLike, HasDeviceMixin):
         if len(positions.shape) == 1:
             positions = xp.expand_dims(positions, axis=0)
 
-        array = fft2(self._evaluate_ctf(xp) * self._fourier_translation_operator(positions), overwrite_x=True)
+        array = ifft2(self._evaluate_ctf(xp) * self._fourier_translation_operator(positions), overwrite_x=True)
 
         array = array / np.sqrt((xp.abs(array[0]) ** 2).sum()) / np.sqrt(np.prod(array.shape[1:]))
 
@@ -1642,8 +1632,8 @@ class SMatrix(_WavesLike, HasDeviceMixin):
                                       complex_exponential(-2 * np.pi * k[i, 1, None, None] * y[None, :]),
                                       self._storage)
 
-        array = array / storage_xp.sqrt((storage_xp.abs(array.sum(0)) ** 2).sum()) / \
-                storage_xp.sqrt(array.shape[1] * array.shape[2])
+        array /= storage_xp.sqrt((storage_xp.abs(array.sum(0)) ** 2).sum()) * \
+                 storage_xp.sqrt(array.shape[1] * array.shape[2])
 
         return SMatrixArray(array,
                             expansion_cutoff=self.expansion_cutoff,

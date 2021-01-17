@@ -188,8 +188,8 @@ class LineScan(AbstractScan, HasGridMixin):
     def __init__(self,
                  start: Sequence[float],
                  end: Sequence[float],
-                 gpts: Union[int, Sequence[int]] = None,
-                 sampling: Union[float, Sequence[float]] = None,
+                 gpts: int = None,
+                 sampling: float = None,
                  endpoint: bool = True):
 
         super().__init__()

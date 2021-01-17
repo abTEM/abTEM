@@ -178,6 +178,32 @@ def fft_interpolate_2d(array, new_shape, normalization='values', overwrite_x=Fal
     return array
 
 
+def fourier_translation_operator(positions, shape):
+    positions_shape = positions.shape
+
+    if len(positions_shape) == 1:
+        positions = positions[None]
+
+    xp = get_array_module(positions)
+    complex_exponential = get_device_function(xp, 'complex_exponential')
+
+    kx, ky = spatial_frequencies(shape, (1., 1.))
+    kx = kx.reshape((1, -1, 1))
+    ky = ky.reshape((1, 1, -1))
+    kx = xp.asarray(kx)
+    ky = xp.asarray(ky)
+    positions = xp.asarray(positions)
+    x = positions[:, 0].reshape((-1,) + (1, 1))
+    y = positions[:, 1].reshape((-1,) + (1, 1))
+
+    result = complex_exponential(-2 * np.pi * kx * x) * complex_exponential(-2 * np.pi * ky * y)
+
+    if len(positions_shape) == 1:
+        return result[0]
+    else:
+        return result
+
+
 def subdivide_into_batches(num_items: int, num_batches: int = None, max_batch: int = None):
     """
     Split an n integer into m (almost) equal integers, such that the sum of smaller integers equals n.

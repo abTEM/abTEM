@@ -134,11 +134,14 @@ def calibrations_from_grid(gpts: Sequence[int],
     return calibrations
 
 
-def grid_from_calibration(calibration, extent=None, gpts=None):
+def grid_from_calibrations(calibrations, extent=None, gpts=None):
     if (extent is None) and (gpts is None):
         raise RuntimeError
 
-    sampling = calibration.sampling
+    sampling = ()
+    for calibration in calibrations:
+        sampling += (calibration.sampling,)
+
     return Grid(extent=extent, gpts=gpts, sampling=sampling)
 
 
@@ -236,6 +239,16 @@ class Measurement:  # (metaclass=ABCMeta):
     @property
     def dimension(self):
         return len(self.shape)
+
+    def angle(self):
+        new_measurement = self.copy()
+        new_measurement._array = np.angle(new_measurement.array)
+        return new_measurement
+
+    def abs(self):
+        new_measurement = self.copy()
+        new_measurement._array = np.abs(new_measurement.array)
+        return new_measurement
 
     # @array.setter
     # def array(self, array):
