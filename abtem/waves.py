@@ -263,7 +263,6 @@ class Waves(_WavesLike):
         if gpts != self.gpts:
             array = fft_crop(array, self.array.shape[:-2] + gpts)
 
-
         antialiasing_aperture = self.antialiasing_aperture * min(self.gpts[0] / gpts[0], self.gpts[1] / gpts[1])
 
         if return_fourier_space:
@@ -1433,6 +1432,10 @@ class SMatrix(_WavesLike, HasDeviceMixin):
         """The grid of the interpolated probe wave functions."""
         interpolated_gpts = tuple(n // self.interpolation for n in self.gpts)
         return Grid(gpts=interpolated_gpts, sampling=self.sampling, lock_gpts=True)
+
+    def equivalent_probe(self):
+        return Probe(extent=self.extent, gpts=self.gpts, sampling=self.sampling, energy=self.energy, ctf=self.ctf,
+                     device=self.device)
 
     def _generate_tds_probes(self,
                              scan: AbstractScan,
