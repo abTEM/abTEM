@@ -550,7 +550,7 @@ class PlaneWave(_WavesLike, HasDeviceMixin):
         xp = get_array_module_from_device(self._device)
         self.grid.check_is_defined()
         array = xp.ones((1, self.gpts[0], self.gpts[1]), dtype=xp.complex64)
-        array = array / np.sqrt(np.prod(array.shape))
+        #array = array / np.sqrt(np.prod(array.shape))
         return Waves(array, extent=self.extent, energy=self.energy)
 
     def __copy__(self, a) -> 'PlaneWave':
@@ -632,7 +632,8 @@ class Probe(_WavesLike, HasDeviceMixin):
         return self._ctf
 
     def _fourier_translation_operator(self, positions):
-        positions /= self.sampling
+        xp = get_array_module(positions)
+        positions /= xp.array(self.sampling)
         return fourier_translation_operator(positions, self.gpts)
 
     @cached_method('_ctf_cache')
