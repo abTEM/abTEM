@@ -5,6 +5,14 @@ from ase import units
 from abtem.device import get_array_module, get_device_function
 from tqdm.auto import tqdm
 import numbers
+import os
+
+_ROOT = os.path.abspath(os.path.dirname(__file__))
+
+
+def _set_path(path):
+    """Internal function to set the parametrization data directory."""
+    return os.path.join(_ROOT, 'data', path)
 
 
 def energy2mass(energy):
@@ -251,6 +259,21 @@ def generate_batches(num_items: int, num_batches: int = None, max_batch: int = N
         yield start, end
 
         start = end
+
+
+def tapered_cutoff(x, cutoff, rolloff=.1):
+    xp = get_array_module(x)
+
+    rolloff = rolloff * cutoff
+
+    if rolloff > 0.:
+        array = .5 * (1 + xp.cos(np.pi * (x - cutoff + rolloff) / rolloff))
+        array[x > cutoff] = 0.
+        array = xp.where(x > cutoff - rolloff, array, xp.ones_like(x, dtype=xp.float32))
+    else:
+        array = xp.array(x < cutoff).astype(xp.float32)
+
+    return array
 
 
 class ProgressBar:
