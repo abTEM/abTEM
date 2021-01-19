@@ -1,13 +1,16 @@
 import numpy as np
 from scipy.ndimage import center_of_mass
+from tqdm.auto import tqdm
 
+from abtem.device import get_array_module
 from abtem.measure import Measurement, calibrations_from_grid
-from abtem.utils import fourier_translation_operator
+from abtem.utils import fourier_translation_operator, ProgressBar
 from abtem.waves import Probe
 
 
 def fft_shift(array, positions):
-    return np.fft.ifft2(np.fft.fft2(array) * fourier_translation_operator(positions, array.shape))
+    xp = get_array_module(array)
+    return xp.fft.ifft2(xp.fft.fft2(array) * fourier_translation_operator(positions, array.shape))
 
 
 def _run_epie(object,
@@ -20,10 +23,12 @@ def _run_epie(object,
               fix_probe: bool = False,
               fix_com: bool = False,
               return_iterations: bool = False,
-              verbose: bool = True):
-    object = np.array(object)
-    probe = np.array(probe)
-    diffraction_patterns = np.array(diffraction_patterns)
+              verbose: bool = True, ):
+    xp = get_array_module(probe)
+
+    object = xp.array(object)
+    probe = xp.array(probe)
+    # diffraction_patterns = np.array(diffraction_patterns)
 
     if len(diffraction_patterns.shape) != 3:
         raise ValueError()
@@ -32,7 +37,7 @@ def _run_epie(object,
         raise ValueError()
 
     if object.shape == (2,):
-        object = np.ones(object, dtype=np.complex64)
+        object = xp.ones((int(object[0]), int(object[1])), dtype=xp.complex64)
     elif len(object.shape) != 2:
         raise ValueError()
 
@@ -47,46 +52,60 @@ def _run_epie(object,
         probe_iterations = []
         SSE_iterations = []
 
-    k = 0
+    diffraction_patterns = np.fft.ifftshift(np.sqrt(diffraction_patterns), axes=(-2, -1))
+
     SSE = 0.
+    k = 0
+    outer_pbar = ProgressBar(total=maxiter)
+    inner_pbar = ProgressBar(total=len(positions))
+
     while k < maxiter:
         indices = np.arange(len(positions))
         np.random.shuffle(indices)
 
+        old_position = xp.array((0., 0.))
+        inner_pbar.reset()
         SSE = 0.
         for j in indices:
-            position = positions[j]
-            illuminated_object = fft_shift(object, - position)
+            position = xp.array(positions[j])
+
+            diffraction_pattern = xp.array(diffraction_patterns[j])
+            illuminated_object = fft_shift(object, old_position - position)
 
             g = illuminated_object * probe
-            G = np.fft.fftshift(np.fft.fft2(g))
-            Gprime = np.sqrt(diffraction_patterns[j]) * np.exp(1j * np.angle(G))
-            gprime = np.fft.ifft2(np.fft.ifftshift(Gprime))
+            gprime = xp.fft.ifft2(diffraction_pattern * xp.exp(1j * xp.angle(xp.fft.fft2(g))))
 
-            shifted_object = illuminated_object + alpha * (gprime - g) * np.conj(probe) / (np.max(np.abs(probe)) ** 2)
-            object = fft_shift(shifted_object, position)
+            object = illuminated_object + alpha * (gprime - g) * xp.conj(probe) / (xp.max(xp.abs(probe)) ** 2)
+            old_position = position
 
             if not fix_probe:
-                probe = probe + beta * (gprime - g) * np.conj(illuminated_object) / (
-                        np.max(np.abs(illuminated_object)) ** 2)
+                probe = probe + beta * (gprime - g) * xp.conj(illuminated_object) / (
+                        xp.max(xp.abs(illuminated_object)) ** 2)
 
-            SSE += np.sum(np.abs(G) ** 2 - diffraction_patterns[j]) ** 2
+            # SSE += xp.sum(xp.abs(G) ** 2 - diffraction_pattern) ** 2
+            inner_pbar.update(1)
+
+        object = fft_shift(object, position)
 
         if fix_com:
-            com = center_of_mass(np.fft.fftshift(np.abs(probe) ** 2))
-            probe = np.fft.ifftshift(fft_shift(probe, - np.array(com)))
+            com = center_of_mass(xp.fft.fftshift(xp.abs(probe) ** 2))
+            probe = xp.fft.ifftshift(fft_shift(probe, - xp.array(com)))
 
-        SSE = SSE / np.prod(diffraction_patterns.shape)
+        # SSE = SSE / np.prod(diffraction_patterns.shape)
 
         if return_iterations:
             object_iterations.append(object)
             probe_iterations.append(probe)
             SSE_iterations.append(SSE)
 
-        if verbose:
-            print(f'Iteration {k:<{len(str(maxiter))}}, SSE = {SSE:.3e}')
+        outer_pbar.update(1)
+        # if verbose:
+        #    print(f'Iteration {k:<{len(str(maxiter))}}, SSE = {float(SSE):.3e}')
 
         k += 1
+
+    inner_pbar.close()
+    outer_pbar.close()
 
     if return_iterations:
         return object_iterations, probe_iterations, SSE_iterations
@@ -102,7 +121,10 @@ def epie(measurement: Measurement,
          fix_probe: bool = False,
          fix_com: bool = False,
          return_iterations: bool = False,
-         verbose: bool = True):
+         verbose: bool = True,
+         device='cpu'):
+    # xp = get_array_module_from_device(device)
+
     diffraction_patterns = measurement.array.reshape((-1,) + measurement.array.shape[2:])
 
     extent = (probe_guess.wavelength * 1e3 / measurement.calibrations[2].sampling,
@@ -120,7 +142,8 @@ def epie(measurement: Measurement,
     probe_guess.gpts = measurement.shape[2:]
     calibrations = calibrations_from_grid(probe_guess.gpts, probe_guess.sampling, names=['x', 'y'], units='Å')
 
-    probe_guess = probe_guess.build((0, 0)).array[0]
+    probe_guess._device = device
+    probe_guess = probe_guess.build(np.array([0, 0])).array[0]
 
     result = _run_epie(measurement.shape[2:],
                        probe_guess,
