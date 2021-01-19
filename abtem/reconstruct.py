@@ -22,8 +22,7 @@ def _run_epie(object,
               beta: float = 1.,
               fix_probe: bool = False,
               fix_com: bool = False,
-              return_iterations: bool = False,
-              verbose: bool = True, ):
+              return_iterations: bool = False):
     xp = get_array_module(probe)
 
     object = xp.array(object)
@@ -121,9 +120,38 @@ def epie(measurement: Measurement,
          fix_probe: bool = False,
          fix_com: bool = False,
          return_iterations: bool = False,
-         verbose: bool = True,
          device='cpu'):
-    # xp = get_array_module_from_device(device)
+    """
+    Reconstruct the phase of a 4D-STEM measurement using the extended Ptychographical Iterative Engine.
+
+    See https://doi.org/10.1016/j.ultramic.2009.05.012
+
+    Parameters
+    ----------
+    measurement : Measurement object
+        4D-STEM measurement.
+    probe_guess : Probe object
+        The initial guess for the probe.
+    maxiter : int
+        Run the algorithm for this many iterations.
+    alpha : float
+        Controls the size of the iterative updates for the object. See reference.
+    beta : float
+        Controls the size of the iterative updates for the probe. See reference.
+    fix_probe : bool
+        If True, the probe will not be updated by the algorithm. Default is False.
+    fix_com : bool
+        If True, the center of mass of the probe will be centered. Default is True.
+    return_iterations : bool
+        If True, return the reconstruction after every iteration. Default is False.
+    device : str
+        Set the calculation device.
+
+    Returns
+    -------
+    List of Measurement objects
+
+    """
 
     diffraction_patterns = measurement.array.reshape((-1,) + measurement.array.shape[2:])
 
@@ -154,8 +182,7 @@ def epie(measurement: Measurement,
                        beta=beta,
                        return_iterations=return_iterations,
                        fix_probe=fix_probe,
-                       fix_com=fix_com,
-                       verbose=verbose)
+                       fix_com=fix_com)
 
     if return_iterations:
         object_iterations = [Measurement(object, calibrations=calibrations) for object in result[0]]
