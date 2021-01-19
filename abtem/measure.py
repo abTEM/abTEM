@@ -14,9 +14,8 @@ from scipy.interpolate import interpn
 
 from abtem.base_classes import Grid
 from abtem.device import asnumpy
-from abtem.utils import periodic_crop, energy2wavelength
+from abtem.utils import periodic_crop, tapered_cutoff
 from abtem.visualize.mpl import show_measurement_2d, show_measurement_1d
-from ase import units
 
 
 class Calibration:
@@ -787,6 +786,34 @@ def intgrad2d(gradient, sampling=None):
     T = np.real(np.fft.ifft2(That))
     T -= T.min()
     return T
+
+
+def bandlimit(measurement: Measurement, cutoff: float, taper: float = .1):
+    """
+    Bandlimit a collection of diffraction patterns.
+
+    Parameters
+    ----------
+    measurement : Measurement
+        Collection of diffraction patterns.
+    cutoff : float
+        The cutoff radius in mrad.
+    taper : float
+        Taper the bandlimiting window to avoind a sharp cutoff.
+
+    Returns
+    -------
+    Measurement
+        Bandlimited measurment.
+    """
+    if measurement.dimension != 4:
+        raise NotImplementedError()
+
+    kx = measurement.calibrations[-2].coordinates(measurement.array.shape[-2])
+    ky = measurement.calibrations[-1].coordinates(measurement.array.shape[-1])
+    k = np.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
+    measurement.array[:] *= tapered_cutoff(k, cutoff, taper)[None, None]
+    return measurement
 
 
 def center_of_mass(measurement: Measurement, return_icom: bool = False):
