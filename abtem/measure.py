@@ -809,6 +809,8 @@ def bandlimit(measurement: Measurement, cutoff: float, taper: float = .1):
     if measurement.dimension != 4:
         raise NotImplementedError()
 
+    measurement = measurement.copy()
+
     kx = measurement.calibrations[-2].coordinates(measurement.array.shape[-2])
     ky = measurement.calibrations[-1].coordinates(measurement.array.shape[-1])
     k = np.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
