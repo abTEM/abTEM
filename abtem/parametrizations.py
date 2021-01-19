@@ -6,12 +6,7 @@ from scipy.special import kn
 import numpy as np
 from numba import jit
 
-_ROOT = os.path.abspath(os.path.dirname(__file__))
-
-
-def _set_path(path):
-    """Internal function to set the parametrization data directory."""
-    return os.path.join(_ROOT, 'data', path)
+from abtem.utils import _set_path
 
 
 def load_parameters(filename):
@@ -28,15 +23,18 @@ def load_parameters(filename):
     return parameters
 
 
-def load_lobato_parameters():
+def load_lobato_parameters(convert=True):
     """Function to load the default Lobato parameters (doi:10.1107/S205327331401643X)."""
     parameters = {}
 
     for key, value in load_parameters(_set_path('lobato.txt')).items():
         a = np.array([value[key] for key in ('a1', 'a2', 'a3', 'a4', 'a5')])
         b = np.array([value[key] for key in ('b1', 'b2', 'b3', 'b4', 'b5')])
-        a = np.pi ** 2 * a / b ** (3 / 2.)
-        b = 2 * np.pi / np.sqrt(b)
+
+        if convert:
+            a = np.pi ** 2 * a / b ** (3 / 2.)
+            b = 2 * np.pi / np.sqrt(b)
+
         parameters[key] = np.vstack((a, b))
 
     return parameters
@@ -87,7 +85,7 @@ def d2vdr2_lobato(r, p):
     return d2vdr2
 
 
-def load_kirkland_parameters():
+def load_kirkland_parameters(convert=True):
     """Function to load the Kirkland parameters (doi:10.1007/978-1-4419-6533-2)."""
     parameters = {}
 
@@ -96,10 +94,12 @@ def load_kirkland_parameters():
         b = np.array([value[key] for key in ('b1', 'b2', 'b3')])
         c = np.array([value[key] for key in ('c1', 'c2', 'c3')])
         d = np.array([value[key] for key in ('d1', 'd2', 'd3')])
-        a = np.pi * a
-        b = 2. * np.pi * np.sqrt(b)
-        c = np.pi ** (3. / 2.) * c / d ** (3. / 2.)
-        d = np.pi ** 2 / d
+        if convert:
+            a = np.pi * a
+            b = 2. * np.pi * np.sqrt(b)
+            c = np.pi ** (3. / 2.) * c / d ** (3. / 2.)
+            d = np.pi ** 2 / d
+
         parameters[key] = np.vstack((a, b, c, d))
 
     return parameters
@@ -110,6 +110,13 @@ def kirkland(r, p):
     return (p[0, 0] * np.exp(-p[1, 0] * r) / r + p[2, 0] * np.exp(-p[3, 0] * r ** 2.) +
             p[0, 1] * np.exp(-p[1, 1] * r) / r + p[2, 1] * np.exp(-p[3, 1] * r ** 2.) +
             p[0, 2] * np.exp(-p[1, 2] * r) / r + p[2, 2] * np.exp(-p[3, 2] * r ** 2.))
+
+
+@jit(nopython=True, nogil=True)
+def kirkland_scattering(k, p):
+    return (p[0, 0] / (p[1, 0] + k ** 2) + p[2, 0] * np.exp(-p[3, 0] * k ** 2) +
+            p[0, 1] / (p[1, 1] + k ** 2) + p[2, 1] * np.exp(-p[3, 1] * k ** 2) +
+            p[0, 2] / (p[1, 2] + k ** 2) + p[2, 2] * np.exp(-p[3, 2] * k ** 2))
 
 
 @jit(nopython=True, nogil=True)
