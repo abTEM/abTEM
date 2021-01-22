@@ -9,8 +9,6 @@
 | [**Install Guide**](https://abtem.readthedocs.io/en/latest/install.html)
 | [**Examples**](https://github.com/jacobjma/abTEM/tree/master/examples)
 
-**This program is under development and subject to changes. Please be aware and report issues.**
-
 abTEM provides a Python API for running simulations of (scanning) transmission electron microscopy images and diffraction patterns using the multislice or PRISM algorithms. It is designed to closely integrate with atomistic simulations using the Atomic Simulation Environment (ASE), and to directly use *ab initio* electrostatic potentials from the high-performance density functional theory code GPAW.
 
 ## Installation
