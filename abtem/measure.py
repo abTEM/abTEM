@@ -1,7 +1,7 @@
 """Module to describe the detection of scattered electron waves."""
 from collections.abc import Iterable, Callable
 from copy import copy
-from typing import Sequence, Tuple, Union
+from typing import Sequence, Tuple, Union, List, Union
 
 import h5py
 import imageio
@@ -164,8 +164,8 @@ class Measurement:  # (metaclass=ABCMeta):
     """
 
     def __init__(self,
-                 array: np.ndarray,
-                 calibrations: Union[Calibration, Sequence[Calibration]] = None,
+                 array: Union[np.ndarray, 'Measurement'],
+                 calibrations: Union[Calibration, Sequence[Union[Calibration, None]]] = None,
                  units: str = '',
                  name: str = ''):
 
@@ -236,7 +236,7 @@ class Measurement:  # (metaclass=ABCMeta):
         return self._array
 
     @property
-    def dimension(self):
+    def dimension(self) -> int:
         return len(self.shape)
 
     def angle(self):
@@ -285,7 +285,7 @@ class Measurement:  # (metaclass=ABCMeta):
         return len(self.array.shape)
 
     @property
-    def calibrations(self):
+    def calibrations(self) -> List[Union[Calibration, None]]:
         """
         The measurement calibrations.
         """
@@ -649,12 +649,11 @@ class FlexibleAnnularMeasurement(Measurement):
         return Measurement(array, calibrations=self.calibrations[:-1])
 
 
-class DiffractionPatterns(Measurement):
-
-    def __init__(self, array, spatial_sampling, angular_sampling):
-        calibrations = [Calibration(0., d, 'Å', name) for d, name in zip(spatial_sampling, ('x', 'y'))]
-
-        super().__init__(array, )
+# class DiffractionPatterns(Measurement):
+#
+#     def __init__(self, array, spatial_sampling, angular_sampling):
+#         calibrations = [Calibration(0., d, 'Å', name) for d, name in zip(spatial_sampling, ('x', 'y'))]
+#         super().__init__(array, )
 
 
 def probe_profile(probe_measurement: Measurement, angle: float = 0.) -> Measurement:
@@ -665,7 +664,7 @@ def probe_profile(probe_measurement: Measurement, angle: float = 0.) -> Measurem
     point0 = np.array((extent[0] / 2, extent[1] / 2))
     point1 = point0 + np.array([np.cos(np.pi * angle / 180), np.sin(np.pi * angle / 180)])
     point0, point1 = _line_intersect_rectangle(point0, point1, (0., 0.), extent)
-    line_profile = interpolate_line(probe_measurement, point0, point1)
+    line_profile = probe_measurement.interpolate_line(point0, point1)
     return line_profile
 
 
@@ -707,45 +706,19 @@ def _line_intersect_rectangle(point0, point1, lower_corner, upper_corner):
     return intersect0, intersect1
 
 
-def interpolate_line(measurement: Measurement, start: Sequence[float], end: Sequence[float],
-                     sampling: Sequence[float] = None):
-    from abtem.scan import LineScan
+def calculate_fwhm(probe_profile: Measurement) -> float:
+    """
+    Calculate the full width at half maximum of a 1d measurement, typically a probe profile.
 
-    array = np.squeeze(measurement.array)
+    Parameters
+    ----------
+    probe_profile : Measurement
+        Probe profile measurement.
 
-    if not (len(array.shape) == 2):
-        raise RuntimeError()
-
-    if (measurement.calibrations[-1] is None) or (measurement.calibrations[-2] is None):
-        raise RuntimeError()
-
-    if measurement.calibrations[-2].units != measurement.calibrations[-1].units:
-        raise RuntimeError()
-
-    if (sampling is None):
-        sampling = (measurement.calibrations[-2].sampling + measurement.calibrations[-1].sampling) / 2.
-
-    x = np.linspace(measurement.calibrations[-2].offset,
-                    measurement.shape[-2] * measurement.calibrations[-2].sampling,
-                    measurement.shape[-2])
-    y = np.linspace(measurement.calibrations[1].offset,
-                    measurement.shape[-1] * measurement.calibrations[-1].sampling,
-                    measurement.shape[-1])
-
-    line_scan = LineScan(start=start, end=end, sampling=sampling)
-
-    interpolated_array = interpn((x, y), array, line_scan.get_positions())
-
-    return Measurement(interpolated_array,
-                       Calibration(offset=0,
-                                   sampling=line_scan.sampling[0],
-                                   units=measurement.calibrations[-2].units,
-                                   name=measurement.calibrations[-2].name))
-
-
-def calculate_fwhm(probe_profile: Measurement):
-    """Function for calculating the full width at half maximum value for a 1D function."""
-
+    Returns
+    -------
+    float
+    """
     array = probe_profile.array
     peak_idx = np.argmax(array)
     peak_value = array[peak_idx]
@@ -759,9 +732,9 @@ def calculate_fwhm(probe_profile: Measurement):
     return fwhm
 
 
-def intgrad2d(gradient, sampling=None):
+def intgrad2d(gradient: np.ndarray, sampling: Tuple[float, float] = None):
     """
-    Perform Fourier space integration of gradient.
+    Perform Fourier-space integration of gradient.
 
     Parameters
     ----------

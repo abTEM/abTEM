@@ -1,11 +1,11 @@
 """Module for various convenient utilities."""
+import os
+
 import numpy as np
 from ase import units
+from tqdm.auto import tqdm
 
 from abtem.device import get_array_module, get_device_function
-from tqdm.auto import tqdm
-import numbers
-import os
 
 _ROOT = os.path.abspath(os.path.dirname(__file__))
 
@@ -31,6 +31,10 @@ def energy2mass(energy):
     """
 
     return (1 + units._e * energy / (units._me * units._c ** 2)) * units._me
+
+
+def relativistic_mass_correction(energy):
+    return (1 + units._e * energy / (units._me * units._c ** 2))
 
 
 def energy2wavelength(energy):
@@ -186,7 +190,7 @@ def fft_interpolate_2d(array, new_shape, normalization='values', overwrite_x=Fal
     return array
 
 
-def fourier_translation_operator(positions, shape):
+def fourier_translation_operator(positions: np.ndarray, shape: tuple):
     positions_shape = positions.shape
 
     if len(positions_shape) == 1:
@@ -210,6 +214,11 @@ def fourier_translation_operator(positions, shape):
         return result[0]
     else:
         return result
+
+
+def fft_shift(array, positions):
+    xp = get_array_module(array)
+    return xp.fft.ifft2(xp.fft.fft2(array) * fourier_translation_operator(positions, array.shape))
 
 
 def subdivide_into_batches(num_items: int, num_batches: int = None, max_batch: int = None):

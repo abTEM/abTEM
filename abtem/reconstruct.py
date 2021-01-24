@@ -1,16 +1,10 @@
 import numpy as np
 from scipy.ndimage import center_of_mass
-from tqdm.auto import tqdm
 
 from abtem.device import get_array_module
 from abtem.measure import Measurement, calibrations_from_grid
-from abtem.utils import fourier_translation_operator, ProgressBar
+from abtem.utils import ProgressBar, fft_shift
 from abtem.waves import Probe
-
-
-def fft_shift(array, positions):
-    xp = get_array_module(array)
-    return xp.fft.ifft2(xp.fft.fft2(array) * fourier_translation_operator(positions, array.shape))
 
 
 def _run_epie(object,

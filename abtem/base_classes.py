@@ -473,7 +473,7 @@ class Grid:
         elif (self.gpts is not None) & (other.gpts is not None) & np.any(self.gpts != other.gpts):
             raise RuntimeError('Inconsistent grid gpts ({} != {})'.format(self.gpts, other.gpts))
 
-    def snap_to_power(self, power: int = 2):
+    def round_to_power(self, power: int = 2):
         """
         Round the grid gpts up to the nearest value that is a power of n. Fourier transforms are faster for arrays of
         whose size can be factored into small primes (2, 3, 5 and 7).
@@ -665,10 +665,14 @@ class AntialiasFilter:
     Antialias filter object.
     """
 
-    cutoff = 2 / 3.
+    cutoff = 2 / 3
     rolloff = .1
 
-    def __init__(self):
+    def __init__(self, cutoff=None):
+        if cutoff is None:
+            cutoff = self.cutoff
+
+        self.cutoff = cutoff
         self._mask_cache = Cache(1)
 
     @cached_method('_mask_cache')
@@ -689,6 +693,12 @@ class AntialiasFilter:
             array = xp.where(k > kcut - self.rolloff, array, xp.ones_like(k, dtype=xp.float32))
         else:
             array = xp.array(k < kcut).astype(xp.float32)
+        return array
+
+    def _bandlimit(self, array):
+        xp = get_array_module(array)
+        fft2_convolve = get_device_function(xp, 'fft2_convolve')
+        fft2_convolve(array, self.get_mask(array.shape[-2:], (1, 1), xp), overwrite_x=True)
         return array
 
     def bandlimit(self, waves):

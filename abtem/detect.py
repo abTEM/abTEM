@@ -1,7 +1,7 @@
 """Module for describing the detection of transmitted waves and different detector types."""
 from abc import ABCMeta, abstractmethod
 from copy import copy
-from typing import Tuple, List, Any, Union
+from typing import Tuple, List, Any, Union, Sequence
 
 import numpy as np
 
@@ -40,10 +40,7 @@ def _polar_regions(gpts, angular_sampling, inner, outer, nbins_radial, nbins_azi
 
 
 def check_max_angle_exceeded(waves, max_angle):
-    if isinstance(max_angle, str):
-        return
-
-    if max_angle is not None:
+    if (max_angle is not None) and (not isinstance(max_angle, str)):
         if max_angle > min(waves.cutoff_scattering_angles):
             raise RuntimeError('Detector max angle exceeds the cutoff scattering angle.')
 
@@ -106,7 +103,6 @@ class _PolarDetector(AbstractDetector):
     @classmethod
     def _label_to_index(cls, labels):
         xp = get_array_module(labels)
-
         labels = labels.flatten()
         labels_order = labels.argsort()
         sorted_labels = labels[labels_order]
@@ -140,8 +136,8 @@ class _PolarDetector(AbstractDetector):
 
     @cached_method('cache')
     def _get_regions(self,
-                     gpts: Tuple[int],
-                     angular_sampling: Tuple[float],
+                     gpts: Sequence[int],
+                     angular_sampling: Sequence[float],
                      cutoff_scattering_angle: float = None,
                      xp=np) -> List[np.ndarray]:
 
@@ -170,10 +166,8 @@ class _PolarDetector(AbstractDetector):
 
         Parameters
         ----------
-        grid : Grid object
-            The grid of the Waves objects that will be detected.
-        wavelength : float
-            The wavelength of the Waves objects that will be detected.
+        waves : Waves object
+            An example of the
         scan : Scan object
             The scan object that will define the scan dimensions the measurement.
 
@@ -281,16 +275,13 @@ class AnnularDetector(_PolarDetector):
         self._max_detected_angle = value
         self._outer = value
 
-    def _integrate_array(self, array, angular_sampling, cutoff_scattering_angle, normalize=True):
-        xp = get_array_module(array)
+    def _integrate_array(self, array: np.ndarray, angular_sampling: Sequence[float],
+                         cutoff_scattering_angle: float = None):
 
+        xp = get_array_module(array)
         indices = self._get_regions(array.shape[-2:], angular_sampling, cutoff_scattering_angle)[0]
         values = xp.sum(array.reshape(array.shape[:-2] + (-1,))[..., indices], axis=-1)
-
-        if normalize:
-            return values / xp.sum(array, axis=(-2, -1))
-        else:
-            return values
+        return values
 
     def integrate(self, diffraction_patterns: Measurement) -> Measurement:
         """
@@ -305,11 +296,12 @@ class AnnularDetector(_PolarDetector):
         -------
         Measurement
         """
-        #if (diffraction_patterns.dimensions != 3) and (diffraction_patterns.dimensions != 4):
-        #    raise RuntimeError()
+
+        if diffraction_patterns.dimensions < 2:
+            raise ValueError()
 
         if not (diffraction_patterns.calibrations[-1].units == diffraction_patterns.calibrations[-2].units):
-            raise RuntimeError()
+            raise ValueError()
 
         sampling = (diffraction_patterns.calibrations[-2].sampling, diffraction_patterns.calibrations[-1].sampling)
 
@@ -323,7 +315,7 @@ class AnnularDetector(_PolarDetector):
 
         return Measurement(self._integrate_array(array, sampling, cutoff_scattering_angle), calibrations=calibrations)
 
-    def detect(self, waves, normalize: bool = True) -> np.ndarray:
+    def detect(self, waves) -> np.ndarray:
         """
         Integrate the intensity of a the wave functions over the detector range.
 
@@ -331,8 +323,6 @@ class AnnularDetector(_PolarDetector):
         ----------
         waves : Waves object
             The batch of wave functions to detect.
-        normalize : bool
-            Normalize output by the total intensity of the wave function.
 
         Returns
         -------
@@ -345,7 +335,7 @@ class AnnularDetector(_PolarDetector):
         abs2 = get_device_function(xp, 'abs2')
 
         intensity = abs2(fft2(waves.array, overwrite_x=False))
-        return self._integrate_array(intensity, waves.angular_sampling, min(waves.cutoff_scattering_angles), normalize)
+        return self._integrate_array(intensity, waves.angular_sampling, min(waves.cutoff_scattering_angles))
 
     def __copy__(self) -> 'AnnularDetector':
         return self.__class__(self.inner, self.outer, save_file=self.save_file)
@@ -423,7 +413,7 @@ class FlexibleAnnularDetector(_PolarDetector):
         result = xp.zeros((len(intensity), len(separators) - 1), dtype=xp.float32)
         sum_run_length_encoded(intensity, result, separators)
 
-        return result / total[:, None]
+        return result
 
     def __copy__(self) -> 'FlexibleAnnularDetector':
         return self.__class__(self.step_size, save_file=self.save_file)
@@ -548,8 +538,8 @@ class PixelatedDetector(AbstractDetector):
     """
     Pixelated detector object.
 
-    The pixelated detector records the intensity of the Fourier-transformed exit wave function. This may be used for
-    simulating 4D-STEM.
+    The pixelated detector records the intensity of the Fourier-transformed exit wavefunction. This may be used for
+    example for simulating 4D-STEM.
 
     Parameters
     ----------
@@ -732,7 +722,7 @@ class WavefunctionDetector(AbstractDetector):
     """
 
     def __init__(self, save_file: str = None):
-        super().__init__(max_detected_angle=np.inf, save_file=save_file)
+        super().__init__(max_detected_angle=None, save_file=save_file)
 
     def allocate_measurement(self, waves, scan: AbstractScan) -> Measurement:
         """

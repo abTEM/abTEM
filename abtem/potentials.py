@@ -20,6 +20,7 @@ from abtem.structures import is_cell_orthogonal
 from abtem.tanh_sinh import integrate, tanh_sinh_nodes_and_weights
 from abtem.temperature import AbstractFrozenPhonons, DummyFrozenPhonons
 from abtem.utils import energy2sigma, ProgressBar, generate_batches, _disc_meshgrid
+from abtem.structures import pad_atoms
 
 # Vacuum permitivity in ASE units
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
@@ -376,41 +377,6 @@ class PotentialIntegrator:
         return values, derivatives
 
 
-def pad_atoms(atoms: Atoms, margin: float):
-    """
-    Repeat the atoms in x and y, retaining only the repeated atoms within the margin distance from the cell boundary.
-
-    Parameters
-    ----------
-    atoms: ASE Atoms object
-        The atoms that should be padded.
-    margin: float
-        The padding margin.
-
-    Returns
-    -------
-    ASE Atoms object
-        Padded atoms.
-    """
-
-    if not is_cell_orthogonal(atoms):
-        raise RuntimeError('The cell of the atoms must be orthogonal.')
-
-    left = atoms[atoms.positions[:, 0] < margin]
-    left.positions[:, 0] += atoms.cell[0, 0]
-    right = atoms[atoms.positions[:, 0] > atoms.cell[0, 0] - margin]
-    right.positions[:, 0] -= atoms.cell[0, 0]
-
-    atoms += left + right
-
-    top = atoms[atoms.positions[:, 1] < margin]
-    top.positions[:, 1] += atoms.cell[1, 1]
-    bottom = atoms[atoms.positions[:, 1] > atoms.cell[1, 1] - margin]
-    bottom.positions[:, 1] -= atoms.cell[1, 1]
-    atoms += top + bottom
-    return atoms
-
-
 def superpose_deltas(positions, z, array):
     shape = array.shape[-2:]
     xp = get_array_module(array)
@@ -433,28 +399,31 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
     Parameters
     ----------
-    atoms: Atoms or FrozenPhonons object
+    atoms : Atoms or FrozenPhonons object
         Atoms or FrozenPhonons defining the atomic configuration(s) used in the IAM of the electrostatic potential(s).
-    gpts: one or two int, optional
+    gpts : one or two int, optional
         Number of grid points describing each slice of the potential.
-    sampling: one or two float, optional
+    sampling : one or two float, optional
         Lateral sampling of the potential [1 / Å].
-    slice_thickness: float, optional
+    slice_thickness : float, optional
         Thickness of the potential slices in Å for calculating the number of slices used by the multislice algorithm.
         Default is 0.5 Å.
-    parametrization: 'lobato' or 'kirkland', optional
+    parametrization : 'lobato' or 'kirkland', optional
         The potential parametrization describes the radial dependence of the potential for each element. Two of the
         most accurate parametrizations are available by Lobato et. al. and Kirkland. The abTEM default is 'lobato'.
         See the citation guide for references.
-    projection: 'finite' or 'infinite'
+    projection : 'finite' or 'infinite'
         If 'finite' the 3d potential is numerically integrated between the slice boundaries. If 'infinite' the infinite
         potential projection of each atom will be assigned to a single slice.
-    cutoff_tolerance: float, optional
+    cutoff_tolerance : float, optional
         The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]. The cutoff is only
         relevant for potentials using the 'finite' projection scheme.
-    device: str, optional
+    device : str, optional
         The device used for calculating the potential. The default is 'cpu'.
-    storage: str, optional
+    precalculate : bool
+        If True, precalculate the potential else the potential will be calculated on-the-fly and immediately discarded.
+        Default is True.
+    storage : str, optional
         The device on which to store the created potential. The default is 'None', defaulting to the chosen device.
     """
 
@@ -467,7 +436,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
                  projection: str = 'finite',
                  cutoff_tolerance: float = 1e-3,
                  device='cpu',
-                 precalculate=True,
+                 precalculate: bool = True,
                  storage=None):
 
         self._cutoff_tolerance = cutoff_tolerance

@@ -1,5 +1,7 @@
 """Module for modifying ASE atoms objects for use in abTEM."""
 from fractions import Fraction
+from numbers import Number
+from typing import Union, Sequence
 
 import numpy as np
 from ase import Atoms
@@ -159,3 +161,167 @@ def orthogonalize_cell(atoms: Atoms, limit_denominator: int = 10, return_strain=
         return atoms, strain_tensor
     else:
         return atoms
+
+
+def cut_rectangle(atoms: Atoms, origin: Sequence[float], extent: Sequence[float], margin: float = 0.):
+    """
+    Cuts out a cell starting at the origin to a given extent from a sufficiently repeated copy of atoms.
+
+    Parameters
+    ----------
+    atoms : ASE atoms object
+        This should correspond to a repeatable unit cell.
+    origin : two float
+        Origin of the new cell. Units of Angstrom.
+    extent : two float
+        xy-extent of the new cell. Units of Angstrom.
+    margin : float
+        Atoms within margin from the border of the new cell will be included. Units of Angstrom. Default is 0.
+
+    Returns
+    -------
+    ASE atoms object
+    """
+    atoms = atoms.copy()
+    cell = atoms.cell.copy()
+    atoms = standardize_cell(atoms)
+
+    extent = (extent[0], extent[1], atoms.cell[2, 2],)
+    atoms.positions[:, :2] -= np.array(origin)
+
+    a = atoms.cell.scaled_positions(np.array((extent[0] + 2 * margin, 0, 0)))
+    b = atoms.cell.scaled_positions(np.array((0, extent[1] + 2 * margin, 0)))
+    cell_with_margin = np.dot(np.array([a[:2], b[:2]]), atoms.cell[:2, :2])
+
+    scaled_corners_newcell = np.array([[0., 0.], [0., 1.], [1., 0.], [1., 1.]])
+    corners = np.dot(scaled_corners_newcell, cell_with_margin)
+    scaled_corners = np.linalg.solve(atoms.cell[:2, :2].T, corners.T).T
+    repetitions = np.ceil(scaled_corners.ptp(axis=0)).astype(np.int) + 1
+
+    atoms = atoms.repeat(tuple(repetitions) + (1,))
+    atoms.positions[:, :2] += np.dot(np.floor(scaled_corners.min(axis=0)), cell[:2, :2])
+
+    margin_cell_translation = np.ceil(cell.scaled_positions(np.array([margin, margin, 0]))[:2])
+    atoms.positions[:, :2] -= margin_cell_translation[0] * cell[0, :2]
+    atoms.positions[:, :2] -= margin_cell_translation[1] * cell[1, :2]
+
+    atoms.set_cell([extent[0], extent[1], cell[2, 2]])
+
+    atoms = atoms[((atoms.positions[:, 0] >= -margin) &
+                   (atoms.positions[:, 1] >= -margin) &
+                   (atoms.positions[:, 0] < extent[0] + margin) &
+                   (atoms.positions[:, 1] < extent[1] + margin))
+    ]
+    return atoms
+
+
+def pad_atoms(atoms: Atoms, margin: float):
+    """
+    Repeat the atoms in x and y, retaining only the repeated atoms within the margin distance from the cell boundary.
+
+    Parameters
+    ----------
+    atoms: ASE Atoms object
+        The atoms that should be padded.
+    margin: float
+        The padding margin.
+
+    Returns
+    -------
+    ASE Atoms object
+        Padded atoms.
+    """
+
+    if not is_cell_orthogonal(atoms):
+        raise RuntimeError('The cell of the atoms must be orthogonal.')
+
+    left = atoms[atoms.positions[:, 0] < margin]
+    left.positions[:, 0] += atoms.cell[0, 0]
+    right = atoms[atoms.positions[:, 0] > atoms.cell[0, 0] - margin]
+    right.positions[:, 0] -= atoms.cell[0, 0]
+
+    atoms += left + right
+
+    top = atoms[atoms.positions[:, 1] < margin]
+    top.positions[:, 1] += atoms.cell[1, 1]
+    bottom = atoms[atoms.positions[:, 1] > atoms.cell[1, 1] - margin]
+    bottom.positions[:, 1] -= atoms.cell[1, 1]
+    atoms += top + bottom
+    return atoms
+
+
+class SlicedAtoms:
+
+    def __init__(self, atoms, slice_thicknesses):
+        self._atoms = atoms
+        self.slice_thicknesses = slice_thicknesses
+
+    @property
+    def atoms(self):
+        return self._atoms
+
+    @property
+    def positions(self):
+        return self.atoms.positions
+
+    @property
+    def numbers(self):
+        return self.atoms.numbers
+
+    def __len__(self):
+        return len(self.atoms)
+
+    @property
+    def slice_thicknesses(self):
+        return self._slice_thicknesses
+
+    @slice_thicknesses.setter
+    def slice_thicknesses(self, slice_thicknesses):
+        if isinstance(slice_thicknesses, Number):
+            num_slices = int(np.ceil(self._atoms.cell[2, 2] / slice_thicknesses))
+            slice_thicknesses = np.full(num_slices, float(slice_thicknesses))
+        self._slice_thicknesses = slice_thicknesses
+
+    def flip(self):
+        self._atoms.positions[:] = self._atoms.cell[2, 2] - self._atoms.positions[:]
+        self._slice_thicknesses[:] = self._slice_thicknesses[::-1]
+
+    def get_slice_entrance(self, i):
+        return np.sum(self.slice_thicknesses[:i])
+
+    def get_slice_exit(self, i):
+        return self.get_slice_entrance(i) + self.slice_thicknesses[i]
+
+    def get_subsliced_atoms(self,
+                            start,
+                            end=None,
+                            atomic_number=None,
+                            padding: Union[bool, float] = False,
+                            z_margin=0.):
+
+        if end is None:
+            end = start + 1
+
+        a = self.get_slice_entrance(start) - z_margin
+        b = self.get_slice_entrance(end) + z_margin
+
+        in_slice = (self.atoms.positions[:, 2] > a) * (self.atoms.positions[:, 2] < b)
+
+        if atomic_number is not None:
+            in_slice = (self.atoms.numbers == atomic_number) * in_slice
+
+        atoms = self.atoms[in_slice]
+
+        if padding:
+            atoms = pad_atoms(atoms, padding)
+
+        return self.__class__(atoms, self.slice_thicknesses)
+
+    @property
+    def num_slices(self):
+        """The number of projected potential slices."""
+        return len(self._slice_thicknesses)
+
+    def get_slice_thickness(self, i):
+        """The thickness of the projected potential slices."""
+        return self._slice_thicknesses[i]
