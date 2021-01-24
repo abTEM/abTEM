@@ -550,7 +550,7 @@ class PlaneWave(_WavesLike, HasDeviceMixin):
         xp = get_array_module_from_device(self._device)
         self.grid.check_is_defined()
         array = xp.ones((1, self.gpts[0], self.gpts[1]), dtype=xp.complex64)
-        #array = array / np.sqrt(np.prod(array.shape))
+        # array = array / np.sqrt(np.prod(array.shape))
         return Waves(array, extent=self.extent, energy=self.energy)
 
     def __copy__(self, a) -> 'PlaneWave':
@@ -1055,21 +1055,10 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
             pbar.reset()
             close_pbar = False
 
-        batch_sizes = subdivide_into_batches(len(self), n_batches)
-
         xp = get_array_module_from_device(self._device)
 
-        # if xp != get_array_module(self.array):
-        #     stream = xp.cuda.Stream(non_blocking=False)
-        #     partial_array = xp.empty((batch_sizes[0],) + self.gpts, dtype=xp.complex64)
-        #
-        # else:
-        #     stream = None
-        #     partial_array = None
-        # partial_array = xp.empty((batch_sizes[0],) + self.gpts, dtype=xp.complex64)
-
         n = 0
-        for batch_size in batch_sizes:
+        for batch_size in subdivide_into_batches(len(self), n_batches):
             start = n
             end = n + batch_size
 
@@ -1078,13 +1067,6 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
                                         extent=self.extent, energy=self.energy)
             else:
                 yield start, end, Waves(self._array[start:end], extent=self.extent, energy=self.energy)
-
-            # if stream is not None:
-            #     partial_array[:batch_size].set(self._array[start:end], stream=stream)
-            #     yield start, end, Waves(partial_array[:batch_size], extent=self.extent, energy=self.energy)
-            # #
-            # else:
-            #     yield start, end, Waves(self._array[start:end], extent=self.extent, energy=self.energy)
 
             n += batch_size
             pbar.update(batch_size)
@@ -1095,7 +1077,7 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
 
     def multislice(self,
                    potential: AbstractPotential,
-                   max_batch=None,
+                   max_batch: int = None,
                    multislice_pbar: Union[ProgressBar, bool] = True,
                    plane_waves_pbar: Union[ProgressBar, bool] = True):
         """
@@ -1244,8 +1226,8 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
     def scan(self,
              scan: AbstractScan,
              detectors: Sequence[AbstractDetector],
-             max_batch_probes=None,
-             max_batch_expansion=None,
+             max_batch_probes: int = None,
+             max_batch_expansion: int = None,
              pbar: Union[ProgressBar, bool] = True):
 
         """
@@ -1280,7 +1262,6 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
 
         for indices, exit_probes in self._generate_probes(scan, max_batch_probes, max_batch_expansion):
             for detector in detectors:
-                # for detector, measurement in measurements.items():
                 new_measurement = detector.detect(exit_probes)
                 try:
                     scan.insert_new_measurement(measurements[detector], indices, new_measurement)
@@ -1288,7 +1269,6 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
                     measurements[detector] = detector.allocate_measurement(exit_probes, scan)
                     scan.insert_new_measurement(measurements[detector], indices, new_measurement)
 
-            # scan.insert_new_measurement(measurement, indices, detector.detect(exit_probes))
             pbar.update(len(indices))
 
         pbar.refresh()
@@ -1627,8 +1607,8 @@ class SMatrix(_WavesLike, HasDeviceMixin):
         y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=xp.float32)
 
         k = self.k
-
         shape = (len(k),) + self.gpts
+
         array = storage_xp.zeros(shape, dtype=np.complex64)
 
         for i in range(len(k)):
@@ -1636,8 +1616,10 @@ class SMatrix(_WavesLike, HasDeviceMixin):
                                       complex_exponential(-2 * np.pi * k[i, 1, None, None] * y[None, :]),
                                       self._storage)
 
-        array /= storage_xp.sqrt((storage_xp.abs(array.sum(0)) ** 2).sum()) * \
-                 storage_xp.sqrt(array.shape[1] * array.shape[2])
+        cropped_shape = (self.gpts[0] // self.interpolation, self.gpts[1] // self.interpolation)
+
+        probe = (storage_xp.abs(array.sum(0)) ** 2)[:cropped_shape[0],:cropped_shape[1]]
+        array /= storage_xp.sqrt(probe.sum()) * storage_xp.sqrt(cropped_shape[0] * cropped_shape[1])
 
         return SMatrixArray(array,
                             expansion_cutoff=self.expansion_cutoff,
@@ -1648,12 +1630,8 @@ class SMatrix(_WavesLike, HasDeviceMixin):
                             ctf=self.ctf.copy(),
                             device=self._device)
 
-    def profile(self, angle=0.):
-
+    def profile(self, angle=0.) -> Measurement:
         measurement = self.build().collapse((self.extent[0] / 2, self.extent[1] / 2)).intensity()
-
-        print(type(measurement.array))
-
         return probe_profile(measurement, angle=angle)
 
     def interact(self, sliders=None, profile=False):
@@ -1687,7 +1665,7 @@ class SMatrix(_WavesLike, HasDeviceMixin):
         """
         return self.build().collapse((self.extent[0] / 2, self.extent[1] / 2)).intensity().show(**kwargs)
 
-    def __copy__(self):
+    def __copy__(self) -> 'SMatrix':
         return self.__class__(expansion_cutoff=self.expansion_cutoff,
                               interpolation=self.interpolation,
                               ctf=self.ctf.copy(),
@@ -1697,6 +1675,6 @@ class SMatrix(_WavesLike, HasDeviceMixin):
                               device=self._device,
                               storage=self._storage)
 
-    def copy(self):
+    def copy(self) -> 'SMatrix':
         """Make a copy."""
         return copy(self)
