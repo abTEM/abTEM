@@ -7,25 +7,29 @@ from abtem.scan import GridScan
 from abtem.waves import Probe
 
 
-def test_flexible_annular_detector():
+def test_detector_consistency():
     atoms = read('data/srtio3_100.cif')
     atoms *= (4, 4, 1)
 
-    potential = Potential(atoms, gpts=512, projection='infinite', slice_thickness=.5,
+    potential = Potential(atoms, gpts=256, projection='infinite', slice_thickness=.5,
                           parametrization='kirkland', ).build(pbar=False)
 
     probe = Probe(energy=300e3, semiangle_cutoff=9.4, rolloff=0.05)
 
     flexible_detector = FlexibleAnnularDetector()
-    annular_detector = AnnularDetector(inner=30, outer=80)
+    annular_detector = AnnularDetector(inner=20, outer=40)
+    pixelated_detector = PixelatedDetector()
 
     end = (potential.extent[0] / 4, potential.extent[1] / 4)
 
-    gridscan = GridScan(start=[0, 0], end=end, sampling=.2)
+    gridscan = GridScan(start=[0, 0], end=end, sampling=.5)
 
-    measurements = probe.scan(gridscan, [flexible_detector, annular_detector], potential, pbar=False)
+    measurements = probe.scan(gridscan, [flexible_detector, pixelated_detector, annular_detector], potential,
+                              pbar=False)
 
-    assert np.allclose(measurements[flexible_detector].integrate(30, 80).array, measurements[annular_detector].array)
+    assert np.allclose(measurements[0].integrate(20, 40).array, measurements[2].array)
+    assert np.allclose(annular_detector.integrate(measurements[1]).array,
+                       measurements[2].array)
 
 
 def test_pixelated_detector():

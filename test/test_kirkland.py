@@ -23,27 +23,15 @@ def test_fig_5_12():
     assert np.round(intensity.max(), 2) == np.float32(1.03)
 
 
-def test_fig():
+def test_fig_5_22():
     atoms = Atoms('CSiCuAuU', positions=[(x, 25, 4) for x in np.linspace(5, 45, 5)], cell=(50, 50, 8))
-
     gpts = 2048
-
     potential = Potential(atoms=atoms, gpts=gpts, parametrization='kirkland', slice_thickness=8)
-
     probe = Probe(energy=200e3, defocus=700, Cs=1.3e7, semiangle_cutoff=10.37)
-
     probe.grid.match(potential)
-
     scan = LineScan(start=[5, 25], end=[45, 25], gpts=5)
-
     detector = AnnularDetector(inner=40, outer=200)
+    measurement = probe.scan(scan, detector, potential, pbar=False)
 
-    measurements = probe.scan(scan, [detector], potential, pbar=False)
-
-    #assert np.allclose(measurements[detector].array, [0.00010976, 0.00054356, 0.00198158, 0.00997221, 0.01098883])
-    assert np.allclose(measurements[detector].array, [0.0001168, 0.00059303, 0.00214667, 0.00977803, 0.01167613],
-                       atol=1e-5)
-    #assert np.allclose(measurements[detector].array, [0.00010933, 0.00054426, 0.00205304, 0.00986171, 0.01197426],
-                      #atol=1e-5)
-    # assert np.allclose(measurements[detector].array, [0.00012474, 0.00060268, 0.0022271 , 0.00963283, 0.01076559],
-    #                    atol=1e-5)
+    correct_values = np.array([0.0001168, 0.00059303, 0.00214667, 0.00977803, 0.01167613])
+    assert np.allclose(measurement.array, correct_values, atol=1e-5)

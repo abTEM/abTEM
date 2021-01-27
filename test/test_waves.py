@@ -201,18 +201,18 @@ def test_probe_waves_line_scan():
     potential = DummyPotential(extent=5, sampling=.1)
 
     scan = LineScan((0, 0), (1, 1), gpts=10)
-    measurements = probe.scan(scan, [detector], potential, max_batch=1, pbar=False)
+    measurement = probe.scan(scan, detector, potential, max_batch=1, pbar=False)
 
     assert detector._detect_count == 10
-    assert np.all(measurements[detector].array == 1.)
+    assert np.all(measurement.array == 1.)
 
-    measurements = probe.scan(scan, [detector], potential, pbar=False)
+    measurement = probe.scan(scan, [detector], potential, pbar=False)
     assert detector._detect_count == 11
-    assert np.all(measurements[detector].array == 1.)
+    assert np.all(measurement.array == 1.)
 
-    measurements = probe.scan(scan, [detector], potential, max_batch=3, pbar=False)
+    measurement = probe.scan(scan, detector, potential, max_batch=3, pbar=False)
     assert detector._detect_count == 15
-    assert np.all(measurements[detector].array == 1.)
+    assert np.all(measurement.array == 1.)
 
 
 def test_probe_waves_grid_scan():
@@ -221,7 +221,7 @@ def test_probe_waves_grid_scan():
     potential = DummyPotential(extent=5, sampling=.1)
 
     scan = GridScan((0, 0), (1, 1), gpts=10)
-    measurements = probe.scan(scan, [detector], potential, max_batch=1, pbar=False)
+    measurement = probe.scan(scan, detector, potential, max_batch=1, pbar=False)
 
     assert detector._detect_count == 100
-    assert np.all(measurements[detector].array == 1.)
+    assert np.all(measurement.array == 1.)

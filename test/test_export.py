@@ -80,8 +80,8 @@ def test_linescan_to_file(tmp_path):
 
     measurements = probe.scan(scan, [detector, export_detector], potential, pbar=False)
 
-    measurement = measurements[detector]
-    imported_measurement = Measurement.read(measurements[export_detector])
+    measurement = measurements[0]
+    imported_measurement = Measurement.read(measurements[1])
 
     assert np.allclose(measurement.array, imported_measurement.array)
     assert measurement.calibrations[0] == imported_measurement.calibrations[0]
@@ -107,8 +107,8 @@ def test_gridscan_to_file(tmp_path):
 
     measurements = probe.scan(scan, [detector, export_detector], potential, pbar=False)
 
-    measurement = measurements[detector]
-    imported_measurement = Measurement.read(measurements[export_detector])
+    measurement = measurements[0]
+    imported_measurement = Measurement.read(measurements[1])
 
     assert np.allclose(measurement.array, imported_measurement.array)
     assert measurement.calibrations[0] == imported_measurement.calibrations[0]

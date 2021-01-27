@@ -25,23 +25,33 @@ def test_prism_raises():
 
 
 def test_prism_match_probe():
-    S_builder = SMatrix(30., 60e3, 1, extent=5, gpts=50)
+    S = SMatrix(30., 60e3, 1, extent=5, gpts=50)
     probe = Probe(extent=5, gpts=50, energy=60e3, semiangle_cutoff=30., rolloff=0.)
-    assert np.allclose(probe.build([(0., 0.)]).array, S_builder.build().collapse([(0., 0.)]).array, atol=2e-5)
+    assert np.allclose(probe.build([(0., 0.)]).array, S.build().collapse([(0., 0.)]).array, atol=2e-5)
 
 
 def test_prism_translate():
-    S_builder = SMatrix(30, 60e3, 1, extent=5, gpts=50)
+    S = SMatrix(30, 60e3, 1, extent=5, gpts=50)
     probe = Probe(extent=5, gpts=50, energy=60e3, semiangle_cutoff=30, rolloff=0)
     assert np.allclose(probe.build(np.array([(2.5, 2.5)])).array,
-                       S_builder.build().collapse([(2.5, 2.5)]).array, atol=1e-5)
+                       S.build().collapse([(2.5, 2.5)]).array, atol=1e-5)
+
+
+def test_prism_tilt():
+    S = SMatrix(30., 60e3, 1, extent=5, gpts=50, tilt=(1, 2))
+    S_array = S.build()
+    wave = S_array.collapse()
+    assert S_array.tilt == S.tilt == wave.tilt
 
 
 def test_prism_interpolation():
-    S_builder = SMatrix(30, 60e3, 2, extent=10, gpts=100)
+    S = SMatrix(30, 60e3, 2, extent=10, gpts=100)
     probe = Probe(extent=5, gpts=50, energy=60e3, semiangle_cutoff=30, rolloff=0)
-    assert np.allclose(probe.build(np.array([(2.5, 2.5)])).array,
-                       S_builder.build().collapse([(2.5, 2.5)]).array, atol=1e-5)
+
+    probe_array = probe.build(np.array([(2.5, 2.5)])).array
+    S_array = S.build().collapse([(2.5, 2.5)]).array
+
+    assert np.allclose(probe_array, S_array, atol=1e-5)
 
 
 def test_prism_multislice():
@@ -57,14 +67,13 @@ def test_probe_waves_line_scan():
     linescan = LineScan(start=[0, 0], end=[2.5, 2.5], gpts=10)
     detector = AnnularDetector(inner=80, outer=200)
 
-    S_builder = SMatrix(30, 80e3, 1, gpts=500)
-    S = S_builder.multislice(potential, pbar=False)
+    S = SMatrix(30, 80e3, 1, gpts=500).multislice(potential, pbar=False)
     probe = Probe(semiangle_cutoff=30, energy=80e3, gpts=500)
 
-    prism_measurements = S.scan(linescan, [detector], max_batch_probes=10, pbar=False)
-    measurements = probe.scan(linescan, [detector], potential, max_batch=50, pbar=False)
+    prism_measurement = S.scan(linescan, detector, max_batch_probes=10, pbar=False)
+    measurement = probe.scan(linescan, detector, potential, max_batch=50, pbar=False)
 
-    assert np.allclose(measurements[detector].array, prism_measurements[detector].array, atol=1e-6)
+    assert np.allclose(measurement.array, prism_measurement.array, atol=1e-6)
 
 
 def test_interpolation_scan():
@@ -81,9 +90,9 @@ def test_interpolation_scan():
     atoms *= (2, 2, 1)
     potential = Potential(atoms)
     S = S_builder.multislice(potential, pbar=False)
-    prism_measurements = S.scan(linescan, [detector], max_batch_probes=10, pbar=False)
+    prism_measurements = S.scan(linescan, detector, max_batch_probes=10, pbar=False)
 
-    assert np.allclose(measurements[detector].array, prism_measurements[detector].array, atol=1e-6)
+    assert np.allclose(measurements.array, prism_measurements.array, atol=1e-6)
 
 
 def test_prism_batch():
@@ -96,14 +105,15 @@ def test_prism_batch():
     assert np.allclose(S1.array, S2.array)
 
 
-# def test_downsample():
-#     S = SMatrix(expansion_cutoff=10, interpolation=2, energy=300e3, extent=10, sampling=.05)
-#     S = S.build().downsample(normalization='values')
-#
-#     S2 = SMatrix(expansion_cutoff=10, interpolation=2, energy=300e3, extent=10, gpts=S.gpts)
-#     S2 = S2.build()
-#
-#     assert np.allclose(S.array - S2.array, 0., atol=5e-6)
+def test_downsample_smatrix():
+    S = SMatrix(expansion_cutoff=10, interpolation=2, energy=300e3, extent=10, sampling=.05)
+    S = S.build().downsample()
+
+    S2 = SMatrix(expansion_cutoff=10, interpolation=2, energy=300e3, extent=10, gpts=S.gpts)
+    S2 = S2.build()
+
+    assert np.allclose(S.array - S2.array, 0., atol=5e-6)
+
 
 def test_downsample_max_angle():
     S = SMatrix(30, 80e3, 1, gpts=500)
@@ -130,14 +140,14 @@ def test_downsample_detect():
     gridscan = GridScan(start=[0, 0], end=end, sampling=.2)
     S = SMatrix(energy=300e3, semiangle_cutoff=9.4, rolloff=0.05, expansion_cutoff=10)
     S_exit = S.multislice(potential, pbar=False)
-    measurements = S_exit.scan(gridscan, [detector], pbar=False)
+    measurement = S_exit.scan(gridscan, detector, pbar=False)
     S_downsampled = S_exit.downsample()
 
-    downsampled_measurements = S_downsampled.scan(gridscan, [detector], pbar=False)
+    downsampled_measurement = S_downsampled.scan(gridscan, detector, pbar=False)
 
     assert S_downsampled.array.shape != S_exit.array.shape
-    assert not np.all(measurements[detector].array == downsampled_measurements[detector].array)
-    assert np.allclose(measurements[detector].array, downsampled_measurements[detector].array)
+    assert not np.all(measurement.array == downsampled_measurement.array)
+    assert np.allclose(measurement.array, downsampled_measurement.array)
 
 
 def test_crop():
@@ -195,7 +205,7 @@ def test_cropped_scan():
     measurements = S.scan(gridscan, [detector], max_batch_probes=64)
 
     scans = gridscan.partition_scan((2, 2))
-    cropped_measurements = {detector: detector.allocate_measurement(S.collapse((0,0)), gridscan)}
+    cropped_measurements = {detector: detector.allocate_measurement(S.collapse((0, 0)), gridscan)}
 
     for scan in scans:
         cropped = S.crop_to_scan(scan)
