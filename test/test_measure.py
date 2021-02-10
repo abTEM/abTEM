@@ -1,6 +1,6 @@
-from abtem.base_classes import Grid
-from abtem.scan import GridScan
 import numpy as np
+
+from abtem.scan import GridScan
 
 
 def test_calibration_coordinates():

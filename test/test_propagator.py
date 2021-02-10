@@ -1,6 +1,7 @@
 from abtem.waves import FresnelPropagator, Probe
 import numpy as np
 
+
 def test_propagator_cache():
     wave = Probe(extent=10, gpts=100, energy=60e3, semiangle_cutoff=30).build()
 
@@ -21,4 +22,4 @@ def test_propagator_cache():
 
 def testbandlimit_propagator():
     p = FresnelPropagator()
-    p = p._evaluate_propagator_array((256, 256), (.02, .02), 80e3, .5, np)
+    p = p._evaluate_propagator_array((256, 256), (.02, .02), 80e3, .5, (0., 0.), np)

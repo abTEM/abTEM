@@ -113,7 +113,7 @@ def _multislice(waves: Union['Waves', 'SMatrixArray'],
         for start, end, t_chunk in potential.generate_transmission_functions(energy=waves.energy, max_batch=max_batch):
             for _, __, t_slice in t_chunk.generate_slices(max_batch=1):
                 waves = t_slice.transmit(waves)
-                waves = propagator.propagate(waves, t_slice.thickness, waves.tilt)
+                waves = propagator.propagate(waves, t_slice.thickness)
 
             pbar.update(end - start)
 
@@ -404,7 +404,7 @@ class Waves(_WavesLike):
                                              max_batch=max_batch_potential)
 
                     if detector:
-                        result._array += asnumpy(detector.detect(exit_waves))
+                        result._array += asnumpy(detector.detect(exit_waves)) / n
                     else:
                         result._array[i] = xp.squeeze(exit_waves.array)
 
@@ -1186,16 +1186,17 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
         xp = get_array_module_from_device(self.device)
         batch_crop = get_device_function(xp, 'batch_crop')
 
+
         if max_batch_expansion is None:
             max_batch_expansion = self._max_batch_expansion()
 
         if positions is None:
-            positions = xp.array((self.extent[0] / 2, self.extent[1] / 2), dtype=xp.float32)
+            positions = np.array((self.extent[0] / 2, self.extent[1] / 2), dtype=xp.float32)
         else:
-            positions = xp.array(positions, dtype=xp.float32)
+            positions = np.array(positions, dtype=xp.float32)
 
         if len(positions.shape) == 1:
-            positions = xp.expand_dims(positions, axis=0)
+            positions = np.expand_dims(positions, axis=0)
 
         coefficients = self._get_coefficients(positions)
 
@@ -1542,8 +1543,8 @@ class SMatrix(_WavesLike, HasDeviceMixin):
                                                          potential,
                                                          max_batch_probes=max_batch_probes,
                                                          max_batch_expansion=max_batch_expansion,
-                                                         potential_pbar=True,
-                                                         plane_waves_pbar=True)
+                                                         potential_pbar=pbar,
+                                                         plane_waves_pbar=pbar)
 
             tds_bar = ProgressBar(total=len(potential.frozen_phonons), desc='TDS',
                                   disable=(not pbar) or (len(potential.frozen_phonons) == 1))

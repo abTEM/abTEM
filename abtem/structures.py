@@ -182,28 +182,28 @@ def cut_rectangle(atoms: Atoms, origin: Sequence[float], extent: Sequence[float]
     -------
     ASE atoms object
     """
+
+    # TODO : check that this works in edge cases
+
     atoms = atoms.copy()
     cell = atoms.cell.copy()
-    atoms = standardize_cell(atoms)
 
     extent = (extent[0], extent[1], atoms.cell[2, 2],)
     atoms.positions[:, :2] -= np.array(origin)
 
-    a = atoms.cell.scaled_positions(np.array((extent[0] + 2 * margin, 0, 0)))
-    b = atoms.cell.scaled_positions(np.array((0, extent[1] + 2 * margin, 0)))
-    cell_with_margin = np.dot(np.array([a[:2], b[:2]]), atoms.cell[:2, :2])
+    a = atoms.cell.scaled_positions(np.array((extent[0] + 2* margin, 0, 0)))
+    b = atoms.cell.scaled_positions(np.array((0, extent[1] + 2* margin, 0)))
 
-    scaled_corners_newcell = np.array([[0., 0.], [0., 1.], [1., 0.], [1., 1.]])
-    corners = np.dot(scaled_corners_newcell, cell_with_margin)
-    scaled_corners = np.linalg.solve(atoms.cell[:2, :2].T, corners.T).T
-    repetitions = np.ceil(scaled_corners.ptp(axis=0)).astype(np.int) + 1
+    repetitions = (int(np.ceil(abs(a[0])) + np.ceil(abs(b[0]))),
+                   int(np.ceil(abs(a[1])) + np.ceil(abs(b[1]))), 1)
 
-    atoms = atoms.repeat(tuple(repetitions) + (1,))
-    atoms.positions[:, :2] += np.dot(np.floor(scaled_corners.min(axis=0)), cell[:2, :2])
+    shift = (-np.floor(min(a[0], 0)) - np.floor(min(b[0], 0)),
+             -np.floor(min(a[1], 0)) - np.floor(min(b[1], 0)), 0)
+    atoms.set_scaled_positions(atoms.get_scaled_positions() - shift)
 
-    margin_cell_translation = np.ceil(cell.scaled_positions(np.array([margin, margin, 0]))[:2])
-    atoms.positions[:, :2] -= margin_cell_translation[0] * cell[0, :2]
-    atoms.positions[:, :2] -= margin_cell_translation[1] * cell[1, :2]
+    atoms *= repetitions
+
+    atoms.positions[:,:2] -= margin
 
     atoms.set_cell([extent[0], extent[1], cell[2, 2]])
 

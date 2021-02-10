@@ -190,6 +190,8 @@ class Measurement:  # (metaclass=ABCMeta):
         self._name = name
 
     def __getitem__(self, args):
+        # TODO: check that edge cases work
+
         if isinstance(args, Iterable):
             args += (slice(None),) * (len(self.array.shape) - len(args))
         else:
@@ -571,9 +573,7 @@ class Measurement:  # (metaclass=ABCMeta):
 
     def interpolate_line(self, start, end, gpts=None, sampling=None, width=None, interpolation='splinef2d'):
         from abtem.scan import LineScan
-
-        if not (self.dimensions == 2):
-            raise RuntimeError()
+        self = self.squeeze()
 
         if (self.calibrations[0] is None) or (self.calibrations[1] is None):
             raise RuntimeError()
@@ -839,6 +839,8 @@ def center_of_mass(measurement: Measurement, return_icom: bool = False):
     else:
         return (Measurement(com[..., 0], measurement.calibrations[:-2], units='mrad', name='com_x'),
                 Measurement(com[..., 1], measurement.calibrations[:-2], units='mrad', name='com_y'))
+
+
 
 
 def rotational_average(measurement: Measurement):
