@@ -155,7 +155,7 @@ def add_scan_noise(measurement: Measurement, dwell_time: float, flyback_time: fl
     return measurement
 
 
-def poisson_noise(measurement: Measurement, dose: float):
+def poisson_noise(measurement: Measurement, dose: float, pixel_area: float = None):
     """
     Add Poisson noise to a measurment.
 
@@ -165,6 +165,8 @@ def poisson_noise(measurement: Measurement, dose: float):
         The measurement to add noise to.
     dose: float
         The irradiation dose in electrons per Å^2.
+    pixel_area: float, optional
+        Pixel area in Å^2. If not provided this will be calculated from the calibraions when possible.
 
     Returns
     -------
@@ -172,7 +174,17 @@ def poisson_noise(measurement: Measurement, dose: float):
         The noisy measurement.
     """
 
-    pixel_area = np.product([calibration.sampling for calibration in measurement.calibrations[:2]])
+    if pixel_area is None:
+        pixel_areas = []
+        for calibration in measurement.calibrations:
+            if calibration is not None:
+                if calibration.units.lower() in ('angstrom', 'å'):
+                    pixel_areas.append(calibration.sampling)
+
+        if len(pixel_areas) != 2:
+            raise RuntimeError('Real space pixel size not recognized from calibrations.')
+
+        pixel_area = np.product(pixel_areas)
 
     measurement = measurement.copy()
     array = measurement.array
