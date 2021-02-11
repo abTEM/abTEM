@@ -1,4 +1,19 @@
+import os
+
 import pytest
+from ase.io import read
+
+_ROOT = os.path.abspath(os.path.dirname(__file__))
+
+
+@pytest.fixture(scope='session')
+def data_path():
+    """Internal function to set the parametrization data directory."""
+    return os.path.join(_ROOT, 'data')
+
+@pytest.fixture(scope='session')
+def graphene_atoms(data_path):
+    return read(os.path.join(data_path, 'orthogonal_graphene.cif'))
 
 
 def pytest_configure(config):

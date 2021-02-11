@@ -9,22 +9,13 @@ from abtem.potentials import Potential, PotentialArray
 from abtem.scan import LineScan, GridScan
 from abtem.waves import Probe, Waves
 
-_ROOT = os.path.abspath(os.path.dirname(__file__))
 
-
-def _set_path(path):
-    """Internal function to set the parametrization data directory."""
-    return os.path.join(_ROOT, 'data', path)
-
-
-def test_export_import_potential(tmp_path):
-    atoms = read(_set_path('orthogonal_graphene.cif'))
-
+def test_export_import_potential(tmp_path, graphene_atoms):
     d = tmp_path / 'sub'
     d.mkdir()
     path = d / 'potential.hdf5'
 
-    potential = Potential(atoms, sampling=.05)
+    potential = Potential(graphene_atoms, sampling=.05)
     precalculated_potential = potential.build(pbar=False)
     precalculated_potential.write(path)
     imported_potential = PotentialArray.read(path)
@@ -61,13 +52,12 @@ def test_export_import_measurement(tmp_path):
     assert measurement.calibrations[1] == imported_measurement.calibrations[1]
 
 
-def test_linescan_to_file(tmp_path):
+def test_linescan_to_file(tmp_path, graphene_atoms):
     d = tmp_path / 'sub'
     d.mkdir()
     path = d / 'measurement2.hdf5'
 
-    atoms = read(_set_path('orthogonal_graphene.cif'))
-    potential = Potential(atoms=atoms, sampling=.05)
+    potential = Potential(atoms=graphene_atoms, sampling=.05)
 
     probe = Probe(energy=200e3, semiangle_cutoff=30)
 
@@ -88,19 +78,18 @@ def test_linescan_to_file(tmp_path):
     assert measurement.calibrations[1] == imported_measurement.calibrations[1]
 
 
-def test_gridscan_to_file(tmp_path):
+def test_gridscan_to_file(tmp_path, graphene_atoms):
     d = tmp_path / 'sub'
     d.mkdir()
     path = d / 'measurement2.hdf5'
 
-    atoms = read(_set_path('orthogonal_graphene.cif'))
-    potential = Potential(atoms=atoms, sampling=.05)
+    potential = Potential(atoms=graphene_atoms, sampling=.05)
 
     probe = Probe(energy=200e3, semiangle_cutoff=30)
 
     probe.grid.match(potential)
 
-    scan = GridScan(start=[0, 0], end=[0, potential.extent[1]], gpts=(10,9))
+    scan = GridScan(start=[0, 0], end=[0, potential.extent[1]], gpts=(10, 9))
 
     detector = PixelatedDetector()
     export_detector = PixelatedDetector(save_file=path)
