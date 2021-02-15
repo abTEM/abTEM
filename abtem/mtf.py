@@ -60,7 +60,7 @@ class MTF():
             if calibration is not None:
                 if calibration.units.lower() in ('angstrom', 'å'):
                    sampling.append(calibration.sampling)
-        
+
         # Get number of gridpoints from measurement
         if len(measurement.array.shape) == 2:
             gpts = [ measurement.array.shape[0], measurement.array.shape[1] ]
@@ -72,7 +72,7 @@ class MTF():
         img = measurement.array
 
         # Get spatial frequencies
-        kx,ky = spatial_frequencies(gpts, sampling)
+        kx,ky = spatial_frequencies(gpts,sampling)
         k = np.sqrt(kx**2+ky**2)
 
         # Compute MTF
