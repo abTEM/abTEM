@@ -6,7 +6,8 @@ from abtem import GridScan, Potential, Probe, AnnularDetector, Measurement
 
 """
 In this example, we parallelize over scan positions by partitioning the probe positions of the grid scan and calculating
-each partition on a different CPU core. The results from each are saved to disk, 
+each partition on a different CPU core. The results from each process are saved to disk, after all processes are done 
+the results are retrived and combined by the master.  
 """
 
 comm = MPI.COMM_WORLD
