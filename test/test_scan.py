@@ -5,7 +5,7 @@ import pytest
 from abtem.detect import AnnularDetector
 from abtem.potentials import Potential
 from abtem.scan import PositionScan, LineScan, GridScan
-from abtem.waves import SMatrix
+from abtem.waves import Probe
 from ase.io import read
 
 
@@ -85,23 +85,22 @@ def test_partition():
     assert np.allclose(((np.vstack(positions)[None] - gridscan.get_positions()[:, None]) ** 2).min(1), 0)
 
 
-# def test_partition_measurement():
-#     atoms = read(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data/amorphous_carbon.cif'))
-#     potential = Potential(atoms, gpts=512, slice_thickness=1, projection='infinite',
-#                           parametrization='kirkland').build(pbar=False)
-#
-#     detector = AnnularDetector(inner=70, outer=100)
-#     gridscan = GridScan(start=[0, 0], end=potential.extent, gpts=16)
-#
-#     S = SMatrix(expansion_cutoff=15, interpolation=1, energy=300e3)
-#     S = S.multislice(potential, pbar=False)
-#
-#     measurements = S.scan(gridscan, detector, pbar=False)
-#
-#     scans = gridscan.partition_scan((2, 2))
-#     partitioned_measurements = {detector: detector.allocate_measurement(S.collapse((0, 0)), gridscan)}
-#
-#     for scan in scans:
-#         partitioned_measurements = S.scan(scan, measurements, pbar=False)
-#
-#     assert np.allclose(partitioned_measurements[detector].array, measurements[detector].array)
+def test_partition_measurement():
+    atoms = read(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data/amorphous_carbon.cif'))
+    potential = Potential(atoms, gpts=256, slice_thickness=1, projection='infinite',
+                          parametrization='kirkland').build(pbar=False)
+
+    detector = AnnularDetector(inner=70, outer=100)
+    gridscan = GridScan(start=[0, 0], end=potential.extent, gpts=4)
+
+    probe = Probe(semiangle_cutoff=15, energy=300e3)
+
+    measurements = probe.scan(gridscan, detector, potential, pbar=False)
+
+    scans = gridscan.partition_scan((2, 2))
+    partitioned_measurements = detector.allocate_measurement(probe, gridscan)
+
+    for scan in scans:
+        probe.scan(scan, detector, potential, measurements=partitioned_measurements, pbar=False)
+
+    assert np.allclose(partitioned_measurements.array, measurements.array)

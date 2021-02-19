@@ -1,7 +1,4 @@
-import os
-
 import numpy as np
-from ase.io import read
 
 from abtem.detect import PixelatedDetector
 from abtem.measure import Measurement, calibrations_from_grid
