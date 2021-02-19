@@ -801,7 +801,6 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
         for atoms in self.frozen_phonons:
             self.atoms.positions[:] = atoms.positions
-            # self.atoms.wrap()
             pbar.reset()
 
             if self._precalculate:

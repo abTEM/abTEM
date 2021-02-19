@@ -1,7 +1,7 @@
 """Module to describe electron waves and their propagation."""
 from copy import copy
 from numbers import Number
-from typing import Union, Sequence, Tuple, List
+from typing import Union, Sequence, Tuple, List, Dict
 
 import h5py
 import numpy as np
@@ -46,7 +46,6 @@ class FresnelPropagator:
              complex_exponential(-(ky ** 2)[None] * np.pi * wavelength * dz))
 
         if tilt is not None:
-            print(dz, tilt)
             f *= (complex_exponential(-kx[:, None] * xp.tan(tilt[0] / 1e3) * dz * 2 * np.pi) *
                   complex_exponential(-ky[None] * xp.tan(tilt[1] / 1e3) * dz * 2 * np.pi))
 
@@ -711,13 +710,15 @@ class Probe(_WavesLike, HasDeviceMixin):
     def _generate_tds_probes(self, scan, potential, max_batch, pbar):
         tds_bar = ProgressBar(total=len(potential.frozen_phonons), desc='TDS',
                               disable=(not pbar) or (len(potential.frozen_phonons) == 1))
-        potential_pbar = ProgressBar(total=len(potential), desc='Potential', disable=not pbar)
+        potential_pbar = ProgressBar(total=len(potential), desc='Potential',
+                                     disable=(not pbar) or (not potential._precalculate))
 
         for potential_config in potential.generate_frozen_phonon_potentials(pbar=potential_pbar):
             yield self._generate_probes(scan, potential_config, max_batch)
             tds_bar.update(1)
 
         potential_pbar.close()
+        potential_pbar.refresh()
         tds_bar.refresh()
         tds_bar.close()
 
@@ -725,6 +726,7 @@ class Probe(_WavesLike, HasDeviceMixin):
              scan: AbstractScan,
              detectors: Union[AbstractDetector, Sequence[AbstractDetector]],
              potential: Union[Atoms, AbstractPotential],
+             measurements: Union[Measurement, Dict[AbstractDetector, Measurement]] = None,
              max_batch: int = None,
              pbar: bool = True) -> Union[Measurement, List[Measurement]]:
 
@@ -735,10 +737,12 @@ class Probe(_WavesLike, HasDeviceMixin):
         ----------
         scan : Scan object
             Scan object defining the positions of the probe wave functions.
-        detectors : List of detector objects
+        detectors : Detector or list of detectors
             The detectors recording the measurements.
         potential : Potential
             The potential to scan the probe over.
+        measurements : Measurement or list of measurements
+            Diction
         max_batch : int, optional
             The probe batch size. Larger batches are faster, but require more memory. Default is None.
         pbar : bool, optional
@@ -756,6 +760,19 @@ class Probe(_WavesLike, HasDeviceMixin):
         if isinstance(detectors, AbstractDetector):
             detectors = [detectors]
 
+        if measurements is None:
+            measurements = {}
+        elif isinstance(measurements, Measurement):
+            if len(detectors) == 1:
+                measurements = {detectors[0]: measurements}
+            else:
+                raise ValueError('measurements must be provided as dict when more than one detector provided')
+        elif isinstance(measurements, dict):
+            if not set(measurements.keys()) == set(detectors):
+                raise ValueError('measurements dict keys does not match detectors')
+        else:
+            raise ValueError('measurements must be Measurement or dict of AbtractDetector: Measurement')
+
         scan_bar = ProgressBar(total=len(scan), desc='Scan', disable=not pbar)
 
         if isinstance(potential, AbstractTDSPotentialBuilder):
@@ -766,7 +783,6 @@ class Probe(_WavesLike, HasDeviceMixin):
 
             probe_generators = [self._generate_probes(scan, potential, max_batch)]
 
-        measurements = {}
         for probe_generator in probe_generators:
             scan_bar.reset()
             for indices, exit_probes in probe_generator:
@@ -1186,7 +1202,6 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
         xp = get_array_module_from_device(self.device)
         batch_crop = get_device_function(xp, 'batch_crop')
 
-
         if max_batch_expansion is None:
             max_batch_expansion = self._max_batch_expansion()
 
@@ -1448,7 +1463,8 @@ class SMatrix(_WavesLike, HasDeviceMixin):
                              plane_waves_pbar: Union[ProgressBar, bool] = True):
 
         if isinstance(potential_pbar, bool):
-            potential_pbar = ProgressBar(total=len(potential), desc='Potential', disable=not potential_pbar)
+            potential_pbar = ProgressBar(total=len(potential), desc='Potential',
+                                         disable=(not potential_pbar) or (not potential._precalculate))
 
         if isinstance(plane_waves_pbar, bool):
             plane_waves_pbar = ProgressBar(total=len(self), desc='Multislice', disable=not plane_waves_pbar)

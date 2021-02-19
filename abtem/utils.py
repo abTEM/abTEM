@@ -6,6 +6,7 @@ from ase import units
 from tqdm.auto import tqdm
 
 from abtem.device import get_array_module, get_device_function
+from typing import Tuple
 
 _ROOT = os.path.abspath(os.path.dirname(__file__))
 
@@ -15,7 +16,7 @@ def _set_path(path):
     return os.path.join(_ROOT, 'data', path)
 
 
-def energy2mass(energy):
+def energy2mass(energy: float) -> float:
     """
     Calculate relativistic mass from energy.
 
@@ -33,11 +34,11 @@ def energy2mass(energy):
     return (1 + units._e * energy / (units._me * units._c ** 2)) * units._me
 
 
-def relativistic_mass_correction(energy):
+def relativistic_mass_correction(energy: float) -> float:
     return (1 + units._e * energy / (units._me * units._c ** 2))
 
 
-def energy2wavelength(energy):
+def energy2wavelength(energy: float) -> float:
     """
     Calculate relativistic de Broglie wavelength from energy.
 
@@ -56,7 +57,7 @@ def energy2wavelength(energy):
         energy * (2 * units._me * units._c ** 2 / units._e + energy)) / units._e * 1.e10
 
 
-def energy2sigma(energy):
+def energy2sigma(energy: float) -> float:
     """
     Calculate interaction parameter from energy.
 
@@ -75,7 +76,7 @@ def energy2sigma(energy):
             units._hplanck * units.s * units.J) ** 2)
 
 
-def spatial_frequencies(gpts, sampling):
+def spatial_frequencies(gpts: Tuple[int, int], sampling: Tuple[float, float]):
     """
     Calculate spatial frequencies of a grid.
 
@@ -111,7 +112,7 @@ def _disc_meshgrid(r):
     return rows[inside], cols[inside]
 
 
-def periodic_crop(array, corners, new_shape):
+def periodic_crop(array, corners, new_shape: Tuple[int, int]):
     xp = get_array_module(array)
 
     if ((corners[0] > 0) & (corners[1] > 0) & (corners[0] + new_shape[0] < array.shape[-2]) & (
@@ -190,7 +191,20 @@ def fft_interpolate_2d(array, new_shape, normalization='values', overwrite_x=Fal
     return array
 
 
-def fourier_translation_operator(positions: np.ndarray, shape: tuple):
+def fourier_translation_operator(positions: np.ndarray, shape: tuple) -> np.ndarray:
+    """
+    Create an array representing one or more phase ramp(s) for shifting another array.
+
+    Parameters
+    ----------
+    positions : array of xy-positions
+    shape : two int
+
+    Returns
+    -------
+
+    """
+
     positions_shape = positions.shape
 
     if len(positions_shape) == 1:

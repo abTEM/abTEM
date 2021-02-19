@@ -94,14 +94,16 @@ class FrozenPhonons(AbstractFrozenPhonons):
                  seed=None):
 
         try:
-            sigmas_array = np.array(sigmas, dtype=np.float)
+            sigmas_array = np.array([sigmas], dtype=np.float)
 
             if len(sigmas_array) == 1:
-                sigmas_array = np.tile(sigmas_array)
+                sigmas_array = np.tile(sigmas_array, len(atoms))
+
             elif len(sigmas_array) != len(atoms):
                 raise RuntimeError('The displacement standard deviation must be provided for all atoms.')
 
         except TypeError:
+
             sigmas_array = np.zeros(len(atoms), dtype=np.float)
             new_sigmas = {}
             for key, sigma in sigmas.items():

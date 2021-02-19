@@ -5,15 +5,39 @@ from typing import Tuple, List, Any, Union, Sequence
 
 import numpy as np
 
-from abtem.base_classes import Cache, Event, watched_property, cached_method, Grid
+from abtem.base_classes import Cache, Event, watched_property, cached_method
 from abtem.device import get_array_module, get_device_function
-from abtem.measure import Calibration, calibrations_from_grid, Measurement, FlexibleAnnularMeasurement
+from abtem.measure import Calibration, calibrations_from_grid, Measurement
 from abtem.scan import AbstractScan
 from abtem.utils import spatial_frequencies
 from abtem.visualize.mpl import show_measurement_2d
 
 
-def _polar_regions(gpts, angular_sampling, inner, outer, nbins_radial, nbins_azimuthal):
+def _polar_regions(gpts: Tuple[int, int], angular_sampling: Tuple[float, float], inner: float, outer: float,
+                   nbins_radial: int, nbins_azimuthal: int):
+    """
+    Create an array of labels for the regions of a given detector geometry.
+
+    Parameters
+    ----------
+    gpts : two int
+        Number of grid points describing the detector regions.
+    angular_sampling : two float
+        Angular sampling of the discretized detector regions in radians.
+    inner : float
+        Inner boundary of the detector regions [rad].
+    outer : float
+        Outer boundary of the detector regions [rad].
+    nbins_radial : int
+        Number of radial detector bins.
+    nbins_azimuthal
+        Number of azimuthal detector bins.
+
+    Returns
+    -------
+    2d array
+        Array of integer labels representing the detector regions.
+    """
     """Create the polar segmentation of a detector."""
 
     sampling = (1 / angular_sampling[0] / gpts[0], 1 / angular_sampling[1] / gpts[1])
@@ -176,6 +200,9 @@ class _PolarDetector(AbstractDetector):
         Measurement object or str
             The allocated measurement or path to hdf5 file with the measurement data.
         """
+
+        waves.grid.check_is_defined()
+        waves.accelerator.check_is_defined()
 
         if scan is None:
             shape = ()
@@ -375,14 +402,6 @@ class FlexibleAnnularDetector(_PolarDetector):
     def step_size(self, value: float):
         self._radial_steps = value
 
-    def allocate_measurement(self, waves, scan: AbstractScan = None) -> Measurement:
-        measurement = super().allocate_measurement(waves, scan)
-        angular_sampling = measurement.calibrations[-1].sampling
-        angular_offset = measurement.calibrations[-1].offset
-        spatial_sampling = [calibration.sampling for calibration in measurement.calibrations[:-1]]
-        measurement = FlexibleAnnularMeasurement(measurement.array, spatial_sampling, angular_sampling, angular_offset)
-        return measurement
-
     def detect(self, waves) -> np.ndarray:
         """
         Integrate the intensity of a the wave functions over the detector range.
@@ -543,9 +562,11 @@ class PixelatedDetector(AbstractDetector):
 
     Parameters
     ----------
-    max_angle : str or float
-        The diffraction patterns will be detected up to this angle.
-    resample : 'uniform' or False
+    max_angle : str or float or None
+        The diffraction patterns will be detected up to this angle. If set to a string it must be 'limit' or 'valid'
+
+
+         *_    resample : 'uniform' or False
         If 'uniform', the diffraction patterns from rectangular cells will be downsampled to a uniform angular sampling.
     save_file : str
         The path to the file used for saving the detector output.
@@ -650,6 +671,7 @@ class PixelatedDetector(AbstractDetector):
         """
 
         waves.grid.check_is_defined()
+        waves.accelerator.check_is_defined()
         check_max_angle_exceeded(waves, self.max_angle)
 
         gpts = waves.downsampled_gpts(self.max_angle)

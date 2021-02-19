@@ -156,7 +156,7 @@ class Cache:
     """
     Cache object.
 
-    Simple class for handling a dictionary-based cache. When the cache is full, the first inserted item is deleted.
+    Class for handling a dictionary-based cache. When the cache is full, the first inserted item is deleted.
 
     Parameters
     ----------
@@ -447,7 +447,7 @@ class Grid:
             raise RuntimeError('Grid extent cannot be inferred')
         elif other.extent is None:
             other.extent = self.extent
-        elif np.any(self.extent != other.extent):
+        elif np.any(np.array(self.extent, np.float32) != np.array(other.extent, np.float32)):
             self.extent = other.extent
 
         if (self.gpts is None) & (other.gpts is None):
@@ -467,11 +467,13 @@ class Grid:
             The grid that should be checked.
         """
 
-        if (self.extent is not None) & (other.extent is not None) & np.any(self.extent != other.extent):
-            raise RuntimeError('Inconsistent grid extent ({} != {})'.format(self.extent, other.extent))
+        if (self.extent is not None) & (other.extent is not None):
+            if not np.all(np.isclose(self.extent, other.extent)):
+                raise RuntimeError('Inconsistent grid extent ({} != {})'.format(self.extent, other.extent))
 
-        elif (self.gpts is not None) & (other.gpts is not None) & np.any(self.gpts != other.gpts):
-            raise RuntimeError('Inconsistent grid gpts ({} != {})'.format(self.gpts, other.gpts))
+        if (self.gpts is not None) & (other.gpts is not None):
+            if not np.all(self.gpts == other.gpts):
+                raise RuntimeError('Inconsistent grid gpts ({} != {})'.format(self.gpts, other.gpts))
 
     def round_to_power(self, power: int = 2):
         """
