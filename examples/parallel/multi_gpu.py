@@ -39,7 +39,7 @@ measurements = detector.allocate_measurement(probe, gridscan)
 
 for i, scan in enumerate(scans):
     with cp.cuda.Device(i):
-        probe.scan(scans[i], detector, potential, measurements=measurements, pbar=False)
+        probe.scan(scan, detector, potential, measurements=measurements, pbar=False)
 
 measurements.interpolate(.05).gaussian_filter(.25).show()
 plt.show()
