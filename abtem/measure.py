@@ -423,7 +423,7 @@ class Measurement:  # (metaclass=ABCMeta):
         sigma = (sigma / self.calibrations[-2].sampling, sigma / self.calibrations[-1].sampling)
 
         new_copy = self.copy()
-        new_copy._array = gaussian_filter(self.array, sigma, padding_mode=padding_mode)
+        new_copy._array = gaussian_filter(self.array, sigma, mode=padding_mode)
         return new_copy
 
     def _interpolate_1d(self, new_sampling: float = None, new_gpts: int = None, padding: str = 'wrap',
