@@ -15,13 +15,14 @@ size = comm.Get_size()
 rank = comm.Get_rank()
 
 atoms = bulk('Si', crystalstructure='diamond', cubic=True)
-atoms = surface(atoms, (1, 1, 0), 10)
+atoms = surface(atoms, (1, 1, 0), 3)
 atoms.center(axis=2, vacuum=5)
-atoms *= (1, 1, 1)
+reps = (3, 4, 1)
+atoms *= reps
 atoms.wrap()
 
 potential = Potential(atoms,
-                      sampling=.05,
+                      gpts=768,
                       projection='infinite',
                       parametrization='kirkland',
                       precalculate=True,
@@ -33,7 +34,8 @@ probe.match_grid(potential)
 temp_fname = f'temp_{str(rank).zfill(len(str(size - 1)))}.hdf5'
 detector = AnnularDetector(60, 240, save_file=temp_fname)
 
-scan = GridScan((0, 0), (potential.extent[0] / 3, potential.extent[1] / 4), sampling=.9 * probe.ctf.nyquist_sampling)
+scan_end = (potential.extent[0] / reps[0], potential.extent[1] / reps[1])
+scan = GridScan((0, 0), scan_end, sampling=.9 * probe.ctf.nyquist_sampling)
 
 measurement = detector.allocate_measurement(probe, scan)
 scans = scan.partition_scan((1, size))
@@ -48,5 +50,5 @@ if rank == 0:
         measurement += Measurement.read(f'temp_{str(i).zfill(len(str(size - 1)))}.hdf5')
 
     measurement.write('silicon_110.hdf5')
-    measurement.show()
+    measurement.interpolate(.05).gaussian_filter(.25).show()
     plt.show()
