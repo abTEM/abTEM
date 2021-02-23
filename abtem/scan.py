@@ -144,7 +144,7 @@ class PositionScan(AbstractScan):
     def get_positions(self):
         return self._positions
 
-    def add_to_mpl_plot(self, ax, marker: str = 'o',  color: str = 'r', **kwargs):
+    def add_to_mpl_plot(self, ax, marker: str = 'o', color: str = 'r', **kwargs):
         """
         Add a visualization of the scan positions to a matplotlib plot.
 
@@ -159,7 +159,7 @@ class PositionScan(AbstractScan):
         kwargs:
             Additional options for matplotlib.pyplot.plot as keyword arguments.
         """
-        ax.plot(*self.get_positions().T, marker=marker, linestyle='',color=color, **kwargs)
+        ax.plot(*self.get_positions().T, marker=marker, linestyle='', color=color, **kwargs)
 
     def __copy__(self):
         return self.__class__(self._positions.copy())
@@ -401,8 +401,6 @@ class GridScan(AbstractScan, HasGridMixin):
                 for unique in np.unique(x):
                     f['array'][unique, y[unique == x]] += asnumpy(new_measurement[unique == x])
         else:
-            print(measurement.array.shape)
-            print(x,y, new_measurement.shape)
             measurement.array[x, y] += asnumpy(new_measurement)
 
     def partition_scan(self, partitions: Sequence[int]) -> List['GridScan']:

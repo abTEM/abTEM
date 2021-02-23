@@ -531,7 +531,6 @@ class SegmentedDetector(_PolarDetector):
         fft2 = get_device_function(xp, 'fft2')
         abs2 = get_device_function(xp, 'abs2')
         sum_run_length_encoded = get_device_function(xp, 'sum_run_length_encoded')
-        print(len(waves))
         intensity = abs2(fft2(waves.array, overwrite_x=False))
 
         indices = self._get_regions(waves.gpts, waves.angular_sampling, min(waves.cutoff_scattering_angles), xp)
