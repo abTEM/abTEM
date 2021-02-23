@@ -14,7 +14,7 @@ from abtem.visualize.mpl import show_measurement_2d
 
 
 def _polar_regions(gpts: Tuple[int, int], angular_sampling: Tuple[float, float], inner: float, outer: float,
-                   nbins_radial: int, nbins_azimuthal: int):
+                   nbins_radial: int, nbins_azimuthal: int, rotation=0.):
     """
     Create an array of labels for the regions of a given detector geometry.
 
@@ -53,7 +53,7 @@ def _polar_regions(gpts: Tuple[int, int], angular_sampling: Tuple[float, float],
 
     radial_bins[valid] = nbins_radial * (alpha[valid] - inner) / (outer - inner)
 
-    angles = np.arctan2(alpha_x[:, None], alpha_y[None]) % (2 * np.pi)
+    angles = (np.arctan2(alpha_x[:, None], alpha_y[None]) + rotation) % (2 * np.pi)
 
     angular_bins = np.floor(nbins_azimuthal * (angles / (2 * np.pi)))
     angular_bins = np.clip(angular_bins, 0, nbins_azimuthal - 1).astype(np.int)
@@ -108,6 +108,7 @@ class _PolarDetector(AbstractDetector):
                  outer: float = None,
                  radial_steps: float = 1.,
                  azimuthal_steps: float = None,
+                 rotation: float = 0.,
                  save_file: str = None):
 
         self._inner = inner
@@ -119,6 +120,8 @@ class _PolarDetector(AbstractDetector):
             azimuthal_steps = 2 * np.pi
 
         self._azimuthal_steps = azimuthal_steps
+
+        self._rotation = rotation
 
         self.cache = Cache(1)
         self.changed = Event()
@@ -172,7 +175,8 @@ class _PolarDetector(AbstractDetector):
                                        inner / 1e3,
                                        outer / 1e3,
                                        nbins_radial,
-                                       nbins_azimuthal)
+                                       nbins_azimuthal,
+                                       rotation=self._rotation)
 
         region_labels = xp.asarray(region_labels)
 
@@ -465,11 +469,12 @@ class SegmentedDetector(_PolarDetector):
         The path to the file used for saving the detector output.
     """
 
-    def __init__(self, inner: float, outer: float, nbins_radial: int, nbins_angular: int, save_file: str = None):
+    def __init__(self, inner: float, outer: float, nbins_radial: int, nbins_angular: int, rotation: float = 0.,
+                 save_file: str = None):
         radial_steps = (outer - inner) / nbins_radial
         azimuthal_steps = 2 * np.pi / nbins_angular
         super().__init__(inner=inner, outer=outer, radial_steps=radial_steps, azimuthal_steps=azimuthal_steps,
-                         save_file=save_file)
+                         rotation=rotation, save_file=save_file)
 
     @property
     def inner(self) -> float:
