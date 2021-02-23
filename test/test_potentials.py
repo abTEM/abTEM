@@ -68,3 +68,16 @@ def test_potential_storage():
 
     potential = Potential(atoms=atoms, sampling=.1, device='gpu', storage='cpu')
     assert type(potential.build().array) is np.ndarray
+
+
+def test_potential_infinite(graphene_atoms):
+    potential = Potential(atoms=graphene_atoms, sampling=.1, projection='infinite', parametrization='kirkland')
+    potential.build(pbar=False)
+
+
+@pytest.mark.gpu
+def test_potential_infinite_gpu(graphene_atoms):
+    potential = Potential(atoms=graphene_atoms, sampling=.1, projection='infinite', parametrization='kirkland',
+                          device='gpu')
+
+    potential.build(pbar=False)

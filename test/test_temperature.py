@@ -9,13 +9,27 @@ from abtem.scan import LineScan
 from abtem.waves import Probe
 
 
+def test_frozen_phonons():
+    atoms = Atoms('CO', positions=[(2.5, 2.5, 2), (2.5, 2.5, 3)], cell=(5, 5, 4))
+    fp1 = FrozenPhonons(atoms, 10, sigmas={'C': .1, 'O': .1})
+    fp2 = FrozenPhonons(atoms, 10, sigmas=.1)
+    fp3 = FrozenPhonons(atoms, 10, sigmas=[.1, .1])
+
+    assert np.all(fp1._sigmas == fp2._sigmas) & np.all(fp2._sigmas == fp3._sigmas)
+
+
 def test_frozen_phonons_raise():
     atoms = Atoms('CO', positions=[(2.5, 2.5, 2), (2.5, 2.5, 3)], cell=(5, 5, 4))
 
     with pytest.raises(RuntimeError) as e:
         FrozenPhonons(atoms, 10, sigmas={'C': .1})
 
-    assert str(e.value) == 'Displacement standard deviation not provided for all atomic species.'
+    assert str(e.value) == 'Displacement standard deviation must be provided for all atomic species.'
+
+    with pytest.raises(RuntimeError) as e:
+        FrozenPhonons(atoms, 10, sigmas=[.1])
+
+    assert str(e.value) == 'Displacement standard deviation must be provided for all atoms.'
 
 
 def test_probe_line_scan():

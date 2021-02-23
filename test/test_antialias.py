@@ -21,13 +21,6 @@ def test_bandlimit():
 
     probe = Probe(energy=300e3, semiangle_cutoff=30, rolloff=0.0, gpts=100)
 
-    #alpha_x = np.fft.fftfreq(probe.gpts[0], probe.sampling[0]) * probe.wavelength * 1000
-    #alpha_y = np.fft.fftfreq(probe.gpts[1], probe.sampling[1]) * probe.wavelength * 1000
-
-    #alpha = np.sqrt(alpha_x[:, None] ** 2 + alpha_y[None] ** 2)
-
-    #np.sum(alpha < 30)
-
     waves = probe.multislice((0, 0), atoms, pbar=False)
     diffraction_pattern = waves.diffraction_pattern(max_angle=30)
 

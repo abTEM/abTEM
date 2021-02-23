@@ -59,3 +59,8 @@ def test_pixelated_detector():
     wave = probe.build()
     measurement = detector.allocate_measurement(wave)
     assert measurement.array.shape[0] == measurement.array.shape[1]
+
+
+def test_segmented_detector():
+    # TODO : fill in test
+    pass
