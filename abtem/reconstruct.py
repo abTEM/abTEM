@@ -21,7 +21,6 @@ def _run_epie(object,
 
     object = xp.array(object)
     probe = xp.array(probe)
-    # diffraction_patterns = np.array(diffraction_patterns)
 
     if len(diffraction_patterns.shape) != 3:
         raise ValueError()

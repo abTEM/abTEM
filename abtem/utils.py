@@ -16,6 +16,10 @@ def _set_path(path):
     return os.path.join(_ROOT, 'data', path)
 
 
+def relativistic_mass_correction(energy: float) -> float:
+    return (1 + units._e * energy / (units._me * units._c ** 2))
+
+
 def energy2mass(energy: float) -> float:
     """
     Calculate relativistic mass from energy.
@@ -31,11 +35,7 @@ def energy2mass(energy: float) -> float:
         Relativistic mass [kg]̄
     """
 
-    return (1 + units._e * energy / (units._me * units._c ** 2)) * units._me
-
-
-def relativistic_mass_correction(energy: float) -> float:
-    return (1 + units._e * energy / (units._me * units._c ** 2))
+    return relativistic_mass_correction(energy) * units._me
 
 
 def energy2wavelength(energy: float) -> float:

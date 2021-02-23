@@ -531,18 +531,24 @@ class SegmentedDetector(_PolarDetector):
         fft2 = get_device_function(xp, 'fft2')
         abs2 = get_device_function(xp, 'abs2')
         sum_run_length_encoded = get_device_function(xp, 'sum_run_length_encoded')
-
+        print(len(waves))
         intensity = abs2(fft2(waves.array, overwrite_x=False))
 
         indices = self._get_regions(waves.gpts, waves.angular_sampling, min(waves.cutoff_scattering_angles), xp)
-        total = xp.sum(intensity, axis=(-2, -1))
 
         separators = xp.concatenate((xp.array([0]), xp.cumsum(xp.array([len(ring) for ring in indices]))))
         intensity = intensity.reshape((intensity.shape[0], -1))[:, xp.concatenate(indices)]
         result = xp.zeros((len(intensity), len(separators) - 1), dtype=xp.float32)
         sum_run_length_encoded(intensity, result, separators)
 
-        return result.reshape((-1, self.nbins_radial, self.nbins_angular)) / total[:, None, None]
+        shape = (-1,)
+        if self.nbins_radial > 1:
+            shape += (self.nbins_radial,)
+
+        if self.nbins_angular > 1:
+            shape += (self.nbins_angular,)
+
+        return result.reshape(shape)
 
     def __copy__(self) -> 'SegmentedDetector':
         return self.__class__(inner=self.inner, outer=self.outer, nbins_radial=self.nbins_radial,

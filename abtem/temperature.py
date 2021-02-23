@@ -1,6 +1,8 @@
 """Module to describe the effect of temperature on the atomic positions."""
 from abc import abstractmethod, ABCMeta
 from typing import Mapping, Union, Sequence
+from numbers import Number
+from collections import Iterable
 
 import numpy as np
 from ase import Atoms
@@ -93,17 +95,11 @@ class FrozenPhonons(AbstractFrozenPhonons):
                  directions: str = 'xyz',
                  seed=None):
 
-        try:
-            sigmas_array = np.array([sigmas], dtype=np.float)
+        if isinstance(sigmas, Number):
+            sigmas_array = np.array(sigmas, dtype=np.float)
+            sigmas_array = np.tile(sigmas_array, len(atoms))
 
-            if len(sigmas_array) == 1:
-                sigmas_array = np.tile(sigmas_array, len(atoms))
-
-            elif len(sigmas_array) != len(atoms):
-                raise RuntimeError('The displacement standard deviation must be provided for all atoms.')
-
-        except TypeError:
-
+        elif isinstance(sigmas, dict):
             sigmas_array = np.zeros(len(atoms), dtype=np.float)
             new_sigmas = {}
             for key, sigma in sigmas.items():
@@ -116,7 +112,16 @@ class FrozenPhonons(AbstractFrozenPhonons):
                 try:
                     sigmas_array[atoms.numbers == unique] = new_sigmas[unique]
                 except KeyError:
-                    raise RuntimeError('Displacement standard deviation not provided for all atomic species.')
+                    raise RuntimeError('Displacement standard deviation must be provided for all atomic species.')
+
+        elif isinstance(sigmas, Iterable):
+            sigmas_array = np.array(sigmas, dtype=np.float)
+
+        else:
+            raise ValueError()
+
+        if len(sigmas_array) != len(atoms):
+            raise RuntimeError('Displacement standard deviation must be provided for all atoms.')
 
         self._sigmas = sigmas_array
 

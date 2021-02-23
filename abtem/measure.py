@@ -645,17 +645,21 @@ class Measurement:  # (metaclass=ABCMeta):
 
     def integrate(self, start: float, end: float, axis=-1) -> 'Measurement':
         """
-
+        Perform 1d integration measurement from e.g. the FlexibleAnnularDetector
 
         Parameters
         ----------
-        start
-        end
-        axis
+        start : float
+            Lower limit of integral in units of the calibration of the given axis.
+        end : float
+            Upper limit of integral in units of the calibration of the given axis.
+        axis : int
+            The
 
         Returns
         -------
-
+        Measurement
+            Integrated measurement.
         """
         offset = self.calibrations[axis].offset
         sampling = self.calibrations[axis].sampling

@@ -401,6 +401,8 @@ class GridScan(AbstractScan, HasGridMixin):
                 for unique in np.unique(x):
                     f['array'][unique, y[unique == x]] += asnumpy(new_measurement[unique == x])
         else:
+            print(measurement.array.shape)
+            print(x,y, new_measurement.shape)
             measurement.array[x, y] += asnumpy(new_measurement)
 
     def partition_scan(self, partitions: Sequence[int]) -> List['GridScan']:
