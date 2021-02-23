@@ -155,7 +155,7 @@ def add_scan_noise(measurement: Measurement, dwell_time: float, flyback_time: fl
     return measurement
 
 
-def poisson_noise(measurement: Measurement, dose: float, pixel_area: float = None):
+def poisson_noise(measurement: Measurement, dose: float, pixel_area: float = None, negative_values='clip'):
     """
     Add Poisson noise to a measurment.
 
@@ -187,7 +187,11 @@ def poisson_noise(measurement: Measurement, dose: float, pixel_area: float = Non
         pixel_area = np.product(pixel_areas)
 
     measurement = measurement.copy()
-    array = np.clip(measurement.array, a_min=1e-12)
+
+    if negative_values == 'clip':
+        array = np.clip(measurement.array, a_min=1e-12, a_max=None)
+    elif negative_values != 'raise':
+        raise ValueError()
 
     electrons_per_pixel = dose * pixel_area
 
