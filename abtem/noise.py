@@ -187,7 +187,7 @@ def poisson_noise(measurement: Measurement, dose: float, pixel_area: float = Non
         pixel_area = np.product(pixel_areas)
 
     measurement = measurement.copy()
-    array = measurement.array
+    array = np.clip(measurement.array, a_min=1e-12)
 
     electrons_per_pixel = dose * pixel_area
 
