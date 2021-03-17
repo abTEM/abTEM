@@ -478,6 +478,8 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         if not is_cell_orthogonal(atoms):
             raise RuntimeError('Atoms are not orthogonal')
 
+
+
         self._atoms = atoms
         self._grid = Grid(extent=np.diag(atoms.cell)[:2], gpts=gpts, sampling=sampling, lock_extent=True)
 
@@ -547,8 +549,11 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
     def slice_thickness(self, value):
         self._slice_thickness = value
 
-    def get_slice_thickness(self, i):
+    def get_slice_thickness(self, i) -> float:
         return self._atoms.cell[2, 2] / self.num_slices
+
+    def get_parameterized_function(self, number) -> Callable:
+        return lambda r: self._function(r, self.parameters[number])
 
     def get_cutoff(self, number: int) -> float:
         """
@@ -656,7 +661,9 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         fft2_convolve = get_device_function(xp, 'fft2_convolve')
 
         atoms = self.atoms.copy()
+        atoms.pbc = True
         atoms.wrap()
+
         positions = atoms.get_positions().astype(np.float32)
         numbers = atoms.get_atomic_numbers()
         unique = np.unique(numbers)
