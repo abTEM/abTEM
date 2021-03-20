@@ -108,6 +108,7 @@ class _PolarDetector(AbstractDetector):
                  outer: float = None,
                  radial_steps: float = 1.,
                  azimuthal_steps: float = None,
+                 offset: Tuple[float, float] = None,
                  rotation: float = 0.,
                  save_file: str = None):
 
@@ -122,6 +123,7 @@ class _PolarDetector(AbstractDetector):
         self._azimuthal_steps = azimuthal_steps
 
         self._rotation = rotation
+        self._offset = offset
 
         self.cache = Cache(1)
         self.changed = Event()
@@ -163,8 +165,8 @@ class _PolarDetector(AbstractDetector):
 
     @cached_method('cache')
     def _get_regions(self,
-                     gpts: Sequence[int],
-                     angular_sampling: Sequence[float],
+                     gpts: Tuple[int, int],
+                     angular_sampling: Tuple[float, float],
                      cutoff_scattering_angle: float = None,
                      xp=np) -> List[np.ndarray]:
 
@@ -177,6 +179,15 @@ class _PolarDetector(AbstractDetector):
                                        nbins_radial,
                                        nbins_azimuthal,
                                        rotation=self._rotation)
+
+        if self._offset is not None:
+            offset = (int(round(self._offset[0] / angular_sampling[0])),
+                      int(round(self._offset[1] / angular_sampling[1])))
+
+            if (abs(offset[0]) > region_labels.shape[0]) or (abs(offset[1]) > region_labels.shape[1]):
+                raise RuntimeError('Detector offset exceeds maximum detected angle.')
+
+            region_labels = np.roll(region_labels, offset, (0, 1))
 
         region_labels = xp.asarray(region_labels)
 
@@ -278,12 +289,14 @@ class AnnularDetector(_PolarDetector):
         Inner integration limit [mrad].
     outer: float
         Outer integration limit [mrad].
+    offset: two float, optional
+        Center offset of integration region [mrad].
     save_file: str
         The path to the file for saving the detector output.
     """
 
-    def __init__(self, inner: float, outer: float, save_file: str = None):
-        super().__init__(inner=inner, outer=outer, radial_steps=outer - inner, save_file=save_file)
+    def __init__(self, inner: float, outer: float, offset: Tuple[float, float] = None, save_file: str = None):
+        super().__init__(inner=inner, outer=outer, offset=offset, radial_steps=outer - inner, save_file=save_file)
 
     @property
     def inner(self) -> float:
