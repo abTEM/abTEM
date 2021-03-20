@@ -53,7 +53,8 @@ class CTF(HasAcceleratorMixin):
     energy: float
         The electron energy of the wave functions this contrast transfer function will be applied to [eV].
     parameters: dict
-        Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in Å.
+        Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in Å
+        and angles should be given in radians.
     kwargs:
         Provide the aberration coefficients as keyword arguments.
 
@@ -322,8 +323,8 @@ class CTF(HasAcceleratorMixin):
 
         return array
 
-    def evaluate_on_grid(self, grid, xp=np):
-        kx, ky = spatial_frequencies(grid.gpts, grid.sampling)
+    def evaluate_on_grid(self, gpts, sampling, xp=np):
+        kx, ky = spatial_frequencies(gpts, sampling)
         kx = kx.reshape((1, -1, 1))
         ky = ky.reshape((1, 1, -1))
         kx = xp.asarray(kx)
