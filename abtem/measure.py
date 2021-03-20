@@ -203,15 +203,19 @@ class Measurement:  # (metaclass=ABCMeta):
         new_array = self.array[args]
         new_calibrations = []
         for i, (arg, calibration) in enumerate(zip(args, self.calibrations)):
-            if isinstance(arg, slice):
-                if arg.start is None:
-                    offset = calibration.offset
-                else:
-                    offset = arg.start * calibration.sampling + calibration.offset
 
-                new_calibrations.append(Calibration(offset=offset,
-                                                    sampling=calibration.sampling,
-                                                    units=calibration.units, name=calibration.name))
+            if isinstance(arg, slice):
+                if calibration is None:
+                    new_calibrations.append(None)
+                else:
+                    if arg.start is None:
+                        offset = calibration.offset
+                    else:
+                        offset = arg.start * calibration.sampling + calibration.offset
+
+                    new_calibrations.append(Calibration(offset=offset,
+                                                        sampling=calibration.sampling,
+                                                        units=calibration.units, name=calibration.name))
             elif isinstance(arg, Iterable):
                 new_calibrations.append(None)
 
@@ -716,9 +720,13 @@ class Measurement:  # (metaclass=ABCMeta):
         if (gpts is None) & (sampling is None):
             sampling = (measurement.calibrations[0].sampling + measurement.calibrations[1].sampling) / 2.
 
-        x = np.linspace(measurement.calibrations[0].offset, measurement.shape[0] * measurement.calibrations[0].sampling,
+        x = np.linspace(measurement.calibrations[0].offset,
+                        measurement.shape[0] * measurement.calibrations[0].sampling + measurement.calibrations[
+                            0].offset,
                         measurement.shape[0])
-        y = np.linspace(measurement.calibrations[1].offset, measurement.shape[1] * measurement.calibrations[1].sampling,
+        y = np.linspace(measurement.calibrations[1].offset,
+                        measurement.shape[1] * measurement.calibrations[1].sampling + measurement.calibrations[
+                            1].offset,
                         measurement.shape[1])
 
         scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling)
@@ -732,6 +740,10 @@ class Measurement:  # (metaclass=ABCMeta):
             positions = positions.reshape((-1, 2))
             interpolated_array = interpn((x, y), measurement.array, positions, method=interpolation_method,
                                          bounds_error=False, fill_value=0)
+            # import matplotlib.pyplot as plt
+            # plt.plot(*positions.T,'ro')
+            # plt.show()
+
             interpolated_array = interpolated_array.reshape((n, -1)).mean(0)
 
         else:
@@ -756,6 +768,22 @@ class Measurement:  # (metaclass=ABCMeta):
             return show_measurement_1d(self, ax=ax, **kwargs)
         else:
             return show_measurement_2d(self, ax=ax, **kwargs)
+
+
+def stack_measurements(measurements):
+    for measurement in measurements[1:]:
+        for calibration, other_calibration in zip(measurement.calibrations, measurements[0].calibrations):
+            if calibration != other_calibration:
+                raise RuntimeError('Measurement calibrations must match.')
+
+    for measurement in measurements[1:]:
+        if measurement.shape != measurements[0].shape:
+            raise RuntimeError('Measurement shapes must match.')
+
+    array = np.stack([measurement.array for measurement in measurements])
+
+    calibrations = (None,) + measurements[0].calibrations
+    return Measurement(array, calibrations=calibrations, units=measurements[0].units, name=measurements[0].name)
 
 
 def probe_profile(probe_measurement: Measurement, angle: float = 0.) -> Measurement:
@@ -966,7 +994,7 @@ def center_of_mass(measurement: Measurement, return_icom: bool = False):
             raise RuntimeError('the integrated center of mass is only defined for 4d measurements')
 
         sampling = (measurement.calibrations[0].sampling, measurement.calibrations[1].sampling)
-        print(sampling)
+
         icom = intgrad2d((com[..., 0], com[..., 1]), sampling)
         return Measurement(icom, measurement.calibrations[:-2])
     else:
