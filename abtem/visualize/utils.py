@@ -1,10 +1,12 @@
-
 from colorsys import hls_to_rgb
 
 import numpy as np
 
 
 def format_label(calibration):
+    if calibration is None:
+        return ''
+
     label = ''
     if calibration.name:
         label += f'{calibration.name}'
@@ -68,5 +70,3 @@ def _line_intersect_rectangle(point0, point1, lower_corner, upper_corner):
         intersect1 = (upper_corner[0], y(upper_corner[0]))
 
     return intersect0, intersect1
-
-

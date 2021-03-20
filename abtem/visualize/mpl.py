@@ -234,7 +234,10 @@ def show_measurement_1d(measurement, ax=None, figsize=None, legend=False, title=
 
     calibration = measurement.calibrations[0]
     array = measurement.array
-    x = np.linspace(calibration.offset, calibration.offset + len(array) * calibration.sampling, len(array))
+    if calibration is None:
+        x = np.arange(len(array))
+    else:
+        x = np.linspace(calibration.offset, calibration.offset + len(array) * calibration.sampling, len(array))
 
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
