@@ -187,14 +187,15 @@ def poisson_noise(measurement: Measurement, dose: float, pixel_area: float = Non
         pixel_area = np.product(pixel_areas)
 
     measurement = measurement.copy()
+    array = measurement.array
 
     if negative_values == 'clip':
-        array = np.clip(measurement.array, a_min=1e-12, a_max=None)
+        array = np.clip(array, a_min=1e-12, a_max=None)
     elif negative_values != 'raise':
-        raise ValueError()
+        if np.any(array < 0.):
+            raise ValueError('Measurement values must be positive.')
 
     electrons_per_pixel = dose * pixel_area
-
-    measurement.array[:] = array * electrons_per_pixel
+    array = array * electrons_per_pixel
     measurement.array[:] = np.random.poisson(array).astype(np.float)
     return measurement
