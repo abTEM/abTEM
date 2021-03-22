@@ -9,6 +9,12 @@ To install ``abtem`` with pip run::
 
 This installs ``abtem`` with its strict dependencies (see below); some functionality requires additional actions.
 
+For a development installation::
+
+    git clone https://github.com/jacobjma/abTEM
+    cd abtem
+    pip install -e .
+
 GPU calculations (CUDA only)
 ****************************
 GPU calculations with abTEM require CUDA Toolkit 10 and CuPy.
@@ -81,7 +87,8 @@ Only for DFT potentials with GPAW:
 
 Only for interactive graphical interfaces:
 
-- `Bokeh <https://docs.bokeh.org/en/latest/index.html>`_
+- `bqplot <https://bqplot.readthedocs.io/en/latest/>`_
+- `bqplot-image-gl <https://github.com/glue-viz/bqplot-image-gl>`_
 - `ipywidgets <https://ipywidgets.readthedocs.io/en/stable/>`_
 
 Only for testing:
