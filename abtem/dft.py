@@ -252,7 +252,7 @@ class GPAWPotential(AbstractPotentialBuilder):
 
                     integrator = PotentialIntegrator(f, R, self.get_slice_thickness(i), tolerance=1e-6)
 
-                    vr[j], dvdr[j] = integrator.integrate(np.array([atom.z]), a, b, xp=np)
+                    vr[j], dvdr[j] = integrator.integrate(np.array([atom.z]), a, b)
 
                 sampling = np.asarray(self.sampling, dtype=np.float32)
                 run_length_enconding = np.zeros((2,), dtype=np.int32)
