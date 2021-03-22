@@ -20,6 +20,7 @@ from abtem.structures import is_cell_orthogonal, SlicedAtoms, pad_atoms
 from abtem.tanh_sinh import integrate, tanh_sinh_nodes_and_weights
 from abtem.temperature import AbstractFrozenPhonons, DummyFrozenPhonons
 from abtem.utils import energy2sigma, ProgressBar, generate_batches, _disc_meshgrid
+import warnings
 
 # Vacuum permitivity in ASE units
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
@@ -432,7 +433,11 @@ class CrystalPotential(AbstractPotential):
         self._num_frozen_phonon_configs = num_frozen_phonon_configs
 
         if (potential_unit.num_frozen_phonon_configs == 1) & (num_frozen_phonon_configs > 1):
-            raise
+            warnings.warn('"num_frozen_phonon_configs" is greater than one, but the potential unit does not have'
+                          'frozen phonons')
+
+        if (potential_unit.num_frozen_phonon_configs > 1) & (num_frozen_phonon_configs == 1):
+            warnings.warn('the potential unit has frozen phonons, but "num_frozen_phonon_configs" is set to 1')
 
         self._cache = Cache(1)
         self._changed = Event()
