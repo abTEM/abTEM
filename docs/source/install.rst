@@ -17,15 +17,15 @@ For a development installation::
 
 GPU calculations (CUDA only)
 ****************************
-GPU calculations with abTEM require CUDA Toolkit 10 and CuPy.
+GPU calculations with abTEM require CUDA Toolkit and CuPy.
 
-`Download <https://developer.nvidia.com/cuda-10.2-download-archive>`_ and install CUDA toolkit 10 from NVIDIA's website (CUDA toolkit 11 is not supported). On Windows, you may be prompted to install Visual Studio for some features, but this is *not* required to use abTEM.
+`Download <https://developer.nvidia.com/cuda-10.2-download-archive>`_ and install CUDA toolkit 11 from NVIDIA's website. On Windows, you may be prompted to install Visual Studio for some features, but this is *not* required to use abTEM.
 
 Install CuPy from pip::
 
-    pip install cupy-cuda102
+    pip install cupy-cuda*
 
-See `CuPy's installation guide <https://docs.cupy.dev/en/stable/install.html>`_ for more details.
+where * should be substituted for the CUDA Toolkit version. See `CuPy's installation guide <https://docs.cupy.dev/en/stable/install.html>`_ for details.
 
 DFT potentials with GPAW
 ************************
