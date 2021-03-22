@@ -505,28 +505,6 @@ class Grid:
         return copy(self)
 
 
-class DelegatedAttribute:
-
-    def __init__(self, delegate_name, attr_name):
-        self.attr_name = attr_name
-        self.delegate_name = delegate_name
-
-    def __get__(self, instance, owner):
-        if instance is None:
-            return self
-        else:
-            return getattr(self.delegate(instance), self.attr_name)
-
-    def __set__(self, instance, value):
-        setattr(self.delegate(instance), self.attr_name, value)
-
-    def __delete__(self, instance):
-        delattr(self.delegate(instance), self.attr_name)
-
-    def delegate(self, instance):
-        return getattr(instance, self.delegate_name)
-
-
 class HasGridMixin:
     _grid: Grid
 
@@ -534,9 +512,29 @@ class HasGridMixin:
     def grid(self) -> Grid:
         return self._grid
 
-    extent = DelegatedAttribute('grid', 'extent')
-    gpts = DelegatedAttribute('grid', 'gpts')
-    sampling = DelegatedAttribute('grid', 'sampling')
+    @property
+    def extent(self):
+        return self.grid.extent
+
+    @extent.setter
+    def extent(self, extent):
+        self.grid.extent = extent
+
+    @property
+    def gpts(self):
+        return self.grid.gpts
+
+    @gpts.setter
+    def gpts(self, gpts):
+        self.grid.gpts = gpts
+
+    @property
+    def sampling(self):
+        return self.grid.sampling
+
+    @sampling.setter
+    def sampling(self, sampling):
+        self.grid.sampling = sampling
 
     def match_grid(self, other, check_match=False):
         self.grid.match(other, check_match=check_match)
@@ -658,8 +656,17 @@ class HasAcceleratorMixin:
         self._accelerator = new
         self._accelerator.changed = new.changed
 
-    energy = DelegatedAttribute('accelerator', 'energy')
-    wavelength = DelegatedAttribute('accelerator', 'wavelength')
+    @property
+    def energy(self):
+        return self.accelerator.energy
+
+    @energy.setter
+    def energy(self, energy):
+        self.accelerator.energy = energy
+
+    @property
+    def wavelength(self):
+        return self.accelerator.wavelength
 
 
 class AntialiasFilter:
