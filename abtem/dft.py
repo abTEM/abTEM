@@ -175,6 +175,14 @@ class GPAWPotential(AbstractPotentialBuilder):
         return self._calculator
 
     @property
+    def num_frozen_phonon_configs(self):
+        return 1
+
+    def generate_frozen_phonon_potentials(self, pbar=False):
+        for i in range(self.num_frozen_phonon_configs):
+            yield self
+
+    @property
     def core_size(self):
         return self._core_size
 
@@ -233,7 +241,7 @@ class GPAWPotential(AbstractPotentialBuilder):
 
                 slice_atoms = pad_atoms(slice_atoms, cutoff)
 
-                R = np.geomspace(np.min(self.sampling)/2, cutoff, int(np.ceil(cutoff / np.min(self.sampling))) * 10)
+                R = np.geomspace(np.min(self.sampling) / 2, cutoff, int(np.ceil(cutoff / np.min(self.sampling))) * 10)
 
                 vr = np.zeros((len(slice_atoms), len(R)), np.float32)
                 dvdr = np.zeros((len(slice_atoms), len(R)), np.float32)
@@ -245,7 +253,6 @@ class GPAWPotential(AbstractPotentialBuilder):
                     integrator = PotentialIntegrator(f, R, self.get_slice_thickness(i), tolerance=1e-6)
 
                     vr[j], dvdr[j] = integrator.integrate(np.array([atom.z]), a, b, xp=np)
-
 
                 sampling = np.asarray(self.sampling, dtype=np.float32)
                 run_length_enconding = np.zeros((2,), dtype=np.int32)
