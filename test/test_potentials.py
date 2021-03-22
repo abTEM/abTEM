@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 
-from abtem.potentials import Potential
+from abtem.potentials import Potential, CrystalPotential
 from abtem.device import asnumpy, cp
 
 
@@ -45,6 +45,15 @@ def test_potential_build():
     potential = Potential(atoms=atoms, sampling=.1)
     array_potential = potential.build()
     assert np.all(array_potential[2].array == potential[2].array)
+
+
+def test_crystal_potential(graphene_atoms):
+    potential_unit = Potential(graphene_atoms, parametrization='kirkland', gpts=64, projection='infinite')
+    crystal_potential = CrystalPotential(potential_unit, (1, 2, 2))
+    potential = Potential(graphene_atoms * (1, 2, 2), parametrization='kirkland', gpts=(64, 128), projection='infinite')
+
+    for (start, __, a), (_, __, b) in zip(crystal_potential.generate_slices(), potential.generate_slices()):
+        assert np.allclose(a.array, b.array, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.gpu

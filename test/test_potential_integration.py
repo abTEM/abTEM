@@ -11,7 +11,7 @@ def test_gaussian_integral():
     f = lambda r: np.exp(-r ** 2 / (2 * sigma ** 2))
     r = np.array([0, 30])
     integrator = PotentialIntegrator(f, r, 30)
-    value = integrator.integrate(np.array([0.]), -50, 50, np)
+    value = integrator.integrate(np.array([0.]), -50, 50)
     assert np.isclose(value[0][0][0], sigma * np.sqrt(2 * np.pi))
 
 
@@ -20,7 +20,7 @@ def test_projected_kirkland():
     parameters = load_kirkland_parameters()
     r = np.geomspace(.01, 10, 100)
     integrator = PotentialIntegrator(f, r, 20)
-    assert np.allclose(integrator.integrate(np.array([0.]), -10, 10, np)[0], kirkland_projected(r, parameters[6]))
+    assert np.allclose(integrator.integrate(np.array([0.]), -10, 10)[0], kirkland_projected(r, parameters[6]))
 
 
 def test_cutoff():
@@ -37,12 +37,12 @@ def test_interpolation():  # just a sanity check
     L = 20
     atoms = Atoms('C', positions=[(0, 0, 1.5)], cell=(L, L, 3))
 
-    potential = Potential(atoms, sampling=sampling, cutoff_tolerance=1e-3, slice_thickness=10)
+    potential = Potential(atoms, sampling=sampling, cutoff_tolerance=1e-3, slice_thickness=3)
 
     interpolated = potential[0].array[0, 0]
     integrator = potential.get_integrator(6)
 
-    integrated = integrator.integrate(np.array([0.]), -1.5, 1.5, np)[0][0]
+    integrated = integrator.integrate(np.array([0.]), -1.5, 1.5)[0][0]
 
     r = np.linspace(0, L, len(interpolated), endpoint=False)
 
@@ -51,6 +51,9 @@ def test_interpolation():  # just a sanity check
                        np.interp(x, r, interpolated)) / np.interp(x, r, interpolated)
 
     absolute_errors = (np.interp(x, integrator.r, integrated) / kappa - np.interp(x, r, interpolated))
+
+    print(np.abs(relative_errors).max())
+    print(np.abs(absolute_errors).max())
 
     assert np.all((np.abs(relative_errors) < 1e-4) + (np.abs(absolute_errors) < 1e-4))
 

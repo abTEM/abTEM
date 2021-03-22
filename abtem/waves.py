@@ -13,7 +13,7 @@ from abtem.detect import AbstractDetector
 from abtem.device import get_array_module, get_device_function, asnumpy, get_array_module_from_device, \
     copy_to_device, get_available_memory, HasDeviceMixin
 from abtem.measure import calibrations_from_grid, Measurement, block_zeroth_order_spot, probe_profile
-from abtem.potentials import Potential, AbstractPotential, AbstractTDSPotentialBuilder, AbstractPotentialBuilder
+from abtem.potentials import Potential, AbstractPotential, AbstractPotentialBuilder
 from abtem.scan import AbstractScan, GridScan
 from abtem.transfer import CTF
 from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, subdivide_into_batches, periodic_crop, \
@@ -369,52 +369,52 @@ class Waves(_WavesLike):
         propagator = FresnelPropagator()
 
         result = None
-        if isinstance(potential, AbstractTDSPotentialBuilder):
-            if len(potential.frozen_phonons) > 1:
-                xp = get_array_module(self.array)
-                n = len(potential.frozen_phonons)
+
+        if potential.num_frozen_phonon_configs > 1:
+            xp = get_array_module(self.array)
+            n = potential.num_frozen_phonon_configs
+
+            if detector:
+                result = detector.allocate_measurement(self, self.array.shape[:-2])
+            else:
+                if n > 1:
+                    if self.array.shape[0] == 1:
+                        out_array = xp.zeros((n,) + self.array.shape[1:], dtype=xp.complex64)
+                    else:
+                        out_array = xp.zeros((n,) + self.array.shape, dtype=xp.complex64)
+                else:
+                    out_array = xp.zeros(self.array.shape, dtype=xp.complex64)
+
+                result = self.__class__(out_array,
+                                        extent=self.extent,
+                                        energy=self.energy,
+                                        antialiasing_aperture=2 / 3.)
+
+            tds_pbar = ProgressBar(total=n, desc='TDS', disable=(not pbar) or (n == 1))
+            multislice_pbar = ProgressBar(total=len(potential), desc='Multislice', disable=not pbar)
+
+            for i, potential_config in enumerate(potential.generate_frozen_phonon_potentials(pbar=pbar)):
+                multislice_pbar.reset()
+
+                exit_waves = _multislice(copy(self),
+                                         potential_config,
+                                         propagator=propagator,
+                                         pbar=multislice_pbar,
+                                         max_batch=max_batch_potential)
 
                 if detector:
-                    result = detector.allocate_measurement(self, self.array.shape[:-2])
+                    result._array += asnumpy(detector.detect(exit_waves)) / n
                 else:
-                    if n > 1:
-                        if self.array.shape[0] == 1:
-                            out_array = xp.zeros((n,) + self.array.shape[1:], dtype=xp.complex64)
-                        else:
-                            out_array = xp.zeros((n,) + self.array.shape, dtype=xp.complex64)
-                    else:
-                        out_array = xp.zeros(self.array.shape, dtype=xp.complex64)
+                    result._array[i] = xp.squeeze(exit_waves.array)
 
-                    result = self.__class__(out_array,
-                                            extent=self.extent,
-                                            energy=self.energy,
-                                            antialiasing_aperture=2 / 3.)
+                tds_pbar.update(1)
 
-                tds_pbar = ProgressBar(total=n, desc='TDS', disable=(not pbar) or (n == 1))
-                multislice_pbar = ProgressBar(total=len(potential), desc='Multislice', disable=not pbar)
-
-                for i, potential_config in enumerate(potential.generate_frozen_phonon_potentials(pbar=pbar)):
-                    multislice_pbar.reset()
-
-                    exit_waves = _multislice(copy(self),
-                                             potential_config,
-                                             propagator=propagator,
-                                             pbar=multislice_pbar,
-                                             max_batch=max_batch_potential)
-
-                    if detector:
-                        result._array += asnumpy(detector.detect(exit_waves)) / n
-                    else:
-                        result._array[i] = xp.squeeze(exit_waves.array)
-
-                    tds_pbar.update(1)
-
-                multislice_pbar.close()
-                tds_pbar.close()
+            multislice_pbar.close()
+            tds_pbar.close()
 
         if result is None:
             if isinstance(potential, AbstractPotentialBuilder):
-                if potential._precalculate:
+                if potential.precalculate:
                     potential = potential.build(pbar=pbar)
 
             exit_wave = _multislice(self, potential, propagator, pbar, max_batch=max_batch_potential)
@@ -698,29 +698,38 @@ class Probe(_WavesLike, HasDeviceMixin):
         exit_probes._antialiasing_aperture = 2 / 3.
         return exit_probes
 
-    def _generate_probes(self, scan: AbstractScan, potential: Union[AbstractPotential, Atoms], max_batch: int):
-        if not isinstance(max_batch, int):
-            memory_per_wave = 2 * 4 * np.prod(self.gpts)
-            available_memory = get_available_memory(self._device)
-            max_batch = min(int(available_memory * .4 / memory_per_wave), 32)
+    def _estimate_max_batch(self):
+        memory_per_wave = 2 * 4 * np.prod(self.gpts)
+        available_memory = get_available_memory(self._device)
+        return min(int(available_memory * .4 / memory_per_wave), 32)
 
-        for indices, positions in scan.generate_positions(max_batch=max_batch):
-            yield indices, self.multislice(positions, potential, pbar=False)
-
-    def _generate_tds_probes(self, scan, potential, max_batch, pbar):
-        tds_bar = ProgressBar(total=len(potential.frozen_phonons), desc='TDS',
-                              disable=(not pbar) or (len(potential.frozen_phonons) == 1))
+    def _generate_probes(self, scan, potential, max_batch, pbar):
         potential_pbar = ProgressBar(total=len(potential), desc='Potential',
                                      disable=(not pbar) or (not potential._precalculate))
 
+        tds_bar = ProgressBar(total=potential.num_frozen_phonon_configs, desc='TDS',
+                              disable=(not pbar) or (potential.num_frozen_phonon_configs == 1))
+
+        scan_bar = ProgressBar(total=len(scan), desc='Scan', disable=not pbar)
+
         for potential_config in potential.generate_frozen_phonon_potentials(pbar=potential_pbar):
-            yield self._generate_probes(scan, potential_config, max_batch)
+            scan_bar.reset()
+
+            if max_batch is None:
+                max_batch = self._estimate_max_batch()
+
+            for indices, positions in scan.generate_positions(max_batch=max_batch):
+                yield indices, self.multislice(positions, potential_config, pbar=False)
+                scan_bar.update(len(indices))
+
+            scan_bar.refresh()
             tds_bar.update(1)
 
         potential_pbar.close()
         potential_pbar.refresh()
         tds_bar.refresh()
         tds_bar.close()
+        scan_bar.close()
 
     def scan(self,
              scan: AbstractScan,
@@ -773,35 +782,19 @@ class Probe(_WavesLike, HasDeviceMixin):
         else:
             raise ValueError('measurements must be Measurement or dict of AbtractDetector: Measurement')
 
-        scan_bar = ProgressBar(total=len(scan), desc='Scan', disable=not pbar)
+        probe_generator = self._generate_probes(scan, potential, max_batch, pbar)
 
-        if isinstance(potential, AbstractTDSPotentialBuilder):
-            probe_generators = self._generate_tds_probes(scan, potential, max_batch, pbar)
-        else:
-            if isinstance(potential, AbstractPotentialBuilder):
-                potential = potential.build(pbar=True)
+        for indices, exit_probes in probe_generator:
 
-            probe_generators = [self._generate_probes(scan, potential, max_batch)]
+            for detector in detectors:
+                new_entries = detector.detect(exit_probes)
+                new_entries /= potential.num_frozen_phonon_configs
 
-        for probe_generator in probe_generators:
-            scan_bar.reset()
-            for indices, exit_probes in probe_generator:
-
-                for detector in detectors:
-                    new_entries = detector.detect(exit_probes)
-
-                    if isinstance(potential, AbstractTDSPotentialBuilder):
-                        new_entries /= len(potential.frozen_phonons)
-
-                    try:
-                        scan.insert_new_measurement(measurements[detector], indices, new_entries)
-                    except KeyError:
-                        measurements[detector] = detector.allocate_measurement(exit_probes, scan)
-                        scan.insert_new_measurement(measurements[detector], indices, new_entries)
-
-                scan_bar.update(len(indices))
-            scan_bar.refresh()
-        scan_bar.close()
+                try:
+                    scan.insert_new_measurement(measurements[detector], indices, new_entries)
+                except KeyError:
+                    measurements[detector] = detector.allocate_measurement(exit_probes, scan)
+                    scan.insert_new_measurement(measurements[detector], indices, new_entries)
 
         measurements = list(measurements.values())
         if len(measurements) == 1:
@@ -1454,37 +1447,48 @@ class SMatrix(_WavesLike, HasDeviceMixin):
         return Probe(extent=self.extent, gpts=self.gpts, sampling=self.sampling, energy=self.energy, ctf=self.ctf,
                      device=self.device)
 
-    def _generate_tds_probes(self,
-                             scan: AbstractScan,
-                             potential: AbstractTDSPotentialBuilder,
-                             max_batch_probes: int,
-                             max_batch_expansion: int,
-                             potential_pbar: Union[ProgressBar, bool] = True,
-                             plane_waves_pbar: Union[ProgressBar, bool] = True):
+    def _generate_probes(self,
+                         scan: AbstractScan,
+                         potential: AbstractPotential,
+                         max_batch_probes: int,
+                         max_batch_expansion: int,
+                         pbar: bool = True):
 
-        if isinstance(potential_pbar, bool):
-            potential_pbar = ProgressBar(total=len(potential), desc='Potential',
-                                         disable=(not potential_pbar) or (not potential._precalculate))
+        potential_pbar = ProgressBar(total=len(potential), desc='Potential',
+                                     disable=(not pbar) or (not potential._precalculate))
 
-        if isinstance(plane_waves_pbar, bool):
-            plane_waves_pbar = ProgressBar(total=len(self), desc='Multislice', disable=not plane_waves_pbar)
+        multislice_pbar = ProgressBar(total=len(self), desc='Multislice', disable=not pbar)
+
+        scan_bar = ProgressBar(total=len(scan), desc='Scan', disable=not pbar)
+
+        tds_bar = ProgressBar(total=potential.num_frozen_phonon_configs, desc='TDS',
+                              disable=(not pbar) or (potential.num_frozen_phonon_configs == 1))
 
         for potential_config in potential.generate_frozen_phonon_potentials(pbar=potential_pbar):
+            scan_bar.reset()
             S = self.build()
 
             S = S.multislice(potential_config,
                              max_batch=max_batch_expansion,
                              multislice_pbar=False,
-                             plane_waves_pbar=plane_waves_pbar)
+                             plane_waves_pbar=multislice_pbar)
 
             S = S.downsample('limit')
-            yield S._generate_probes(scan, max_batch_probes, max_batch_expansion)
 
-        plane_waves_pbar.refresh()
-        plane_waves_pbar.close()
+            for indices, exit_probes in S._generate_probes(scan, max_batch_probes, max_batch_expansion):
+                yield indices, exit_probes
+                scan_bar.update(len(indices))
 
+            tds_bar.update(1)
+            scan_bar.refresh()
+
+        multislice_pbar.refresh()
+        multislice_pbar.close()
         potential_pbar.refresh()
         potential_pbar.close()
+        scan_bar.close()
+        tds_bar.refresh()
+        tds_bar.close()
 
     def multislice(self,
                    potential: AbstractPotential,
@@ -1554,57 +1558,23 @@ class SMatrix(_WavesLike, HasDeviceMixin):
         if isinstance(detectors, AbstractDetector):
             detectors = [detectors]
 
-        if isinstance(potential, AbstractTDSPotentialBuilder):
-            probe_generators = self._generate_tds_probes(scan,
-                                                         potential,
-                                                         max_batch_probes=max_batch_probes,
-                                                         max_batch_expansion=max_batch_expansion,
-                                                         potential_pbar=pbar,
-                                                         plane_waves_pbar=pbar)
-
-            tds_bar = ProgressBar(total=len(potential.frozen_phonons), desc='TDS',
-                                  disable=(not pbar) or (len(potential.frozen_phonons) == 1))
-
-        else:
-            if isinstance(potential, AbstractPotentialBuilder):
-                potential = potential.build(pbar=True)
-
-            S = self.multislice(potential, max_batch=max_batch_expansion, pbar=pbar)
-            probe_generators = [S._generate_probes(scan,
-                                                   max_batch_probes=max_batch_probes,
-                                                   max_batch_expansion=max_batch_expansion)]
-
-            tds_bar = None
-
-        scan_bar = ProgressBar(total=len(scan), desc='Scan', disable=not pbar)
+        probe_generator = self._generate_probes(scan,
+                                                potential,
+                                                max_batch_probes=max_batch_probes,
+                                                max_batch_expansion=max_batch_expansion,
+                                                pbar=pbar)
 
         measurements = {}
-        for probe_generator in probe_generators:
-            scan_bar.reset()
+        for indices, exit_probes in probe_generator:
+            for detector in detectors:
+                new_measurement = detector.detect(exit_probes)
+                new_measurement /= potential.num_frozen_phonon_configs
 
-            for indices, exit_probes in probe_generator:
-                for detector in detectors:
-                    new_measurement = detector.detect(exit_probes)
-
-                    if isinstance(potential, AbstractTDSPotentialBuilder):
-                        new_measurement /= len(potential.frozen_phonons)
-
-                    try:
-                        scan.insert_new_measurement(measurements[detector], indices, new_measurement)
-                    except KeyError:
-                        measurements[detector] = detector.allocate_measurement(exit_probes, scan)
-                        scan.insert_new_measurement(measurements[detector], indices, new_measurement)
-
-                scan_bar.update(len(indices))
-
-            scan_bar.refresh()
-            if tds_bar:
-                tds_bar.update(1)
-        scan_bar.close()
-
-        if tds_bar:
-            tds_bar.refresh()
-            tds_bar.close()
+                try:
+                    scan.insert_new_measurement(measurements[detector], indices, new_measurement)
+                except KeyError:
+                    measurements[detector] = detector.allocate_measurement(exit_probes, scan)
+                    scan.insert_new_measurement(measurements[detector], indices, new_measurement)
 
         measurements = list(measurements.values())
         if len(measurements) == 1:

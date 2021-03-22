@@ -17,6 +17,16 @@ class DummyPotential(AbstractPotential):
         self._num_slices = num_slices
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
 
+        super().__init__(precalculate=False)
+
+    @property
+    def num_frozen_phonon_configs(self):
+        return 1
+
+    def generate_frozen_phonon_potentials(self, pbar=False):
+        for i in range(self.num_frozen_phonon_configs):
+            yield self
+
     @property
     def num_slices(self):
         return 10
