@@ -291,7 +291,7 @@ class AnnularDetector(_PolarDetector):
         Outer integration limit [mrad].
     offset: two float, optional
         Center offset of integration region [mrad].
-    save_file: str
+    save_file: str, optional
         The path to the file for saving the detector output.
     """
 
@@ -319,12 +319,13 @@ class AnnularDetector(_PolarDetector):
         self._max_detected_angle = value
         self._outer = value
 
-    def _integrate_array(self, array: np.ndarray, angular_sampling: Sequence[float],
+    def _integrate_array(self, array: np.ndarray, angular_sampling: Tuple[float, float],
                          cutoff_scattering_angle: float = None):
 
         xp = get_array_module(array)
         indices = self._get_regions(array.shape[-2:], angular_sampling, cutoff_scattering_angle)[0]
-        values = xp.sum(array.reshape(array.shape[:-2] + (-1,))[..., indices], axis=-1)
+        indexed = array.reshape(array.shape[:-2] + (-1,))[..., indices]
+        values = xp.sum(indexed, axis=-1)
         return values
 
     def integrate(self, diffraction_patterns: Measurement) -> Measurement:
@@ -353,9 +354,14 @@ class AnnularDetector(_PolarDetector):
         array = np.fft.ifftshift(diffraction_patterns.array, axes=(-2, -1))
 
         cutoff_scattering_angle = min(diffraction_patterns.calibrations[-2].sampling *
-                                      diffraction_patterns.array.shape[-2],
+                                      (diffraction_patterns.array.shape[-2] // 2),
                                       diffraction_patterns.calibrations[-1].sampling *
-                                      diffraction_patterns.array.shape[-1], )
+                                      (diffraction_patterns.array.shape[-1] // 2), )
+
+
+        if cutoff_scattering_angle < self.outer:
+            raise RuntimeError('Outer integration limit exceeds the maximum measurement scattering angle ' 
+                               f'({cutoff_scattering_angle} mrad)')
 
         return Measurement(self._integrate_array(array, sampling, cutoff_scattering_angle), calibrations=calibrations)
 
@@ -587,10 +593,9 @@ class PixelatedDetector(AbstractDetector):
     ----------
     max_angle : str or float or None
         The diffraction patterns will be detected up to this angle. If set to a string it must be 'limit' or 'valid'
-
-
-         *_    resample : 'uniform' or False
+    resample : 'uniform' or False
         If 'uniform', the diffraction patterns from rectangular cells will be downsampled to a uniform angular sampling.
+    mode : 'intensity' or 'complex'
     save_file : str
         The path to the file used for saving the detector output.
     """
@@ -598,10 +603,12 @@ class PixelatedDetector(AbstractDetector):
     def __init__(self,
                  max_angle: Union[str, float] = 'valid',
                  resample: Union[str, float] = False,
+                 mode='intensity',
                  save_file: str = None):
 
         self._max_angle = max_angle
         self._resample = resample
+        self._mode = mode
 
         super().__init__(save_file=save_file)
 
@@ -720,7 +727,12 @@ class PixelatedDetector(AbstractDetector):
             scan_shape = scan.shape
             scan_calibrations = scan.calibrations
 
-        array = np.zeros(scan_shape + gpts)
+        if self._mode == 'intensity':
+            array = np.zeros(scan_shape + gpts, dtype=np.float32)
+        elif self._mode == 'complex':
+            array = np.zeros(scan_shape + gpts, dtype=np.complex64)
+        else:
+            raise ValueError()
 
         measurement = Measurement(array, calibrations=scan_calibrations + calibrations)
         if isinstance(self.save_file, str):
@@ -747,11 +759,19 @@ class PixelatedDetector(AbstractDetector):
         abs2 = get_device_function(xp, 'abs2')
 
         waves = waves.far_field(max_angle=self.max_angle)
-        intensity = abs2(waves.array)
 
-        intensity = xp.fft.fftshift(intensity, axes=(-2, -1))
-        intensity = self._interpolate(intensity, waves.angular_sampling)
-        return intensity
+        if self._mode == 'intensity':
+            array = abs2(waves.array)
+        elif self._mode == 'complex':
+            array = waves.array
+        else:
+            raise ValueError()
+
+        array = xp.fft.fftshift(array, axes=(-2, -1))
+
+        if self._resample:
+            array = self._interpolate(array, waves.angular_sampling)
+        return array
 
 
 class WavefunctionDetector(AbstractDetector):
