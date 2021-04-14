@@ -149,7 +149,8 @@ class GPAWPotential(AbstractPotentialBuilder):
                  # origin: Union[float, Sequence[float]] = None,
                  slice_thickness=.5,
                  core_size=.005,
-                 storage='cpu'):
+                 storage='cpu',
+                 precalculate=True):
 
         self._calculator = calculator
         self._core_size = core_size
@@ -168,7 +169,7 @@ class GPAWPotential(AbstractPotentialBuilder):
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling, lock_extent=True)
 
-        super().__init__(storage=storage)
+        super().__init__(precalculate=precalculate, storage=storage)
 
     @property
     def calculator(self):
@@ -180,7 +181,10 @@ class GPAWPotential(AbstractPotentialBuilder):
 
     def generate_frozen_phonon_potentials(self, pbar=False):
         for i in range(self.num_frozen_phonon_configs):
-            yield self
+            if self._precalculate:
+                yield self.build(pbar=pbar)
+            else:
+                yield self
 
     @property
     def core_size(self):
