@@ -323,6 +323,7 @@ class PotentialIntegrator:
 
         value, error_estimate, step_size, order = integrate(f, -1, 1, self._tolerance)
 
+        order = min(order, 2000)
         self._xk, self._wk = tanh_sinh_nodes_and_weights(step_size, order)
 
     @property
