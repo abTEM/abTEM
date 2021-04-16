@@ -8,7 +8,6 @@ def _error_estimate(eps: float,
                     value_estimates: Sequence[float],
                     left_summands: Sequence[float],
                     right_summands: Sequence[float]):
-
     # TODO: improve error estimate using the potential derivatives
     """
     Internal function to estimate the error made by the quadrature.
@@ -35,10 +34,10 @@ def _error_estimate(eps: float,
         error_estimate = 0
 
     else:
-        #e1 = abs(value_estimates[-1] - value_estimates[-2])
+        # e1 = abs(value_estimates[-1] - value_estimates[-2])
         # e2 = abs(value_estimates[-1] - value_estimates[-3])
         # e3 = eps * max(max(abs(left_summands)), max(abs(right_summands)))
-        #e4 = max(abs(left_summands[-1]), abs(right_summands[-1]))
+        # e4 = max(abs(left_summands[-1]), abs(right_summands[-1]))
         # n = np.float((np.log(e1 + np.finfo(e1).eps) / (np.log(e2 + np.finfo(e2).eps))))
 
         e1 = abs(value_estimates[-1] - value_estimates[-2])
@@ -51,7 +50,7 @@ def _error_estimate(eps: float,
 
         #
         #    error_estimate = max(e1 ** n, e1 ** 2, e3, e4)
-        #error_estimate = max(e1, e4)
+        # error_estimate = max(e1, e4)
 
     return error_estimate
 
@@ -80,7 +79,7 @@ def _solve_expx_x_logx(tau, tol, max_steps=10):
     return x
 
 
-def integrate(f: Callable, a: float, b: float, eps: float, max_steps: int = 20):
+def integrate(f: Callable, a: float, b: float, eps: float, max_steps: int = 20, max_order=2000):
     """
     Integrate a function using the Tanh-Sinh quadrature method.
 
@@ -114,6 +113,7 @@ def integrate(f: Callable, a: float, b: float, eps: float, max_steps: int = 20):
 
     def f_right(s):
         return f(b - s)
+
     interval = b - a
 
     def lambertw(x, k):
@@ -152,9 +152,14 @@ def integrate(f: Callable, a: float, b: float, eps: float, max_steps: int = 20):
 
         error_estimate = _error_estimate(eps, value_estimates, left_summands, right_summands)
 
+        if order + j + 1 > max_order:
+            success = True
+            break
+
         if abs(error_estimate) < eps:
             success = True
             break
+
         order += j + 1
         h /= 2
 
