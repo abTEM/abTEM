@@ -203,12 +203,12 @@ def get_device_function(xp, name: str) -> Callable:
     :param xp: The array library. Must numpy or cupy.
     :param name: Name of function.
     """
-    if (xp is cp):
+    if xp is cp:
         return gpu_functions[name]
     elif xp is np:
         return cpu_functions[name]
     else:
-        raise RuntimeError('The array library ')
+        raise RuntimeError(f'The array library {xp} is not recognized.')
 
 
 def get_array_module_from_device(device):
@@ -221,6 +221,15 @@ def get_array_module_from_device(device):
         return cp
 
     return get_array_module(device)
+
+
+def get_device_from_array(array):
+    xp = get_array_module(array)
+
+    if xp is np:
+        return 'cpu'
+
+    return 'gpu'
 
 
 def copy_to_device(array, device):
