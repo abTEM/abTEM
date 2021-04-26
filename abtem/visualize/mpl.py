@@ -8,6 +8,7 @@ from ase.data.colors import jmol_colors
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import Circle
 from abtem.visualize.utils import format_label
+from typing import Union, Tuple
 
 #: Array to facilitate the display of cell boundaries.
 _cube = np.array([[[0, 0, 0], [0, 0, 1]],
@@ -41,7 +42,8 @@ def _plane2axes(plane):
     return axes + (last_axis[0],)
 
 
-def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atoms=.5, title=None, numbering=False):
+def show_atoms(atoms, repeat: Tuple[int, int] = (1, 1), scans=None, plane: Union[Tuple[float, float], str] = 'xy',
+               ax=None, scale_atoms: float = .5, title: str = None, numbering: bool = False, figsize=None):
     """
     Show atoms function
 
@@ -55,8 +57,9 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
         Tiling of the image. Default is (1,1), ie. no tiling.
     scans : ndarray, optional
         List of scans to apply. Default is None.
-    plane : str
-        The projection plane.
+    plane : str, two float
+        The projection plane given as a combination of 'x' 'y' and 'z', e.g. 'xy', or the as two floats representing the
+        azimuth and elevation angles in degrees of the viewing direction, e.g. (45, 45).
     ax : axes object
         pyplot axes object.
     scale_atoms : float
@@ -67,14 +70,29 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
         Option to set plot numbering. Default is False.
     """
 
-    if ax is None:
-        fig, ax = plt.subplots()
-
-    axes = _plane2axes(plane)
-
     atoms = atoms.copy()
-    cell = atoms.cell
     atoms *= repeat + (1,)
+
+    if isinstance(plane, str):
+        ax = _show_atoms_2d(atoms, scans, plane, ax, scale_atoms, title, numbering, figsize)
+    else:
+        if scans is not None:
+            raise NotImplementedError()
+
+        if numbering:
+            raise NotImplementedError()
+        ax = _show_atoms_3d(atoms, plane[0], plane[1], scale_atoms=scale_atoms, ax=ax, figsize=figsize)
+
+    return ax
+
+
+def _show_atoms_2d(atoms, scans=None, plane: Union[Tuple[float, float], str] = 'xy', ax=None, scale_atoms: float = .5,
+                   title: str = None, numbering: bool = False, figsize=None):
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+
+    cell = atoms.cell
+    axes = _plane2axes(plane)
 
     for line in _cube:
         cell_lines = np.array([np.dot(line[0], cell), np.dot(line[1], cell)])
@@ -86,7 +104,6 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
         positions = positions[order]
 
         colors = jmol_colors[atoms.numbers[order]]
-
         sizes = covalent_radii[atoms.numbers[order]] * scale_atoms
 
         circles = []
@@ -113,6 +130,59 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
         for scan in scans:
             scan.add_to_mpl_plot(ax)
 
+    return ax
+
+
+def _show_atoms_3d(atoms, azimuth=45., elevation=30., ax=None, scale_atoms=500., margin=1., figsize=None):
+    cell = atoms.cell
+    colors = jmol_colors[atoms.numbers]
+    sizes = covalent_radii[atoms.numbers] * scale_atoms
+    positions = atoms.positions
+
+    for line in _cube:
+        cell_lines = np.array([np.dot(line[0], cell), np.dot(line[1], cell)])
+        start = cell_lines[0]
+        end = cell_lines[1]
+        cell_line_points = start + (end - start)[None] * np.linspace(0, 1, 100)[:, None]
+        positions = np.vstack((positions, cell_line_points))
+        sizes = np.concatenate((sizes, [5] * len(cell_line_points)))
+        colors = np.vstack((colors, [(0, 0, 0)] * len(cell_line_points)))
+
+    if ax is None:
+        fig = plt.figure(figsize=figsize)
+        ax = fig.add_subplot(projection='3d', proj_type='ortho')
+
+    ax.scatter(positions[:, 0],
+               positions[:, 1],
+               positions[:, 2],
+               c=colors,
+               marker='o',
+               s=sizes,
+               alpha=1,
+               linewidth=1,
+               edgecolor='k')
+
+    xmin = min(min(atoms.positions[:, 0]), min(atoms.cell[:, 0])) - margin
+    xmax = max(max(atoms.positions[:, 0]), max(atoms.cell[:, 0])) + margin
+    ymin = min(min(atoms.positions[:, 1]), min(atoms.cell[:, 1])) - margin
+    ymax = max(max(atoms.positions[:, 1]), max(atoms.cell[:, 1])) + margin
+    zmin = min(min(atoms.positions[:, 2]), min(atoms.cell[:, 2])) - margin
+    zmax = max(max(atoms.positions[:, 2]), max(atoms.cell[:, 2])) + margin
+
+    ax.set_xlim([xmin, xmax])
+    ax.set_ylim([ymin, ymax])
+    ax.set_zlim([zmin, zmax])
+
+    ax.set_xlabel('x [Å]')
+    ax.set_ylabel('y [Å]')
+    ax.set_zlabel('z [Å]')
+
+    ax.grid(False)
+
+    ax.azim = azimuth
+    ax.elev = elevation
+
+    ax.set_box_aspect([xmax - xmin, ymax - ymin, zmax - zmin])
     return ax
 
 
@@ -206,6 +276,8 @@ def show_measurement_2d(measurement,
 
     if title is not None:
         ax.set_title(title)
+    elif len(measurement.array.shape) > 2:
+        ax.set_title(f'Slice {(0,) * (len(measurement.array.shape) - 2)} of {measurement.array.shape} measurement')
 
     return ax, im
 
