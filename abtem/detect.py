@@ -448,7 +448,6 @@ class FlexibleAnnularDetector(_PolarDetector):
         intensity = abs2(fft2(waves.array, overwrite_x=False))
 
         indices = self._get_regions(waves.gpts, waves.angular_sampling, min(waves.cutoff_scattering_angles), xp)
-        total = xp.sum(intensity, axis=(-2, -1))
 
         separators = xp.concatenate((xp.array([0]), xp.cumsum(xp.array([len(ring) for ring in indices]))))
         intensity = intensity.reshape((intensity.shape[0], -1))[:, xp.concatenate(indices)]
