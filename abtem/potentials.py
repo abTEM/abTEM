@@ -10,7 +10,7 @@ from ase import units
 from scipy.optimize import brentq
 
 from abtem.base_classes import Grid, HasGridMixin, Cache, cached_method, HasAcceleratorMixin, Accelerator, Event, \
-    watched_property, AntialiasFilter, cache_clear_callback
+    watched_property, AntialiasFilter, cache_clear_callback, HasEventMixin
 from abtem.device import get_device_function, get_array_module, get_array_module_from_device, copy_to_device, \
     HasDeviceMixin, asnumpy, get_available_memory
 from abtem.measure import calibrations_from_grid, Measurement
@@ -254,10 +254,13 @@ class AbstractPotentialBuilder(AbstractPotential):
             close_pbar = False
 
         pbar.reset()
+        N = 0
         for start, end, potential_slice in generator:
-            array[start:end] = copy_to_device(potential_slice.array, self._storage)
-            slice_thicknesses[start:end] = potential_slice.slice_thicknesses
-            pbar.update(end - start)
+            n = end - start
+            array[N:N + n] = copy_to_device(potential_slice.array, self._storage)
+            slice_thicknesses[N:N + n] = potential_slice.slice_thicknesses
+            pbar.update(n)
+            N += n
 
         pbar.refresh()
 
@@ -400,7 +403,7 @@ def superpose_deltas(positions, z, array):
     array[z, (rows + 1) % shape[0], (cols + 1) % shape[1]] += (rows - positions[:, 0]) * (cols - positions[:, 1])
 
 
-class CrystalPotential(AbstractPotential):
+class CrystalPotential(AbstractPotential, HasEventMixin):
     """
     Crystal potential object
 
@@ -440,7 +443,7 @@ class CrystalPotential(AbstractPotential):
             warnings.warn('the potential unit has frozen phonons, but "num_frozen_phonon_configs" is set to 1')
 
         self._cache = Cache(1)
-        self._changed = Event()
+        self._event = Event()
 
         gpts = (self._potential_unit.gpts[0] * self.repetitions[0],
                 self._potential_unit.gpts[1] * self.repetitions[1])
@@ -448,8 +451,8 @@ class CrystalPotential(AbstractPotential):
                   self._potential_unit.extent[1] * self.repetitions[1])
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=self._potential_unit.sampling, lock_extent=True)
-        self._grid.changed.register(self._changed.notify)
-        self._changed.register(cache_clear_callback(self._cache))
+        self._grid.observe(self._event.notify)
+        self._event.observe(cache_clear_callback(self._cache))
 
         super().__init__(precalculate=False)
 
@@ -551,7 +554,7 @@ class CrystalPotential(AbstractPotential):
                                           energy=energy)
 
 
-class Potential(AbstractPotentialBuilder, HasDeviceMixin):
+class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
     """
     Potential object.
 
@@ -597,9 +600,10 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin):
                  parametrization: str = 'lobato',
                  projection: str = 'finite',
                  cutoff_tolerance: float = 1e-3,
-                 device='cpu',
+                 device: str = 'cpu',
                  precalculate: bool = True,
-                 storage=None):
+                 z_periodic: bool = True,
+                 storage: str = None):
 
         self._cutoff_tolerance = cutoff_tolerance
         self._parametrization = parametrization
@@ -651,11 +655,13 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin):
             self._integrators = {}
             self._disc_indices = {}
 
-        self.grid.changed.register(grid_changed_callback)
-        self.changed = Event()
+        self.grid.observe(grid_changed_callback)
+        self._event = Event()
 
         if storage is None:
             storage = device
+
+        self._z_periodic = z_periodic
 
         super().__init__(precalculate=precalculate, device=device, storage=storage)
 
@@ -709,7 +715,7 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin):
         return self._slice_thickness
 
     @slice_thickness.setter
-    @watched_property('changed')
+    @watched_property('_event')
     def slice_thickness(self, value):
         self._slice_thickness = value
 
@@ -820,6 +826,8 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin):
             return self._generate_slices_infinite(first_slice=first_slice, last_slice=last_slice, max_batch=max_batch)
 
     def _generate_slices_infinite(self, first_slice=0, last_slice=None, max_batch=1) -> Generator:
+        # TODO : simplify method using the sliced atoms object
+
         xp = get_array_module_from_device(self._device)
 
         fft2_convolve = get_device_function(xp, 'fft2_convolve')
@@ -882,13 +890,19 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin):
             yield start, end, PotentialArray(array.real[:end - start], slice_thicknesses, extent=self.extent)
 
     def _generate_slices_finite(self, first_slice=0, last_slice=None, max_batch=1) -> Generator:
-        sliced_atoms = SlicedAtoms(self.atoms, self.slice_thickness)
-
         xp = get_array_module_from_device(self._device)
         interpolate_radial_functions = get_device_function(xp, 'interpolate_radial_functions')
 
         array = None
         unique = np.unique(self.atoms.numbers)
+
+        if (self._z_periodic) & (len(self.atoms) > 0):
+            max_cutoff = max(self.get_integrator(number).cutoff for number in unique)
+            atoms = pad_atoms(self.atoms, margin=max_cutoff, directions='z', in_place=False)
+        else:
+            atoms = self.atoms
+
+        sliced_atoms = SlicedAtoms(atoms, self.slice_thickness)
 
         for start, end in generate_batches(last_slice - first_slice, max_batch=max_batch, start=first_slice):
             if array is None:
