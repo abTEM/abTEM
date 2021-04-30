@@ -8,10 +8,10 @@ import numpy as np
 from ase import Atoms
 
 from abtem.base_classes import Grid, Accelerator, cache_clear_callback, Cache, cached_method, \
-    HasGridMixin, HasAcceleratorMixin, AntialiasFilter, Event
+    HasGridMixin, HasAcceleratorMixin, HasEventMixin, AntialiasFilter, Event
 from abtem.detect import AbstractDetector
 from abtem.device import get_array_module, get_device_function, asnumpy, get_array_module_from_device, \
-    copy_to_device, get_available_memory, HasDeviceMixin
+    copy_to_device, get_available_memory, HasDeviceMixin, get_device_from_array
 from abtem.measure import calibrations_from_grid, Measurement, block_zeroth_order_spot, probe_profile
 from abtem.potentials import Potential, AbstractPotential, AbstractPotentialBuilder
 from abtem.scan import AbstractScan, GridScan
@@ -46,6 +46,7 @@ class FresnelPropagator:
              complex_exponential(-(ky ** 2)[None] * np.pi * wavelength * dz))
 
         if tilt is not None:
+            # TODO : this is specimen tilt, beam tilt really be independent
             f *= (complex_exponential(-kx[:, None] * xp.tan(tilt[0] / 1e3) * dz * 2 * np.pi) *
                   complex_exponential(-ky[None] * xp.tan(tilt[1] / 1e3) * dz * 2 * np.pi))
 
@@ -53,7 +54,8 @@ class FresnelPropagator:
 
     def propagate(self,
                   waves: Union['Waves', 'SMatrixArray'],
-                  dz: float) -> Union['Waves', 'SMatrixArray']:
+                  dz: float,
+                  in_place: bool = True) -> Union['Waves', 'SMatrixArray']:
         """
         Propagate wave functions or scattering matrix.
 
@@ -63,12 +65,17 @@ class FresnelPropagator:
             Wave function or scattering matrix to propagate.
         dz : float
             Propagation distance [Å].
+        in_place : bool, optional
+            If True the wavefunction array will be modified in place. Default is True.
 
         Returns
         -------
         Waves or SMatrixArray object
             The propagated wave functions.
         """
+        if not in_place:
+            waves = waves.copy()
+
         fft2_convolve = get_device_function(get_array_module(waves.array), 'fft2_convolve')
 
         propagator_array = self._evaluate_propagator_array(waves.grid.gpts,
@@ -79,7 +86,7 @@ class FresnelPropagator:
                                                            get_array_module(waves.array))
 
         fft2_convolve(waves._array, propagator_array, overwrite_x=True)
-        waves._antialiasing_aperture = 2 / 3.
+        waves._antialiasing_aperture = (2 / 3.,) * 2
         return waves
 
 
@@ -123,12 +130,13 @@ def _multislice(waves: Union['Waves', 'SMatrixArray'],
     return waves
 
 
-class _WavesLike(HasGridMixin, HasAcceleratorMixin):
+class _WavesLike(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
 
     def __init__(self, tilt: Tuple[float, float] = None, antialiasing_aperture: float = None):
         self._tilt = tilt
         if antialiasing_aperture is None:
-            antialiasing_aperture = AntialiasFilter.cutoff
+            antialiasing_aperture = (AntialiasFilter.cutoff,)*2
+
         self._antialiasing_aperture = antialiasing_aperture
 
     @property
@@ -144,29 +152,66 @@ class _WavesLike(HasGridMixin, HasAcceleratorMixin):
         return self._antialiasing_aperture
 
     @property
-    def cutoff_scattering_angles(self):
-        kcut = 1 / max(self.sampling) / 2 * min(self.antialiasing_aperture, 1)
-        kcut = (np.ceil(2 * self.extent[0] * kcut) / (2 * self.extent[0]) * self.wavelength * 1e3,
-                np.ceil(2 * self.extent[1] * kcut) / (2 * self.extent[1]) * self.wavelength * 1e3)
+    def cutoff_scattering_angles(self) -> Tuple[float, float]:
+        interpolated_grid = self._interpolated_grid
+        #print(self.antialiasing_aperture)
+        kcut = [1 / d / 2 * a for d, a in zip(interpolated_grid.sampling, self.antialiasing_aperture)]
+        kcut = min(kcut)
+        kcut = (
+            np.ceil(2 * interpolated_grid.extent[0] * kcut) / (
+                    2 * interpolated_grid.extent[0]) * self.wavelength * 1e3,
+            np.ceil(2 * interpolated_grid.extent[1] * kcut) / (
+                    2 * interpolated_grid.extent[1]) * self.wavelength * 1e3)
         return kcut
 
     @property
-    def rectangle_cutoff_scattering_angles(self) -> float:
+    def rectangle_cutoff_scattering_angles(self) -> Tuple[float, float]:
         rolloff = AntialiasFilter.rolloff
-        kcut = (1 / max(self.sampling) / 2 * self.antialiasing_aperture - rolloff) / np.sqrt(2)
-        kcut = (np.floor(2 * self.extent[0] * kcut) / (2 * self.extent[0]) * self.wavelength * 1e3,
-                np.floor(2 * self.extent[1] * kcut) / (2 * self.extent[1]) * self.wavelength * 1e3)
+        interpolated_grid = self._interpolated_grid
+        # print(self.antialiasing_aperture / max(interpolated_grid.sampling))
+        # print(interpolated_grid.sampling)
+        kcut = [(a / (d * 2) - rolloff) / np.sqrt(2) for d, a in
+                zip(interpolated_grid.sampling, self.antialiasing_aperture)]
+
+        # print(self.antialiasing_aperture / max(interpolated_grid.sampling))
+        # print(self.antialiasing_aperture / max(interpolated_grid.sampling))
+        kcut = min(kcut)
+        kcut = (
+            np.floor(2 * interpolated_grid.extent[0] * kcut) / (
+                    2 * interpolated_grid.extent[0]) * self.wavelength * 1e3,
+            np.floor(2 * interpolated_grid.extent[1] * kcut) / (
+                    2 * interpolated_grid.extent[1]) * self.wavelength * 1e3)
         return kcut
 
     @property
     def angular_sampling(self):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
-        return tuple([1 / l * self.wavelength * 1e3 for l in self.extent])
+        return tuple([1 / l * self.wavelength * 1e3 for l in self._interpolated_grid.extent])
+
+    def get_spatial_frequencies(self):
+        xp = get_array_module_from_device(self.device)
+        kx, ky = spatial_frequencies(self.grid.gpts, self.grid.sampling)
+        # TODO : should beam tilt be added here?
+        kx = xp.asarray(kx)
+        ky = xp.asarray(ky)
+        return kx, ky
+
+    def get_scattering_angles(self):
+        kx, ky = self.get_spatial_frequencies()
+        alpha, phi = polar_coordinates(kx * self.wavelength, ky * self.wavelength)
+        return alpha, phi
+
+    @property
+    def _interpolated_grid(self):
+        return self.grid
 
     def downsampled_gpts(self, max_angle: Union[float, str]):
+        interpolated_grid = self._interpolated_grid
+
         if max_angle is None:
-            gpts = self.gpts
+            gpts = interpolated_grid.gpts
+
         elif isinstance(max_angle, str):
             if max_angle == 'limit':
                 cutoff_scattering_angle = self.cutoff_scattering_angles
@@ -180,11 +225,39 @@ class _WavesLike(HasGridMixin, HasAcceleratorMixin):
                     int(round(cutoff_scattering_angle[1] / angular_sampling[1] * 2)))
 
         elif isinstance(max_angle, Number):
-            gpts = tuple([int(2 * np.floor(max_angle / d)) + 1 for n, d in zip(self.gpts, self.angular_sampling)])
+            gpts = [int(2 * np.floor(max_angle / d)) + 1 for n, d in zip(interpolated_grid.gpts, self.angular_sampling)]
         else:
             raise RuntimeError()
 
-        return (min(gpts[0], self.gpts[0]), min(gpts[1], self.gpts[1]))
+        return (min(gpts[0], interpolated_grid.gpts[0]), min(gpts[1], interpolated_grid.gpts[1]))
+
+
+class _Scanable(_WavesLike):
+
+    def _validate_detectors(self, detectors):
+        if isinstance(detectors, AbstractDetector):
+            detectors = [detectors]
+        return detectors
+
+    def _validate_scan_measurements(self, detectors, scan, measurements=None):
+
+        if isinstance(measurements, Measurement):
+            if len(detectors) > 1:
+                raise ValueError('more than one detector, measurements must be mapping or None')
+
+            return {detectors[0]: measurements}
+
+        if measurements is None:
+            measurements = {}
+
+        for detector in detectors:
+            if detector not in measurements.keys():
+                measurements[detector] = detector.allocate_measurement(self, scan)
+            # if not set(measurements.keys()) == set(detectors):
+            #    raise ValueError('measurements dict keys does not match detectors')
+        # else:
+        #    raise ValueError('measurements must be Measurement or dict of AbtractDetector: Measurement')
+        return measurements
 
 
 class Waves(_WavesLike):
@@ -213,7 +286,7 @@ class Waves(_WavesLike):
                  sampling: Union[float, Sequence[float]] = None,
                  energy: float = None,
                  tilt: Sequence[float] = None,
-                 antialiasing_aperture: float = None):
+                 antialiasing_aperture: Tuple[float, float] = None):
 
         if len(array.shape) < 2:
             raise RuntimeError('Wave function array should be have 2 dimensions or more')
@@ -222,6 +295,7 @@ class Waves(_WavesLike):
 
         self._grid = Grid(extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True)
         self._accelerator = Accelerator(energy=energy)
+        self._device = get_device_from_array(self._array)
 
         super().__init__(tilt=tilt, antialiasing_aperture=antialiasing_aperture)
 
@@ -261,7 +335,13 @@ class Waves(_WavesLike):
         if gpts != self.gpts:
             array = fft_crop(array, self.array.shape[:-2] + gpts)
 
-        antialiasing_aperture = self.antialiasing_aperture * min(self.gpts[0] / gpts[0], self.gpts[1] / gpts[1])
+        # if max_angle in ('valid', 'limit'):
+        #    antialiasing_aperture = 1.
+        # else:
+        antialiasing_aperture = (self.antialiasing_aperture[0] * self.gpts[0] / gpts[0],
+                                 self.antialiasing_aperture[1] * self.gpts[1] / gpts[1])
+
+        # print(antialiasing_aperture)
 
         if return_fourier_space:
             return Waves(array, extent=self.extent, energy=self.energy, antialiasing_aperture=antialiasing_aperture)
@@ -303,6 +383,23 @@ class Waves(_WavesLike):
 
         return measurement
 
+    def allocate_measurement(self, fourier_space=False):
+        """
+        Allocate a measurement object
+
+        Parameters
+        ----------
+        fourier_space
+
+        Returns
+        -------
+
+        """
+        calibrations = calibrations_from_grid(self.grid.gpts, self.grid.sampling, ['x', 'y'])
+        calibrations = (None,) * (len(self.array.shape) - 2) + calibrations
+        array = np.zeros_like(self.array, dtype=np.float32)
+        return Measurement(array, calibrations)
+
     def apply_ctf(self, ctf: CTF = None, in_place=False, **kwargs):
         """
         Apply the aberrations defined by a CTF object to wave function.
@@ -312,7 +409,8 @@ class Waves(_WavesLike):
         ctf : CTF
             Contrast Transfer Function object to be applied.
         kwargs :
-            Provide the aberration coefficients as keyword arguments.
+            Provide the parameters of the contrast transfer function as keyword arguments. See the documentation for the
+            CTF object.
 
         Returns
         -------
@@ -320,7 +418,6 @@ class Waves(_WavesLike):
             The wave functions with aberrations applied.
         """
 
-        xp = get_array_module(self.array)
         fft2_convolve = get_device_function(get_array_module(self.array), 'fft2_convolve')
 
         if ctf is None:
@@ -334,8 +431,7 @@ class Waves(_WavesLike):
         self.accelerator.check_is_defined()
         self.grid.check_is_defined()
 
-        kx, ky = spatial_frequencies(self.grid.gpts, self.grid.sampling)
-        alpha, phi = polar_coordinates(xp.asarray(kx * self.wavelength), xp.asarray(ky * self.wavelength))
+        alpha, phi = self.get_scattering_angles()
         kernel = ctf.evaluate(alpha, phi)
 
         return self.__class__(fft2_convolve(self.array, kernel, overwrite_x=in_place),
@@ -388,7 +484,7 @@ class Waves(_WavesLike):
                 result = self.__class__(out_array,
                                         extent=self.extent,
                                         energy=self.energy,
-                                        antialiasing_aperture=2 / 3.)
+                                        antialiasing_aperture=(2 / 3.,) * 2)
 
             tds_pbar = ProgressBar(total=n, desc='TDS', disable=(not pbar) or (n == 1))
             multislice_pbar = ProgressBar(total=len(potential), desc='Multislice', disable=not pbar)
@@ -559,7 +655,7 @@ class PlaneWave(_WavesLike, HasDeviceMixin):
         return copy(self)
 
 
-class Probe(_WavesLike, HasDeviceMixin):
+class Probe(_Scanable, HasDeviceMixin, HasEventMixin):
     """
     Probe wavefunction object
 
@@ -610,15 +706,15 @@ class Probe(_WavesLike, HasDeviceMixin):
         self._accelerator = self._ctf._accelerator
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
-        self.changed = Event()
+        self._event = Event()
 
-        self._ctf.changed.register(self.changed.notify)
-        self._grid.changed.register(self.changed.notify)
-        self._accelerator.changed.register(self.changed.notify)
+        self._ctf.observe(self.event.notify)
+        self._grid.observe(self.event.notify)
+        self._accelerator.observe(self.event.notify)
 
         self._device = device
         self._ctf_cache = Cache(1)
-        self.changed.register(cache_clear_callback(self._ctf_cache))
+        self.observe(cache_clear_callback(self._ctf_cache))
         super().__init__(tilt=tilt)
 
     @property
@@ -632,9 +728,9 @@ class Probe(_WavesLike, HasDeviceMixin):
         return fourier_translation_operator(positions, self.gpts)
 
     @cached_method('_ctf_cache')
-    def _evaluate_ctf(self, xp):
-        kx, ky = spatial_frequencies(self.grid.gpts, self.grid.sampling)
-        alpha, phi = polar_coordinates(xp.asarray(kx * self.wavelength), xp.asarray(ky * self.wavelength))
+    def _evaluate_ctf(self):
+        alpha, phi = self.get_scattering_angles()
+
         return self._ctf.evaluate(alpha, phi)
 
     def build(self, positions: Sequence[Sequence[float]] = None) -> Waves:
@@ -665,9 +761,9 @@ class Probe(_WavesLike, HasDeviceMixin):
         if len(positions.shape) == 1:
             positions = xp.expand_dims(positions, axis=0)
 
-        array = ifft2(self._evaluate_ctf(xp) * self._fourier_translation_operator(positions), overwrite_x=True)
+        array = ifft2(self._evaluate_ctf() * self._fourier_translation_operator(positions), overwrite_x=True)
 
-        array = array / np.sqrt((xp.abs(array[0]) ** 2).sum()) / np.sqrt(np.prod(array.shape[1:]))
+        array = array / xp.sqrt((xp.abs(array[0]) ** 2).sum()) / xp.sqrt(np.prod(array.shape[1:]))
 
         return Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt)
 
@@ -695,7 +791,7 @@ class Probe(_WavesLike, HasDeviceMixin):
 
         self.grid.match(potential)
         exit_probes = _multislice(self.build(positions), potential, None, pbar)
-        exit_probes._antialiasing_aperture = 2 / 3.
+        exit_probes._antialiasing_aperture = (2 / 3.,) * 2
         return exit_probes
 
     def _estimate_max_batch(self):
@@ -704,6 +800,7 @@ class Probe(_WavesLike, HasDeviceMixin):
         return min(int(available_memory * .4 / memory_per_wave), 32)
 
     def _generate_probes(self, scan, potential, max_batch, pbar):
+
         potential_pbar = ProgressBar(total=len(potential), desc='Potential',
                                      disable=(not pbar) or (not potential._precalculate))
 
@@ -766,35 +863,13 @@ class Probe(_WavesLike, HasDeviceMixin):
         self.grid.match(potential.grid)
         self.grid.check_is_defined()
 
-        if isinstance(detectors, AbstractDetector):
-            detectors = [detectors]
+        detectors = self._validate_detectors(detectors)
+        measurements = self._validate_scan_measurements(detectors, scan, measurements)
 
-        if measurements is None:
-            measurements = {}
-        elif isinstance(measurements, Measurement):
-            if len(detectors) == 1:
-                measurements = {detectors[0]: measurements}
-            else:
-                raise ValueError('measurements must be provided as dict when more than one detector provided')
-        elif isinstance(measurements, dict):
-            if not set(measurements.keys()) == set(detectors):
-                raise ValueError('measurements dict keys does not match detectors')
-        else:
-            raise ValueError('measurements must be Measurement or dict of AbtractDetector: Measurement')
-
-        probe_generator = self._generate_probes(scan, potential, max_batch, pbar)
-
-        for indices, exit_probes in probe_generator:
-
-            for detector in detectors:
-                new_entries = detector.detect(exit_probes)
-                new_entries /= potential.num_frozen_phonon_configs
-
-                try:
-                    scan.insert_new_measurement(measurements[detector], indices, new_entries)
-                except KeyError:
-                    measurements[detector] = detector.allocate_measurement(exit_probes, scan)
-                    scan.insert_new_measurement(measurements[detector], indices, new_entries)
+        for indices, exit_probes in self._generate_probes(scan, potential, max_batch, pbar):
+            for detector, measurement in measurements.items():
+                new_entries = detector.detect(exit_probes) / potential.num_frozen_phonon_configs
+                scan.insert_new_measurement(measurement, indices, new_entries)
 
         measurements = list(measurements.values())
         if len(measurements) == 1:
@@ -807,26 +882,33 @@ class Probe(_WavesLike, HasDeviceMixin):
         measurement = self.build((self.extent[0] / 2, self.extent[1] / 2)).intensity()
         return probe_profile(measurement, angle=angle)
 
-    def interact(self, sliders=None, profile=False, throttling=False):
-        from abtem.visualize.bqplot import show_measurement_1d, show_measurement_2d
+    def interact(self, sliders=None, profile=False, throttling=0.01):
         from abtem.visualize.widgets import quick_sliders, throttle
+        from abtem.visualize.interactive.apps import MeasurementView1d, MeasurementView2d
         import ipywidgets as widgets
 
         if profile:
-            figure, callback = show_measurement_1d(lambda: [self.profile()])
+            view = MeasurementView1d()
+
+            def callback(*args):
+                view.measurement = self.profile()
         else:
-            figure, callback = show_measurement_2d(lambda: self.build().intensity())
+            view = MeasurementView2d()
+
+            def callback(*args):
+                view.measurement = self.build().intensity()[0]
 
         if throttling:
             callback = throttle(throttling)(callback)
 
-        self.changed.register(callback)
+        self.observe(callback)
+        callback()
 
         if sliders:
             sliders = quick_sliders(self.ctf, **sliders)
-            return widgets.HBox([figure, widgets.VBox(sliders)])
+            return widgets.HBox([view.figure, widgets.VBox(sliders)])
         else:
-            return figure
+            return view.figure
 
     def __copy__(self):
         return self.__class__(gpts=self.gpts,
@@ -853,7 +935,7 @@ class Probe(_WavesLike, HasDeviceMixin):
         return self.build((self.extent[0] / 2, self.extent[1] / 2)).intensity().show(**kwargs)
 
 
-class SMatrixArray(_WavesLike, HasDeviceMixin):
+class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
     """
     Scattering matrix array object.
 
@@ -868,8 +950,6 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
         The angular cutoff of the plane wave expansion [mrad].
     energy : float
         Electron energy [eV].
-    interpolation : one or two int, optional
-        Interpolation factor.
     k : 2d array
         The spatial frequencies of each plane in the plane wave expansion.
     ctf : CTF object, optional
@@ -883,8 +963,8 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
     periodic : bool, optional
         Should the scattering matrix array be considered periodic. This may be false if the scattering matrix is a
         cropping of a larger scattering matrix.
-    cropped_shape : two int, optional
-        The shape of the probe window after Fourier interpolation. This may differ from the shape determined by dividing
+    interpolated_gpts : two int, optional
+        The gpts of the probe window after Fourier interpolation. This may differ from the shape determined by dividing
         each side by the interpolation is the scattering matrix array is cropped from a larger scattering matrix.
     antialiasing_aperture : float, optional
         Assumed antialiasing aperture as a fraction of the real space Nyquist frequency. Default is 2/3.
@@ -897,15 +977,14 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
                  expansion_cutoff: float,
                  energy: float,
                  k: np.ndarray,
-                 interpolation: int = None,
                  ctf: CTF = None,
                  extent: Union[float, Sequence[float]] = None,
                  sampling: Union[float, Sequence[float]] = None,
                  tilt: Tuple[float, float] = None,
                  periodic: bool = True,
                  offset: Sequence[float] = None,
-                 cropped_shape: Tuple[int, int] = None,
-                 antialiasing_aperture: float = None,
+                 interpolated_gpts: Tuple[int, int] = None,
+                 antialiasing_aperture: Tuple[float, float] = None,
                  device: str = 'cpu'):
 
         if ctf is None:
@@ -921,11 +1000,11 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
         self._accelerator = self._ctf._accelerator
 
         self._grid = Grid(extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True)
-        self.changed = Event()
+        self._event = Event()
 
-        self._ctf.changed.register(self.changed.notify)
-        self._grid.changed.register(self.changed.notify)
-        self._accelerator.changed.register(self.changed.notify)
+        self._ctf.observe(self.event.notify)
+        self._grid.event.observe(self.event.notify)
+        self._accelerator.event.observe(self.event.notify)
 
         self._device = device
 
@@ -940,11 +1019,7 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
             offset = (0, 0)
 
         self._offset = np.array(offset, dtype=np.int)
-
-        if (cropped_shape is None) & (interpolation is not None):
-            cropped_shape = (self.gpts[0] // interpolation, self.gpts[1] // interpolation)
-
-        self._cropped_shape = cropped_shape
+        self._interpolated_gpts = interpolated_gpts
 
         super().__init__(tilt=tilt, antialiasing_aperture=antialiasing_aperture)
 
@@ -977,13 +1052,13 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
         return self._periodic
 
     @property
-    def cropped_grid(self):
-        return Grid(gpts=self.cropped_shape, sampling=self.sampling, lock_gpts=True)
+    def interpolated_gpts(self) -> Tuple[int, int]:
+        """The grid of the interpolated scattering matrix."""
+        return self._interpolated_gpts
 
     @property
-    def cropped_shape(self) -> Tuple[int, int]:
-        """The grid of the interpolated scattering matrix."""
-        return self._cropped_shape
+    def _interpolated_grid(self):
+        return Grid(gpts=self._interpolated_gpts, sampling=self.sampling)
 
     @property
     def offset(self):
@@ -1010,10 +1085,10 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
             downsampled = partial_s_matrix.downsample(max_angle)
             new_array[start:end] = copy_to_device(downsampled.array, xp)
 
-        if self.cropped_shape == self.gpts:
-            cropped_shape = gpts
+        if self.interpolated_gpts == self.gpts:
+            interpolated_gpts = gpts
         else:
-            cropped_shape = tuple(n // (self.gpts[i] // self.cropped_shape[i]) for i, n in enumerate(gpts))
+            interpolated_gpts = tuple(n // (self.gpts[i] // self.interpolated_gpts[i]) for i, n in enumerate(gpts))
 
         antialiasing_aperture = downsampled.antialiasing_aperture
 
@@ -1025,7 +1100,7 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
                               energy=self.energy,
                               periodic=self.periodic,
                               offset=self._offset,
-                              cropped_shape=cropped_shape,
+                              interpolated_gpts=interpolated_gpts,
                               antialiasing_aperture=antialiasing_aperture,
                               device=self.device)
 
@@ -1039,14 +1114,13 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
 
         return self.__class__(array=new_array,
                               expansion_cutoff=self._expansion_cutoff,
-                              interpolation=1,
                               k=self.k.copy(),
                               ctf=self.ctf,
                               sampling=self.sampling,
                               energy=self.energy,
                               periodic=False,
                               offset=crop_corner,
-                              cropped_shape=self.cropped_shape,
+                              interpolated_gpts=self.interpolated_gpts,
                               device=self.device)
 
     def _max_batch_expansion(self):
@@ -1056,7 +1130,7 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
 
     def _max_batch_probes(self):
         max_batch_plane_waves = self._max_batch_expansion()
-        memory_per_wave = 2 * 4 * self.cropped_shape[0] * self.cropped_shape[1]
+        memory_per_wave = 2 * 4 * self.interpolated_gpts[0] * self.interpolated_gpts[1]
         memory_per_plane_wave_batch = 2 * 4 * self.gpts[0] * self.gpts[1] * max_batch_plane_waves
         available_memory = .2 * get_available_memory(self._device) - memory_per_plane_wave_batch
         return max(min(int(available_memory / memory_per_wave), 1024), 1)
@@ -1083,9 +1157,11 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
 
             if xp != get_array_module(self.array):
                 yield start, end, Waves(copy_to_device(self._array[start:end], xp),
-                                        extent=self.extent, energy=self.energy)
+                                        extent=self.extent, energy=self.energy,
+                                        antialiasing_aperture=self.antialiasing_aperture)
             else:
-                yield start, end, Waves(self._array[start:end], extent=self.extent, energy=self.energy)
+                yield start, end, Waves(self._array[start:end], extent=self.extent, energy=self.energy,
+                                        antialiasing_aperture=self.antialiasing_aperture)
 
             n += batch_size
             pbar.update(batch_size)
@@ -1137,7 +1213,7 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
             _multislice(partial_s_matrix, potential, propagator=propagator, pbar=multislice_pbar)
             self._array[start: end] = copy_to_device(partial_s_matrix.array, get_array_module(self._array))
 
-        self._antialiasing_aperture = 2 / 3.
+        self._antialiasing_aperture = (2 / 3.,) * 2
 
         if close_pbar:
             multislice_pbar.close()
@@ -1161,9 +1237,9 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
         return self._get_translation_coefficients(positions) * self._get_ctf_coefficients()
 
     def _get_requisite_crop(self, positions: Sequence[float], return_per_position: bool = False):
-        offset = (self.cropped_shape[0] // 2, self.cropped_shape[1] // 2)
+        offset = (self.interpolated_gpts[0] // 2, self.interpolated_gpts[1] // 2)
         corners = np.rint(np.array(positions) / self.sampling - offset).astype(np.int)
-        upper_corners = corners + np.asarray(self.cropped_shape)
+        upper_corners = corners + np.asarray(self.interpolated_gpts)
 
         crop_corner = (np.min(corners[:, 0]).item(), np.min(corners[:, 1]).item())
 
@@ -1206,9 +1282,12 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
         if len(positions.shape) == 1:
             positions = np.expand_dims(positions, axis=0)
 
+        if positions.shape[1] != 2:
+            raise ValueError()
+
         coefficients = self._get_coefficients(positions)
 
-        if self.cropped_shape != self.gpts:
+        if self.interpolated_gpts != self.gpts:
             crop_corner, size, corners = self._get_requisite_crop(positions, return_per_position=True)
 
             if self._offset is not None:
@@ -1218,7 +1297,7 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
             array = copy_to_device(periodic_crop(self.array, crop_corner, size), device=self._device)
             window = xp.tensordot(coefficients, array, axes=[(1,), (0,)])
             corners -= crop_corner
-            window = batch_crop(window, corners, self.cropped_shape)
+            window = batch_crop(window, corners, self.interpolated_gpts)
 
         elif max_batch_expansion <= len(self):
             window = xp.zeros((len(positions),) + self.gpts, dtype=xp.complex64)
@@ -1246,6 +1325,7 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
     def scan(self,
              scan: AbstractScan,
              detectors: Sequence[AbstractDetector],
+             measurements: Union[Measurement, Dict[AbstractDetector, Measurement]] = None,
              max_batch_probes: int = None,
              max_batch_expansion: int = None,
              pbar: Union[ProgressBar, bool] = True):
@@ -1274,21 +1354,16 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
 
         self.grid.check_is_defined()
 
-        if isinstance(detectors, AbstractDetector):
-            detectors = [detectors]
+        detectors = self._validate_detectors(detectors)
+        measurements = self._validate_scan_measurements(detectors, scan, measurements)
 
         if isinstance(pbar, bool):
             pbar = ProgressBar(total=len(scan), desc='Scan', disable=not pbar)
 
-        measurements = {}
         for indices, exit_probes in self._generate_probes(scan, max_batch_probes, max_batch_expansion):
             for detector in detectors:
                 new_measurement = detector.detect(exit_probes)
-                try:
-                    scan.insert_new_measurement(measurements[detector], indices, new_measurement)
-                except KeyError:
-                    measurements[detector] = detector.allocate_measurement(exit_probes, scan)
-                    scan.insert_new_measurement(measurements[detector], indices, new_measurement)
+                scan.insert_new_measurement(measurements[detector], indices, new_measurement)
 
             pbar.update(len(indices))
 
@@ -1308,7 +1383,7 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
                               ctf=self.ctf.copy(),
                               extent=self.extent,
                               offset=self.offset,
-                              cropped_shape=self.cropped_shape,
+                              interpolated_gpts=self.interpolated_gpts,
                               energy=self.energy,
                               antialiasing_aperture=self.antialiasing_aperture,
                               device=self.device)
@@ -1320,7 +1395,7 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
                               ctf=self.ctf.copy(),
                               extent=self.extent,
                               offset=self.offset,
-                              cropped_shape=self.cropped_shape,
+                              interpolated_gpts=self.interpolated_gpts,
                               energy=self.energy,
                               antialiasing_aperture=self.antialiasing_aperture,
                               device=self.device)
@@ -1330,7 +1405,7 @@ class SMatrixArray(_WavesLike, HasDeviceMixin):
         return copy(self)
 
 
-class SMatrix(_WavesLike, HasDeviceMixin):
+class SMatrix(_Scanable, HasDeviceMixin, HasEventMixin):
     """
     Scattering matrix builder class
 
@@ -1364,8 +1439,8 @@ class SMatrix(_WavesLike, HasDeviceMixin):
     """
 
     def __init__(self,
-                 expansion_cutoff: float,
                  energy: float,
+                 expansion_cutoff: float = None,
                  interpolation: int = 1,
                  ctf: CTF = None,
                  extent: Union[float, Sequence[float]] = None,
@@ -1380,7 +1455,6 @@ class SMatrix(_WavesLike, HasDeviceMixin):
             raise ValueError('Interpolation factor must be int')
 
         self._interpolation = interpolation
-        self._expansion_cutoff = expansion_cutoff
 
         if ctf is None:
             ctf = CTF(**kwargs)
@@ -1391,18 +1465,27 @@ class SMatrix(_WavesLike, HasDeviceMixin):
         if (ctf.energy != energy):
             raise RuntimeError
 
+        if (expansion_cutoff is None) and ('semiangle_cutoff' in kwargs):
+            expansion_cutoff = kwargs['semiangle_cutoff']
+
+        if expansion_cutoff is None:
+            raise ValueError('')
+
+        self._expansion_cutoff = expansion_cutoff
+
         self._ctf = ctf
         self._accelerator = self._ctf._accelerator
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
 
-        self.changed = Event()
+        self._event = Event()
 
-        self._ctf.changed.register(self.changed.notify)
-        self._grid.changed.register(self.changed.notify)
-        self._accelerator.changed.register(self.changed.notify)
+        self._ctf.observe(self.event.notify)
+        self._grid.observe(self.event.notify)
+        self._accelerator.observe(self.event.notify)
 
         self._device = device
+
         if storage is None:
             storage = device
 
@@ -1438,7 +1521,11 @@ class SMatrix(_WavesLike, HasDeviceMixin):
         self._interpolation = value
 
     @property
-    def interpolated_grid(self) -> Grid:
+    def interpolated_gpts(self):
+        return tuple(n // self.interpolation for n in self.gpts)
+
+    @property
+    def _interpolated_grid(self) -> Grid:
         """The grid of the interpolated probe wave functions."""
         interpolated_gpts = tuple(n // self.interpolation for n in self.gpts)
         return Grid(gpts=interpolated_gpts, sampling=self.sampling, lock_gpts=True)
@@ -1525,6 +1612,7 @@ class SMatrix(_WavesLike, HasDeviceMixin):
              scan: AbstractScan,
              detectors: Sequence[AbstractDetector],
              potential: Union[Atoms, AbstractPotential],
+             measurements: Union[Measurement, Dict[AbstractDetector, Measurement]] = None,
              max_batch_probes: int = None,
              max_batch_expansion: int = None,
              pbar: bool = True) -> Union[Measurement, Sequence[Measurement]]:
@@ -1555,8 +1643,8 @@ class SMatrix(_WavesLike, HasDeviceMixin):
         self.grid.match(potential.grid)
         self.grid.check_is_defined()
 
-        if isinstance(detectors, AbstractDetector):
-            detectors = [detectors]
+        detectors = self._validate_detectors(detectors)
+        measurements = self._validate_scan_measurements(detectors, scan, measurements)
 
         probe_generator = self._generate_probes(scan,
                                                 potential,
@@ -1564,17 +1652,10 @@ class SMatrix(_WavesLike, HasDeviceMixin):
                                                 max_batch_expansion=max_batch_expansion,
                                                 pbar=pbar)
 
-        measurements = {}
         for indices, exit_probes in probe_generator:
             for detector in detectors:
-                new_measurement = detector.detect(exit_probes)
-                new_measurement /= potential.num_frozen_phonon_configs
-
-                try:
-                    scan.insert_new_measurement(measurements[detector], indices, new_measurement)
-                except KeyError:
-                    measurements[detector] = detector.allocate_measurement(exit_probes, scan)
-                    scan.insert_new_measurement(measurements[detector], indices, new_measurement)
+                new_measurement = detector.detect(exit_probes) / potential.num_frozen_phonon_configs
+                scan.insert_new_measurement(measurements[detector], indices, new_measurement)
 
         measurements = list(measurements.values())
         if len(measurements) == 1:
@@ -1629,14 +1710,14 @@ class SMatrix(_WavesLike, HasDeviceMixin):
                                       complex_exponential(-2 * np.pi * k[i, 1, None, None] * y[None, :]),
                                       self._storage)
 
-        cropped_shape = (self.gpts[0] // self.interpolation, self.gpts[1] // self.interpolation)
+        interpolated_gpts = (self.gpts[0] // self.interpolation, self.gpts[1] // self.interpolation)
 
-        probe = (storage_xp.abs(array.sum(0)) ** 2)[:cropped_shape[0], :cropped_shape[1]]
-        array /= storage_xp.sqrt(probe.sum()) * storage_xp.sqrt(cropped_shape[0] * cropped_shape[1])
+        probe = (storage_xp.abs(array.sum(0)) ** 2)[:interpolated_gpts[0], :interpolated_gpts[1]]
+        array /= storage_xp.sqrt(probe.sum()) * storage_xp.sqrt(interpolated_gpts[0] * interpolated_gpts[1])
 
         return SMatrixArray(array,
                             expansion_cutoff=self.expansion_cutoff,
-                            interpolation=self.interpolation,
+                            interpolated_gpts=self.interpolated_gpts,
                             extent=self.extent,
                             energy=self.energy,
                             tilt=self.tilt,
@@ -1659,7 +1740,7 @@ class SMatrix(_WavesLike, HasDeviceMixin):
             figure, callback = show_measurement_2d(lambda: self.build().collapse((self.extent[0] / 2,
                                                                                   self.extent[1] / 2)).intensity())
 
-        self.changed.register(callback)
+        self.observe(callback)
 
         if sliders:
             sliders = quick_sliders(self.ctf, **sliders)
