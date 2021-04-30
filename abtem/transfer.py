@@ -4,7 +4,7 @@ from typing import Mapping, Union
 
 import numpy as np
 
-from abtem.base_classes import HasAcceleratorMixin, Accelerator, watched_method, watched_property, Event
+from abtem.base_classes import HasAcceleratorMixin, HasEventMixin, Accelerator, watched_method, watched_property, Event
 from abtem.device import get_array_module, get_device_function
 from abtem.measure import Measurement, Calibration
 from abtem.utils import energy2wavelength, spatial_frequencies, polar_coordinates
@@ -23,7 +23,7 @@ polar_aliases = {'defocus': 'C10', 'astigmatism': 'C12', 'astigmatism_angle': 'p
                  'C5': 'C50'}
 
 
-class CTF(HasAcceleratorMixin):
+class CTF(HasAcceleratorMixin, HasEventMixin):
     """
     Contrast transfer function object
 
@@ -72,10 +72,10 @@ class CTF(HasAcceleratorMixin):
             if (key not in polar_symbols) and (key not in polar_aliases.keys()):
                 raise ValueError('{} not a recognized parameter'.format(key))
 
-        self.changed = Event()
+        self._event = Event()
 
         self._accelerator = Accelerator(energy=energy)
-        self._accelerator.changed.register(self.changed.notify)
+        self._accelerator.observe(self.event.notify)
 
         self._semiangle_cutoff = semiangle_cutoff
         self._rolloff = rolloff
@@ -98,7 +98,7 @@ class CTF(HasAcceleratorMixin):
             def setter(self, value):
                 old = getattr(self, key)
                 self._parameters[key] = value
-                self.changed.notify(**{'notifier': self, 'property_name': key, 'change': old != value})
+                self.event.notify({'notifier': self, 'name': key, 'change': old != value})
 
             return property(getter, setter)
 
@@ -133,7 +133,7 @@ class CTF(HasAcceleratorMixin):
         return self._semiangle_cutoff
 
     @semiangle_cutoff.setter
-    @watched_property('changed')
+    @watched_property('_event')
     def semiangle_cutoff(self, value: float):
         self._semiangle_cutoff = value
 
@@ -143,7 +143,7 @@ class CTF(HasAcceleratorMixin):
         return self._rolloff
 
     @rolloff.setter
-    @watched_property('changed')
+    @watched_property('_event')
     def rolloff(self, value: float):
         self._rolloff = value
 
@@ -153,7 +153,7 @@ class CTF(HasAcceleratorMixin):
         return self._focal_spread
 
     @focal_spread.setter
-    @watched_property('changed')
+    @watched_property('_event')
     def focal_spread(self, value: float):
         """The angular spread [mrad]."""
         self._focal_spread = value
@@ -163,7 +163,7 @@ class CTF(HasAcceleratorMixin):
         return self._angular_spread
 
     @angular_spread.setter
-    @watched_property('changed')
+    @watched_property('_event')
     def angular_spread(self, value: float):
         self._angular_spread = value
 
@@ -173,11 +173,11 @@ class CTF(HasAcceleratorMixin):
         return self._gaussian_spread
 
     @gaussian_spread.setter
-    @watched_property('changed')
+    @watched_property('_event')
     def gaussian_spread(self, value: float):
         self._gaussian_spread = value
 
-    @watched_method('changed')
+    @watched_method('_event')
     def set_parameters(self, parameters: dict):
         """
         Set the phase of the phase aberration.
@@ -364,26 +364,27 @@ class CTF(HasAcceleratorMixin):
         return profiles
 
     def apply(self, waves, interact=False, sliders=None, throttling=0.):
-        from abtem.visualize.bqplot import show_measurement_2d
-        from abtem.visualize.widgets import quick_sliders, throttle
-        import ipywidgets as widgets
-
         if interact:
+            from abtem.visualize.interactive.apps import ArrayView2d, MeasurementView2d
+            from abtem.visualize.widgets import quick_sliders, throttle
+            import ipywidgets as widgets
+
             image_waves = waves.copy()
+            array_view = MeasurementView2d(waves.apply_ctf(self).intensity())
 
-            def update():
-                image_waves._array[:] = waves.apply_ctf(self).array
-                return image_waves.intensity()
-
-            figure, callback = show_measurement_2d(update)
+            def update(*args):
+                image_waves.array[:] = waves.apply_ctf(self).array
+                array_view.measurement = image_waves.intensity()
 
             if throttling:
-                callback = throttle(throttling)(callback)
+                update = throttle(throttling)(update)
 
-            self.changed.register(callback)
+            self.observe(update)
+
             if sliders:
                 sliders = quick_sliders(self, **sliders)
-                figure = widgets.HBox([figure, widgets.VBox(sliders)])
+                figure = widgets.HBox([array_view.canvas.figure, widgets.VBox(sliders)])
+
             return image_waves, figure
         else:
             if sliders:
@@ -392,27 +393,28 @@ class CTF(HasAcceleratorMixin):
             return waves.apply_ctf(self)
 
     def interact(self, max_semiangle: float = None, phi: float = 0., sliders=None, throttling=False):
-        import bqplot.pyplot as plt
-        from abtem.visualize.bqplot import show_measurement_1d
-        from abtem.visualize.widgets import quick_sliders, throttle
+        from abtem.visualize.interactive.utils import quick_sliders, throttle
+        from abtem.visualize.interactive.apps import MeasurementView1d
         import ipywidgets as widgets
 
-        figure = plt.figure(fig_margin={'top': 0, 'bottom': 50, 'left': 50, 'right': 0})
-        figure.layout.height = '250px'
-        figure.layout.width = '300px'
+        view = MeasurementView1d()
 
-        _, callback = show_measurement_1d(lambda: self.profiles(max_semiangle, phi).values(), figure)
+        def callback(*args):
+            profiles = self.profiles(max_semiangle, phi)
+            view.measurement = profiles['ctf']
 
         if throttling:
             callback = throttle(throttling)(callback)
 
-        self.changed.register(callback)
+        self.observe(callback)
+
+        callback()
 
         if sliders:
             sliders = quick_sliders(self, **sliders)
-            return widgets.HBox([figure, widgets.VBox(sliders)])
+            return widgets.HBox([view.figure, widgets.VBox(sliders)])
         else:
-            return figure
+            return view.figure
 
     def show(self, max_semiangle: float = None, phi: float = 0, ax=None, **kwargs):
         """
