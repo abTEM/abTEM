@@ -161,7 +161,6 @@ class GPAWPotential(AbstractPotentialBuilder):
 
         self._voxel_height = thickness / nz
         self._slice_vertical_voxels = subdivide_into_batches(nz, num_slices)
-
         # TODO: implement support for non-periodic extent
 
         self._origin = (0., 0.)
@@ -202,7 +201,6 @@ class GPAWPotential(AbstractPotentialBuilder):
         return self._slice_vertical_voxels[i] * self._voxel_height
 
     def generate_slices(self, first_slice=0, last_slice=None, max_batch=1):
-
         interpolate_radial_functions = get_device_function(np, 'interpolate_radial_functions')
 
         if last_slice is None:
@@ -214,6 +212,14 @@ class GPAWPotential(AbstractPotentialBuilder):
         atoms = self._calculator.atoms.copy()
         atoms.set_tags(range(len(atoms)))
         atoms = orthogonalize_cell(atoms)
+
+        cutoffs = {}
+        for number in np.unique(atoms.numbers):
+            indices = np.where(atoms.numbers == number)[0]
+            r = self._calculator.density.setups[indices[0]].xc_correction.rgd.r_g[1:] * units.Bohr
+            cutoffs[number] = r[-1]
+
+        atoms = pad_atoms(atoms, margin=max(cutoffs.values()), directions='z', in_place=True)
 
         indices_by_number = {number: np.where(atoms.numbers == number)[0] for number in np.unique(atoms.numbers)}
 
@@ -233,9 +239,7 @@ class GPAWPotential(AbstractPotentialBuilder):
                 if len(slice_atoms) == 0:
                     continue
 
-                r = self._calculator.density.setups[indices[0]].xc_correction.rgd.r_g[1:] * units.Bohr
-                cutoff = r[-1]
-
+                cutoff = cutoffs[number]
                 margin = np.int(np.ceil(cutoff / np.min(self.sampling)))
                 rows, cols = _disc_meshgrid(margin)
                 disc_indices = np.hstack((rows[:, None], cols[:, None]))
@@ -243,12 +247,13 @@ class GPAWPotential(AbstractPotentialBuilder):
                 slice_atoms = slice_atoms[(slice_atoms.positions[:, 2] > a - cutoff) *
                                           (slice_atoms.positions[:, 2] < b + cutoff)]
 
-                slice_atoms = pad_atoms(slice_atoms, cutoff)
+                slice_atoms = pad_atoms(slice_atoms, margin=cutoff, directions='xy', )
 
                 R = np.geomspace(np.min(self.sampling) / 2, cutoff, int(np.ceil(cutoff / np.min(self.sampling))) * 10)
 
                 vr = np.zeros((len(slice_atoms), len(R)), np.float32)
                 dvdr = np.zeros((len(slice_atoms), len(R)), np.float32)
+                # TODO : improve speed of this
                 for j, atom in enumerate(slice_atoms):
                     r, v = get_paw_corrections(atom.tag, self._calculator, self._core_size)
 
