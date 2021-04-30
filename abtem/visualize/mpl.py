@@ -3,12 +3,13 @@ from collections.abc import Iterable
 
 import matplotlib.pyplot as plt
 import numpy as np
-from ase.data import covalent_radii
+from ase.data import covalent_radii, chemical_symbols
 from ase.data.colors import jmol_colors
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import Circle
 from abtem.visualize.utils import format_label
 from typing import Union, Tuple
+from matplotlib.lines import Line2D
 
 #: Array to facilitate the display of cell boundaries.
 _cube = np.array([[[0, 0, 0], [0, 0, 1]],
@@ -43,7 +44,8 @@ def _plane2axes(plane):
 
 
 def show_atoms(atoms, repeat: Tuple[int, int] = (1, 1), scans=None, plane: Union[Tuple[float, float], str] = 'xy',
-               ax=None, scale_atoms: float = .5, title: str = None, numbering: bool = False, figsize=None):
+               ax=None, scale_atoms: float = .5, title: str = None, numbering: bool = False, figsize=None,
+               legend=False):
     """
     Show atoms function
 
@@ -74,7 +76,7 @@ def show_atoms(atoms, repeat: Tuple[int, int] = (1, 1), scans=None, plane: Union
     atoms *= repeat + (1,)
 
     if isinstance(plane, str):
-        ax = _show_atoms_2d(atoms, scans, plane, ax, scale_atoms, title, numbering, figsize)
+        ax = _show_atoms_2d(atoms, scans, plane, ax, scale_atoms, title, numbering, figsize, legend=legend)
     else:
         if scans is not None:
             raise NotImplementedError()
@@ -87,7 +89,7 @@ def show_atoms(atoms, repeat: Tuple[int, int] = (1, 1), scans=None, plane: Union
 
 
 def _show_atoms_2d(atoms, scans=None, plane: Union[Tuple[float, float], str] = 'xy', ax=None, scale_atoms: float = .5,
-                   title: str = None, numbering: bool = False, figsize=None):
+                   title: str = None, numbering: bool = False, figsize=None, legend=False):
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
 
@@ -122,6 +124,13 @@ def _show_atoms_2d(atoms, scans=None, plane: Union[Tuple[float, float], str] = '
         if numbering:
             for i, (position, size) in enumerate(zip(positions, sizes)):
                 ax.annotate('{}'.format(order[i]), xy=position, ha="center", va="center")
+
+    if legend:
+        legend_elements = [Line2D([0], [0], marker='o', color='w', markeredgecolor='k', label=chemical_symbols[unique],
+                                  markerfacecolor=jmol_colors[unique], markersize=12) for unique in
+                           np.unique(atoms.numbers)]
+
+        ax.legend(handles=legend_elements)
 
     if scans is not None:
         if not isinstance(scans, Iterable):
@@ -189,7 +198,8 @@ def _show_atoms_3d(atoms, azimuth=45., elevation=30., ax=None, scale_atoms=500.,
 def show_measurement_2d(measurement,
                         ax=None,
                         figsize=None,
-                        colorbar=False,
+                        cbar=False,
+                        cbar_label=None,
                         cmap='gray',
                         discrete_cmap=False,
                         vmin=None,
@@ -266,8 +276,11 @@ def show_measurement_2d(measurement,
     im = ax.imshow(array.T, extent=extent, cmap=cmap, origin='lower', vmin=vmin, vmax=vmax, interpolation='nearest',
                    **kwargs)
 
-    if colorbar:
-        cax = plt.colorbar(im, ax=ax, label=format_label(measurement))
+    if cbar:
+        if cbar_label is None:
+            cbar_label = format_label(measurement)
+
+        cax = plt.colorbar(im, ax=ax, label=cbar_label)
         if discrete_cmap:
             cax.set_ticks(ticks=np.arange(np.min(array), np.max(array) + 1))
 
