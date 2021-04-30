@@ -127,8 +127,8 @@ def _show_atoms_2d(atoms, scans=None, plane: Union[Tuple[float, float], str] = '
 
     if legend:
         legend_elements = [Line2D([0], [0], marker='o', color='w', markeredgecolor='k', label=chemical_symbols[unique],
-                                  markerfacecolor=jmol_colors[unique], markersize=12) for unique in
-                           np.unique(atoms.numbers)]
+                                  markerfacecolor=jmol_colors[unique], markersize=12)
+                           for unique in np.unique(atoms.numbers)]
 
         ax.legend(handles=legend_elements)
 
@@ -145,7 +145,7 @@ def _show_atoms_2d(atoms, scans=None, plane: Union[Tuple[float, float], str] = '
 def _show_atoms_3d(atoms, azimuth=45., elevation=30., ax=None, scale_atoms=500., margin=1., figsize=None):
     cell = atoms.cell
     colors = jmol_colors[atoms.numbers]
-    sizes = covalent_radii[atoms.numbers] * scale_atoms
+    sizes = covalent_radii[atoms.numbers] ** 2 * scale_atoms
     positions = atoms.positions
 
     for line in _cube:
@@ -154,7 +154,7 @@ def _show_atoms_3d(atoms, azimuth=45., elevation=30., ax=None, scale_atoms=500.,
         end = cell_lines[1]
         cell_line_points = start + (end - start)[None] * np.linspace(0, 1, 100)[:, None]
         positions = np.vstack((positions, cell_line_points))
-        sizes = np.concatenate((sizes, [5] * len(cell_line_points)))
+        sizes = np.concatenate((sizes, [1] * len(cell_line_points)))
         colors = np.vstack((colors, [(0, 0, 0)] * len(cell_line_points)))
 
     if ax is None:
@@ -290,7 +290,8 @@ def show_measurement_2d(measurement,
     if title is not None:
         ax.set_title(title)
     elif len(measurement.array.shape) > 2:
-        ax.set_title(f'Slice {(0,) * (len(measurement.array.shape) - 2)} of {measurement.array.shape} measurement')
+        if any([n > 1 for n in measurement.array.shape[:-2]]):
+            ax.set_title(f'Slice {(0,) * (len(measurement.array.shape) - 2)} of {measurement.array.shape} measurement')
 
     return ax, im
 
