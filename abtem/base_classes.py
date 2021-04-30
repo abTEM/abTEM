@@ -25,16 +25,16 @@ class Event(object):
         """
         return self._notify_count
 
-    def notify(self, *args, **kwargs):
+    def notify(self, change):
         """
         Notify this event. All registered callbacks are called.
         """
 
         self._notify_count += 1
         for callback in self.callbacks:
-            callback(*args, **kwargs)
+            callback(change)
 
-    def register(self, callbacks: Union[Callable, Sequence[Callable]]):
+    def observe(self, callbacks: Union[Callable, Sequence[Callable]]):
         """
         Register new callbacks.
 
@@ -46,6 +46,17 @@ class Event(object):
         if not isinstance(callbacks, list):
             callbacks = [callbacks]
         self.callbacks += callbacks
+
+
+class HasEventMixin:
+    _event: Event
+
+    @property
+    def event(self):
+        return self._event
+
+    def observe(self, callback):
+        self.event.observe(callback)
 
 
 def watched_method(event: 'str'):
@@ -64,7 +75,7 @@ def watched_method(event: 'str'):
         def new_func(*args, **kwargs):
             instance = args[0]
             result = func(*args, **kwargs)
-            getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': True})
+            getattr(instance, event).notify({'owner': instance, 'name': property_name, 'change': True})
             return result
 
         return new_func
@@ -90,7 +101,8 @@ def watched_property(event: 'str'):
             old = getattr(instance, property_name)
             result = func(*args)
             change = np.any(old != value)
-            getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': change})
+            getattr(instance, event).notify({'notifier': instance, 'name': property_name, 'change': change,
+                                             'old': old, 'new': value})
             return result
 
         return new_func
@@ -109,8 +121,8 @@ def cache_clear_callback(target_cache: 'Cache'):
     """
 
     # noinspection PyUnusedLocal
-    def callback(notifier: Any, property_name: str, change: bool):
-        if change:
+    def callback(change):
+        if change['change']:
             target_cache.clear()
 
     return callback
@@ -244,7 +256,7 @@ class Cache:
         self._misses = 0
 
 
-class Grid:
+class Grid(HasEventMixin):
     """
     Grid object.
 
@@ -274,7 +286,7 @@ class Grid:
                  lock_gpts: bool = False,
                  lock_sampling: bool = False):
 
-        self.changed = Event()
+        self._event = Event()
         self._dimensions = dimensions
 
         if isinstance(endpoint, bool):
@@ -340,7 +352,7 @@ class Grid:
         return self._extent
 
     @extent.setter
-    @watched_method('changed')
+    @watched_method('_event')
     def extent(self, extent: Union[float, Sequence[float]]):
         if self._lock_extent:
             raise RuntimeError('Extent cannot be modified')
@@ -363,7 +375,7 @@ class Grid:
         return self._gpts
 
     @gpts.setter
-    @watched_method('changed')
+    @watched_method('_event')
     def gpts(self, gpts: Union[int, Sequence[int]]):
         if self._lock_gpts:
             raise RuntimeError('Grid gpts cannot be modified')
@@ -387,7 +399,7 @@ class Grid:
         return self._sampling
 
     @sampling.setter
-    @watched_method('changed')
+    @watched_method('_event')
     def sampling(self, sampling):
         if self._lock_sampling:
             raise RuntimeError('Sampling cannot be modified')
@@ -540,7 +552,7 @@ class HasGridMixin:
         self.grid.match(other, check_match=check_match)
 
 
-class Accelerator:
+class Accelerator(HasEventMixin):
     """
     Accelerator object describes the energy of wave functions and transfer functions.
 
@@ -554,7 +566,7 @@ class Accelerator:
         if energy is not None:
             energy = float(energy)
 
-        self.changed = Event()
+        self._event = Event()
         self._energy = energy
         self._lock_energy = lock_energy
 
@@ -566,7 +578,7 @@ class Accelerator:
         return self._energy
 
     @energy.setter
-    @watched_method('changed')
+    @watched_method('_event')
     def energy(self, value: float):
         if self._lock_energy:
             raise RuntimeError('Energy cannot be modified')
