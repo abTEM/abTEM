@@ -883,8 +883,9 @@ class Probe(_Scanable, HasDeviceMixin, HasEventMixin):
         return probe_profile(measurement, angle=angle)
 
     def interact(self, sliders=None, profile=False, throttling: float = 0.01):
-        from abtem.visualize.widgets import quick_sliders, throttle
-        from abtem.visualize.interactive.apps import MeasurementView1d, MeasurementView2d
+        from abtem.visualize.interactive.utils import quick_sliders, throttle
+        from abtem.visualize.interactive import Canvas, MeasurementArtist2d
+        from abtem.visualize.interactive.apps import MeasurementView1d
         import ipywidgets as widgets
 
         if profile:
@@ -893,10 +894,14 @@ class Probe(_Scanable, HasDeviceMixin, HasEventMixin):
             def callback(*args):
                 view.measurement = self.profile()
         else:
-            view = MeasurementView2d()
+            canvas = Canvas(lock_scale=False)
+            artist = MeasurementArtist2d()
+            canvas.artists = {'image': artist}
 
             def callback(*args):
-                view.measurement = self.build().intensity()[0]
+                artist.measurement = self.build().intensity()[0]
+                canvas.adjust_limits_to_artists(adjust_y=False)
+                canvas.adjust_labels_to_artists()
 
         if throttling:
             callback = throttle(throttling)(callback)
@@ -906,9 +911,9 @@ class Probe(_Scanable, HasDeviceMixin, HasEventMixin):
 
         if sliders:
             sliders = quick_sliders(self.ctf, **sliders)
-            return widgets.HBox([view.figure, widgets.VBox(sliders)])
+            return widgets.HBox([canvas.figure, widgets.VBox(sliders)])
         else:
-            return view.figure
+            return canvas.figure
 
     def __copy__(self):
         return self.__class__(gpts=self.gpts,
@@ -1639,6 +1644,9 @@ class SMatrix(_Scanable, HasDeviceMixin, HasEventMixin):
         dict
             Dictionary of measurements with keys given by the detector.
         """
+
+        if isinstance(potential, Atoms):
+            potential = Potential(potential)
 
         self.grid.match(potential.grid)
         self.grid.check_is_defined()

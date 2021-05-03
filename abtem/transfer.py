@@ -358,32 +358,40 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
                                                     name='Temporal')
         profiles['spatial_envelope'] = Measurement(spatial_envelope, calibrations=[calibration],
                                                    name='Spatial')
-        profiles['gaussian_spread'] = Measurement(gaussian_envelope, calibrations=[calibration],
-                                                  name='Gaussian')
+        profiles[' '] = Measurement(gaussian_envelope, calibrations=[calibration],
+                                    name='Gaussian')
         profiles['envelope'] = Measurement(envelope, calibrations=[calibration], name='Envelope')
         return profiles
 
     def apply(self, waves, interact=False, sliders=None, throttling=0.):
         if interact:
             from abtem.visualize.interactive.apps import ArrayView2d, MeasurementView2d
+            from abtem.visualize.interactive import Canvas, MeasurementArtist2d
             from abtem.visualize.widgets import quick_sliders, throttle
             import ipywidgets as widgets
 
             image_waves = waves.copy()
-            array_view = MeasurementView2d(waves.apply_ctf(self).intensity())
+            canvas = Canvas()
+            artist = MeasurementArtist2d()
+            canvas.artists = {'artist': artist}
 
             def update(*args):
                 image_waves.array[:] = waves.apply_ctf(self).array
-                array_view.measurement = image_waves.intensity()
+                artist.measurement = image_waves.intensity()[0]
+                canvas.adjust_limits_to_artists()
+                canvas.adjust_labels_to_artists()
 
             if throttling:
                 update = throttle(throttling)(update)
 
             self.observe(update)
+            update()
 
             if sliders:
                 sliders = quick_sliders(self, **sliders)
-                figure = widgets.HBox([array_view.canvas.figure, widgets.VBox(sliders)])
+                figure = widgets.HBox([canvas.figure, widgets.VBox(sliders)])
+            else:
+                figure = canvas.figure
 
             return image_waves, figure
         else:
@@ -394,14 +402,21 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
 
     def interact(self, max_semiangle: float = None, phi: float = 0., sliders=None, throttling=False):
         from abtem.visualize.interactive.utils import quick_sliders, throttle
-        from abtem.visualize.interactive.apps import MeasurementView1d
+        from abtem.visualize.interactive import Canvas, MeasurementArtist1d
         import ipywidgets as widgets
 
-        view = MeasurementView1d()
+        canvas = Canvas(lock_scale=False)
+        ctf_artist = MeasurementArtist1d()
+        envelope_artist = MeasurementArtist1d()
+        canvas.artists = {'ctf': ctf_artist, 'envelope': envelope_artist}
+        canvas.y_scale.min = -1.1
+        canvas.y_scale.max = 1.1
 
         def callback(*args):
             profiles = self.profiles(max_semiangle, phi)
-            view.measurement = profiles['ctf']
+
+            for name, artist in canvas.artists.items():
+                artist.measurement = profiles[name]
 
         if throttling:
             callback = throttle(throttling)(callback)
@@ -409,12 +424,14 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         self.observe(callback)
 
         callback()
+        canvas.adjust_limits_to_artists(adjust_y=False)
+        canvas.adjust_labels_to_artists()
 
         if sliders:
             sliders = quick_sliders(self, **sliders)
-            return widgets.HBox([view.figure, widgets.VBox(sliders)])
+            return widgets.HBox([canvas.figure, widgets.VBox(sliders)])
         else:
-            return view.figure
+            return canvas.figure
 
     def show(self, max_semiangle: float = None, phi: float = 0, ax=None, **kwargs):
         """

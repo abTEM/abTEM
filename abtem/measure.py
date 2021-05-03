@@ -741,7 +741,7 @@ class Measurement(AbstractMeasurement):
         new_meaurement._array = np.squeeze(asnumpy(new_meaurement.array))
         return new_meaurement
 
-    def integrate(self, start: float, end: float, axis=-1, interact=False):
+    def integrate(self, start: float, end: float, axis=-1, interactive=False):
         """
         Perform 1d integration measurement from e.g. the FlexibleAnnularDetector
 
@@ -772,23 +772,30 @@ class Measurement(AbstractMeasurement):
 
         new_measurement = Measurement(integrate(start, end), calibrations=calibrations)
 
-        if interact:
-            from abtem.visualize.interactive.apps import MeasurementView2d
+        if interactive:
+            from abtem.visualize.interactive import Canvas, MeasurementArtist2d
             import ipywidgets as widgets
 
-            measurement_view = MeasurementView2d(new_measurement)
+            canvas = Canvas(lock_scale=True)
+            artist = MeasurementArtist2d()
+            canvas.artists = {'image': artist}
 
             def update(change):
                 new_measurement.array[:] = integrate(*change['new'])
-                measurement_view.measurement = new_measurement.copy()
+                artist.measurement = new_measurement.copy()
+                canvas.adjust_limits_to_artists()
+                canvas.adjust_labels_to_artists()
+
+            update({'new': [start, end]})
 
             slider = widgets.FloatRangeSlider(min=0,
                                               max=sampling * self.array.shape[-1],
                                               value=[start, end],
-                                              description='Integration range')
+                                              description='Integration range',
+                                              layout=widgets.Layout(width='400px'))
 
             slider.observe(update, 'value')
-            return new_measurement, widgets.HBox([measurement_view._array_view._canvas.figure, slider])
+            return new_measurement, widgets.HBox([canvas.figure, slider])
         else:
             return new_measurement
 

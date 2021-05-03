@@ -1,133 +1,22 @@
 import ipywidgets as widgets
 import numpy as np
-from bqplot import Figure, LinearScale, Axis
-from traitlets import HasTraits, observe, Dict, Instance, default, List, link, Float
+from traitlets import HasTraits, observe, Dict, default, List, link, Float
 from traitlets import validate, Any, Unicode
 from traittypes import Array
 
 from abtem.visualize.interactive.artists import ImageArtist, LinesArtist
-
-
-class Canvas(HasTraits):
-    artists = Dict()
-    tools = Dict()
-    figure = Instance(Figure)
-
-    def __init__(self,
-                 x_scale=None,
-                 y_scale=None,
-                 x_axis=None,
-                 y_axis=None,
-                 height='450px',
-                 width='450px',
-                 min_aspect_ratio=1,
-                 max_aspect_ratio=1,
-                 fig_margin=None,
-                 **kwargs):
-
-        x_scale = x_scale or LinearScale(allow_padding=False)
-        y_scale = y_scale or LinearScale(allow_padding=False)
-
-        scales = {'x': x_scale, 'y': y_scale}
-
-        x_axis = x_axis or Axis(scale=scales['x'])
-        y_axis = y_axis or Axis(scale=scales['y'], orientation='vertical')
-
-        fig_margin = fig_margin or {'top': 0, 'bottom': 50, 'left': 50, 'right': 0}
-
-        figure = Figure(scales=scales,
-                        axes=[x_axis, y_axis],
-                        min_aspect_ratio=min_aspect_ratio,
-                        max_aspect_ratio=max_aspect_ratio,
-                        fig_margin=fig_margin)
-
-        figure.layout.height = height
-        figure.layout.width = width
-        super().__init__(figure=figure, **kwargs)
-
-    @property
-    def x_axis(self):
-        return self.figure.axes[0]
-
-    @property
-    def y_axis(self):
-        return self.figure.axes[1]
-
-    @property
-    def x_scale(self):
-        return self.x_axis.scale
-
-    @property
-    def y_scale(self):
-        return self.y_axis.scale
-
-    @observe('artists')
-    def _observe_artists(self, change):
-        self._update_marks()
-
-    def _update_marks(self):
-        self.figure.marks = []
-        for key, artist in self.artists.items():
-            artist._add_to_canvas(self)
-
-    def _enforce_scale_lock(self):
-        if None in (self.x_scale.min, self.x_scale.min, self.y_scale.min, self.y_scale.max):
-            return
-
-        extent = max(self.x_scale.max - self.x_scale.min, self.y_scale.max - self.y_scale.min) / 2
-        x_center = (self.x_scale.min + self.x_scale.max) / 2
-        y_center = (self.y_scale.min + self.y_scale.max) / 2
-
-        with self.x_scale.hold_trait_notifications(), self.y_scale.hold_trait_notifications():
-            self.x_scale.min = x_center - extent
-            self.x_scale.max = x_center + extent
-            self.y_scale.min = y_center - extent
-            self.y_scale.max = y_center + extent
-
-    @property
-    def toolbar(self):
-        tool_names = ['None'] + list(self.tools.keys())
-
-        tool_selector = widgets.ToggleButtons(options=tool_names)
-        tool_selector.style.button_width = '80px'
-
-        def change_tool(change):
-            if change['old'] != 'None':
-                self.tools[change['old']].deactivate(self)
-
-            if change['new'] == 'None':
-                self.figure.interaction = None
-            else:
-                self.tools[change['new']].activate(self)
-
-        tool_selector.observe(change_tool, 'value')
-
-        reset_button = widgets.Button(description='Reset', layout=widgets.Layout(width='80px'))
-        reset_button.on_click(lambda _: self.adjust_to_artists())
-
-        return widgets.HBox([tool_selector, reset_button])
-
-    def adjust_to_artists(self):
-        xmin = np.min([artist.limits[0][0] for artist in self.artists.values()])
-        xmax = np.max([artist.limits[0][1] for artist in self.artists.values()])
-        ymin = np.min([artist.limits[1][0] for artist in self.artists.values()])
-        ymax = np.max([artist.limits[1][1] for artist in self.artists.values()])
-
-        # with self.x_scale.hold_sync(), self.y_scale.hold_sync():
-        with self.x_scale.hold_trait_notifications(), self.y_scale.hold_trait_notifications():
-            self.x_scale.min = float(xmin)
-            self.x_scale.max = float(xmax)
-            self.y_scale.min = float(ymin)
-            self.y_scale.max = float(ymax)
-            self._enforce_scale_lock()
+from abtem.visualize.interactive.canvas import Canvas
 
 
 class ArrayView(HasTraits):
     array = Array()
 
-    def __init__(self, array, artist, navigation_axes=None, **kwargs):
-        self._canvas = Canvas()
-        self._canvas.artists = {'array_view': artist}
+    def __init__(self, array, artist, navigation_axes=None, canvas=None, **kwargs):
+        if canvas is None:
+            self._canvas = Canvas()
+            self._canvas.artists = {'array_view': artist}
+        else:
+            self._canvas = canvas
 
         self._data_dims = len(array.shape)
         self._navigation_axes = navigation_axes
@@ -262,12 +151,41 @@ class ArrayView1d(ArrayView):
         self._lines_artist.x = np.linspace(extent[0], extent[1], len(self._lines_artist.y))
 
 
-class MeasurementView(HasTraits):
+# class MeasurementView(HasTraits):
+#
+#     def __init__(self, array_view, **kwargs):
+#         self._array_view = array_view
+#
+#         super().__init__(**kwargs)
+#
+#     @property
+#     def canvas(self):
+#         return self._array_view._canvas
+#
+#     @property
+#     def figure(self):
+#         return self.canvas.figure
+#
+#     @property
+#     def artist(self):
+#         return self.canvas.artists['array_view']
 
-    def __init__(self, array_view, **kwargs):
-        self._array_view = array_view
 
-        super().__init__(**kwargs)
+class MeasurementView1d(HasTraits):
+    measurements = Dict()
+
+    def __init__(self, measurements=None, navigation_axes=None, **kwargs):
+
+        if measurements is None:
+            array = np.zeros((0,))
+        else:
+            array = measurements.array
+
+        canvas = Canvas()
+
+        self._array_view = ArrayView1d(array=array, navigation_axes=navigation_axes)
+
+        super().__init__(array_view=array_view, measurement=measurement, **kwargs)
 
     @property
     def canvas(self):
@@ -281,23 +199,8 @@ class MeasurementView(HasTraits):
     def artist(self):
         return self.canvas.artists['array_view']
 
-
-class MeasurementView1d(MeasurementView):
-    measurement = Any()
-
-    def __init__(self, measurement=None, navigation_axes=None, **kwargs):
-
-        if measurement is None:
-            array = np.zeros((0,))
-        else:
-            array = measurement.array
-
-        array_view = ArrayView1d(array=array, navigation_axes=navigation_axes)
-
-        super().__init__(array_view=array_view, measurement=measurement, **kwargs)
-
-    @observe('measurement')
-    def _observe_measurement(self, change):
+    @observe('measurements')
+    def _observe_measurements(self, change):
         extent = self.measurement.calibration_limits
         units = self.measurement.calibration_units
         names = self.measurement.calibration_names
@@ -313,7 +216,7 @@ class MeasurementView1d(MeasurementView):
             #                            + f' [{units[self._array_view.display_axes[1]]}]')
 
 
-class MeasurementView2d(MeasurementView):
+class MeasurementView2d(HasTraits):
     measurement = Any()
     power_scale = Float()
 
