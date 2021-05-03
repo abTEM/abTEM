@@ -27,8 +27,10 @@ Install CuPy from pip::
 
 where * should be substituted for the CUDA Toolkit version. See `CuPy's installation guide <https://docs.cupy.dev/en/stable/install.html>`_ for details.
 
-DFT potentials with GPAW
-************************
+DFT potentials with GPAW (optional)
+***********************************
+
+abTEM can simulate bond-sensitive
 GPAW can be installed from pip (note that GPAW is not officially supported on Windows)::
 
     pip install GPAW
@@ -66,32 +68,31 @@ Dependencies
 ------------
 Strict dependencies:
 
-- `Numpy <https://www.numpy.org/>`_
-- `scipy <https://scipy.org/>`_
-- `Numba <https://www.numba.org/>`_
-- `pyfftw <https://hgomersall.github.io/pyFFTW/>`_
-- `imageio <https://imageio.github.io/>`_
-- `h5py <https://h5py.org/>`_
-- `matplotlib <https://matplotlib.org/>`_
-- `ase <https://wiki.fysik.dtu.dk/ase/>`_
-- `tqdm <https://tqdm.github.io/>`_
-- `psutil <https://github.com/giampaolo/psutil>`_
+* `Numpy <https://www.numpy.org/>`_
+* `scipy <https://scipy.org/>`_
+* `Numba <https://www.numba.org/>`_
+* `pyfftw <https://hgomersall.github.io/pyFFTW/>`_
+* `imageio <https://imageio.github.io/>`_
+* `h5py <https://h5py.org/>`_
+* `matplotlib <https://matplotlib.org/>`_
+* `ase <https://wiki.fysik.dtu.dk/ase/>`_
+* `tqdm <https://tqdm.github.io/>`_
+* `psutil <https://github.com/giampaolo/psutil>`_
 
 Only for GPU calculations:
 
-- `CuPy <https://cupy.dev/>`_
+* `CuPy <https://cupy.dev/>`_
 
 Only for DFT potentials with GPAW:
 
-- `GPAW <https://wiki.fysik.dtu.dk/gpaw/>`_
+* `GPAW <https://wiki.fysik.dtu.dk/gpaw/>`_
 
 Only for interactive graphical interfaces:
 
-- `bqplot <https://bqplot.readthedocs.io/en/latest/>`_
-- `bqplot-image-gl <https://github.com/glue-viz/bqplot-image-gl>`_
-- `ipywidgets <https://ipywidgets.readthedocs.io/en/stable/>`_
+* `bqplot <https://bqplot.readthedocs.io/en/latest/>`_
+* `bqplot-image-gl <https://github.com/glue-viz/bqplot-image-gl>`_
+* `ipywidgets <https://ipywidgets.readthedocs.io/en/stable/>`_
 
 Only for testing:
 
-- `pytest <http://www.pytest.org/>`_
-- `hypothesis <https://hypothesis.readthedocs.io/en/latest/>`_
+* `pytest <http://www.pytest.org/>`_
