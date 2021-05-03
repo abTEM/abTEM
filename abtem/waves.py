@@ -135,7 +135,7 @@ class _WavesLike(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
     def __init__(self, tilt: Tuple[float, float] = None, antialiasing_aperture: float = None):
         self._tilt = tilt
         if antialiasing_aperture is None:
-            antialiasing_aperture = (AntialiasFilter.cutoff,)*2
+            antialiasing_aperture = (AntialiasFilter.cutoff,) * 2
 
         self._antialiasing_aperture = antialiasing_aperture
 
@@ -154,7 +154,7 @@ class _WavesLike(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
     @property
     def cutoff_scattering_angles(self) -> Tuple[float, float]:
         interpolated_grid = self._interpolated_grid
-        #print(self.antialiasing_aperture)
+        # print(self.antialiasing_aperture)
         kcut = [1 / d / 2 * a for d, a in zip(interpolated_grid.sampling, self.antialiasing_aperture)]
         kcut = min(kcut)
         kcut = (
@@ -882,7 +882,7 @@ class Probe(_Scanable, HasDeviceMixin, HasEventMixin):
         measurement = self.build((self.extent[0] / 2, self.extent[1] / 2)).intensity()
         return probe_profile(measurement, angle=angle)
 
-    def interact(self, sliders=None, profile=False, throttling=0.01):
+    def interact(self, sliders=None, profile=False, throttling: float = 0.01):
         from abtem.visualize.widgets import quick_sliders, throttle
         from abtem.visualize.interactive.apps import MeasurementView1d, MeasurementView2d
         import ipywidgets as widgets
@@ -1521,8 +1521,8 @@ class SMatrix(_Scanable, HasDeviceMixin, HasEventMixin):
         self._interpolation = value
 
     @property
-    def interpolated_gpts(self):
-        return tuple(n // self.interpolation for n in self.gpts)
+    def interpolated_gpts(self) -> Tuple[int, int]:
+        return (self.gpts[0] // self.interpolation, self.gpts[1] // self.interpolation)
 
     @property
     def _interpolated_grid(self) -> Grid:
@@ -1729,24 +1729,33 @@ class SMatrix(_Scanable, HasDeviceMixin, HasEventMixin):
         measurement = self.build().collapse((self.extent[0] / 2, self.extent[1] / 2)).intensity()
         return probe_profile(measurement, angle=angle)
 
-    def interact(self, sliders=None, profile=False):
-        from abtem.visualize.bqplot import show_measurement_1d, show_measurement_2d
-        from abtem.visualize.widgets import quick_sliders
+    def interact(self, sliders=None, profile: bool = False, throttling: float = 0.01):
+        from abtem.visualize.widgets import quick_sliders, throttle
+        from abtem.visualize.interactive.apps import MeasurementView1d, MeasurementView2d
         import ipywidgets as widgets
 
         if profile:
-            figure, callback = show_measurement_1d(lambda: [self.profile()])
+            view = MeasurementView1d()
+
+            def callback(*args):
+                view.measurement = self.profile()
         else:
-            figure, callback = show_measurement_2d(lambda: self.build().collapse((self.extent[0] / 2,
-                                                                                  self.extent[1] / 2)).intensity())
+            view = MeasurementView2d()
+
+            def callback(*args):
+                view.measurement = self.build().collapse().intensity()[0]
+
+        if throttling:
+            callback = throttle(throttling)(callback)
 
         self.observe(callback)
+        callback()
 
         if sliders:
             sliders = quick_sliders(self.ctf, **sliders)
-            return widgets.HBox([figure, widgets.VBox(sliders)])
+            return widgets.HBox([view.figure, widgets.VBox(sliders)])
         else:
-            return figure
+            return view.figure
 
     def show(self, **kwargs):
         """
