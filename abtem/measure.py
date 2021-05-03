@@ -799,24 +799,29 @@ class Measurement(AbstractMeasurement):
                          gpts: int = None,
                          sampling: float = None,
                          width: float = None,
-                         offset: float = 0.,
+                         margin: float = 0.,
                          interpolation_method: str = 'splinef2d') -> 'LineProfile':
         """
         Interpolate 2d measurement along a line.
 
         Parameters
         ----------
-        start : two float
+        start : two float, Atom
             Start point on line [Å].
-        end : two float, optional
+        end : two float, Atom, optional
             End point on line [Å].
+        angle : float, optional
+            The angle of the line. This is only used when an "end" is not give.
         gpts : int
             Number of grid points along line.
         sampling : float
             Sampling rate of grid points along line [1 / Å].
-        width : float
-            The interpolation will be averaged across
-        interpolation_method : str
+        width : float, optional
+            The interpolation will be averaged across line of this width.
+        margin : float, optional
+            The line will be extended by this amount at both ends.
+        interpolation_method : str, optional
+            The interpolation method.
 
         Returns
         -------
@@ -835,7 +840,7 @@ class Measurement(AbstractMeasurement):
         if (gpts is None) & (sampling is None):
             sampling = (measurement.calibrations[0].sampling + measurement.calibrations[1].sampling) / 2.
 
-        scan = LineScan(start=start, end=end, angle=angle, gpts=gpts, sampling=sampling, offset=offset)
+        scan = LineScan(start=start, end=end, angle=angle, gpts=gpts, sampling=sampling, margin=margin)
 
         x = np.linspace(measurement.calibrations[0].offset,
                         measurement.shape[0] * measurement.calibrations[0].sampling +
@@ -846,8 +851,8 @@ class Measurement(AbstractMeasurement):
                         measurement.calibrations[1].offset,
                         measurement.shape[1])
 
-        start = scan.offset_start
-        end = scan.offset_end
+        start = scan.margin_start
+        end = scan.margin_end
 
         if width is not None:
             direction = scan.direction

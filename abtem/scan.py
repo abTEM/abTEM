@@ -192,7 +192,7 @@ class LineScan(AbstractScan, HasGridMixin):
                  angle: float = 0.,
                  gpts: int = None,
                  sampling: float = None,
-                 offset: float = 0.,
+                 margin: float = 0.,
                  endpoint: bool = True):
 
         super().__init__()
@@ -212,19 +212,19 @@ class LineScan(AbstractScan, HasGridMixin):
         self._grid = Grid(gpts=gpts, sampling=sampling, endpoint=endpoint, dimensions=1)
 
         self._start = start[:2]
-        self._offset = offset
+        self._margin = margin
 
         if end is not None:
             self._set_direction_and_extent(self._start, end[:2])
         else:
             self.angle = angle
-            self.extent = 2 * self._offset
+            self.extent = 2 * self._margin
 
     def _set_direction_and_extent(self, start: Tuple[float, float], end: Tuple[float, float]):
         difference = np.array(end) - np.array(start)
         extent = np.linalg.norm(difference, axis=0)
         self._direction = difference / extent
-        extent = extent + 2 * self._offset
+        extent = extent + 2 * self._margin
         if extent == 0.:
             raise RuntimeError('scan has no extent')
         self.extent = extent
@@ -254,8 +254,8 @@ class LineScan(AbstractScan, HasGridMixin):
         """
         End point of the scan [Å].
         """
-        return (self.start[0] + self.direction[0] * self.extent[0] - self.direction[0] * 2 * self._offset,
-                self.start[1] + self.direction[1] * self.extent[0] - self.direction[1] * 2 * self._offset)
+        return (self.start[0] + self.direction[0] * self.extent[0] - self.direction[0] * 2 * self._margin,
+                self.start[1] + self.direction[1] * self.extent[0] - self.direction[1] * 2 * self._margin)
 
     @end.setter
     def end(self, end: Tuple[float, float]):
@@ -278,8 +278,8 @@ class LineScan(AbstractScan, HasGridMixin):
         return self._direction
 
     @property
-    def offset(self) -> float:
-        return self._offset
+    def margin(self) -> float:
+        return self._margin
 
     def insert_new_measurement(self,
                                measurement: Measurement,
@@ -294,16 +294,16 @@ class LineScan(AbstractScan, HasGridMixin):
             measurement.array[indices] += asnumpy(new_measurement_values)
 
     @property
-    def offset_start(self) -> Tuple[float, float]:
-        return self.start[0] - self.direction[0] * self.offset, self.start[1] - self.direction[1] * self.offset
+    def margin_start(self) -> Tuple[float, float]:
+        return self.start[0] - self.direction[0] * self.margin, self.start[1] - self.direction[1] * self.margin
 
     @property
-    def offset_end(self) -> Tuple[float, float]:
-        return self.end[0] + self.direction[0] * self.offset, self.end[1] + self.direction[1] * self.offset
+    def margin_end(self) -> Tuple[float, float]:
+        return self.end[0] + self.direction[0] * self.margin, self.end[1] + self.direction[1] * self.margin
 
     def get_positions(self) -> np.ndarray:
-        start = self.offset_start
-        end = self.offset_end
+        start = self.margin_start
+        end = self.margin_end
         x = np.linspace(start[0], end[0], self.gpts[0], endpoint=self.grid.endpoint[0])
         y = np.linspace(start[1], end[1], self.gpts[0], endpoint=self.grid.endpoint[0])
         return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
