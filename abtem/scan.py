@@ -323,8 +323,8 @@ class LineScan(AbstractScan, HasGridMixin):
         kwargs :
             Additional options for matplotlib.pyplot.plot as keyword arguments.
         """
-        start = self.offset_start
-        end = self.offset_end
+        start = self.margin_start
+        end = self.margin_end
         ax.plot([start[0], end[0]], [start[1], end[1]], linestyle=linestyle, color=color, **kwargs)
 
     def __copy__(self):
