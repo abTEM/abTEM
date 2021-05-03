@@ -2,6 +2,7 @@
 from collections.abc import Iterable, Callable
 from copy import copy
 from typing import Sequence, Tuple, List, Union
+from abc import ABCMeta, abstractmethod
 
 import h5py
 import imageio
@@ -18,6 +19,7 @@ from abtem.device import asnumpy
 from abtem.utils import periodic_crop, tapered_cutoff
 from abtem.visualize.mpl import show_measurement_2d, show_measurement_1d
 from abtem.utils import fft_interpolate_2d
+from ase import Atom
 
 
 class Calibration:
@@ -38,7 +40,8 @@ class Calibration:
         The name of this calibration to be shown in plots.
     """
 
-    def __init__(self, offset: float, sampling: float, units: str, name: str = '', endpoint=True):
+    def __init__(self, offset: float, sampling: float, units: str, name: str = '', endpoint: bool = True,
+                 adjustable: bool = True):
         self.offset = offset
         self.sampling = sampling
         self.units = units
@@ -149,7 +152,56 @@ def grid_from_calibrations(calibrations, extent=None, gpts=None) -> Grid:
     return Grid(extent=extent, gpts=gpts, sampling=sampling)
 
 
-class Measurement:  # (metaclass=ABCMeta):
+class AbstractMeasurement(metaclass=ABCMeta):
+
+    def __init__(self, array: np.array, name='', units=''):
+        self._array = asnumpy(array)
+        self._name = name
+        self._units = units
+
+    @property
+    @abstractmethod
+    def calibrations(self):
+        pass
+
+    @property
+    def array(self):
+        return self._array
+
+    @property
+    def shape(self) -> Tuple[int]:
+        """
+        The shape of the measurement array.
+        """
+        return self._array.shape
+
+    @property
+    def units(self) -> 'str':
+        """
+        The units of the array values to be displayed in plots.
+        """
+        return self._units
+
+    @property
+    def name(self) -> 'str':
+        """
+        The name of the array values to be displayed in plots.
+        """
+        return self._name
+
+    @property
+    def dimensions(self) -> int:
+        """
+        The measurement dimensions.
+        """
+        return len(self.array.shape)
+
+    @abstractmethod
+    def show(self):
+        pass
+
+
+class Measurement(AbstractMeasurement):
     """
     Measurement object.
 
@@ -189,10 +241,8 @@ class Measurement:  # (metaclass=ABCMeta):
             raise RuntimeError(
                 'The number of calibrations must equal the number of array dimensions. For undefined use None.')
 
-        self._array = asnumpy(array)
         self._calibrations = calibrations
-        self._units = units
-        self._name = name
+        super().__init__(array=array, name=name, units=units)
 
     def __getitem__(self, args):
         # TODO: check that edge cases work
@@ -266,10 +316,6 @@ class Measurement:  # (metaclass=ABCMeta):
         """
         return self._array
 
-    @property
-    def dimension(self) -> int:
-        return len(self.shape)
-
     def angle(self):
         new_measurement = self.copy()
         new_measurement._array = np.angle(new_measurement.array)
@@ -286,34 +332,6 @@ class Measurement:  # (metaclass=ABCMeta):
         Array of measurements.
         """
         self._array[:] = array
-
-    @property
-    def shape(self) -> Tuple[int]:
-        """
-        The shape of the measurement array.
-        """
-        return self._array.shape
-
-    @property
-    def units(self) -> 'str':
-        """
-        The units of the array values to be displayed in plots.
-        """
-        return self._units
-
-    @property
-    def name(self) -> 'str':
-        """
-        The name of the array values to be displayed in plots.
-        """
-        return self._name
-
-    @property
-    def dimensions(self) -> int:
-        """
-        The measurement dimensions.
-        """
-        return len(self.array.shape)
 
     @property
     def calibrations(self) -> List[Union[Calibration, None]]:
@@ -599,7 +617,7 @@ class Measurement:  # (metaclass=ABCMeta):
         elif self.dimensions == 2:
             return self._interpolate_2d(new_sampling=new_sampling, new_gpts=new_gpts, padding=padding, kind=kind)
         else:
-            raise RuntimeError(f'interpolate only implemented for {self.dimensions}d measurements')
+            raise RuntimeError(f'interpolate not implemented for {self.dimensions}d measurements')
 
     def tile(self, multiples: Sequence[int]) -> 'Measurement':
         """
@@ -775,12 +793,14 @@ class Measurement:  # (metaclass=ABCMeta):
             return new_measurement
 
     def interpolate_line(self,
-                         start: Tuple[float, float],
-                         end: Tuple[float, float],
+                         start: Union[Tuple[float, float], Atom],
+                         end: Union[Tuple[float, float], Atom] = None,
+                         angle: float = 0.,
                          gpts: int = None,
                          sampling: float = None,
                          width: float = None,
-                         interpolation_method: str = 'splinef2d') -> 'Measurement':
+                         offset: float = 0.,
+                         interpolation_method: str = 'splinef2d') -> 'LineProfile':
         """
         Interpolate 2d measurement along a line.
 
@@ -788,7 +808,7 @@ class Measurement:  # (metaclass=ABCMeta):
         ----------
         start : two float
             Start point on line [Å].
-        end : two float
+        end : two float, optional
             End point on line [Å].
         gpts : int
             Number of grid points along line.
@@ -815,16 +835,19 @@ class Measurement:  # (metaclass=ABCMeta):
         if (gpts is None) & (sampling is None):
             sampling = (measurement.calibrations[0].sampling + measurement.calibrations[1].sampling) / 2.
 
+        scan = LineScan(start=start, end=end, angle=angle, gpts=gpts, sampling=sampling, offset=offset)
+
         x = np.linspace(measurement.calibrations[0].offset,
-                        measurement.shape[0] * measurement.calibrations[0].sampling + measurement.calibrations[
-                            0].offset,
+                        measurement.shape[0] * measurement.calibrations[0].sampling +
+                        measurement.calibrations[0].offset,
                         measurement.shape[0])
         y = np.linspace(measurement.calibrations[1].offset,
-                        measurement.shape[1] * measurement.calibrations[1].sampling + measurement.calibrations[
-                            1].offset,
+                        measurement.shape[1] * measurement.calibrations[1].sampling +
+                        measurement.calibrations[1].offset,
                         measurement.shape[1])
 
-        scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling)
+        start = scan.offset_start
+        end = scan.offset_end
 
         if width is not None:
             direction = scan.direction
@@ -842,10 +865,9 @@ class Measurement:  # (metaclass=ABCMeta):
             interpolated_array = interpn((x, y), measurement.array, scan.get_positions(), method=interpolation_method,
                                          bounds_error=False, fill_value=0)
 
-        calibration = Calibration(offset=0, sampling=scan.sampling[0],
-                                  units=measurement.calibrations[0].units,
-                                  name=measurement.calibrations[0].name)
-        return Measurement(interpolated_array, calibration)
+        return LineProfile(interpolated_array, start=start, end=end,
+                           calibration_units=measurement.calibrations[0].units,
+                           calibration_name=measurement.calibrations[0].name)
 
     def show(self, ax=None, interact=False, **kwargs):
         """
@@ -863,6 +885,58 @@ class Measurement:  # (metaclass=ABCMeta):
             return show_measurement_1d(self, ax=ax, **kwargs)
         else:
             return show_measurement_2d(self, ax=ax, **kwargs)
+
+
+class LineProfile(AbstractMeasurement):
+
+    def __init__(self, array, start=None, end=None, extent=None, endpoint=True, calibration_name='',
+                 calibration_units='', name='', units=''):
+
+        if ((start is not None) or (end is not None)) and (extent is not None):
+            raise ValueError()
+
+        if (start is None) != (end is None):
+            raise ValueError()
+
+        self._start = start
+        self._end = end
+        self._extent = extent
+        self._endpoint = endpoint
+        self._calibration_name = calibration_name
+        self._calibration_units = calibration_units
+
+        super().__init__(array=array, name=name, units=units)
+
+    @property
+    def start(self):
+        return self._start
+
+    @property
+    def end(self):
+        return self._end
+
+    @property
+    def extent(self):
+        if (self._extent is None) & (self._start is not None):
+            return np.linalg.norm(np.array(self._end) - np.array(self._start), axis=0)
+        else:
+            return self._extent
+
+    @property
+    def sampling(self):
+        return self.extent / self.array.shape[0]
+
+    @property
+    def calibrations(self):
+        return [Calibration(offset=0, sampling=self.sampling, units=self._calibration_units,
+                            name=self._calibration_name, endpoint=self._endpoint)]
+
+    def add_to_mpl_plot(self, ax, **kwargs):
+        from abtem.scan import LineScan
+        return LineScan(start=self.start, end=self.end, sampling=self.sampling).add_to_mpl_plot(ax, **kwargs)
+
+    def show(self, ax=None, **kwargs):
+        return show_measurement_1d(self, ax=ax, **kwargs)
 
 
 def stack_measurements(measurements):
@@ -1034,7 +1108,7 @@ def bandlimit(measurement: Measurement, cutoff: float, taper: float = .1):
     Measurement
         Bandlimited measurement.
     """
-    if measurement.dimension != 4:
+    if measurement.dimensions != 4:
         raise NotImplementedError()
 
     measurement = measurement.copy()

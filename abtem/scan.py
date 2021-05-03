@@ -11,6 +11,7 @@ from abtem.base_classes import Grid, HasGridMixin
 from abtem.device import asnumpy
 from abtem.measure import Calibration, Measurement
 from abtem.utils import subdivide_into_batches, ProgressBar
+from ase import Atom
 
 
 class AbstractScan(metaclass=ABCMeta):
@@ -186,33 +187,47 @@ class LineScan(AbstractScan, HasGridMixin):
     """
 
     def __init__(self,
-                 start: Sequence[float],
-                 end: Sequence[float],
+                 start: Union[Tuple[float, float], Atom],
+                 end: Union[Tuple[float, float], Atom] = None,
+                 angle: float = 0.,
                  gpts: int = None,
                  sampling: float = None,
+                 offset: float = 0.,
                  endpoint: bool = True):
 
         super().__init__()
 
-        try:
-            start = np.array(start)[:2]
-            end = np.array(end)[:2]
-            assert (start.shape == (2,)) & (end.shape == (2,))
-        except:
-            raise ValueError('Scan start/end has incorrect shape')
+        if isinstance(start, Atom):
+            start = (start.x, start.y)
+
+        if isinstance(end, Atom):
+            end = (end.x, end.y)
+
+        #if (end is not None) & (angle is not None):
+        #    raise ValueError('only one of "end" and "angle" may be specified')
 
         if (gpts is None) & (sampling is None):
-            raise RuntimeError('Grid gpts or sampling must be set')
+            raise RuntimeError('grid gpts or sampling must be set')
 
         self._grid = Grid(gpts=gpts, sampling=sampling, endpoint=endpoint, dimensions=1)
-        self._start = start
-        self._direction, self.extent = self._direction_and_extent(start, end)
 
-    @staticmethod
-    def _direction_and_extent(start: np.ndarray, end: np.ndarray):
-        extent = np.linalg.norm((end - start), axis=0)
-        direction = (end - start) / extent
-        return direction, extent
+        self._start = start[:2]
+        self._offset = offset
+
+        if end is not None:
+            self._set_direction_and_extent(self._start, end[:2])
+        else:
+            self.angle = angle
+            self.extent = 2 * self._offset
+
+    def _set_direction_and_extent(self, start: Tuple[float, float], end: Tuple[float, float]):
+        difference = np.array(end) - np.array(start)
+        extent = np.linalg.norm(difference, axis=0)
+        self._direction = difference / extent
+        extent = extent + 2 * self._offset
+        if extent == 0.:
+            raise RuntimeError('scan has no extent')
+        self.extent = extent
 
     @property
     def shape(self) -> Tuple[int]:
@@ -223,32 +238,48 @@ class LineScan(AbstractScan, HasGridMixin):
         return Calibration(offset=0, sampling=self.sampling[0], units='Å', name='x', endpoint=self.grid.endpoint[0]),
 
     @property
-    def start(self) -> np.ndarray:
+    def start(self) -> Tuple[float, float]:
         """
         Start point of the scan [Å].
         """
         return self._start
 
     @start.setter
-    def start(self, start: Sequence[float]):
-        self._start = np.array(start)
-        self._direction, self.extent = self._direction_and_extent(self._start, self.end)
+    def start(self, start: Tuple[float, float]):
+        self._start = start
+        self._set_direction_and_extent(self._start, self.end)
 
     @property
-    def end(self) -> np.ndarray:
+    def end(self) -> Tuple[float, float]:
         """
         End point of the scan [Å].
         """
-        return self.start + self.direction * self.extent
+        return (self.start[0] + self.direction[0] * self.extent[0] - self.direction[0] * 2 * self._offset,
+                self.start[1] + self.direction[1] * self.extent[0] - self.direction[1] * 2 * self._offset)
 
     @end.setter
-    def end(self, end: Sequence[float]):
-        self._direction, self.extent = self._direction_and_extent(self.start, np.ndarray(end))
+    def end(self, end: Tuple[float, float]):
+        self._set_direction_and_extent(self.start, end)
 
     @property
-    def direction(self) -> np.ndarray:
+    def angle(self) -> float:
+        """
+        End point of the scan [Å].
+        """
+        return np.arctan2(self._direction[0], self._direction[1])
+
+    @angle.setter
+    def angle(self, angle: float):
+        self._direction = (np.cos(np.deg2rad(angle)), np.sin(np.deg2rad(angle)))
+
+    @property
+    def direction(self) -> Tuple[float, float]:
         """Direction of the scan line."""
         return self._direction
+
+    @property
+    def offset(self) -> float:
+        return self._offset
 
     def insert_new_measurement(self,
                                measurement: Measurement,
@@ -262,11 +293,19 @@ class LineScan(AbstractScan, HasGridMixin):
         else:
             measurement.array[indices] += asnumpy(new_measurement_values)
 
+    @property
+    def offset_start(self) -> Tuple[float, float]:
+        return self.start[0] - self.direction[0] * self.offset, self.start[1] - self.direction[1] * self.offset
+
+    @property
+    def offset_end(self) -> Tuple[float, float]:
+        return self.end[0] + self.direction[0] * self.offset, self.end[1] + self.direction[1] * self.offset
+
     def get_positions(self) -> np.ndarray:
-        x = np.linspace(self.start[0], self.start[0] + np.array(self.extent) * self.direction[0], self.gpts[0],
-                        endpoint=self.grid.endpoint[0])
-        y = np.linspace(self.start[1], self.start[1] + np.array(self.extent) * self.direction[1], self.gpts[0],
-                        endpoint=self.grid.endpoint[0])
+        start = self.offset_start
+        end = self.offset_end
+        x = np.linspace(start[0], end[0], self.gpts[0], endpoint=self.grid.endpoint[0])
+        y = np.linspace(start[1], end[1], self.gpts[0], endpoint=self.grid.endpoint[0])
         return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
     def add_to_mpl_plot(self, ax, linestyle: str = '-', color: str = 'r', **kwargs):
@@ -284,11 +323,12 @@ class LineScan(AbstractScan, HasGridMixin):
         kwargs :
             Additional options for matplotlib.pyplot.plot as keyword arguments.
         """
-
-        ax.plot([self.start[0], self.end[0]], [self.start[1], self.end[1]], linestyle=linestyle, color=color, **kwargs)
+        start = self.offset_start
+        end = self.offset_end
+        ax.plot([start[0], end[0]], [start[1], end[1]], linestyle=linestyle, color=color, **kwargs)
 
     def __copy__(self):
-        return self.__class__(start=self.start, end=self.end, gpts=self.gpts, endpoint=self.grid.endpoint)
+        return self.__class__(start=self.start, end=self.end, gpts=self.gpts, endpoint=self.grid.endpoint[0])
 
 
 class GridScan(AbstractScan, HasGridMixin):
