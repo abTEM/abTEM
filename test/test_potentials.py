@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 from ase import Atoms
+from ase.build import bulk
 
 from abtem.potentials import Potential, CrystalPotential
 from abtem.device import asnumpy, cp
@@ -54,6 +55,23 @@ def test_crystal_potential(graphene_atoms):
 
     for (start, __, a), (_, __, b) in zip(crystal_potential.generate_slices(), potential.generate_slices()):
         assert np.allclose(a.array, b.array, atol=1e-5, rtol=1e-5)
+
+
+def test_z_periodic():
+    atoms = bulk('C', 'sc', a=2)
+
+    potential = Potential(atoms, slice_thickness=1, z_periodic=False, sampling=.05).build().project()
+
+    potential_z_periodic = Potential(atoms, slice_thickness=1, z_periodic=True, sampling=.05).build().project()
+
+    assert np.any((potential - potential_z_periodic).array)
+
+    atoms.center(axis=2, vacuum=4)
+
+    potential = Potential(atoms, slice_thickness=1, z_periodic=False, sampling=.05).build().project()
+    potential_z_periodic = Potential(atoms, slice_thickness=1, z_periodic=True, sampling=.05).build().project()
+
+    assert np.all((potential - potential_z_periodic).array == 0)
 
 
 @pytest.mark.gpu

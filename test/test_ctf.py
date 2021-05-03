@@ -60,4 +60,4 @@ def test_ctf_raises():
 def test_ctf_event():
     ctf = CTF(energy=80e3)
     ctf.semiangle_cutoff = 1
-    assert ctf.changed.notify_count == 2
+    assert ctf.event.notify_count == 2

@@ -37,7 +37,7 @@ def test_interpolation():  # just a sanity check
     L = 20
     atoms = Atoms('C', positions=[(0, 0, 1.5)], cell=(L, L, 3))
 
-    potential = Potential(atoms, sampling=sampling, cutoff_tolerance=1e-3, slice_thickness=3)
+    potential = Potential(atoms, sampling=sampling, cutoff_tolerance=1e-3, slice_thickness=3, z_periodic=False)
 
     interpolated = potential[0].array[0, 0]
     integrator = potential.get_integrator(6)

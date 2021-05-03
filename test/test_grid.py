@@ -60,13 +60,13 @@ def test_grid_event():
     grid = Grid()
 
     grid.extent = 5
-    assert grid.changed._notify_count == 1
+    assert grid.event._notify_count == 1
 
     grid.gpts = 100
-    assert grid.changed._notify_count == 2
+    assert grid.event._notify_count == 2
 
     grid.sampling = .1
-    assert grid.changed._notify_count == 3
+    assert grid.event._notify_count == 3
 
 
 def test_locked_grid():
