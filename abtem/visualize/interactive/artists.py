@@ -210,8 +210,8 @@ class MeasurementArtist2d(Artist):
         units = self.measurement.calibration_units
         names = self.measurement.calibration_names
 
-        self.x_label = (f'{names[0]} [{units[0]}]')
-        self.y_label = (f'{names[1]} [{units[1]}]')
+        self.x_label = f'{names[0]} [{units[0]}]'
+        self.y_label = f'{names[1]} [{units[1]}]'
 
     def _add_to_canvas(self, canvas):
         self._image_artist._add_to_canvas(canvas)
@@ -230,6 +230,14 @@ class Artist1d(HasTraits):
         self._mark = mark
         super().__init__(**kwargs)
         link((self._mark, 'visible'), (self, 'visible'))
+
+    @observe('x')
+    def _observe_x(self, change):
+        self._mark.x = self.x
+
+    @observe('y')
+    def _observe_y(self, change):
+        self._mark.y = self.y
 
     def _add_to_canvas(self, canvas):
         scales = {'x': canvas.figure.axes[0].scale,
@@ -252,8 +260,6 @@ class ScatterArtist(Artist1d):
                   'y': LinearScale(allow_padding=False, orientation='vertical'), }
         mark = Scatter(x=np.zeros((1,)), y=np.zeros((1,)), scales=scales, colors=colors)
 
-        link((mark, 'x'), (self, 'x'))
-        link((mark, 'y'), (self, 'y'))
         super().__init__(mark=mark, **kwargs)
 
 
@@ -265,10 +271,8 @@ class LinesArtist(Artist1d):
 
         scales = {'x': LinearScale(allow_padding=False),
                   'y': LinearScale(allow_padding=False, orientation='vertical'), }
-        mark = Lines(x=np.zeros((1,)), y=np.zeros((1,)), scales=scales, colors=colors)
+        mark = Lines(x=np.zeros((2,)), y=np.zeros((2,)), scales=scales, colors=colors)
 
-        link((mark, 'x'), (self, 'x'))
-        link((mark, 'y'), (self, 'y'))
         super().__init__(mark=mark, **kwargs)
 
 
@@ -289,13 +293,13 @@ class MeasurementArtist1d(Artist):
             return
 
         with self._lines_artist.hold_trait_notifications():
-            self._lines_artist.y = change['new'].array
+            self._lines_artist._mark.y = change['new'].array
             self._lines_artist.x = change['new'].calibrations[0].coordinates(len(change['new'].array))
 
             units = self.measurement.calibration_units
             names = self.measurement.calibration_names
 
-            self.x_label = (f'{names[0]} [{units[0]}]')
+            self.x_label = f'{names[0]} [{units[0]}]'
 
     def _add_to_canvas(self, canvas):
         self._lines_artist._add_to_canvas(canvas)
