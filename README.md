@@ -32,7 +32,8 @@ To try abTEM in your webbrowser, click the binder link:
 
 ## Citing abTEM
 
-If you find abTEM useful in your research, please cite our methods article:\
+If you find abTEM useful in your research, please cite our methods article:
+
 J. Madsen & T. Susi, "The abTEM code: transmission electron microscopy from first principles", Open Research Europe 1:24 (2021), doi:[10.12688/openreseurope.13015.1](https://doi.org/10.12688/openreseurope.13015.1).
 
 Open code from articles using abTEM is available in our [repository](https://github.com/jacobjma/abTEM/tree/master/articles).
