@@ -1,4 +1,4 @@
-# abTEM: ab initio Transmission Electron Microscopy
+# abTEM: transmission electron microscopy from first principles
 
 [![PyPI version](https://badge.fury.io/py/abtem.svg)](https://badge.fury.io/py/abtem)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
