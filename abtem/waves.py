@@ -13,7 +13,7 @@ from abtem.detect import AbstractDetector
 from abtem.device import get_array_module, get_device_function, asnumpy, get_array_module_from_device, \
     copy_to_device, get_available_memory, HasDeviceMixin, get_device_from_array
 from abtem.measure import calibrations_from_grid, Measurement, block_zeroth_order_spot, probe_profile
-from abtem.potentials import Potential, AbstractPotential, AbstractPotentialBuilder
+from abtem.potentials import Potential, AbstractPotential, AbstractPotentialBuilder, superpose_deltas
 from abtem.scan import AbstractScan, GridScan
 from abtem.transfer import CTF
 from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, subdivide_into_batches, periodic_crop, \
@@ -225,7 +225,8 @@ class _WavesLike(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
                     int(round(cutoff_scattering_angle[1] / angular_sampling[1] * 2)))
 
         elif isinstance(max_angle, Number):
-            gpts = [int(2 * np.floor(max_angle / d)) + 1 for n, d in zip(interpolated_grid.gpts, self.angular_sampling)]
+            gpts = [int(2 * np.ceil(max_angle / d)) + 1 for n, d in zip(interpolated_grid.gpts, self.angular_sampling)]
+
         else:
             raise RuntimeError()
 
@@ -460,6 +461,9 @@ class Waves(_WavesLike):
             Wave function at the exit plane of the potential.
         """
 
+        if isinstance(potential, Atoms):
+            potential = Potential(potential)
+
         self.grid.match(potential)
 
         propagator = FresnelPropagator()
@@ -653,6 +657,46 @@ class PlaneWave(_WavesLike, HasDeviceMixin):
     def copy(self):
         """Make a copy."""
         return copy(self)
+
+
+def convolve_probe(probe, atoms, shape, margin, intensities):
+    extent = np.diag(atoms.cell)[:2]
+    sampling = extent / np.array(shape)
+
+    margin = int(np.ceil(margin / min(sampling)))
+    shape_w_margin = (shape[0] + 2 * margin, shape[1] + 2 * margin)
+
+    positions = atoms.positions[:, :2] / sampling
+
+    inside = ((positions[:, 0] > -margin) &
+              (positions[:, 1] > -margin) &
+              (positions[:, 0] < shape[0] + margin) &
+              (positions[:, 1] < shape[1] + margin))
+
+    positions = positions[inside] + margin
+    numbers = atoms.numbers[inside]
+
+    if isinstance(intensities, float):
+        intensities = {unique: unique ** intensities for unique in np.unique(numbers)}
+
+    array = np.zeros((1,) + shape_w_margin)
+    for number in np.unique(atoms.numbers):
+        temp = np.zeros((1,) + shape_w_margin)
+        superpose_deltas(positions[numbers == number], 0, temp)
+        array += temp * intensities[number]
+
+    probe = probe.copy()
+    probe.extent = (shape_w_margin[0] * sampling[0], shape_w_margin[1] * sampling[1])
+    probe.gpts = shape_w_margin
+    intensity = probe.build((0, 0)).intensity()[0].array
+    intensity /= intensity.max()
+
+    array = np.fft.ifft2(np.fft.fft2(array) * np.fft.fft2(intensity)).real
+    array = array[0, margin:-margin, margin:-margin]
+    array = np.abs(array)
+
+    calibrations = calibrations_from_grid(gpts=shape, sampling=sampling)
+    return Measurement(array=array, calibrations=calibrations)
 
 
 class Probe(_Scanable, HasDeviceMixin, HasEventMixin):
