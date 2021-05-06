@@ -1,7 +1,7 @@
 import numpy as np
 from bqplot import LinearScale, ColorScale, Lines, Scatter, ColorAxis, Figure, Axis
 from bqplot_image_gl import ImageGL
-from traitlets import HasTraits, observe, default, List, link, Float, Unicode, Instance, Bool
+from traitlets import HasTraits, observe, default, List, link, Float, Unicode, Instance, Bool, Int, Any
 from traittypes import Array
 import ipywidgets as widgets
 from abtem.measure import Measurement
@@ -185,6 +185,84 @@ class ImageArtist(Artist):
         return [tuple([l - .5 * s for l in L]) for L, s in zip(self.extent, self.display_sampling)]
 
 
+class ItemSelector(HasTraits):
+    sequence = Any()
+    current_index = Int(0)
+    current_item = Any()
+
+    def __init__(self, **kwargs):
+        self._slider = widgets.IntSlider(min=0, max=0, step=1)
+        link((self._slider, 'value'), (self, 'current_index'))
+        super().__init__(**kwargs)
+
+    @observe('current_index')
+    def _observe_current_index(self, change):
+        self.current_item = self.sequence[self.current_index]
+
+    @observe('sequence')
+    def _observe_sequence(self, change):
+        self._slider.max = len(self.sequence) - 1
+
+        clipped_current_index = min(self.current_index, self._slider.max)
+        force_trigger = clipped_current_index == self.current_index
+
+        self.current_index = clipped_current_index
+
+        if force_trigger:
+            self._observe_current_index(None)
+
+
+class ArrayViewArtist(Artist):
+    array = Array()
+    index = Int()
+
+    def __init__(self, **kwargs):
+        self._image_artist = ImageArtist()
+        super().__init__(**kwargs)
+
+    @property
+    def image_artist(self):
+        return self._image_artist
+
+    @observe('array', 'index')
+    def _observe_array(self, change):
+        self._image_artist.image = self.array[self.index]
+
+    def _add_to_canvas(self, canvas):
+        self._image_artist._add_to_canvas(canvas)
+
+    @property
+    def navigation_sliders(self):
+        slider = widgets.IntSlider(min=0, max=len(self.array) - 1, step=1)
+        link((slider, 'value'), (self, 'index'))
+        return slider
+
+    @property
+    def limits(self):
+        return self._image_artist.limits
+
+
+class PointSeriesArtist(Artist):
+    points = List()
+    index = Int()
+
+    def __init__(self, **kwargs):
+        self._scatter_artist = ScatterArtist()
+        super().__init__(**kwargs)
+
+    @observe('points', 'index')
+    def _observe_points(self, change):
+        self._scatter_artist.x = self.points[self.index][:, 0]
+        self._scatter_artist.y = self.points[self.index][:, 1]
+
+    def _add_to_canvas(self, canvas):
+        self._scatter_artist._add_to_canvas(canvas)
+
+    @property
+    def limits(self):
+        return self._scatter_artist.limits
+
+
 class MeasurementArtist2d(Artist):
     measurement = Instance(Measurement, allow_none=True)
 
@@ -226,8 +304,9 @@ class Artist1d(HasTraits):
     y = Array()
     visible = Bool()
 
-    def __init__(self, mark, **kwargs):
+    def __init__(self, mark, color_scale=None, **kwargs):
         self._mark = mark
+        self._color_scale = color_scale
         super().__init__(**kwargs)
         link((self._mark, 'visible'), (self, 'visible'))
 
@@ -241,7 +320,12 @@ class Artist1d(HasTraits):
 
     def _add_to_canvas(self, canvas):
         scales = {'x': canvas.figure.axes[0].scale,
-                  'y': canvas.figure.axes[1].scale}
+                             'y': canvas.figure.axes[1].scale}
+
+        try:
+            scales['color'] = self._mark.scales['color']
+        except KeyError:
+            pass
 
         self._mark.scales = scales
         canvas.figure.marks = [self._mark] + canvas.figure.marks
@@ -252,15 +336,27 @@ class Artist1d(HasTraits):
 
 
 class ScatterArtist(Artist1d):
+    color = Any()
+
     def __init__(self, colors='red', **kwargs):
         if isinstance(colors, str):
             colors = [colors]
 
+        color_scale = ColorScale(scheme='plasma')
+
         scales = {'x': LinearScale(allow_padding=False),
-                  'y': LinearScale(allow_padding=False, orientation='vertical'), }
-        mark = Scatter(x=np.zeros((1,)), y=np.zeros((1,)), scales=scales, colors=colors)
+                  'y': LinearScale(allow_padding=False, orientation='vertical'),
+                  'color': color_scale
+                  }
+        mark = Scatter(x=np.zeros((1,)), y=np.zeros((1,)), scales=scales)
+
+        # link((self, 'color'), (mark, 'color'))
 
         super().__init__(mark=mark, **kwargs)
+
+    # @default('color')
+    # def _default_colors(self):
+    #     return ['red']
 
 
 class LinesArtist(Artist1d):
