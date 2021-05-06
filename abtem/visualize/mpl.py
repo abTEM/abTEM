@@ -207,6 +207,7 @@ def show_measurement_2d(measurement,
                         power=1.,
                         log_scale=False,
                         title=None,
+                        equal_ticks=False,
                         **kwargs):
     """
     Show image function
@@ -292,6 +293,13 @@ def show_measurement_2d(measurement,
     elif len(measurement.array.shape) > 2:
         if any([n > 1 for n in measurement.array.shape[:-2]]):
             ax.set_title(f'Slice {(0,) * (len(measurement.array.shape) - 2)} of {measurement.array.shape} measurement')
+
+    if equal_ticks:
+        d = max(np.diff(ax.get_xticks())[0], np.diff(ax.get_yticks())[0])
+        xticks = np.arange(*ax.get_xlim(), d)
+        yticks = np.arange(*ax.get_ylim(), d)
+        ax.set_xticks(xticks)
+        ax.set_yticks(yticks)
 
     return ax, im
 
