@@ -1,7 +1,7 @@
 """Module for often-used base classes."""
 from collections import OrderedDict
 from copy import copy
-from typing import Optional, Union, Sequence, Any, Callable
+from typing import Optional, Union, Sequence, Any, Callable, Tuple
 
 import numpy as np
 
@@ -160,6 +160,14 @@ def cached_method(target_cache_property: str):
             return result
 
         return new_func
+
+    return wrapper
+
+
+def copy_docstring_from(source):
+    def wrapper(func):
+        func.__doc__ = source.__doc__
+        return func
 
     return wrapper
 
@@ -332,23 +340,17 @@ class Grid(HasEventMixin):
 
     @property
     def endpoint(self) -> tuple:
-        """
-        Include the grid endpoint.
-        """
+        """Include the grid endpoint."""
         return self._endpoint
 
     @property
     def dimensions(self) -> int:
-        """
-        Number of dimensions represented by the grid.
-        """
+        """Number of dimensions represented by the grid."""
         return self._dimensions
 
     @property
     def extent(self) -> tuple:
-        """
-        Grid extent in each dimension [Å].
-        """
+        """Grid extent in each dimension [Å]."""
         return self._extent
 
     @extent.setter
@@ -369,9 +371,7 @@ class Grid(HasEventMixin):
 
     @property
     def gpts(self) -> tuple:
-        """
-        Number of grid points in each dimension.
-        """
+        """Number of grid points in each dimension."""
         return self._gpts
 
     @gpts.setter
@@ -393,9 +393,7 @@ class Grid(HasEventMixin):
 
     @property
     def sampling(self) -> tuple:
-        """
-        Grid sampling in each dimension [1 / Å].
-        """
+        """Grid sampling in each dimension [1 / Å]."""
         return self._sampling
 
     @sampling.setter
@@ -525,6 +523,7 @@ class HasGridMixin:
         return self._grid
 
     @property
+    @copy_docstring_from(Grid.extent)
     def extent(self):
         return self.grid.extent
 
@@ -533,6 +532,7 @@ class HasGridMixin:
         self.grid.extent = extent
 
     @property
+    @copy_docstring_from(Grid.gpts)
     def gpts(self):
         return self.grid.gpts
 
@@ -541,6 +541,7 @@ class HasGridMixin:
         self.grid.gpts = gpts
 
     @property
+    @copy_docstring_from(Grid.sampling)
     def sampling(self):
         return self.grid.sampling
 
@@ -589,17 +590,13 @@ class Accelerator(HasEventMixin):
 
     @property
     def wavelength(self) -> float:
-        """
-        Relativistic wavelength [Å].
-        """
+        """ Relativistic wavelength [Å]. """
         self.check_is_defined()
         return energy2wavelength(self.energy)
 
     @property
     def sigma(self) -> float:
-        """
-        Interaction parameter.
-        """
+        """ Interaction parameter. """
         self.check_is_defined()
         return energy2sigma(self.energy)
 
@@ -650,9 +647,7 @@ class Accelerator(HasEventMixin):
         return self.__class__(self.energy)
 
     def copy(self):
-        """
-        Make a copy.
-        """
+        """Make a copy."""
         return copy(self)
 
 
@@ -666,9 +661,10 @@ class HasAcceleratorMixin:
     @accelerator.setter
     def accelerator(self, new: Accelerator):
         self._accelerator = new
-        self._accelerator.changed = new.changed
+        self._accelerator._event = new._event
 
     @property
+    @copy_docstring_from(Accelerator.energy)
     def energy(self):
         return self.accelerator.energy
 
@@ -677,24 +673,52 @@ class HasAcceleratorMixin:
         self.accelerator.energy = energy
 
     @property
+    @copy_docstring_from(Accelerator.wavelength)
     def wavelength(self):
         return self.accelerator.wavelength
 
 
-class AntialiasFilter:
+class BeamTilt(HasEventMixin):
+
+    def __init__(self, tilt: Tuple[float, float] = (0., 0.)):
+        self._tilt = tilt
+        self._event = Event()
+
+    @property
+    def tilt(self) -> Tuple[float, float]:
+        """Beam tilt [mrad]."""
+        return self._tilt
+
+    @tilt.setter
+    @watched_method('_event')
+    def tilt(self, value: Tuple[float, float]):
+        self._tilt = value
+
+
+class HasBeamTiltMixin:
+    _beam_tilt: BeamTilt
+
+    @property
+    @copy_docstring_from(BeamTilt.tilt)
+    def tilt(self) -> Tuple[float, float]:
+        return self._beam_tilt.tilt
+
+    @tilt.setter
+    def tilt(self, value: Tuple[float, float]):
+        self.tilt = value
+
+
+class AntialiasFilter(HasEventMixin):
     """
     Antialias filter object.
     """
-
-    cutoff = 2 / 3
+    cutoff = 2 / 3.
     rolloff = .1
 
-    def __init__(self, cutoff=None):
-        if cutoff is None:
-            cutoff = self.cutoff
-
-        self.cutoff = cutoff
+    def __init__(self):
         self._mask_cache = Cache(1)
+        self._event = Event()
+        self._event.observe(cache_clear_callback(self._mask_cache))
 
     @cached_method('_mask_cache')
     def get_mask(self, gpts, sampling, xp):
@@ -737,3 +761,31 @@ class AntialiasFilter:
         fft2_convolve = get_device_function(xp, 'fft2_convolve')
         fft2_convolve(waves.array, self.get_mask(waves.gpts, waves.sampling, xp), overwrite_x=True)
         return waves
+
+
+class AntialiasAperture:
+
+    def __init__(self, antialias_aperture=(2 / 3., 2 / 3.)):
+        self._antialias_aperture = antialias_aperture
+
+    @property
+    def antialias_aperture(self) -> Tuple[float, float]:
+        """Anti-aliasing aperture as a fraction of the Nyquist frequency."""
+        return self._antialias_aperture
+
+    @antialias_aperture.setter
+    def antialias_aperture(self, value: Tuple[float, float]):
+        self._antialias_aperture = value
+
+
+class HasAntialiasAperture(HasEventMixin):
+    _antialias_aperture: AntialiasAperture
+
+    @property
+    @copy_docstring_from(AntialiasAperture.antialias_aperture)
+    def antialias_aperture(self) -> Tuple[float, float]:
+        return self._antialias_aperture.antialias_aperture
+
+    @antialias_aperture.setter
+    def antialias_aperture(self, value: Tuple[float, float]):
+        self._antialias_aperture.antialias_aperture = value

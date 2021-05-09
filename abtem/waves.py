@@ -1,4 +1,5 @@
 """Module to describe electron waves and their propagation."""
+from abc import abstractmethod
 from copy import copy
 from numbers import Number
 from typing import Union, Sequence, Tuple, List, Dict
@@ -8,7 +9,8 @@ import numpy as np
 from ase import Atoms
 
 from abtem.base_classes import Grid, Accelerator, cache_clear_callback, Cache, cached_method, \
-    HasGridMixin, HasAcceleratorMixin, HasEventMixin, AntialiasFilter, Event
+    HasGridMixin, HasAcceleratorMixin, HasEventMixin, AntialiasFilter, Event, HasBeamTiltMixin, BeamTilt, \
+    AntialiasAperture, HasAntialiasAperture
 from abtem.detect import AbstractDetector
 from abtem.device import get_array_module, get_device_function, asnumpy, get_array_module_from_device, \
     copy_to_device, get_available_memory, HasDeviceMixin, get_device_from_array
@@ -86,7 +88,7 @@ class FresnelPropagator:
                                                            get_array_module(waves.array))
 
         fft2_convolve(waves._array, propagator_array, overwrite_x=True)
-        waves._antialiasing_aperture = (2 / 3.,) * 2
+        waves.antialias_aperture = (2 / 3.,) * 2
         return waves
 
 
@@ -130,32 +132,30 @@ def _multislice(waves: Union['Waves', 'SMatrixArray'],
     return waves
 
 
-class _WavesLike(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
+class _WavesLike(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin, HasBeamTiltMixin, HasAntialiasAperture):
 
-    def __init__(self, tilt: Tuple[float, float] = None, antialiasing_aperture: float = None):
-        self._tilt = tilt
-        if antialiasing_aperture is None:
-            antialiasing_aperture = (AntialiasFilter.cutoff,) * 2
+    # def __init__(self, tilt: Tuple[float, float] = None, antialiasing_aperture: Tuple[float, float] = None):
+    #     self.tilt = tilt
+    #
+    #     if antialiasing_aperture is None:
+    #         antialiasing_aperture = (2 / 3.,) * 2
+    #
+    #     self.antialiasing_aperture = antialiasing_aperture
 
-        self._antialiasing_aperture = antialiasing_aperture
+    # @property
+    # @abstractmethod
+    # def tilt(self):
+    #     pass
 
-    @property
-    def tilt(self):
-        return self._tilt
-
-    @tilt.setter
-    def tilt(self, value):
-        self._tilt = value
-
-    @property
-    def antialiasing_aperture(self):
-        return self._antialiasing_aperture
+    # @property
+    # @abstractmethod
+    # def antialias_aperture(self):
+    #     pass
 
     @property
     def cutoff_scattering_angles(self) -> Tuple[float, float]:
         interpolated_grid = self._interpolated_grid
-        # print(self.antialiasing_aperture)
-        kcut = [1 / d / 2 * a for d, a in zip(interpolated_grid.sampling, self.antialiasing_aperture)]
+        kcut = [1 / d / 2 * a for d, a in zip(interpolated_grid.sampling, self.antialias_aperture)]
         kcut = min(kcut)
         kcut = (
             np.ceil(2 * interpolated_grid.extent[0] * kcut) / (
@@ -168,13 +168,9 @@ class _WavesLike(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
     def rectangle_cutoff_scattering_angles(self) -> Tuple[float, float]:
         rolloff = AntialiasFilter.rolloff
         interpolated_grid = self._interpolated_grid
-        # print(self.antialiasing_aperture / max(interpolated_grid.sampling))
-        # print(interpolated_grid.sampling)
         kcut = [(a / (d * 2) - rolloff) / np.sqrt(2) for d, a in
-                zip(interpolated_grid.sampling, self.antialiasing_aperture)]
+                zip(interpolated_grid.sampling, self.antialias_aperture)]
 
-        # print(self.antialiasing_aperture / max(interpolated_grid.sampling))
-        # print(self.antialiasing_aperture / max(interpolated_grid.sampling))
         kcut = min(kcut)
         kcut = (
             np.floor(2 * interpolated_grid.extent[0] * kcut) / (
@@ -207,10 +203,10 @@ class _WavesLike(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
         return self.grid
 
     def downsampled_gpts(self, max_angle: Union[float, str]):
-        interpolated_grid = self._interpolated_grid
+        interpolated_gpts = self._interpolated_grid.gpts
 
         if max_angle is None:
-            gpts = interpolated_grid.gpts
+            gpts = interpolated_gpts
 
         elif isinstance(max_angle, str):
             if max_angle == 'limit':
@@ -224,13 +220,13 @@ class _WavesLike(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin):
             gpts = (int(round(cutoff_scattering_angle[0] / angular_sampling[0] * 2)),
                     int(round(cutoff_scattering_angle[1] / angular_sampling[1] * 2)))
 
-        elif isinstance(max_angle, Number):
-            gpts = [int(2 * np.ceil(max_angle / d)) + 1 for n, d in zip(interpolated_grid.gpts, self.angular_sampling)]
-
         else:
-            raise RuntimeError()
+            try:
+                gpts = [int(2 * np.ceil(max_angle / d)) + 1 for n, d in zip(interpolated_gpts, self.angular_sampling)]
+            except:
+                raise RuntimeError()
 
-        return (min(gpts[0], interpolated_grid.gpts[0]), min(gpts[1], interpolated_grid.gpts[1]))
+        return (min(gpts[0], interpolated_gpts[0]), min(gpts[1], interpolated_gpts[1]))
 
 
 class _Scanable(_WavesLike):
@@ -286,19 +282,18 @@ class Waves(_WavesLike):
                  extent: Union[float, Sequence[float]] = None,
                  sampling: Union[float, Sequence[float]] = None,
                  energy: float = None,
-                 tilt: Sequence[float] = None,
-                 antialiasing_aperture: Tuple[float, float] = None):
+                 tilt: Tuple[float, float] = None,
+                 antialias_aperture: Tuple[float, float] = None):
 
         if len(array.shape) < 2:
             raise RuntimeError('Wave function array should be have 2 dimensions or more')
 
         self._array = array
-
         self._grid = Grid(extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True)
         self._accelerator = Accelerator(energy=energy)
+        self._beam_tilt = BeamTilt(tilt=tilt)
+        self._antialias_aperture = AntialiasAperture(antialias_aperture=antialias_aperture)
         self._device = get_device_from_array(self._array)
-
-        super().__init__(tilt=tilt, antialiasing_aperture=antialiasing_aperture)
 
     def __len__(self):
         return len(self.array)
@@ -325,7 +320,7 @@ class Waves(_WavesLike):
         abs2 = get_device_function(get_array_module(self.array), 'abs2')
         return Measurement(abs2(array), calibrations)
 
-    def downsample(self, max_angle='valid', return_fourier_space=False):
+    def downsample(self, max_angle='valid', return_fourier_space: bool = False) -> 'Waves':
         xp = get_array_module(self.array)
         fft2 = get_device_function(xp, 'fft2')
         ifft2 = get_device_function(xp, 'ifft2')
@@ -336,19 +331,13 @@ class Waves(_WavesLike):
         if gpts != self.gpts:
             array = fft_crop(array, self.array.shape[:-2] + gpts)
 
-        # if max_angle in ('valid', 'limit'):
-        #    antialiasing_aperture = 1.
-        # else:
-        antialiasing_aperture = (self.antialiasing_aperture[0] * self.gpts[0] / gpts[0],
-                                 self.antialiasing_aperture[1] * self.gpts[1] / gpts[1])
-
-        # print(antialiasing_aperture)
+        antialias_aperture = (self.antialias_aperture[0] * self.gpts[0] / gpts[0],
+                              self.antialias_aperture[1] * self.gpts[1] / gpts[1])
 
         if return_fourier_space:
-            return Waves(array, extent=self.extent, energy=self.energy, antialiasing_aperture=antialiasing_aperture)
+            return Waves(array, extent=self.extent, energy=self.energy, antialias_aperture=antialias_aperture)
         else:
-            return Waves(ifft2(array), extent=self.extent, energy=self.energy,
-                         antialiasing_aperture=antialiasing_aperture)
+            return Waves(ifft2(array), extent=self.extent, energy=self.energy, antialias_aperture=antialias_aperture)
 
     def far_field(self, max_angle='valid'):
         return self.downsample(max_angle=max_angle, return_fourier_space=True)
@@ -384,7 +373,7 @@ class Waves(_WavesLike):
 
         return measurement
 
-    def allocate_measurement(self, fourier_space=False):
+    def allocate_measurement(self, fourier_space=False) -> Measurement:
         """
         Allocate a measurement object
 
@@ -401,7 +390,7 @@ class Waves(_WavesLike):
         array = np.zeros_like(self.array, dtype=np.float32)
         return Measurement(array, calibrations)
 
-    def apply_ctf(self, ctf: CTF = None, in_place=False, **kwargs):
+    def apply_ctf(self, ctf: CTF = None, in_place=False, **kwargs) -> 'Waves':
         """
         Apply the aberrations defined by a CTF object to wave function.
 
@@ -444,7 +433,7 @@ class Waves(_WavesLike):
                    potential: AbstractPotential,
                    pbar: Union[ProgressBar, bool] = True,
                    detector=None,
-                   max_batch_potential=1) -> 'Waves':
+                   max_batch_potential: int = 1) -> 'Waves':
         """
         Propagate and transmit wave function through the provided potential.
 
@@ -488,7 +477,7 @@ class Waves(_WavesLike):
                 result = self.__class__(out_array,
                                         extent=self.extent,
                                         energy=self.energy,
-                                        antialiasing_aperture=(2 / 3.,) * 2)
+                                        antialias_aperture=(2 / 3.,) * 2)
 
             tds_pbar = ProgressBar(total=n, desc='TDS', disable=(not pbar) or (n == 1))
             multislice_pbar = ProgressBar(total=len(potential), desc='Multislice', disable=not pbar)
@@ -572,7 +561,7 @@ class Waves(_WavesLike):
 
     def __copy__(self) -> 'Waves':
         new_copy = self.__class__(array=self._array.copy(), tilt=self.tilt,
-                                  antialiasing_aperture=self.antialiasing_aperture)
+                                  antialias_aperture=self.antialias_aperture)
         new_copy._grid = copy(self.grid)
         new_copy._accelerator = copy(self.accelerator)
         return new_copy
@@ -582,7 +571,7 @@ class Waves(_WavesLike):
         return copy(self)
 
 
-class PlaneWave(_WavesLike, HasDeviceMixin):
+class PlaneWave(_WavesLike):
     """
     Plane wave object
 
@@ -613,9 +602,9 @@ class PlaneWave(_WavesLike, HasDeviceMixin):
                  device: str = 'cpu'):
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
+        self._beam_tilt = BeamTilt(tilt=tilt)
+        self._antialias_aperture = AntialiasAperture()
         self._device = device
-
-        super().__init__(tilt=tilt)
 
     def multislice(self,
                    potential: Union[AbstractPotential, Atoms],
@@ -699,7 +688,7 @@ def convolve_probe(probe, atoms, shape, margin, intensities):
     return Measurement(array=array, calibrations=calibrations)
 
 
-class Probe(_Scanable, HasDeviceMixin, HasEventMixin):
+class Probe(_Scanable, HasEventMixin):
     """
     Probe wavefunction object
 
@@ -748,8 +737,9 @@ class Probe(_Scanable, HasDeviceMixin, HasEventMixin):
 
         self._ctf = ctf
         self._accelerator = self._ctf._accelerator
-
+        self._beam_tilt = BeamTilt(tilt=tilt)
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
+        self._antialias_aperture = AntialiasAperture()
         self._event = Event()
 
         self._ctf.observe(self.event.notify)
@@ -759,7 +749,6 @@ class Probe(_Scanable, HasDeviceMixin, HasEventMixin):
         self._device = device
         self._ctf_cache = Cache(1)
         self.observe(cache_clear_callback(self._ctf_cache))
-        super().__init__(tilt=tilt)
 
     @property
     def ctf(self) -> CTF:
@@ -809,7 +798,8 @@ class Probe(_Scanable, HasDeviceMixin, HasEventMixin):
 
         array = array / xp.sqrt((xp.abs(array[0]) ** 2).sum()) / xp.sqrt(np.prod(array.shape[1:]))
 
-        return Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt)
+        return Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt,
+                     antialias_aperture=self.antialias_aperture)
 
     def multislice(self, positions: Sequence[Sequence[float]], potential: AbstractPotential, pbar=True) -> Waves:
         """
@@ -984,7 +974,7 @@ class Probe(_Scanable, HasDeviceMixin, HasEventMixin):
         return self.build((self.extent[0] / 2, self.extent[1] / 2)).intensity().show(**kwargs)
 
 
-class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
+class SMatrixArray(_Scanable, HasEventMixin):
     """
     Scattering matrix array object.
 
@@ -1015,7 +1005,7 @@ class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
     interpolated_gpts : two int, optional
         The gpts of the probe window after Fourier interpolation. This may differ from the shape determined by dividing
         each side by the interpolation is the scattering matrix array is cropped from a larger scattering matrix.
-    antialiasing_aperture : float, optional
+    antialiasing_aperture : two float, optional
         Assumed antialiasing aperture as a fraction of the real space Nyquist frequency. Default is 2/3.
     device : str, optional
         The calculations will be carried out on this device. Default is 'cpu'.
@@ -1027,13 +1017,13 @@ class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
                  energy: float,
                  k: np.ndarray,
                  ctf: CTF = None,
-                 extent: Union[float, Sequence[float]] = None,
-                 sampling: Union[float, Sequence[float]] = None,
+                 extent: Union[float, Tuple[float, float]] = None,
+                 sampling: Union[float, Tuple[float, float]] = None,
                  tilt: Tuple[float, float] = None,
                  periodic: bool = True,
-                 offset: Sequence[float] = None,
+                 offset: Tuple[int, int] = (0, 0),
                  interpolated_gpts: Tuple[int, int] = None,
-                 antialiasing_aperture: Tuple[float, float] = None,
+                 antialias_aperture: Tuple[float, float] = None,
                  device: str = 'cpu'):
 
         if ctf is None:
@@ -1047,8 +1037,9 @@ class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
 
         self._ctf = ctf
         self._accelerator = self._ctf._accelerator
-
         self._grid = Grid(extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True)
+        self._beam_tilt = BeamTilt(tilt=tilt)
+        self._antialias_aperture = AntialiasAperture(antialias_aperture=antialias_aperture)
         self._event = Event()
 
         self._ctf.observe(self.event.notify)
@@ -1056,21 +1047,13 @@ class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
         self._accelerator.event.observe(self.event.notify)
 
         self._device = device
-
         self._array = array
-        self._antialiasing_aperture = antialiasing_aperture
-
         self._expansion_cutoff = expansion_cutoff
         self._k = k
-        self._periodic = periodic
-
-        if offset is None:
-            offset = (0, 0)
-
-        self._offset = np.array(offset, dtype=np.int)
         self._interpolated_gpts = interpolated_gpts
 
-        super().__init__(tilt=tilt, antialiasing_aperture=antialiasing_aperture)
+        self._periodic = periodic
+        self._offset = offset
 
     @property
     def ctf(self) -> CTF:
@@ -1083,10 +1066,6 @@ class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
         return self._array
 
     @property
-    def antialiasing_aperture(self):
-        return self._antialiasing_aperture
-
-    @property
     def k(self) -> np.ndarray:
         """The spatial frequencies of each wave in the plane wave expansion."""
         return self._k
@@ -1097,7 +1076,7 @@ class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
         return self._expansion_cutoff
 
     @property
-    def periodic(self):
+    def periodic(self) -> bool:
         return self._periodic
 
     @property
@@ -1110,7 +1089,7 @@ class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
         return Grid(gpts=self._interpolated_gpts, sampling=self.sampling)
 
     @property
-    def offset(self):
+    def offset(self) -> Tuple[int, int]:
         return self._offset
 
     def __len__(self) -> int:
@@ -1120,7 +1099,7 @@ class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
     def _raise_not_periodic(self):
         raise RuntimeError('not implemented for non-periodic/cropped scattering matrices')
 
-    def downsample(self, max_angle='limit'):
+    def downsample(self, max_angle='limit') -> 'SMatrixArray':
         if not self.periodic:
             self._raise_not_periodic()
 
@@ -1139,7 +1118,7 @@ class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
         else:
             interpolated_gpts = tuple(n // (self.gpts[i] // self.interpolated_gpts[i]) for i, n in enumerate(gpts))
 
-        antialiasing_aperture = downsampled.antialiasing_aperture
+        antialias_aperture = downsampled.antialias_aperture
 
         return self.__class__(array=new_array,
                               expansion_cutoff=self._expansion_cutoff,
@@ -1150,10 +1129,10 @@ class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
                               periodic=self.periodic,
                               offset=self._offset,
                               interpolated_gpts=interpolated_gpts,
-                              antialiasing_aperture=antialiasing_aperture,
+                              antialias_aperture=antialias_aperture,
                               device=self.device)
 
-    def crop_to_scan(self, scan):
+    def crop_to_scan(self, scan) -> 'SMatrixArray':
 
         if not isinstance(scan, GridScan):
             raise NotImplementedError()
@@ -1172,19 +1151,19 @@ class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
                               interpolated_gpts=self.interpolated_gpts,
                               device=self.device)
 
-    def _max_batch_expansion(self):
+    def _max_batch_expansion(self) -> int:
         memory_per_wave = 2 * 4 * self.gpts[0] * self.gpts[1]
         available_memory = .2 * get_available_memory(self._device)
         return min(int(available_memory / memory_per_wave), len(self))
 
-    def _max_batch_probes(self):
+    def _max_batch_probes(self) -> int:
         max_batch_plane_waves = self._max_batch_expansion()
         memory_per_wave = 2 * 4 * self.interpolated_gpts[0] * self.interpolated_gpts[1]
         memory_per_plane_wave_batch = 2 * 4 * self.gpts[0] * self.gpts[1] * max_batch_plane_waves
         available_memory = .2 * get_available_memory(self._device) - memory_per_plane_wave_batch
         return max(min(int(available_memory / memory_per_wave), 1024), 1)
 
-    def _generate_partial(self, max_batch: int = None, pbar: Union[ProgressBar, bool] = True):
+    def _generate_partial(self, max_batch: int = None, pbar: Union[ProgressBar, bool] = True) -> Waves:
         if max_batch is None:
             n_batches = 1
         else:
@@ -1207,10 +1186,10 @@ class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
             if xp != get_array_module(self.array):
                 yield start, end, Waves(copy_to_device(self._array[start:end], xp),
                                         extent=self.extent, energy=self.energy,
-                                        antialiasing_aperture=self.antialiasing_aperture)
+                                        antialias_aperture=self.antialias_aperture)
             else:
                 yield start, end, Waves(self._array[start:end], extent=self.extent, energy=self.energy,
-                                        antialiasing_aperture=self.antialiasing_aperture)
+                                        antialias_aperture=self.antialias_aperture)
 
             n += batch_size
             pbar.update(batch_size)
@@ -1289,9 +1268,7 @@ class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
         offset = (self.interpolated_gpts[0] // 2, self.interpolated_gpts[1] // 2)
         corners = np.rint(np.array(positions) / self.sampling - offset).astype(np.int)
         upper_corners = corners + np.asarray(self.interpolated_gpts)
-
         crop_corner = (np.min(corners[:, 0]).item(), np.min(corners[:, 1]).item())
-
         size = (np.max(upper_corners[:, 0]).item() - crop_corner[0],
                 np.max(upper_corners[:, 1]).item() - crop_corner[1])
 
@@ -1332,16 +1309,16 @@ class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
             positions = np.expand_dims(positions, axis=0)
 
         if positions.shape[1] != 2:
-            raise ValueError()
+            raise ValueError('positions must be of shape Nx2')
 
         coefficients = self._get_coefficients(positions)
 
         if self.interpolated_gpts != self.gpts:
             crop_corner, size, corners = self._get_requisite_crop(positions, return_per_position=True)
 
-            if self._offset is not None:
-                corners -= self._offset
-                crop_corner = (crop_corner[0] - self._offset[0], crop_corner[1] - self._offset[1])
+            if self.offset is not None:
+                corners -= self.offset
+                crop_corner = (crop_corner[0] - self.offset[0], crop_corner[1] - self.offset[1])
 
             array = copy_to_device(periodic_crop(self.array, crop_corner, size), device=self._device)
             window = xp.tensordot(coefficients, array, axes=[(1,), (0,)])
@@ -1358,7 +1335,7 @@ class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
             window = xp.tensordot(coefficients, copy_to_device(self.array, device=self._device), axes=[(1,), (0,)])
 
         return Waves(window, sampling=self.sampling, energy=self.energy, tilt=self.tilt,
-                     antialiasing_aperture=self.antialiasing_aperture)
+                     antialias_aperture=self.antialias_aperture)
 
     def _generate_probes(self, scan: AbstractScan, max_batch_probes, max_batch_expansion):
 
@@ -1434,7 +1411,7 @@ class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
                               offset=self.offset,
                               interpolated_gpts=self.interpolated_gpts,
                               energy=self.energy,
-                              antialiasing_aperture=self.antialiasing_aperture,
+                              antialias_aperture=self.antialiasing_aperture,
                               device=self.device)
 
     def __copy__(self, device=None):
@@ -1446,15 +1423,23 @@ class SMatrixArray(_Scanable, HasDeviceMixin, HasEventMixin):
                               offset=self.offset,
                               interpolated_gpts=self.interpolated_gpts,
                               energy=self.energy,
-                              antialiasing_aperture=self.antialiasing_aperture,
+                              antialias_aperture=self.antialias_aperture,
                               device=self.device)
 
     def copy(self):
         """Make a copy."""
         return copy(self)
 
+#
+# class PartialSMatrix(HasEventMixin):
+#
+#     def __init__(self, parent_s_matrix, k):
+#         pass
+#
+#         super().__init__()
 
-class SMatrix(_Scanable, HasDeviceMixin, HasEventMixin):
+
+class SMatrix(_Scanable, HasEventMixin):
     """
     Scattering matrix builder class
 
@@ -1492,6 +1477,7 @@ class SMatrix(_Scanable, HasDeviceMixin, HasEventMixin):
                  expansion_cutoff: float = None,
                  interpolation: int = 1,
                  ctf: CTF = None,
+                 num_rings: int = None,
                  extent: Union[float, Sequence[float]] = None,
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
@@ -1524,9 +1510,9 @@ class SMatrix(_Scanable, HasDeviceMixin, HasEventMixin):
 
         self._ctf = ctf
         self._accelerator = self._ctf._accelerator
-
+        self._antialias_aperture = AntialiasAperture()
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
-
+        self._beam_tilt = BeamTilt(tilt=tilt)
         self._event = Event()
 
         self._ctf.observe(self.event.notify)
@@ -1540,7 +1526,8 @@ class SMatrix(_Scanable, HasDeviceMixin, HasEventMixin):
 
         self._storage = storage
 
-        super().__init__(tilt=tilt)
+        if num_rings is not None:
+            raise NotImplementedError()
 
     @property
     def ctf(self):
@@ -1740,6 +1727,12 @@ class SMatrix(_Scanable, HasDeviceMixin, HasEventMixin):
         ky = ky[mask]
         return xp.asarray((kx, ky)).T
 
+    def _partial_wavevectors(self):
+        pass
+
+    def _build_partial(self):
+        pass
+
     def build(self) -> SMatrixArray:
         """Build the scattering matrix."""
 
@@ -1775,6 +1768,7 @@ class SMatrix(_Scanable, HasDeviceMixin, HasEventMixin):
                             tilt=self.tilt,
                             k=k,
                             ctf=self.ctf.copy(),
+                            antialias_aperture=self.antialias_aperture,
                             device=self._device)
 
     def profile(self, angle=0.) -> Measurement:
