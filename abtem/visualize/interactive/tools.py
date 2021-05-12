@@ -109,9 +109,9 @@ class SelectPositionTool(HasTraits):
     position = Array()
     marker = Bool()
 
-    def __init__(self, **kwargs):
+    def __init__(self, allow_drag=True, **kwargs):
         self._point_artist = ScatterArtist()
-
+        self._allow_drag = allow_drag
         super().__init__(**kwargs)
 
     @default('position')
@@ -126,6 +126,7 @@ class SelectPositionTool(HasTraits):
                                        y_scale=canvas.figure.axes[1].scale)
 
         def on_mouse_msg(_, change, __):
+
             if change['event'] in ('dragmove', 'click'):
                 position = np.array([change['domain']['x'], change['domain']['y']])
 
@@ -135,7 +136,12 @@ class SelectPositionTool(HasTraits):
                 self._point_artist.y = np.array([position[1]])
 
         canvas.figure.interaction = interaction
-        interaction.events = ['click']
+
+        events = ['click']
+        if self._allow_drag:
+            events += ['dragmove']
+
+        interaction.events = events
         canvas.figure.interaction.on_msg(on_mouse_msg)
 
     def deactivate(self, canvas):
