@@ -1422,7 +1422,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
         return copy(self)
 
 
-class PartialSMatrix(_Scanable):
+class PartitionedSMatrix(_Scanable):
 
     def __init__(self, parent_s_matrix, wave_vectors):
         self._parent_s_matrix = parent_s_matrix
@@ -1435,7 +1435,12 @@ class PartialSMatrix(_Scanable):
         self._device = self._parent_s_matrix._device
 
         self._event = Event()
-        self._beamlets_cache = Cache(1)
+        self._beamlet_weights_cache = Cache(1)
+        self._beamlet_basis_cache = Cache(1)
+
+        self._ctf_has_changed = Event()
+        self._ctf.observe(self._ctf_has_changed.notify)
+        self._ctf_has_changed.observe(cache_clear_callback(self._beamlet_basis_cache))
 
         self._has_tilt = True
         self._accumulated_defocus = 0.
@@ -1445,10 +1450,14 @@ class PartialSMatrix(_Scanable):
         return self._parent_s_matrix.k
 
     @property
+    def ctf(self):
+        return self._ctf
+
+    @property
     def wave_vectors(self):
         return self._wave_vectors
 
-    @cached_method('_beamlets_cache')
+    @cached_method('_beamlet_weights_cache')
     def get_beamlet_weights(self):
         from scipy.spatial import Delaunay
         from abtem.natural_neighbors import find_natural_neighbors, natural_neighbor_weights
@@ -1551,12 +1560,12 @@ class PartialSMatrix(_Scanable):
         # positions /= xp.array(self.sampling)
         return fourier_translation_operator(positions, self.gpts)
 
-    @cached_method('_beamlets_cache')
+    @cached_method('_beamlet_basis_cache')
     def get_beamlet_basis(self):
         alpha, phi = self.get_scattering_angles()
 
         ctf = self._ctf.copy()
-        ctf.defocus = ctf.defocus = -self._accumulated_defocus
+        ctf.defocus = ctf.defocus - self._accumulated_defocus
         # ctf = CTF(defocus=-self._accumulated_defocus, energy=self.energy, semiangle_cutoff=10)
         coeff = ctf.evaluate(alpha, phi)
         weights = self.get_beamlet_weights() * coeff
@@ -1929,7 +1938,7 @@ class SMatrix(_Scanable, HasEventMixin):
 
     @property
     def is_partial(self):
-        return self._num_rings is not None
+        return self._num_partitions is not None
 
     def __len__(self):
         if self.is_partial:
@@ -2013,7 +2022,7 @@ class SMatrix(_Scanable, HasEventMixin):
                                        ctf=self.ctf.copy(),
                                        antialias_aperture=self.antialias_aperture,
                                        device=self._device)
-        return PartialSMatrix(parent_s_matrix, wave_vectors=self.get_wavevectors())
+        return PartitionedSMatrix(parent_s_matrix, wave_vectors=self.get_wavevectors())
 
     def _build_convential(self):
         k = self.get_wavevectors()
@@ -2035,7 +2044,7 @@ class SMatrix(_Scanable, HasEventMixin):
                             antialias_aperture=self.antialias_aperture,
                             device=self._device)
 
-    def build(self) -> Union[SMatrixArray, PartialSMatrix]:
+    def build(self) -> Union[SMatrixArray, PartitionedSMatrix]:
         """Build the scattering matrix."""
 
         if self._num_partitions is None:
