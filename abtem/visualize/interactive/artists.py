@@ -1,9 +1,13 @@
+import ipywidgets as widgets
 import numpy as np
-from bqplot import LinearScale, ColorScale, Lines, Scatter, ColorAxis, Figure, Axis
+from ase import Atoms
+from ase.data import covalent_radii
+from ase.data.colors import jmol_colors
+from bqplot import LinearScale, ColorScale, Lines, Scatter, Figure, Axis
 from bqplot_image_gl import ImageGL
 from traitlets import HasTraits, observe, default, List, link, Float, Unicode, Instance, Bool, Int, Any
 from traittypes import Array
-import ipywidgets as widgets
+
 from abtem.measure import Measurement
 
 
@@ -54,6 +58,7 @@ class ColorBar(widgets.HBox):
 class Artist(HasTraits):
     x_label = Unicode(None, allow_none=True)
     y_label = Unicode(None, allow_none=True)
+    visible = Bool()
 
     def _add_to_canvas(self, canvas):
         raise NotImplementedError()
@@ -65,7 +70,6 @@ class Artist(HasTraits):
 
 class ImageArtist(Artist):
     image = Array()
-    visible = Bool()
     extent = List(allow_none=True)
     power = Float(1.)
     color_scheme = Unicode('Greys')
@@ -299,10 +303,9 @@ class MeasurementArtist2d(Artist):
         return self._image_artist.limits
 
 
-class Artist1d(HasTraits):
+class Artist1d(Artist):
     x = Array()
     y = Array()
-    visible = Bool()
 
     def __init__(self, mark, color_scale=None, **kwargs):
         self._mark = mark
@@ -320,10 +323,15 @@ class Artist1d(HasTraits):
 
     def _add_to_canvas(self, canvas):
         scales = {'x': canvas.figure.axes[0].scale,
-                             'y': canvas.figure.axes[1].scale}
+                  'y': canvas.figure.axes[1].scale}
 
         try:
             scales['color'] = self._mark.scales['color']
+        except KeyError:
+            pass
+
+        try:
+            scales['size'] = self._mark.scales['size']
         except KeyError:
             pass
 
@@ -346,13 +354,20 @@ class ScatterArtist(Artist1d):
 
         scales = {'x': LinearScale(allow_padding=False),
                   'y': LinearScale(allow_padding=False, orientation='vertical'),
-                  'color': color_scale
+                  'color': color_scale,
+                  'size': LinearScale(min=0, max=1),
                   }
         mark = Scatter(x=np.zeros((1,)), y=np.zeros((1,)), scales=scales)
 
         # link((self, 'color'), (mark, 'color'))
 
         super().__init__(mark=mark, **kwargs)
+
+        link((self._mark, 'visible'), (self, 'visible'))
+
+    @observe('color')
+    def _observe_color(self):
+        self._mark.color = self.color
 
     # @default('color')
     # def _default_colors(self):
@@ -403,3 +418,35 @@ class MeasurementArtist1d(Artist):
     @property
     def limits(self):
         return self._lines_artist.limits
+
+
+class AtomsArtist(Artist):
+    atoms = Instance(Atoms)
+
+    def __init__(self, scale_atoms=500, **kwargs):
+        self._scatter_artist = ScatterArtist()
+        self._scatter_artist._mark.stroke = 'black'
+        self._scale_atoms = scale_atoms
+        super().__init__(**kwargs)
+
+        link((self._scatter_artist._mark, 'visible'), (self, 'visible'))
+
+        self.x_label = 'x [Å]'
+        self.y_label = 'y [Å]'
+
+    def _add_to_canvas(self, canvas):
+        self._scatter_artist._add_to_canvas(canvas)
+
+    @property
+    def limits(self):
+        return self._scatter_artist.limits
+
+    @observe('atoms')
+    def _observe_atoms(self, change):
+        x, y = self.atoms.get_positions()[:, :2].T
+        self._scatter_artist.x = x
+        self._scatter_artist.y = y
+        colors = ['#%02x%02x%02x' % tuple((jmol_colors[i] * 255).astype(np.int)) for i in self.atoms.numbers]
+        sizes = [int(covalent_radii[i] * self._scale_atoms) for i in self.atoms.numbers]
+        self._scatter_artist._mark.colors = colors
+        self._scatter_artist._mark.size = sizes
