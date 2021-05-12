@@ -8,6 +8,7 @@ from traitlets import Unicode
 class Canvas(HasTraits):
     artists = Dict()
     tools = Dict()
+    tool = Unicode('None')
     figure = Instance(Figure)
     x_label = Unicode()
     y_label = Unicode()
@@ -48,7 +49,6 @@ class Canvas(HasTraits):
         super().__init__(figure=figure, **kwargs)
         link((self, 'x_label'), (x_axis, 'label'))
         link((self, 'y_label'), (y_axis, 'label'))
-
 
     @property
     def x_axis(self):
@@ -105,23 +105,24 @@ class Canvas(HasTraits):
                 self.y_scale.min = y_center - extent
                 self.y_scale.max = y_center + extent
 
+    @observe('tool')
+    def _observe_tool(self, change):
+        if change['old'] != 'None':
+            self.tools[change['old']].deactivate(self)
+
+        if change['new'] == 'None':
+            self.figure.interaction = None
+        else:
+            self.tools[change['new']].activate(self)
+
     @property
     def toolbar(self):
         tool_names = ['None'] + list(self.tools.keys())
 
-        tool_selector = widgets.ToggleButtons(options=tool_names)
+        tool_selector = widgets.ToggleButtons(options=tool_names, value=self.tool)
         tool_selector.style.button_width = '80px'
 
-        def change_tool(change):
-            if change['old'] != 'None':
-                self.tools[change['old']].deactivate(self)
-
-            if change['new'] == 'None':
-                self.figure.interaction = None
-            else:
-                self.tools[change['new']].activate(self)
-
-        tool_selector.observe(change_tool, 'value')
+        link((tool_selector, 'value'), (self, 'tool'))
 
         reset_button = widgets.Button(description='Reset', layout=widgets.Layout(width='80px'))
         reset_button.on_click(lambda _: self.adjust_limits_to_artists())
