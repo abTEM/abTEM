@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.spatial import cKDTree, ConvexHull, qhull
+from scipy.spatial import cKDTree, ConvexHull
 
 
 def triangle_area(pt1, pt2, pt3):
@@ -22,7 +22,7 @@ def circumcircle_radius(pt0, pt1, pt2):
     return radius
 
 
-def circumcenter(pt0, pt1, pt2):
+def circumcenter(pt0, pt1, pt2, eps=1e-12):
     a_x, a_y = pt0
     b_x, b_y = pt1
     c_x, c_y = pt2
@@ -35,6 +35,13 @@ def circumcenter(pt0, pt1, pt2):
     ba_x_diff = b_x - a_x
 
     d_div = (a_x * bc_y_diff + b_x * ca_y_diff + c_x * ab_y_diff)
+
+    if abs(d_div) < eps:
+        line = np.array([pt0, pt1, pt2])
+        distances = np.sum((line[..., None] - line.T[None]) ** 2, axis=1)
+        line[np.where(distances == distances.max())[0]].mean(axis=0)
+        return np.mean([pt0, pt1, pt2], axis=0)
+
     d_inv = 0.5 / d_div
 
     a_mag = a_x * a_x + a_y * a_y
@@ -47,51 +54,28 @@ def circumcenter(pt0, pt1, pt2):
 
 
 def find_natural_neighbors(tri, grid_points):
-    # Used for fast identification of points with a radius of another point
     tree = cKDTree(grid_points)
 
-    # Mask for points that are outside the triangulation
-    in_triangulation = tri.find_simplex(tree.data) >= 0
+    # in_triangulation = tri.find_simplex(tree.data) >= 0
 
     triangle_info = []
     members = {key: [] for key in range(len(tree.data))}
     for i, indices in enumerate(tri.simplices):
-        # Find the circumcircle (center and radius) for the triangle.
         triangle = tri.points[indices]
         cc = circumcenter(*triangle)
         r = circumcircle_radius(*triangle)
         triangle_info.append(cc)
 
-        # Find all grid points within the circumcircle.
         for point in tree.query_ball_point(cc, r):
-            # If this point is within the triangulation, add this triangle to its list of
-            # natural neighbors
-            #if in_triangulation[point]:
             members[point].append(i)
 
     return members, np.array(triangle_info)
 
 
 def find_local_boundary(tri, triangles):
-    r"""Find and return the outside edges of a collection of natural neighbor triangles.
-    There is no guarantee that this boundary is convex, so ConvexHull is not
-    sufficient in some situations.
-    Parameters
-    ----------
-    tri: `scipy.spatial.Delaunay`
-        A Delaunay Triangulation
-    triangles: (N, ) array
-        List of natural neighbor triangles.
-    Returns
-    -------
-    edges: list
-        List of vertex codes that form outer edges of
-        a group of natural neighbor triangles.
-    """
     edges = []
 
     for triangle in triangles:
-
         for i in range(3):
 
             pt1 = tri.simplices[triangle][i]
@@ -109,17 +93,7 @@ def find_local_boundary(tri, triangles):
     return edges
 
 
-def area(poly):
-    r"""Find the area of a given polygon using the shoelace algorithm.
-    Parameters
-    ----------
-    poly: (2, N) ndarray
-        2-dimensional coordinates representing an ordered
-        traversal around the edge a polygon.
-    Returns
-    -------
-    area: float
-    """
+def polygon_area(poly):
     a = 0.0
     n = len(poly)
 
@@ -130,17 +104,6 @@ def area(poly):
 
 
 def order_edges(edges):
-    r"""Return an ordered traversal of the edges of a two-dimensional polygon.
-    Parameters
-    ----------
-    edges: (2, N) ndarray
-        List of unordered line segments, where each
-        line segment is represented by two unique
-        vertex codes.
-    Returns
-    -------
-    ordered_edges: (2, N) ndarray
-    """
     edge = edges[0]
     edges = edges[1:]
 
@@ -164,6 +127,14 @@ def order_edges(edges):
 
 
 def natural_neighbor_weights(points, query_point, tri, neighbors, circumcenters):
+    weights = np.zeros(len(points))
+
+    overlap = np.isclose(query_point[0], points[:, 0]) * np.isclose(query_point[1], points[:, 1])
+
+    if np.any(overlap):
+        weights[np.where(overlap)[0]] = 1.
+        return weights
+
     edges = find_local_boundary(tri, neighbors)
     edge_vertices = [segment[0] for segment in order_edges(edges)]
     num_vertices = len(edge_vertices)
@@ -173,32 +144,22 @@ def natural_neighbor_weights(points, query_point, tri, neighbors, circumcenters)
 
     c1 = circumcenter(query_point, tri.points[p1], tri.points[p2])
     polygon = [c1]
-
-    weights = np.zeros(len(points))
-
     for i in range(num_vertices):
+
         p3 = edge_vertices[(i + 2) % num_vertices]
-        try:
-            c2 = circumcenter(query_point, tri.points[p3], tri.points[p2])
-            polygon.append(c2)
 
-            for check_tri in neighbors:
-                if p2 in tri.simplices[check_tri]:
-                    polygon.append(circumcenters[check_tri])
+        c2 = circumcenter(query_point, tri.points[p3], tri.points[p2])
+        polygon.append(c2)
 
-            pts = [polygon[i] for i in ConvexHull(polygon).vertices]
+        for check_tri in neighbors:
+            if p2 in tri.simplices[check_tri]:
+                polygon.append(circumcenters[check_tri])
 
-            cur_area = area(pts)
-            weights[(tri.points[p2][0] == points[:, 0]) & (tri.points[p2][1] == points[:, 1])] += cur_area
-
-        except (ZeroDivisionError, qhull.QhullError) as e:
-            print(polygon, query_point)
-            weights[:] = np.nan
-            return weights
+        pts = [polygon[i] for i in ConvexHull(polygon).vertices]
+        area = polygon_area(pts)
+        weights[(tri.points[p2][0] == points[:, 0]) & (tri.points[p2][1] == points[:, 1])] += area
 
         polygon = [c2]
         p2 = p3
 
-    weights = weights / weights.sum()
-
-    return weights
+    return weights / weights.sum()
