@@ -5,6 +5,7 @@ from numbers import Number
 from typing import Union, Sequence, Tuple, List, Dict
 
 import h5py
+import matplotlib.pyplot as plt
 import numpy as np
 from ase import Atoms
 
@@ -19,7 +20,7 @@ from abtem.potentials import Potential, AbstractPotential, AbstractPotentialBuil
 from abtem.scan import AbstractScan, GridScan
 from abtem.transfer import CTF
 from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, subdivide_into_batches, periodic_crop, \
-    fft_crop, fourier_translation_operator
+    fft_crop, fourier_translation_operator, array_row_intersection
 
 
 class FresnelPropagator:
@@ -217,8 +218,8 @@ class _WavesLike(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin, HasBeamTiltM
                 raise RuntimeError()
 
             angular_sampling = self.angular_sampling
-            gpts = (int(round(cutoff_scattering_angle[0] / angular_sampling[0] * 2)),
-                    int(round(cutoff_scattering_angle[1] / angular_sampling[1] * 2)))
+            gpts = (int(np.ceil(cutoff_scattering_angle[0] / angular_sampling[0] * 2)),
+                    int(np.ceil(cutoff_scattering_angle[1] / angular_sampling[1] * 2)))
 
         else:
             try:
@@ -255,6 +256,20 @@ class _Scanable(_WavesLike):
         # else:
         #    raise ValueError('measurements must be Measurement or dict of AbtractDetector: Measurement')
         return measurements
+
+    def _validate_positions(self, positions: Sequence = None) -> np.ndarray:
+        if positions is None:
+            positions = np.array((self.extent[0] / 2, self.extent[1] / 2), dtype=np.float32)
+        else:
+            positions = np.array(positions, dtype=np.float32)
+
+        if len(positions.shape) == 1:
+            positions = np.expand_dims(positions, axis=0)
+
+        if positions.shape[1] != 2:
+            raise ValueError('positions must be of shape Nx2')
+
+        return positions
 
 
 class Waves(_WavesLike):
@@ -763,7 +778,6 @@ class Probe(_Scanable, HasEventMixin):
     @cached_method('_ctf_cache')
     def _evaluate_ctf(self):
         alpha, phi = self.get_scattering_angles()
-
         return self._ctf.evaluate(alpha, phi)
 
     def build(self, positions: Sequence[Sequence[float]] = None) -> Waves:
@@ -786,13 +800,7 @@ class Probe(_Scanable, HasEventMixin):
         xp = get_array_module_from_device(self._device)
         ifft2 = get_device_function(xp, 'ifft2')
 
-        if positions is None:
-            positions = xp.array((self.extent[0] / 2, self.extent[1] / 2), dtype=xp.float32)
-        else:
-            positions = xp.array(positions, dtype=xp.float32)
-
-        if len(positions.shape) == 1:
-            positions = xp.expand_dims(positions, axis=0)
+        positions = self._validate_positions(positions)
 
         array = ifft2(self._evaluate_ctf() * self._fourier_translation_operator(positions), overwrite_x=True)
 
@@ -1013,7 +1021,6 @@ class SMatrixArray(_Scanable, HasEventMixin):
 
     def __init__(self,
                  array: np.ndarray,
-                 expansion_cutoff: float,
                  energy: float,
                  k: np.ndarray,
                  ctf: CTF = None,
@@ -1048,7 +1055,6 @@ class SMatrixArray(_Scanable, HasEventMixin):
 
         self._device = device
         self._array = array
-        self._expansion_cutoff = expansion_cutoff
         self._k = k
         self._interpolated_gpts = interpolated_gpts
 
@@ -1069,11 +1075,6 @@ class SMatrixArray(_Scanable, HasEventMixin):
     def k(self) -> np.ndarray:
         """The spatial frequencies of each wave in the plane wave expansion."""
         return self._k
-
-    @property
-    def expansion_cutoff(self) -> float:
-        """Expansion cutoff."""
-        return self._expansion_cutoff
 
     @property
     def periodic(self) -> bool:
@@ -1121,7 +1122,6 @@ class SMatrixArray(_Scanable, HasEventMixin):
         antialias_aperture = downsampled.antialias_aperture
 
         return self.__class__(array=new_array,
-                              expansion_cutoff=self._expansion_cutoff,
                               k=self.k.copy(),
                               ctf=self.ctf,
                               extent=self.extent,
@@ -1141,7 +1141,6 @@ class SMatrixArray(_Scanable, HasEventMixin):
         new_array = periodic_crop(self.array, crop_corner, size)
 
         return self.__class__(array=new_array,
-                              expansion_cutoff=self._expansion_cutoff,
                               k=self.k.copy(),
                               ctf=self.ctf,
                               sampling=self.sampling,
@@ -1226,6 +1225,9 @@ class SMatrixArray(_Scanable, HasEventMixin):
         if not self.periodic:
             self._raise_not_periodic()
 
+        if isinstance(potential, Atoms):
+            potential = Potential(potential)
+
         if not isinstance(max_batch, int):
             max_batch = self._max_batch_expansion()
 
@@ -1258,8 +1260,8 @@ class SMatrixArray(_Scanable, HasEventMixin):
         complex_exponential = get_device_function(xp, 'complex_exponential')
         positions = xp.asarray(positions)
         k = xp.asarray(self.k)
-        return (complex_exponential(2. * np.pi * k[:, 0][None] * positions[:, 0, None]) *
-                complex_exponential(2. * np.pi * k[:, 1][None] * positions[:, 1, None]))
+        return (complex_exponential(-2. * np.pi * k[:, 0][None] * positions[:, 0, None]) *
+                complex_exponential(-2. * np.pi * k[:, 1][None] * positions[:, 1, None]))
 
     def _get_coefficients(self, positions: Sequence[float]):
         return self._get_translation_coefficients(positions) * self._get_ctf_coefficients()
@@ -1300,16 +1302,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
         if max_batch_expansion is None:
             max_batch_expansion = self._max_batch_expansion()
 
-        if positions is None:
-            positions = np.array((self.extent[0] / 2, self.extent[1] / 2), dtype=xp.float32)
-        else:
-            positions = np.array(positions, dtype=xp.float32)
-
-        if len(positions.shape) == 1:
-            positions = np.expand_dims(positions, axis=0)
-
-        if positions.shape[1] != 2:
-            raise ValueError('positions must be of shape Nx2')
+        positions = self._validate_positions(positions)
 
         coefficients = self._get_coefficients(positions)
 
@@ -1404,19 +1397,17 @@ class SMatrixArray(_Scanable, HasEventMixin):
 
     def transfer(self, device):
         return self.__class__(array=copy_to_device(self.array, device),
-                              expansion_cutoff=self._expansion_cutoff,
                               k=self.k.copy(),
                               ctf=self.ctf.copy(),
                               extent=self.extent,
                               offset=self.offset,
                               interpolated_gpts=self.interpolated_gpts,
                               energy=self.energy,
-                              antialias_aperture=self.antialiasing_aperture,
+                              antialias_aperture=self.antialias_aperture,
                               device=self.device)
 
     def __copy__(self, device=None):
         return self.__class__(array=self.array.copy(),
-                              expansion_cutoff=self._expansion_cutoff,
                               k=self.k.copy(),
                               ctf=self.ctf.copy(),
                               extent=self.extent,
@@ -1430,13 +1421,243 @@ class SMatrixArray(_Scanable, HasEventMixin):
         """Make a copy."""
         return copy(self)
 
-#
-# class PartialSMatrix(HasEventMixin):
-#
-#     def __init__(self, parent_s_matrix, k):
-#         pass
-#
-#         super().__init__()
+
+class PartialSMatrix(_Scanable):
+
+    def __init__(self, parent_s_matrix, wave_vectors):
+        self._parent_s_matrix = parent_s_matrix
+        self._wave_vectors = wave_vectors
+
+        self._grid = self._parent_s_matrix.grid
+        self._ctf = self._parent_s_matrix.ctf
+        self._accelerator = self._parent_s_matrix.accelerator
+        self._antialias_aperture = self._parent_s_matrix.antialias_aperture
+        self._device = self._parent_s_matrix._device
+
+        self._event = Event()
+        self._beamlets_cache = Cache(1)
+
+        self._has_tilt = True
+        self._accumulated_defocus = 0.
+
+    @property
+    def parent_wave_vectors(self):
+        return self._parent_s_matrix.k
+
+    @property
+    def wave_vectors(self):
+        return self._wave_vectors
+
+    @cached_method('_beamlets_cache')
+    def get_beamlet_weights(self):
+        from scipy.spatial import Delaunay
+        from abtem.natural_neighbors import find_natural_neighbors, natural_neighbor_weights
+
+        parent_wavevectors = self.parent_wave_vectors
+        wave_vectors = self.wave_vectors
+
+        n = len(parent_wavevectors)
+        tri = Delaunay(parent_wavevectors)
+
+        kx, ky = self.get_spatial_frequencies()
+        kx, ky = np.meshgrid(kx, ky, indexing='ij')
+
+        k = np.asarray((kx.ravel(), ky.ravel())).T
+
+        weights = np.zeros((n,) + kx.shape)
+
+        intersection = np.where(array_row_intersection(k, wave_vectors))[0]
+
+        members, circumcenters = find_natural_neighbors(tri, k)
+
+        for i in intersection:
+            j, l = np.unravel_index(i, kx.shape)
+            weights[:, j, l] = natural_neighbor_weights(parent_wavevectors, k[i], tri, members[i],
+                                                        circumcenters)
+
+        return weights
+
+    def get_weights(self):
+        from scipy.spatial import Delaunay
+        from abtem.natural_neighbors import find_natural_neighbors, natural_neighbor_weights
+
+        parent_wavevectors = self.parent_wave_vectors
+        n = len(parent_wavevectors)
+        tri = Delaunay(parent_wavevectors)
+
+        k = self.wave_vectors
+        weights = np.zeros((n, len(k)))
+
+        members, circumcenters = find_natural_neighbors(tri, k)
+        for i, p in enumerate(k):
+            weights[:, i] = natural_neighbor_weights(parent_wavevectors, p, tri, members[i], circumcenters)
+
+        return weights
+
+    def downsample(self, **kwargs):
+        new_s_matrix_array = self._parent_s_matrix.downsample(**kwargs)
+        return self.__class__(new_s_matrix_array, wave_vectors=self.wave_vectors)
+
+    def _add_plane_wave_tilt(self):
+        if self._has_tilt:
+            return
+
+    def _remove_plane_wave_tilt(self):
+        if not self._has_tilt:
+            return
+
+        xp = get_array_module(self._parent_s_matrix.array)
+        storage = get_device_from_array(self._parent_s_matrix.array)
+        complex_exponential = get_device_function(xp, 'complex_exponential')
+
+        x = xp.linspace(0, self.extent[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=xp.float32)
+        y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=xp.float32)
+
+        array = self._parent_s_matrix.array
+        k = self.parent_wave_vectors
+
+        alpha = xp.sqrt(k[:, 0] ** 2 + k[:, 1] ** 2) * self.wavelength
+        phi = xp.arctan2(k[:, 0], k[:, 1])
+
+        ctf = CTF(defocus=self._accumulated_defocus, energy=self.energy)
+        coeff = ctf.evaluate(alpha, phi)
+
+        array *= coeff[:, None, None]
+
+        for i in range(len(array)):
+            array[i] *= copy_to_device(complex_exponential(-2 * np.pi * k[i, 0, None, None] * x[:, None]) *
+                                       complex_exponential(-2 * np.pi * k[i, 1, None, None] * y[None, :]),
+                                       storage)
+
+        self._has_tilt = False
+
+    def multislice(self, potential: AbstractPotential,
+                   max_batch: int = None,
+                   multislice_pbar: Union[ProgressBar, bool] = True,
+                   plane_waves_pbar: Union[ProgressBar, bool] = True):
+
+        if isinstance(potential, Atoms):
+            potential = Potential(potential)
+
+        self._add_plane_wave_tilt()
+
+        self._accumulated_defocus += potential.thickness
+
+        self._parent_s_matrix.multislice(potential, max_batch, multislice_pbar, plane_waves_pbar)
+        return self
+
+    def _fourier_translation_operator(self, positions):
+        xp = get_array_module(positions)
+        # positions /= xp.array(self.sampling)
+        return fourier_translation_operator(positions, self.gpts)
+
+    @cached_method('_beamlets_cache')
+    def get_beamlet_basis(self):
+        alpha, phi = self.get_scattering_angles()
+
+        ctf = self._ctf.copy()
+        ctf.defocus = ctf.defocus = -self._accumulated_defocus
+        # ctf = CTF(defocus=-self._accumulated_defocus, energy=self.energy, semiangle_cutoff=10)
+        coeff = ctf.evaluate(alpha, phi)
+        weights = self.get_beamlet_weights() * coeff
+        return np.fft.ifft2(weights, axes=(1, 2))
+
+    def _build_planewaves(self, k):
+        self.grid.check_is_defined()
+        self.accelerator.check_is_defined()
+
+        # xp = get_array_module_from_device(self._device)
+        xp = np
+        # storage_xp = get_array_module_from_device(self._storage)
+        complex_exponential = get_device_function(xp, 'complex_exponential')
+
+        x = xp.linspace(0, self.extent[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=xp.float32)
+        y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=xp.float32)
+
+        shape = (len(k),) + self.gpts
+
+        array = xp.zeros(shape, dtype=np.complex64)
+        for i in range(len(k)):
+            array[i] = (complex_exponential(2 * np.pi * k[i, 0, None, None] * x[:, None]) *
+                        complex_exponential(2 * np.pi * k[i, 1, None, None] * y[None, :]))
+
+        return array
+
+    def interpolate_full(self):
+        self._remove_plane_wave_tilt()
+
+        plane_waves = self._build_planewaves(self.wave_vectors)
+        weights = self.get_weights()
+
+        for i, plane_wave in enumerate(plane_waves):
+            plane_wave *= (self._parent_s_matrix.array * weights[:, i, None, None]).sum(0)
+
+        alpha = np.sqrt(self.wave_vectors[:, 0] ** 2 + self.wave_vectors[:, 1] ** 2) * self.wavelength
+        phi = np.arctan2(self.wave_vectors[:, 0], self.wave_vectors[:, 1])
+
+        plane_waves *= CTF(defocus=-self._accumulated_defocus, energy=self.energy).evaluate(alpha, phi)[:, None, None]
+
+        return SMatrixArray(plane_waves, energy=self.energy, k=self.wave_vectors, extent=self.extent,
+                            interpolated_gpts=self.gpts, antialias_aperture=self._parent_s_matrix.antialias_aperture)
+
+    def get_beamlets(self, positions, subpixel_shift=False):
+        xp = get_array_module(positions)
+        positions /= xp.array(self.sampling)
+
+        if subpixel_shift:
+            weights = self.get_beamlet_weights() * self._fourier_translation_operator(positions)
+            return np.fft.ifft2(weights, axes=(1, 2))
+        else:
+            positions = np.round(positions).astype(np.int)
+            weights = np.roll(self.get_beamlet_basis(), positions, axis=(1, 2))
+            return weights
+
+    def reduce(self, positions, subpixel_shift=False):
+        self._remove_plane_wave_tilt()
+        beamlets = self.get_beamlets(positions, subpixel_shift=subpixel_shift)
+        array = np.einsum('ijk,ijk->jk', self._parent_s_matrix.array, beamlets)
+        return Waves(array=array, extent=self.extent, energy=self.energy,
+                     antialias_aperture=self._parent_s_matrix._antialias_aperture.antialias_aperture)
+
+    def show_wave_vectors(self, ax=None):
+        from matplotlib.colors import to_rgb
+        from abtem.measure import fourier_space_offset
+        weights = np.fft.fftshift(self.get_beamlet_weights(), axes=(1, 2))
+
+        color_cycle = [['c', 'r'], ['m', 'g'], ['b', 'y']]
+        colors = ['w']
+        i = 1
+        while True:
+            colors += color_cycle[(i - 1) % 3] * (3 + (i - 1) * 3)
+            i += 1
+            if len(colors) >= len(weights):
+                break
+
+        colors = np.array([to_rgb(color) for color in colors])
+
+        color_map = np.zeros(weights.shape[1:] + (3,))
+
+        for i, color in enumerate(colors):
+            color_map += weights[i, ..., None] * color[None, None]
+
+        if ax is None:
+            fig, ax = plt.subplots()
+
+        offsets = [fourier_space_offset(n, d) for n, d in zip(self.gpts, self.sampling)]
+
+        extent = [offsets[0], offsets[0] + 1 / self.extent[0] * self.gpts[0] - 1 / self.extent[0],
+                  offsets[1], offsets[1] + 1 / self.extent[1] * self.gpts[1] - 1 / self.extent[1]]
+        extent = [l * 1000 * self.wavelength for l in extent]
+
+        ax.imshow(color_map, extent=extent, origin='lower')
+        ax.set_xlim([min(self.wave_vectors[:, 0]) * 1.1 * 1000 * self.wavelength,
+                     max(self.wave_vectors[:, 0]) * 1.1 * 1000 * self.wavelength])
+        ax.set_ylim([min(self.wave_vectors[:, 1]) * 1.1 * 1000 * self.wavelength,
+                     max(self.wave_vectors[:, 1]) * 1.1 * 1000 * self.wavelength])
+        ##ax.set_ylim([-self.expansion_cutoff * 1.1, self.expansion_cutoff * 1.1])
+        ax.set_xlabel('alpha_x [mrad]')
+        ax.set_ylabel('alpha_y [mrad]')
+        return ax
 
 
 class SMatrix(_Scanable, HasEventMixin):
@@ -1526,8 +1747,10 @@ class SMatrix(_Scanable, HasEventMixin):
 
         self._storage = storage
 
-        if num_rings is not None:
-            raise NotImplementedError()
+        self._num_rings = num_rings
+
+        # if num_rings is not None:
+        #    raise NotImplementedError()
 
     @property
     def ctf(self):
@@ -1639,6 +1862,7 @@ class SMatrix(_Scanable, HasEventMixin):
             potential = Potential(potential)
 
         self.grid.match(potential)
+
         return self.build().multislice(potential,
                                        max_batch=max_batch,
                                        multislice_pbar=pbar,
@@ -1702,16 +1926,27 @@ class SMatrix(_Scanable, HasEventMixin):
         else:
             return measurements
 
+    @property
+    def is_partial(self):
+        return self._num_rings is not None
+
     def __len__(self):
-        return len(self.k)
+        if self.is_partial:
+            return len(self.get_parent_wavevectors())
+        else:
+            return len(self.get_wavevectors())
 
     @property
     def k(self):
+        return self.get_wavevectors()
+
+    def get_wavevectors(self):
+        self.grid.check_is_defined()
+        self.accelerator.check_is_defined()
+
         xp = get_array_module_from_device(self._device)
-        n_max = int(
-            xp.ceil(self.expansion_cutoff / 1000. / (self.wavelength / self.extent[0] * self.interpolation)))
-        m_max = int(
-            xp.ceil(self.expansion_cutoff / 1000. / (self.wavelength / self.extent[1] * self.interpolation)))
+        n_max = int(xp.ceil(self.expansion_cutoff / 1000. / (self.wavelength / self.extent[0] * self.interpolation)))
+        m_max = int(xp.ceil(self.expansion_cutoff / 1000. / (self.wavelength / self.extent[1] * self.interpolation)))
 
         n = xp.arange(-n_max, n_max + 1, dtype=xp.float32)
         w = xp.asarray(self.extent[0], dtype=xp.float32)
@@ -1727,17 +1962,22 @@ class SMatrix(_Scanable, HasEventMixin):
         ky = ky[mask]
         return xp.asarray((kx, ky)).T
 
-    def _partial_wavevectors(self):
-        pass
+    def get_parent_wavevectors(self):
+        rings = [np.array((0., 0.))]
+        n = 6
+        for r in np.linspace(self.expansion_cutoff / (self._num_rings - 1), self.expansion_cutoff, self._num_rings - 1):
+            angles = np.arange(n, dtype=np.int32) * 2 * np.pi / n + np.pi / 2
+            kx = np.round(r * np.sin(angles) / 1000. / self.wavelength * self.extent[0]) / self.extent[0]
+            ky = np.round(r * np.cos(-angles) / 1000. / self.wavelength * self.extent[1]) / self.extent[1]
+            n += 6
+            rings.append(np.array([kx, ky]).T)
 
-    def _build_partial(self):
-        pass
+        return np.vstack(rings)
 
-    def build(self) -> SMatrixArray:
-        """Build the scattering matrix."""
-
+    def _build_planewaves(self, k):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
+
         xp = get_array_module_from_device(self._device)
         storage_xp = get_array_module_from_device(self._storage)
         complex_exponential = get_device_function(xp, 'complex_exponential')
@@ -1745,23 +1985,42 @@ class SMatrix(_Scanable, HasEventMixin):
         x = xp.linspace(0, self.extent[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=xp.float32)
         y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=xp.float32)
 
-        k = self.k
         shape = (len(k),) + self.gpts
 
         array = storage_xp.zeros(shape, dtype=np.complex64)
-
         for i in range(len(k)):
-            array[i] = copy_to_device(complex_exponential(-2 * np.pi * k[i, 0, None, None] * x[:, None]) *
-                                      complex_exponential(-2 * np.pi * k[i, 1, None, None] * y[None, :]),
+            array[i] = copy_to_device(complex_exponential(2 * np.pi * k[i, 0, None, None] * x[:, None]) *
+                                      complex_exponential(2 * np.pi * k[i, 1, None, None] * y[None, :]),
                                       self._storage)
+
+        return array
+
+    def _build_partial(self):
+        k_parent = self.get_parent_wavevectors()
+        array = self._build_planewaves(k_parent)
+
+        parent_s_matrix = SMatrixArray(array,
+                                       interpolated_gpts=self.interpolated_gpts,
+                                       extent=self.extent,
+                                       energy=self.energy,
+                                       tilt=self.tilt,
+                                       k=k_parent,
+                                       ctf=self.ctf.copy(),
+                                       antialias_aperture=self.antialias_aperture,
+                                       device=self._device)
+        return PartialSMatrix(parent_s_matrix, wave_vectors=self.get_wavevectors())
+
+    def _build_convential(self):
+        k = self.get_wavevectors()
+        array = self._build_planewaves(k)
+        xp = get_array_module(array)
 
         interpolated_gpts = (self.gpts[0] // self.interpolation, self.gpts[1] // self.interpolation)
 
-        probe = (storage_xp.abs(array.sum(0)) ** 2)[:interpolated_gpts[0], :interpolated_gpts[1]]
-        array /= storage_xp.sqrt(probe.sum()) * storage_xp.sqrt(interpolated_gpts[0] * interpolated_gpts[1])
+        probe = (xp.abs(array.sum(0)) ** 2)[:interpolated_gpts[0], :interpolated_gpts[1]]
+        array /= xp.sqrt(probe.sum()) * xp.sqrt(interpolated_gpts[0] * interpolated_gpts[1])
 
         return SMatrixArray(array,
-                            expansion_cutoff=self.expansion_cutoff,
                             interpolated_gpts=self.interpolated_gpts,
                             extent=self.extent,
                             energy=self.energy,
@@ -1770,6 +2029,14 @@ class SMatrix(_Scanable, HasEventMixin):
                             ctf=self.ctf.copy(),
                             antialias_aperture=self.antialias_aperture,
                             device=self._device)
+
+    def build(self) -> Union[SMatrixArray, PartialSMatrix]:
+        """Build the scattering matrix."""
+
+        if self._num_rings is None:
+            return self._build_convential()
+        else:
+            return self._build_partial()
 
     def profile(self, angle=0.) -> Measurement:
         measurement = self.build().collapse((self.extent[0] / 2, self.extent[1] / 2)).intensity()
