@@ -54,8 +54,11 @@ class Calibration:
                 (self.units == other.units) &
                 (self.name == other.name))
 
+    def extent(self, n):
+        return (self.offset, n * self.sampling + self.offset)
+
     def coordinates(self, n):
-        return np.linspace(self.offset, n * self.sampling + self.offset, n, endpoint=False)
+        return np.linspace(*self.extent(n), n, endpoint=False)
 
     def __copy__(self):
         return self.__class__(self.offset, self.sampling, self.units, self.name)
@@ -67,7 +70,7 @@ class Calibration:
         return copy(self)
 
 
-def _fourier_space_offset(n: int, d: float):
+def fourier_space_offset(n: int, d: float):
     """
     Calculate the calibration offset of a Fourier space measurement.
 
@@ -132,7 +135,7 @@ def calibrations_from_grid(gpts: Sequence[int],
     if fourier_space:
         for name, n, d in zip(names, gpts, sampling):
             r = n * d
-            offset = _fourier_space_offset(n, d)
+            offset = fourier_space_offset(n, d)
             calibrations += (Calibration(offset * scale_factor, 1 / r * scale_factor, units, name),)
     else:
         for name, d in zip(names, sampling):
@@ -1018,6 +1021,8 @@ def block_zeroth_order_spot(diffraction_pattern: Measurement, angular_radius=1):
     alpha = alpha_x ** 2 + alpha_y ** 2
     block = alpha > angular_radius ** 2
 
+    tapered_cutoff(k, cutoff, taper)
+
     diffraction_pattern._array *= block
     return diffraction_pattern
 
@@ -1102,7 +1107,7 @@ def intgrad2d(gradient: np.ndarray, sampling: Tuple[float, float] = None):
     return T
 
 
-def bandlimit(measurement: Measurement, cutoff: float, taper: float = .1):
+def bandlimit(measurement: Measurement, cutoff: float, taper: float = .1, band_type='lowpass'):
     """
     Bandlimit a collection of diffraction patterns.
 
@@ -1120,15 +1125,25 @@ def bandlimit(measurement: Measurement, cutoff: float, taper: float = .1):
     Measurement
         Bandlimited measurement.
     """
-    if measurement.dimensions != 4:
-        raise NotImplementedError()
+    # if measurement.dimensions != 4:
+    #    raise NotImplementedError()
 
     measurement = measurement.copy()
+
+    pad_dimensions = measurement.dimensions - 2
+    if pad_dimensions < 0:
+        raise RuntimeError()
 
     kx = measurement.calibrations[-2].coordinates(measurement.array.shape[-2])
     ky = measurement.calibrations[-1].coordinates(measurement.array.shape[-1])
     k = np.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
-    measurement.array[:] *= tapered_cutoff(k, cutoff, taper)[None, None]
+    if band_type == 'lowpass':
+        measurement.array[:] *= tapered_cutoff(k, cutoff, taper)[(None,) * pad_dimensions]
+    elif band_type == 'highpass':
+        measurement.array[:] *= 1 - tapered_cutoff(k, cutoff * (1 + taper), taper)[(None,) * pad_dimensions]
+    else:
+        raise ValueError('band_type must be "lowpass" or "highpass"')
+
     return measurement
 
 
