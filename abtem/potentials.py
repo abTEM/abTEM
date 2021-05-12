@@ -58,6 +58,10 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
     def generate_frozen_phonon_potentials(self, pbar=False):
         pass
 
+    @property
+    def thickness(self):
+        return sum([self.get_slice_thickness(i) for i in range(len(self))])
+
     def check_slice_idx(self, i):
         """Raises an error if i is greater than the number of slices."""
         if i >= self.num_slices:
