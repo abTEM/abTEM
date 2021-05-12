@@ -1619,7 +1619,7 @@ class PartialSMatrix(_Scanable):
         return Waves(array=array, extent=self.extent, energy=self.energy,
                      antialias_aperture=self._parent_s_matrix._antialias_aperture.antialias_aperture)
 
-    def show_wave_vectors(self, ax=None):
+    def show_interpolation_weights(self, ax=None):
         from matplotlib.colors import to_rgb
         from abtem.measure import fourier_space_offset
         weights = np.fft.fftshift(self.get_beamlet_weights(), axes=(1, 2))
@@ -1634,11 +1634,14 @@ class PartialSMatrix(_Scanable):
                 break
 
         colors = np.array([to_rgb(color) for color in colors])
-
         color_map = np.zeros(weights.shape[1:] + (3,))
 
         for i, color in enumerate(colors):
             color_map += weights[i, ..., None] * color[None, None]
+
+        alpha, phi = self.get_scattering_angles()
+        intensity = np.abs(self._ctf.evaluate(alpha, phi)) ** 2
+        color_map *= np.fft.fftshift(intensity[..., None])
 
         if ax is None:
             fig, ax = plt.subplots()
@@ -1654,7 +1657,7 @@ class PartialSMatrix(_Scanable):
                      max(self.wave_vectors[:, 0]) * 1.1 * 1000 * self.wavelength])
         ax.set_ylim([min(self.wave_vectors[:, 1]) * 1.1 * 1000 * self.wavelength,
                      max(self.wave_vectors[:, 1]) * 1.1 * 1000 * self.wavelength])
-        ##ax.set_ylim([-self.expansion_cutoff * 1.1, self.expansion_cutoff * 1.1])
+
         ax.set_xlabel('alpha_x [mrad]')
         ax.set_ylabel('alpha_y [mrad]')
         return ax
@@ -1698,7 +1701,7 @@ class SMatrix(_Scanable, HasEventMixin):
                  expansion_cutoff: float = None,
                  interpolation: int = 1,
                  ctf: CTF = None,
-                 num_rings: int = None,
+                 num_partitions: int = None,
                  extent: Union[float, Sequence[float]] = None,
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
@@ -1746,11 +1749,7 @@ class SMatrix(_Scanable, HasEventMixin):
             storage = device
 
         self._storage = storage
-
-        self._num_rings = num_rings
-
-        # if num_rings is not None:
-        #    raise NotImplementedError()
+        self._num_partitions = num_partitions
 
     @property
     def ctf(self):
@@ -1965,7 +1964,11 @@ class SMatrix(_Scanable, HasEventMixin):
     def get_parent_wavevectors(self):
         rings = [np.array((0., 0.))]
         n = 6
-        for r in np.linspace(self.expansion_cutoff / (self._num_rings - 1), self.expansion_cutoff, self._num_rings - 1):
+        if self._num_partitions == 1:
+            raise NotImplementedError()
+
+        for r in np.linspace(self.expansion_cutoff / (self._num_partitions - 1), self.expansion_cutoff,
+                             self._num_partitions - 1):
             angles = np.arange(n, dtype=np.int32) * 2 * np.pi / n + np.pi / 2
             kx = np.round(r * np.sin(angles) / 1000. / self.wavelength * self.extent[0]) / self.extent[0]
             ky = np.round(r * np.cos(-angles) / 1000. / self.wavelength * self.extent[1]) / self.extent[1]
@@ -2033,7 +2036,7 @@ class SMatrix(_Scanable, HasEventMixin):
     def build(self) -> Union[SMatrixArray, PartialSMatrix]:
         """Build the scattering matrix."""
 
-        if self._num_rings is None:
+        if self._num_partitions is None:
             return self._build_convential()
         else:
             return self._build_partial()
