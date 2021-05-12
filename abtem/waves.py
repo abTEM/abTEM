@@ -1602,7 +1602,7 @@ class PartialSMatrix(_Scanable):
 
     def get_beamlets(self, positions, subpixel_shift=False):
         xp = get_array_module(positions)
-        positions /= xp.array(self.sampling)
+        positions = positions / xp.array(self.sampling)
 
         if subpixel_shift:
             weights = self.get_beamlet_weights() * self._fourier_translation_operator(positions)
