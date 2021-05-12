@@ -1680,6 +1680,8 @@ class SMatrix(_Scanable, HasEventMixin):
         Interpolation factor. Default is 1 (no interpolation).
     ctf: CTF object, optional
         The probe contrast transfer function. Default is None (aperture is set by the cutoff of the expansion).
+    num_partitions : int
+        The number of partitions used for in the parent scattering matrix.
     extent : one or two float, optional
         Lateral extent of wave functions [Å]. Default is None (inherits the extent from the potential).
     gpts : one or two int, optional
