@@ -232,7 +232,12 @@ def fourier_translation_operator(positions: np.ndarray, shape: tuple) -> np.ndar
 
 def fft_shift(array, positions):
     xp = get_array_module(array)
-    return xp.fft.ifft2(xp.fft.fft2(array) * fourier_translation_operator(positions, array.shape))
+    return xp.fft.ifft2(xp.fft.fft2(array) * fourier_translation_operator(positions, array.shape[-2:]))
+
+
+def array_row_intersection(a, b):
+    tmp = np.prod(np.swapaxes(a[:, :, None], 1, 2) == b, axis=2)
+    return np.sum(np.cumsum(tmp, axis=0) * tmp == 1, axis=1).astype(bool)
 
 
 def subdivide_into_batches(num_items: int, num_batches: int = None, max_batch: int = None):
