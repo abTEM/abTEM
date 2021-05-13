@@ -1020,9 +1020,6 @@ def block_zeroth_order_spot(diffraction_pattern: Measurement, angular_radius=1):
 
     alpha = alpha_x ** 2 + alpha_y ** 2
     block = alpha > angular_radius ** 2
-
-    tapered_cutoff(k, cutoff, taper)
-
     diffraction_pattern._array *= block
     return diffraction_pattern
 
