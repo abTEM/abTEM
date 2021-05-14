@@ -553,7 +553,8 @@ class Measurement(AbstractMeasurement):
                         new_sampling: Union[float, Tuple[float, float]] = None,
                         new_gpts: Union[int, Tuple[int, int]] = None,
                         padding: str = 'wrap',
-                        kind: str = None) -> 'Measurement':
+                        kind: str = None,
+                        axes=None) -> 'Measurement':
 
         if kind is None:
             kind = 'quintic'
@@ -591,11 +592,43 @@ class Measurement(AbstractMeasurement):
 
         return self.__class__(new_array, calibrations, name=self.name, units=self.units)
 
+    def _interpolate_4d(self, new_grid):
+        pass
+
+    # old_shape = array.shape
+    #
+    # array = array.reshape(array.shape[:2] + (-1,))
+    # array = np.rollaxis(array, axis=-1)
+    # array = fft_interpolate_2d(array, (60, 60))
+    # array = np.rollaxis(array, axis=0, start=3)
+    # array = array.reshape(array.shape[:2] + old_shape[-2:])
+    #
+    # if kind is None:
+    #     kind = 'quintic'
+    #
+    # if not (self.calibrations[-1].units == self.calibrations[-2].units):
+    #     raise RuntimeError('the units of the interpolation dimensions must match')
+    #
+    # endpoint = tuple([calibration.endpoint for calibration in self.calibrations])
+    # sampling = tuple([calibration.sampling for calibration in self.calibrations])
+    # offset = tuple([calibration.offset for calibration in self.calibrations])
+    #
+    # extent = (sampling[0] * (self.array.shape[0] - endpoint[0]),
+    #           sampling[1] * (self.array.shape[1] - endpoint[1]))
+    #
+    # new_grid = Grid(extent=extent, gpts=new_gpts, sampling=new_sampling, endpoint=endpoint)
+    #
+    # if kind.lower() == 'fft':
+    #     new_array = fft_interpolate_2d(self.array, new_grid.gpts)
+
+    # new_shape = (20,20,20,20)
+
     def interpolate(self,
                     new_sampling: Union[float, Tuple[float, float]] = None,
                     new_gpts: Union[int, Tuple[int, int]] = None,
                     padding: str = 'wrap',
-                    kind: str = None) -> 'Measurement':
+                    kind: str = None,
+                    axes=None) -> 'Measurement':
         """
         Interpolate a 2d measurement.
 
@@ -617,10 +650,17 @@ class Measurement(AbstractMeasurement):
         """
         if self.dimensions == 1:
             return self._interpolate_1d(new_sampling=new_sampling, new_gpts=new_gpts, padding=padding, kind=kind)
-        elif self.dimensions == 2:
+
+        if self.dimensions == 2:
             return self._interpolate_2d(new_sampling=new_sampling, new_gpts=new_gpts, padding=padding, kind=kind)
-        else:
-            raise RuntimeError(f'interpolate not implemented for {self.dimensions}d measurements')
+
+        if len(axes) > 2:
+            raise ValueError()
+
+        return self._interpolate_2d(new_sampling=new_sampling, new_gpts=new_gpts, padding=padding, kind=kind, axes=axes)
+
+        # else:
+        #    raise RuntimeError(f'interpolate not implemented for {self.dimensions}d measurements')
 
     def tile(self, multiples: Sequence[int]) -> 'Measurement':
         """
