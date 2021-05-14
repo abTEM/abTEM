@@ -802,7 +802,7 @@ class Probe(_Scanable, HasEventMixin):
 
         positions = self._validate_positions(positions)
 
-        array = ifft2(self._evaluate_ctf() * self._fourier_translation_operator(positions), overwrite_x=True)
+        array = ifft2(self._evaluate_ctf() * self._fourier_translation_operator(xp.asarray(positions)), overwrite_x=True)
 
         array = array / xp.sqrt((xp.abs(array[0]) ** 2).sum()) / xp.sqrt(np.prod(array.shape[1:]))
 
