@@ -175,7 +175,6 @@ def fft_interpolate_2d(array, new_shape, normalization='values', overwrite_x=Fal
 
     if np.iscomplexobj(array):
         cropped = fft_crop(fft2(array), new_shape)
-        print(cropped.shape)
         array = ifft2(cropped, overwrite_x=overwrite_x)
     else:
         array = xp.complex64(array)
