@@ -24,7 +24,7 @@ def test_bandlimit():
     waves = probe.multislice((0, 0), atoms, pbar=False)
     diffraction_pattern = waves.diffraction_pattern(max_angle=30)
 
-    assert diffraction_pattern.shape == (1, 31, 31)
+    assert diffraction_pattern.shape == (1, 33, 33)
 
     probe = Probe(energy=300e3, semiangle_cutoff=1e3, rolloff=0.0, gpts=100)
     waves = probe.multislice((0, 0), atoms, pbar=False)

@@ -183,7 +183,7 @@ def test_downsample():
 
     array = np.fft.ifft2(mask)
 
-    waves = Waves(array, sampling=sampling, energy=80e3)
+    waves = Waves(array, sampling=sampling, energy=80e3, antialias_aperture=(2 / 3.,) * 2)
 
     assert np.allclose(waves.downsample('valid', return_fourier_space=True).array.real, 1.)
     assert not np.allclose(waves.downsample('limit', return_fourier_space=True).array.real, 1.)
