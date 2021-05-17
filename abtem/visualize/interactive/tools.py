@@ -3,7 +3,7 @@ from abc import abstractmethod, ABC
 import numpy as np
 from bqplot.interacts import BrushSelector, PanZoom
 from bqplot_image_gl.interacts import MouseInteraction
-from traitlets import HasTraits, Int, default, Bool
+from traitlets import HasTraits, Int, default, Bool, List
 from traittypes import Array
 
 from abtem.visualize.interactive.artists import ScatterArtist
@@ -84,14 +84,16 @@ class SelectPixelTool(HasTraits):
                 indices = self._image_artist.position_to_index(position)
                 indices[0] = max(0, min(indices[0], self._image_artist.image.shape[0] - 1))
                 indices[1] = max(0, min(indices[1], self._image_artist.image.shape[1] - 1))
-                rounded_position = self._image_artist.indices_to_position((indices[0], indices[1]))
+
                 self.index_x = indices[0]
                 self.index_y = indices[1]
+
+                rounded_position = self._image_artist.indices_to_position((indices[0], indices[1]))
                 self._point_artist.x = np.array([rounded_position[0]])
                 self._point_artist.y = np.array([rounded_position[1]])
 
         canvas.figure.interaction = interaction
-        interaction.events = ['click']
+        interaction.events = ['click', 'dragmove']
         canvas.figure.interaction.on_msg(on_mouse_msg)
 
     def deactivate(self, canvas):
@@ -102,6 +104,48 @@ class SelectPixelTool(HasTraits):
 
         canvas.artists = artists
         canvas._observe_artists(None)
+        canvas.figure.interaction = None
+
+
+class BoxSelectPixelTool(HasTraits):
+    __metaclass__ = Tool
+
+    selected_x = List()
+    selected_y = List()
+
+    def __init__(self, image_artist, **kwargs):
+        self._image_artist = image_artist
+
+        super().__init__(**kwargs)
+
+    def activate(self, canvas):
+
+        brush_selector = BrushSelector(color='red')
+        brush_selector.x_scale = canvas.x_scale
+        brush_selector.y_scale = canvas.y_scale
+
+        def box_zoom(change):
+            selected_x = brush_selector.selected_x
+            selected_y = brush_selector.selected_y
+
+            if (selected_x is None) or (selected_y is None):
+                return
+
+            corner1 = self._image_artist.position_to_index([selected_x[0], selected_y[0]])
+            corner2 = self._image_artist.position_to_index([selected_x[1], selected_y[1]])
+
+            for corner in (corner1, corner2):
+                corner[0] = max(0, min(corner[0], self._image_artist.image.shape[0] - 1))
+                corner[1] = max(0, min(corner[1], self._image_artist.image.shape[1] - 1))
+
+            with self.hold_trait_notifications():
+                self.selected_x = [min(corner1[0], corner2[0]), max(corner1[0], corner2[0])]
+                self.selected_y = [min(corner1[1], corner2[1]), max(corner1[1], corner2[1])]
+
+        brush_selector.observe(box_zoom)
+        canvas.figure.interaction = brush_selector
+
+    def deactivate(self, canvas):
         canvas.figure.interaction = None
 
 

@@ -29,14 +29,18 @@ class ColorBar(widgets.HBox):
         # self._x_axis.tick_format = '.2e'
         self._x_axis.num_ticks = 5
 
-        figure = Figure(scales=scales,
+        self._figure = Figure(scales=scales,
                         layout=widgets.Layout(height='80px'),
                         axes=[self._x_axis],
-                        fig_margin={'top': 0, 'bottom': 50, 'left': 50, 'right': 10})
+                        fig_margin={'top': 0, 'bottom': 50, 'left': 50, 'right': 0})
 
-        figure.marks = [self._mark]
+        self._figure.marks = [self._mark]
 
-        super().__init__(children=[figure])
+        super().__init__(children=[self._figure])
+
+    @property
+    def layout(self):
+        return self._figure.layout
 
     @observe('label')
     def _observe_label(self, change):
@@ -73,6 +77,7 @@ class ImageArtist(Artist):
     extent = List(allow_none=True)
     power = Float(1.)
     color_scheme = Unicode('Greys')
+    autoadjust_colorscale = Bool(True)
 
     def __init__(self, **kwargs):
         self._color_scale = ColorScale(colors=['black', 'white'], min=0, max=1)
@@ -87,9 +92,11 @@ class ImageArtist(Artist):
         link((self._mark, 'visible'), (self, 'visible'))
         super().__init__(**kwargs)
 
+
+
     @property
     def power_scale_slider(self):
-        slider = widgets.FloatSlider(description='Power', min=1e-3, max=1, value=1, step=1e-3, )
+        slider = widgets.FloatSlider(description='Power scale', min=1e-3, max=1, value=1, step=1e-3, )
         slider.observe(self._observe_image, 'value')
         link((slider, 'value'), (self, 'power'))
         return slider
@@ -142,10 +149,11 @@ class ImageArtist(Artist):
             self._mark.image = image.T
 
         if not self.image.size == 0:
-            self._mark.scales['image'].min = float(image.min())
-            self._mark.scales['image'].max = float(image.max())
-            self._color_bar.min = float(image.min())
-            self._color_bar.max = float(image.max())
+            if self.autoadjust_colorscale:
+                self._mark.scales['image'].min = float(image.min())
+                self._mark.scales['image'].max = float(image.max())
+                self._color_bar.min = float(image.min())
+                self._color_bar.max = float(image.max())
 
     @observe('extent')
     def _observe_extent(self, change):

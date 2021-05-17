@@ -83,7 +83,7 @@ class Canvas(HasTraits):
         if (self.y_scale.min is not None) or (self.y_scale.max is not None):
             adjust_y = True
 
-        self.adjust_limits_to_artists(adjust_x=adjust_x, adjust_y=adjust_y)
+        #self.adjust_limits_to_artists(adjust_x=adjust_x, adjust_y=adjust_y)
 
     def _enforce_scale_lock(self, adjust_x=True, adjust_y=True):
         if not self.lock_scale:
@@ -120,14 +120,14 @@ class Canvas(HasTraits):
         tool_names = ['None'] + list(self.tools.keys())
 
         tool_selector = widgets.ToggleButtons(options=tool_names, value=self.tool)
-        tool_selector.style.button_width = '80px'
+        tool_selector.style.button_width = '60px'
 
         link((tool_selector, 'value'), (self, 'tool'))
 
         reset_button = widgets.Button(description='Reset', layout=widgets.Layout(width='80px'))
         reset_button.on_click(lambda _: self.adjust_limits_to_artists())
 
-        return widgets.HBox([tool_selector, reset_button])
+        return widgets.HBox([widgets.HBox([tool_selector]), reset_button])
 
     # @observe('x_limits')
     # def _observe_x_limits(self, change):
