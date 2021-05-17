@@ -592,37 +592,6 @@ class Measurement(AbstractMeasurement):
 
         return self.__class__(new_array, calibrations, name=self.name, units=self.units)
 
-    def _interpolate_4d(self, new_grid):
-        pass
-
-    # old_shape = array.shape
-    #
-    # array = array.reshape(array.shape[:2] + (-1,))
-    # array = np.rollaxis(array, axis=-1)
-    # array = fft_interpolate_2d(array, (60, 60))
-    # array = np.rollaxis(array, axis=0, start=3)
-    # array = array.reshape(array.shape[:2] + old_shape[-2:])
-    #
-    # if kind is None:
-    #     kind = 'quintic'
-    #
-    # if not (self.calibrations[-1].units == self.calibrations[-2].units):
-    #     raise RuntimeError('the units of the interpolation dimensions must match')
-    #
-    # endpoint = tuple([calibration.endpoint for calibration in self.calibrations])
-    # sampling = tuple([calibration.sampling for calibration in self.calibrations])
-    # offset = tuple([calibration.offset for calibration in self.calibrations])
-    #
-    # extent = (sampling[0] * (self.array.shape[0] - endpoint[0]),
-    #           sampling[1] * (self.array.shape[1] - endpoint[1]))
-    #
-    # new_grid = Grid(extent=extent, gpts=new_gpts, sampling=new_sampling, endpoint=endpoint)
-    #
-    # if kind.lower() == 'fft':
-    #     new_array = fft_interpolate_2d(self.array, new_grid.gpts)
-
-    # new_shape = (20,20,20,20)
-
     def interpolate(self,
                     new_sampling: Union[float, Tuple[float, float]] = None,
                     new_gpts: Union[int, Tuple[int, int]] = None,
@@ -656,6 +625,25 @@ class Measurement(AbstractMeasurement):
 
         if len(axes) > 2:
             raise ValueError()
+
+        array = measurement.array
+
+        old_shape = array.shape
+
+        # print(old_shape)
+
+        # array = array.reshape(array.shape[:2] + (-1,))
+
+        axes = (2, 3)
+
+        array = np.moveaxis(array, axes, range(len(axes)))
+
+        rolled_shape = array.shape
+
+        array = array.reshape((-1,) + array.shape[-2:])
+        array = fft_interpolate_2d(array, (60, 60))
+        array = array.reshape(rolled_shape[:len(axes)] + array.shape[-2:])
+        array = np.moveaxis(array, range(len(axes)), axes)
 
         return self._interpolate_2d(new_sampling=new_sampling, new_gpts=new_gpts, padding=padding, kind=kind, axes=axes)
 
@@ -1036,6 +1024,72 @@ def probe_profile(probe_measurement: Measurement, angle: float = 0.) -> Measurem
     point0, point1 = _line_intersect_rectangle(point0, point1, (0., 0.), extent)
     line_profile = probe_measurement.interpolate_line(point0, point1)
     return line_profile
+
+
+def interpolate_2d(measurement,
+                   new_sampling: Union[float, Tuple[float, float]] = None,
+                   new_gpts: Union[int, Tuple[int, int]] = None,
+                   padding: str = 'wrap',
+                   kind: str = None,
+                   axes=None) -> 'Measurement':
+    if kind is None:
+        kind = 'quintic'
+
+    if axes is None:
+        axes = (0, 1)
+
+    moved_axes = ()
+    for i in range(len(measurement.array.shape)):
+        if not i in axes:
+            moved_axes += (i,)
+
+    if (len(measurement.array.shape) - len(axes)) != 2:
+        raise ValueError()
+
+    array = np.moveaxis(measurement.array, axes, range(len(axes)))
+    rolled_shape = array.shape
+    array = array.reshape((-1,) + array.shape[-2:])
+
+    if not (measurement.calibrations[axes[0]].units == measurement.calibrations[axes[1]].units):
+        raise RuntimeError('the units of the interpolation dimensions must match')
+
+    endpoint = tuple([calibration.endpoint for calibration in measurement.calibrations])
+    sampling = tuple([calibration.sampling for calibration in measurement.calibrations])
+    offset = tuple([calibration.offset for calibration in measurement.calibrations])
+
+    extent = (sampling[axes[0]] * (measurement.array.shape[axes[0]] - endpoint[axes[0]]),
+              sampling[axes[1]] * (measurement.array.shape[axes[1]] - endpoint[axes[1]]))
+
+    new_grid = Grid(extent=extent, gpts=new_gpts, sampling=new_sampling, endpoint=endpoint)
+
+    if kind.lower() == 'fft':
+        new_array = fft_interpolate_2d(array, new_grid.gpts)
+    else:
+        array = np.pad(array, ((5,) * 2,) * 2, mode=padding)
+
+        x = measurement.calibrations[axes[0]].coordinates(array.shape[axes[0]]) - \
+            5 * measurement.calibrations[axes[0]].sampling
+        y = measurement.calibrations[axes[1]].coordinates(array.shape[axes[1]]) - \
+            5 * measurement.calibrations[axes[1]].sampling
+
+        interpolator = interp2d(x, y, array.T, kind=kind)
+
+        x = np.linspace(offset[axes[0]], offset[axes[0]] + extent[axes[0]], new_grid.gpts[axes[0]],
+                        endpoint=endpoint[axes[0]])
+        y = np.linspace(offset[axes[1]], offset[axes[1]] + extent[axes[1]], new_grid.gpts[axes[1]],
+                        endpoint=endpoint[axes[1]])
+        new_array = interpolator(x, y).T
+
+    #if rolled_shape is not None:
+    new_array = new_array.reshape(rolled_shape[:len(axes)] + new_array.shape[-2:])
+    new_array = np.moveaxis(new_array, range(len(axes)), axes)
+
+    calibrations = [copy(calibration) for calibration in measurement.calibrations]
+    #for i, axis in enumerate(range(len(measurement.array.shape)) - set(axes)):
+    #    calibrations.append(copy(measurement.calibrations[axis]))
+    #    calibrations[-1].sampling = new_grid.sampling[i]
+
+    return Measurement(new_array, calibrations, name=measurement.name, units=measurement.units)
 
 
 def block_zeroth_order_spot(diffraction_pattern: Measurement, angular_radius=1):
