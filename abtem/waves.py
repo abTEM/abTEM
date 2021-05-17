@@ -298,7 +298,7 @@ class Waves(_WavesLike):
                  sampling: Union[float, Sequence[float]] = None,
                  energy: float = None,
                  tilt: Tuple[float, float] = None,
-                 antialias_aperture: Tuple[float, float] = None):
+                 antialias_aperture: Tuple[float, float] = (2 / 3., 2 / 3.)):
 
         if len(array.shape) < 2:
             raise RuntimeError('Wave function array should be have 2 dimensions or more')
@@ -802,7 +802,8 @@ class Probe(_Scanable, HasEventMixin):
 
         positions = self._validate_positions(positions)
 
-        array = ifft2(self._evaluate_ctf() * self._fourier_translation_operator(xp.asarray(positions)), overwrite_x=True)
+        array = ifft2(self._evaluate_ctf() * self._fourier_translation_operator(xp.asarray(positions)),
+                      overwrite_x=True)
 
         array = array / xp.sqrt((xp.abs(array[0]) ** 2).sum()) / xp.sqrt(np.prod(array.shape[1:]))
 
