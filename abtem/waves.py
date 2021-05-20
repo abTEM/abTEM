@@ -218,9 +218,8 @@ class _WavesLike(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin, HasBeamTiltM
                 raise RuntimeError()
 
             angular_sampling = self.angular_sampling
-            gpts = (int(np.ceil(cutoff_scattering_angle[0] / angular_sampling[0] * 2)),
-                    int(np.ceil(cutoff_scattering_angle[1] / angular_sampling[1] * 2)))
-
+            gpts = (int(np.ceil(cutoff_scattering_angle[0] / angular_sampling[0] * 2 - 1e-12)),
+                    int(np.ceil(cutoff_scattering_angle[1] / angular_sampling[1] * 2 - 1e-12)))
         else:
             try:
                 gpts = [int(2 * np.ceil(max_angle / d)) + 1 for n, d in zip(interpolated_gpts, self.angular_sampling)]
