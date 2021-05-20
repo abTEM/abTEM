@@ -110,7 +110,8 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12):
     return atoms
 
 
-def orthogonalize_cell(atoms: Atoms, limit_denominator: int = 10, return_strain=False):
+def orthogonalize_cell(atoms: Atoms, limit_denominator: int = 10, preserve_periodicity: bool = True,
+                       return_strain: bool = False):
     """
     Make the cell of an ASE atoms object orthogonal. This is accomplished by repeating the cell until the x-component
     of the lattice vectors in the xy-plane closely matches. If the ratio between the x-components is irrational this
@@ -124,6 +125,9 @@ def orthogonalize_cell(atoms: Atoms, limit_denominator: int = 10, return_strain=
     limit_denominator : int
         The maximum denominator in the rational approximation. Increase this to allow more repetitions and hence less
         strain.
+    preserve_periodicity : bool, optional
+        This function will make a structure periodic while preserving periodicity exactly, this will generally result in
+        repeating the structure. If preserving periodicity is not desired, this may be set to False. Default is True.
     return_strain : bool
         If true, return the strain tensor that were applied to make the atoms orthogonal.
 
@@ -139,6 +143,9 @@ def orthogonalize_cell(atoms: Atoms, limit_denominator: int = 10, return_strain=
 
     atoms = atoms.copy()
     atoms = standardize_cell(atoms)
+
+    if preserve_periodicity:
+        return cut_rectangle(atoms, origin=(0, 0), extent=np.diag(atoms.cell)[:2])
 
     fraction = atoms.cell[0, 0] / atoms.cell[1, 0]
     fraction = Fraction(fraction).limit_denominator(limit_denominator)
@@ -251,10 +258,10 @@ def pad_atoms(atoms: Atoms, margin: float, directions='xy', in_place=False):
         atoms.positions[:] -= np.diag(old_cell) * [rep // 2 for rep in reps]
         atoms.cell = old_cell
 
-    #import matplotlib.pyplot as plt
-    #from abtem import show_atoms
-    #show_atoms(atoms, plane='xz')
-    #plt.show()
+    # import matplotlib.pyplot as plt
+    # from abtem import show_atoms
+    # show_atoms(atoms, plane='xz')
+    # plt.show()
 
     to_keep = np.ones(len(atoms), dtype=bool)
     for axis in axes:
@@ -312,7 +319,7 @@ class SlicedAtoms:
         return max(np.sum(self.slice_thicknesses[:i]), 0)
 
     def get_slice_exit(self, i):
-        return min(self.get_slice_entrance(i) + self.slice_thicknesses[i], self.atoms.cell[2,2])
+        return min(self.get_slice_entrance(i) + self.slice_thicknesses[i], self.atoms.cell[2, 2])
 
     def get_subsliced_atoms(self,
                             start,
