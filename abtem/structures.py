@@ -144,7 +144,7 @@ def orthogonalize_cell(atoms: Atoms, limit_denominator: int = 10, preserve_perio
     atoms = atoms.copy()
     atoms = standardize_cell(atoms)
 
-    if preserve_periodicity:
+    if not preserve_periodicity:
         return cut_rectangle(atoms, origin=(0, 0), extent=np.diag(atoms.cell)[:2])
 
     fraction = atoms.cell[0, 0] / atoms.cell[1, 0]
