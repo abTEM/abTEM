@@ -30,9 +30,9 @@ class ColorBar(widgets.HBox):
         self._x_axis.num_ticks = 5
 
         self._figure = Figure(scales=scales,
-                        layout=widgets.Layout(height='80px'),
-                        axes=[self._x_axis],
-                        fig_margin={'top': 0, 'bottom': 50, 'left': 50, 'right': 0})
+                              layout=widgets.Layout(height='80px'),
+                              axes=[self._x_axis],
+                              fig_margin={'top': 0, 'bottom': 50, 'left': 50, 'right': 0})
 
         self._figure.marks = [self._mark]
 
@@ -79,7 +79,7 @@ class ImageArtist(Artist):
     color_scheme = Unicode('Greys')
     autoadjust_colorscale = Bool(True)
 
-    def __init__(self, **kwargs):
+    def __init__(self, rgb=False, **kwargs):
         self._color_scale = ColorScale(colors=['black', 'white'], min=0, max=1)
         self._color_bar = ColorBar(color_scale=self._color_scale)
 
@@ -87,12 +87,15 @@ class ImageArtist(Artist):
                   'y': LinearScale(allow_padding=False, orientation='vertical'),
                   'image': self._color_scale}
 
-        self._mark = ImageGL(image=np.zeros((0, 0)), scales=scales)
+        if rgb:
+            self._mark = ImageGL(image=np.zeros((0, 0, 3)), scales=scales)
+        else:
+            self._mark = ImageGL(image=np.zeros((0, 0)), scales=scales)
+
+        self._rgb = rgb
 
         link((self._mark, 'visible'), (self, 'visible'))
         super().__init__(**kwargs)
-
-
 
     @property
     def power_scale_slider(self):
@@ -117,7 +120,7 @@ class ImageArtist(Artist):
             self._color_scale.scheme = change['new']
 
     @property
-    def colorbar(self):
+    def color_bar(self):
         return self._color_bar
 
     @default('extent')
@@ -126,7 +129,7 @@ class ImageArtist(Artist):
 
     @default('image')
     def _default_image(self):
-        return np.zeros((0, 0))
+        return np.zeros((0, 0,3))
 
     def _add_to_canvas(self, canvas):
         scales = {'x': canvas.figure.axes[0].scale,
@@ -136,24 +139,32 @@ class ImageArtist(Artist):
         self._mark.scales = scales
         canvas.figure.marks = [self._mark] + canvas.figure.marks
 
-    @observe('image')
-    def _observe_image(self, change):
+    def update_image(self, *args):
         image = self.image ** self.power
 
         if self.extent is None:
             with self._mark.hold_sync():
                 self._mark.x = [-.5, image.shape[0] - .5]
                 self._mark.y = [-.5, image.shape[1] - .5]
-                self._mark.image = image.T
+                self._mark.image = image#.T
         else:
-            self._mark.image = image.T
+            self._mark.image = image#.T
 
-        if not self.image.size == 0:
-            if self.autoadjust_colorscale:
+        if self._rgb:
+            return
+
+        if (not self.image.size == 0) & self.autoadjust_colorscale:
+            with self._mark.hold_sync():
                 self._mark.scales['image'].min = float(image.min())
                 self._mark.scales['image'].max = float(image.max())
+
+            with self._color_bar._mark.hold_sync():
                 self._color_bar.min = float(image.min())
                 self._color_bar.max = float(image.max())
+
+    @observe('image')
+    def _observe_image(self, *args):
+        self.update_image(*args)
 
     @observe('extent')
     def _observe_extent(self, change):
@@ -365,7 +376,7 @@ class ScatterArtist(Artist1d):
                   'color': color_scale,
                   'size': LinearScale(min=0, max=1),
                   }
-        mark = Scatter(x=np.zeros((1,)), y=np.zeros((1,)), scales=scales)
+        mark = Scatter(x=np.zeros((1,)), y=np.zeros((1,)), scales=scales, colors=['red'])
 
         # link((self, 'color'), (mark, 'color'))
 
@@ -390,9 +401,44 @@ class LinesArtist(Artist1d):
 
         scales = {'x': LinearScale(allow_padding=False),
                   'y': LinearScale(allow_padding=False, orientation='vertical'), }
+
         mark = Lines(x=np.zeros((2,)), y=np.zeros((2,)), scales=scales, colors=colors)
 
         super().__init__(mark=mark, **kwargs)
+
+
+class CircleArtist(Artist):
+    center = Array()
+    radius = Float(1.)
+
+    def __init__(self, **kwargs):
+        self._mark = Lines(scales={'x': LinearScale(), 'y': LinearScale()}, colors=['red'])
+        super().__init__(**kwargs)
+        self.update_mark()
+
+    @default('center')
+    def _default_center(self):
+        return np.zeros((2,))
+
+    def update_mark(self):
+        x = self.center[0] + np.cos(np.linspace(0, 2 * np.pi, 100)) * self.radius
+        y = self.center[1] + np.sin(np.linspace(0, 2 * np.pi, 100)) * self.radius
+        with self._mark.hold_sync():
+            self._mark.x = x
+            self._mark.y = y
+
+    @observe('center', 'radius')
+    def _observe_center_and_radius(self, change):
+        self.update_mark()
+
+    def _add_to_canvas(self, canvas):
+        self._mark.scales = {'x': canvas.figure.axes[0].scale, 'y': canvas.figure.axes[1].scale}
+        canvas.figure.marks = [self._mark] + canvas.figure.marks
+
+    @property
+    def limits(self):
+        return [(self.center[0] - self.radius, self.center[0] + self.radius),
+                (self.center[1] - self.radius, self.center[1] + self.radius)]
 
 
 class MeasurementArtist1d(Artist):
