@@ -165,7 +165,6 @@ class Canvas(HasTraits):
             self.y_scale.min = None
             self.y_scale.max = None
         else:
-            print('b')
             self.y_scale.min = change['new'][0]
             self.y_scale.max = change['new'][1]
 

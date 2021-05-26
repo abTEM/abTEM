@@ -80,7 +80,6 @@ class SelectPixelTool(HasTraits):
                                        y_scale=canvas.figure.axes[1].scale)
 
         def on_mouse_msg(_, change, __):
-            print(change)
             if change['event'] in ('dragmove', 'click'):
                 position = np.array([change['domain']['x'], change['domain']['y']])
                 indices = self._image_artist.position_to_index(position)
@@ -260,7 +259,6 @@ class SelectAnnularRadiiTool(HasTraits):
         link((self, 'center'), (self._outer_circle_artist, 'center'))
 
         def callback(_, change, __):
-            print(change)
             position = np.array([change['domain']['x'], change['domain']['y']])
             distance = np.linalg.norm(self.center - position)
             if change['event'] == 'dragstart':
