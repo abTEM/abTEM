@@ -10,9 +10,13 @@ class Canvas(HasTraits):
     tools = Dict()
     tool = Unicode('None')
     figure = Instance(Figure)
+    title = Unicode()
     x_label = Unicode()
     y_label = Unicode()
+    x_limits = List()
+    y_limits = List()
     lock_scale = Bool(True, allow_none=True)
+    _tool_artists = List()
 
     def __init__(self,
                  x_scale=None,
@@ -49,6 +53,16 @@ class Canvas(HasTraits):
         super().__init__(figure=figure, **kwargs)
         link((self, 'x_label'), (x_axis, 'label'))
         link((self, 'y_label'), (y_axis, 'label'))
+        #link((self, 'title'), (figure, 'title'))
+
+    @property
+    def widget(self):
+        whitespace = widgets.HBox([])
+        whitespace.layout.width = f'{self.figure.fig_margin["left"]}px'
+
+        title = widgets.HTML(value=f"<p style='font-size:16px;text-align:center'> {self.title} </p>")
+        title.layout.width = f'{float(self.figure.layout.width[:-2]) - self.figure.fig_margin["left"]}px'
+        return widgets.VBox([widgets.HBox([whitespace, title]), self.figure])
 
     @property
     def x_axis(self):
@@ -66,22 +80,26 @@ class Canvas(HasTraits):
     def y_scale(self):
         return self.y_axis.scale
 
-    @observe('artists')
+    @observe('artists', '_tool_artists')
     def _observe_artists(self, change):
         self._update_marks()
 
     def _update_marks(self):
         self.figure.marks = []
+
         for key, artist in self.artists.items():
             artist._add_to_canvas(self)
 
-        adjust_x = False
-        adjust_y = False
-        if (self.x_scale.min is not None) or (self.x_scale.max is not None):
-            adjust_x = True
+        for artist in self._tool_artists:
+            artist._add_to_canvas(self)
 
-        if (self.y_scale.min is not None) or (self.y_scale.max is not None):
-            adjust_y = True
+        # adjust_x = False
+        # adjust_y = False
+        # if (self.x_scale.min is not None) or (self.x_scale.max is not None):
+        #     adjust_x = True
+        #
+        # if (self.y_scale.min is not None) or (self.y_scale.max is not None):
+        #     adjust_y = True
 
         #self.adjust_limits_to_artists(adjust_x=adjust_x, adjust_y=adjust_y)
 
@@ -124,29 +142,32 @@ class Canvas(HasTraits):
 
         link((tool_selector, 'value'), (self, 'tool'))
 
+        whitespace = widgets.HBox([])
+        whitespace.layout.width = f'{self.figure.fig_margin["left"]}px'
+
         reset_button = widgets.Button(description='Reset', layout=widgets.Layout(width='80px'))
         reset_button.on_click(lambda _: self.adjust_limits_to_artists())
 
-        return widgets.HBox([widgets.HBox([tool_selector]), reset_button])
+        return widgets.HBox([whitespace, widgets.HBox([tool_selector]), reset_button])
 
-    # @observe('x_limits')
-    # def _observe_x_limits(self, change):
-    #     if change['new'] is None:
-    #         self.x_scale.min = None
-    #         self.x_scale.max = None
-    #     else:
-    #         self.x_scale.min = change['new'][0]
-    #         self.x_scale.max = change['new'][1]
-    #
-    # @observe('y_limits')
-    # def _observe_y_limits(self, change):
-    #     if change['new'] is None:
-    #         self.y_scale.min = None
-    #         self.y_scale.max = None
-    #     else:
-    #         print('b')
-    #         self.y_scale.min = change['new'][0]
-    #         self.y_scale.max = change['new'][1]
+    @observe('x_limits')
+    def _observe_x_limits(self, change):
+        if change['new'] is None:
+            self.x_scale.min = None
+            self.x_scale.max = None
+        else:
+            self.x_scale.min = change['new'][0]
+            self.x_scale.max = change['new'][1]
+
+    @observe('y_limits')
+    def _observe_y_limits(self, change):
+        if change['new'] is None:
+            self.y_scale.min = None
+            self.y_scale.max = None
+        else:
+            print('b')
+            self.y_scale.min = change['new'][0]
+            self.y_scale.max = change['new'][1]
 
     @property
     def visibility_checkboxes(self):
