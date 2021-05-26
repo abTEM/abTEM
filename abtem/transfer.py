@@ -4,7 +4,8 @@ from typing import Mapping, Union
 
 import numpy as np
 
-from abtem.base_classes import HasAcceleratorMixin, HasEventMixin, Accelerator, watched_method, watched_property, Event
+from abtem.base_classes import HasAcceleratorMixin, HasEventMixin, Accelerator, watched_method, watched_property, Event, \
+    Grid
 from abtem.device import get_array_module, get_device_function
 from abtem.measure import Measurement, Calibration
 from abtem.utils import energy2wavelength, spatial_frequencies, polar_coordinates
@@ -323,7 +324,12 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
 
         return array
 
-    def evaluate_on_grid(self, gpts, sampling, xp=np):
+    def evaluate_on_grid(self, gpts=None, extent=None, sampling=None, xp=np):
+        grid = Grid(gpts=gpts, extent=extent, sampling=sampling)
+
+        gpts = grid.gpts
+        sampling = grid.sampling
+
         kx, ky = spatial_frequencies(gpts, sampling)
         kx = kx.reshape((1, -1, 1))
         ky = ky.reshape((1, 1, -1))
