@@ -208,6 +208,8 @@ def show_measurement_2d(measurement,
                         log_scale=False,
                         title=None,
                         equal_ticks=False,
+                        x_label=None,
+                        y_label=None,
                         **kwargs):
     """
     Show image function
@@ -285,8 +287,11 @@ def show_measurement_2d(measurement,
         if discrete_cmap:
             cax.set_ticks(ticks=np.arange(np.min(array), np.max(array) + 1))
 
-    ax.set_xlabel(format_label(calibrations[-2]))
-    ax.set_ylabel(format_label(calibrations[-1]))
+    if x_label is not None:
+        ax.set_xlabel(format_label(calibrations[-2]))
+
+    if y_label is not None:
+        ax.set_ylabel(format_label(calibrations[-1]))
 
     if title is not None:
         ax.set_title(title)
