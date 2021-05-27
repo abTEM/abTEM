@@ -287,12 +287,12 @@ def show_measurement_2d(measurement,
         if discrete_cmap:
             cax.set_ticks(ticks=np.arange(np.min(array), np.max(array) + 1))
 
-    if x_label is not None:
+    if x_label is None:
         ax.set_xlabel(format_label(calibrations[-2]))
     else:
         ax.set_xlabel(x_label)
 
-    if y_label is not None:
+    if y_label is None:
         ax.set_ylabel(format_label(calibrations[-1]))
     else:
         ax.set_ylabel(y_label)
