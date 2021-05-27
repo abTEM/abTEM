@@ -288,14 +288,13 @@ def show_measurement_2d(measurement,
             cax.set_ticks(ticks=np.arange(np.min(array), np.max(array) + 1))
 
     if x_label is None:
-        ax.set_xlabel(format_label(calibrations[-2]))
-    else:
-        ax.set_xlabel(x_label)
+        x_label = format_label(calibrations[-2])
 
     if y_label is None:
-        ax.set_ylabel(format_label(calibrations[-1]))
-    else:
-        ax.set_ylabel(y_label)
+        y_label = format_label(calibrations[-1])
+
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
 
     if title is not None:
         ax.set_title(title)
@@ -313,7 +312,8 @@ def show_measurement_2d(measurement,
     return ax, im
 
 
-def show_measurement_1d(measurement, ax=None, figsize=None, legend=False, title=None, label=None, **kwargs):
+def show_measurement_1d(measurement, ax=None, figsize=None, legend=False, title=None, label=None,
+                        x_label=None, y_label=None, **kwargs):
     """
     Show line function
 
@@ -349,8 +349,15 @@ def show_measurement_1d(measurement, ax=None, figsize=None, legend=False, title=
         label = measurement.name
 
     lines = ax.plot(x, array, label=label, **kwargs)
-    ax.set_xlabel(format_label(calibration))
-    ax.set_ylabel(format_label(measurement))
+
+    if x_label is None:
+        x_label = format_label(calibration)
+
+    if y_label is None:
+        y_label = format_label(measurement)
+
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
 
     if legend:
         ax.legend()
