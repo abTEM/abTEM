@@ -289,9 +289,13 @@ def show_measurement_2d(measurement,
 
     if x_label is not None:
         ax.set_xlabel(format_label(calibrations[-2]))
+    else:
+        ax.set_xlabel(x_label)
 
     if y_label is not None:
         ax.set_ylabel(format_label(calibrations[-1]))
+    else:
+        ax.set_ylabel(y_label)
 
     if title is not None:
         ax.set_title(title)
