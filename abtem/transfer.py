@@ -3,7 +3,6 @@ from collections import defaultdict
 from typing import Mapping, Union
 
 import numpy as np
-
 from abtem.base_classes import HasAcceleratorMixin, HasEventMixin, Accelerator, watched_method, watched_property, Event, \
     Grid
 from abtem.device import get_array_module, get_device_function
@@ -44,7 +43,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
     semiangle_cutoff: float
         The semiangle cutoff describes the sharp Fourier space cutoff due to the objective aperture [mrad].
     rolloff: float
-        Softens the cutoff. A value of 0 gives a hard cutoff, while 1 gives the softest possible cutoff [Å].
+        Tapers the cutoff edge over the given angular range [mrad].
     focal_spread: float
         The 1/e width of the focal spread due to chromatic aberration and lens current instability [Å].
     angular_spread: float
@@ -65,7 +64,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
 
     """
 
-    def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 0.1, focal_spread: float = 0.,
+    def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 2, focal_spread: float = 0.,
                  angular_spread: float = 0., gaussian_spread: float = 0., energy: float = None,
                  parameters: Mapping[str, float] = None, **kwargs):
 
@@ -212,7 +211,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
             return xp.ones_like(alpha)
 
         if self.rolloff > 0.:
-            rolloff = self.rolloff * semiangle_cutoff
+            rolloff = self.rolloff / 1000. #* semiangle_cutoff
             array = .5 * (1 + xp.cos(np.pi * (alpha - semiangle_cutoff + rolloff) / rolloff))
             array[alpha > semiangle_cutoff] = 0.
             array = xp.where(alpha > semiangle_cutoff - rolloff, array, xp.ones_like(alpha, dtype=xp.float32))
@@ -371,7 +370,6 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
 
     def apply(self, waves, interact=False, sliders=None, throttling=0.):
         if interact:
-            from abtem.visualize.interactive.apps import ArrayView2d, MeasurementView2d
             from abtem.visualize.interactive import Canvas, MeasurementArtist2d
             from abtem.visualize.widgets import quick_sliders, throttle
             import ipywidgets as widgets
