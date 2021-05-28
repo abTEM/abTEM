@@ -6,9 +6,9 @@ from ase.data.colors import jmol_colors
 from bqplot import LinearScale, ColorScale, Lines, Scatter, Figure, Axis
 from bqplot_image_gl import ImageGL
 from traitlets import HasTraits, observe, default, List, link, Float, Unicode, Instance, Bool, Int, Any
-from traittypes import Array
 
 from abtem.measure import Measurement
+from abtem.visualize.interactive.utils import Array
 
 
 class ColorBar(widgets.HBox):
@@ -73,7 +73,7 @@ class Artist(HasTraits):
 
 
 class ImageArtist(Artist):
-    image = Array()
+    image = Array(check_equal=False)
     extent = List(allow_none=True)
     power = Float(1.)
     color_scheme = Unicode('Greys')
@@ -129,7 +129,7 @@ class ImageArtist(Artist):
 
     @default('image')
     def _default_image(self):
-        return np.zeros((0, 0,3))
+        return np.zeros((0, 0, 3))
 
     def _add_to_canvas(self, canvas):
         scales = {'x': canvas.figure.axes[0].scale,
@@ -140,15 +140,19 @@ class ImageArtist(Artist):
         canvas.figure.marks = [self._mark] + canvas.figure.marks
 
     def update_image(self, *args):
-        image = self.image ** self.power
+        image = self.image
+        if self.power != 1:
+            image = image ** self.power
+
+        image = np.swapaxes(image, 0, 1)
 
         if self.extent is None:
             with self._mark.hold_sync():
                 self._mark.x = [-.5, image.shape[0] - .5]
                 self._mark.y = [-.5, image.shape[1] - .5]
-                self._mark.image = image#.T
+                self._mark.image = image
         else:
-            self._mark.image = image#.T
+            self._mark.image = image
 
         if self._rgb:
             return
@@ -305,7 +309,7 @@ class MeasurementArtist2d(Artist):
         extent = self.measurement.calibration_limits
 
         with self._image_artist.hold_trait_notifications():
-            self._image_artist.image = change['new'].array
+            self._image_artist.image = change['new'].array  # + np.random.rand()*1e-3
             self._image_artist.extent = extent
 
         units = self.measurement.calibration_units

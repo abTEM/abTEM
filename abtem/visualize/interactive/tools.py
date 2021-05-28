@@ -64,14 +64,19 @@ class PanZoomTool(Tool):
 class SelectPixelTool(HasTraits):
     __metaclass__ = Tool
 
-    index_x = Int()
-    index_y = Int()
+    indices = List()
+
+    # index_y = Int()
 
     def __init__(self, image_artist, **kwargs):
         self._image_artist = image_artist
         self._point_artist = ScatterArtist()
 
         super().__init__(**kwargs)
+
+    @default('indices')
+    def _default_indices(self):
+        return [0, 0]
 
     def activate(self, canvas):
         self._point_artist._add_to_canvas(canvas)
@@ -86,8 +91,8 @@ class SelectPixelTool(HasTraits):
                 indices[0] = max(0, min(indices[0], self._image_artist.image.shape[0] - 1))
                 indices[1] = max(0, min(indices[1], self._image_artist.image.shape[1] - 1))
 
-                self.index_x = indices[0]
-                self.index_y = indices[1]
+                self.indices = indices
+                # self.index_y = indices[1]
 
                 rounded_position = self._image_artist.indices_to_position((indices[0], indices[1]))
                 self._point_artist.x = np.array([rounded_position[0]])
