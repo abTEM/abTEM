@@ -297,7 +297,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
                        p['C54'] * xp.cos(4 * (phi - p['phi54'])) +
                        p['C56'] * xp.cos(6 * (phi - p['phi56']))))
 
-        array = 2 * xp.pi / self.wavelength * array
+        array = np.float32(2 * xp.pi / self.wavelength) * array
         return array
 
     def evaluate_aberrations(self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]) -> \
