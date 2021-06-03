@@ -213,15 +213,15 @@ def fourier_translation_operator(positions: np.ndarray, shape: tuple) -> np.ndar
     complex_exponential = get_device_function(xp, 'complex_exponential')
 
     kx, ky = spatial_frequencies(shape, (1., 1.))
-    kx = kx.reshape((1, -1, 1))
-    ky = ky.reshape((1, 1, -1))
-    kx = xp.asarray(kx)
-    ky = xp.asarray(ky)
-    positions = xp.asarray(positions)
+    kx = kx.reshape((1, -1, 1)).astype(np.float32)
+    ky = ky.reshape((1, 1, -1)).astype(np.float32)
     x = positions[:, 0].reshape((-1,) + (1, 1))
     y = positions[:, 1].reshape((-1,) + (1, 1))
 
-    result = complex_exponential(-2 * np.pi * kx * x) * complex_exponential(-2 * np.pi * ky * y)
+    twopi = np.float32(2. * np.pi)
+    result = (-twopi * kx * x).map_blocks(complex_exponential) * (-twopi * ky * y).map_blocks(complex_exponential)
+
+    # map_blocks necessary due to issue: https://github.com/dask/distributed/issues/3450
 
     if len(positions_shape) == 1:
         return result[0]
