@@ -5,23 +5,35 @@ from numba import jit, prange
 from typing import Sequence
 
 
-@nb.vectorize([nb.complex64(nb.float32), nb.complex128(nb.float64)])
-def complex_exponential(x):
+# def complex_exponential(x):
+# return _complex_exponential(x.ravel()).reshape(x.shape)
+#    return _complex_exponential(x)
+
+
+# @nb.guvectorize([(nb.float32[:], nb.complex64[:]), (nb.float64[:], nb.complex128[:])], '(n)->(n)')
+@nb.guvectorize([(nb.float32[:, :], nb.complex64[:, :])], '(n,m)->(n,m)')
+def complex_exponential(x, out):
     """
     Calculate the complex exponential.
     """
-    return np.cos(x) + 1.j * np.sin(x)
+    for i in range(x.shape[0]):
+        for j in range(x.shape[1]):
+            out[i, j] = np.cos(x[i, j]) + 1.j * np.sin(x[i, j])
 
 
-@nb.vectorize([nb.float32(nb.complex64), nb.float64(nb.complex128)])
-def abs2(x):
+# @nb.vectorize([nb.float32(nb.complex64), nb.float64(nb.complex128)])
+@nb.guvectorize([(nb.complex64[:, :], nb.float32[:, :])], '(n,m)->(n,m)')
+def abs2(x, out):
     """
     Calculate the absolute square of a complex number.
     """
-    return x.real ** 2 + x.imag ** 2
+    for i in range(x.shape[0]):
+        for j in range(x.shape[1]):
+            out[i, j] = x[i, j].real ** 2 + x[i, j].imag ** 2
 
 
-@jit(nopython=True, nogil=True, parallel=True)
+#
+# @jit(nopython=True, nogil=True, parallel=True)
 def interpolate_radial_functions(array: np.ndarray,
                                  rle_encoding: np.ndarray,
                                  disc_indices: np.ndarray,
@@ -56,12 +68,12 @@ def interpolate_radial_functions(array: np.ndarray,
     n = r.shape[0]
     dt = np.log(r[-1] / r[0]) / (n - 1)
 
-    for p in prange(rle_encoding.shape[0] - 1): # Thread safe loop
+    for p in prange(rle_encoding.shape[0] - 1):  # Thread safe loop
         for i in range(rle_encoding[p], rle_encoding[p + 1]):
             px = int(round(positions[i, 0] / sampling[0]))
             py = int(round(positions[i, 1] / sampling[1]))
 
-            for j in range(disc_indices.shape[0]): # Thread safe loop
+            for j in range(disc_indices.shape[0]):  # Thread safe loop
                 k = px + disc_indices[j, 0]
                 m = py + disc_indices[j, 1]
 
@@ -77,7 +89,9 @@ def interpolate_radial_functions(array: np.ndarray,
                         array[p, k, m] += v[i, idx] + (r_interp - r[idx]) * dvdr[i, idx]
 
 
-@jit(nopython=True, nogil=True, parallel=True, fastmath=True)
+#
+#
+# @jit(nopython=True, nogil=True, parallel=True, fastmath=True)
 def sum_run_length_encoded(array, result, separators):
     for x in prange(result.shape[1]):
         for i in range(result.shape[0]):
