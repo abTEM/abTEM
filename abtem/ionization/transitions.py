@@ -1,5 +1,4 @@
 import contextlib
-# from gpaw.atom.configurations import configurations
 import os
 from abc import ABCMeta, abstractmethod
 from typing import Union, Sequence, Tuple
@@ -15,118 +14,15 @@ from sympy.physics.wigner import wigner_3j
 
 from abtem.base_classes import HasAcceleratorMixin, HasGridMixin, Grid, Accelerator, Cache, cached_method
 from abtem.device import get_array_module, get_device_function
+from abtem.ionization.utils import check_valid_quantum_number, config_str_to_config_tuples, \
+    remove_electron_from_config_str, load_electronic_configurations
 from abtem.measure import Measurement, calibrations_from_grid
-from abtem.utils import _set_path, energy2wavelength, spatial_frequencies, polar_coordinates, \
+from abtem.utils import energy2wavelength, spatial_frequencies, polar_coordinates, \
     relativistic_mass_correction, fourier_translation_operator
-
-azimuthal_number = {'s': 0, 'p': 1, 'd': 2, 'f': 3, 'g': 4, 'h': 5, 'i': 6}
-azimuthal_letter = {value: key for key, value in azimuthal_number.items()}
-
-
-def config_str_to_config_tuples(config_str):
-    config_tuples = []
-    for subshell_string in config_str.split(' '):
-        config_tuples.append((int(subshell_string[0]), azimuthal_number[subshell_string[1]], int(subshell_string[2])))
-    return config_tuples
-
-
-def config_tuples_to_config_str(config_tuples):
-    config_str = []
-    for n, ell, occ in config_tuples:
-        config_str.append(str(n) + azimuthal_letter[ell] + str(occ))
-    return ' '.join(config_str)
-
-
-def remove_electron_from_config_str(config_str, n, ell):
-    config_tuples = []
-    for shell in config_str_to_config_tuples(config_str):
-        if shell[:2] == (n, ell):
-            config_tuples.append(shell[:2] + (shell[2] - 1,))
-        else:
-            config_tuples.append(shell)
-    return config_tuples_to_config_str(config_tuples)
-
-
-def check_valid_quantum_number(Z, n, ell):
-    symbol = chemical_symbols[Z]
-    config_tuple = config_str_to_config_tuples(load_electronic_configurations()[symbol])
-
-    if not any([shell[:2] == (n, ell) for shell in config_tuple]):
-        raise RuntimeError(f'Quantum numbers ({n}, {ell}) not valid for element {symbol}')
-
-
-def load_electronic_configurations():
-    configurations = {}
-    with open(_set_path('electron_configurations.txt')) as f:
-        for i, line in enumerate(f):
-            line = line.strip()
-            prefix_start = line.find('[')
-            prefix_end = line.find(']')
-            if prefix_start > -1:
-                line = configurations[line[prefix_start + 1:prefix_end]] + line[prefix_end + 1:]
-
-            configurations[chemical_symbols[i + 1]] = line
-    return configurations
-
-
-def load_fac_data(fname):
-    path = _set_path(fname)
-    table = np.loadtxt(path, skiprows=15)
-
-    header_data = {}
-    with open(path, 'r') as f:
-        for i in range(12):
-            split_line = f.readline()[1:].split('=')
-
-            key = split_line[0].strip()
-
-            if key in ('ilast',):
-                value = int(split_line[1].strip())
-            else:
-                value = float(split_line[1].strip())
-
-            header_data[key] = value
-
-    return header_data, table
-
-
-def get_fac_bound_wave(Z, n, ell):
-    symbol = chemical_symbols[Z]
-    fname = f'fac/{symbol}/{symbol}_bound_n={n}_l={ell}.txt'
-    header_data, table = load_fac_data(fname)
-    energy = header_data['energy']
-    wave = interp1d(table[:, 1], table[:, 4], kind='cubic', fill_value=0, bounds_error=False)
-    return energy, wave
-
-
-def get_fac_continuum_wave(Z, n, ell, ellprime):
-    symbol = chemical_symbols[Z]
-
-    fname = f'fac/{symbol}/{symbol}_excited_n={n}_l={ell}_lprime={ellprime}.txt'
-    header_data, table = load_fac_data(fname)
-    ilast = header_data['ilast']
-    epsilon = header_data['energy']
-
-    # Normalization from Flexible Atomic Code
-    norm_fac = 1 / (2 * (epsilon / units.Hartree) * (1 + units.alpha ** 2 * (epsilon / units.Hartree) / 2)) ** .25
-
-    # Normalization from Manson 1972
-    norm_manson = 1 / np.sqrt(np.pi) / (epsilon / units.Rydberg) ** 0.25
-
-    wave = np.zeros_like(table[:, 1])
-    wave[:ilast + 1] = table[:ilast + 1, 4] / norm_fac * norm_manson
-    amplitude = table[ilast + 1:, 2] / norm_fac * norm_manson
-    phase = table[ilast + 1:, 3]
-
-    wave[ilast + 1:] = amplitude * np.sin(phase)
-
-    wave = interp1d(table[:, 1], wave, kind='cubic', fill_value=0, bounds_error=False)
-    return wave
 
 
 def get_gpaw_bound_wave(Z, n, ell, xc='PBE'):
-
-    #_, a = get_fac_bound_wave(Z,n, ell)
+    # _, a = get_fac_bound_wave(Z,n, ell)
 
     check_valid_quantum_number(Z, n, ell)
     config_tuples = config_str_to_config_tuples(load_electronic_configurations()[chemical_symbols[Z]])
@@ -268,8 +164,8 @@ class TransitionPotential(HasAcceleratorMixin, HasGridMixin):
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
 
-        #self._bound_energy, self._bound_wave = get_fac_bound_wave(self.Z, self.n, self._bound_state[0])
-        #self._continuum_wave = get_fac_continuum_wave(self.Z, self.n, self._bound_state[0], self._continuum_state[0])
+        # self._bound_energy, self._bound_wave = get_fac_bound_wave(self.Z, self.n, self._bound_state[0])
+        # self._continuum_wave = get_fac_continuum_wave(self.Z, self.n, self._bound_state[0], self._continuum_state[0])
 
         self._bound_energy, self._bound_wave = get_gpaw_bound_wave(self.Z, self.n, self._bound_state[0])
         self._continuum_wave = get_gpaw_continuum_wave(self.Z, self.n, self._bound_state[0], self._continuum_state[0],
