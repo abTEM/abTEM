@@ -844,7 +844,6 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
         numbers = atoms.get_atomic_numbers()
         unique = np.unique(numbers)
         order = np.argsort(positions[:, 2])
-
         positions = positions[order]
         numbers = numbers[order]
 
@@ -873,22 +872,24 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
             start_idx = np.searchsorted(slice_idx, start)
             end_idx = np.searchsorted(slice_idx, end)
 
-            if start_idx != end_idx:
-                for j, number in enumerate(unique):
-                    temp[:] = 0.
-                    chunk_positions = positions[start_idx:end_idx]
-                    chunk_slice_idx = slice_idx[start_idx:end_idx] - start
+            if start_idx == end_idx:
+                continue
 
-                    if len(unique) > 1:
-                        chunk_positions = chunk_positions[numbers[start_idx:end_idx] == number]
-                        chunk_slice_idx = chunk_slice_idx[numbers[start_idx:end_idx] == number]
+            for j, number in enumerate(unique):
+                temp[:] = 0.
+                chunk_positions = positions[start_idx:end_idx]
+                chunk_slice_idx = slice_idx[start_idx:end_idx] - start
 
-                    chunk_positions = xp.asarray(chunk_positions[:, :2] / self.sampling)
+                if len(unique) > 1:
+                    chunk_positions = chunk_positions[numbers[start_idx:end_idx] == number]
+                    chunk_slice_idx = chunk_slice_idx[numbers[start_idx:end_idx] == number]
 
-                    superpose_deltas(chunk_positions, chunk_slice_idx, temp)
-                    fft2_convolve(temp, scattering_factors[number])
+                chunk_positions = xp.asarray(chunk_positions[:, :2] / self.sampling)
 
-                    array += temp
+                superpose_deltas(chunk_positions, chunk_slice_idx, temp)
+                fft2_convolve(temp, scattering_factors[number])
+
+                array += temp
 
             slice_thicknesses = [self.get_slice_thickness(i) for i in range(start, end)]
             yield start, end, PotentialArray(array.real[:end - start], slice_thicknesses, extent=self.extent)
@@ -1119,6 +1120,11 @@ class PotentialArray(AbstractPotential, HasGridMixin):
     @property
     def thickness(self):
         return np.sum(self._slice_thicknesses)
+
+    def flip(self):
+        array = self._array[::-1]
+        slice_thicknesses = self._slice_thicknesses[::-1]
+        return self.__class__(array=array, slice_thicknesses=slice_thicknesses, extent=self.extent)
 
     def generate_slices(self, first_slice: int = 0, last_slice: int = None, max_batch: int = 1):
         if last_slice is None:
