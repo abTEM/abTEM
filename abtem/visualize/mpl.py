@@ -10,6 +10,7 @@ from matplotlib.patches import Circle
 from abtem.visualize.utils import format_label
 from typing import Union, Tuple
 from matplotlib.lines import Line2D
+from abtem.visualize.utils import domain_coloring
 
 #: Array to facilitate the display of cell boundaries.
 _cube = np.array([[[0, 0, 0], [0, 0, 1]],
@@ -208,6 +209,7 @@ def show_measurement_2d(measurement,
                         log_scale=False,
                         title=None,
                         equal_ticks=False,
+                        is_rgb=False,
                         x_label=None,
                         y_label=None,
                         **kwargs):
@@ -252,6 +254,9 @@ def show_measurement_2d(measurement,
     calibrations = measurement.calibrations[-2:]
     array = measurement.array[(0,) * (measurement.dimensions - 2) + (slice(None),) * 2]
 
+    if np.iscomplexobj(array):
+        array = domain_coloring(array)
+
     if power != 1:
         array = array ** power
 
@@ -276,7 +281,7 @@ def show_measurement_2d(measurement,
     if discrete_cmap:
         cmap = plt.get_cmap(cmap, np.max(array) - np.min(array) + 1)
 
-    im = ax.imshow(array.T, extent=extent, cmap=cmap, origin='lower', vmin=vmin, vmax=vmax, interpolation='nearest',
+    im = ax.imshow(np.swapaxes(array, 0,1), extent=extent, cmap=cmap, origin='lower', vmin=vmin, vmax=vmax, interpolation='nearest',
                    **kwargs)
 
     if cbar:
