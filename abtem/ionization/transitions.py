@@ -403,23 +403,43 @@ class TransitionPotential(HasAcceleratorMixin, HasGridMixin):
 
     def __init__(self,
                  transitions,
-                 atoms,
+                 atoms=None,
                  slice_thickness=None,
                  gpts: Union[int, Sequence[float]] = None,
                  sampling: Union[float, Sequence[float]] = None,
                  energy: float = None,
                  min_contrast=.95):
+
         if isinstance(transitions, SubshellTransitions):
             transitions = [transitions]
 
-        self._transitions = transitions
-        self._grid = Grid(extent=np.diag(atoms.cell)[:2], gpts=gpts, sampling=sampling, lock_extent=True)
-        self._accelerator = Accelerator(energy=energy)
         self._slice_thickness = slice_thickness
+
+        self._grid = Grid(gpts=gpts, sampling=sampling)
+
+        self.atoms = atoms
+        self._transitions = transitions
+
+        self._accelerator = Accelerator(energy=energy)
+
         # self._atoms = atoms
         self._sliced_atoms = SlicedAtoms(atoms, slice_thicknesses=self._slice_thickness)
 
         self._potentials_cache = Cache(1)
+
+    @property
+    def atoms(self):
+        return self._atoms
+
+    @atoms.setter
+    def atoms(self, atoms):
+        self._atoms = atoms
+
+        if atoms is not None:
+            self.extent = np.diag(atoms.cell)[:2]
+            self._sliced_atoms = SlicedAtoms(atoms, slice_thicknesses=self._slice_thickness)
+        else:
+            self._sliced_atoms = None
 
     @property
     def num_edges(self):
