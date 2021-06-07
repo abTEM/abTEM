@@ -49,4 +49,4 @@ def check_valid_quantum_number(Z, n, ell):
     config_tuple = config_str_to_config_tuples(load_electronic_configurations()[symbol])
 
     if not any([shell[:2] == (n, ell) for shell in config_tuple]):
-        raise RuntimeError(f'Quantum numbers ({n}, {ell}) not valid for element {symbol}')
+        raise RuntimeError(f'Quantum numbers (n, ell) = ({n}, {ell}) not valid for element {symbol}')

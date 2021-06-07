@@ -188,11 +188,23 @@ class SubshellTransitions(AbstractTransitionCollection):
             continuum_waves[ellprime] = interp1d(r, ur, kind='cubic', fill_value='extrapolate', bounds_error=False)
         return ae.ETotal * units.Hartree, continuum_waves
 
+    def get_bound_wave(self):
+        return self._calculate_bound()[1]
+
+    def get_continuum_waves(self):
+        return self._calculate_continuum()[1]
+
     def get_transition_quantum_numbers(self):
         transitions = []
         for ml in np.arange(-self.ell, self.ell + 1):
             for new_ell in self.ellprimes:
                 for new_ml in np.arange(-new_ell, new_ell + 1):
+                    if not abs(new_ell - self.ell) == 1:
+                        continue
+
+                    if not (abs(ml - new_ml) < 2):
+                       continue
+
                     transitions.append([(self.ell, ml), (new_ell, new_ml)])
         return transitions
 
@@ -202,8 +214,8 @@ class SubshellTransitions(AbstractTransitionCollection):
                                   sampling: Union[float, Sequence[float]] = None,
                                   energy: float = None,
                                   pbar=True):
-        transitions = []
 
+        transitions = []
         if isinstance(pbar, bool):
             pbar = ProgressBar(total=len(self), desc='Transitions', disable=(not pbar))
 
@@ -211,6 +223,7 @@ class SubshellTransitions(AbstractTransitionCollection):
         _, continuum_waves = self._calculate_continuum()
         energy_loss = self.energy_loss
 
+        intensities = []
         for bound_state, continuum_state in self.get_transition_quantum_numbers():
             continuum_wave = continuum_waves[continuum_state[0]]
 
@@ -225,6 +238,8 @@ class SubshellTransitions(AbstractTransitionCollection):
                                                  sampling=sampling,
                                                  energy=energy
                                                  )
+
+            intensities.append(transition.calculate_total_intensity())
 
             # for bound_state, continuum_state in self.get_transition_quantum_numbers():
             #     transition = TransitionPotential(self.Z,
@@ -289,17 +304,6 @@ class ProjectedCoreTransition(ProjectedAtomicTransition):
         kn = 1 / energy2wavelength(self.energy + self.energy_loss)
         return k0 - kn
 
-    def overlap_integral(self, k, ellprimeprime):
-        rmax = self._bound_wave.x[-1]
-        rmax = 20
-        # rmax = max(self._bound_wave[1])
-        grid = 2 * np.pi * k * units.Bohr
-        r = np.linspace(0, rmax, 1000)
-        values = (self._bound_wave(r) *
-                  spherical_jn(ellprimeprime, grid[:, None] * r[None]) *
-                  self._continuum_wave(r))
-        return np.trapz(values, r, axis=1)
-
     def _fourier_translation_operator(self, positions):
         return fourier_translation_operator(positions, self.gpts)
 
@@ -313,10 +317,23 @@ class ProjectedCoreTransition(ProjectedAtomicTransition):
             positions = np.expand_dims(positions, axis=0)
 
         positions /= self.sampling
-
         potential = np.fft.ifft2(self._evaluate_potential() * self._fourier_translation_operator(positions))
-        # return self._evaluate_potential()
         return potential
+
+    def calculate_total_intensity(self):
+        return (np.abs(self.build()) ** 2).sum()
+
+    def overlap_integral(self, k, ellprimeprime):
+        rmax = self._bound_wave.x[-1]
+        rmax = 20
+        # rmax = max(self._bound_wave[1])
+        grid = 2 * np.pi * k * units.Bohr
+        r = np.linspace(0, rmax, 10000)
+
+        values = (self._bound_wave(r) *
+                  spherical_jn(ellprimeprime, grid[:, None] * r[None]) *
+                  self._continuum_wave(r))
+        return np.trapz(values, r, axis=1)
 
     @cached_method('_cache')
     def _evaluate_potential(self):
@@ -355,11 +372,15 @@ class ProjectedCoreTransition(ProjectedAtomicTransition):
                               * np.float(wigner_3j(ellprime, ellprimeprime, ell, 0, 0, 0))
                               * np.float(wigner_3j(ellprime, ellprimeprime, ell, -mlprime, -mlprimeprime, ml)))
 
+                # print(prefactor2)
+
                 if np.abs(prefactor2) < 1e-12:
                     continue
 
                 if jk is None:
                     jk = interp1d(radial_grid, self.overlap_integral(radial_grid, ellprimeprime))(k)
+
+                # sss
 
                 Ylm = sph_harm(mlprimeprime, ellprimeprime, phi, theta)
                 potential += prefactor1 * prefactor2 * jk * Ylm
@@ -411,11 +432,6 @@ class TransitionPotential(HasAcceleratorMixin, HasGridMixin):
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
-
-        # self._bound_energy, self._bound_wave = get_gpaw_bound_wave(self.Z, self.n, self._bound_state[0])
-        # self._continuum_wave = get_gpaw_continuum_wave(self.Z, self.n, self._bound_state[0], self._continuum_state[0],
-        #                                                epsilon)
-
         self._xc = xc
         self._cache = Cache(1)
 
