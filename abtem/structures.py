@@ -279,6 +279,12 @@ def pad_atoms(atoms: Atoms, margin: float, directions='xy', in_place=False):
     return atoms
 
 
+def flip_atoms(atoms):
+    atoms = atoms.copy()
+    atoms.positions[:] = atoms.cell[2, 2] - atoms.positions[:]
+    return atoms
+
+
 class SlicedAtoms:
 
     def __init__(self, atoms, slice_thicknesses):
@@ -334,7 +340,7 @@ class SlicedAtoms:
         a = self.get_slice_entrance(start) - z_margin
         b = self.get_slice_entrance(end) + z_margin
 
-        in_slice = (self.atoms.positions[:, 2] > a) * (self.atoms.positions[:, 2] < b)
+        in_slice = (self.atoms.positions[:, 2] >= a) * (self.atoms.positions[:, 2] < b)
 
         if atomic_number is not None:
             in_slice = (self.atoms.numbers == atomic_number) * in_slice
