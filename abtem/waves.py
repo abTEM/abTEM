@@ -1,7 +1,5 @@
 """Module to describe electron waves and their propagation."""
-from abc import abstractmethod
 from copy import copy
-from numbers import Number
 from typing import Union, Sequence, Tuple, List, Dict
 
 import h5py
@@ -21,6 +19,8 @@ from abtem.scan import AbstractScan, GridScan
 from abtem.transfer import CTF
 from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, subdivide_into_batches, periodic_crop, \
     fft_crop, fourier_translation_operator, array_row_intersection
+from abtem.structures import SlicedAtoms
+from abtem.ionization import SubshellTransitions
 
 
 class FresnelPropagator:
@@ -735,6 +735,7 @@ class Probe(_Scanable, HasEventMixin):
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
                  energy: float = None,
+                 aperture: float = None,
                  ctf: CTF = None,
                  tilt: Tuple[float, float] = None,
                  device: str = 'cpu',
@@ -771,13 +772,21 @@ class Probe(_Scanable, HasEventMixin):
 
     def _fourier_translation_operator(self, positions):
         xp = get_array_module(positions)
-        positions /= xp.array(self.sampling)
+        positions /= xp.array(self.sampling, dtype=np.float32)
+
+        positions_shape = positions.shape
+
+        if len(positions_shape) == 1:
+            positions = positions[None]
+
         return fourier_translation_operator(positions, self.gpts)
 
     @cached_method('_ctf_cache')
     def _evaluate_ctf(self):
         alpha, phi = self.get_scattering_angles()
-        return self._ctf.evaluate(alpha, phi)
+
+        array = self._ctf.evaluate(alpha, phi)
+        return array
 
     def build(self, positions: Sequence[Sequence[float]] = None) -> Waves:
         """
@@ -1191,6 +1200,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
                                         antialias_aperture=self.antialias_aperture)
 
             n += batch_size
+
             pbar.update(batch_size)
 
         pbar.refresh()
@@ -1935,6 +1945,61 @@ class SMatrix(_Scanable, HasEventMixin):
             return measurements[0]
         else:
             return measurements
+
+    def coreloss_scan(self, scan, detector, potential, transition_potential):
+        transition_potential.atoms = potential.atoms
+
+        self.grid.match(potential)
+        S1 = self.build()
+
+        S2 = SMatrix(energy=self.energy, semiangle_cutoff=detector.collection_angle,
+                     interpolation=detector.interpolation)
+        S2.grid.match(potential)
+
+        potential = potential.build(pbar=True)
+        backwards_pbar = ProgressBar(total=len(S2), desc='Backward multislice')
+
+        potential.flip()
+        S2 = S2.build().multislice(potential, plane_waves_pbar=backwards_pbar, multislice_pbar=False)
+
+        backwards_pbar.close()
+        potential.flip()
+
+        transition_potential._sliced_atoms.slice_thicknesses = potential.slice_thicknesses
+        transition_potential.grid.match(potential)
+        transition_potential.accelerator.match(self)
+
+        image = np.zeros(scan.gpts, dtype=np.float32).ravel()
+
+        xp = get_array_module(S1.array)
+
+        propagator = FresnelPropagator()
+        positions = scan.get_positions()
+        coefficients = S1._get_coefficients(positions)
+        forward_pbar = ProgressBar(total=len(potential), desc='Forward multislice')
+
+        for i, potential_slice in enumerate(potential):
+
+            for t in transition_potential._generate_slice_transition_potentials(slice_idx=i, transitions_idx=0):
+                tmp = t * S1.array
+
+                SHn0 = xp.tensordot(S2.array.reshape((len(S2), -1)), tmp.reshape((len(S1), -1)).T, axes=1)
+
+                image += (xp.abs(xp.dot(SHn0, coefficients.T)) ** 2).sum(0)
+
+            S1 = potential_slice.transmit(S1)
+            S2 = potential_slice.transmit(S2)
+            S1 = propagator.propagate(S1, potential_slice.thickness)
+            S2 = propagator.propagate(S2, potential_slice.thickness)
+
+            forward_pbar.update(1)
+
+        forward_pbar.close()
+
+        calibrations = calibrations_from_grid(self.grid.gpts, self.grid.sampling, ['x', 'y'])
+        measurement = Measurement(image.reshape(scan.gpts), calibrations=calibrations)
+
+        return measurement
 
     @property
     def is_partial(self):
