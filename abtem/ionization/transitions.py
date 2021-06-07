@@ -19,6 +19,7 @@ from abtem.measure import Measurement, calibrations_from_grid
 from abtem.utils import energy2wavelength, spatial_frequencies, polar_coordinates, \
     relativistic_mass_correction, fourier_translation_operator
 from abtem.utils import ProgressBar
+from abtem.structures import SlicedAtoms
 
 
 def get_gpaw_bound_wave(Z, n, ell, xc='PBE'):
@@ -203,13 +204,12 @@ class SubshellTransitions(AbstractTransitionCollection):
                         continue
 
                     if not (abs(ml - new_ml) < 2):
-                       continue
+                        continue
 
                     transitions.append([(self.ell, ml), (new_ell, new_ml)])
         return transitions
 
-    def get_transition_potentials(self,
-                                  extent: Union[float, Sequence[float]] = None,
+    def get_transition_potentials(self, extent: Union[float, Sequence[float]] = None,
                                   gpts: Union[float, Sequence[float]] = None,
                                   sampling: Union[float, Sequence[float]] = None,
                                   energy: float = None,
@@ -223,34 +223,20 @@ class SubshellTransitions(AbstractTransitionCollection):
         _, continuum_waves = self._calculate_continuum()
         energy_loss = self.energy_loss
 
-        intensities = []
         for bound_state, continuum_state in self.get_transition_quantum_numbers():
             continuum_wave = continuum_waves[continuum_state[0]]
 
-            transition = ProjectedCoreTransition(Z=self.Z,
-                                                 bound_wave=bound_wave,
-                                                 continuum_wave=continuum_wave,
-                                                 bound_state=bound_state,
-                                                 continuum_state=continuum_state,
-                                                 energy_loss=energy_loss,
-                                                 extent=extent,
-                                                 gpts=gpts,
-                                                 sampling=sampling,
-                                                 energy=energy
-                                                 )
-
-            intensities.append(transition.calculate_total_intensity())
-
-            # for bound_state, continuum_state in self.get_transition_quantum_numbers():
-            #     transition = TransitionPotential(self.Z,
-            #                                      self.n,
-            #                                      bound_state,
-            #                                      continuum_state,
-            #                                      self.epsilon,
-            #                                      extent=extent,
-            #                                      gpts=gpts,
-            #                                      sampling=sampling,
-            #                                      energy=energy)
+            transition = ProjectedAtomicTransition(Z=self.Z,
+                                                   bound_wave=bound_wave,
+                                                   continuum_wave=continuum_wave,
+                                                   bound_state=bound_state,
+                                                   continuum_state=continuum_state,
+                                                   energy_loss=energy_loss,
+                                                   extent=extent,
+                                                   gpts=gpts,
+                                                   sampling=sampling,
+                                                   energy=energy
+                                                   )
             transitions += [transition]
             pbar.update(1)
 
@@ -259,7 +245,7 @@ class SubshellTransitions(AbstractTransitionCollection):
         return transitions
 
 
-class ProjectedAtomicTransition(HasAcceleratorMixin, HasGridMixin):
+class AbstractProjectedAtomicTransition(HasAcceleratorMixin, HasGridMixin):
 
     def __init__(self, Z, extent, gpts, sampling, energy):
         self._Z = Z
@@ -267,7 +253,7 @@ class ProjectedAtomicTransition(HasAcceleratorMixin, HasGridMixin):
         self._accelerator = Accelerator(energy=energy)
 
 
-class ProjectedCoreTransition(ProjectedAtomicTransition):
+class ProjectedAtomicTransition(AbstractProjectedAtomicTransition):
 
     def __init__(self,
                  Z: int,
@@ -362,25 +348,20 @@ class ProjectedCoreTransition(ProjectedAtomicTransition):
             jk = None
 
             for mlprimeprime in range(-ellprimeprime, ellprimeprime + 1):
-                # Check second selection rule
-                # (http://mathworld.wolfram.com/Wigner3j-Symbol.html)
-                if ml - mlprime - mlprimeprime != 0:
+
+                if ml - mlprime - mlprimeprime != 0:  # Wigner3j selection rule
                     continue
 
-                # evaluate Eq. (14) from Dwyer Ultramicroscopy 104 (2005) 141-151
+                # Evaluate Eq. (14) from Dwyer Ultramicroscopy 104 (2005) 141-151
                 prefactor2 = ((-1.0) ** (mlprime + mlprimeprime)
-                              * np.float(wigner_3j(ellprime, ellprimeprime, ell, 0, 0, 0))
-                              * np.float(wigner_3j(ellprime, ellprimeprime, ell, -mlprime, -mlprimeprime, ml)))
-
-                # print(prefactor2)
+                              * float(wigner_3j(ellprime, ellprimeprime, ell, 0, 0, 0))
+                              * float(wigner_3j(ellprime, ellprimeprime, ell, -mlprime, -mlprimeprime, ml)))
 
                 if np.abs(prefactor2) < 1e-12:
                     continue
 
                 if jk is None:
                     jk = interp1d(radial_grid, self.overlap_integral(radial_grid, ellprimeprime))(k)
-
-                # sss
 
                 Ylm = sph_harm(mlprimeprime, ellprimeprime, phi, theta)
                 potential += prefactor1 * prefactor2 * jk * Ylm
@@ -402,165 +383,253 @@ class ProjectedCoreTransition(ProjectedAtomicTransition):
         potential *= relativistic_mass_correction(self.energy) / (
                 2 * units.Bohr * np.pi ** 2 * np.sqrt(units.Rydberg) * kn * k ** 2
         )
-        # potential = np.fft.ifft2(potential)
         return potential
+
+    def measure(self):
+        array = np.fft.fftshift(self.build())[0]
+        calibrations = calibrations_from_grid(self.gpts, self.sampling, ['x', 'y'])
+        abs2 = get_device_function(get_array_module(array), 'abs2')
+        return Measurement(array, calibrations, name=str(self))
+
+    def show(self, ax, **kwargs):
+        # array = np.fft.fftshift(self.build())[0]
+        # calibrations = calibrations_from_grid(self.gpts, self.sampling, ['x', 'y'])
+        # abs2 = get_device_function(get_array_module(array), 'abs2')
+        self.measure().show(ax=ax)
+        # Measurement(abs2(array), calibrations, name=str(self)).show(**kwargs)
 
 
 class TransitionPotential(HasAcceleratorMixin, HasGridMixin):
 
     def __init__(self,
-                 Z: int,
-                 n: int,
-                 bound_state: Tuple[int, int],
-                 continuum_state: Tuple[int, int],
-                 epsilon: float = 1.,
-                 xc='PBE',
-                 extent: Union[float, Sequence[float]] = None,
+                 transitions,
+                 atoms,
+                 slice_thickness=None,
                  gpts: Union[int, Sequence[float]] = None,
                  sampling: Union[float, Sequence[float]] = None,
-                 energy: float = None):
+                 energy: float = None,
+                 min_contrast=.95):
+        if isinstance(transitions, SubshellTransitions):
+            transitions = [transitions]
 
-        self._Z = Z
-        self._n = n
-
-        if (bound_state[1] > bound_state[0]) or (continuum_state[1] > continuum_state[0]):
-            raise ValueError()
-
-        self._bound_state = bound_state
-        self._continuum_state = continuum_state
-        self._epsilon = epsilon
-
-        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
+        self._transitions = transitions
+        self._grid = Grid(extent=np.diag(atoms.cell)[:2], gpts=gpts, sampling=sampling, lock_extent=True)
         self._accelerator = Accelerator(energy=energy)
-        self._xc = xc
-        self._cache = Cache(1)
+        self._slice_thickness = slice_thickness
+        # self._atoms = atoms
+        self._sliced_atoms = SlicedAtoms(atoms, slice_thicknesses=self._slice_thickness)
 
-    def __str__(self):
-        return (f'{self._bound_state} -> {self._continuum_state}')
-
-    @property
-    def Z(self):
-        return self._Z
+        self._potentials_cache = Cache(1)
 
     @property
-    def n(self):
-        return self._n
+    def num_edges(self):
+        return len(self._transitions)
 
     @property
-    def epsilon(self):
-        return self._epsilon
+    def num_slices(self):
+        return self._sliced_atoms.num_slices
 
-    def energy_loss(self):
-        return self._bound_energy - self._epsilon
+    @cached_method('_potentials_cache')
+    def _calculate_potentials(self, transitions_idx):
+        transitions = self._transitions[transitions_idx]
+        return transitions.get_transition_potentials(extent=self.extent, gpts=self.gpts, energy=self.energy, pbar=False)
 
-    def momentum_transfer(self, energy):
-        k0 = 1 / energy2wavelength(energy)
-        kn = 1 / energy2wavelength(energy + self.energy_loss())
-        return k0 - kn
+    def _generate_slice_transition_potentials(self, slice_idx, transitions_idx):
+        transitions = self._transitions[transitions_idx]
+        Z = transitions.Z
 
-    def evaluate_bound_wave(self, r):
-        return self._bound_wave(r)
+        atoms_slice = self._sliced_atoms.get_subsliced_atoms(slice_idx, atomic_number=Z).atoms
 
-    def evaluate_continuum_wave(self, r):
-        return self._continuum_wave(r)
+        for transition in self._calculate_potentials(transitions_idx):
+            for atom in atoms_slice:
+                t = np.asarray(transition.build(atom.position[:2]))
+                yield t
 
-    def overlap_integral(self, k, ellprimeprime):
-        rmax = self._bound_wave.x[-1]
-        rmax = 20
-        # rmax = max(self._bound_wave[1])
-        grid = 2 * np.pi * k * units.Bohr
-        r = np.linspace(0, rmax, 1000)
-        values = (self.evaluate_bound_wave(r) *
-                  spherical_jn(ellprimeprime, grid[:, None] * r[None]) *
-                  self.evaluate_continuum_wave(r))
-        return np.trapz(values, r, axis=1)
+    def show(self, transitions_idx=0):
+        intensity = None
 
-    def _fourier_translation_operator(self, positions):
-        return fourier_translation_operator(positions, self.gpts)
-
-    def build(self, positions=None):
-        if positions is None:
-            positions = np.zeros((1, 2), dtype=np.float32)
+        if self._sliced_atoms.slice_thicknesses is None:
+            none_slice_thickess = True
+            self._sliced_atoms.slice_thicknesses = self._sliced_atoms.atoms.cell[2, 2]
         else:
-            positions = np.array(positions, dtype=np.float32)
+            none_slice_thickess = False
 
-        if len(positions.shape) == 1:
-            positions = np.expand_dims(positions, axis=0)
+        for slice_idx in range(self.num_slices):
+            for t in self._generate_slice_transition_potentials(slice_idx, transitions_idx):
+                if intensity is None:
+                    intensity = np.abs(t) ** 2
+                else:
+                    intensity += np.abs(t) ** 2
 
-        positions /= self.sampling
+        if none_slice_thickess:
+            self._sliced_atoms.slice_thicknesses = None
 
-        potential = np.fft.ifft2(self._evaluate_potential() * self._fourier_translation_operator(positions))
-        # return self._evaluate_potential()
-        return potential
-
-    @cached_method('_cache')
-    def _evaluate_potential(self):
-        from sympy.physics.wigner import wigner_3j
-
-        self.grid.check_is_defined()
-        self.accelerator.check_is_defined()
-
-        potential = np.zeros(self.gpts, dtype=np.complex64)
-
-        kx, ky = spatial_frequencies(self.gpts, self.sampling)
-        kz = self.momentum_transfer(self.energy)
-
-        kt, phi = polar_coordinates(kx, ky)
-        k = np.sqrt(kt ** 2 + kz ** 2)
-        theta = np.pi - np.arctan(kt / kz)
-
-        radial_grid = np.arange(0, np.max(k) * 1.05, 1 / max(self.extent))
-
-        ell, ml = self._bound_state
-        ellprime, mlprime = self._continuum_state
-
-        for ellprimeprime in range(max(ell - ellprime, 0), np.abs(ell + ellprime) + 1):
-            prefactor1 = (np.sqrt(4 * np.pi) * ((-1.j) ** ellprimeprime) *
-                          np.sqrt((2 * ellprime + 1) * (2 * ellprimeprime + 1) * (2 * ell + 1)))
-            jk = None
-
-            for mlprimeprime in range(-ellprimeprime, ellprimeprime + 1):
-                # Check second selection rule
-                # (http://mathworld.wolfram.com/Wigner3j-Symbol.html)
-                if ml - mlprime - mlprimeprime != 0:
-                    continue
-
-                # evaluate Eq. (14) from Dwyer Ultramicroscopy 104 (2005) 141-151
-                prefactor2 = ((-1.0) ** (mlprime + mlprimeprime)
-                              * np.float(wigner_3j(ellprime, ellprimeprime, ell, 0, 0, 0))
-                              * np.float(wigner_3j(ellprime, ellprimeprime, ell, -mlprime, -mlprimeprime, ml)))
-
-                if np.abs(prefactor2) < 1e-12:
-                    continue
-
-                if jk is None:
-                    jk = interp1d(radial_grid, self.overlap_integral(radial_grid, ellprimeprime))(k)
-
-                Ylm = sph_harm(mlprimeprime, ellprimeprime, phi, theta)
-                potential += prefactor1 * prefactor2 * jk * Ylm
-
-        potential *= np.prod(self.gpts) / np.prod(self.extent)
-
-        # Multiply by orbital filling
-        # if orbital_filling_factor:
-        potential *= np.sqrt(4 * ell + 2)
-
-        # Apply constants:
-        # sqrt(Rdyberg) to convert to 1/sqrt(eV) units
-        # 1 / (2 pi**2 a0 kn) as as per paper
-        # Relativistic mass correction to go from a0 to relativistically corrected a0*
-        # divide by q**2
-
-        kn = 1 / energy2wavelength(self.energy + self.energy_loss())
-
-        potential *= relativistic_mass_correction(self.energy) / (
-                2 * units.Bohr * np.pi ** 2 * np.sqrt(units.Rydberg) * kn * k ** 2
-        )
-        # potential = np.fft.ifft2(potential)
-        return potential
-
-    def show(self, **kwargs):
-        array = np.fft.fftshift(np.fft.ifft2(self._evaluate_potential()))
         calibrations = calibrations_from_grid(self.gpts, self.sampling, ['x', 'y'])
-        abs2 = get_device_function(get_array_module(array), 'abs2')
-        Measurement(abs2(array), calibrations, name=str(self)).show(**kwargs)
+        Measurement(intensity[0], calibrations, name=str(self)).show()
+
+        # for t in self._generate_transition_potentials(slice_idx, transitions_idx):
+        #    if amplitude is None:
+        #        amplitude = np.abs(t)
+
+    # def project_intensity(self, transitions_idx):
+
+#
+#
+# class TransitionPotential(HasAcceleratorMixin, HasGridMixin):
+#
+#     def __init__(self,
+#                  Z: int,
+#                  n: int,
+#                  bound_state: Tuple[int, int],
+#                  continuum_state: Tuple[int, int],
+#                  epsilon: float = 1.,
+#                  xc='PBE',
+#                  extent: Union[float, Sequence[float]] = None,
+#                  gpts: Union[int, Sequence[float]] = None,
+#                  sampling: Union[float, Sequence[float]] = None,
+#                  energy: float = None):
+#
+#         self._Z = Z
+#         self._n = n
+#
+#         if (bound_state[1] > bound_state[0]) or (continuum_state[1] > continuum_state[0]):
+#             raise ValueError()
+#
+#         self._bound_state = bound_state
+#         self._continuum_state = continuum_state
+#         self._epsilon = epsilon
+#
+#         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
+#         self._accelerator = Accelerator(energy=energy)
+#         self._xc = xc
+#         self._cache = Cache(1)
+#
+#     def __str__(self):
+#         return (f'{self._bound_state} -> {self._continuum_state}')
+#
+#     @property
+#     def Z(self):
+#         return self._Z
+#
+#     @property
+#     def n(self):
+#         return self._n
+#
+#     @property
+#     def epsilon(self):
+#         return self._epsilon
+#
+#     def energy_loss(self):
+#         return self._bound_energy - self._epsilon
+#
+#     def momentum_transfer(self, energy):
+#         k0 = 1 / energy2wavelength(energy)
+#         kn = 1 / energy2wavelength(energy + self.energy_loss())
+#         return k0 - kn
+#
+#     def evaluate_bound_wave(self, r):
+#         return self._bound_wave(r)
+#
+#     def evaluate_continuum_wave(self, r):
+#         return self._continuum_wave(r)
+#
+#     def overlap_integral(self, k, ellprimeprime):
+#         rmax = self._bound_wave.x[-1]
+#         rmax = 20
+#         # rmax = max(self._bound_wave[1])
+#         grid = 2 * np.pi * k * units.Bohr
+#         r = np.linspace(0, rmax, 1000)
+#         values = (self.evaluate_bound_wave(r) *
+#                   spherical_jn(ellprimeprime, grid[:, None] * r[None]) *
+#                   self.evaluate_continuum_wave(r))
+#         return np.trapz(values, r, axis=1)
+#
+#     def _fourier_translation_operator(self, positions):
+#         return fourier_translation_operator(positions, self.gpts)
+#
+#     def build(self, positions=None):
+#         if positions is None:
+#             positions = np.zeros((1, 2), dtype=np.float32)
+#         else:
+#             positions = np.array(positions, dtype=np.float32)
+#
+#         if len(positions.shape) == 1:
+#             positions = np.expand_dims(positions, axis=0)
+#
+#         positions /= self.sampling
+#
+#         potential = np.fft.ifft2(self._evaluate_potential() * self._fourier_translation_operator(positions))
+#         # return self._evaluate_potential()
+#         return potential
+#
+#     @cached_method('_cache')
+#     def _evaluate_potential(self):
+#         from sympy.physics.wigner import wigner_3j
+#
+#         self.grid.check_is_defined()
+#         self.accelerator.check_is_defined()
+#
+#         potential = np.zeros(self.gpts, dtype=np.complex64)
+#
+#         kx, ky = spatial_frequencies(self.gpts, self.sampling)
+#         kz = self.momentum_transfer(self.energy)
+#
+#         kt, phi = polar_coordinates(kx, ky)
+#         k = np.sqrt(kt ** 2 + kz ** 2)
+#         theta = np.pi - np.arctan(kt / kz)
+#
+#         radial_grid = np.arange(0, np.max(k) * 1.05, 1 / max(self.extent))
+#
+#         ell, ml = self._bound_state
+#         ellprime, mlprime = self._continuum_state
+#
+#         for ellprimeprime in range(max(ell - ellprime, 0), np.abs(ell + ellprime) + 1):
+#             prefactor1 = (np.sqrt(4 * np.pi) * ((-1.j) ** ellprimeprime) *
+#                           np.sqrt((2 * ellprime + 1) * (2 * ellprimeprime + 1) * (2 * ell + 1)))
+#             jk = None
+#
+#             for mlprimeprime in range(-ellprimeprime, ellprimeprime + 1):
+#                 # Check second selection rule
+#                 # (http://mathworld.wolfram.com/Wigner3j-Symbol.html)
+#                 if ml - mlprime - mlprimeprime != 0:
+#                     continue
+#
+#                 # evaluate Eq. (14) from Dwyer Ultramicroscopy 104 (2005) 141-151
+#                 prefactor2 = ((-1.0) ** (mlprime + mlprimeprime)
+#                               * np.float(wigner_3j(ellprime, ellprimeprime, ell, 0, 0, 0))
+#                               * np.float(wigner_3j(ellprime, ellprimeprime, ell, -mlprime, -mlprimeprime, ml)))
+#
+#                 if np.abs(prefactor2) < 1e-12:
+#                     continue
+#
+#                 if jk is None:
+#                     jk = interp1d(radial_grid, self.overlap_integral(radial_grid, ellprimeprime))(k)
+#
+#                 Ylm = sph_harm(mlprimeprime, ellprimeprime, phi, theta)
+#                 potential += prefactor1 * prefactor2 * jk * Ylm
+#
+#         potential *= np.prod(self.gpts) / np.prod(self.extent)
+#
+#         # Multiply by orbital filling
+#         # if orbital_filling_factor:
+#         potential *= np.sqrt(4 * ell + 2)
+#
+#         # Apply constants:
+#         # sqrt(Rdyberg) to convert to 1/sqrt(eV) units
+#         # 1 / (2 pi**2 a0 kn) as as per paper
+#         # Relativistic mass correction to go from a0 to relativistically corrected a0*
+#         # divide by q**2
+#
+#         kn = 1 / energy2wavelength(self.energy + self.energy_loss())
+#
+#         potential *= relativistic_mass_correction(self.energy) / (
+#                 2 * units.Bohr * np.pi ** 2 * np.sqrt(units.Rydberg) * kn * k ** 2
+#         )
+#         # potential = np.fft.ifft2(potential)
+#         return potential
+#
+#     def show(self, **kwargs):
+#         array = np.fft.fftshift(np.fft.ifft2(self._evaluate_potential()))
+#         calibrations = calibrations_from_grid(self.gpts, self.sampling, ['x', 'y'])
+#         abs2 = get_device_function(get_array_module(array), 'abs2')
+#         Measurement(abs2(array), calibrations, name=str(self)).show(**kwargs)
