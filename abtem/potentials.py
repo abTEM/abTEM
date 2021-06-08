@@ -1156,6 +1156,11 @@ class PotentialArray(AbstractPotential, HasGridMixin):
 
         return self.__class__(array=new_array, slice_thicknesses=new_slice_thicknesses, extent=new_extent)
 
+    def flip(self):
+        self._array = self._array[::-1]
+        self._slice_thicknesses = self._slice_thicknesses[::-1]
+        return self
+
     def write(self, path):
         """
         Write potential to file.
