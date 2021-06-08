@@ -1957,11 +1957,10 @@ class SMatrix(_Scanable, HasEventMixin):
         S2.grid.match(potential)
 
         potential = potential.build(pbar=True)
-        backwards_pbar = ProgressBar(total=len(S2), desc='Backward multislice')
 
+        backwards_pbar = ProgressBar(total=len(S2), desc='Backward multislice')
         potential.flip()
         S2 = S2.build().multislice(potential, plane_waves_pbar=backwards_pbar, multislice_pbar=False)
-
         backwards_pbar.close()
         potential.flip()
 
@@ -1969,7 +1968,10 @@ class SMatrix(_Scanable, HasEventMixin):
         transition_potential.grid.match(potential)
         transition_potential.accelerator.match(self)
 
-        image = np.zeros(scan.gpts, dtype=np.float32).ravel()
+        images = []
+
+        for i in range(transition_potential.num_edges):
+            images.append(np.zeros((scan.gpts[0] * scan.gpts[1],), dtype=np.float32))
 
         xp = get_array_module(S1.array)
 
@@ -1980,12 +1982,14 @@ class SMatrix(_Scanable, HasEventMixin):
 
         for i, potential_slice in enumerate(potential):
 
-            for t in transition_potential._generate_slice_transition_potentials(slice_idx=i, transitions_idx=0):
-                tmp = t * S1.array
+            for transition_idx in range(transition_potential.num_edges):
 
-                SHn0 = xp.tensordot(S2.array.reshape((len(S2), -1)), tmp.reshape((len(S1), -1)).T, axes=1)
+                for t in transition_potential._generate_slice_transition_potentials(slice_idx=i,
+                                                                                    transitions_idx=transition_idx):
+                    tmp = t * S1.array
+                    SHn0 = xp.tensordot(S2.array.reshape((len(S2), -1)), tmp.reshape((len(S1), -1)).T, axes=1)
 
-                image += (xp.abs(xp.dot(SHn0, coefficients.T)) ** 2).sum(0)
+                    images[transition_idx] += (xp.abs(xp.dot(SHn0, coefficients.T)) ** 2).sum(0)
 
             S1 = potential_slice.transmit(S1)
             S2 = potential_slice.transmit(S2)
@@ -1996,10 +2000,16 @@ class SMatrix(_Scanable, HasEventMixin):
 
         forward_pbar.close()
 
-        calibrations = calibrations_from_grid(self.grid.gpts, self.grid.sampling, ['x', 'y'])
-        measurement = Measurement(image.reshape(scan.gpts), calibrations=calibrations)
+        calibrations = calibrations_from_grid(scan.gpts, scan.sampling, ['x', 'y'])
 
-        return measurement
+        measurements = []
+        for image in images:
+            measurements.append(Measurement(image.reshape(scan.gpts), calibrations=calibrations))
+
+        if len(measurements) == 1:
+            measurements = measurements[0]
+
+        return measurements
 
     @property
     def is_partial(self):
