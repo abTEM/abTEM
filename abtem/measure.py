@@ -203,7 +203,7 @@ class AbstractMeasurement(metaclass=ABCMeta):
     def show(self):
         pass
 
-
+# TODO : ensure diffraction pattern centering
 class Measurement(AbstractMeasurement):
     """
     Measurement object.
@@ -557,7 +557,7 @@ class Measurement(AbstractMeasurement):
                         axes=None) -> 'Measurement':
 
         if kind is None:
-            kind = 'quintic'
+            kind = 'fft'
 
         if not (self.calibrations[-1].units == self.calibrations[-2].units):
             raise RuntimeError('the units of the interpolation dimensions must match')
@@ -921,6 +921,8 @@ class Measurement(AbstractMeasurement):
         kwargs:
             Additional keyword arguments for the abtem.plot.show_image function.
         """
+
+
 
         # TODO : implement interactive show method
 
