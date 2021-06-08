@@ -22,12 +22,12 @@ from abtem.utils import ProgressBar
 from abtem.structures import SlicedAtoms
 
 
-def get_gpaw_bound_wave(Z, n, ell, xc='PBE'):
+def get_gpaw_bound_wave(Z, n, l, xc='PBE'):
     from gpaw.atom.all_electron import AllElectron
 
-    check_valid_quantum_number(Z, n, ell)
+    check_valid_quantum_number(Z, n, l)
     config_tuples = config_str_to_config_tuples(load_electronic_configurations()[chemical_symbols[Z]])
-    subshell_index = [shell[:2] for shell in config_tuples].index((n, ell))
+    subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
 
     with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
         ae = AllElectron(chemical_symbols[Z], xcname=xc, gpernode=500)
@@ -38,13 +38,13 @@ def get_gpaw_bound_wave(Z, n, ell, xc='PBE'):
     return energy, wave
 
 
-def get_gpaw_continuum_wave(Z, n, ell, ellprime, epsilon, xc='PBE'):
+def get_gpaw_continuum_wave(Z, n, l, lprime, epsilon, xc='PBE'):
     from gpaw.atom.all_electron import AllElectron
 
-    check_valid_quantum_number(Z, n, ell)
+    check_valid_quantum_number(Z, n, l)
 
     with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-        ae = AllElectron(chemical_symbols[Z], corehole=(n, ell, 1.), xcname=xc, gpernode=500)
+        ae = AllElectron(chemical_symbols[Z], corehole=(n, l, 1.), xcname=xc, gpernode=500)
         ae.run()
 
     vr = interp1d(ae.r, -ae.vr, fill_value='extrapolate', bounds_error=False)
@@ -54,7 +54,7 @@ def get_gpaw_continuum_wave(Z, n, ell, ellprime, epsilon, xc='PBE'):
         return np.array([up, (l * (l + 1) / r ** 2 - 2 * vr(r) / r - e) * u])
 
     r = np.geomspace(1e-7, 200, 1000000)
-    ur = integrate.odeint(schroedinger_derivative, [0.0, 1.], r, args=(ellprime, epsilon, vr))
+    ur = integrate.odeint(schroedinger_derivative, [0.0, 1.], r, args=(lprime, epsilon, vr))
 
     sqrt_k = 1 / (2 * epsilon / units.Hartree * (1 + units.alpha ** 2 * epsilon / units.Hartree / 2)) ** .25
     ur = ur[:, 0] / ur[:, 0].max() / epsilon ** .5 * units.Rydberg ** 0.25 / sqrt_k / np.sqrt(np.pi)
@@ -78,10 +78,10 @@ class AbstractTransitionCollection(metaclass=ABCMeta):
 
 class SubshellTransitions(AbstractTransitionCollection):
 
-    def __init__(self, Z, n, ell, order=1, min_contrast=1., epsilon=1, xc='PBE'):
-        check_valid_quantum_number(Z, n, ell)
+    def __init__(self, Z, n, l, order=1, min_contrast=1., epsilon=1, xc='PBE'):
+        check_valid_quantum_number(Z, n, l)
         self._n = n
-        self._ell = ell
+        self._l = l
         self._order = order
         self._min_contrast = min_contrast
         self._epsilon = epsilon
@@ -112,13 +112,13 @@ class SubshellTransitions(AbstractTransitionCollection):
         return self._n
 
     @property
-    def ell(self):
-        return self._ell
+    def l(self):
+        return self._l
 
     @property
-    def ellprimes(self):
-        min_new_ell = max(self.ell - self.order, 0)
-        return np.arange(min_new_ell, self.ell + self.order + 1)
+    def lprimes(self):
+        min_new_l = max(self.l - self.order, 0)
+        return np.arange(min_new_l, self.l + self.order + 1)
 
     def __len__(self):
         return len(self.get_transition_quantum_numbers())
@@ -141,15 +141,15 @@ class SubshellTransitions(AbstractTransitionCollection):
 
     @property
     def excited_configuration(self):
-        return remove_electron_from_config_str(self.bound_configuration, self.n, self.ell)
+        return remove_electron_from_config_str(self.bound_configuration, self.n, self.l)
 
     @cached_method('_bound_cache')
     def _calculate_bound(self):
         from gpaw.atom.all_electron import AllElectron
 
-        check_valid_quantum_number(self.Z, self.n, self.ell)
+        check_valid_quantum_number(self.Z, self.n, self.l)
         config_tuples = config_str_to_config_tuples(load_electronic_configurations()[chemical_symbols[self.Z]])
-        subshell_index = [shell[:2] for shell in config_tuples].index((self.n, self.ell))
+        subshell_index = [shell[:2] for shell in config_tuples].index((self.n, self.l))
 
         with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
             ae = AllElectron(chemical_symbols[self.Z], xcname=self.xc)
@@ -162,9 +162,9 @@ class SubshellTransitions(AbstractTransitionCollection):
     def _calculate_continuum(self):
         from gpaw.atom.all_electron import AllElectron
 
-        check_valid_quantum_number(self.Z, self.n, self.ell)
+        check_valid_quantum_number(self.Z, self.n, self.l)
         config_tuples = config_str_to_config_tuples(load_electronic_configurations()[chemical_symbols[self.Z]])
-        subshell_index = [shell[:2] for shell in config_tuples].index((self.n, self.ell))
+        subshell_index = [shell[:2] for shell in config_tuples].index((self.n, self.l))
 
         with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
             ae = AllElectron(chemical_symbols[self.Z], xcname=self.xc)
@@ -179,14 +179,14 @@ class SubshellTransitions(AbstractTransitionCollection):
 
         r = np.geomspace(1e-7, 200, 1000000)
         continuum_waves = {}
-        for ellprime in self.ellprimes:
-            ur = integrate.odeint(schroedinger_derivative, [0.0, 1.], r, args=(ellprime, self.epsilon, vr))
+        for lprime in self.lprimes:
+            ur = integrate.odeint(schroedinger_derivative, [0.0, 1.], r, args=(lprime, self.epsilon, vr))
 
             sqrt_k = 1 / (2 * self.epsilon / units.Hartree * (
                     1 + units.alpha ** 2 * self.epsilon / units.Hartree / 2)) ** .25
             ur = ur[:, 0] / ur[:, 0].max() / self.epsilon ** .5 * units.Rydberg ** 0.25 / sqrt_k / np.sqrt(np.pi)
 
-            continuum_waves[ellprime] = interp1d(r, ur, kind='cubic', fill_value='extrapolate', bounds_error=False)
+            continuum_waves[lprime] = interp1d(r, ur, kind='cubic', fill_value='extrapolate', bounds_error=False)
         return ae.ETotal * units.Hartree, continuum_waves
 
     def get_bound_wave(self):
@@ -197,16 +197,16 @@ class SubshellTransitions(AbstractTransitionCollection):
 
     def get_transition_quantum_numbers(self):
         transitions = []
-        for ml in np.arange(-self.ell, self.ell + 1):
-            for new_ell in self.ellprimes:
-                for new_ml in np.arange(-new_ell, new_ell + 1):
-                    if not abs(new_ell - self.ell) == 1:
+        for ml in np.arange(-self.l, self.l + 1):
+            for new_l in self.lprimes:
+                for new_ml in np.arange(-new_l, new_l + 1):
+                    if not abs(new_l - self.l) == 1:
                         continue
 
                     if not (abs(ml - new_ml) < 2):
                         continue
 
-                    transitions.append([(self.ell, ml), (new_ell, new_ml)])
+                    transitions.append([(self.l, ml), (new_l, new_ml)])
         return transitions
 
     def get_transition_potentials(self, extent: Union[float, Sequence[float]] = None,
@@ -309,7 +309,7 @@ class ProjectedAtomicTransition(AbstractProjectedAtomicTransition):
     def calculate_total_intensity(self):
         return (np.abs(self.build()) ** 2).sum()
 
-    def overlap_integral(self, k, ellprimeprime):
+    def overlap_integral(self, k, lprimeprime):
         rmax = self._bound_wave.x[-1]
         rmax = 20
         # rmax = max(self._bound_wave[1])
@@ -317,7 +317,7 @@ class ProjectedAtomicTransition(AbstractProjectedAtomicTransition):
         r = np.linspace(0, rmax, 10000)
 
         values = (self._bound_wave(r) *
-                  spherical_jn(ellprimeprime, grid[:, None] * r[None]) *
+                  spherical_jn(lprimeprime, grid[:, None] * r[None]) *
                   self._continuum_wave(r))
         return np.trapz(values, r, axis=1)
 
@@ -339,38 +339,38 @@ class ProjectedAtomicTransition(AbstractProjectedAtomicTransition):
 
         radial_grid = np.arange(0, np.max(k) * 1.05, 1 / max(self.extent))
 
-        ell, ml = self._bound_state
-        ellprime, mlprime = self._continuum_state
+        l, ml = self._bound_state
+        lprime, mlprime = self._continuum_state
 
-        for ellprimeprime in range(max(ell - ellprime, 0), np.abs(ell + ellprime) + 1):
-            prefactor1 = (np.sqrt(4 * np.pi) * ((-1.j) ** ellprimeprime) *
-                          np.sqrt((2 * ellprime + 1) * (2 * ellprimeprime + 1) * (2 * ell + 1)))
+        for lprimeprime in range(max(l - lprime, 0), np.abs(l + lprime) + 1):
+            prefactor1 = (np.sqrt(4 * np.pi) * ((-1.j) ** lprimeprime) *
+                          np.sqrt((2 * lprime + 1) * (2 * lprimeprime + 1) * (2 * l + 1)))
             jk = None
 
-            for mlprimeprime in range(-ellprimeprime, ellprimeprime + 1):
+            for mlprimeprime in range(-lprimeprime, lprimeprime + 1):
 
                 if ml - mlprime - mlprimeprime != 0:  # Wigner3j selection rule
                     continue
 
                 # Evaluate Eq. (14) from Dwyer Ultramicroscopy 104 (2005) 141-151
                 prefactor2 = ((-1.0) ** (mlprime + mlprimeprime)
-                              * float(wigner_3j(ellprime, ellprimeprime, ell, 0, 0, 0))
-                              * float(wigner_3j(ellprime, ellprimeprime, ell, -mlprime, -mlprimeprime, ml)))
+                              * float(wigner_3j(lprime, lprimeprime, l, 0, 0, 0))
+                              * float(wigner_3j(lprime, lprimeprime, l, -mlprime, -mlprimeprime, ml)))
 
                 if np.abs(prefactor2) < 1e-12:
                     continue
 
                 if jk is None:
-                    jk = interp1d(radial_grid, self.overlap_integral(radial_grid, ellprimeprime))(k)
+                    jk = interp1d(radial_grid, self.overlap_integral(radial_grid, lprimeprime))(k)
 
-                Ylm = sph_harm(mlprimeprime, ellprimeprime, phi, theta)
+                Ylm = sph_harm(mlprimeprime, lprimeprime, phi, theta)
                 potential += prefactor1 * prefactor2 * jk * Ylm
 
         potential *= np.prod(self.gpts) / np.prod(self.extent)
 
         # Multiply by orbital filling
         # if orbital_filling_factor:
-        potential *= np.sqrt(4 * ell + 2)
+        potential *= np.sqrt(4 * l + 2)
 
         # Apply constants:
         # sqrt(Rdyberg) to convert to 1/sqrt(eV) units
@@ -486,170 +486,3 @@ class TransitionPotential(HasAcceleratorMixin, HasGridMixin):
 
         calibrations = calibrations_from_grid(self.gpts, self.sampling, ['x', 'y'])
         Measurement(intensity[0], calibrations, name=str(self)).show()
-
-        # for t in self._generate_transition_potentials(slice_idx, transitions_idx):
-        #    if amplitude is None:
-        #        amplitude = np.abs(t)
-
-    # def project_intensity(self, transitions_idx):
-
-#
-#
-# class TransitionPotential(HasAcceleratorMixin, HasGridMixin):
-#
-#     def __init__(self,
-#                  Z: int,
-#                  n: int,
-#                  bound_state: Tuple[int, int],
-#                  continuum_state: Tuple[int, int],
-#                  epsilon: float = 1.,
-#                  xc='PBE',
-#                  extent: Union[float, Sequence[float]] = None,
-#                  gpts: Union[int, Sequence[float]] = None,
-#                  sampling: Union[float, Sequence[float]] = None,
-#                  energy: float = None):
-#
-#         self._Z = Z
-#         self._n = n
-#
-#         if (bound_state[1] > bound_state[0]) or (continuum_state[1] > continuum_state[0]):
-#             raise ValueError()
-#
-#         self._bound_state = bound_state
-#         self._continuum_state = continuum_state
-#         self._epsilon = epsilon
-#
-#         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
-#         self._accelerator = Accelerator(energy=energy)
-#         self._xc = xc
-#         self._cache = Cache(1)
-#
-#     def __str__(self):
-#         return (f'{self._bound_state} -> {self._continuum_state}')
-#
-#     @property
-#     def Z(self):
-#         return self._Z
-#
-#     @property
-#     def n(self):
-#         return self._n
-#
-#     @property
-#     def epsilon(self):
-#         return self._epsilon
-#
-#     def energy_loss(self):
-#         return self._bound_energy - self._epsilon
-#
-#     def momentum_transfer(self, energy):
-#         k0 = 1 / energy2wavelength(energy)
-#         kn = 1 / energy2wavelength(energy + self.energy_loss())
-#         return k0 - kn
-#
-#     def evaluate_bound_wave(self, r):
-#         return self._bound_wave(r)
-#
-#     def evaluate_continuum_wave(self, r):
-#         return self._continuum_wave(r)
-#
-#     def overlap_integral(self, k, ellprimeprime):
-#         rmax = self._bound_wave.x[-1]
-#         rmax = 20
-#         # rmax = max(self._bound_wave[1])
-#         grid = 2 * np.pi * k * units.Bohr
-#         r = np.linspace(0, rmax, 1000)
-#         values = (self.evaluate_bound_wave(r) *
-#                   spherical_jn(ellprimeprime, grid[:, None] * r[None]) *
-#                   self.evaluate_continuum_wave(r))
-#         return np.trapz(values, r, axis=1)
-#
-#     def _fourier_translation_operator(self, positions):
-#         return fourier_translation_operator(positions, self.gpts)
-#
-#     def build(self, positions=None):
-#         if positions is None:
-#             positions = np.zeros((1, 2), dtype=np.float32)
-#         else:
-#             positions = np.array(positions, dtype=np.float32)
-#
-#         if len(positions.shape) == 1:
-#             positions = np.expand_dims(positions, axis=0)
-#
-#         positions /= self.sampling
-#
-#         potential = np.fft.ifft2(self._evaluate_potential() * self._fourier_translation_operator(positions))
-#         # return self._evaluate_potential()
-#         return potential
-#
-#     @cached_method('_cache')
-#     def _evaluate_potential(self):
-#         from sympy.physics.wigner import wigner_3j
-#
-#         self.grid.check_is_defined()
-#         self.accelerator.check_is_defined()
-#
-#         potential = np.zeros(self.gpts, dtype=np.complex64)
-#
-#         kx, ky = spatial_frequencies(self.gpts, self.sampling)
-#         kz = self.momentum_transfer(self.energy)
-#
-#         kt, phi = polar_coordinates(kx, ky)
-#         k = np.sqrt(kt ** 2 + kz ** 2)
-#         theta = np.pi - np.arctan(kt / kz)
-#
-#         radial_grid = np.arange(0, np.max(k) * 1.05, 1 / max(self.extent))
-#
-#         ell, ml = self._bound_state
-#         ellprime, mlprime = self._continuum_state
-#
-#         for ellprimeprime in range(max(ell - ellprime, 0), np.abs(ell + ellprime) + 1):
-#             prefactor1 = (np.sqrt(4 * np.pi) * ((-1.j) ** ellprimeprime) *
-#                           np.sqrt((2 * ellprime + 1) * (2 * ellprimeprime + 1) * (2 * ell + 1)))
-#             jk = None
-#
-#             for mlprimeprime in range(-ellprimeprime, ellprimeprime + 1):
-#                 # Check second selection rule
-#                 # (http://mathworld.wolfram.com/Wigner3j-Symbol.html)
-#                 if ml - mlprime - mlprimeprime != 0:
-#                     continue
-#
-#                 # evaluate Eq. (14) from Dwyer Ultramicroscopy 104 (2005) 141-151
-#                 prefactor2 = ((-1.0) ** (mlprime + mlprimeprime)
-#                               * np.float(wigner_3j(ellprime, ellprimeprime, ell, 0, 0, 0))
-#                               * np.float(wigner_3j(ellprime, ellprimeprime, ell, -mlprime, -mlprimeprime, ml)))
-#
-#                 if np.abs(prefactor2) < 1e-12:
-#                     continue
-#
-#                 if jk is None:
-#                     jk = interp1d(radial_grid, self.overlap_integral(radial_grid, ellprimeprime))(k)
-#
-#                 Ylm = sph_harm(mlprimeprime, ellprimeprime, phi, theta)
-#                 potential += prefactor1 * prefactor2 * jk * Ylm
-#
-#         potential *= np.prod(self.gpts) / np.prod(self.extent)
-#
-#         # Multiply by orbital filling
-#         # if orbital_filling_factor:
-#         potential *= np.sqrt(4 * ell + 2)
-#
-#         # Apply constants:
-#         # sqrt(Rdyberg) to convert to 1/sqrt(eV) units
-#         # 1 / (2 pi**2 a0 kn) as as per paper
-#         # Relativistic mass correction to go from a0 to relativistically corrected a0*
-#         # divide by q**2
-#
-#         kn = 1 / energy2wavelength(self.energy + self.energy_loss())
-#
-#         potential *= relativistic_mass_correction(self.energy) / (
-#                 2 * units.Bohr * np.pi ** 2 * np.sqrt(units.Rydberg) * kn * k ** 2
-#         )
-#         # potential = np.fft.ifft2(potential)
-#         return potential
-#
-#     def show(self, **kwargs):
-#         array = np.fft.fftshift(np.fft.ifft2(self._evaluate_potential()))
-#         calibrations = calibrations_from_grid(self.gpts, self.sampling, ['x', 'y'])
-#         abs2 = get_device_function(get_array_module(array), 'abs2')
-#         Measurement(abs2(array), calibrations, name=str(self)).show(**kwargs)
