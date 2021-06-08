@@ -251,8 +251,15 @@ def show_measurement_2d(measurement,
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
 
-    calibrations = measurement.calibrations[-2:]
-    array = measurement.array[(0,) * (measurement.dimensions - 2) + (slice(None),) * 2]
+    if is_rgb:
+        calibrations = measurement.calibrations[-3:-1]
+    else:
+        calibrations = measurement.calibrations[-2:]
+
+    if not is_rgb:
+        array = measurement.array[(0,) * (measurement.dimensions - 2) + (slice(None),) * 2]
+    else:
+        array = measurement.array[:, :, :]
 
     if np.iscomplexobj(array):
         array = domain_coloring(array)
@@ -281,7 +288,8 @@ def show_measurement_2d(measurement,
     if discrete_cmap:
         cmap = plt.get_cmap(cmap, np.max(array) - np.min(array) + 1)
 
-    im = ax.imshow(np.swapaxes(array, 0,1), extent=extent, cmap=cmap, origin='lower', vmin=vmin, vmax=vmax, interpolation='nearest',
+    im = ax.imshow(np.swapaxes(array, 0, 1), extent=extent, cmap=cmap, origin='lower', vmin=vmin, vmax=vmax,
+                   interpolation='nearest',
                    **kwargs)
 
     if cbar:
