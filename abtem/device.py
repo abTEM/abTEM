@@ -6,6 +6,7 @@ import pyfftw
 from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions, sum_run_length_encoded
 from abtem.interpolate import interpolate_bilinear_cpu
 import numbers
+import dask.array as da
 
 FFTW_EFFORT = 'FFTW_MEASURE'
 FFTW_THREADS = 12
@@ -18,8 +19,8 @@ try:  # This should be the only place import cupy, to make it a non-essential de
     from abtem.cuda_kernels import launch_interpolate_radial_functions, launch_sum_run_length_encoded, \
         interpolate_bilinear_gpu, launch_batch_crop
 
-    get_array_module = cp.get_array_module
 
+    # get_array_module = cp.get_array_module
 
     def fft2_convolve(array: cp.array, kernel: cp.array, overwrite_x: bool = True):
         """
@@ -67,6 +68,19 @@ except ImportError:  # cupy is not available
     gpu_functions = None
     asnumpy = np.asarray
     import scipy.ndimage as ndimage
+
+
+# def get_array_module(array):
+#     if isinstance(array, np.ndarray):
+#         return np
+#
+#     if isinstance(array, da.core.Array):
+#         return da
+#
+#     if cp is not None:
+#         return cp.get_array_module(array)
+#
+#     raise ValueError()
 
 
 def create_fftw_objects(array, allow_new_plan=True):
@@ -205,8 +219,13 @@ def get_device_function(xp, name: str) -> Callable:
     """
     if xp is cp:
         return gpu_functions[name]
-    elif xp is np:
+
+    if xp is np:
         return cpu_functions[name]
+
+    if xp is da:
+        return cpu_functions[name]
+
     else:
         raise RuntimeError(f'The array library {xp} is not recognized.')
 

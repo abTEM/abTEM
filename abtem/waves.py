@@ -21,6 +21,8 @@ from abtem.scan import AbstractScan, GridScan
 from abtem.transfer import CTF
 from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, subdivide_into_batches, periodic_crop, \
     fft_crop, fourier_translation_operator, array_row_intersection
+import dask.array as da
+from abtem import fft
 
 
 class FresnelPropagator:
@@ -43,8 +45,8 @@ class FresnelPropagator:
                                    tilt: Tuple[float, float],
                                    xp) -> np.ndarray:
         complex_exponential = get_device_function(xp, 'complex_exponential')
-        kx = xp.fft.fftfreq(gpts[0], sampling[0]).astype(xp.float32)
-        ky = xp.fft.fftfreq(gpts[1], sampling[1]).astype(xp.float32)
+        kx = xp.fft.fftfreq(gpts[0], sampling[0]).astype(np.float32)
+        ky = xp.fft.fftfreq(gpts[1], sampling[1]).astype(np.float32)
         f = (complex_exponential(-(kx ** 2)[:, None] * np.pi * wavelength * dz) *
              complex_exponential(-(ky ** 2)[None] * np.pi * wavelength * dz))
 
@@ -79,8 +81,6 @@ class FresnelPropagator:
         if not in_place:
             waves = waves.copy()
 
-        fft2_convolve = get_device_function(get_array_module(waves.array), 'fft2_convolve')
-
         propagator_array = self._evaluate_propagator_array(waves.grid.gpts,
                                                            waves.grid.sampling,
                                                            waves.wavelength,
@@ -88,7 +88,7 @@ class FresnelPropagator:
                                                            waves.tilt,
                                                            get_array_module(waves.array))
 
-        fft2_convolve(waves._array, propagator_array, overwrite_x=True)
+        waves._array = fft.fft2_convolve(waves.array, propagator_array)
         waves.antialias_aperture = (2 / 3.,) * 2
         return waves
 
@@ -258,9 +258,9 @@ class _Scanable(_WavesLike):
 
     def _validate_positions(self, positions: Sequence = None) -> np.ndarray:
         if positions is None:
-            positions = np.array((self.extent[0] / 2, self.extent[1] / 2), dtype=np.float32)
+            positions = da.array((self.extent[0] / 2, self.extent[1] / 2), dtype=np.float32)
         else:
-            positions = np.array(positions, dtype=np.float32)
+            positions = da.array(positions, dtype=np.float32)
 
         if len(positions.shape) == 1:
             positions = np.expand_dims(positions, axis=0)
@@ -771,13 +771,13 @@ class Probe(_Scanable, HasEventMixin):
 
     def _fourier_translation_operator(self, positions):
         xp = get_array_module(positions)
-        positions /= xp.array(self.sampling)
+        positions /= xp.array(self.sampling).astype(np.float32)
         return fourier_translation_operator(positions, self.gpts)
 
     @cached_method('_ctf_cache')
     def _evaluate_ctf(self):
         alpha, phi = self.get_scattering_angles()
-        return self._ctf.evaluate(alpha, phi)
+        return da.array(self._ctf.evaluate(alpha, phi))
 
     def build(self, positions: Sequence[Sequence[float]] = None) -> Waves:
         """
@@ -797,13 +797,10 @@ class Probe(_Scanable, HasEventMixin):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
         xp = get_array_module_from_device(self._device)
-        ifft2 = get_device_function(xp, 'ifft2')
 
         positions = self._validate_positions(positions)
 
-        array = ifft2(self._evaluate_ctf() * self._fourier_translation_operator(xp.asarray(positions)),
-                      overwrite_x=True)
-
+        array = fft.ifft2(self._evaluate_ctf() * self._fourier_translation_operator(positions))
         array = array / xp.sqrt((xp.abs(array[0]) ** 2).sum()) / xp.sqrt(np.prod(array.shape[1:]))
 
         return Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt,
@@ -833,7 +830,6 @@ class Probe(_Scanable, HasEventMixin):
 
         self.grid.match(potential)
         exit_probes = _multislice(self.build(positions), potential, None, pbar)
-        exit_probes._antialiasing_aperture = (2 / 3.,) * 2
         return exit_probes
 
     def _estimate_max_batch(self):
@@ -1519,8 +1515,8 @@ class PartitionedSMatrix(_Scanable):
         storage = get_device_from_array(self._parent_s_matrix.array)
         complex_exponential = get_device_function(xp, 'complex_exponential')
 
-        x = xp.linspace(0, self.extent[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=xp.float32)
-        y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=xp.float32)
+        x = xp.linspace(0, self.extent[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=np.float32)
+        y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=np.float32)
 
         array = self._parent_s_matrix.array
         k = self.parent_wave_vectors
@@ -1580,8 +1576,8 @@ class PartitionedSMatrix(_Scanable):
         # storage_xp = get_array_module_from_device(self._storage)
         complex_exponential = get_device_function(xp, 'complex_exponential')
 
-        x = xp.linspace(0, self.extent[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=xp.float32)
-        y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=xp.float32)
+        x = xp.linspace(0, self.extent[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=np.float32)
+        y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=np.float32)
 
         shape = (len(k),) + self.gpts
 
@@ -1958,13 +1954,13 @@ class SMatrix(_Scanable, HasEventMixin):
         n_max = int(xp.ceil(self.expansion_cutoff / 1000. / (self.wavelength / self.extent[0] * self.interpolation)))
         m_max = int(xp.ceil(self.expansion_cutoff / 1000. / (self.wavelength / self.extent[1] * self.interpolation)))
 
-        n = xp.arange(-n_max, n_max + 1, dtype=xp.float32)
-        w = xp.asarray(self.extent[0], dtype=xp.float32)
-        m = xp.arange(-m_max, m_max + 1, dtype=xp.float32)
-        h = xp.asarray(self.extent[1], dtype=xp.float32)
+        n = xp.arange(-n_max, n_max + 1, dtype=np.float32)
+        w = xp.asarray(self.extent[0], dtype=np.float32)
+        m = xp.arange(-m_max, m_max + 1, dtype=np.float32)
+        h = xp.asarray(self.extent[1], dtype=np.float32)
 
-        kx = n / w * xp.float32(self.interpolation)
-        ky = m / h * xp.float32(self.interpolation)
+        kx = n / w * np.float32(self.interpolation)
+        ky = m / h * np.float32(self.interpolation)
 
         mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (self.expansion_cutoff / 1000. / self.wavelength) ** 2
         kx, ky = xp.meshgrid(kx, ky, indexing='ij')
@@ -1996,8 +1992,8 @@ class SMatrix(_Scanable, HasEventMixin):
         storage_xp = get_array_module_from_device(self._storage)
         complex_exponential = get_device_function(xp, 'complex_exponential')
 
-        x = xp.linspace(0, self.extent[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=xp.float32)
-        y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=xp.float32)
+        x = xp.linspace(0, self.extent[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=np.float32)
+        y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=np.float32)
 
         shape = (len(k),) + self.gpts
 

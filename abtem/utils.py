@@ -219,7 +219,11 @@ def fourier_translation_operator(positions: np.ndarray, shape: tuple) -> np.ndar
     y = positions[:, 1].reshape((-1,) + (1, 1))
 
     twopi = np.float32(2. * np.pi)
-    result = (-twopi * kx * x).map_blocks(complex_exponential) * (-twopi * ky * y).map_blocks(complex_exponential)
+
+    result = (-twopi * kx * x).map_blocks(complex_exponential, dtype=np.complex64) * \
+             (-twopi * ky * y).map_blocks(complex_exponential, dtype=np.complex64)
+
+    # result = complex_exponential(-twopi * kx * x) * complex_exponential(-twopi * kx * x)
 
     # map_blocks necessary due to issue: https://github.com/dask/distributed/issues/3450
 
