@@ -1,7 +1,7 @@
 """Module for describing the detection of transmitted waves and different detector types."""
 from abc import ABCMeta, abstractmethod
 from copy import copy
-from typing import Tuple, List, Any, Union, Sequence
+from typing import Tuple, List, Any, Union
 
 import numpy as np
 
@@ -11,6 +11,8 @@ from abtem.measure import Calibration, calibrations_from_grid, Measurement
 from abtem.scan import AbstractScan
 from abtem.utils import spatial_frequencies
 from abtem.visualize.mpl import show_measurement_2d
+from abtem.device_func import abs2
+from abtem.utils.fft import fft2
 
 
 def _polar_regions(gpts: Tuple[int, int], angular_sampling: Tuple[float, float], inner: float, outer: float,
@@ -199,6 +201,32 @@ class _PolarDetector(AbstractDetector):
             region_indices.append(indices)
         return region_indices
 
+    def measurement_shape(self, waves):
+        nbins_radial, nbins_azimuthal, inner, _ = self._get_bins(min(waves.cutoff_scattering_angles))
+
+        shape = ()
+
+        if nbins_radial > 1:
+            shape += (nbins_radial,)
+
+        if nbins_azimuthal > 1:
+            shape += (nbins_azimuthal,)
+
+        return shape
+
+    def measurement_calibrations(self, waves):
+        nbins_radial, nbins_azimuthal, inner, _ = self._get_bins(min(waves.cutoff_scattering_angles))
+
+        calibrations = ()
+
+        if nbins_radial > 1:
+            calibrations += (Calibration(offset=inner, sampling=self._radial_steps, units='mrad'),)
+
+        if nbins_azimuthal > 1:
+            calibrations += (Calibration(offset=0, sampling=self._azimuthal_steps, units='rad'),)
+
+        return calibrations
+
     def allocate_measurement(self, waves, scan: AbstractScan = None) -> Measurement:
         """
         Allocate a Measurement object or an hdf5 file.
@@ -358,14 +386,13 @@ class AnnularDetector(_PolarDetector):
                                       diffraction_patterns.calibrations[-1].sampling *
                                       (diffraction_patterns.array.shape[-1] // 2), )
 
-
         if cutoff_scattering_angle < self.outer:
-            raise RuntimeError('Outer integration limit exceeds the maximum measurement scattering angle ' 
+            raise RuntimeError('Outer integration limit exceeds the maximum measurement scattering angle '
                                f'({cutoff_scattering_angle} mrad)')
 
         return Measurement(self._integrate_array(array, sampling, cutoff_scattering_angle), calibrations=calibrations)
 
-    def detect(self, waves) -> np.ndarray:
+    def detect(self, waves, scan=None) -> np.ndarray:
         """
         Integrate the intensity of a the wave functions over the detector range.
 
@@ -381,11 +408,17 @@ class AnnularDetector(_PolarDetector):
         """
 
         xp = get_array_module(waves.array)
-        fft2 = get_device_function(xp, 'fft2')
-        abs2 = get_device_function(xp, 'abs2')
 
         intensity = abs2(fft2(waves.array, overwrite_x=False))
-        return self._integrate_array(intensity, waves.angular_sampling, min(waves.cutoff_scattering_angles))
+        integrated_intensity = self._integrate_array(intensity, waves.angular_sampling,
+                                                     min(waves.cutoff_scattering_angles))
+
+        if scan is not None:
+            shape = scan.shape + self.measurement_shape(waves)
+            calibrations = scan.calibrations + self.measurement_calibrations(waves)
+            return Measurement(array=integrated_intensity.reshape(shape), calibrations=calibrations)
+        else:
+            return integrated_intensity
 
     def __copy__(self) -> 'AnnularDetector':
         return self.__class__(self.inner, self.outer, save_file=self.save_file)

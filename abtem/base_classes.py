@@ -6,7 +6,9 @@ from typing import Optional, Union, Sequence, Any, Callable, Tuple
 import numpy as np
 
 from abtem.device import copy_to_device, get_array_module, get_device_function
-from abtem.utils import energy2wavelength, energy2sigma, spatial_frequencies
+from abtem.utils.convert import energy2wavelength, energy2sigma
+from abtem.utils import spatial_frequencies
+from abtem.utils.fft import fft2_convolve
 
 
 class Event(object):
@@ -746,7 +748,7 @@ class AntialiasFilter(HasEventMixin):
         fft2_convolve(array, self.get_mask(array.shape[-2:], (1, 1), xp), overwrite_x=True)
         return array
 
-    def bandlimit(self, waves):
+    def bandlimit(self, array):
         """
 
         Parameters
@@ -757,10 +759,10 @@ class AntialiasFilter(HasEventMixin):
         -------
 
         """
-        xp = get_array_module(waves.array)
-        fft2_convolve = get_device_function(xp, 'fft2_convolve')
-        fft2_convolve(waves.array, self.get_mask(waves.gpts, waves.sampling, xp), overwrite_x=True)
-        return waves
+        xp = get_array_module(array)
+        array = fft2_convolve(array, self.get_mask(array.shape[-2:], None, xp), overwrite_x=True,
+                              dask_key_name='bandlimit')
+        return array
 
 
 class AntialiasAperture:

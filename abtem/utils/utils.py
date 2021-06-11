@@ -13,67 +13,7 @@ _ROOT = os.path.abspath(os.path.dirname(__file__))
 
 def _set_path(path):
     """Internal function to set the parametrization data directory."""
-    return os.path.join(_ROOT, 'data', path)
-
-
-def relativistic_mass_correction(energy: float) -> float:
-    return (1 + units._e * energy / (units._me * units._c ** 2))
-
-
-def energy2mass(energy: float) -> float:
-    """
-    Calculate relativistic mass from energy.
-
-    Parameters
-    ----------
-    energy: float
-        Energy [eV].
-
-    Returns
-    -------
-    float
-        Relativistic mass [kg]̄
-    """
-
-    return relativistic_mass_correction(energy) * units._me
-
-
-def energy2wavelength(energy: float) -> float:
-    """
-    Calculate relativistic de Broglie wavelength from energy.
-
-    Parameters
-    ----------
-    energy: float
-        Energy [eV].
-
-    Returns
-    -------
-    float
-        Relativistic de Broglie wavelength [Å].
-    """
-
-    return units._hplanck * units._c / np.sqrt(
-        energy * (2 * units._me * units._c ** 2 / units._e + energy)) / units._e * 1.e10
-
-
-def energy2sigma(energy: float) -> float:
-    """
-    Calculate interaction parameter from energy.
-
-    Parameters
-    ----------
-    energy: float
-        Energy [ev].
-
-    Returns
-    -------
-    float
-        Interaction parameter [1 / (Å * eV)].
-    """
-
-    return (2 * np.pi * energy2mass(energy) * units.kg * units._e * units.C * energy2wavelength(energy) / (
-            units._hplanck * units.s * units.J) ** 2)
+    return os.path.join(_ROOT, '../data', path)
 
 
 def spatial_frequencies(gpts: Tuple[int, int], sampling: Tuple[float, float]):
@@ -145,7 +85,6 @@ def fft_interpolation_masks(shape1, shape2, xp=np, epsilon=1e-7):
 
     mask1 = (kx1 <= kx_max) & (kx1 >= kx_min) & (ky1 <= ky_max) & (ky1 >= ky_min)
     mask2 = (kx2 <= kx_max) & (kx2 >= kx_min) & (ky2 <= ky_max) & (ky2 >= ky_min)
-
     return mask1, mask2
 
 
@@ -335,22 +274,3 @@ class ProgressBar:
 
     def close(self):
         self.tqdm.close()
-
-
-class GaussianDistribution:
-
-    def __init__(self, center, sigma, num_samples, sampling_limit=4):
-        self.center = center
-        self.sigma = sigma
-        self.sampling_limit = sampling_limit
-        self.num_samples = num_samples
-
-    def __len__(self):
-        return self.num_samples
-
-    def __iter__(self):
-        samples = np.linspace(-self.sigma * self.sampling_limit, self.sigma * self.sampling_limit, self.num_samples)
-        values = 1 / (self.sigma * np.sqrt(2 * np.pi)) * np.exp(-.5 * samples ** 2 / self.sigma ** 2)
-        values /= values.sum()
-        for sample, value in zip(samples, values):
-            yield sample + self.center, value

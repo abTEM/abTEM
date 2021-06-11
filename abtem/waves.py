@@ -1,9 +1,9 @@
 """Module to describe electron waves and their propagation."""
-from abc import abstractmethod
 from copy import copy
-from numbers import Number
 from typing import Union, Sequence, Tuple, List, Dict
 
+import dask
+import dask.array as da
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
@@ -20,9 +20,8 @@ from abtem.potentials import Potential, AbstractPotential, AbstractPotentialBuil
 from abtem.scan import AbstractScan, GridScan
 from abtem.transfer import CTF
 from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, subdivide_into_batches, periodic_crop, \
-    fft_crop, fourier_translation_operator, array_row_intersection
-import dask.array as da
-from abtem import fft
+    fft_crop, fourier_translation_operator, array_row_intersection, fft
+from abtem.utils.complex import complex_exponential
 
 
 class FresnelPropagator:
@@ -36,7 +35,6 @@ class FresnelPropagator:
     def __init__(self):
         self._cache = Cache(1)
 
-    @cached_method('_cache')
     def _evaluate_propagator_array(self,
                                    gpts: Tuple[int, int],
                                    sampling: Tuple[float, float],
@@ -44,16 +42,17 @@ class FresnelPropagator:
                                    dz: float,
                                    tilt: Tuple[float, float],
                                    xp) -> np.ndarray:
-        complex_exponential = get_device_function(xp, 'complex_exponential')
+
         kx = xp.fft.fftfreq(gpts[0], sampling[0]).astype(np.float32)
         ky = xp.fft.fftfreq(gpts[1], sampling[1]).astype(np.float32)
         f = (complex_exponential(-(kx ** 2)[:, None] * np.pi * wavelength * dz) *
              complex_exponential(-(ky ** 2)[None] * np.pi * wavelength * dz))
 
         if tilt is not None:
-            # TODO : this is specimen tilt, beam tilt really be independent
             f *= (complex_exponential(-kx[:, None] * xp.tan(tilt[0] / 1e3) * dz * 2 * np.pi) *
                   complex_exponential(-ky[None] * xp.tan(tilt[1] / 1e3) * dz * 2 * np.pi))
+
+        self.f = f
 
         return f * AntialiasFilter().get_mask(gpts, sampling, xp)
 
@@ -96,9 +95,8 @@ class FresnelPropagator:
 def _multislice(waves: Union['Waves', 'SMatrixArray'],
                 potential: AbstractPotential,
                 propagator: FresnelPropagator = None,
-                pbar: Union[ProgressBar, bool] = True,
-                max_batch: int = 1,
                 ) -> Union['Waves', 'SMatrixArray']:
+
     waves.grid.match(potential)
     waves.accelerator.check_is_defined()
     waves.grid.check_is_defined()
@@ -106,29 +104,9 @@ def _multislice(waves: Union['Waves', 'SMatrixArray'],
     if propagator is None:
         propagator = FresnelPropagator()
 
-    if isinstance(pbar, bool):
-        pbar = ProgressBar(total=len(potential), desc='Multislice', disable=not pbar)
-        close_pbar = True
-    else:
-        close_pbar = False
-
-    pbar.reset()
-    if max_batch == 1:
-        for start, end, t in potential.generate_transmission_functions(energy=waves.energy, max_batch=1):
-            waves = t.transmit(waves)
-            waves = propagator.propagate(waves, t.thickness)
-            pbar.update(1)
-    else:
-        for start, end, t_chunk in potential.generate_transmission_functions(energy=waves.energy, max_batch=max_batch):
-            for _, __, t_slice in t_chunk.generate_slices(max_batch=1):
-                waves = t_slice.transmit(waves)
-                waves = propagator.propagate(waves, t_slice.thickness)
-
-            pbar.update(end - start)
-
-    pbar.refresh()
-    if close_pbar:
-        pbar.close()
+    for t in potential.build(max_batch=1, energy=300e3):
+        waves = t.transmit(waves)
+        waves = propagator.propagate(waves, t.thickness)
 
     return waves
 
@@ -308,6 +286,10 @@ class Waves(_WavesLike):
         self._beam_tilt = BeamTilt(tilt=tilt)
         self._antialias_aperture = AntialiasAperture(antialias_aperture=antialias_aperture)
         self._device = get_device_from_array(self._array)
+
+    def compute(self):
+        self._array = self._array.compute()
+        return self
 
     def __len__(self):
         return len(self.array)
@@ -501,9 +483,7 @@ class Waves(_WavesLike):
 
                 exit_waves = _multislice(copy(self),
                                          potential_config,
-                                         propagator=propagator,
-                                         pbar=multislice_pbar,
-                                         max_batch=max_batch_potential)
+                                         propagator=propagator)
 
                 if detector:
                     result._array += asnumpy(detector.detect(exit_waves)) / n
@@ -520,7 +500,7 @@ class Waves(_WavesLike):
                 if potential.precalculate:
                     potential = potential.build(pbar=pbar)
 
-            exit_wave = _multislice(self, potential, propagator, pbar, max_batch=max_batch_potential)
+            exit_wave = _multislice(self, potential, propagator)
 
             if detector:
                 result = detector.allocate_measurement(self, self.array.shape[:-2])
@@ -650,7 +630,8 @@ class PlaneWave(_WavesLike):
         """Build the plane wave function as a Waves object."""
         xp = get_array_module_from_device(self._device)
         self.grid.check_is_defined()
-        array = xp.ones((1, self.gpts[0], self.gpts[1]), dtype=xp.complex64)
+        array = da.ones((1, self.gpts[0], self.gpts[1]), dtype=xp.complex64)
+
         # array = array / np.sqrt(np.prod(array.shape))
         return Waves(array, extent=self.extent, energy=self.energy)
 
@@ -870,8 +851,7 @@ class Probe(_Scanable, HasEventMixin):
              scan: AbstractScan,
              detectors: Union[AbstractDetector, Sequence[AbstractDetector]],
              potential: Union[Atoms, AbstractPotential],
-             measurements: Union[Measurement, Dict[AbstractDetector, Measurement]] = None,
-             max_batch: int = None,
+             chunk_size: int = None,
              pbar: bool = True) -> Union[Measurement, List[Measurement]]:
 
         """
@@ -902,14 +882,20 @@ class Probe(_Scanable, HasEventMixin):
         self.grid.check_is_defined()
 
         detectors = self._validate_detectors(detectors)
-        measurements = self._validate_scan_measurements(detectors, scan, measurements)
 
-        for indices, exit_probes in self._generate_probes(scan, potential, max_batch, pbar):
-            for detector, measurement in measurements.items():
-                new_entries = detector.detect(exit_probes) / potential.num_frozen_phonon_configs
-                scan.insert_new_measurement(measurement, indices, new_entries)
+        positions = da.from_array(scan.get_positions(), chunks=(chunk_size, 2))
+        exit_probes = self.multislice(positions, potential)
 
-        measurements = list(measurements.values())
+        measurements = []
+
+        for i, potential_config in enumerate(potential.generate_frozen_phonon_potentials()):
+            for detector in detectors:
+                if i == 0:
+                    measurement = detector.detect(exit_probes, scan) / potential.num_frozen_phonon_configs
+                    measurements.append(measurement)
+                else:
+                    measurements[i] += detector.detect(exit_probes, scan) / potential.num_frozen_phonon_configs
+
         if len(measurements) == 1:
             return measurements[0]
         else:

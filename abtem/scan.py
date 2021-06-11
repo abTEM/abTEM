@@ -422,10 +422,11 @@ class GridScan(AbstractScan, HasGridMixin):
         width = abs(self.start[1] - self.end[1])
         return height * width
 
-    def get_positions(self) -> np.ndarray:
+    def get_positions(self, flatten=True) -> np.ndarray:
         x = np.linspace(self.start[0], self.end[0], self.gpts[0], endpoint=self.grid.endpoint[0])
         y = np.linspace(self.start[1], self.end[1], self.gpts[1], endpoint=self.grid.endpoint[1])
         x, y = np.meshgrid(x, y, indexing='ij')
+
         return np.stack((np.reshape(x, (-1,)),
                          np.reshape(y, (-1,))), axis=1)
 
