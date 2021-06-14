@@ -2,9 +2,9 @@ import numpy as np
 from scipy.ndimage import center_of_mass
 
 from abtem.device import get_array_module
-from abtem.measure import Measurement, calibrations_from_grid
+from abtem.measure.old_measure import Measurement, calibrations_from_grid
 from abtem.utils import ProgressBar, fft_shift
-from abtem.waves import Probe
+from abtem.waves.waves import Probe
 
 
 def _run_epie(object,
