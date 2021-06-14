@@ -7,6 +7,25 @@ import numpy as np
 from numba import jit
 
 from abtem.utils import _set_path
+import dask
+
+@dask.delayed(pure=True, nout=2)
+def get_parameterization(parametrization):
+    if parametrization == 'kirkland':
+        parameters = load_kirkland_parameters()
+        funcs = {'potential': kirkland,
+                 'derivative': dvdr_kirkland,
+                 'projected_fourier': kirkland_projected_fourier}
+
+    elif parametrization == 'lobato':
+        parameters = load_lobato_parameters()
+        funcs = {'potential': lobato,
+                 'derivative': dvdr_lobato,
+                 'projected_fourier': None}
+    else:
+        raise RuntimeError('Parametrization {} not recognized'.format(parametrization))
+
+    return parameters, funcs
 
 
 def load_parameters(filename):
