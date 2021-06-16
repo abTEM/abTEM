@@ -743,7 +743,7 @@ class AntialiasFilter(HasEventMixin):
     def _bandlimit(self, array):
         xp = get_array_module(array)
         fft2_convolve = get_device_function(xp, 'fft2_convolve')
-        fft2_convolve(array, self.get_mask(array.shape[-2:], (1, 1), xp), overwrite_x=True)
+        array = fft2_convolve(array, self.get_mask(array.shape[-2:], (1, 1), xp), overwrite_x=True)
         return array
 
     def bandlimit(self, waves):
@@ -759,7 +759,7 @@ class AntialiasFilter(HasEventMixin):
         """
         xp = get_array_module(waves.array)
         fft2_convolve = get_device_function(xp, 'fft2_convolve')
-        fft2_convolve(waves.array, self.get_mask(waves.gpts, waves.sampling, xp), overwrite_x=True)
+        waves._array = fft2_convolve(waves.array, self.get_mask(waves.gpts, waves.sampling, xp), overwrite_x=True)
         return waves
 
 

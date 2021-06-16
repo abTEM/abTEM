@@ -886,7 +886,7 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
                     chunk_positions = xp.asarray(chunk_positions[:, :2] / self.sampling)
 
                     superpose_deltas(chunk_positions, chunk_slice_idx, temp)
-                    fft2_convolve(temp, scattering_factors[number])
+                    temp = fft2_convolve(temp, scattering_factors[number])
 
                     array += temp
 
@@ -1088,7 +1088,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
             antialias_filter = AntialiasFilter()
 
         for start, end, potential_slices in t.generate_slices(max_batch=max_batch):
-            antialias_filter.bandlimit(potential_slices)
+            t._array[start:end] = antialias_filter.bandlimit(potential_slices).array
 
         return t
 

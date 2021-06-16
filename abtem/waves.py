@@ -88,7 +88,7 @@ class FresnelPropagator:
                                                            waves.tilt,
                                                            get_array_module(waves.array))
 
-        fft2_convolve(waves._array, propagator_array, overwrite_x=True)
+        waves._array = fft2_convolve(waves._array, propagator_array, overwrite_x=True)
         waves.antialias_aperture = (2 / 3.,) * 2
         return waves
 
@@ -116,12 +116,14 @@ def _multislice(waves: Union['Waves', 'SMatrixArray'],
     if max_batch == 1:
         for start, end, t in potential.generate_transmission_functions(energy=waves.energy, max_batch=1):
             waves = t.transmit(waves)
+
             waves = propagator.propagate(waves, t.thickness)
             pbar.update(1)
     else:
         for start, end, t_chunk in potential.generate_transmission_functions(energy=waves.energy, max_batch=max_batch):
             for _, __, t_slice in t_chunk.generate_slices(max_batch=1):
                 waves = t_slice.transmit(waves)
+
                 waves = propagator.propagate(waves, t_slice.thickness)
 
             pbar.update(end - start)

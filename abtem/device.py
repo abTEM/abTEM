@@ -118,6 +118,17 @@ def create_fftw_objects(array, allow_new_plan=True):
 
 
 def fft2_convolve(array, kernel, overwrite_x=True):
+    if not overwrite_x:
+        array = array.copy()
+
+    # array = mkl_fft.fft2(array, overwrite_x=overwrite_x)
+    # array *= kernel
+    # array = mkl_fft.ifft2(array, overwrite_x=overwrite_x)
+    #
+    # #print(array.real.max())
+    #
+    # return array
+
     def _fft_convolve(array, kernel):
         fftw_forward, fftw_backward = create_fftw_objects(array)
         fftw_forward()
@@ -125,21 +136,22 @@ def fft2_convolve(array, kernel, overwrite_x=True):
         fftw_backward()
         return array
 
-    if not overwrite_x:
-        array = array.copy()
-
     return _fft_convolve(array, kernel)
 
 
 def fft2(array, overwrite_x=True):
+
+    # return mkl_fft.fft2(array, overwrite_x=overwrite_x)
     if not overwrite_x:
-        array = array.copy()
+       array = array.copy()
 
     fftw_forward, fftw_backward = create_fftw_objects(array)
     return fftw_forward()
 
 
 def ifft2(array, overwrite_x=True):
+
+    # return mkl_fft.ifft2(array, overwrite_x=overwrite_x)
     if not overwrite_x:
         array = array.copy()
 
@@ -169,6 +181,7 @@ def view_as_windows(array, window_shape, step=1):
 
     if ((xp.array(window_shape) - 1) < 0).any():
         raise ValueError('`window_shape` is too small')
+
 
     win_indices_shape = (((xp.array(array.shape) - xp.array(window_shape)) // xp.array(step)) + 1)
     new_shape = tuple(win_indices_shape.tolist()) + window_shape
