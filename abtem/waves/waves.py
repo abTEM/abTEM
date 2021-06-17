@@ -17,10 +17,12 @@ from abtem.measure.old_measure import calibrations_from_grid, Measurement, block
 from abtem.potentials import Potential, AbstractPotential
 from abtem.scan import AbstractScan
 from abtem.transfer import CTF
-from abtem.utils import ProgressBar, fft_crop, fourier_translation_operator, fft
+from abtem.utils import ProgressBar, fft_crop, fourier_translation_operator
 from abtem.utils.complex import abs2
+from abtem.utils.coordinates import spatial_frequencies
 from abtem.waves.base import _WavesLike, _Scanable
-from abtem.waves.multislice import FresnelPropagator, _multislice
+from abtem.waves.multislice import multislice
+from abtem.utils.fft import ifft2
 
 
 class Waves(_WavesLike):
@@ -201,11 +203,7 @@ class Waves(_WavesLike):
                               energy=self.energy,
                               tilt=self.tilt)
 
-    def multislice(self,
-                   potential: AbstractPotential,
-                   pbar: Union[ProgressBar, bool] = True,
-                   detector=None,
-                   max_batch_potential: int = 1) -> 'Waves':
+    def multislice(self, potential: AbstractPotential, detector=None, ) -> 'Waves':
         """
         Propagate and transmit wave function through the provided potential.
 
@@ -227,60 +225,17 @@ class Waves(_WavesLike):
 
         self.grid.match(potential)
 
-        propagator = FresnelPropagator()
+        if potential.num_frozen_phonons == 1:
+            return multislice(self, potential)
 
-        result = None
+        exit_waves = []
+        for p in potential.frozen_phonon_potentials():
+            exit_waves.append(multislice(self.copy(), p))
 
-        if potential.num_frozen_phonon_configs > 1:
-            xp = get_array_module(self.array)
-            n = potential.num_frozen_phonon_configs
+        array = da.concatenate([exit_wave.array for exit_wave in exit_waves])
 
-            if detector:
-                result = detector.allocate_measurement(self, self.array.shape[:-2])
-            else:
-                if n > 1:
-                    if self.array.shape[0] == 1:
-                        out_array = xp.zeros((n,) + self.array.shape[1:], dtype=xp.complex64)
-                    else:
-                        out_array = xp.zeros((n,) + self.array.shape, dtype=xp.complex64)
-                else:
-                    out_array = xp.zeros(self.array.shape, dtype=xp.complex64)
-
-                result = self.__class__(out_array,
-                                        extent=self.extent,
-                                        energy=self.energy,
-                                        antialias_aperture=(2 / 3.,) * 2)
-
-            tds_pbar = ProgressBar(total=n, desc='TDS', disable=(not pbar) or (n == 1))
-            multislice_pbar = ProgressBar(total=len(potential), desc='Multislice', disable=not pbar)
-
-            for i, potential_config in enumerate(potential.generate_frozen_phonon_potentials(pbar=pbar)):
-                multislice_pbar.reset()
-
-                exit_waves = _multislice(copy(self),
-                                         potential_config,
-                                         propagator=propagator)
-
-                if detector:
-                    result._array += asnumpy(detector.detect(exit_waves)) / n
-                else:
-                    result._array[i] = xp.squeeze(exit_waves.array)
-
-                tds_pbar.update(1)
-
-            multislice_pbar.close()
-            tds_pbar.close()
-
-        if result is None:
-            exit_wave = _multislice(self, potential, propagator)
-
-            if detector:
-                result = detector.allocate_measurement(self, self.array.shape[:-2])
-                result._array = asnumpy(detector.detect(exit_wave))
-            else:
-                result = exit_wave
-
-        return result
+        return self.__class__(array=array, extent=self.extent, energy=self.energy, tilt=self.tilt,
+                              antialias_aperture=(2 / 3.,) * 2)
 
     def write(self, path: str):
         """
@@ -372,10 +327,7 @@ class PlaneWave(_WavesLike):
         self._antialias_aperture = AntialiasAperture()
         self._device = device
 
-    def multislice(self,
-                   potential: Union[AbstractPotential, Atoms],
-                   pbar: bool = True,
-                   max_batch_potential: int = 1) -> Waves:
+    def multislice(self, potential: Union[AbstractPotential, Atoms], ) -> Waves:
         """
         Build plane wave function and propagate it through the potential. The grid of the two will be matched.
 
@@ -394,17 +346,15 @@ class PlaneWave(_WavesLike):
 
         if isinstance(potential, Atoms):
             potential = Potential(atoms=potential)
-        potential.grid.match(self)
 
-        return self.build().multislice(potential, pbar=pbar, max_batch_potential=max_batch_potential)
+        potential.grid.match(self)
+        return self.build().multislice(potential)
 
     def build(self) -> Waves:
         """Build the plane wave function as a Waves object."""
         xp = get_array_module_from_device(self._device)
         self.grid.check_is_defined()
-        array = da.ones((self.gpts[0], self.gpts[1]), dtype=xp.complex64)
-
-        # array = array / np.sqrt(np.prod(array.shape))
+        array = da.from_array(np.ones((1, self.gpts[0], self.gpts[1]), dtype=xp.complex64), chunks=(1, -1, -1))
         return Waves(array, extent=self.extent, energy=self.energy)
 
     def __copy__(self) -> 'PlaneWave':
@@ -487,9 +437,9 @@ class Probe(_Scanable, HasEventMixin):
         positions /= xp.array(self.sampling).astype(np.float32)
         return fourier_translation_operator(positions, self.gpts)
 
-    @cached_method('_ctf_cache')
     def _evaluate_ctf(self):
-        alpha, phi = self.get_scattering_angles()
+        _, __, alpha, phi = spatial_frequencies(self.gpts, self.sampling, return_radial=True, return_azimuthal=True)
+        alpha *= self.wavelength
         return da.array(self._ctf.evaluate(alpha, phi))
 
     def build(self, positions: Sequence[Sequence[float]] = None) -> Waves:
@@ -506,16 +456,19 @@ class Probe(_Scanable, HasEventMixin):
         Waves object
             Probe wave functions as a Waves object.
         """
-
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
         xp = get_array_module_from_device(self._device)
 
         positions = self._validate_positions(positions)
 
-        array = fft.ifft2(self._evaluate_ctf() * self._fourier_translation_operator(positions))
-        array = array / xp.sqrt((xp.abs(array[0]) ** 2).sum()) / xp.sqrt(np.prod(array.shape[1:]))
+        # *self._fourier_translation_operator(positions)
 
+        #array = ifft2(self._evaluate_ctf())
+
+
+        # array = array / xp.sqrt((xp.abs(array[0]) ** 2).sum()) / xp.sqrt(np.prod(array.shape[1:]))
+        #
         return Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt,
                      antialias_aperture=self.antialias_aperture)
 

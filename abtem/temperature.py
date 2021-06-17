@@ -8,6 +8,7 @@ import numpy as np
 from ase import Atoms
 from ase.data import atomic_numbers
 from copy import copy
+import dask
 
 
 class AbstractFrozenPhonons(metaclass=ABCMeta):
@@ -52,6 +53,10 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
 
     def __init__(self, atoms: Atoms):
         self._atoms = atoms.copy()
+
+    @property
+    def atoms(self):
+        return self._atoms
 
     def __len__(self):
         return 1
@@ -142,6 +147,10 @@ class FrozenPhonons(AbstractFrozenPhonons):
         self._seed = seed
 
     @property
+    def cell(self):
+        return self._atoms.cell
+
+    @property
     def atoms(self) -> Atoms:
         return self._atoms
 
@@ -154,13 +163,8 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
         for i in range(len(self)):
             atoms = self._atoms.copy()
-            positions = atoms.get_positions()
-
             for direction in self._directions:
-                positions[:, direction] += self._sigmas * np.random.randn(len(positions))
-
-            atoms.set_positions(positions)
-
+                atoms.positions[:, direction] += self._sigmas * np.random.randn(len(atoms))
             yield atoms
 
     def __copy__(self):

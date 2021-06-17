@@ -158,9 +158,15 @@ def grid_from_calibrations(calibrations, extent=None, gpts=None) -> Grid:
 class AbstractMeasurement(metaclass=ABCMeta):
 
     def __init__(self, array: np.array, name='', units=''):
-        self._array = asnumpy(array)
+        self._array = array
         self._name = name
         self._units = units
+
+    def compute(self):
+        try:
+            self._array = self._array.compute()
+        except:
+            pass
 
     @property
     @abstractmethod
@@ -1080,12 +1086,12 @@ def interpolate_2d(measurement,
                         endpoint=endpoint[axes[1]])
         new_array = interpolator(x, y).T
 
-    #if rolled_shape is not None:
+    # if rolled_shape is not None:
     new_array = new_array.reshape(rolled_shape[:len(axes)] + new_array.shape[-2:])
     new_array = np.moveaxis(new_array, range(len(axes)), axes)
 
     calibrations = [copy(calibration) for calibration in measurement.calibrations]
-    #for i, axis in enumerate(range(len(measurement.array.shape)) - set(axes)):
+    # for i, axis in enumerate(range(len(measurement.array.shape)) - set(axes)):
     #    calibrations.append(copy(measurement.calibrations[axis]))
     #    calibrations[-1].sampling = new_grid.sampling[i]
 

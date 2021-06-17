@@ -7,7 +7,7 @@ import numpy as np
 
 from abtem.base_classes import Cache, Event, watched_property, cached_method
 from abtem.device import get_array_module, get_device_function
-from abtem.measure import Calibration, calibrations_from_grid, Measurement
+from abtem.measure.old_measure import Calibration, calibrations_from_grid, Measurement
 from abtem.scan import AbstractScan
 from abtem.utils import spatial_frequencies
 from abtem.visualize.mpl import show_measurement_2d

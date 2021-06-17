@@ -2,12 +2,16 @@
 from collections import defaultdict
 from typing import Mapping, Union
 
+import dask.array as da
 import numpy as np
+
 from abtem.base_classes import HasAcceleratorMixin, HasEventMixin, Accelerator, watched_method, watched_property, Event, \
     Grid
 from abtem.device import get_array_module, get_device_function
-from abtem.measure import Measurement, Calibration
+from abtem.measure.old_measure import Measurement, Calibration
 from abtem.utils import energy2wavelength, spatial_frequencies, polar_coordinates
+from abtem.utils.complex import complex_exponential
+
 
 #: Symbols for the polar representation of all optical aberrations up to the fifth order.
 polar_symbols = ('C10', 'C12', 'phi12',
@@ -211,7 +215,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
             return xp.ones_like(alpha)
 
         if self.rolloff > 0.:
-            rolloff = self.rolloff / 1000. #* semiangle_cutoff
+            rolloff = self.rolloff / 1000.  # * semiangle_cutoff
             array = .5 * (1 + xp.cos(np.pi * (alpha - semiangle_cutoff + rolloff) / rolloff))
             array[alpha > semiangle_cutoff] = 0.
             array = xp.where(alpha > semiangle_cutoff - rolloff, array, xp.ones_like(alpha, dtype=xp.float32))
@@ -267,7 +271,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         alpha2 = alpha ** 2
         alpha = xp.array(alpha)
 
-        array = xp.zeros(alpha.shape, dtype=np.float32)
+        array = da.zeros(alpha.shape, dtype=np.float32)
         if any([p[symbol] != 0. for symbol in ('C10', 'C12', 'phi12')]):
             array += (1 / 2 * alpha2 *
                       (p['C10'] +
@@ -302,8 +306,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
 
     def evaluate_aberrations(self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]) -> \
             Union[float, np.ndarray]:
-        xp = get_array_module(alpha)
-        complex_exponential = get_device_function(xp, 'complex_exponential')
+
         return complex_exponential(-self.evaluate_chi(alpha, phi))
 
     def evaluate(self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
@@ -312,14 +315,14 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         if self.semiangle_cutoff < np.inf:
             array *= self.evaluate_aperture(alpha)
 
-        if self.focal_spread > 0.:
-            array *= self.evaluate_temporal_envelope(alpha)
-
-        if self.angular_spread > 0.:
-            array *= self.evaluate_spatial_envelope(alpha, phi)
-
-        if self.gaussian_spread > 0.:
-            array *= self.evaluate_gaussian_envelope(alpha)
+        # if self.focal_spread > 0.:
+        #     array *= self.evaluate_temporal_envelope(alpha)
+        #
+        # if self.angular_spread > 0.:
+        #     array *= self.evaluate_spatial_envelope(alpha, phi)
+        #
+        # if self.gaussian_spread > 0.:
+        #     array *= self.evaluate_gaussian_envelope(alpha)
 
         return array
 

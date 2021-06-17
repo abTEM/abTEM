@@ -143,7 +143,7 @@ class _Scanable(_WavesLike):
             positions = da.array(positions, dtype=np.float32)
 
         if len(positions.shape) == 1:
-            positions = np.expand_dims(positions, axis=0)
+            positions = positions[None]
 
         if positions.shape[1] != 2:
             raise ValueError('positions must be of shape Nx2')

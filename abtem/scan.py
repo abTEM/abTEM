@@ -9,7 +9,7 @@ from matplotlib.patches import Rectangle
 
 from abtem.base_classes import Grid, HasGridMixin
 from abtem.device import asnumpy
-from abtem.measure import Calibration, Measurement
+from abtem.measure.old_measure import Calibration, Measurement
 from abtem.utils import subdivide_into_batches, ProgressBar
 from ase import Atom
 

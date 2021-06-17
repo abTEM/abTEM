@@ -5,7 +5,7 @@ from abtem.potentials.parametrizations import get_parameterization
 from abtem.potentials.utils import kappa
 from abtem.utils.backend import get_array_module
 from abtem.utils.coordinates import spatial_frequencies
-from abtem.utils.fft import fft2_convolve
+from abtem.utils.fft import fft2, ifft2
 
 
 def scattering_factor(gpts, sampling, atomic_number, xp='numpy', parametrization='kirkland'):
@@ -17,9 +17,9 @@ def scattering_factor(gpts, sampling, atomic_number, xp='numpy', parametrization
     return f / (sinc * sampling[0] * sampling[1] * kappa)
 
 
-def superpose_deltas(positions, slice_idx, shape):
+def superpose_deltas(positions, slice_idx, array):
     xp = get_array_module(positions)
-    array = np.zeros(shape, dtype=np.float32)
+    shape = array.shape
 
     rounded = xp.floor(positions).astype(xp.int32)
     rows, cols = rounded[:, 0], rounded[:, 1]
@@ -33,25 +33,27 @@ def superpose_deltas(positions, slice_idx, shape):
     return array
 
 
-def infinite_potential_projections(positions, numbers, slice_idx, shape, sampling, xp='numpy'):
+def infinite_potential_projections(positions, numbers, slice_idx, shape, sampling, scattering_factors, xp='numpy'):
     xp = get_array_module(xp)
 
-    array = xp.zeros(shape, dtype=xp.float32)
-
     if len(positions) == 0:
-        return array
+        return xp.zeros(shape, dtype=xp.float32)
+
+    array = xp.zeros(shape, dtype=xp.complex64)
 
     positions = xp.asarray(positions / sampling)
     unique = np.unique(numbers)
 
-    for number in unique:
+    temp = np.zeros_like(array, dtype=np.complex64)
+    for i, number in enumerate(unique):
         if len(unique) > 1:
-            temp = superpose_deltas(positions[numbers == number], slice_idx[numbers == number], shape)
+            if i > 0:
+                temp[:] = 0.
+
+            temp = superpose_deltas(positions[numbers == number], slice_idx[numbers == number], temp)
         else:
-            temp = superpose_deltas(positions, slice_idx, shape)
+            temp = superpose_deltas(positions, slice_idx, temp)
 
-        f = scattering_factor(shape[1:], sampling, number, xp).compute()
+        array += fft2(temp, overwrite_x=False) * scattering_factors[number]
 
-        array += fft2_convolve(temp, f).real
-
-    return array
+    return ifft2(array, overwrite_x=False).real

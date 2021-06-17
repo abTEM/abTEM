@@ -5,10 +5,8 @@ from typing import Optional, Union, Sequence, Any, Callable, Tuple
 
 import numpy as np
 
-from abtem.device import copy_to_device, get_array_module, get_device_function
 from abtem.utils.convert import energy2wavelength, energy2sigma
-from abtem.utils import spatial_frequencies
-from abtem.utils.fft import fft2_convolve
+import xarray as xr
 
 
 class Event(object):
@@ -440,6 +438,16 @@ class Grid(HasEventMixin):
         elif self.gpts is None:
             raise RuntimeError('Grid gpts are not defined')
 
+    def coords(self):
+        coords = []
+        names = ['x', 'y', 'z']
+
+        for i, (gpts, extent, endpoint) in enumerate(zip(self.gpts, self.extent, self.endpoint)):
+            coords.append(xr.DataArray(np.linspace(0, extent, gpts, endpoint=endpoint), name=names[i],
+                                       attrs={'units': 'Å'}))
+
+        return coords
+
     def match(self, other: Union['Grid', 'HasGridMixin'], check_match: bool = False):
         """
         Set the parameters of this grid to match another grid.
@@ -708,61 +716,6 @@ class HasBeamTiltMixin:
     @tilt.setter
     def tilt(self, value: Tuple[float, float]):
         self.tilt = value
-
-
-class AntialiasFilter(HasEventMixin):
-    """
-    Antialias filter object.
-    """
-    cutoff = 2 / 3.
-    rolloff = .1
-
-    def __init__(self):
-        self._mask_cache = Cache(1)
-        self._event = Event()
-        self._event.observe(cache_clear_callback(self._mask_cache))
-
-    @cached_method('_mask_cache')
-    def get_mask(self, gpts, sampling, xp):
-        if sampling is None:
-            sampling = (1., 1.)
-
-        kx, ky = spatial_frequencies(gpts, sampling)
-        kx = copy_to_device(kx, xp)
-        ky = copy_to_device(ky, xp)
-        k = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
-
-        kcut = 1 / max(sampling) / 2 * self.cutoff
-
-        if self.rolloff > 0.:
-            array = .5 * (1 + xp.cos(np.pi * (k - kcut + self.rolloff) / self.rolloff))
-            array[k > kcut] = 0.
-            array = xp.where(k > kcut - self.rolloff, array, xp.ones_like(k, dtype=xp.float32))
-        else:
-            array = xp.array(k < kcut).astype(xp.float32)
-        return array
-
-    def _bandlimit(self, array):
-        xp = get_array_module(array)
-        fft2_convolve = get_device_function(xp, 'fft2_convolve')
-        fft2_convolve(array, self.get_mask(array.shape[-2:], (1, 1), xp), overwrite_x=True)
-        return array
-
-    def bandlimit(self, array):
-        """
-
-        Parameters
-        ----------
-        waves
-
-        Returns
-        -------
-
-        """
-        xp = get_array_module(array)
-        array = fft2_convolve(array, self.get_mask(array.shape[-2:], None, xp), overwrite_x=True,
-                              dask_key_name='bandlimit')
-        return array
 
 
 class AntialiasAperture:

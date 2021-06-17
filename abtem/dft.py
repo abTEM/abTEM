@@ -9,7 +9,7 @@ from abtem.base_classes import Grid
 from abtem.device import get_device_function
 from abtem.potentials import AbstractPotentialBuilder, PotentialArray, _disc_meshgrid, pad_atoms, \
     PotentialIntegrator
-from abtem.structures import orthogonalize_cell
+from abtem.structures.structures import orthogonalize_cell
 from abtem.utils import subdivide_into_batches
 
 import warnings

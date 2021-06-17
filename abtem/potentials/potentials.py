@@ -13,7 +13,7 @@ from ase import Atoms
 from abtem.base_classes import Grid, HasGridMixin, HasAcceleratorMixin, Accelerator, watched_property, HasEventMixin
 from abtem.device import HasDeviceMixin, get_available_memory
 from abtem.measure.old_measure import Measurement
-from abtem.potentials.infinite import infinite_potential_projections
+from abtem.potentials.infinite import infinite_potential_projections, scattering_factor
 from abtem.structures.slicing import SliceIndexedAtoms
 from abtem.structures.structures import is_cell_orthogonal
 from abtem.temperature import AbstractFrozenPhonons, DummyFrozenPhonons
@@ -40,12 +40,12 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    def num_frozen_phonon_configs(self):
+    def num_frozen_phonons(self):
         pass
 
     @property
     @abstractmethod
-    def generate_frozen_phonon_potentials(self, pbar=False):
+    def frozen_phonon_potentials(self):
         pass
 
     @property
@@ -186,20 +186,17 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
 
         self._projection = projection
 
-        if isinstance(atoms, AbstractFrozenPhonons):
-            self._frozen_phonons = atoms
-        else:
-            self._frozen_phonons = DummyFrozenPhonons(atoms)
-
-        atoms = next(iter(self._frozen_phonons))
-
         if np.abs(atoms.cell[2, 2]) < 1e-12:
             raise RuntimeError('cell has no thickness')
 
         if not is_cell_orthogonal(atoms):
             raise RuntimeError('atoms are not orthogonal')
 
-        self._atoms = atoms
+        if isinstance(atoms, AbstractFrozenPhonons):
+            self._frozen_phonons = atoms
+        else:
+            self._frozen_phonons = DummyFrozenPhonons(atoms)
+
         self._grid = Grid(extent=np.diag(atoms.cell)[:2], gpts=gpts, sampling=sampling, lock_extent=True)
 
         super().__init__(chunk_size=chunk_size, device=device)
@@ -222,7 +219,7 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
     @property
     def atoms(self):
         """Atoms object defining the atomic configuration."""
-        return self._atoms
+        return self._frozen_phonons.atoms
 
     @property
     def frozen_phonons(self):
@@ -230,7 +227,7 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
         return self._frozen_phonons
 
     @property
-    def num_frozen_phonon_configs(self):
+    def num_frozen_phonons(self):
         return len(self.frozen_phonons)
 
     @property
@@ -241,7 +238,7 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
     @property
     def num_slices(self):
         """The number of projected potential slices."""
-        return int(np.ceil(self._atoms.cell[2, 2] / self._slice_thickness))
+        return int(np.ceil(self.atoms.cell[2, 2] / self._slice_thickness))
 
     @property
     def slice_thickness(self):
@@ -254,34 +251,36 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
         self._slice_thickness = value
 
     def get_slice_thickness(self, i) -> float:
-        return self._atoms.cell[2, 2] / self.num_slices
+        return self.atoms.cell[2, 2] / self.num_slices
 
     def get_parameterized_function(self, number) -> Callable:
         return lambda r: self._function(r, self.parameters[number])
 
     def build(self):
+        atoms = self.atoms
+
         slice_thicknesses = [self.get_slice_thickness(i) for i in range(len(self))]
-        slice_index_atoms = SliceIndexedAtoms(self.atoms, self.num_slices)
+        slice_index_atoms = SliceIndexedAtoms(atoms, self.num_slices)
+
+        scattering_factors = {}
+        for number in np.unique(self.atoms.numbers):
+            scattering_factors[number] = scattering_factor(self.gpts, self.sampling, number, np)  # .compute()
 
         array = []
         for first_slice, last_slice in generate_batches(len(self), max_batch=self._chunk_size, start=0):
             positions, numbers, slice_idx = slice_index_atoms.get_atoms_in_slices(first_slice, last_slice)
             shape = (last_slice - first_slice,) + self.gpts
 
-            chunk = dask.delayed(infinite_potential_projections)(positions, numbers, slice_idx, shape, self.sampling)
-            chunk = da.from_delayed(chunk, shape=shape, dtype=np.float32)
-            array.append(chunk)
+            chunk = dask.delayed(infinite_potential_projections)(positions, numbers, slice_idx, shape, self.sampling,
+                                                                 scattering_factors)
+
+            array.append(da.from_delayed(chunk, shape=shape, dtype=np.float32))
 
         return PotentialArray(da.concatenate(array), slice_thicknesses, extent=self.extent)
 
-    def generate_frozen_phonon_potentials(self, pbar: Union[ProgressBar, bool] = True):
+    def frozen_phonon_potentials(self):
         """
         Function to generate scattering potentials for a set of frozen phonon configurations.
-
-        Parameters
-        ----------
-        pbar: bool, optional
-            Display a progress bar. Default is True.
 
         Returns
         -------
@@ -289,17 +288,15 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
             Generator of potentials.
         """
 
-        if isinstance(pbar, bool):
-            pbar = ProgressBar(total=len(self), desc='Potential', disable=not pbar)
+        potentials = []
+
 
         for atoms in self.frozen_phonons:
-            self.atoms.positions[:] = atoms.positions
-            pbar.reset()
+            potential = Potential(atoms, slice_thickness=self.slice_thickness, gpts=self.gpts,
+                                  chunk_size=self._chunk_size)
+            potentials.append(potential)
 
-            yield self
-
-        pbar.refresh()
-        pbar.close()
+        return potentials
 
     def __copy__(self):
         return self.__class__(atoms=self.frozen_phonons.copy(),
@@ -364,6 +361,16 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         self._array = self.array.compute()
         return self
 
+    def delayed(self, chunks=1):
+        if isinstance(self.array, da.core.Array):
+            return self
+
+        array = da.from_array(self.array, name=str(id(self.array)), chunks=(chunks, -1, -1))
+        return self.__class__(array=array, slice_thicknesses=self.slice_thicknesses.copy(), extent=self.extent)
+
+    def split_chunks(self):
+        return [self[a:a + b] for a, b in zip(np.cumsum((0,) + self.array.chunks[0]), self.array.chunks[0])]
+
     def __getitem__(self, items):
         if isinstance(items, (int, slice)):
             potential_array = self.array[items]
@@ -392,18 +399,18 @@ class PotentialArray(AbstractPotential, HasGridMixin):
 
         array = AntialiasFilter()(array, sampling=self.sampling)
 
+
         t = TransmissionFunction(array, slice_thicknesses=self._slice_thicknesses.copy(), extent=self.extent,
                                  energy=energy)
 
         return t
 
     @property
-    def num_frozen_phonon_configs(self):
+    def num_frozen_phonons(self):
         return 1
 
-    def generate_frozen_phonon_potentials(self, pbar=False):
-        for i in range(self.num_frozen_phonon_configs):
-            yield self
+    def frozen_phonon_potentials(self):
+        return [self]
 
     @property
     def num_slices(self):
@@ -542,17 +549,22 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         else:
             raise TypeError('Potential must indexed with integers or slices, not {}'.format(type(items)))
 
-    def transmission_function(self, energy, antialias_filter=None):
+    def delayed(self, chunks=1):
+        new = super().delayed(chunks=chunks)
+        new.energy = self.energy
+        return new
+
+    def transmission_function(self, energy):
         if energy != self.energy:
             raise RuntimeError()
-
         return self
 
     def transmit(self, waves):
         self.accelerator.check_match(waves)
-        try:
-            waves._array = waves._array * self.array
-        except AttributeError:
-            waves = self.transmit(waves.build())
+        # try:
+        # print(type(waves._array), type(self.array)
+        waves._array *= self.array
+        # except AttributeError:
+        #    waves = self.transmit(waves.build())
 
         return waves

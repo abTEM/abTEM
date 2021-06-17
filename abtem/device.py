@@ -20,7 +20,7 @@ try:  # This should be the only place import cupy, to make it a non-essential de
         interpolate_bilinear_gpu, launch_batch_crop
 
 
-    # get_array_module = cp.get_array_module
+    get_array_module = cp.get_array_module
 
     def fft2_convolve(array: cp.array, kernel: cp.array, overwrite_x: bool = True):
         """

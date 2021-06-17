@@ -11,6 +11,7 @@ def spatial_frequencies(gpts: Tuple[int, int],
                         sampling: Tuple[float, float],
                         return_grid: bool = False,
                         return_radial: bool = False,
+                        return_azimuthal: bool = False,
                         xp=np):
     """
     Calculate spatial frequencies of a grid.
@@ -46,5 +47,11 @@ def spatial_frequencies(gpts: Tuple[int, int],
 
         k = da.sqrt(sum([expand_dims(ki, axis=i) ** 2 for i, ki in enumerate(kis)]))
         out += (k,)
+
+    if return_azimuthal:
+        if len(kis) != 2:
+            raise NotImplementedError()
+
+        out += (xp.arctan2(kis[0][:, None], kis[1][None, :]),)
 
     return out
