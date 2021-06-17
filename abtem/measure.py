@@ -700,17 +700,29 @@ class Measurement(AbstractMeasurement):
         signal_type: str
             The signal type alias for some signal type
         """
-        from hyperspy.singals import BaseSignal, Signal1D, Signal2D
-        if self.calibrations is None:
-            sig = BaseSignal(self.array)
+        from hyperspy._signals.signal2d import Signal2D
+        from hyperspy._signals.signal1d import Signal1D
+        signal_shape = np.shape(self.array)
+        axes = []
+        for i, size in zip(self.calibrations, signal_shape):
+            if i is None:
+                axes.append({"offset": 0,
+                             "scale": 1,
+                             "units": "",
+                             "name": "",
+                             "size": size})
+            else:
+                axes.append({"offset": i.offset,
+                            "scale": i.sampling,
+                            "units": i.units,
+                            "name": i.name,
+                            "size": size})
+            print(axes)
+        if len(signal_shape) == 3:
+            # This could change depending on the type of measurement
+            sig = Signal1D(self.array, axes=axes)
         else:
-            signal_shape = np.shape(self.array)
-            axes = [{"offset": i.offset,
-                     "scale": i.sampling,
-                     "units": i.units,
-                     "name": i.name,
-                     "size": size} for i, size in zip(self.calibrations, signal_shape)]
-            sig = Signal2D(self.array, axes)
+            sig = Signal2D(self.array, axes=axes)
         if signal_type is not None:
             sig.set_signal_type(signal_type)
         return sig
