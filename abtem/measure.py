@@ -693,42 +693,71 @@ class Measurement(AbstractMeasurement):
 
         return cls(datasets['array'], calibrations)
 
-    def write(self, path, mode='w'):
+    def to_hyperspy(self,signal_type=None):
+        """
+        Changes the Measurement object to a `hyperspy.BaseSignal` Object or a defined signal type.
+
+        signal_type: str
+            The signal type alias for some signal type
+        """
+        from hyperspy.singals import BaseSignal, Signal1D, Signal2D
+        if self.calibrations is None:
+            sig = BaseSignal(self.array)
+        else:
+            signal_shape = np.shape(self.array)
+            axes = [{"offset": i.offset,
+                     "scale": i.sampling,
+                     "units": i.units,
+                     "name": i.name,
+                     "size": size} for i, size in zip(self.calibrations, signal_shape)]
+            sig = Signal2D(self.array, axes)
+        if signal_type is not None:
+            sig.set_signal_type(signal_type)
+        return sig
+
+    def write(self, path, mode='w', format="hdf5", **kwargs):
         """
         Write measurement to a hdf5 file.
 
         path: str
             The path to write the file.
+        format: str
+            One of ["hdf5", "hspy"]
+        kwargs:
+            Any of the additional parameters for saving a hyperspy dataset
         """
+        if format is "hdf5":
+            with h5py.File(path, mode) as f:
+                f.create_dataset('array', data=self.array)
 
-        with h5py.File(path, mode) as f:
-            f.create_dataset('array', data=self.array)
+                is_none = []
+                offsets = []
+                sampling = []
+                units = []
+                names = []
+                for calibration in self.calibrations:
+                    if calibration is None:
+                        offsets += [0.]
+                        sampling += [0.]
+                        units += ['']
+                        names += ['']
+                        is_none += [True]
+                    else:
+                        offsets += [calibration.offset]
+                        sampling += [calibration.sampling]
+                        units += [calibration.units.encode('utf-8')]
+                        names += [calibration.name.encode('utf-8')]
+                        is_none += [False]
 
-            is_none = []
-            offsets = []
-            sampling = []
-            units = []
-            names = []
-            for calibration in self.calibrations:
-                if calibration is None:
-                    offsets += [0.]
-                    sampling += [0.]
-                    units += ['']
-                    names += ['']
-                    is_none += [True]
-                else:
-                    offsets += [calibration.offset]
-                    sampling += [calibration.sampling]
-                    units += [calibration.units.encode('utf-8')]
-                    names += [calibration.name.encode('utf-8')]
-                    is_none += [False]
-
-            f.create_dataset('offset', data=offsets)
-            f.create_dataset('sampling', data=sampling)
-            f.create_dataset('units', (len(units),), 'S10', units)
-            f.create_dataset('name', (len(names),), 'S10', names)
-            f.create_dataset('is_none', data=is_none)
-
+                f.create_dataset('offset', data=offsets)
+                f.create_dataset('sampling', data=sampling)
+                f.create_dataset('units', (len(units),), 'S10', units)
+                f.create_dataset('name', (len(names),), 'S10', names)
+                f.create_dataset('is_none', data=is_none)
+        elif format is "hspy":
+            self.to_hyperspy().save(path, **kwargs)
+        else:
+            raise ValueError('Format must be one of "hdf5" or "hspy"')
         return path
 
     def save_as_image(self, path: str):
