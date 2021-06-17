@@ -64,7 +64,7 @@ def test_subtract_measurements(stem_data):
     stem_data -= stem_data
 
 
-@pytest.mark.parametrize("signal_type",[None, "diffraction"])
+@pytest.mark.parametrize("signal_type", [None, "diffraction"])
 def test_to_hyperspy(stem_data, signal_type):
     for key in stem_data:
         sig = stem_data[key].to_hyperspy(signal_type=signal_type)

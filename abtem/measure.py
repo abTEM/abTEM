@@ -717,7 +717,6 @@ class Measurement(AbstractMeasurement):
                             "units": i.units,
                             "name": i.name,
                             "size": size})
-            print(axes)
         if len(signal_shape) == 3:
             # This could change depending on the type of measurement
             sig = Signal1D(self.array, axes=axes)
