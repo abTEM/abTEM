@@ -87,6 +87,6 @@ class MTF:
 
         # Apply MTF
         img = np.fft.ifft2(np.fft.fft2(img) * np.sqrt(mtf))
-        measurement.array[:] = (img.real + img.imag) / 2
+        measurement.array[:] = img.real
 
         return measurement
