@@ -1,7 +1,7 @@
 import numpy as np
 from ase import Atoms
 
-from abtem.structures import standardize_cell
+from abtem.structures.structures import standardize_cell
 
 
 def angle_between(v1, v2):
