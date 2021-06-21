@@ -6,7 +6,7 @@ import numpy as np
 from numba import jit
 from scipy.special import kn
 
-from abtem.utils import _set_path
+from abtem.basic import _set_path
 
 
 def get_parameterization(parametrization):

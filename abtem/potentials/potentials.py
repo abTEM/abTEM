@@ -9,20 +9,20 @@ import numpy as np
 import zarr
 from ase import Atoms
 
+from abtem.basic.antialias import AntialiasFilter
+from abtem.basic.backend import get_array_module
+from abtem.basic.backend import xp_to_str
+from abtem.basic.complex import complex_exponential
+from abtem.basic.energy import HasAcceleratorMixin, Accelerator, energy2sigma
+from abtem.basic.event import HasEventMixin, watched_property
+from abtem.basic.grid import Grid, HasGridMixin
+from abtem.basic.utils import generate_batches
 from abtem.device import HasDeviceMixin, get_available_memory
 from abtem.measure.measure import Measurement, calibrations_from_grid
 from abtem.potentials.infinite import infinite_potential_projections, calculate_scattering_factors
 from abtem.potentials.temperature import AbstractFrozenPhonons, DummyFrozenPhonons
 from abtem.structures.slicing import SliceIndexedAtoms
 from abtem.structures.structures import is_cell_orthogonal
-from abtem.utils.energy import HasAcceleratorMixin, Accelerator, energy2sigma
-from abtem.utils import generate_batches
-from abtem.utils.antialias import AntialiasFilter
-from abtem.utils.backend import xp_to_str
-from abtem.utils.complex import complex_exponential
-from abtem.utils.event import HasEventMixin, watched_property
-from abtem.utils.grid import Grid, HasGridMixin
-from abtem.utils.backend import get_array_module
 
 
 class AbstractPotential(HasGridMixin, metaclass=ABCMeta):

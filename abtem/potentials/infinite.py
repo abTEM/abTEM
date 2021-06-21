@@ -2,9 +2,9 @@ import numpy as np
 
 from abtem.potentials.parametrizations import get_parameterization
 from abtem.potentials.utils import kappa
-from abtem.utils.backend import get_array_module
-from abtem.utils.fft import fft2, ifft2
-from abtem.utils.grid import spatial_frequencies, polar_spatial_frequencies
+from abtem.basic.backend import get_array_module
+from abtem.basic.fft import fft2, ifft2
+from abtem.basic.grid import spatial_frequencies, polar_spatial_frequencies
 
 
 def _sinc(gpts, sampling, xp):
