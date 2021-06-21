@@ -1,15 +1,14 @@
 """Module to describe independent atom model parametrizations of the scattering potential."""
 import csv
 import os
-from scipy.special import kn
 
 import numpy as np
 from numba import jit
+from scipy.special import kn
 
 from abtem.utils import _set_path
-import dask
 
-@dask.delayed(pure=True, nout=2)
+
 def get_parameterization(parametrization):
     if parametrization == 'kirkland':
         parameters = load_kirkland_parameters()
