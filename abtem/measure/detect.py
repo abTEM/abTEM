@@ -3,103 +3,58 @@ from abc import ABCMeta, abstractmethod
 from copy import copy
 from typing import Tuple, List, Any, Union
 
+import dask
 import numpy as np
 
-from abtem.base_classes import Cache, Event, watched_property, cached_method
+from abtem.base_classes import watched_property
 from abtem.device import get_array_module, get_device_function
-from abtem.measure.old_measure import Calibration, calibrations_from_grid, Measurement
-from abtem.scan import AbstractScan
-from abtem.utils import spatial_frequencies
-from abtem.visualize.mpl import show_measurement_2d
 from abtem.device_func import abs2
+from abtem.measure.measure import Calibration, calibrations_from_grid, Measurement
 from abtem.utils.fft import fft2
+from abtem.utils.grid import polar_spatial_frequencies
+from abtem.visualize.mpl import show_measurement_2d
+from abtem.waves.scan import AbstractScan
 
 
-def _polar_regions(gpts: Tuple[int, int], angular_sampling: Tuple[float, float], inner: float, outer: float,
-                   nbins_radial: int, nbins_azimuthal: int, rotation=0.):
-    """
-    Create an array of labels for the regions of a given detector geometry.
 
-    Parameters
-    ----------
-    gpts : two int
-        Number of grid points describing the detector regions.
-    angular_sampling : two float
-        Angular sampling of the discretized detector regions in radians.
-    inner : float
-        Inner boundary of the detector regions [rad].
-    outer : float
-        Outer boundary of the detector regions [rad].
-    nbins_radial : int
-        Number of radial detector bins.
-    nbins_azimuthal
-        Number of azimuthal detector bins.
+    # if (nbins_radial == 1) & (nbins_azimuthal == 1):
+    #    return np.where(bins == 0)
 
-    Returns
-    -------
-    2d array
-        Array of integer labels representing the detector regions.
-    """
-    """Create the polar segmentation of a detector."""
-
-    sampling = (1 / angular_sampling[0] / gpts[0], 1 / angular_sampling[1] / gpts[1])
-    kx, ky = spatial_frequencies(gpts, sampling)
-
-    alpha_x = np.asarray(kx)
-    alpha_y = np.asarray(ky)
-
-    alpha = np.sqrt(alpha_x.reshape((-1, 1)) ** 2 + alpha_y.reshape((1, -1)) ** 2)
-
-    radial_bins = -np.ones(gpts, dtype=int)
-    valid = (alpha >= inner) & (alpha <= outer)
-
-    radial_bins[valid] = nbins_radial * (alpha[valid] - inner) / (outer - inner)
-
-    angles = (np.arctan2(alpha_x[:, None], alpha_y[None]) + rotation) % (2 * np.pi)
-
-    angular_bins = np.floor(nbins_azimuthal * (angles / (2 * np.pi)))
-    angular_bins = np.clip(angular_bins, 0, nbins_azimuthal - 1).astype(np.int)
-
-    bins = -np.ones(gpts, dtype=int)
-    bins[valid] = angular_bins[valid] + radial_bins[valid] * nbins_azimuthal
-    return bins
+    # region_indices = []
+    # for indices in self._label_to_index(region_labels):
+    #     region_indices.append(indices)
+    # return region_indices
+    # return bins
 
 
-def check_max_angle_exceeded(waves, max_angle):
-    if (max_angle is not None) and (not isinstance(max_angle, str)):
-        if max_angle > min(waves.cutoff_scattering_angles):
+def check_cutoff_angle(waves, angle):
+    if (angle is not None) and (not isinstance(angle, str)):
+        if (angle > waves.cutoff_angles[0]) or (angle > waves.cutoff_angles[1]):
             raise RuntimeError('Detector max angle exceeds the cutoff scattering angle.')
 
 
 class AbstractDetector(metaclass=ABCMeta):
     """Abstract base class for all detectors."""
 
-    def __init__(self, max_detected_angle=None, save_file: str = None):
-        if save_file is not None:
-            save_file = str(save_file)
-
-            if not save_file.endswith('.hdf5'):
-                self._save_file = save_file + '.hdf5'
-            else:
-                self._save_file = save_file
-
-        else:
-            self._save_file = None
-
-        self._max_detected_angle = max_detected_angle
+    def __init__(self, path: str = None):
+        self._path = path
 
     @property
-    def save_file(self) -> str:
+    def path(self) -> str:
         """The path to the file for saving the detector output."""
-        return self._save_file
+        return self._path
 
     @abstractmethod
     def detect(self, waves) -> Any:
         pass
 
     @abstractmethod
-    def allocate_measurement(self, waves, scan) -> Measurement:
+    def __copy__(self):
         pass
+
+    def copy(self):
+        """Make a copy."""
+        return copy(self)
 
 
 class _PolarDetector(AbstractDetector):
@@ -127,22 +82,7 @@ class _PolarDetector(AbstractDetector):
         self._rotation = rotation
         self._offset = offset
 
-        self.cache = Cache(1)
-        self.changed = Event()
         super().__init__(max_detected_angle=outer, save_file=save_file)
-
-    @classmethod
-    def _label_to_index(cls, labels):
-        xp = get_array_module(labels)
-        labels = labels.flatten()
-        labels_order = labels.argsort()
-        sorted_labels = labels[labels_order]
-        indices = xp.arange(0, len(labels) + 1)[labels_order]
-        index = xp.arange(0, np.max(labels) + 1)
-        lo = xp.searchsorted(sorted_labels, index, side='left')
-        hi = xp.searchsorted(sorted_labels, index, side='right')
-        for i, (l, h) in enumerate(zip(lo, hi)):
-            yield indices[l:h]
 
     def _get_bins(self, cutoff_scattering_angle=None):
         if self._inner is None:
@@ -165,7 +105,6 @@ class _PolarDetector(AbstractDetector):
 
         return nbins_radial, nbins_azimuthal, inner, outer
 
-    @cached_method('cache')
     def _get_regions(self,
                      gpts: Tuple[int, int],
                      angular_sampling: Tuple[float, float],
@@ -174,13 +113,13 @@ class _PolarDetector(AbstractDetector):
 
         nbins_radial, nbins_azimuthal, inner, outer = self._get_bins(cutoff_scattering_angle)
 
-        region_labels = _polar_regions(gpts,
-                                       (angular_sampling[0] / 1e3, angular_sampling[1] / 1e3),
-                                       inner / 1e3,
-                                       outer / 1e3,
-                                       nbins_radial,
-                                       nbins_azimuthal,
-                                       rotation=self._rotation)
+        region_labels = polar_detector_regions(gpts,
+                                               (angular_sampling[0] / 1e3, angular_sampling[1] / 1e3),
+                                               inner / 1e3,
+                                               outer / 1e3,
+                                               nbins_radial,
+                                               nbins_azimuthal,
+                                               rotation=self._rotation)
 
         if self._offset is not None:
             offset = (int(round(self._offset[0] / angular_sampling[0])),
@@ -304,7 +243,7 @@ class _PolarDetector(AbstractDetector):
         return show_measurement_2d(measurement, discrete_cmap=True, **kwargs)
 
 
-class AnnularDetector(_PolarDetector):
+class AnnularDetector(AbstractDetector):
     """
     Annular detector object.
 
@@ -319,12 +258,15 @@ class AnnularDetector(_PolarDetector):
         Outer integration limit [mrad].
     offset: two float, optional
         Center offset of integration region [mrad].
-    save_file: str, optional
+    path: str, optional
         The path to the file for saving the detector output.
     """
 
-    def __init__(self, inner: float, outer: float, offset: Tuple[float, float] = None, save_file: str = None):
-        super().__init__(inner=inner, outer=outer, offset=offset, radial_steps=outer - inner, save_file=save_file)
+    def __init__(self, inner: float, outer: float, offset: Tuple[float, float] = None, path: str = None):
+        self._inner = inner
+        self._outer = outer
+        self._offset = offset
+        super().__init__(path=path)
 
     @property
     def inner(self) -> float:
@@ -332,7 +274,6 @@ class AnnularDetector(_PolarDetector):
         return self._inner
 
     @inner.setter
-    @watched_property('changed')
     def inner(self, value: float):
         self._inner = value
 
@@ -342,57 +283,40 @@ class AnnularDetector(_PolarDetector):
         return self._outer
 
     @outer.setter
-    @watched_property('changed')
     def outer(self, value: float):
-        self._max_detected_angle = value
         self._outer = value
 
-    def _integrate_array(self, array: np.ndarray, angular_sampling: Tuple[float, float],
-                         cutoff_scattering_angle: float = None):
+    def check_cutoff_angle(self, waves):
+        if (self._outer > waves.cutoff_angles[0]) or (self._outer > waves.cutoff_angles[1]):
+            raise RuntimeError('Detector max angle exceeds the cutoff scattering angle.')
 
-        xp = get_array_module(array)
-        indices = self._get_regions(array.shape[-2:], angular_sampling, cutoff_scattering_angle)[0]
-        indexed = array.reshape(array.shape[:-2] + (-1,))[..., indices]
-        values = xp.sum(indexed, axis=-1)
-        return values
+    def get_detector_region(self, gpts, sampling):
+        bins = polar_detector_bins(gpts=gpts,
+                                   sampling=sampling,
+                                   inner=self.inner,
+                                   outer=self.outer,
+                                   nbins_radial=1,
+                                   nbins_azimuthal=1)
+        return bins == 0
 
-    def integrate(self, diffraction_patterns: Measurement) -> Measurement:
-        """
-        Integrate diffraction pattern measurements on the detector region.
-
-        Parameters
-        ----------
-        diffraction_patterns : 2d, 3d or 4d Measurement object
-            The collection diffraction patterns to be integrated.
-
-        Returns
-        -------
-        Measurement
-        """
-
-        if diffraction_patterns.dimensions < 2:
+    def integrate(self, measurement, axes=(-2, -1), fftshift=True):
+        if measurement.dimensions < 2:
             raise ValueError()
 
-        if not (diffraction_patterns.calibrations[-1].units == diffraction_patterns.calibrations[-2].units):
+        if not (measurement.calibrations[-2].units == measurement.calibrations[-1].units):
             raise ValueError()
 
-        sampling = (diffraction_patterns.calibrations[-2].sampling, diffraction_patterns.calibrations[-1].sampling)
+        sampling = (measurement.calibrations[-2].sampling, measurement.calibrations[-1].sampling)
 
-        calibrations = diffraction_patterns.calibrations[:-2]
-        array = np.fft.ifftshift(diffraction_patterns.array, axes=(-2, -1))
+        calibrations = measurement.calibrations[:-2]
+        array = np.fft.ifftshift(measurement.array, axes=axes)
 
-        cutoff_scattering_angle = min(diffraction_patterns.calibrations[-2].sampling *
-                                      (diffraction_patterns.array.shape[-2] // 2),
-                                      diffraction_patterns.calibrations[-1].sampling *
-                                      (diffraction_patterns.array.shape[-1] // 2), )
+        cutoff_scattering_angle = min(measurement.calibrations[-2].sampling *
+                                      (measurement.array.shape[-2] // 2),
+                                      measurement.calibrations[-1].sampling *
+                                      (measurement.array.shape[-1] // 2), )
 
-        if cutoff_scattering_angle < self.outer:
-            raise RuntimeError('Outer integration limit exceeds the maximum measurement scattering angle '
-                               f'({cutoff_scattering_angle} mrad)')
-
-        return Measurement(self._integrate_array(array, sampling, cutoff_scattering_angle), calibrations=calibrations)
-
-    def detect(self, waves, scan=None) -> np.ndarray:
+    def detect(self, waves, calibrations=None) -> Measurement:
         """
         Integrate the intensity of a the wave functions over the detector range.
 
@@ -407,28 +331,26 @@ class AnnularDetector(_PolarDetector):
             Detected values as a 1D array. The array has the same length as the batch size of the wave functions.
         """
 
-        xp = get_array_module(waves.array)
+        self.check_cutoff_angle(waves)
 
-        intensity = abs2(fft2(waves.array, overwrite_x=False))
-        integrated_intensity = self._integrate_array(intensity, waves.angular_sampling,
-                                                     min(waves.cutoff_scattering_angles))
+        def integrate_fourier_space(array, bins):
+            xp = get_array_module(array)
+            return xp.sum(abs2(fft2(array, overwrite_x=False)) * bins, axis=(-2, -1))
 
-        if scan is not None:
-            shape = scan.shape + self.measurement_shape(waves)
-            calibrations = scan.calibrations + self.measurement_calibrations(waves)
-            return Measurement(array=integrated_intensity.reshape(shape), calibrations=calibrations)
-        else:
-            return integrated_intensity
+        bins = dask.delayed(self.get_detector_region)(waves.gpts, waves.angular_sampling, waves.wavelength)
+
+        integrated_intensity = waves.array.map_blocks(integrate_fourier_space, bins=bins,
+                                                      drop_axis=(len(waves.shape) - 2, len(waves.shape) - 1),
+                                                      dtype=np.float32)
+
+        calibrations = (None,) * (len(integrated_intensity.shape) - len(calibrations)) + calibrations
+        return Measurement(array=integrated_intensity, calibrations=calibrations)
 
     def __copy__(self) -> 'AnnularDetector':
-        return self.__class__(self.inner, self.outer, save_file=self.save_file)
-
-    def copy(self) -> 'AnnularDetector':
-        """Make a copy."""
-        return copy(self)
+        return self.__class__(self.inner, self.outer, path=self.path)
 
 
-class FlexibleAnnularDetector(_PolarDetector):
+class FlexibleAnnularDetector(AbstractDetector):
     """
     Flexible annular detector object.
 
@@ -443,8 +365,9 @@ class FlexibleAnnularDetector(_PolarDetector):
         The path to the file used for saving the detector output.
     """
 
-    def __init__(self, step_size: float = 1., save_file: str = None):
-        super().__init__(radial_steps=step_size, save_file=save_file)
+    def __init__(self, step_size: float = 1., path: str = None):
+        self.step_size = step_size
+        super().__init__(path=path)
 
     @property
     def step_size(self) -> float:
@@ -454,7 +377,6 @@ class FlexibleAnnularDetector(_PolarDetector):
         return self._radial_steps
 
     @step_size.setter
-    @watched_property('changed')
     def step_size(self, value: float):
         self._radial_steps = value
 

@@ -2,7 +2,7 @@
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
-from abtem.measure.old_measure import Measurement
+from abtem.measure.measure import Measurement
 
 
 def _pixel_times(dwell_time, flyback_time, shape):
