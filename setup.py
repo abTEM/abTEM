@@ -36,6 +36,10 @@ setup(
         'ase',
         'tqdm',
         'psutil'],
+    extras_require={
+        'full': ['hyperspy',
+                 'pyxem']
+    },
     tests_require=['pytest'],
     packages=find_packages(),
     include_package_data=True,
