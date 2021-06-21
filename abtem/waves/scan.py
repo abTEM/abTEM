@@ -5,13 +5,13 @@ from typing import Union, Sequence, Tuple, List
 
 import h5py
 import numpy as np
+from ase import Atom
 from matplotlib.patches import Rectangle
 
-from abtem.base_classes import Grid, HasGridMixin
 from abtem.device import asnumpy
-from abtem.measure.old_measure import Calibration, Measurement
+from abtem.measure.measure import Calibration, Measurement
 from abtem.utils import subdivide_into_batches, ProgressBar
-from ase import Atom
+from abtem.utils.grid import Grid, HasGridMixin
 
 
 class AbstractScan(metaclass=ABCMeta):
@@ -203,7 +203,7 @@ class LineScan(AbstractScan, HasGridMixin):
         if isinstance(end, Atom):
             end = (end.x, end.y)
 
-        #if (end is not None) & (angle is not None):
+        # if (end is not None) & (angle is not None):
         #    raise ValueError('only one of "end" and "angle" may be specified')
 
         if (gpts is None) & (sampling is None):
@@ -362,9 +362,7 @@ class GridScan(AbstractScan, HasGridMixin):
                  end: Sequence[float],
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
-                 endpoint: bool = False,
-                 batch_partition: str = 'squares',
-                 measurement_shift: Sequence[int] = None):
+                 endpoint: bool = False):
 
         super().__init__()
 
@@ -377,12 +375,6 @@ class GridScan(AbstractScan, HasGridMixin):
 
         if (gpts is None) & (sampling is None):
             raise RuntimeError('Grid gpts or sampling must be set')
-
-        if not batch_partition.lower() in ['squares', 'lines']:
-            raise ValueError('batch partition must be "squares" or "lines"')
-
-        self._batch_partition = batch_partition
-        self._measurement_shift = measurement_shift
 
         self._grid = Grid(extent=end - start, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint)
 
@@ -416,19 +408,19 @@ class GridScan(AbstractScan, HasGridMixin):
     def end(self, end: Sequence[float]):
         self.extent = np.array(end) - self.start
 
-    def get_scan_area(self) -> float:
+    @property
+    def area(self) -> float:
         """Get the area of the scan."""
-        height = abs(self.start[0] - self.end[0])
-        width = abs(self.start[1] - self.end[1])
-        return height * width
+        return abs(self.start[0] - self.end[0]) * abs(self.start[1] - self.end[1])
 
-    def get_positions(self, flatten=True) -> np.ndarray:
-        x = np.linspace(self.start[0], self.end[0], self.gpts[0], endpoint=self.grid.endpoint[0])
-        y = np.linspace(self.start[1], self.end[1], self.gpts[1], endpoint=self.grid.endpoint[1])
+    def get_positions(self, chunks=1) -> np.ndarray:
+        x = np.linspace(self.start[0], self.end[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=np.float32)
+        y = np.linspace(self.start[1], self.end[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=np.float32)
         x, y = np.meshgrid(x, y, indexing='ij')
 
-        return np.stack((np.reshape(x, (-1,)),
-                         np.reshape(y, (-1,))), axis=1)
+        # chunks = (max(1, int(np.floor(np.sqrt(chunks)))), max(1, int(np.floor(np.sqrt(chunks)))), 2)
+        return np.stack((x, y), axis=-1)
+        # return da.from_array(array, chunks=chunks)
 
     def insert_new_measurement(self, measurement, indices: np.ndarray, new_measurement: np.ndarray):
         x, y = np.unravel_index(indices, self.shape)

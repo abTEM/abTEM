@@ -1,115 +1,98 @@
 """Module to describe electron waves and their propagation."""
 from typing import Union, Sequence, Tuple
 
+import dask
 import dask.array as da
 import numpy as np
-
-from abtem.base_classes import HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAntialiasAperture
-from abtem.detect import AbstractDetector
+from abc import ABCMeta, abstractmethod
 from abtem.device import HasDeviceMixin
-from abtem.device import get_array_module_from_device
-from abtem.measure.old_measure import Measurement
-from abtem.utils.antialias import AntialiasFilter
-from abtem.utils.coordinates import spatial_frequencies
+from abtem.measure.measure import Measurement
+from abtem.utils.antialias import HasAntialiasAperture
+from abtem.utils.energy import HasAcceleratorMixin
+from abtem.utils.event import HasEventMixin, Event, watched_method
+from abtem.utils.grid import HasGridMixin
+from abtem.measure.detect import AbstractDetector
+from abtem.waves.scan import AbstractScan
+from copy import copy
 
 
-class _WavesLike(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin, HasBeamTiltMixin, HasAntialiasAperture):
+class BeamTilt(HasEventMixin):
 
-    # def __init__(self, tilt: Tuple[float, float] = None, antialiasing_aperture: Tuple[float, float] = None):
-    #     self.tilt = tilt
-    #
-    #     if antialiasing_aperture is None:
-    #         antialiasing_aperture = (2 / 3.,) * 2
-    #
-    #     self.antialiasing_aperture = antialiasing_aperture
-
-    # @property
-    # @abstractmethod
-    # def tilt(self):
-    #     pass
-
-    # @property
-    # @abstractmethod
-    # def antialias_aperture(self):
-    #     pass
+    def __init__(self, tilt: Tuple[float, float] = (0., 0.)):
+        self._tilt = tilt
+        self._event = Event()
 
     @property
-    def cutoff_scattering_angles(self) -> Tuple[float, float]:
-        interpolated_grid = self._interpolated_grid
-        kcut = [1 / d / 2 * a for d, a in zip(interpolated_grid.sampling, self.antialias_aperture)]
-        kcut = min(kcut)
-        kcut = (
-            np.ceil(2 * interpolated_grid.extent[0] * kcut) / (
-                    2 * interpolated_grid.extent[0]) * self.wavelength * 1e3,
-            np.ceil(2 * interpolated_grid.extent[1] * kcut) / (
-                    2 * interpolated_grid.extent[1]) * self.wavelength * 1e3)
-        return kcut
+    def tilt(self) -> Tuple[float, float]:
+        """Beam tilt [mrad]."""
+        return self._tilt
+
+    @tilt.setter
+    @watched_method('_event')
+    def tilt(self, value: Tuple[float, float]):
+        self._tilt = value
+
+
+class HasBeamTiltMixin:
+    _beam_tilt: BeamTilt
 
     @property
-    def rectangle_cutoff_scattering_angles(self) -> Tuple[float, float]:
-        rolloff = AntialiasFilter.rolloff
-        interpolated_grid = self._interpolated_grid
-        kcut = [(a / (d * 2) - rolloff) / np.sqrt(2) for d, a in
-                zip(interpolated_grid.sampling, self.antialias_aperture)]
+    def tilt(self) -> Tuple[float, float]:
+        return self._beam_tilt.tilt
 
-        kcut = min(kcut)
-        kcut = (
-            np.floor(2 * interpolated_grid.extent[0] * kcut) / (
-                    2 * interpolated_grid.extent[0]) * self.wavelength * 1e3,
-            np.floor(2 * interpolated_grid.extent[1] * kcut) / (
-                    2 * interpolated_grid.extent[1]) * self.wavelength * 1e3)
-        return kcut
+    @tilt.setter
+    def tilt(self, value: Tuple[float, float]):
+        self.tilt = value
+
+
+class AbstractWaves(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin, HasBeamTiltMixin, HasAntialiasAperture,
+                    metaclass=ABCMeta):
+
+    @abstractmethod
+    def multislice(self, *args, **kwargs):
+        pass
+
+    @abstractmethod
+    def __copy__(self):
+        pass
+
+    def copy(self):
+        """Make a copy."""
+        return copy(self)
+
+    @property
+    def antialias_valid_gpts(self):
+        return self._valid_rectangle(self.gpts, self.sampling)
+
+    @property
+    def antialias_cutoff_gpts(self):
+        return self._cutoff_rectangle(self.gpts, self.sampling)
+
+    def _gpts_in_angle(self, angle):
+        return tuple(int(2 * np.ceil(angle / d)) + 1 for n, d in zip(self.gpts, self.angular_sampling))
+
+    @property
+    def cutoff_angles(self) -> Tuple[float, float]:
+        return (self.antialias_cutoff_gpts[0] // 2 * self.angular_sampling[0],
+                self.antialias_cutoff_gpts[1] // 2 * self.angular_sampling[1])
+
+    @property
+    def rectangle_cutoff_angles(self) -> Tuple[float, float]:
+        return (self.antialias_valid_gpts[0] // 2 * self.angular_sampling[0],
+                self.antialias_valid_gpts[1] // 2 * self.angular_sampling[1])
 
     @property
     def angular_sampling(self):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
-        return tuple([1 / l * self.wavelength * 1e3 for l in self._interpolated_grid.extent])
-
-    def get_spatial_frequencies(self):
-        xp = get_array_module_from_device(self.device)
-        kx, ky = spatial_frequencies(self.grid.gpts, self.grid.sampling)
-        # TODO : should beam tilt be added here?
-        kx = xp.asarray(kx)
-        ky = xp.asarray(ky)
-        return kx, ky
-
-    def get_scattering_angles(self):
-        kx, ky = self.get_spatial_frequencies()
-        alpha, phi = polar_coordinates(kx * self.wavelength, ky * self.wavelength)
-        return alpha, phi
-
-    @property
-    def _interpolated_grid(self):
-        return self.grid
-
-    def downsampled_gpts(self, max_angle: Union[float, str]):
-        interpolated_gpts = self._interpolated_grid.gpts
-
-        if max_angle is None:
-            gpts = interpolated_gpts
-
-        elif isinstance(max_angle, str):
-            if max_angle == 'limit':
-                cutoff_scattering_angle = self.cutoff_scattering_angles
-            elif max_angle == 'valid':
-                cutoff_scattering_angle = self.rectangle_cutoff_scattering_angles
-            else:
-                raise RuntimeError()
-
-            angular_sampling = self.angular_sampling
-            gpts = (int(np.ceil(cutoff_scattering_angle[0] / angular_sampling[0] * 2 - 1e-12)),
-                    int(np.ceil(cutoff_scattering_angle[1] / angular_sampling[1] * 2 - 1e-12)))
-        else:
-            try:
-                gpts = [int(2 * np.ceil(max_angle / d)) + 1 for n, d in zip(interpolated_gpts, self.angular_sampling)]
-            except:
-                raise RuntimeError()
-
-        return (min(gpts[0], interpolated_gpts[0]), min(gpts[1], interpolated_gpts[1]))
+        return tuple(1 / l * self.wavelength * 1e3 for l in self.extent)
 
 
-class _Scanable(_WavesLike):
+class _Scanable(AbstractWaves):
+
+    def compute_chunks(self):
+        chunk_size = dask.utils.parse_bytes(dask.config.get('array.chunk-size'))
+        return int(np.floor(chunk_size / (2 * 4 * np.prod(self.gpts))))
 
     def _validate_detectors(self, detectors):
         if isinstance(detectors, AbstractDetector):
@@ -136,16 +119,25 @@ class _Scanable(_WavesLike):
         #    raise ValueError('measurements must be Measurement or dict of AbtractDetector: Measurement')
         return measurements
 
-    def _validate_positions(self, positions: Sequence = None) -> np.ndarray:
+    def _validate_positions(self, positions: Union[Sequence, AbstractScan] = None):
+        if isinstance(positions, AbstractScan):
+            positions = positions.get_positions()
+
         if positions is None:
-            positions = da.array((self.extent[0] / 2, self.extent[1] / 2), dtype=np.float32)
-        else:
-            positions = da.array(positions, dtype=np.float32)
+            positions = (self.extent[0] / 2, self.extent[1] / 2)
+
+        if not isinstance(positions, da.core.Array):
+            positions = np.array(positions, dtype=np.float32)
 
         if len(positions.shape) == 1:
             positions = positions[None]
 
-        if positions.shape[1] != 2:
-            raise ValueError('positions must be of shape Nx2')
+        if positions.shape[-1] != 2:
+            raise ValueError()
+
+        if not isinstance(positions, da.core.Array):
+            dims = len(positions.shape) - 1
+            chunks = int(np.floor(self.compute_chunks() ** (1 / dims)))
+            positions = da.from_array(positions, chunks=(chunks,) * dims + (self.compute_chunks(),))
 
         return positions

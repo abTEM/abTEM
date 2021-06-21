@@ -2,16 +2,14 @@
 from collections import defaultdict
 from typing import Mapping, Union
 
-import dask.array as da
 import numpy as np
 
-from abtem.base_classes import HasAcceleratorMixin, HasEventMixin, Accelerator, watched_method, watched_property, Event, \
-    Grid
-from abtem.device import get_array_module, get_device_function
-from abtem.measure.old_measure import Measurement, Calibration
-from abtem.utils import energy2wavelength, spatial_frequencies, polar_coordinates
+from abtem.device import get_array_module
+from abtem.measure.measure import Measurement, Calibration
 from abtem.utils.complex import complex_exponential
-
+from abtem.utils.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
+from abtem.utils.event import Event, HasEventMixin, watched_method, watched_property
+from abtem.utils.grid import Grid, polar_spatial_frequencies
 
 #: Symbols for the polar representation of all optical aberrations up to the fifth order.
 polar_symbols = ('C10', 'C12', 'phi12',
@@ -271,7 +269,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         alpha2 = alpha ** 2
         alpha = xp.array(alpha)
 
-        array = da.zeros(alpha.shape, dtype=np.float32)
+        array = xp.zeros(alpha.shape, dtype=np.float32)
         if any([p[symbol] != 0. for symbol in ('C10', 'C12', 'phi12')]):
             array += (1 / 2 * alpha2 *
                       (p['C10'] +
@@ -332,13 +330,16 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         gpts = grid.gpts
         sampling = grid.sampling
 
-        kx, ky = spatial_frequencies(gpts, sampling)
-        kx = kx.reshape((1, -1, 1))
-        ky = ky.reshape((1, 1, -1))
-        kx = xp.asarray(kx)
-        ky = xp.asarray(ky)
-        alpha, phi = polar_coordinates(xp.asarray(kx * self.wavelength), xp.asarray(ky * self.wavelength))
-        return self.evaluate(alpha, phi)
+        alpha, phi = polar_spatial_frequencies(gpts, sampling, delayed=False, xp=xp)
+
+        # kx, ky = spatial_frequencies(gpts, sampling)
+        # kx = kx.reshape((1, -1, 1))
+        # ky = ky.reshape((1, 1, -1))
+        # kx = xp.asarray(kx)
+        # ky = xp.asarray(ky)
+        # alpha, phi = polar_coordinates(xp.asarray(kx * self.wavelength), xp.asarray(ky * self.wavelength))
+
+        return self.evaluate(alpha * self.wavelength, phi)
 
     def profiles(self, max_semiangle: float = None, phi: float = 0.):
         if max_semiangle is None:

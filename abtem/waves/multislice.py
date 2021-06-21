@@ -1,6 +1,6 @@
 """Module to describe electron waves and their propagation."""
 from typing import TYPE_CHECKING
-from typing import Union, Tuple
+from typing import Union
 
 import dask
 import dask.array as da
@@ -10,12 +10,21 @@ from abtem.potentials import AbstractPotential, AbstractPotentialBuilder
 from abtem.utils.antialias import AntialiasFilter
 from abtem.utils.backend import get_array_module
 from abtem.utils.complex import complex_exponential
-from abtem.utils.coordinates import spatial_frequencies
+from abtem.utils.grid import spatial_frequencies
 from abtem.utils.fft import fft2_convolve
 
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves
     from abtem.waves.prism import SMatrixArray
+
+
+def fresnel(gpts, sampling, dz):
+    kx, ky = spatial_frequencies(gpts, sampling, delayed=False)
+
+    f = (complex_exponential(-(kx ** 2)[:, None] * np.pi * dz) *
+         complex_exponential(-(ky ** 2)[None] * np.pi * dz))
+
+    return f
 
 
 class FresnelPropagator:
@@ -43,18 +52,16 @@ class FresnelPropagator:
         if self._array is not None:
             return self._array
 
-        kx, ky = spatial_frequencies(self._gpts, self._sampling)
+        f = dask.delayed(fresnel, pure=True)(self._gpts, self._sampling, self._wavelength * dz)
+        f = da.from_delayed(f, shape=self._gpts, dtype=np.complex64)
 
-        f = (complex_exponential(-(kx ** 2)[:, None] * np.pi * self._wavelength * dz) *
-             complex_exponential(-(ky ** 2)[None] * np.pi * self._wavelength * dz))
+        # if self._tilt is not None:
+        #     f *= (complex_exponential(-kx[:, None] * self._xp.tan(self._tilt[0] / 1e3) * dz * 2 * np.pi) *
+        #           complex_exponential(-ky[None] * self._xp.tan(self._tilt[1] / 1e3) * dz * 2 * np.pi))
 
-        if self._tilt is not None:
-            f *= (complex_exponential(-kx[:, None] * self._xp.tan(self._tilt[0] / 1e3) * dz * 2 * np.pi) *
-                  complex_exponential(-ky[None] * self._xp.tan(self._tilt[1] / 1e3) * dz * 2 * np.pi))
+        self._array = f * AntialiasFilter().build(self._gpts, self._sampling, self._xp)
 
-        self._array = (f * AntialiasFilter().build(self._gpts, self._sampling, self._xp)).compute()
         self._dz = dz
-
         return self._array
 
     def propagate(self, waves: Union['Waves', 'SMatrixArray'], dz: float) -> Union['Waves', 'SMatrixArray']:
@@ -76,35 +83,68 @@ class FresnelPropagator:
         return waves
 
 
-@dask.delayed
+def chunk_sequence(seq, num):
+    avg = len(seq) / float(num)
+    out = []
+    last = 0.0
+
+    while last < len(seq):
+        out.append(seq[int(last):int(last + avg)])
+        last += avg
+
+    return out
+
+
+# dask.delayed
 def _multislice(waves, transmission_function, slice_thicknesses, propagator):
     for t, d in zip(transmission_function, slice_thicknesses):
         waves *= t
-        waves = fft2_convolve(waves, propagator.build(d), overwrite_x=False)
+        waves = fft2_convolve(waves, propagator, overwrite_x=False)
     return waves
 
 
 def multislice(waves: Union['Waves', 'SMatrixArray'],
-               potential: Union[AbstractPotential, AbstractPotentialBuilder]
+               potential: Union[AbstractPotential, AbstractPotentialBuilder],
+               splits=1,
                ) -> Union['Waves', 'SMatrixArray']:
     waves.grid.match(potential)
     waves.accelerator.check_is_defined()
     waves.grid.check_is_defined()
 
-    propagator = FresnelPropagator(waves)
-
     try:
-        transmission_function = potential.transmission_function(energy=waves.energy)
-    except AttributeError:
-        transmission_function = potential.build().transmission_function(energy=waves.energy)
+        potential_array = potential.build()
+    except:
+        potential_array = potential
 
     try:
         waves_array = waves.array
     except AttributeError:
-        waves_array = waves.build().array
+        waves = waves.build()
+        waves_array = waves.array
 
-    waves._array = da.from_delayed(
-        _multislice(waves_array, transmission_function.array, transmission_function.slice_thicknesses, propagator),
-        shape=waves.array.shape, dtype=np.complex64)
+    propagator = FresnelPropagator(waves)
+    propagator = propagator.build(.5)
 
+    chunks = potential_array.array.chunks[0]
+
+    chunks = tuple(sum(chunk) for chunk in chunk_sequence(chunks, min(len(chunks), splits)))
+
+    slics = [slice(start, start + length) for start, length in zip(np.cumsum((0,) + chunks), chunks)]
+
+    for slic in slics:
+        potential_chunks = potential_array[slic]
+
+        try:
+            transmission_function = potential_chunks.transmission_function(energy=waves.energy)
+        except AttributeError:
+            transmission_function = potential_chunks.build().transmission_function(energy=waves.energy)
+
+        waves_array = waves_array.map_blocks(_multislice,
+                                             transmission_function=transmission_function.array,
+                                             slice_thicknesses=transmission_function.slice_thicknesses,
+                                             propagator=propagator,
+                                             dtype=np.complex64)
+
+    waves._array = waves_array
+    waves.antialias_aperture = 2 / 3.
     return waves

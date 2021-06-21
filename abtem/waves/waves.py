@@ -2,30 +2,30 @@
 from copy import copy
 from typing import Union, Sequence, Tuple, List
 
+import dask
 import dask.array as da
 import h5py
 import numpy as np
-import xarray as xr
 from ase import Atoms
 
-from abtem.base_classes import Grid, Accelerator, cache_clear_callback, Cache, cached_method, HasEventMixin, Event, \
-    BeamTilt, AntialiasAperture
-from abtem.detect import AbstractDetector
-from abtem.device import get_array_module, get_device_function, asnumpy, get_array_module_from_device, \
-    get_available_memory, get_device_from_array
-from abtem.measure.old_measure import calibrations_from_grid, Measurement, block_zeroth_order_spot, probe_profile
+from abtem.device import get_array_module, get_array_module_from_device, get_device_from_array
+from abtem.measure.measure import calibrations_from_grid, Measurement, probe_profile, Calibration, DiffractionPatterns
 from abtem.potentials import Potential, AbstractPotential
-from abtem.scan import AbstractScan
-from abtem.transfer import CTF
-from abtem.utils import ProgressBar, fft_crop, fourier_translation_operator
+from abtem.utils.antialias import AntialiasAperture
+from abtem.utils.backend import get_array_module
 from abtem.utils.complex import abs2
-from abtem.utils.coordinates import spatial_frequencies
-from abtem.waves.base import _WavesLike, _Scanable
+from abtem.utils.energy import Accelerator
+from abtem.utils.event import HasEventMixin
+from abtem.utils.fft import fft2, ifft2, fft2_convolve, fft2_shift_kernel, fft2_crop
+from abtem.utils.grid import Grid
+from abtem.waves.base import AbstractWaves, _Scanable, BeamTilt
+from abtem.measure.detect import AbstractDetector
 from abtem.waves.multislice import multislice
-from abtem.utils.fft import ifft2
+from abtem.waves.scan import AbstractScan
+from abtem.waves.transfer import CTF
 
 
-class Waves(_WavesLike):
+class Waves(AbstractWaves):
     """
     Waves object
 
@@ -47,20 +47,23 @@ class Waves(_WavesLike):
 
     def __init__(self,
                  array: np.ndarray,
+                 energy: float,
                  extent: Union[float, Sequence[float]] = None,
                  sampling: Union[float, Sequence[float]] = None,
-                 energy: float = None,
-                 tilt: Tuple[float, float] = None,
-                 antialias_aperture: Tuple[float, float] = (2 / 3., 2 / 3.)):
+                 tilt: Tuple[float, float] = (0., 0.),
+                 antialias_aperture: float = None):
 
         if len(array.shape) < 2:
             raise RuntimeError('Wave function array should be have 2 dimensions or more')
 
         self._array = array
         self._grid = Grid(extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True)
+
+        self._grid.check_is_defined()
+
         self._accelerator = Accelerator(energy=energy)
         self._beam_tilt = BeamTilt(tilt=tilt)
-        self._antialias_aperture = AntialiasAperture(antialias_aperture=antialias_aperture)
+        self._antialias_aperture = AntialiasAperture(cutoff=antialias_aperture)
         self._device = get_device_from_array(self._array)
 
     def compute(self):
@@ -75,6 +78,10 @@ class Waves(_WavesLike):
         """Array representing the wave functions."""
         return self._array
 
+    @property
+    def shape(self):
+        return self.array.shape
+
     def intensity(self) -> Measurement:
         """
         Calculate the intensity of the wave functions at the image plane.
@@ -84,39 +91,56 @@ class Waves(_WavesLike):
         Measurement
             The wave function intensity.
         """
-        coords = [np.arange(len(self))] + self.grid.coords()
-        measurement = xr.DataArray(abs2(self.array), coords=coords, dims=['batch', 'x', 'y'], name='Intensity',
-                                   attrs={'units': 'arb. units'})
-        return measurement
 
-        # calibrations = calibrations_from_grid(self.grid.gpts, self.grid.sampling, ['x', 'y'])
-        # array = self.array
-        # calibrations = (None,) * (len(array.shape) - 2) + calibrations
-        # return Measurement(abs2(array), calibrations)
+        calibrations = tuple(Calibration(offset=0., sampling=1., units='') for _ in range(len(self.shape) - 2))
+        calibrations = calibrations + calibrations_from_grid(self.grid.gpts, self.grid.sampling, ['x', 'y'])
+        return Measurement(abs2(self.array), calibrations)
 
-    def downsample(self, max_angle='valid', return_fourier_space: bool = False) -> 'Waves':
-        xp = get_array_module(self.array)
-        fft2 = get_device_function(xp, 'fft2')
-        ifft2 = get_device_function(xp, 'ifft2')
-        array = fft2(self.array, overwrite_x=False)
+    def _gpt_within_angle(self, angle):
 
-        gpts = self.downsampled_gpts(max_angle)
+        if angle is None:
+            return self.gpts
+
+        if not isinstance(angle, str):
+            return tuple(int(2 * np.ceil(angle / d)) + 1 for n, d in zip(self.gpts, self.angular_sampling))
+
+        if angle == 'cutoff':
+            return self.antialias_cutoff_gpts
+
+        if angle == 'valid':
+            return self.antialias_valid_gpts
+
+        raise ValueError()
+
+    def _downsampled_array(self, max_angle='valid', return_fourier_space: bool = False):
+        gpts = self._gpt_within_angle(max_angle)
+
+        array = self.array
+
+        if (gpts != self.gpts) or return_fourier_space:
+            array = fft2(array, overwrite_x=False)
 
         if gpts != self.gpts:
-            array = fft_crop(array, self.array.shape[:-2] + gpts)
+            array = array.map_blocks(fft2_crop, new_shape=self.array.shape[:-2] + gpts,
+                                     chunks=array.chunks[:-2] + ((gpts[0],), (gpts[1],)), dtype=np.complex64)
+
+        if return_fourier_space:
+            return array
+
+        return ifft2(array)
+
+    def downsample(self, max_angle='valid') -> 'Waves':
+        xp = get_array_module(self.array)
+
+        gpts = self.downsampled_gpts(max_angle)
 
         antialias_aperture = (self.antialias_aperture[0] * self.gpts[0] / gpts[0],
                               self.antialias_aperture[1] * self.gpts[1] / gpts[1])
 
-        if return_fourier_space:
-            return Waves(array, extent=self.extent, energy=self.energy, antialias_aperture=antialias_aperture)
-        else:
-            return Waves(ifft2(array), extent=self.extent, energy=self.energy, antialias_aperture=antialias_aperture)
+        array = self._downsample(max_angle='valid')
+        return Waves(array, extent=self.extent, energy=self.energy, antialias_aperture=antialias_aperture)
 
-    def far_field(self, max_angle='valid'):
-        return self.downsample(max_angle=max_angle, return_fourier_space=True)
-
-    def diffraction_pattern(self, max_angle='valid', block_zeroth_order=False) -> Measurement:
+    def diffraction_patterns(self, max_angle='valid', fftshift=True) -> DiffractionPatterns:
         """
         Calculate the intensity of the wave functions at the diffraction plane.
 
@@ -125,44 +149,37 @@ class Waves(_WavesLike):
         Measurement object
             The intensity of the diffraction pattern(s).
         """
-        xp = get_array_module(self.array)
-        abs2 = get_device_function(xp, 'abs2')
-        waves = self.far_field(max_angle)
 
-        pattern = np.fft.fftshift(asnumpy(abs2(waves.array)), axes=(-1, -2))
+        def _diffraction_pattern(array, new_gpts, fftshift):
+            xp = get_array_module(array)
 
-        calibrations = calibrations_from_grid(waves.gpts,
-                                              waves.sampling,
-                                              names=['alpha_x', 'alpha_y'],
-                                              units='mrad',
-                                              scale_factor=self.wavelength * 1000,
-                                              fourier_space=True)
+            array = fft2(array, overwrite_x=False)
 
-        calibrations = (None,) * (len(pattern.shape) - 2) + calibrations
+            if array.shape[-2:] != new_gpts:
+                array = fft2_crop(array, new_shape=array.shape[:-2] + new_gpts)
 
-        measurement = Measurement(pattern, calibrations)
+            array = abs2(array)
 
-        if block_zeroth_order:
-            block_zeroth_order_spot(measurement, block_zeroth_order)
+            if fftshift:
+                return xp.fft.fftshift(array, axes=(-1, -2))
 
-        return measurement
+            return xp.fft.fftshift(array, axes=(-1, -2))
 
-    def allocate_measurement(self, fourier_space=False) -> Measurement:
-        """
-        Allocate a measurement object
+        new_gpts = self._gpt_within_angle(max_angle)
 
-        Parameters
-        ----------
-        fourier_space
+        pattern = self.array.map_blocks(_diffraction_pattern, new_gpts=new_gpts, fftshift=fftshift,
+                                        chunks=self.array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
+                                        dtype=np.complex64)
 
-        Returns
-        -------
-
-        """
-        calibrations = calibrations_from_grid(self.grid.gpts, self.grid.sampling, ['x', 'y'])
-        calibrations = (None,) * (len(self.array.shape) - 2) + calibrations
-        array = np.zeros_like(self.array, dtype=np.float32)
-        return Measurement(array, calibrations)
+        # calibrations = calibrations_from_grid(self.gpts,
+        #                                       self.sampling,
+        #                                       names=['alpha_x', 'alpha_y'],
+        #                                       units='mrad',
+        #                                       scale_factor=self.wavelength * 1000,
+        #                                       fourier_space=True)
+        #
+        # calibrations = (None,) * (len(pattern.shape) - 2) + calibrations
+        return DiffractionPatterns(pattern, angular_sampling=self.angular_sampling, fftshift=fftshift)
 
     def apply_ctf(self, ctf: CTF = None, in_place=False, **kwargs) -> 'Waves':
         """
@@ -182,8 +199,6 @@ class Waves(_WavesLike):
             The wave functions with aberrations applied.
         """
 
-        fft2_convolve = get_device_function(get_array_module(self.array), 'fft2_convolve')
-
         if ctf is None:
             ctf = CTF(**kwargs)
 
@@ -195,15 +210,14 @@ class Waves(_WavesLike):
         self.accelerator.check_is_defined()
         self.grid.check_is_defined()
 
-        alpha, phi = self.get_scattering_angles()
-        kernel = ctf.evaluate(alpha, phi)
+        kernel = ctf.evaluate_on_grid(extent=self.extent, gpts=self.gpts, sampling=self.sampling)
 
         return self.__class__(fft2_convolve(self.array, kernel, overwrite_x=in_place),
                               extent=self.extent,
                               energy=self.energy,
                               tilt=self.tilt)
 
-    def multislice(self, potential: AbstractPotential, detector=None, ) -> 'Waves':
+    def multislice(self, potential: AbstractPotential, splits=1, detector=None, ) -> 'Waves':
         """
         Propagate and transmit wave function through the provided potential.
 
@@ -226,16 +240,16 @@ class Waves(_WavesLike):
         self.grid.match(potential)
 
         if potential.num_frozen_phonons == 1:
-            return multislice(self, potential)
+            return multislice(self, potential, splits=splits)
 
         exit_waves = []
         for p in potential.frozen_phonon_potentials():
-            exit_waves.append(multislice(self.copy(), p))
+            exit_waves.append(multislice(self.copy(), p, splits=splits))
 
-        array = da.concatenate([exit_wave.array for exit_wave in exit_waves])
+        array = da.stack([exit_wave.array for exit_wave in exit_waves], axis=0)
 
         return self.__class__(array=array, extent=self.extent, energy=self.energy, tilt=self.tilt,
-                              antialias_aperture=(2 / 3.,) * 2)
+                              antialias_aperture=2 / 3.)
 
     def write(self, path: str):
         """
@@ -292,7 +306,23 @@ class Waves(_WavesLike):
         return copy(self)
 
 
-class PlaneWave(_WavesLike):
+class ScannedWaves(Waves):
+
+    def __init__(self,
+                 array: np.ndarray,
+                 energy: float,
+                 extent: Union[float, Tuple[float, float]] = None,
+                 sampling: Union[float, Tuple[float, float]] = None,
+                 scan_sampling: Union[float, Tuple[float, float]] = None,
+                 tilt: Tuple[float, float] = (0., 0.),
+                 antialias_aperture: float = None):
+        super().__init__(array, energy=energy, extent=extent, sampling=sampling, tilt=tilt,
+                         antialias_aperture=antialias_aperture)
+
+        self._scan_sampling = scan_sampling
+
+
+class PlaneWave(AbstractWaves):
     """
     Plane wave object
 
@@ -327,7 +357,7 @@ class PlaneWave(_WavesLike):
         self._antialias_aperture = AntialiasAperture()
         self._device = device
 
-    def multislice(self, potential: Union[AbstractPotential, Atoms], ) -> Waves:
+    def multislice(self, potential: Union[AbstractPotential, Atoms], splits=1) -> Waves:
         """
         Build plane wave function and propagate it through the potential. The grid of the two will be matched.
 
@@ -348,21 +378,17 @@ class PlaneWave(_WavesLike):
             potential = Potential(atoms=potential)
 
         potential.grid.match(self)
-        return self.build().multislice(potential)
+        return self.build().multislice(potential, splits=splits)
 
     def build(self) -> Waves:
         """Build the plane wave function as a Waves object."""
         xp = get_array_module_from_device(self._device)
         self.grid.check_is_defined()
-        array = da.from_array(np.ones((1, self.gpts[0], self.gpts[1]), dtype=xp.complex64), chunks=(1, -1, -1))
+        array = da.from_array(np.ones((self.gpts[0], self.gpts[1]), dtype=xp.complex64), chunks=(-1, -1))
         return Waves(array, extent=self.extent, energy=self.energy)
 
     def __copy__(self) -> 'PlaneWave':
         return self.__class__(extent=self.extent, gpts=self.gpts, sampling=self.sampling, energy=self.energy)
-
-    def copy(self):
-        """Make a copy."""
-        return copy(self)
 
 
 class Probe(_Scanable, HasEventMixin):
@@ -414,18 +440,10 @@ class Probe(_Scanable, HasEventMixin):
 
         self._ctf = ctf
         self._accelerator = self._ctf._accelerator
-        self._beam_tilt = BeamTilt(tilt=tilt)
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._antialias_aperture = AntialiasAperture()
-        self._event = Event()
-
-        self._ctf.observe(self.event.notify)
-        self._grid.observe(self.event.notify)
-        self._accelerator.observe(self.event.notify)
-
+        self._beam_tilt = BeamTilt(tilt=tilt)
         self._device = device
-        self._ctf_cache = Cache(1)
-        self.observe(cache_clear_callback(self._ctf_cache))
 
     @property
     def ctf(self) -> CTF:
@@ -435,14 +453,21 @@ class Probe(_Scanable, HasEventMixin):
     def _fourier_translation_operator(self, positions):
         xp = get_array_module(positions)
         positions /= xp.array(self.sampling).astype(np.float32)
-        return fourier_translation_operator(positions, self.gpts)
+        print(positions)
+        drop_axis = len(positions.shape) - 1
+        new_axis = (len(positions.shape) - 1, len(positions.shape))
+        return positions.map_blocks(fft2_shift_kernel, shape=self.gpts, meta=xp.array((), dtype=np.complex64),
+                                    drop_axis=drop_axis, new_axis=new_axis,
+                                    chunks=positions.chunks[:-1] + ((self.gpts[0],), (self.gpts[1],)))
 
     def _evaluate_ctf(self):
-        _, __, alpha, phi = spatial_frequencies(self.gpts, self.sampling, return_radial=True, return_azimuthal=True)
-        alpha *= self.wavelength
-        return da.array(self._ctf.evaluate(alpha, phi))
+        xp = get_array_module(self._device)
+        array = self._ctf.evaluate_on_grid(gpts=self.gpts, sampling=self.sampling, xp=xp)
+        array = array / xp.sqrt(abs2(array).sum())  # / np.sqrt(np.prod(array.shape))
+        # print(abs2(array).sum(), array.shape)
+        return array
 
-    def build(self, positions: Sequence[Sequence[float]] = None) -> Waves:
+    def build(self, positions: Union[Sequence[Sequence[float]], AbstractScan] = None) -> Waves:
         """
         Build probe wave functions at the provided positions.
 
@@ -458,21 +483,21 @@ class Probe(_Scanable, HasEventMixin):
         """
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
-        xp = get_array_module_from_device(self._device)
 
         positions = self._validate_positions(positions)
 
-        # *self._fourier_translation_operator(positions)
+        xp = get_array_module(self._device)
 
-        #array = ifft2(self._evaluate_ctf())
+        positions = positions.map_blocks(xp.asarray)
 
+        ctf = da.from_delayed(dask.delayed(self._evaluate_ctf)(), shape=self.gpts,
+                              meta=xp.array((), dtype=np.complex64))
 
-        # array = array / xp.sqrt((xp.abs(array[0]) ** 2).sum()) / xp.sqrt(np.prod(array.shape[1:]))
-        #
-        return Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt,
-                     antialias_aperture=self.antialias_aperture)
+        array = ifft2(ctf * self._fourier_translation_operator(positions))
 
-    def multislice(self, positions: Sequence[Sequence[float]], potential: AbstractPotential, pbar=True) -> Waves:
+        return Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt)
+
+    def multislice(self, positions: Union[Sequence[Sequence[float]],], potential: AbstractPotential) -> Waves:
         """
         Build probe wave functions at the provided positions and propagate them through the potential.
 
@@ -495,49 +520,14 @@ class Probe(_Scanable, HasEventMixin):
             potential = Potential(potential)
 
         self.grid.match(potential)
-        exit_probes = _multislice(self.build(positions), potential, None, pbar)
-        return exit_probes
-
-    def _estimate_max_batch(self):
-        memory_per_wave = 2 * 4 * np.prod(self.gpts)
-        available_memory = get_available_memory(self._device)
-        return min(int(available_memory * .4 / memory_per_wave), 32)
-
-    def _generate_probes(self, scan, potential, max_batch, pbar):
-
-        potential_pbar = ProgressBar(total=len(potential), desc='Potential',
-                                     disable=(not pbar) or (not potential._precalculate))
-
-        tds_bar = ProgressBar(total=potential.num_frozen_phonon_configs, desc='TDS',
-                              disable=(not pbar) or (potential.num_frozen_phonon_configs == 1))
-
-        scan_bar = ProgressBar(total=len(scan), desc='Scan', disable=not pbar)
-
-        for potential_config in potential.generate_frozen_phonon_potentials(pbar=potential_pbar):
-            scan_bar.reset()
-
-            if max_batch is None:
-                max_batch = self._estimate_max_batch()
-
-            for indices, positions in scan.generate_positions(max_batch=max_batch):
-                yield indices, self.multislice(positions, potential_config, pbar=False)
-                scan_bar.update(len(indices))
-
-            scan_bar.refresh()
-            tds_bar.update(1)
-
-        potential_pbar.close()
-        potential_pbar.refresh()
-        tds_bar.refresh()
-        tds_bar.close()
-        scan_bar.close()
+        return self.build(positions).multislice(potential)
 
     def scan(self,
              scan: AbstractScan,
              detectors: Union[AbstractDetector, Sequence[AbstractDetector]],
              potential: Union[Atoms, AbstractPotential],
              chunk_size: int = None,
-             pbar: bool = True) -> Union[Measurement, List[Measurement]]:
+             ) -> Union[Measurement, List[Measurement]]:
 
         """
         Raster scan the probe across the potential and record a measurement for each detector.
@@ -573,7 +563,7 @@ class Probe(_Scanable, HasEventMixin):
 
         measurements = []
 
-        for i, potential_config in enumerate(potential.generate_frozen_phonon_potentials()):
+        for i, potential_config in enumerate(potential.frozen_phonon_potentials()):
             for detector in detectors:
                 if i == 0:
                     measurement = detector.detect(exit_probes, scan) / potential.num_frozen_phonon_configs

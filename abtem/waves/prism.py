@@ -7,13 +7,13 @@ from ase import Atoms
 
 from abtem.base_classes import Grid, cache_clear_callback, Cache, cached_method, HasEventMixin, Event, BeamTilt, \
     AntialiasAperture
-from abtem.detect import AbstractDetector
+from abtem.measure.detect import AbstractDetector
 from abtem.device import get_array_module, get_device_function, get_array_module_from_device, \
     copy_to_device, get_available_memory, get_device_from_array
-from abtem.measure.old_measure import Measurement, probe_profile
+from abtem.measure.measure import Measurement, probe_profile
 from abtem.potentials import Potential, AbstractPotential
-from abtem.scan import AbstractScan, GridScan
-from abtem.transfer import CTF
+from abtem.waves.scan import AbstractScan, GridScan
+from abtem.waves.transfer import CTF
 from abtem.utils import ProgressBar, subdivide_into_batches, periodic_crop, fourier_translation_operator, \
     array_row_intersection
 from abtem.waves.base import _Scanable
@@ -667,7 +667,7 @@ class PartitionedSMatrix(_Scanable):
 
     def show_interpolation_weights(self, ax=None):
         from matplotlib.colors import to_rgb
-        from abtem.measure.old_measure import fourier_space_offset
+        from abtem.measure.measure import fourier_space_offset
         weights = np.fft.fftshift(self.get_beamlet_weights(), axes=(1, 2))
 
         color_cycle = [['c', 'r'], ['m', 'g'], ['b', 'y']]
