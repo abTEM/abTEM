@@ -1,14 +1,15 @@
 """Module to describe the detection of scattered electron waves."""
+from abc import ABCMeta, abstractmethod
 from collections.abc import Iterable, Callable
 from copy import copy
 from typing import Sequence, Tuple, List, Union
-from abc import ABCMeta, abstractmethod
 
 import h5py
 import imageio
 import numpy as np
 import scipy.misc
 import scipy.ndimage
+from ase import Atom
 from scipy import ndimage
 from scipy.interpolate import interp1d, interp2d, interpn
 from scipy.ndimage import gaussian_filter
@@ -16,10 +17,9 @@ from scipy.ndimage import gaussian_filter
 from abtem.base_classes import Grid
 from abtem.cpu_kernels import abs2
 from abtem.device import asnumpy
+from abtem.utils import fft_interpolate_2d
 from abtem.utils import periodic_crop, tapered_cutoff
 from abtem.visualize.mpl import show_measurement_2d, show_measurement_1d
-from abtem.utils import fft_interpolate_2d
-from ase import Atom
 
 
 class Calibration:
@@ -202,6 +202,7 @@ class AbstractMeasurement(metaclass=ABCMeta):
     @abstractmethod
     def show(self):
         pass
+
 
 # TODO : ensure diffraction pattern centering
 class Measurement(AbstractMeasurement):
@@ -626,26 +627,26 @@ class Measurement(AbstractMeasurement):
         if len(axes) > 2:
             raise ValueError()
 
-        array = measurement.array
-
-        old_shape = array.shape
-
-        # print(old_shape)
-
-        # array = array.reshape(array.shape[:2] + (-1,))
-
-        axes = (2, 3)
-
-        array = np.moveaxis(array, axes, range(len(axes)))
-
-        rolled_shape = array.shape
-
-        array = array.reshape((-1,) + array.shape[-2:])
-        array = fft_interpolate_2d(array, (60, 60))
-        array = array.reshape(rolled_shape[:len(axes)] + array.shape[-2:])
-        array = np.moveaxis(array, range(len(axes)), axes)
-
-        return self._interpolate_2d(new_sampling=new_sampling, new_gpts=new_gpts, padding=padding, kind=kind, axes=axes)
+        # array = measurement.array
+        #
+        # old_shape = array.shape
+        #
+        # # print(old_shape)
+        #
+        # # array = array.reshape(array.shape[:2] + (-1,))
+        #
+        # axes = (2, 3)
+        #
+        # array = np.moveaxis(array, axes, range(len(axes)))
+        #
+        # rolled_shape = array.shape
+        #
+        # array = array.reshape((-1,) + array.shape[-2:])
+        # array = fft_interpolate_2d(array, (60, 60))
+        # array = array.reshape(rolled_shape[:len(axes)] + array.shape[-2:])
+        # array = np.moveaxis(array, range(len(axes)), axes)
+        #
+        # return self._interpolate_2d(new_sampling=new_sampling, new_gpts=new_gpts, padding=padding, kind=kind, axes=axes)
 
         # else:
         #    raise RuntimeError(f'interpolate not implemented for {self.dimensions}d measurements')
@@ -693,7 +694,7 @@ class Measurement(AbstractMeasurement):
 
         return cls(datasets['array'], calibrations)
 
-    def to_hyperspy(self,signal_type=None):
+    def to_hyperspy(self, signal_type=None):
         """
         Changes the Measurement object to a `hyperspy.BaseSignal` Object or a defined signal type.
 
@@ -713,10 +714,10 @@ class Measurement(AbstractMeasurement):
                              "size": size})
             else:
                 axes.append({"offset": i.offset,
-                            "scale": i.sampling,
-                            "units": i.units,
-                            "name": i.name,
-                            "size": size})
+                             "scale": i.sampling,
+                             "units": i.units,
+                             "name": i.name,
+                             "size": size})
         if len(signal_shape) == 3:
             # This could change depending on the type of measurement
             sig = Signal1D(self.array, axes=axes)
@@ -737,7 +738,7 @@ class Measurement(AbstractMeasurement):
         kwargs:
             Any of the additional parameters for saving a hyperspy dataset
         """
-        if format is "hdf5":
+        if format == "hdf5":
             with h5py.File(path, mode) as f:
                 f.create_dataset('array', data=self.array)
 
@@ -765,7 +766,7 @@ class Measurement(AbstractMeasurement):
                 f.create_dataset('units', (len(units),), 'S10', units)
                 f.create_dataset('name', (len(names),), 'S10', names)
                 f.create_dataset('is_none', data=is_none)
-        elif format is "hspy":
+        elif format == "hspy":
             self.to_hyperspy().save(path, **kwargs)
         else:
             raise ValueError('Format must be one of "hdf5" or "hspy"')
@@ -962,8 +963,6 @@ class Measurement(AbstractMeasurement):
             Additional keyword arguments for the abtem.plot.show_image function.
         """
 
-
-
         # TODO : implement interactive show method
 
         if self.dimensions == 1:
@@ -1122,12 +1121,12 @@ def interpolate_2d(measurement,
                         endpoint=endpoint[axes[1]])
         new_array = interpolator(x, y).T
 
-    #if rolled_shape is not None:
+    # if rolled_shape is not None:
     new_array = new_array.reshape(rolled_shape[:len(axes)] + new_array.shape[-2:])
     new_array = np.moveaxis(new_array, range(len(axes)), axes)
 
     calibrations = [copy(calibration) for calibration in measurement.calibrations]
-    #for i, axis in enumerate(range(len(measurement.array.shape)) - set(axes)):
+    # for i, axis in enumerate(range(len(measurement.array.shape)) - set(axes)):
     #    calibrations.append(copy(measurement.calibrations[axis]))
     #    calibrations[-1].sampling = new_grid.sampling[i]
 
