@@ -1,4 +1,3 @@
-import cupy as cp
 import dask.array as da
 import numba as nb
 import numpy as np
@@ -25,6 +24,7 @@ def _abs2(x):
 def abs2(x, **kwargs):
     if isinstance(x, np.ndarray):
         return _abs2(x)
+
 
     if isinstance(x, da.core.Array):
         return x.map_blocks(_abs2, **kwargs)
