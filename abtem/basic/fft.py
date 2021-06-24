@@ -1,11 +1,15 @@
-import cupy as cp
 import dask.array as da
 import mkl_fft
 import numpy as np
 
-from abtem.basic.backend import get_array_module
+from abtem.basic.backend import get_array_module, check_cupy_is_installed
 from abtem.basic.complex import complex_exponential
 from abtem.basic.grid import spatial_frequencies
+
+try:
+    import cupy as cp
+except:
+    cp = None
 
 
 def fft2(x, overwrite_x=False):
@@ -16,6 +20,8 @@ def fft2(x, overwrite_x=False):
 
     if isinstance(x, da.core.Array):
         return x.map_blocks(mkl_fft.fft2, meta=xp.array((), dtype=np.complex64))
+
+    check_cupy_is_installed()
 
     if isinstance(x, cp.ndarray):
         return cp.fft.fft2(x)
@@ -29,6 +35,8 @@ def ifft2(x, overwrite_x=False):
 
     if isinstance(x, da.core.Array):
         return x.map_blocks(ifft2, meta=xp.array((), dtype=np.complex64))
+
+    check_cupy_is_installed()
 
     if isinstance(x, cp.ndarray):
         return cp.fft.ifft2(x)
