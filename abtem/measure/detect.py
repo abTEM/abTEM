@@ -7,24 +7,22 @@ import dask
 import numpy as np
 
 from abtem.base_classes import watched_property
+from abtem.basic.fft import fft2
 from abtem.device import get_array_module, get_device_function
 from abtem.device_func import abs2
 from abtem.measure.measure import Calibration, calibrations_from_grid, Measurement
-from abtem.utils.fft import fft2
-from abtem.utils.grid import polar_spatial_frequencies
 from abtem.visualize.mpl import show_measurement_2d
 from abtem.waves.scan import AbstractScan
 
 
+# if (nbins_radial == 1) & (nbins_azimuthal == 1):
+#    return np.where(bins == 0)
 
-    # if (nbins_radial == 1) & (nbins_azimuthal == 1):
-    #    return np.where(bins == 0)
-
-    # region_indices = []
-    # for indices in self._label_to_index(region_labels):
-    #     region_indices.append(indices)
-    # return region_indices
-    # return bins
+# region_indices = []
+# for indices in self._label_to_index(region_labels):
+#     region_indices.append(indices)
+# return region_indices
+# return bins
 
 
 def check_cutoff_angle(waves, angle):

@@ -8,18 +8,18 @@ import h5py
 import numpy as np
 from ase import Atoms
 
+from abtem.basic.antialias import AntialiasAperture
+from abtem.basic.backend import get_array_module
+from abtem.basic.complex import abs2
+from abtem.basic.energy import Accelerator
+from abtem.basic.event import HasEventMixin
+from abtem.basic.fft import fft2, ifft2, fft2_convolve, fft2_shift_kernel, fft2_crop
+from abtem.basic.grid import Grid
 from abtem.device import get_array_module, get_array_module_from_device, get_device_from_array
+from abtem.measure.detect import AbstractDetector
 from abtem.measure.measure import calibrations_from_grid, Measurement, probe_profile, Calibration, DiffractionPatterns
 from abtem.potentials import Potential, AbstractPotential
-from abtem.utils.antialias import AntialiasAperture
-from abtem.utils.backend import get_array_module
-from abtem.utils.complex import abs2
-from abtem.utils.energy import Accelerator
-from abtem.utils.event import HasEventMixin
-from abtem.utils.fft import fft2, ifft2, fft2_convolve, fft2_shift_kernel, fft2_crop
-from abtem.utils.grid import Grid
-from abtem.waves.base import AbstractWaves, _Scanable, BeamTilt
-from abtem.measure.detect import AbstractDetector
+from abtem.waves.base import AbstractWaves, AbstractScannedWaves, BeamTilt
 from abtem.waves.multislice import multislice
 from abtem.waves.scan import AbstractScan
 from abtem.waves.transfer import CTF
@@ -58,9 +58,6 @@ class Waves(AbstractWaves):
 
         self._array = array
         self._grid = Grid(extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True)
-
-        self._grid.check_is_defined()
-
         self._accelerator = Accelerator(energy=energy)
         self._beam_tilt = BeamTilt(tilt=tilt)
         self._antialias_aperture = AntialiasAperture(cutoff=antialias_aperture)
@@ -295,7 +292,7 @@ class Waves(AbstractWaves):
         return self.intensity().show(ax=ax, **kwargs)
 
     def __copy__(self) -> 'Waves':
-        new_copy = self.__class__(array=self._array.copy(), tilt=self.tilt,
+        new_copy = self.__class__(array=self._array.copy(), tilt=self.tilt, energy=self.energy,
                                   antialias_aperture=self.antialias_aperture)
         new_copy._grid = copy(self.grid)
         new_copy._accelerator = copy(self.accelerator)
@@ -391,7 +388,7 @@ class PlaneWave(AbstractWaves):
         return self.__class__(extent=self.extent, gpts=self.gpts, sampling=self.sampling, energy=self.energy)
 
 
-class Probe(_Scanable, HasEventMixin):
+class Probe(AbstractScannedWaves, HasEventMixin):
     """
     Probe wavefunction object
 
@@ -453,7 +450,6 @@ class Probe(_Scanable, HasEventMixin):
     def _fourier_translation_operator(self, positions):
         xp = get_array_module(positions)
         positions /= xp.array(self.sampling).astype(np.float32)
-        print(positions)
         drop_axis = len(positions.shape) - 1
         new_axis = (len(positions.shape) - 1, len(positions.shape))
         return positions.map_blocks(fft2_shift_kernel, shape=self.gpts, meta=xp.array((), dtype=np.complex64),
@@ -464,7 +460,6 @@ class Probe(_Scanable, HasEventMixin):
         xp = get_array_module(self._device)
         array = self._ctf.evaluate_on_grid(gpts=self.gpts, sampling=self.sampling, xp=xp)
         array = array / xp.sqrt(abs2(array).sum())  # / np.sqrt(np.prod(array.shape))
-        # print(abs2(array).sum(), array.shape)
         return array
 
     def build(self, positions: Union[Sequence[Sequence[float]], AbstractScan] = None) -> Waves:
@@ -494,7 +489,6 @@ class Probe(_Scanable, HasEventMixin):
                               meta=xp.array((), dtype=np.complex64))
 
         array = ifft2(ctf * self._fourier_translation_operator(positions))
-
         return Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt)
 
     def multislice(self, positions: Union[Sequence[Sequence[float]],], potential: AbstractPotential) -> Waves:
@@ -621,9 +615,6 @@ class Probe(_Scanable, HasEventMixin):
                               energy=self.energy,
                               ctf=self.ctf.copy(),
                               device=self.device)
-
-    def copy(self):
-        return copy(self)
 
     def show(self, **kwargs):
         """

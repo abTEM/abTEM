@@ -2,8 +2,8 @@ from typing import Tuple
 
 import numpy as np
 
+from abtem.basic.grid import polar_spatial_frequencies
 from abtem.device import get_array_module
-from abtem.utils.grid import polar_spatial_frequencies
 
 
 def _label_to_index(labels):

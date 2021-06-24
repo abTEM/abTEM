@@ -8,10 +8,10 @@ import numpy as np
 from ase import Atom
 from matplotlib.patches import Rectangle
 
+from abtem.basic.grid import Grid, HasGridMixin
+from abtem.basic.utils import subdivide_into_batches, ProgressBar
 from abtem.device import asnumpy
 from abtem.measure.measure import Calibration, Measurement
-from abtem.utils import subdivide_into_batches, ProgressBar
-from abtem.utils.grid import Grid, HasGridMixin
 
 
 class AbstractScan(metaclass=ABCMeta):

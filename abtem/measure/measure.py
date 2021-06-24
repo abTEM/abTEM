@@ -4,6 +4,7 @@ from collections.abc import Iterable, Callable
 from copy import copy
 from typing import Sequence, Tuple, List, Union
 
+import dask
 import h5py
 import imageio
 import numpy as np
@@ -14,16 +15,14 @@ from scipy import ndimage
 from scipy.interpolate import interp1d, interp2d, interpn
 from scipy.ndimage import gaussian_filter
 
+from abtem.basic.backend import get_array_module
+from abtem.basic.fft import fft2_interpolate
+from abtem.basic.grid import Grid
+from abtem.basic.utils import periodic_crop, tapered_cutoff
 from abtem.cpu_kernels import abs2
 from abtem.device import asnumpy
-from abtem.utils import fft_interpolate_2d
-from abtem.utils import periodic_crop, tapered_cutoff
-from abtem.utils.grid import Grid
-from abtem.utils.backend import get_array_module
-from abtem.utils.fft import fft2, ifft2
-from abtem.visualize.mpl import show_measurement_2d, show_measurement_1d
 from abtem.measure.utils import polar_detector_bins
-import dask
+from abtem.visualize.mpl import show_measurement_2d, show_measurement_1d
 
 
 class AbstractCalibration:
@@ -258,8 +257,6 @@ class Measurement(AbstractMeasurement):
 
         self._calibrations = calibrations
         super().__init__(array=array, name=name, units=units)
-
-
 
     def __getitem__(self, args):
         # TODO: check that edge cases work
@@ -586,7 +583,7 @@ class Measurement(AbstractMeasurement):
         new_grid = Grid(extent=extent, gpts=new_gpts, sampling=new_sampling, endpoint=endpoint)
 
         if kind.lower() == 'fft':
-            new_array = fft_interpolate_2d(self.array, new_grid.gpts)
+            new_array = fft2_interpolate(self.array, new_grid.gpts)
         else:
             array = np.pad(self.array, ((5,) * 2,) * 2, mode=padding)
 
@@ -640,26 +637,26 @@ class Measurement(AbstractMeasurement):
         if len(axes) > 2:
             raise ValueError()
 
-        array = measurement.array
-
-        old_shape = array.shape
-
-        # print(old_shape)
-
-        # array = array.reshape(array.shape[:2] + (-1,))
-
-        axes = (2, 3)
-
-        array = np.moveaxis(array, axes, range(len(axes)))
-
-        rolled_shape = array.shape
-
-        array = array.reshape((-1,) + array.shape[-2:])
-        array = fft_interpolate_2d(array, (60, 60))
-        array = array.reshape(rolled_shape[:len(axes)] + array.shape[-2:])
-        array = np.moveaxis(array, range(len(axes)), axes)
-
-        return self._interpolate_2d(new_sampling=new_sampling, new_gpts=new_gpts, padding=padding, kind=kind, axes=axes)
+        # array = measurement.array
+        #
+        # old_shape = array.shape
+        #
+        # # print(old_shape)
+        #
+        # # array = array.reshape(array.shape[:2] + (-1,))
+        #
+        # axes = (2, 3)
+        #
+        # array = np.moveaxis(array, axes, range(len(axes)))
+        #
+        # rolled_shape = array.shape
+        #
+        # array = array.reshape((-1,) + array.shape[-2:])
+        # array = fft2_interpolate(array, (60, 60))
+        # array = array.reshape(rolled_shape[:len(axes)] + array.shape[-2:])
+        # array = np.moveaxis(array, range(len(axes)), axes)
+        #
+        # return self._interpolate_2d(new_sampling=new_sampling, new_gpts=new_gpts, padding=padding, kind=kind, axes=axes)
 
         # else:
         #    raise RuntimeError(f'interpolate not implemented for {self.dimensions}d measurements')

@@ -1,6 +1,7 @@
 import numba as nb
 import numpy as np
 import dask.array as da
+import cupy as cp
 
 
 # @nb.guvectorize([(nb.float32[:, :], nb.complex64[:, :])], '(n,m)->(n,m)')
@@ -43,6 +44,11 @@ def abs2(x, **kwargs):
     if isinstance(x, da.core.Array):
         return x.map_blocks(_abs2, **kwargs)
 
+    if isinstance(x, cp.ndarray):
+        return cp.abs(x) ** 2
+
+    raise ValueError()
+
 
 def complex_exponential(x, **kwargs):
     if isinstance(x, np.ndarray):
@@ -50,3 +56,8 @@ def complex_exponential(x, **kwargs):
 
     if isinstance(x, da.core.Array):
         return x.map_blocks(_complex_exponential)
+
+    if isinstance(x, cp.ndarray):
+        return cp.exp(1.j * x)
+
+    raise ValueError()

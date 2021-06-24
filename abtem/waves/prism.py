@@ -1,25 +1,30 @@
 from copy import copy
 from typing import Union, Sequence, Tuple, Dict
 
+import dask.array as da
 import matplotlib.pyplot as plt
 import numpy as np
 from ase import Atoms
 
-from abtem.base_classes import Grid, cache_clear_callback, Cache, cached_method, HasEventMixin, Event, BeamTilt, \
-    AntialiasAperture
-from abtem.measure.detect import AbstractDetector
+from abtem.base_classes import Cache, cached_method, HasEventMixin, Event
+from abtem.basic.antialias import AntialiasAperture
+from abtem.basic.complex import complex_exponential
+from abtem.basic.fft import fft2_shift_kernel
+from abtem.basic.grid import Grid
+from abtem.basic.utils import subdivide_into_batches, periodic_crop, array_row_intersection
 from abtem.device import get_array_module, get_device_function, get_array_module_from_device, \
     copy_to_device, get_available_memory, get_device_from_array
+from abtem.measure.detect import AbstractDetector
 from abtem.measure.measure import Measurement, probe_profile
 from abtem.potentials import Potential, AbstractPotential
+from abtem.waves.base import BeamTilt, AbstractScannedWaves
 from abtem.waves.scan import AbstractScan, GridScan
 from abtem.waves.transfer import CTF
-from abtem.utils import ProgressBar, subdivide_into_batches, periodic_crop, fourier_translation_operator, \
-    array_row_intersection
-from abtem.waves.base import _Scanable
+from abtem.waves.waves import Waves
+import dask
 
 
-class SMatrixArray(_Scanable, HasEventMixin):
+class SMatrixArray(AbstractScannedWaves):
     """
     Scattering matrix array object.
 
@@ -67,7 +72,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
                  periodic: bool = True,
                  offset: Tuple[int, int] = (0, 0),
                  interpolated_gpts: Tuple[int, int] = None,
-                 antialias_aperture: Tuple[float, float] = None,
+                 antialias_aperture: float = None,
                  device: str = 'cpu'):
 
         if ctf is None:
@@ -83,12 +88,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
         self._accelerator = self._ctf._accelerator
         self._grid = Grid(extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True)
         self._beam_tilt = BeamTilt(tilt=tilt)
-        self._antialias_aperture = AntialiasAperture(antialias_aperture=antialias_aperture)
-        self._event = Event()
-
-        self._ctf.observe(self.event.notify)
-        self._grid.event.observe(self.event.notify)
-        self._accelerator.event.observe(self.event.notify)
+        self._antialias_aperture = AntialiasAperture(cutoff=antialias_aperture)
 
         self._device = device
         self._array = array
@@ -199,7 +199,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
         available_memory = .2 * get_available_memory(self._device) - memory_per_plane_wave_batch
         return max(min(int(available_memory / memory_per_wave), 1024), 1)
 
-    def _generate_partial(self, max_batch: int = None, pbar: Union[ProgressBar, bool] = True) -> Waves:
+    def _generate_partial(self, max_batch: int = None, pbar: Union[bool] = True) -> Waves:
         if max_batch is None:
             n_batches = 1
         else:
@@ -237,8 +237,8 @@ class SMatrixArray(_Scanable, HasEventMixin):
     def multislice(self,
                    potential: AbstractPotential,
                    max_batch: int = None,
-                   multislice_pbar: Union[ProgressBar, bool] = True,
-                   plane_waves_pbar: Union[ProgressBar, bool] = True):
+                   multislice_pbar: Union[bool] = True,
+                   plane_waves_pbar: Union[bool] = True):
         """
         Propagate the scattering matrix through the provided potential.
 
@@ -277,7 +277,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
         propagator = FresnelPropagator()
 
         for start, end, partial_s_matrix in self._generate_partial(max_batch, pbar=plane_waves_pbar):
-            _multislice(partial_s_matrix, potential, propagator=propagator, pbar=multislice_pbar)
+            multislice(partial_s_matrix, potential, propagator=propagator, pbar=multislice_pbar)
             self._array[start: end] = copy_to_device(partial_s_matrix.array, get_array_module(self._array))
 
         self._antialiasing_aperture = (2 / 3.,) * 2
@@ -316,7 +316,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
         else:
             return crop_corner, size
 
-    def collapse(self, positions: Sequence[Sequence[float]] = None, max_batch_expansion: int = None) -> Waves:
+    def reduce(self, positions: Sequence[Sequence[float]] = None, max_batch_expansion: int = None) -> Waves:
         """
         Collapse the scattering matrix to probe wave functions centered on the provided positions.
 
@@ -384,7 +384,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
              measurements: Union[Measurement, Dict[AbstractDetector, Measurement]] = None,
              max_batch_probes: int = None,
              max_batch_expansion: int = None,
-             pbar: Union[ProgressBar, bool] = True):
+             pbar: Union[bool] = True):
 
         """
         Raster scan the probe across the potential and record a measurement for each detector.
@@ -459,7 +459,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
         return copy(self)
 
 
-class PartitionedSMatrix(_Scanable):
+class PartitionedSMatrix(AbstractScannedWaves):
 
     def __init__(self, parent_s_matrix, wave_vectors):
         self._parent_s_matrix = parent_s_matrix
@@ -476,8 +476,6 @@ class PartitionedSMatrix(_Scanable):
         self._beamlet_basis_cache = Cache(1)
 
         self._ctf_has_changed = Event()
-        self._ctf.observe(self._ctf_has_changed.notify)
-        self._ctf_has_changed.observe(cache_clear_callback(self._beamlet_basis_cache))
 
         self._has_tilt = True
         self._accumulated_defocus = 0.
@@ -579,8 +577,8 @@ class PartitionedSMatrix(_Scanable):
 
     def multislice(self, potential: AbstractPotential,
                    max_batch: int = None,
-                   multislice_pbar: Union[ProgressBar, bool] = True,
-                   plane_waves_pbar: Union[ProgressBar, bool] = True):
+                   multislice_pbar: Union[bool] = True,
+                   plane_waves_pbar: Union[bool] = True):
 
         if isinstance(potential, Atoms):
             potential = Potential(potential)
@@ -595,7 +593,7 @@ class PartitionedSMatrix(_Scanable):
     def _fourier_translation_operator(self, positions):
         xp = get_array_module(positions)
         # positions /= xp.array(self.sampling)
-        return fourier_translation_operator(positions, self.gpts)
+        return fft2_shift_kernel(positions, self.gpts)
 
     @cached_method('_beamlet_basis_cache')
     def get_beamlet_basis(self):
@@ -709,7 +707,16 @@ class PartitionedSMatrix(_Scanable):
         return ax
 
 
-class SMatrix(_Scanable, HasEventMixin):
+def plane_waves(wave_vectors, extent, gpts):
+    xp = get_array_module(wave_vectors)
+    x = xp.linspace(0, extent[0], gpts[0], endpoint=False, dtype=np.float32)
+    y = xp.linspace(0, extent[1], gpts[1], endpoint=False, dtype=np.float32)
+    array = (complex_exponential(2 * np.pi * wave_vectors[:, 0, None, None] * x[:, None]) *
+             complex_exponential(2 * np.pi * wave_vectors[:, 1, None, None] * y[None, :]))
+    return array
+
+
+class SMatrix(AbstractScannedWaves, HasEventMixin):
     """
     Scattering matrix builder class
 
@@ -750,6 +757,7 @@ class SMatrix(_Scanable, HasEventMixin):
                  interpolation: int = 1,
                  ctf: CTF = None,
                  num_partitions: int = None,
+                 chunks=None,
                  extent: Union[float, Sequence[float]] = None,
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
@@ -787,17 +795,18 @@ class SMatrix(_Scanable, HasEventMixin):
         self._beam_tilt = BeamTilt(tilt=tilt)
         self._event = Event()
 
-        self._ctf.observe(self.event.notify)
-        self._grid.observe(self.event.notify)
-        self._accelerator.observe(self.event.notify)
-
         self._device = device
 
         if storage is None:
             storage = device
 
         self._storage = storage
+        self._chunks = chunks
         self._num_partitions = num_partitions
+
+    @property
+    def chunks(self):
+        return self._chunks
 
     @property
     def ctf(self):
@@ -886,7 +895,7 @@ class SMatrix(_Scanable, HasEventMixin):
     def multislice(self,
                    potential: AbstractPotential,
                    max_batch: int = None,
-                   pbar: Union[ProgressBar, bool] = True):
+                   pbar: Union[bool] = True):
         """
         Build scattering matrix and propagate the scattering matrix through the provided potential.
 
@@ -987,13 +996,14 @@ class SMatrix(_Scanable, HasEventMixin):
     def k(self):
         return self.get_wavevectors()
 
-    def get_wavevectors(self):
+    @property
+    def wave_vectors(self):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
         xp = get_array_module_from_device(self._device)
-        n_max = int(xp.ceil(self.expansion_cutoff / 1000. / (self.wavelength / self.extent[0] * self.interpolation)))
-        m_max = int(xp.ceil(self.expansion_cutoff / 1000. / (self.wavelength / self.extent[1] * self.interpolation)))
+        n_max = int(xp.ceil(self.expansion_cutoff / 1.e3 / (self.wavelength / self.extent[0] * self.interpolation)))
+        m_max = int(xp.ceil(self.expansion_cutoff / 1.e3 / (self.wavelength / self.extent[1] * self.interpolation)))
 
         n = xp.arange(-n_max, n_max + 1, dtype=np.float32)
         w = xp.asarray(self.extent[0], dtype=np.float32)
@@ -1003,7 +1013,7 @@ class SMatrix(_Scanable, HasEventMixin):
         kx = n / w * np.float32(self.interpolation)
         ky = m / h * np.float32(self.interpolation)
 
-        mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (self.expansion_cutoff / 1000. / self.wavelength) ** 2
+        mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (self.expansion_cutoff / 1.e3 / self.wavelength) ** 2
         kx, ky = xp.meshgrid(kx, ky, indexing='ij')
         kx = kx[mask]
         ky = ky[mask]
@@ -1025,27 +1035,6 @@ class SMatrix(_Scanable, HasEventMixin):
 
         return np.vstack(rings)
 
-    def _build_planewaves(self, k):
-        self.grid.check_is_defined()
-        self.accelerator.check_is_defined()
-
-        xp = get_array_module_from_device(self._device)
-        storage_xp = get_array_module_from_device(self._storage)
-        complex_exponential = get_device_function(xp, 'complex_exponential')
-
-        x = xp.linspace(0, self.extent[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=np.float32)
-        y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=np.float32)
-
-        shape = (len(k),) + self.gpts
-
-        array = storage_xp.zeros(shape, dtype=np.complex64)
-        for i in range(len(k)):
-            array[i] = copy_to_device(complex_exponential(2 * np.pi * k[i, 0, None, None] * x[:, None]) *
-                                      complex_exponential(2 * np.pi * k[i, 1, None, None] * y[None, :]),
-                                      self._storage)
-
-        return array
-
     def _build_partial(self):
         k_parent = self.get_parent_wavevectors()
         array = self._build_planewaves(k_parent)
@@ -1062,14 +1051,22 @@ class SMatrix(_Scanable, HasEventMixin):
         return PartitionedSMatrix(parent_s_matrix, wave_vectors=self.get_wavevectors())
 
     def _build_convential(self):
-        k = self.get_wavevectors()
-        array = self._build_planewaves(k)
-        xp = get_array_module(array)
+        k = da.from_array(self.wave_vectors, chunks=(self.chunks, -1))
 
-        interpolated_gpts = (self.gpts[0] // self.interpolation, self.gpts[1] // self.interpolation)
+        def _build_s_matrix(k, extent, gpts, interpolation):
+            array = plane_waves(k, extent, gpts)
+            xp = get_array_module(array)
 
-        probe = (xp.abs(array.sum(0)) ** 2)[:interpolated_gpts[0], :interpolated_gpts[1]]
-        array /= xp.sqrt(probe.sum()) * xp.sqrt(interpolated_gpts[0] * interpolated_gpts[1])
+            interpolated_gpts = (gpts[0] // interpolation, self.gpts[1] // interpolation)
+
+            #probe = (xp.abs(array.sum(0)) ** 2)[:interpolated_gpts[0], :interpolated_gpts[1]]
+            #array /= xp.sqrt(probe.sum()) * xp.sqrt(interpolated_gpts[0] * interpolated_gpts[1])
+
+            return array
+
+        array = k.map_blocks(_build_s_matrix, extent=self.extent, gpts=self.gpts, interpolation=self.interpolation,
+                             drop_axis=1, new_axis=(1, 2),
+                             chunks=k.chunks[:-1] + ((self.gpts[0],), (self.gpts[1],)), dtype=np.complex64)
 
         return SMatrixArray(array,
                             interpolated_gpts=self.interpolated_gpts,
@@ -1083,6 +1080,9 @@ class SMatrix(_Scanable, HasEventMixin):
 
     def build(self) -> Union[SMatrixArray, PartitionedSMatrix]:
         """Build the scattering matrix."""
+
+        self.grid.check_is_defined()
+        self.accelerator.check_is_defined()
 
         if self._num_partitions is None:
             return self._build_convential()

@@ -4,12 +4,12 @@ from typing import Mapping, Union
 
 import numpy as np
 
+from abtem.basic.complex import complex_exponential
+from abtem.basic.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
+from abtem.basic.event import Event, HasEventMixin, watched_method, watched_property
+from abtem.basic.grid import Grid, polar_spatial_frequencies
 from abtem.device import get_array_module
 from abtem.measure.measure import Measurement, Calibration
-from abtem.utils.complex import complex_exponential
-from abtem.utils.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
-from abtem.utils.event import Event, HasEventMixin, watched_method, watched_property
-from abtem.utils.grid import Grid, polar_spatial_frequencies
 
 #: Symbols for the polar representation of all optical aberrations up to the fifth order.
 polar_symbols = ('C10', 'C12', 'phi12',

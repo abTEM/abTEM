@@ -7,11 +7,11 @@ import dask.array as da
 import numpy as np
 
 from abtem.potentials import AbstractPotential, AbstractPotentialBuilder
-from abtem.utils.antialias import AntialiasFilter
-from abtem.utils.backend import get_array_module
-from abtem.utils.complex import complex_exponential
-from abtem.utils.grid import spatial_frequencies
-from abtem.utils.fft import fft2_convolve
+from abtem.basic.antialias import AntialiasFilter
+from abtem.basic.backend import get_array_module
+from abtem.basic.complex import complex_exponential
+from abtem.basic.grid import spatial_frequencies
+from abtem.basic.fft import fft2_convolve
 
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves

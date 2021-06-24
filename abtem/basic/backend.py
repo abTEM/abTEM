@@ -25,6 +25,10 @@ def xp_to_str(xp):
 
 
 def get_array_module(x):
+
+    if isinstance(x, da.core.Array):
+        return get_array_module(x._meta)
+
     if isinstance(x, str):
 
         if x.lower() in ('numpy', 'cpu'):
@@ -48,8 +52,5 @@ def get_array_module(x):
 
     if x is cp:
         return cp
-
-    if isinstance(x, da.core.Array):
-        return get_array_module(x._meta)
 
     raise ValueError(f'array module specification {x} not recognized')

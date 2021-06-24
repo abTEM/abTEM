@@ -1,19 +1,20 @@
 """Module to describe electron waves and their propagation."""
+from abc import ABCMeta, abstractmethod
+from copy import copy
 from typing import Union, Sequence, Tuple
 
 import dask
 import dask.array as da
 import numpy as np
-from abc import ABCMeta, abstractmethod
+
+from abtem.basic.antialias import HasAntialiasAperture
+from abtem.basic.energy import HasAcceleratorMixin
+from abtem.basic.event import HasEventMixin, Event, watched_method
+from abtem.basic.grid import HasGridMixin
 from abtem.device import HasDeviceMixin
-from abtem.measure.measure import Measurement
-from abtem.utils.antialias import HasAntialiasAperture
-from abtem.utils.energy import HasAcceleratorMixin
-from abtem.utils.event import HasEventMixin, Event, watched_method
-from abtem.utils.grid import HasGridMixin
 from abtem.measure.detect import AbstractDetector
+from abtem.measure.measure import Measurement
 from abtem.waves.scan import AbstractScan
-from copy import copy
 
 
 class BeamTilt(HasEventMixin):
@@ -88,7 +89,7 @@ class AbstractWaves(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin, HasBeamTi
         return tuple(1 / l * self.wavelength * 1e3 for l in self.extent)
 
 
-class _Scanable(AbstractWaves):
+class AbstractScannedWaves(AbstractWaves):
 
     def compute_chunks(self):
         chunk_size = dask.utils.parse_bytes(dask.config.get('array.chunk-size'))
