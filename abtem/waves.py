@@ -1949,10 +1949,11 @@ class SMatrix(_Scanable, HasEventMixin):
             return measurements
 
     def coreloss_scan(self, scan, detector, potential, transition_potential):
-        transition_potential.atoms = potential.atoms
+        if transition_potential.atoms is None:
+            transition_potential.atoms = potential.atoms
 
         self.grid.match(potential)
-        S1 = self.build()
+        S1 = self.build(normalize=True)
 
         S2 = SMatrix(energy=self.energy, semiangle_cutoff=detector.collection_angle,
                      interpolation=detector.interpolation)
@@ -1962,7 +1963,7 @@ class SMatrix(_Scanable, HasEventMixin):
 
         backwards_pbar = ProgressBar(total=len(S2), desc='Backward multislice')
         potential.flip()
-        S2 = S2.build().multislice(potential, plane_waves_pbar=backwards_pbar, multislice_pbar=False)
+        S2 = S2.build(normalize=False).multislice(potential, plane_waves_pbar=backwards_pbar, multislice_pbar=False)
         backwards_pbar.close()
         potential.flip()
 
@@ -1989,6 +1990,7 @@ class SMatrix(_Scanable, HasEventMixin):
                 for t in transition_potential._generate_slice_transition_potentials(slice_idx=i,
                                                                                     transitions_idx=transition_idx):
                     tmp = t * S1.array
+
                     SHn0 = xp.tensordot(S2.array.reshape((len(S2), -1)), tmp.reshape((len(S1), -1)).T, axes=1)
 
                     images[transition_idx] += (xp.abs(xp.dot(SHn0, coefficients.T)) ** 2).sum(0)
@@ -2101,15 +2103,17 @@ class SMatrix(_Scanable, HasEventMixin):
                                        device=self._device)
         return PartitionedSMatrix(parent_s_matrix, wave_vectors=self.get_wavevectors())
 
-    def _build_convential(self):
+    def _build_convential(self, normalize=False):
         k = self.get_wavevectors()
         array = self._build_planewaves(k)
         xp = get_array_module(array)
 
         interpolated_gpts = (self.gpts[0] // self.interpolation, self.gpts[1] // self.interpolation)
 
-        probe = (xp.abs(array.sum(0)) ** 2)[:interpolated_gpts[0], :interpolated_gpts[1]]
-        array /= xp.sqrt(probe.sum()) * xp.sqrt(interpolated_gpts[0] * interpolated_gpts[1])
+        if normalize:
+            probe = (xp.abs(array.sum(0)) ** 2)[:interpolated_gpts[0], :interpolated_gpts[1]]
+            array /= xp.sqrt(probe.sum()) * xp.sqrt(probe.shape[0] * probe.shape[1])
+
 
         return SMatrixArray(array,
                             interpolated_gpts=self.interpolated_gpts,
@@ -2121,11 +2125,11 @@ class SMatrix(_Scanable, HasEventMixin):
                             antialias_aperture=self.antialias_aperture,
                             device=self._device)
 
-    def build(self) -> Union[SMatrixArray, PartitionedSMatrix]:
+    def build(self, normalize=True) -> Union[SMatrixArray, PartitionedSMatrix]:
         """Build the scattering matrix."""
 
         if self._num_partitions is None:
-            return self._build_convential()
+            return self._build_convential(normalize=normalize)
         else:
             return self._build_partial()
 
