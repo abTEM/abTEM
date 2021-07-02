@@ -1088,7 +1088,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
             antialias_filter = AntialiasFilter()
 
         for start, end, potential_slices in t.generate_slices(max_batch=max_batch):
-            t._array[start:end] = antialias_filter.bandlimit(potential_slices).array
+           t._array[start:end] = antialias_filter.bandlimit(potential_slices).array
 
         return t
 
@@ -1196,7 +1196,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
 
         return cls(array=datasets['array'], slice_thicknesses=datasets['slice_thicknesses'], extent=datasets['extent'])
 
-    def transmit(self, waves):
+    def transmit(self, waves, conjugate=False):
         """
         Transmit a wave function.
 
@@ -1209,7 +1209,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         -------
         TransmissionFunction
         """
-        return self.as_transmission_function(waves.energy).transmit(waves)
+        return self.as_transmission_function(waves.energy).transmit(waves, conjugate=conjugate)
 
     def project(self):
         """
@@ -1253,8 +1253,12 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
             raise RuntimeError()
         return self.generate_slices(first_slice=first_slice, last_slice=last_slice, max_batch=max_batch)
 
-    def transmit(self, waves):
+    def transmit(self, waves, conjugate=False):
         self.accelerator.check_match(waves)
         xp = get_array_module(waves._array)
-        waves._array *= copy_to_device(self.array, xp)
+
+        if conjugate:
+            waves._array *= xp.conjugate(copy_to_device(self.array, xp))
+        else:
+            waves._array *= copy_to_device(self.array, xp)
         return waves
