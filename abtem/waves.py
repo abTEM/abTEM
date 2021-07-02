@@ -98,6 +98,7 @@ def _multislice(waves: Union['Waves', 'SMatrixArray'],
                 propagator: FresnelPropagator = None,
                 pbar: Union[ProgressBar, bool] = True,
                 max_batch: int = 1,
+                transposed=False,
                 ) -> Union['Waves', 'SMatrixArray']:
     waves.grid.match(potential)
     waves.accelerator.check_is_defined()
@@ -115,16 +116,24 @@ def _multislice(waves: Union['Waves', 'SMatrixArray'],
     pbar.reset()
     if max_batch == 1:
         for start, end, t in potential.generate_transmission_functions(energy=waves.energy, max_batch=1):
-            waves = t.transmit(waves)
 
-            waves = propagator.propagate(waves, t.thickness)
+            if transposed:
+                waves = propagator.propagate(waves, t.thickness)
+                waves = t.transmit(waves)
+            else:
+                waves = t.transmit(waves)
+                waves = propagator.propagate(waves, t.thickness)
             pbar.update(1)
     else:
         for start, end, t_chunk in potential.generate_transmission_functions(energy=waves.energy, max_batch=max_batch):
             for _, __, t_slice in t_chunk.generate_slices(max_batch=1):
-                waves = t_slice.transmit(waves)
 
-                waves = propagator.propagate(waves, t_slice.thickness)
+                if transposed:
+                    waves = propagator.propagate(waves, t_slice.thickness)
+                    waves = t_slice.transmit(waves)
+                else:
+                    waves = t_slice.transmit(waves)
+                    waves = propagator.propagate(waves, t_slice.thickness)
 
             pbar.update(end - start)
 
@@ -1213,7 +1222,8 @@ class SMatrixArray(_Scanable, HasEventMixin):
                    potential: AbstractPotential,
                    max_batch: int = None,
                    multislice_pbar: Union[ProgressBar, bool] = True,
-                   plane_waves_pbar: Union[ProgressBar, bool] = True):
+                   plane_waves_pbar: Union[ProgressBar, bool] = True,
+                   transposed: bool = False):
         """
         Propagate the scattering matrix through the provided potential.
 
@@ -1252,7 +1262,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
         propagator = FresnelPropagator()
 
         for start, end, partial_s_matrix in self._generate_partial(max_batch, pbar=plane_waves_pbar):
-            _multislice(partial_s_matrix, potential, propagator=propagator, pbar=multislice_pbar)
+            _multislice(partial_s_matrix, potential, propagator=propagator, pbar=multislice_pbar, transposed=transposed)
             self._array[start: end] = copy_to_device(partial_s_matrix.array, get_array_module(self._array))
 
         self._antialiasing_aperture = (2 / 3.,) * 2
@@ -1555,7 +1565,7 @@ class PartitionedSMatrix(_Scanable):
     def multislice(self, potential: AbstractPotential,
                    max_batch: int = None,
                    multislice_pbar: Union[ProgressBar, bool] = True,
-                   plane_waves_pbar: Union[ProgressBar, bool] = True):
+                   plane_waves_pbar: Union[ProgressBar, bool] = True,):
 
         if isinstance(potential, Atoms):
             potential = Potential(potential)
@@ -1952,18 +1962,25 @@ class SMatrix(_Scanable, HasEventMixin):
         if transition_potential.atoms is None:
             transition_potential.atoms = potential.atoms
 
+        xp = get_array_module_from_device(self._device)
+
         self.grid.match(potential)
         S1 = self.build()
+        S1._array = S1._array / xp.sqrt((xp.abs(S1._array[0]) ** 2).sum())
 
         S2 = SMatrix(energy=self.energy, semiangle_cutoff=detector.collection_angle,
-                     interpolation=detector.interpolation)
+                     interpolation=detector.interpolation, device=self._device, rolloff=0.)
         S2.grid.match(potential)
 
         potential = potential.build(pbar=pbar)
 
-        backwards_pbar = ProgressBar(total=len(S2), desc='Backward multislice', disable=not pbar)
         potential.flip()
-        S2 = S2.build(normalize=False).multislice(potential, plane_waves_pbar=backwards_pbar, multislice_pbar=False)
+        backwards_pbar = ProgressBar(total=len(S2), desc='Backward multislice', disable=not pbar)
+
+        S2 = S2.build(normalize=False)
+        S2._array /= xp.sqrt((xp.abs(S2.array) ** 2).sum((1, 2))[:, None, None])
+
+        S2 = S2.multislice(potential, plane_waves_pbar=backwards_pbar, multislice_pbar=False, transposed=True)
         backwards_pbar.close()
         potential.flip()
 
@@ -1972,34 +1989,33 @@ class SMatrix(_Scanable, HasEventMixin):
         transition_potential.accelerator.match(self)
 
         images = []
-
         for i in range(transition_potential.num_edges):
             images.append(np.zeros((scan.gpts[0] * scan.gpts[1],), dtype=np.float32))
-
-        xp = get_array_module(S1.array)
 
         propagator = FresnelPropagator()
         positions = scan.get_positions()
         coefficients = S1._get_coefficients(positions)
+
+        coefficients = coefficients / np.sqrt(np.sum(coefficients.shape[1]))
         forward_pbar = ProgressBar(total=len(potential), desc='Forward multislice', disable=not pbar)
 
         for i, potential_slice in enumerate(potential):
-
             for transition_idx in range(transition_potential.num_edges):
-
                 for t in transition_potential._generate_slice_transition_potentials(slice_idx=i,
                                                                                     transitions_idx=transition_idx):
-                    tmp = t * S1.array
+                    tmp = copy_to_device(t, xp) * S1.array
                     SHn0 = xp.tensordot(S2.array.reshape((len(S2), -1)), tmp.reshape((len(S1), -1)).T, axes=1)
 
-                    images[transition_idx] += (xp.abs(xp.dot(SHn0, coefficients.T)) ** 2).sum(0)
-
-            S1 = potential_slice.transmit(S1)
-            S2 = potential_slice.transmit(S2)
-            S1 = propagator.propagate(S1, potential_slice.thickness)
-            S2 = propagator.propagate(S2, potential_slice.thickness)
+                    images[transition_idx] += copy_to_device((xp.abs(xp.dot(SHn0, coefficients.T)) ** 2).sum(0), xp)
 
             forward_pbar.update(1)
+
+            # inverse transposed propagation
+            S2 = propagator.propagate(S2, -potential_slice.thickness)
+            S2 = potential_slice.transmit(S2, conjugate=True)
+
+            S1 = potential_slice.transmit(S1)
+            S1 = propagator.propagate(S1, potential_slice.thickness)
 
         forward_pbar.close()
 
