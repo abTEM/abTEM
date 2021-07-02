@@ -22,46 +22,6 @@ from abtem.utils import ProgressBar
 from abtem.structures import SlicedAtoms
 
 
-def get_gpaw_bound_wave(Z, n, l, xc='PBE'):
-    from gpaw.atom.all_electron import AllElectron
-
-    check_valid_quantum_number(Z, n, l)
-    config_tuples = config_str_to_config_tuples(load_electronic_configurations()[chemical_symbols[Z]])
-    subshell_index = [shell[:2] for shell in config_tuples].index((n, l))
-
-    with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-        ae = AllElectron(chemical_symbols[Z], xcname=xc, gpernode=500)
-        ae.run()
-
-    energy = ae.e_j[subshell_index] * units.Hartree
-    wave = interp1d(ae.r, ae.u_j[subshell_index], kind='cubic', fill_value='extrapolate', bounds_error=False)
-    return energy, wave
-
-
-def get_gpaw_continuum_wave(Z, n, l, lprime, epsilon, xc='PBE'):
-    from gpaw.atom.all_electron import AllElectron
-
-    check_valid_quantum_number(Z, n, l)
-
-    with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-        ae = AllElectron(chemical_symbols[Z], corehole=(n, l, 1.), xcname=xc, gpernode=500)
-        ae.run()
-
-    vr = interp1d(ae.r, -ae.vr, fill_value='extrapolate', bounds_error=False)
-
-    def schroedinger_derivative(y, r, l, e, vr):
-        (u, up) = y
-        return np.array([up, (l * (l + 1) / r ** 2 - 2 * vr(r) / r - e) * u])
-
-    r = np.geomspace(1e-7, 200, 1000000)
-    ur = integrate.odeint(schroedinger_derivative, [0.0, 1.], r, args=(lprime, epsilon, vr))
-
-    sqrt_k = 1 / (2 * epsilon / units.Hartree * (1 + units.alpha ** 2 * epsilon / units.Hartree / 2)) ** .25
-    ur = ur[:, 0] / ur[:, 0].max() / epsilon ** .5 * units.Rydberg ** 0.25 / sqrt_k / np.sqrt(np.pi)
-
-    return interp1d(r, ur, kind='cubic', fill_value='extrapolate', bounds_error=False)
-
-
 class AbstractTransitionCollection(metaclass=ABCMeta):
 
     def __init__(self, Z):
@@ -209,7 +169,8 @@ class SubshellTransitions(AbstractTransitionCollection):
                     transitions.append([(self.l, ml), (new_l, new_ml)])
         return transitions
 
-    def get_transition_potentials(self, extent: Union[float, Sequence[float]] = None,
+    def get_transition_potentials(self,
+                                  extent: Union[float, Sequence[float]] = None,
                                   gpts: Union[float, Sequence[float]] = None,
                                   sampling: Union[float, Sequence[float]] = None,
                                   energy: float = None,
@@ -422,7 +383,6 @@ class TransitionPotential(HasAcceleratorMixin, HasGridMixin):
 
         self._accelerator = Accelerator(energy=energy)
 
-        # self._atoms = atoms
         self._sliced_atoms = SlicedAtoms(atoms, slice_thicknesses=self._slice_thickness)
 
         self._potentials_cache = Cache(1)
