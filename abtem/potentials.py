@@ -1088,7 +1088,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
             antialias_filter = AntialiasFilter()
 
         for start, end, potential_slices in t.generate_slices(max_batch=max_batch):
-           t._array[start:end] = antialias_filter.bandlimit(potential_slices).array
+            t._array[start:end] = antialias_filter.bandlimit(potential_slices).array
 
         return t
 
