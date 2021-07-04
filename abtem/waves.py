@@ -170,9 +170,9 @@ class _WavesLike(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin, HasBeamTiltM
         kcut = [1 / d / 2 * a for d, a in zip(interpolated_grid.sampling, self.antialias_aperture)]
         kcut = min(kcut)
         kcut = (
-            np.ceil(2 * interpolated_grid.extent[0] * kcut) / (
+            np.floor(2 * interpolated_grid.extent[0] * kcut) / (
                     2 * interpolated_grid.extent[0]) * self.wavelength * 1e3,
-            np.ceil(2 * interpolated_grid.extent[1] * kcut) / (
+            np.floor(2 * interpolated_grid.extent[1] * kcut) / (
                     2 * interpolated_grid.extent[1]) * self.wavelength * 1e3)
         return kcut
 
@@ -1273,9 +1273,12 @@ class SMatrixArray(_Scanable, HasEventMixin):
 
     def _get_ctf_coefficients(self):
         xp = get_array_module(self._array)
+        abs2 = get_device_function(xp, 'abs2')
         alpha = xp.sqrt(self.k[:, 0] ** 2 + self.k[:, 1] ** 2) * self.wavelength
         phi = xp.arctan2(self.k[:, 0], self.k[:, 1])
-        return self._ctf.evaluate(alpha, phi)
+        ctf_coefficients = self._ctf.evaluate(alpha, phi)
+        ctf_coefficients = ctf_coefficients / xp.sqrt(abs2(ctf_coefficients).sum()) * xp.sqrt(len(ctf_coefficients))
+        return ctf_coefficients
 
     def _get_translation_coefficients(self, positions: Sequence[float]):
         xp = get_array_module_from_device(self.device)
@@ -1565,7 +1568,7 @@ class PartitionedSMatrix(_Scanable):
     def multislice(self, potential: AbstractPotential,
                    max_batch: int = None,
                    multislice_pbar: Union[ProgressBar, bool] = True,
-                   plane_waves_pbar: Union[ProgressBar, bool] = True,):
+                   plane_waves_pbar: Union[ProgressBar, bool] = True, ):
 
         if isinstance(potential, Atoms):
             potential = Potential(potential)
@@ -1821,7 +1824,7 @@ class SMatrix(_Scanable, HasEventMixin):
         interpolated_gpts = tuple(n // self.interpolation for n in self.gpts)
         return Grid(gpts=interpolated_gpts, sampling=self.sampling, lock_gpts=True)
 
-    def equivalent_probe(self):
+    def get_equivalent_probe(self):
         return Probe(extent=self.extent, gpts=self.gpts, sampling=self.sampling, energy=self.energy, ctf=self.ctf,
                      device=self.device)
 
@@ -1990,11 +1993,11 @@ class SMatrix(_Scanable, HasEventMixin):
 
         images = []
         for i in range(transition_potential.num_edges):
-            images.append(np.zeros((scan.gpts[0] * scan.gpts[1],), dtype=np.float32))
+            images.append(xp.zeros((scan.gpts[0] * scan.gpts[1],), dtype=xp.float32))
 
         propagator = FresnelPropagator()
         positions = scan.get_positions()
-        coefficients = S1._get_coefficients(positions)
+        coefficients = copy_to_device(S1._get_coefficients(positions), xp)
 
         coefficients = coefficients / np.sqrt(np.sum(coefficients.shape[1]))
         forward_pbar = ProgressBar(total=len(potential), desc='Forward multislice', disable=not pbar)
