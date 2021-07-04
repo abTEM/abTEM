@@ -197,6 +197,7 @@ class _PolarDetector(AbstractDetector):
         region_indices = []
         for indices in self._label_to_index(region_labels):
             region_indices.append(indices)
+
         return region_indices
 
     def allocate_measurement(self, waves, scan: AbstractScan = None) -> Measurement:
@@ -237,6 +238,7 @@ class _PolarDetector(AbstractDetector):
             calibrations += (Calibration(offset=0, sampling=self._azimuthal_steps, units='rad'),)
 
         array = np.zeros(shape, dtype=np.float32)
+
         measurement = Measurement(array, calibrations=calibrations)
         if isinstance(self.save_file, str):
             measurement = measurement.write(self.save_file)
@@ -358,9 +360,8 @@ class AnnularDetector(_PolarDetector):
                                       diffraction_patterns.calibrations[-1].sampling *
                                       (diffraction_patterns.array.shape[-1] // 2), )
 
-
         if cutoff_scattering_angle < self.outer:
-            raise RuntimeError('Outer integration limit exceeds the maximum measurement scattering angle ' 
+            raise RuntimeError('Outer integration limit exceeds the maximum measurement scattering angle '
                                f'({cutoff_scattering_angle} mrad)')
 
         return Measurement(self._integrate_array(array, sampling, cutoff_scattering_angle), calibrations=calibrations)
@@ -446,12 +447,12 @@ class FlexibleAnnularDetector(_PolarDetector):
         sum_run_length_encoded = get_device_function(xp, 'sum_run_length_encoded')
 
         intensity = abs2(fft2(waves.array, overwrite_x=False))
-
         indices = self._get_regions(waves.gpts, waves.angular_sampling, min(waves.cutoff_scattering_angles), xp)
 
         separators = xp.concatenate((xp.array([0]), xp.cumsum(xp.array([len(ring) for ring in indices]))))
         intensity = intensity.reshape((intensity.shape[0], -1))[:, xp.concatenate(indices)]
-        result = xp.zeros((len(intensity), len(separators) - 1), dtype=xp.float32)
+        result = xp.zeros((len(intensity), len(indices)), dtype=xp.float32)
+
         sum_run_length_encoded(intensity, result, separators)
 
         return result
