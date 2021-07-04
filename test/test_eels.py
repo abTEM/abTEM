@@ -44,3 +44,35 @@ def test_dummy_transition():
                                        transition_potential, pbar=False)
 
     assert np.allclose(measurement_eels.array, 1)
+
+
+def test_tranpose():
+    pass
+    # from abtem.waves import FresnelPropagator, PlaneWave
+    #
+    # atoms = Atoms('O', positions=[(2, 2, 2)], cell=(4, 4, 4))
+    #
+    # potential = Potential(atoms, gpts=512, slice_thickness=4, projection='infinite', parametrization='kirkland')
+    # potential = potential.build(pbar=False).as_transmission_function(100e3)
+    #
+    # wave = PlaneWave(energy=100e3, device='cpu')
+    # wave.match_grid(potential)
+    # wave = wave.build()
+    #
+    # # plt.imshow((potential.array * np.conjugate(potential.array))[0].real)
+    # # plt.colorbar()
+    #
+    # wave = potential.transmit(wave)
+    # wave = propagator.propagate(wave, potential_slice.thickness)
+    # wave = potential.transmit(wave)
+    # wave = propagator.propagate(wave, potential_slice.thickness)
+    #
+    # plt.imshow(np.abs(wave.array[0]) ** 2)
+    # plt.colorbar()
+    # plt.show()
+    #
+    # wave = propagator.propagate(wave, -potential_slice.thickness)
+    # wave = potential.transmit(wave, conjugate=True)
+    # wave = propagator.propagate(wave, -potential_slice.thickness)
+    # wave = potential.transmit(wave, conjugate=True)
+

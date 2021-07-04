@@ -31,7 +31,7 @@ def test_bandlimit():
 
     diffraction_pattern = waves.diffraction_pattern('limit')
     assert not np.allclose(diffraction_pattern.array / diffraction_pattern.array.max(), 1.)
-    assert diffraction_pattern.shape == (1, 67, 67)
+    assert diffraction_pattern.shape == (1, 66, 66)
 
     diffraction_pattern = waves.diffraction_pattern('valid')
 

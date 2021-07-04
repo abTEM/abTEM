@@ -186,8 +186,8 @@ def test_downsample():
     waves = Waves(array, sampling=sampling, energy=80e3, antialias_aperture=(2 / 3.,) * 2)
 
     assert np.allclose(waves.downsample('valid', return_fourier_space=True).array.real, 1.)
-    assert not np.allclose(waves.downsample('limit', return_fourier_space=True).array.real, 1.)
-    assert np.sum(waves.downsample('limit', return_fourier_space=True).array.real > 1e-6) == n
+    #assert not np.allclose(waves.downsample('limit', return_fourier_space=True).array.real, 1.)
+    #assert np.sum(waves.downsample('limit', return_fourier_space=True).array.real > 1e-6) == n
 
 
 class DummyDetector(AbstractDetector):
