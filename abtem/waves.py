@@ -1272,7 +1272,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
         return self
 
     def _get_ctf_coefficients(self):
-        xp = get_array_module(self._array)
+        xp = get_array_module_from_device(self._device)
         abs2 = get_device_function(xp, 'abs2')
         alpha = xp.sqrt(self.k[:, 0] ** 2 + self.k[:, 1] ** 2) * self.wavelength
         phi = xp.arctan2(self.k[:, 0], self.k[:, 1])
@@ -2006,10 +2006,16 @@ class SMatrix(_Scanable, HasEventMixin):
             for transition_idx in range(transition_potential.num_edges):
                 for t in transition_potential._generate_slice_transition_potentials(slice_idx=i,
                                                                                     transitions_idx=transition_idx):
-                    tmp = copy_to_device(t, xp) * S1.array
-                    SHn0 = xp.tensordot(S2.array.reshape((len(S2), -1)), tmp.reshape((len(S1), -1)).T, axes=1)
 
-                    images[transition_idx] += copy_to_device((xp.abs(xp.dot(SHn0, coefficients.T)) ** 2).sum(0), xp)
+                    if self.interpolation == 1:
+                        tmp = copy_to_device(t, xp) * S1.array
+
+                        SHn0 = xp.tensordot(S2.array.reshape((len(S2), -1)), tmp.reshape((len(S1), -1)).T, axes=1)
+
+                        images[transition_idx] += copy_to_device((xp.abs(xp.dot(SHn0, coefficients.T)) ** 2).sum(0), xp)
+
+                    else:
+                        raise NotImplementedError()
 
             forward_pbar.update(1)
 
