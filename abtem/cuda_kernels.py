@@ -106,7 +106,6 @@ def launch_batch_crop(array, corners, new_shape):
     blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
     result = cp.zeros((len(array),) + new_shape, dtype=array.dtype)
     batch_crop[blockspergrid, threadsperblock](result, array, corners)
-
     return result
 
 

@@ -1,28 +1,35 @@
 """Module to describe the detection of scattered electron waves."""
+from abc import ABCMeta, abstractmethod
 from collections.abc import Iterable, Callable
 from copy import copy
 from typing import Sequence, Tuple, List, Union
-from abc import ABCMeta, abstractmethod
 
+import dask
 import h5py
 import imageio
 import numpy as np
 import scipy.misc
 import scipy.ndimage
+from ase import Atom
 from scipy import ndimage
 from scipy.interpolate import interp1d, interp2d, interpn
 from scipy.ndimage import gaussian_filter
 
-from abtem.base_classes import Grid
+from abtem.basic.backend import get_array_module
+from abtem.basic.fft import fft2_interpolate
+from abtem.basic.grid import Grid
+from abtem.basic.utils import tapered_cutoff
 from abtem.cpu_kernels import abs2
 from abtem.device import asnumpy
-from abtem.utils import periodic_crop, tapered_cutoff
+from abtem.measure.utils import polar_detector_bins
 from abtem.visualize.mpl import show_measurement_2d, show_measurement_1d
-from abtem.utils import fft_interpolate_2d
-from ase import Atom
 
 
-class Calibration:
+class AbstractCalibration:
+    pass
+
+
+class Calibration(AbstractCalibration):
     """
     Calibration object
 
@@ -40,8 +47,7 @@ class Calibration:
         The name of this calibration to be shown in plots.
     """
 
-    def __init__(self, offset: float, sampling: float, units: str, name: str = '', endpoint: bool = True,
-                 adjustable: bool = True):
+    def __init__(self, offset: float, sampling: float, units: str, name: str = '', endpoint: bool = True):
         self.offset = offset
         self.sampling = sampling
         self.units = units
@@ -58,16 +64,19 @@ class Calibration:
         return (self.offset, n * self.sampling + self.offset)
 
     def coordinates(self, n):
-        return np.linspace(*self.extent(n), n, endpoint=False)
+        return np.linspace(*self.extent(n), n, endpoint=self.endpoint)
 
     def __copy__(self):
-        return self.__class__(self.offset, self.sampling, self.units, self.name)
+        return self.__class__(self.offset, self.sampling, self.units, self.name, self.endpoint)
 
     def copy(self):
         """
         Make a copy.
         """
         return copy(self)
+
+
+#class NonUniformCalibration
 
 
 def fourier_space_offset(n: int, d: float):
@@ -162,11 +171,13 @@ class AbstractMeasurement(metaclass=ABCMeta):
         self._name = name
         self._units = units
 
+    @abstractmethod
     def compute(self):
-        try:
-            self._array = self._array.compute()
-        except:
-            pass
+        pass
+
+        # array = self._array.compute()
+        # calibrations = [calibration.copy() if calibration is not None else None for calibration in self.calibrations]
+        # return self.__class__(array, calibrations=calibrations)
 
     @property
     @abstractmethod
@@ -243,8 +254,8 @@ class Measurement(AbstractMeasurement):
             units = measurement.array
             name = measurement.name
 
-        if not isinstance(calibrations, Iterable):
-            calibrations = [calibrations] * len(array.shape)
+        if calibrations is None:
+            calibrations = tuple(Calibration(offset=0, sampling=1, units='', name='') for _ in range(len(array.shape)))
 
         if len(calibrations) != len(array.shape):
             raise RuntimeError(
@@ -578,7 +589,7 @@ class Measurement(AbstractMeasurement):
         new_grid = Grid(extent=extent, gpts=new_gpts, sampling=new_sampling, endpoint=endpoint)
 
         if kind.lower() == 'fft':
-            new_array = fft_interpolate_2d(self.array, new_grid.gpts)
+            new_array = fft2_interpolate(self.array, new_grid.gpts)
         else:
             array = np.pad(self.array, ((5,) * 2,) * 2, mode=padding)
 
@@ -632,26 +643,26 @@ class Measurement(AbstractMeasurement):
         if len(axes) > 2:
             raise ValueError()
 
-        array = measurement.array
-
-        old_shape = array.shape
-
-        # print(old_shape)
-
-        # array = array.reshape(array.shape[:2] + (-1,))
-
-        axes = (2, 3)
-
-        array = np.moveaxis(array, axes, range(len(axes)))
-
-        rolled_shape = array.shape
-
-        array = array.reshape((-1,) + array.shape[-2:])
-        array = fft_interpolate_2d(array, (60, 60))
-        array = array.reshape(rolled_shape[:len(axes)] + array.shape[-2:])
-        array = np.moveaxis(array, range(len(axes)), axes)
-
-        return self._interpolate_2d(new_sampling=new_sampling, new_gpts=new_gpts, padding=padding, kind=kind, axes=axes)
+        # array = measurement.array
+        #
+        # old_shape = array.shape
+        #
+        # # print(old_shape)
+        #
+        # # array = array.reshape(array.shape[:2] + (-1,))
+        #
+        # axes = (2, 3)
+        #
+        # array = np.moveaxis(array, axes, range(len(axes)))
+        #
+        # rolled_shape = array.shape
+        #
+        # array = array.reshape((-1,) + array.shape[-2:])
+        # array = fft2_interpolate(array, (60, 60))
+        # array = array.reshape(rolled_shape[:len(axes)] + array.shape[-2:])
+        # array = np.moveaxis(array, range(len(axes)), axes)
+        #
+        # return self._interpolate_2d(new_sampling=new_sampling, new_gpts=new_gpts, padding=padding, kind=kind, axes=axes)
 
         # else:
         #    raise RuntimeError(f'interpolate not implemented for {self.dimensions}d measurements')
@@ -872,7 +883,7 @@ class Measurement(AbstractMeasurement):
         Measurement
             Line profile measurement.
         """
-        from abtem.scan import LineScan
+        from abtem.waves.scan import LineScan
         measurement = self.squeeze()
 
         if measurement.dimensions != 2:
@@ -917,6 +928,42 @@ class Measurement(AbstractMeasurement):
         return LineProfile(interpolated_array, start=start, end=end,
                            calibration_units=measurement.calibrations[0].units,
                            calibration_name=measurement.calibrations[0].name)
+
+    def integrate_annular_disc(self, diffraction_patterns) -> 'Measurement':
+        """
+        Integrate diffraction pattern measurements on the detector region.
+
+        Parameters
+        ----------
+        diffraction_patterns : 2d, 3d or 4d Measurement object
+            The collection diffraction patterns to be integrated.
+
+        Returns
+        -------
+        Measurement
+        """
+
+        if diffraction_patterns.dimensions < 2:
+            raise ValueError()
+
+        if not (diffraction_patterns.calibrations[-1].units == diffraction_patterns.calibrations[-2].units):
+            raise ValueError()
+
+        sampling = (diffraction_patterns.calibrations[-2].sampling, diffraction_patterns.calibrations[-1].sampling)
+
+        calibrations = diffraction_patterns.calibrations[:-2]
+        array = np.fft.ifftshift(diffraction_patterns.array, axes=(-2, -1))
+
+        cutoff_scattering_angle = min(diffraction_patterns.calibrations[-2].sampling *
+                                      (diffraction_patterns.array.shape[-2] // 2),
+                                      diffraction_patterns.calibrations[-1].sampling *
+                                      (diffraction_patterns.array.shape[-1] // 2), )
+
+        if cutoff_scattering_angle < self.outer:
+            raise RuntimeError('Outer integration limit exceeds the maximum measurement scattering angle '
+                               f'({cutoff_scattering_angle} mrad)')
+
+        return Measurement(self._integrate_array(array, sampling, cutoff_scattering_angle), calibrations=calibrations)
 
     def show(self, ax=None, interact=False, **kwargs):
         """
@@ -981,11 +1028,122 @@ class LineProfile(AbstractMeasurement):
                             name=self._calibration_name, endpoint=self._endpoint)]
 
     def add_to_mpl_plot(self, ax, **kwargs):
-        from abtem.scan import LineScan
+        from abtem.waves.scan import LineScan
         return LineScan(start=self.start, end=self.end, sampling=self.sampling).add_to_mpl_plot(ax, **kwargs)
 
     def show(self, ax=None, **kwargs):
         return show_measurement_1d(self, ax=ax, **kwargs)
+
+
+class Images:
+
+    def __init__(self, array, sampling: Tuple[float, float]):
+        self._array = array
+        self._sampling = sampling
+
+    @property
+    def array(self):
+        return self._array
+
+    @property
+    def shape(self):
+        return self._array.shape
+
+
+class DiffractionPatterns(AbstractMeasurement):
+
+    def __init__(self, array, angular_sampling: Tuple[float, float], collection_clibrations=None,
+                 fftshift: bool = False):
+
+        self._array = array
+        self._angular_sampling = angular_sampling
+        self._fftshift = fftshift
+
+        super().__init__(array, name='Diffraction pattern', units='arb. unit')
+
+    def compute(self):
+        array = self._array.compute()
+        return self.__class__(array, angular_sampling=self.angular_sampling, fftshift=self.fftshift)
+
+    @property
+    def calibrations(self):
+        return
+
+    @property
+    def array(self):
+        return self._array
+
+    @property
+    def shape(self):
+        return self._array.shape
+
+    @property
+    def max_angles(self):
+        return (self.shape[0] // 2 * self.angular_sampling[0], self.shape[1] // 2 * self.angular_sampling[1])
+
+    @property
+    def _collection_axes(self):
+        return tuple(range(self.dimensions))
+
+    def _reduce(self, axis, func, **kwargs):
+        if axis is None:
+            axis = self._collection_axes
+
+        if len(set(axis) - set(self._collection_axes)) == 0:
+            return self.__class__(func(axis, np.mean), self.angular_sampling, fftshift=self.fftshift)
+        else:
+            raise NotImplementedError()
+
+    #def mean(self, axis=None):
+
+    # return self.__class__
+
+    def integrate_annular_disc(self, inner, outer):
+        bins = dask.delayed(polar_detector_bins, pure=True)(gpts=self.array.shape[-2:],
+                                                            sampling=self.angular_sampling,
+                                                            inner=inner,
+                                                            outer=outer,
+                                                            nbins_radial=1,
+                                                            nbins_azimuthal=1,
+                                                            fftshift=not self.fftshift)
+
+        def integrate_fourier_space(array, bins):
+            xp = get_array_module(array)
+            return xp.sum(array * bins, axis=(-2, -1))
+
+        integrated_intensity = self.array.map_blocks(integrate_fourier_space, bins=bins,
+                                                     drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
+                                                     dtype=np.float32)
+
+        return Measurement(integrated_intensity)
+
+    def polar_bin(self, inner=0., outer=None, step_size=1., azimuthal_bins=1):
+        if outer is None:
+            outer = min(self.max_angles)
+
+        nbins_radial = int((outer - inner) / step_size)
+
+        bins = dask.delayed(polar_detector_bins, pure=True)(gpts=self.array.shape[-2:],
+                                                            sampling=self.angular_sampling,
+                                                            inner=inner,
+                                                            outer=outer,
+                                                            nbins_radial=nbins_radial,
+                                                            nbins_azimuthal=1,
+                                                            fftshift=not self.fftshift)
+
+    @property
+    def fftshift(self):
+        return self._fftshift
+
+    @property
+    def angular_sampling(self) -> Tuple[float, float]:
+        return self._angular_sampling
+
+    def show(self):
+        pass
+
+
+# class ScannedDiffractionPatterns():
 
 
 def stack_measurements(measurements):

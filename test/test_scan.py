@@ -2,10 +2,10 @@ import os
 
 import numpy as np
 import pytest
-from abtem.detect import AnnularDetector, PixelatedDetector
+from abtem.measure.detect import AnnularDetector, PixelatedDetector
 from abtem.potentials import Potential
-from abtem.scan import PositionScan, LineScan, GridScan
-from abtem.waves import Probe
+from abtem.waves.scan import PositionScan, LineScan, GridScan
+from abtem.waves.waves import Probe
 from ase.io import read
 
 

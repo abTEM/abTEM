@@ -9,15 +9,17 @@ import numpy as np
 from ase import Atoms
 
 from abtem.basic.antialias import AntialiasAperture
+from abtem.basic.axes import HasAxesMetadata
 from abtem.basic.backend import get_array_module
 from abtem.basic.complex import abs2
 from abtem.basic.energy import Accelerator
 from abtem.basic.event import HasEventMixin
-from abtem.basic.fft import fft2, ifft2, fft2_convolve, fft2_shift_kernel, fft2_crop
+from abtem.basic.fft import fft2, ifft2, fft2_convolve, fft2_shift_kernel, fft2_crop, fft2_interpolate
 from abtem.basic.grid import Grid
-from abtem.device import get_array_module, get_array_module_from_device, get_device_from_array
+from abtem.device import get_array_module_from_device, get_device_from_array
 from abtem.measure.detect import AbstractDetector
-from abtem.measure.measure import calibrations_from_grid, Measurement, probe_profile, Calibration, DiffractionPatterns
+from abtem.measure.measure import DiffractionPatterns, Images
+from abtem.measure.old_measure import Measurement, probe_profile
 from abtem.potentials import Potential, AbstractPotential
 from abtem.waves.base import AbstractWaves, AbstractScannedWaves, BeamTilt
 from abtem.waves.multislice import multislice
@@ -25,7 +27,7 @@ from abtem.waves.scan import AbstractScan
 from abtem.waves.transfer import CTF
 
 
-class Waves(AbstractWaves):
+class Waves(AbstractWaves, HasAxesMetadata):
     """
     Waves object
 
@@ -51,7 +53,9 @@ class Waves(AbstractWaves):
                  extent: Union[float, Sequence[float]] = None,
                  sampling: Union[float, Sequence[float]] = None,
                  tilt: Tuple[float, float] = (0., 0.),
-                 antialias_aperture: float = None):
+                 antialias_aperture: float = None,
+                 axes_metadata=None,
+                 metadata=None):
 
         if len(array.shape) < 2:
             raise RuntimeError('Wave function array should be have 2 dimensions or more')
@@ -62,6 +66,17 @@ class Waves(AbstractWaves):
         self._beam_tilt = BeamTilt(tilt=tilt)
         self._antialias_aperture = AntialiasAperture(cutoff=antialias_aperture)
         self._device = get_device_from_array(self._array)
+
+        self._axes_metadata = axes_metadata
+        self._metadata = metadata
+
+    @property
+    def axes_metadata(self):
+        return self._axes_metadata
+
+    @property
+    def metadata(self):
+        return self._metadata
 
     def compute(self):
         return self.__class__(self._array.compute(), extent=self.extent, energy=self.energy, tilt=self.tilt,
@@ -79,7 +94,7 @@ class Waves(AbstractWaves):
     def shape(self):
         return self.array.shape
 
-    def intensity(self) -> Measurement:
+    def intensity(self) -> Images:
         """
         Calculate the intensity of the wave functions at the image plane.
 
@@ -88,53 +103,18 @@ class Waves(AbstractWaves):
         Measurement
             The wave function intensity.
         """
+        return Images(abs2(self.array), axes_metadata=self.axes_metadata)
 
-        calibrations = tuple(Calibration(offset=0., sampling=1., units='') for _ in range(len(self.shape) - 2))
-        calibrations = calibrations + calibrations_from_grid(self.grid.gpts, self.grid.sampling, ['x', 'y'])
-        return Measurement(abs2(self.array), calibrations)
-
-    def _gpt_within_angle(self, angle):
-
-        if angle is None:
-            return self.gpts
-
-        if not isinstance(angle, str):
-            return tuple(int(2 * np.ceil(angle / d)) + 1 for n, d in zip(self.gpts, self.angular_sampling))
-
-        if angle == 'cutoff':
-            return self.antialias_cutoff_gpts
-
-        if angle == 'valid':
-            return self.antialias_valid_gpts
-
-        raise ValueError()
-
-    def _downsampled_array(self, max_angle='valid', return_fourier_space: bool = False):
-        gpts = self._gpt_within_angle(max_angle)
+    def downsample(self, max_angle='valid') -> 'Waves':
+        gpts = self._gpts_within_angle(max_angle)
 
         array = self.array
 
-        if (gpts != self.gpts) or return_fourier_space:
-            array = fft2(array, overwrite_x=False)
-
         if gpts != self.gpts:
-            array = array.map_blocks(fft2_crop, new_shape=self.array.shape[:-2] + gpts,
-                                     chunks=array.chunks[:-2] + ((gpts[0],), (gpts[1],)), dtype=np.complex64)
+            array = fft2_interpolate(array, new_shape=self.array.shape[:-2] + gpts)
 
-        if return_fourier_space:
-            return array
+        antialias_aperture = self.antialias_aperture * min(self.gpts[0] / gpts[0], self.gpts[1] / gpts[1])
 
-        return ifft2(array)
-
-    def downsample(self, max_angle='valid') -> 'Waves':
-        xp = get_array_module(self.array)
-
-        gpts = self.downsampled_gpts(max_angle)
-
-        antialias_aperture = (self.antialias_aperture[0] * self.gpts[0] / gpts[0],
-                              self.antialias_aperture[1] * self.gpts[1] / gpts[1])
-
-        array = self._downsample(max_angle='valid')
         return Waves(array, extent=self.extent, energy=self.energy, antialias_aperture=antialias_aperture)
 
     def diffraction_patterns(self, max_angle='valid', fftshift=True) -> DiffractionPatterns:
@@ -160,23 +140,21 @@ class Waves(AbstractWaves):
             if fftshift:
                 return xp.fft.fftshift(array, axes=(-1, -2))
 
-            return xp.fft.fftshift(array, axes=(-1, -2))
+            return array
 
-        new_gpts = self._gpt_within_angle(max_angle)
+        xp = get_array_module(self.array)
+
+        new_gpts = self._gpts_within_angle(max_angle)
 
         pattern = self.array.map_blocks(_diffraction_pattern, new_gpts=new_gpts, fftshift=fftshift,
                                         chunks=self.array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
-                                        dtype=np.complex64)
+                                        meta=xp.array((), dtype=xp.float32))
 
-        # calibrations = calibrations_from_grid(self.gpts,
-        #                                       self.sampling,
-        #                                       names=['alpha_x', 'alpha_y'],
-        #                                       units='mrad',
-        #                                       scale_factor=self.wavelength * 1000,
-        #                                       fourier_space=True)
-        #
-        # calibrations = (None,) * (len(pattern.shape) - 2) + calibrations
-        return DiffractionPatterns(pattern, angular_sampling=self.angular_sampling, fftshift=fftshift)
+        axes_metadata = [{'type': 'fourier_space', 'sampling': self.angular_sampling[0]},
+                         {'type': 'fourier_space', 'sampling': self.angular_sampling[1]}]
+        axes_metadata = self.axes_metadata[:-2] + axes_metadata
+
+        return DiffractionPatterns(pattern, fftshift=fftshift, axes_metadata=axes_metadata, metadata=self._metadata)
 
     def apply_ctf(self, ctf: CTF = None, in_place=False, **kwargs) -> 'Waves':
         """
@@ -209,12 +187,20 @@ class Waves(AbstractWaves):
 
         kernel = ctf.evaluate_on_grid(extent=self.extent, gpts=self.gpts, sampling=self.sampling)
 
+        xp = get_array_module(self.array)
+
+        kernel = xp.asarray(kernel)
+
+        #print(type(kernel), type(self.array), fft2_convolve(self.array, kernel, overwrite_x=in_place))
+        #sss
+
         return self.__class__(fft2_convolve(self.array, kernel, overwrite_x=in_place),
                               extent=self.extent,
                               energy=self.energy,
+                              axes_metadata=self._axes_metadata,
                               tilt=self.tilt)
 
-    def multislice(self, potential: AbstractPotential, splits=1, detector=None, ) -> 'Waves':
+    def multislice(self, potential: AbstractPotential, splits=1) -> 'Waves':
         """
         Propagate and transmit wave function through the provided potential.
 
@@ -245,8 +231,10 @@ class Waves(AbstractWaves):
 
         array = da.stack([exit_wave.array for exit_wave in exit_waves], axis=0)
 
+        axes_metadata = [{'type': 'ensemble', 'name': 'frozen_phonons'}] + self.axes_metadata
+
         return self.__class__(array=array, extent=self.extent, energy=self.energy, tilt=self.tilt,
-                              antialias_aperture=2 / 3.)
+                              antialias_aperture=2 / 3., axes_metadata=axes_metadata)
 
     def write(self, path: str):
         """
@@ -301,22 +289,6 @@ class Waves(AbstractWaves):
     def copy(self) -> 'Waves':
         """Make a copy."""
         return copy(self)
-
-
-class ScannedWaves(Waves):
-
-    def __init__(self,
-                 array: np.ndarray,
-                 energy: float,
-                 extent: Union[float, Tuple[float, float]] = None,
-                 sampling: Union[float, Tuple[float, float]] = None,
-                 scan_sampling: Union[float, Tuple[float, float]] = None,
-                 tilt: Tuple[float, float] = (0., 0.),
-                 antialias_aperture: float = None):
-        super().__init__(array, energy=energy, extent=extent, sampling=sampling, tilt=tilt,
-                         antialias_aperture=antialias_aperture)
-
-        self._scan_sampling = scan_sampling
 
 
 class PlaneWave(AbstractWaves):
@@ -381,8 +353,11 @@ class PlaneWave(AbstractWaves):
         """Build the plane wave function as a Waves object."""
         xp = get_array_module_from_device(self._device)
         self.grid.check_is_defined()
-        array = da.from_array(np.ones((self.gpts[0], self.gpts[1]), dtype=xp.complex64), chunks=(-1, -1))
-        return Waves(array, extent=self.extent, energy=self.energy)
+        array = da.from_array(xp.ones((self.gpts[0], self.gpts[1]), dtype=xp.complex64), chunks=(-1, -1))
+
+        metadata = {'energy': self.energy}
+        return Waves(array, extent=self.extent, energy=self.energy, axes_metadata=self._base_axes_metadata,
+                     metadata=metadata)
 
     def __copy__(self) -> 'PlaneWave':
         return self.__class__(extent=self.extent, gpts=self.gpts, sampling=self.sampling, energy=self.energy)
@@ -479,7 +454,15 @@ class Probe(AbstractScannedWaves, HasEventMixin):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
+        if isinstance(positions, AbstractScan):
+            axes_metadata = positions.axes_metadata + self._base_axes_metadata
+            positions = positions.get_positions()
+        else:
+            axes_metadata = [{'type': 'positions'}] + self._base_axes_metadata
+
         positions = self._validate_positions(positions)
+
+        positions = da.from_array(positions, chunks=self._compute_chunks(len(positions.array) - 1))
 
         xp = get_array_module(self._device)
 
@@ -489,9 +472,12 @@ class Probe(AbstractScannedWaves, HasEventMixin):
                               meta=xp.array((), dtype=np.complex64))
 
         array = ifft2(ctf * self._fourier_translation_operator(positions))
-        return Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt)
 
-    def multislice(self, positions: Union[Sequence[Sequence[float]],], potential: AbstractPotential) -> Waves:
+        return Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt, axes_metadata=axes_metadata)
+
+    def multislice(self,
+                   potential: AbstractPotential,
+                   positions: Union[Sequence[Sequence[float]], AbstractScan] = None) -> Waves:
         """
         Build probe wave functions at the provided positions and propagate them through the potential.
 
@@ -510,10 +496,8 @@ class Probe(AbstractScannedWaves, HasEventMixin):
             Probe exit wave functions as a Waves object.
         """
 
-        if isinstance(potential, Atoms):
-            potential = Potential(potential)
+        potential = self._validate_potential(potential)
 
-        self.grid.match(potential)
         return self.build(positions).multislice(potential)
 
     def scan(self,

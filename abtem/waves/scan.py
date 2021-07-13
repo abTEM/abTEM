@@ -1,7 +1,7 @@
 """Module for describing different types of scans."""
 from abc import ABCMeta, abstractmethod
 from copy import copy
-from typing import Union, Sequence, Tuple, List
+from typing import Union, Sequence, Tuple
 
 import h5py
 import numpy as np
@@ -9,9 +9,8 @@ from ase import Atom
 from matplotlib.patches import Rectangle
 
 from abtem.basic.grid import Grid, HasGridMixin
-from abtem.basic.utils import subdivide_into_batches, ProgressBar
 from abtem.device import asnumpy
-from abtem.measure.measure import Calibration, Measurement
+from abtem.measure.old_measure import Calibration, Measurement
 
 
 class AbstractScan(metaclass=ABCMeta):
@@ -22,6 +21,11 @@ class AbstractScan(metaclass=ABCMeta):
 
     def __len__(self):
         return self.num_positions
+
+    @property
+    @abstractmethod
+    def sampling(self):
+        pass
 
     @property
     def num_positions(self):
@@ -35,8 +39,7 @@ class AbstractScan(metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    def calibrations(self) -> tuple:
-        """The measurement calibrations associated with the scan."""
+    def axes_metadata(self):
         pass
 
     @abstractmethod
@@ -45,125 +48,12 @@ class AbstractScan(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def insert_new_measurement(self, measurement, indices, new_values):
-        """
-        Insert new measurement values into a Measurement object or HDF5 file.
-
-        Parameters
-        ----------
-        measurement : Measurement object
-            The measurement to which new values are inserted.
-        start : int
-            First index of slice.
-        end : int
-            Last index of slice.
-        new_values : ndarray
-            New measurement values to be inserted. Length should be (end - start).
-        """
-        pass
-
-    def generate_positions(self, max_batch, pbar=False):
-        positions = self.get_positions()
-        self._partition_batches(max_batch)
-
-        if pbar:
-            pbar = ProgressBar(total=len(self))
-
-        for i in range(len(self._batches)):
-            indices = self.get_next_batch()
-            yield indices, positions[indices]
-
-            if pbar:
-                pbar.update(len(indices))
-
-        if pbar:
-            pbar.close()
-
-    def get_next_batch(self):
-        return self._batches.pop(0)
-
-    def _partition_batches(self, max_batch):
-        n = len(self)
-        n_batches = (n + (-n % max_batch)) // max_batch
-        batch_sizes = subdivide_into_batches(len(self), n_batches)
-
-        self._batches = []
-
-        start = 0
-        for batch_size in batch_sizes:
-            end = start + batch_size
-            indices = np.arange(start, end, dtype=np.int)
-            start += batch_size
-            self._batches.append(indices)
-
-    @abstractmethod
     def __copy__(self):
         pass
 
     def copy(self):
         """Make a copy."""
         return copy(self)
-
-
-class PositionScan(AbstractScan):
-    """
-    Position scan object.
-
-    Defines a scan based on user-provided positions.
-
-    Parameters
-    ----------
-    positions : list
-        A list of xy scan positions [Å].
-    """
-
-    def __init__(self, positions: np.ndarray):
-
-        self._positions = np.array(positions)
-
-        if (len(self._positions.shape) != 2) or (self._positions.shape[1] != 2):
-            raise RuntimeError('The shape of the sequence of positions must be (n, 2).')
-
-        super().__init__()
-
-    @property
-    def shape(self) -> tuple:
-        return len(self),
-
-    @property
-    def calibrations(self) -> tuple:
-        return None,
-
-    def insert_new_measurement(self, measurement, indices, new_measurement):
-        if isinstance(measurement, str):
-            with h5py.File(measurement, 'a') as f:
-                f['array'][indices] = asnumpy(new_measurement)
-
-        else:
-            measurement.array[indices] = asnumpy(new_measurement)
-
-    def get_positions(self):
-        return self._positions
-
-    def add_to_mpl_plot(self, ax, marker: str = 'o', color: str = 'r', **kwargs):
-        """
-        Add a visualization of the scan positions to a matplotlib plot.
-
-        Parameters
-        ----------
-        ax: matplotlib Axes
-            The axes of the matplotlib plot the visualization should be added to.
-        marker: str, optional
-            Style of scan position markers. Default is '-'.
-        color: str, optional
-            Color of the scan position markers. Default is 'r'.
-        kwargs:
-            Additional options for matplotlib.pyplot.plot as keyword arguments.
-        """
-        ax.plot(*self.get_positions().T, marker=marker, linestyle='', color=color, **kwargs)
-
-    def __copy__(self):
-        return self.__class__(self._positions.copy())
 
 
 class LineScan(AbstractScan, HasGridMixin):
@@ -331,7 +221,7 @@ class LineScan(AbstractScan, HasGridMixin):
         return self.__class__(start=self.start, end=self.end, gpts=self.gpts, endpoint=self.grid.endpoint[0])
 
 
-class GridScan(AbstractScan, HasGridMixin):
+class GridScan(HasGridMixin, AbstractScan):
     """
     Grid scan object.
 
@@ -413,98 +303,17 @@ class GridScan(AbstractScan, HasGridMixin):
         """Get the area of the scan."""
         return abs(self.start[0] - self.end[0]) * abs(self.start[1] - self.end[1])
 
-    def get_positions(self, chunks=1) -> np.ndarray:
+    @property
+    def axes_metadata(self):
+        return [{'label': 'x', 'type': 'scan', 'sampling': self.sampling[0], 'offset': self.start[0]},
+                {'label': 'y', 'type': 'scan', 'sampling': self.sampling[1], 'offset': self.start[1]}]
+
+    def get_positions(self) -> np.ndarray:
         x = np.linspace(self.start[0], self.end[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=np.float32)
         y = np.linspace(self.start[1], self.end[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=np.float32)
+
         x, y = np.meshgrid(x, y, indexing='ij')
-
-        # chunks = (max(1, int(np.floor(np.sqrt(chunks)))), max(1, int(np.floor(np.sqrt(chunks)))), 2)
         return np.stack((x, y), axis=-1)
-        # return da.from_array(array, chunks=chunks)
-
-    def insert_new_measurement(self, measurement, indices: np.ndarray, new_measurement: np.ndarray):
-        x, y = np.unravel_index(indices, self.shape)
-
-        if self._measurement_shift is not None:
-            x += self._measurement_shift[0]
-            y += self._measurement_shift[1]
-
-        if isinstance(measurement, str):
-            with h5py.File(measurement, 'a') as f:
-                for unique in np.unique(x):
-                    f['array'][unique, y[unique == x]] += asnumpy(new_measurement[unique == x])
-        else:
-            measurement.array[x, y] += asnumpy(new_measurement)
-
-    def partition_scan(self, partitions: Sequence[int]) -> List['GridScan']:
-        """
-        Partition the scan into smaller grid scans
-
-        Parameters
-        ----------
-        partitions : two int
-            The number of partitions to create in x and y.
-
-        Returns
-        -------
-        List of GridScan objects
-        """
-        Nx = subdivide_into_batches(self.gpts[0], partitions[0])
-        Ny = subdivide_into_batches(self.gpts[1], partitions[1])
-        Sx = np.concatenate(([0], np.cumsum(Nx)))
-        Sy = np.concatenate(([0], np.cumsum(Ny)))
-
-        scans = []
-        for i, nx in enumerate(Nx):
-            for j, ny in enumerate(Ny):
-                start = [Sx[i] * self.sampling[0], Sy[j] * self.sampling[1]]
-                end = [start[0] + nx * self.sampling[0], start[1] + ny * self.sampling[1]]
-                endpoint = [False, False]
-
-                if i + 1 == partitions[0]:
-                    endpoint[0] = self.grid.endpoint[0]
-                    if endpoint[0]:
-                        end[0] -= self.sampling[0]
-
-                if j + 1 == partitions[1]:
-                    endpoint[1] = self.grid.endpoint[1]
-                    if endpoint[1]:
-                        end[1] -= self.sampling[1]
-
-                scan = self.__class__(start,
-                                      end,
-                                      gpts=(nx, ny),
-                                      endpoint=endpoint,
-                                      batch_partition='squares',
-                                      measurement_shift=(Sx[i], Sy[j]))
-
-                scans.append(scan)
-        return scans
-
-    def _partition_batches(self, max_batch: int):
-        if self._batch_partition == 'lines':
-            super()._partition_batches(max_batch)
-            return
-
-        if max_batch == 1:
-            self._batches = [[i] for i in range(len(self))]
-            return
-
-        max_batch_x = int(np.floor(np.sqrt(max_batch)))
-        max_batch_y = int(np.floor(np.sqrt(max_batch)))
-
-        Nx = subdivide_into_batches(self.gpts[0], (self.gpts[0] + (-self.gpts[0] % max_batch_x)) // max_batch_x)
-        Ny = subdivide_into_batches(self.gpts[1], (self.gpts[1] + (-self.gpts[1] % max_batch_y)) // max_batch_y)
-
-        self._batches = []
-        Sx = np.concatenate(([0], np.cumsum(Nx)))
-        Sy = np.concatenate(([0], np.cumsum(Ny)))
-
-        for i, nx in enumerate(Nx):
-            for j, ny in enumerate(Ny):
-                x = np.arange(Sx[i], Sx[i] + nx, dtype=np.int)
-                y = np.arange(Sy[j], Sy[j] + ny, dtype=np.int)
-                self._batches.append((y[None] + x[:, None] * self.gpts[1]).ravel())
 
     def add_to_mpl_plot(self, ax, alpha: float = .33, facecolor: str = 'r', edgecolor: str = 'r', **kwargs):
         """
@@ -531,6 +340,19 @@ class GridScan(AbstractScan, HasGridMixin):
         return self.__class__(start=self.start,
                               end=self.end,
                               gpts=self.gpts,
-                              endpoint=self.grid.endpoint,
-                              batch_partition=self._batch_partition,
-                              measurement_shift=self._measurement_shift)
+                              endpoint=self.grid.endpoint)
+
+
+class HasScanMixin:
+    _scan: Union[AbstractScan, None]
+
+    @property
+    def scan(self):
+        return self._scan
+
+    @property
+    def scan_sampling(self):
+        if self._scan is None:
+            return None
+        else:
+            return self.scan.sampling

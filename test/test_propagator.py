@@ -1,4 +1,4 @@
-from abtem.waves import FresnelPropagator, Probe
+from abtem.waves.waves import FresnelPropagator, Probe
 import numpy as np
 
 

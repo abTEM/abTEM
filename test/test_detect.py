@@ -1,10 +1,10 @@
 import numpy as np
 from ase.io import read
 
-from abtem.detect import AnnularDetector, FlexibleAnnularDetector, PixelatedDetector
+from abtem.measure.detect import AnnularDetector, FlexibleAnnularDetector, PixelatedDetector
 from abtem.potentials import Potential
-from abtem.scan import GridScan
-from abtem.waves import Probe
+from abtem.waves.scan import GridScan
+from abtem.waves.waves import Probe
 
 
 def test_detector_consistency():

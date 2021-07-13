@@ -1,9 +1,8 @@
 import numpy as np
 from ase import Atoms
 
-from abtem.cpu_kernels import interpolate_radial_functions
-from abtem.parametrizations import kirkland_projected, kirkland, load_kirkland_parameters
-from abtem.potentials import PotentialIntegrator, Potential, kappa, _disc_meshgrid
+from abtem.potentials.parametrizations import kirkland_projected, kirkland, load_kirkland_parameters
+from abtem.potentials import PotentialIntegrator, Potential
 
 
 def test_gaussian_integral():

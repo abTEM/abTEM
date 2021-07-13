@@ -11,12 +11,15 @@ If you use abTEM and its implemented methods in your research, we kindly ask tha
 
 abTEM implementation (tentative reference)::
 
-    @article{abtem,
-    title = {abTEM: ab Initio Transmission Electron Microscopy Image Simulation},
+    @Article{abtem,
     author = {Jacob Madsen and Toma Susi},
-    journal = {Microscopy and Microanalysis},
-    year = {2020},
-    doi = {10.1017/S1431927620014701},
+    title = {The abTEM code: transmission electron microscopy from first principles [version 2; peer review: 2 approved]
+    },
+    journal = {Open Research Europe},
+    volume = {1},
+    year = {2021},
+    number = {24},
+    doi = {10.12688/openreseurope.13015.2}
     }
 
 ab initio electrostatic potentials from GPAW::
@@ -85,4 +88,34 @@ GPAW for calculating DFT potentials::
         number = {3},
         pages = {035109},
         journal = {Phys. Rev. B},
+    }
+Linear-scaling algorithm for calculation of inelastic transitions by Hamish G. Brown et al::
+
+    @article{PhysRevResearch.1.033186,
+      title = {Linear-scaling algorithm for rapid computation of inelastic transitions in the presence of multiple electron scattering},
+      author = {Hamish G. Brown and Jim Ciston and Colin Ophus},
+      journal = {Phys. Rev. Research},
+      volume = {1},
+      issue = {3},
+      pages = {033186},
+      numpages = {10},
+      year = {2019},
+      month = {Dec},
+      publisher = {American Physical Society},
+      doi = {10.1103/PhysRevResearch.1.033186},
+    }
+Linear-scaling algorithm for calculation of inelastic transitions by  Brown et al::
+
+    @article{PhysRevResearch.1.033186,
+      title = {Linear-scaling algorithm for rapid computation of inelastic transitions in the presence of multiple electron scattering},
+      author = {Hamish G. Brown and Jim Ciston and Colin Ophus},
+      journal = {Phys. Rev. Research},
+      volume = {1},
+      issue = {3},
+      pages = {033186},
+      numpages = {10},
+      year = {2019},
+      month = {Dec},
+      publisher = {American Physical Society},
+      doi = {10.1103/PhysRevResearch.1.033186},
     }

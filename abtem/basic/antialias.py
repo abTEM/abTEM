@@ -39,17 +39,20 @@ class AntialiasFilter:
     def _build_antialias_filter(self, gpts, sampling, xp):
         cutoff = 1 / max(sampling) / 2 * self.cutoff
         taper = self.taper / max(sampling)
-        # return bandlimit(gpts, sampling, cutoff, taper, xp_to_str(xp))
         return da.from_delayed(
             dask.delayed(antialias_aperture, pure=True)(gpts, sampling, cutoff, taper, xp_to_str(xp)),
-            shape=gpts, dtype=np.float32)
+            shape=gpts, meta=xp.array((), dtype=xp.float32))
 
     def build(self, gpts, sampling, xp=np):
         return self._build_antialias_filter(gpts, sampling, xp)
 
     def __call__(self, array, sampling, overwrite_x=True):
         xp = get_array_module(array)
-        array = fft2_convolve(array, self.build(array.shape[-2:], sampling, xp), overwrite_x=False)
+
+        kernel = self.build(array.shape[-2:], sampling, xp)
+
+        array = fft2_convolve(array, kernel, overwrite_x=False)
+
         return array
 
 

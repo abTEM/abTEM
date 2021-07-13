@@ -10,7 +10,7 @@ from abtem.base_classes import watched_property
 from abtem.basic.fft import fft2
 from abtem.device import get_array_module, get_device_function
 from abtem.device_func import abs2
-from abtem.measure.measure import Calibration, calibrations_from_grid, Measurement
+from abtem.measure.old_measure import Calibration, calibrations_from_grid, Measurement
 from abtem.visualize.mpl import show_measurement_2d
 from abtem.waves.scan import AbstractScan
 

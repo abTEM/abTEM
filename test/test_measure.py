@@ -3,8 +3,8 @@ import pytest
 
 from abtem import GridScan, AnnularDetector, PixelatedDetector, Probe, Potential, PlaneWave, FlexibleAnnularDetector, \
     Measurement
-from abtem.noise import poisson_noise
-from abtem.measure import center_of_mass
+from abtem.measure.noise import poisson_noise
+from abtem.measure.old_measure import center_of_mass
 
 def test_calibration_coordinates():
     for endpoint in (True, False):

@@ -9,7 +9,7 @@ from abtem.basic.energy import Accelerator, HasAcceleratorMixin, energy2waveleng
 from abtem.basic.event import Event, HasEventMixin, watched_method, watched_property
 from abtem.basic.grid import Grid, polar_spatial_frequencies
 from abtem.device import get_array_module
-from abtem.measure.measure import Measurement, Calibration
+from abtem.measure.old_measure import Measurement, Calibration
 
 #: Symbols for the polar representation of all optical aberrations up to the fifth order.
 polar_symbols = ('C10', 'C12', 'phi12',

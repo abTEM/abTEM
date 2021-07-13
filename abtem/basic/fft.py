@@ -19,7 +19,7 @@ def fft2(x, overwrite_x=False):
         return mkl_fft.fft2(x, overwrite_x=overwrite_x)
 
     if isinstance(x, da.core.Array):
-        return x.map_blocks(mkl_fft.fft2, meta=xp.array((), dtype=np.complex64))
+        return x.map_blocks(fft2, meta=xp.array((), dtype=np.complex64))
 
     check_cupy_is_installed()
 
@@ -43,17 +43,25 @@ def ifft2(x, overwrite_x=False):
 
 
 def _fft2_convolve(x, kernel, overwrite_x=True):
-    x = mkl_fft.fft2(x, overwrite_x=overwrite_x)
+    x = fft2(x, overwrite_x=overwrite_x)
     x *= kernel
-    return mkl_fft.ifft2(x, overwrite_x=overwrite_x)
+    return ifft2(x, overwrite_x=overwrite_x)
 
 
 def fft2_convolve(x, kernel, overwrite_x=True, ):
+    xp = get_array_module(x)
+
     if isinstance(x, np.ndarray):
         return _fft2_convolve(x, kernel, overwrite_x)
 
     if isinstance(x, da.core.Array):
-        return x.map_blocks(_fft2_convolve, kernel=kernel, overwrite_x=overwrite_x, dtype=np.complex64)
+        return x.map_blocks(_fft2_convolve, kernel=kernel, overwrite_x=overwrite_x,
+                            meta=xp.array((), dtype=np.complex64))
+
+    check_cupy_is_installed()
+
+    if isinstance(x, cp.ndarray):
+        return _fft2_convolve(x, kernel, overwrite_x)
 
 
 def fft2_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
@@ -124,9 +132,14 @@ def fft2_interpolate(array, new_shape, normalization='values', overwrite_x=False
 
     old_size = array.shape[-2] * array.shape[-1]
 
+    def _fft2_interpolate(array, new_shape):
+        return ifft2(fft2_crop(fft2(array), new_shape), overwrite_x=overwrite_x)
+
     if np.iscomplexobj(array):
-        cropped = fft2_crop(fft2(array), new_shape)
-        array = ifft2(cropped, overwrite_x=overwrite_x)
+        array = array.map_blocks(_fft2_interpolate, new_shape=new_shape[-2:],
+                                 chunks=array.chunks[:-2] + ((new_shape[-2],), (new_shape[-1],)),
+                                 dtype=np.complex64)
+
     else:
         array = xp.complex64(array)
         array = ifft2(fft2_crop(fft2(array), new_shape), overwrite_x=overwrite_x).real

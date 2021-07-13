@@ -1,8 +1,7 @@
-import numpy as np
 import pytest
 
 from abtem.base_classes import Grid
-from abtem.waves import Probe
+
 
 def test_create_grid():
     grid = Grid(extent=5, sampling=.2)

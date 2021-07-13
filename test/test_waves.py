@@ -4,11 +4,11 @@ import numpy as np
 import pytest
 
 from abtem.base_classes import Grid, AntialiasFilter
-from abtem.detect import AbstractDetector
-from abtem.measure import Measurement
+from abtem.measure.detect import AbstractDetector
+from abtem.measure.old_measure import Measurement
 from abtem.potentials import AbstractPotential, PotentialArray
-from abtem.scan import LineScan, GridScan
-from abtem.waves import Waves, PlaneWave, Probe
+from abtem.waves.scan import LineScan, GridScan
+from abtem.waves.waves import Waves, PlaneWave, Probe
 
 
 class DummyPotential(AbstractPotential):

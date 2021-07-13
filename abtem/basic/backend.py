@@ -1,10 +1,17 @@
 import numpy as np
 import dask.array as da
+from typing import Union
+import scipy
 
 try:
     import cupy as cp
 except:
     cp = None
+
+try:
+    import cupyx
+except:
+    cupyx = None
 
 
 def check_cupy_is_installed():
@@ -25,12 +32,10 @@ def xp_to_str(xp):
 
 
 def get_array_module(x):
-
     if isinstance(x, da.core.Array):
         return get_array_module(x._meta)
 
     if isinstance(x, str):
-
         if x.lower() in ('numpy', 'cpu'):
             return np
 
@@ -54,3 +59,35 @@ def get_array_module(x):
         return cp
 
     raise ValueError(f'array module specification {x} not recognized')
+
+
+def get_scipy_module(x):
+    xp = get_array_module(x)
+
+    if xp is np:
+        return scipy
+
+    if xp is cp:
+        return cupyx.scipy
+
+
+def asnumpy(array):
+    if cp is None:
+        return array
+
+    if isinstance(array, da.core.Array):
+        return array.map_blocks(asnumpy)
+
+    return cp.asnumpy(array)
+
+
+def copy_to_device(array, device):
+    xp = get_array_module(device)
+
+    if xp is np:
+        return array
+
+    if xp is cp:
+        return cp.asarray(array)
+
+    raise RuntimeError()

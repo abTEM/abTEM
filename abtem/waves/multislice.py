@@ -8,7 +8,7 @@ import numpy as np
 
 from abtem.potentials import AbstractPotential, AbstractPotentialBuilder
 from abtem.basic.antialias import AntialiasFilter
-from abtem.basic.backend import get_array_module
+from abtem.basic.backend import get_array_module, xp_to_str, copy_to_device
 from abtem.basic.complex import complex_exponential
 from abtem.basic.grid import spatial_frequencies
 from abtem.basic.fft import fft2_convolve
@@ -18,8 +18,8 @@ if TYPE_CHECKING:
     from abtem.waves.prism import SMatrixArray
 
 
-def fresnel(gpts, sampling, dz):
-    kx, ky = spatial_frequencies(gpts, sampling, delayed=False)
+def fresnel(gpts, sampling, dz, xp):
+    kx, ky = spatial_frequencies(gpts, sampling, delayed=False, xp=xp)
 
     f = (complex_exponential(-(kx ** 2)[:, None] * np.pi * dz) *
          complex_exponential(-(ky ** 2)[None] * np.pi * dz))
@@ -52,14 +52,16 @@ class FresnelPropagator:
         if self._array is not None:
             return self._array
 
-        f = dask.delayed(fresnel, pure=True)(self._gpts, self._sampling, self._wavelength * dz)
-        f = da.from_delayed(f, shape=self._gpts, dtype=np.complex64)
+        xp = self._xp
+
+        f = dask.delayed(fresnel, pure=True)(self._gpts, self._sampling, self._wavelength * dz, xp=xp_to_str(xp))
+        f = da.from_delayed(f, shape=self._gpts, meta=xp.array((), dtype=xp.complex64))
 
         # if self._tilt is not None:
         #     f *= (complex_exponential(-kx[:, None] * self._xp.tan(self._tilt[0] / 1e3) * dz * 2 * np.pi) *
         #           complex_exponential(-ky[None] * self._xp.tan(self._tilt[1] / 1e3) * dz * 2 * np.pi))
 
-        self._array = f * AntialiasFilter().build(self._gpts, self._sampling, self._xp)
+        self._array = f * AntialiasFilter().build(self._gpts, self._sampling, xp)
 
         self._dz = dz
         return self._array
@@ -95,10 +97,10 @@ def chunk_sequence(seq, num):
     return out
 
 
-# dask.delayed
 def _multislice(waves, transmission_function, slice_thicknesses, propagator):
+    xp = get_array_module(waves)
     for t, d in zip(transmission_function, slice_thicknesses):
-        waves *= t
+        waves *= copy_to_device(t, xp)
         waves = fft2_convolve(waves, propagator, overwrite_x=False)
     return waves
 
@@ -123,6 +125,7 @@ def multislice(waves: Union['Waves', 'SMatrixArray'],
         waves_array = waves.array
 
     propagator = FresnelPropagator(waves)
+
     propagator = propagator.build(.5)
 
     chunks = potential_array.array.chunks[0]

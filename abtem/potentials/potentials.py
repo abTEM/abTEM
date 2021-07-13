@@ -16,9 +16,10 @@ from abtem.basic.complex import complex_exponential
 from abtem.basic.energy import HasAcceleratorMixin, Accelerator, energy2sigma
 from abtem.basic.event import HasEventMixin, watched_property
 from abtem.basic.grid import Grid, HasGridMixin
-from abtem.basic.utils import generate_batches
+from abtem.basic.utils import generate_chunks
 from abtem.device import HasDeviceMixin, get_available_memory
-from abtem.measure.measure import Measurement, calibrations_from_grid
+from abtem.measure.old_measure import Measurement, calibrations_from_grid
+from abtem.measure.measure import Images
 from abtem.potentials.infinite import infinite_potential_projections, calculate_scattering_factors
 from abtem.potentials.temperature import AbstractFrozenPhonons, DummyFrozenPhonons
 from abtem.structures.slicing import SliceIndexedAtoms
@@ -76,6 +77,11 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
     def project(self):
         pass
 
+    @property
+    def _base_axes_metadata(self):
+        return [{'label': 'x', 'type': 'real_space', 'sampling': self.sampling[0]},
+                {'label': 'y', 'type': 'real_space', 'sampling': self.sampling[1]}]
+
     def show(self, **kwargs):
         """
         Show the potential projection. This requires building all potential slices.
@@ -122,10 +128,7 @@ class AbstractPotentialBuilder(AbstractPotential):
         pass
 
     def project(self):
-        return self[:].compute().project()
-
-    def show(self, **kwargs):
-        return self.project().show(**kwargs)
+        return self[:].compute()  # .project()
 
 
 class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
@@ -277,7 +280,7 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
                                              meta=xp.array((), dtype=np.float32))
 
         array = []
-        for first_slice, last_slice in generate_batches(len(self), max_batch=self._chunks, start=0):
+        for first_slice, last_slice in generate_chunks(len(self), chunks=self._chunks):
             positions, numbers, slice_idx = slice_index_atoms.get_atoms_in_slices(first_slice, last_slice)
             shape = (last_slice - first_slice,) + self.gpts
 
@@ -299,9 +302,9 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
         """
 
         potentials = []
-
         for atoms in self.frozen_phonons:
-            potential = Potential(atoms, slice_thickness=self.slice_thickness, gpts=self.gpts, chunks=self._chunks)
+            potential = Potential(atoms, slice_thickness=self.slice_thickness, gpts=self.gpts, chunks=self._chunks,
+                                  device=self._device)
             potentials.append(potential)
 
         return potentials
@@ -403,8 +406,10 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         TransmissionFunction object
         """
 
+        xp = get_array_module(self.array)
+
         def _transmission_function(array, energy):
-            array = complex_exponential(np.float32(energy2sigma(energy)) * array)
+            array = complex_exponential(xp.float32(energy2sigma(energy)) * array)
             return array
 
         array = self._array.map_blocks(_transmission_function, energy=energy)
@@ -527,8 +532,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         """
         calibrations = calibrations_from_grid(self.grid.gpts, self.grid.sampling, ['x', 'y'])
 
-        return Measurement(array=self.array.sum(0), calibrations=calibrations, name='Projected potential',
-                           units='eV Å / e')
+        return Images(array=self._array.sum(0), axes_metadata=self._base_axes_metadata)
 
     def __copy___(self):
         return self.__class__(array=self.array.copy(),

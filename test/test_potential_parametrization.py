@@ -1,6 +1,6 @@
 import numpy as np
 
-from abtem.parametrizations import lobato, kirkland, load_kirkland_parameters, load_lobato_parameters
+from abtem.potentials.parametrizations import lobato, kirkland, load_kirkland_parameters, load_lobato_parameters
 from abtem.potentials import kappa
 
 kirkland_parameters = load_kirkland_parameters()

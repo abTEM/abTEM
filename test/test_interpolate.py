@@ -1,9 +1,9 @@
 import numpy as np
 from abtem.utils import spatial_frequencies
 from scipy.interpolate import interpn
-from abtem.detect import PixelatedDetector
+from abtem.measure.detect import PixelatedDetector
 from abtem.interpolate import interpolate_bilinear_cpu
-from abtem.waves import Probe
+from abtem.waves.waves import Probe
 
 
 def test_interpolate():

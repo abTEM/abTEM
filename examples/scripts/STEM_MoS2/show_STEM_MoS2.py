@@ -1,4 +1,4 @@
-from abtem.measure import Measurement
+from abtem.measure.old_measure import Measurement
 import matplotlib.pyplot as plt
 
 measurement = Measurement.read('STEM_MoS2.hdf5')

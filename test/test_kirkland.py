@@ -1,10 +1,10 @@
 import numpy as np
 from ase import Atoms
 
-from abtem.detect import AnnularDetector
+from abtem.measure.detect import AnnularDetector
 from abtem.potentials import Potential
-from abtem.scan import LineScan
-from abtem.waves import PlaneWave, Probe
+from abtem.waves.scan import LineScan
+from abtem.waves.waves import PlaneWave, Probe
 
 
 def test_fig_5_12():

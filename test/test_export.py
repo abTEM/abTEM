@@ -1,10 +1,10 @@
 import numpy as np
 
-from abtem.detect import PixelatedDetector
-from abtem.measure import Measurement, calibrations_from_grid
+from abtem.measure.detect import PixelatedDetector
+from abtem.measure.old_measure import Measurement, calibrations_from_grid
 from abtem.potentials import Potential, PotentialArray
-from abtem.scan import LineScan, GridScan
-from abtem.waves import Probe, Waves
+from abtem.waves.scan import LineScan, GridScan
+from abtem.waves.waves import Probe, Waves
 
 
 def test_export_import_potential(tmp_path, graphene_atoms):

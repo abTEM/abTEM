@@ -7,7 +7,7 @@ from bqplot import LinearScale, ColorScale, Lines, Scatter, Figure, Axis
 from bqplot_image_gl import ImageGL
 from traitlets import HasTraits, observe, default, List, link, Float, Unicode, Instance, Bool, Int, Any
 
-from abtem.measure import Measurement
+from abtem.measure.old_measure import Measurement
 from abtem.visualize.interactive.utils import Array
 
 

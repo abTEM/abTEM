@@ -2,11 +2,11 @@ import os
 
 import numpy as np
 import pytest
-from abtem.detect import AnnularDetector, FlexibleAnnularDetector
+from abtem.measure.detect import AnnularDetector, FlexibleAnnularDetector
 from abtem.device import asnumpy, cp
 from abtem.potentials import Potential
-from abtem.scan import LineScan, GridScan
-from abtem.waves import Probe, SMatrix
+from abtem.waves.scan import LineScan, GridScan
+from abtem.waves.waves import Probe, SMatrix
 from ase import Atoms
 from ase.io import read
 

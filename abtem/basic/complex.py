@@ -2,7 +2,7 @@ import dask.array as da
 import numba as nb
 import numpy as np
 
-from abtem.basic.backend import check_cupy_is_installed
+from abtem.basic.backend import check_cupy_is_installed, cp
 
 
 @nb.vectorize([nb.complex64(nb.float32), nb.complex128(nb.float64)])
@@ -25,9 +25,8 @@ def abs2(x, **kwargs):
     if isinstance(x, np.ndarray):
         return _abs2(x)
 
-
     if isinstance(x, da.core.Array):
-        return x.map_blocks(_abs2, **kwargs)
+        return x.map_blocks(abs2, **kwargs)
 
     check_cupy_is_installed()
 
@@ -42,7 +41,7 @@ def complex_exponential(x, **kwargs):
         return _complex_exponential(x)
 
     if isinstance(x, da.core.Array):
-        return x.map_blocks(_complex_exponential)
+        return x.map_blocks(complex_exponential)
 
     check_cupy_is_installed()
 

@@ -5,7 +5,7 @@ import pytest
 from ase.io import read
 
 from abtem.potentials import Potential
-from abtem.structures import orthogonalize_cell
+from abtem.structures.structures import orthogonalize_cell
 from ase import Atoms
 from ase import units
 
@@ -13,7 +13,7 @@ from ase import units
 @pytest.mark.gpaw
 def test_dft():
     from gpaw import GPAW
-    from abtem.dft import GPAWPotential
+    from abtem.potentials.gpaw import GPAWPotential
 
     atoms = read(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data/hexagonal_graphene.cif'))
 
@@ -52,7 +52,7 @@ def test_dft():
 def test_compare_abtem_to_gpaw():
     from gpaw import GPAW
     from gpaw.utilities.ps2ae import PS2AE
-    from abtem.dft import GPAWPotential
+    from abtem.potentials.gpaw import GPAWPotential
 
     atoms = Atoms('C', positions=[(0, 1, 2)], cell=(2, 2, 4), pbc=True)
 

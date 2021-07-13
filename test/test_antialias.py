@@ -1,7 +1,6 @@
-from abtem.base_classes import AntialiasFilter
 import numpy as np
 from ase import Atoms
-from abtem.waves import Probe
+from abtem.waves.waves import Probe
 
 
 # def test_crop():

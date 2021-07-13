@@ -5,7 +5,7 @@ print('current version:', __version__)
 from ase.build import mx2
 
 from abtem import *
-from abtem.structures import orthogonalize_cell
+from abtem.structures.structures import orthogonalize_cell
 
 device = 'cpu'
 

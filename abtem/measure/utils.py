@@ -1,6 +1,7 @@
 from typing import Tuple
 
 import numpy as np
+from numba import prange, jit
 
 from abtem.basic.grid import polar_spatial_frequencies
 from abtem.device import get_array_module
@@ -28,6 +29,7 @@ def polar_detector_bins(gpts: Tuple[int, int],
                         rotation: float = 0.,
                         offset: Tuple[float, float] = (0., 0.),
                         fftshift=False,
+                        return_indices=False,
                         ):
     """
     Create an array of labels for the regions of a given detector geometry.
@@ -56,15 +58,15 @@ def polar_detector_bins(gpts: Tuple[int, int],
     alpha, phi = polar_spatial_frequencies(gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), delayed=False)
     phi = (phi + rotation) % (2 * np.pi)
 
-    radial_bins = np.zeros(gpts, dtype=int)
+    radial_bins = -np.ones(gpts, dtype=int)
     valid = (alpha >= inner) & (alpha <= outer)
 
-    radial_bins[valid] = (nbins_radial * (alpha[valid] - inner) / (outer - inner)) + 1
+    radial_bins[valid] = (nbins_radial * (alpha[valid] - inner) / (outer - inner))
 
     angular_bins = np.floor(nbins_azimuthal * (phi / (2 * np.pi)))
     angular_bins = np.clip(angular_bins, 0, nbins_azimuthal - 1).astype(np.int)
 
-    bins = np.zeros(gpts, dtype=int)
+    bins = -np.ones(gpts, dtype=int)
     bins[valid] = angular_bins[valid] + radial_bins[valid] * nbins_azimuthal
 
     if np.any(np.array(offset) != 0.):
@@ -75,7 +77,27 @@ def polar_detector_bins(gpts: Tuple[int, int],
 
         bins = np.roll(bins, offset, (0, 1))
 
+
     if fftshift:
         bins = np.fft.fftshift(bins)
 
-    return bins
+    # import matplotlib.pyplot as plt
+    # plt.imshow(bins == 0)
+    # plt.colorbar()
+    # plt.show()
+
+    if return_indices:
+        indices = []
+        for i in _label_to_index(bins):
+            indices.append(i)
+        return indices
+    else:
+        return bins
+
+
+@jit(nopython=True, nogil=True, parallel=True, fastmath=True)
+def sum_run_length_encoded(array, result, separators):
+    for x in prange(result.shape[1]):
+        for i in range(result.shape[0]):
+            for j in range(separators[x], separators[x + 1]):
+                result[i, x] += array[i, j]

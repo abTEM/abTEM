@@ -3,10 +3,10 @@ import pytest
 from ase import Atoms
 
 from abtem import FrozenPhonons
-from abtem.detect import AnnularDetector
+from abtem.measure.detect import AnnularDetector
 from abtem.potentials import Potential
-from abtem.scan import LineScan
-from abtem.waves import Probe
+from abtem.waves.scan import LineScan
+from abtem.waves.waves import Probe
 
 
 def test_frozen_phonons():
