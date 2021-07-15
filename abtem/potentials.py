@@ -1228,6 +1228,40 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         return self.__class__(array=self.array.copy(),
                               slice_thicknesses=self._slice_thicknesses.copy(),
                               extent=self.extent)
+    
+    def to_hyperspy(self):
+        """
+        Changes the PotentialArray object to a `hyperspy.Signal2D` Object.
+        """
+        from hyperspy._signals.signal2d import Signal2D
+        signal_shape = self.array.shape
+        axes = []
+        
+        # as the first dimension is always the thickness that is added first
+        axes.append({"offset": 0,
+                    "scale": self.thickness / self.num_slices,
+                    "units": "Å",
+                    "name": "z",
+                    "size": self.num_slices})
+
+        # loop for x and y axes
+        for i, size in zip(self.project().calibrations, signal_shape[1:]):
+            if i is None:
+                axes.append({"offset": 0,
+                            "scale": 1,
+                            "units": "",
+                            "name": "",
+                            "size": size})
+            else:
+                axes.append({"offset": i.offset,
+                            "scale": i.sampling,
+                            "units": i.units,
+                            "name": i.name,
+                            "size": size})
+                
+        sig = Signal2D(self.array, axes=axes)
+
+        return sig
 
 
 class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
