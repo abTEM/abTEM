@@ -1161,19 +1161,28 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         self._slice_thicknesses = self._slice_thicknesses[::-1]
         return self
 
-    def write(self, path):
+    def write(self, path, format="hdf5", **kwargs):
         """
-        Write potential to file.
+        Write potential to a file.
 
         Parameters
         ----------
         path: str
             Path to which the data is saved.
+        format: str
+            One of ["hdf5", "hspy"]. Default is "hdf5".
+        kwargs:
+            Any of the additional parameters for saving a hyperspy dataset.
         """
-        with h5py.File(path, 'w') as f:
-            f.create_dataset('array', data=self.array)
-            f.create_dataset('slice_thicknesses', data=self._slice_thicknesses)
-            f.create_dataset('extent', data=self.extent)
+        if format == "hdf5":
+            with h5py.File(path, 'w') as f:
+                f.create_dataset('array', data=self.array)
+                f.create_dataset('slice_thicknesses', data=self._slice_thicknesses)
+                f.create_dataset('extent', data=self.extent)
+        elif format == "hspy":
+            self.to_hyperspy().save(**kwargs)
+        else:
+            raise ValueError('Format must be one of "hdf5" or "hspy"')
 
     @classmethod
     def read(cls, path):
@@ -1228,6 +1237,40 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         return self.__class__(array=self.array.copy(),
                               slice_thicknesses=self._slice_thicknesses.copy(),
                               extent=self.extent)
+    
+    def to_hyperspy(self):
+        """
+        Changes the PotentialArray object to a `hyperspy.Signal2D` Object.
+        """
+        from hyperspy._signals.signal2d import Signal2D
+        signal_shape = self.array.shape
+        axes = []
+        
+        # as the first dimension is always the thickness that is added first
+        axes.append({"offset": 0,
+                    "scale": self.thickness / self.num_slices,
+                    "units": "Å",
+                    "name": "z",
+                    "size": self.num_slices})
+
+        # loop for x and y axes
+        for i, size in zip(self.project().calibrations, signal_shape[1:]):
+            if i is None:
+                axes.append({"offset": 0,
+                            "scale": 1,
+                            "units": "",
+                            "name": "",
+                            "size": size})
+            else:
+                axes.append({"offset": i.offset,
+                            "scale": i.sampling,
+                            "units": i.units,
+                            "name": i.name,
+                            "size": size})
+                
+        sig = Signal2D(self.array, axes=axes)
+
+        return sig
 
 
 class TransmissionFunction(PotentialArray, HasAcceleratorMixin):

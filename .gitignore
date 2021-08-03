@@ -1,4 +1,4 @@
 .DS_Store
 .ipynb_checkpoints
-*.pyc
-*.egg-info*
+.pyc
+.egg-info
