@@ -157,11 +157,13 @@ class ImageArtist(Artist):
         if self._rgb:
             return
 
+        self._set_extent()
+
         if (not self.image.size == 0) & self.autoadjust_colorscale:
             with self._mark.hold_sync():
                 self._mark.scales['image'].min = float(image.min())
                 self._mark.scales['image'].max = float(image.max())
-                self._set_extent()
+
 
             with self._color_bar._mark.hold_sync():
                 self._color_bar.min = float(image.min())
