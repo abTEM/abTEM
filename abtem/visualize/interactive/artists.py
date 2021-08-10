@@ -88,9 +88,9 @@ class ImageArtist(Artist):
                   'image': self._color_scale}
 
         if rgb:
-            self._mark = ImageGL(image=np.zeros((0, 0, 3)), scales=scales)
+            self._mark = ImageGL(image=np.zeros((1, 1, 3)), scales=scales)
         else:
-            self._mark = ImageGL(image=np.zeros((0, 0)), scales=scales)
+            self._mark = ImageGL(image=np.zeros((1, 1)), scales=scales)
 
         self._rgb = rgb
 
@@ -161,10 +161,18 @@ class ImageArtist(Artist):
             with self._mark.hold_sync():
                 self._mark.scales['image'].min = float(image.min())
                 self._mark.scales['image'].max = float(image.max())
+                self._set_extent()
 
             with self._color_bar._mark.hold_sync():
                 self._color_bar.min = float(image.min())
                 self._color_bar.max = float(image.max())
+
+    def _set_extent(self):
+        sampling = ((self.extent[0][1] - self.extent[0][0]) / self.image.shape[0],
+                    (self.extent[1][1] - self.extent[1][0]) / self.image.shape[1])
+
+        self._mark.x = [value - .5 * sampling[0] for value in self.extent[0]]
+        self._mark.y = [value - .5 * sampling[1] for value in self.extent[1]]
 
     @observe('image')
     def _observe_image(self, *args):
@@ -175,11 +183,7 @@ class ImageArtist(Artist):
         if self.image.size == 0:
             return
 
-        sampling = ((change['new'][0][1] - change['new'][0][0]) / self.image.shape[0],
-                    (change['new'][1][1] - change['new'][1][0]) / self.image.shape[1])
-
-        self._mark.x = [value - .5 * sampling[0] for value in change['new'][0]]
-        self._mark.y = [value - .5 * sampling[1] for value in change['new'][1]]
+        self._set_extent()
 
     @property
     def display_sampling(self):
