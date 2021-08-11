@@ -16,27 +16,45 @@ class ColorBar(widgets.HBox):
     max = Float(1.)
     label = Unicode()
 
-    def __init__(self, color_scale, label='', *args, **kwargs):
+    def __init__(self, color_scale, label='', margin=(50, 0), direction='horizontal', width=80, **kwargs):
         self._x_scale = LinearScale(allow_padding=False)
-
+        self._y_scale = LinearScale(allow_padding=False, orientation='vertical')
         scales = {'x': self._x_scale,
-                  'y': LinearScale(allow_padding=False, orientation='vertical'),
+                  'y': self._y_scale,
                   'image': color_scale}
 
-        self._mark = ImageGL(image=np.linspace(0, 1, 500)[None], scales=scales)
-        self._x_axis = Axis(scale=scales['x'], label=label)
+        self._mark = ImageGL(image=np.zeros((1,)), scales=scales)
 
-        # self._x_axis.tick_format = '.2e'
-        self._x_axis.num_ticks = 5
+        self._direction = direction
+
+        if direction == 'horizontal':
+            # self._x_axis.num_ticks = 5
+            axis = Axis(scale=scales['x'], label=label)
+
+            fig_margin = {'top': 0, 'bottom': 50, 'left': margin[0], 'right': margin[1]}
+            layout = widgets.Layout(height=f'{width}px', width='auto')
+        else:
+            axis = Axis(scale=scales['y'], label=label, orientation='vertical', side='right')
+
+            fig_margin = {'top': margin[1], 'bottom': margin[0], 'left': 0, 'right': 50}
+            layout = widgets.Layout(width=f'{width}px', height='auto')
 
         self._figure = Figure(scales=scales,
-                              layout=widgets.Layout(height='80px'),
-                              axes=[self._x_axis],
-                              fig_margin={'top': 0, 'bottom': 50, 'left': 50, 'right': 0})
+                              layout=layout,
+                              axes=[axis],
+                              fig_margin=fig_margin)
 
         self._figure.marks = [self._mark]
 
         super().__init__(children=[self._figure])
+
+    def _get_array(self):
+        array = np.linspace(self.min, self.max, 255)
+        if self._direction == 'horizontal':
+            array = array[None]
+        else:
+            array = array[:, None]
+        return array
 
     @property
     def layout(self):
@@ -46,17 +64,18 @@ class ColorBar(widgets.HBox):
     def _observe_label(self, change):
         self._x_axis.label = change['new']
 
-    @observe('min')
-    def _observe_min(self, change):
-        self._mark.image = np.linspace(change['new'], self.max, 100)[None]
-        self._x_scale.min = change['new']
-        self._mark.x = [change['new'], self.max]
-
     @observe('max')
     def _observe_min(self, change):
-        self._mark.image = np.linspace(self.min, change['new'], 100)[None]
-        self._x_scale.max = change['new']
-        self._mark.x = [self.min, change['new']]
+        self._mark.image = self._get_array()
+
+        if self._direction == 'horizontal':
+            self._x_scale.min = self.min
+            self._x_scale.max = self.max
+            self._mark.x = [self.min, self.max]
+        else:
+            self._y_scale.min = self.min
+            self._y_scale.max = self.max
+            self._mark.y = [self.min, self.max]
 
 
 class Artist(HasTraits):
@@ -81,7 +100,6 @@ class ImageArtist(Artist):
 
     def __init__(self, rgb=False, **kwargs):
         self._color_scale = ColorScale(colors=['black', 'white'], min=0, max=1)
-        self._color_bar = ColorBar(color_scale=self._color_scale)
 
         scales = {'x': LinearScale(allow_padding=False),
                   'y': LinearScale(allow_padding=False, orientation='vertical'),
@@ -96,6 +114,20 @@ class ImageArtist(Artist):
 
         link((self._mark, 'visible'), (self, 'visible'))
         super().__init__(**kwargs)
+
+    def get_color_bar(self, label='', margin=(50, 0), width=80, height=None, direction='horizontal'):
+
+        # if direction == 'horizontal':
+
+        color_bar = ColorBar(color_scale=self._color_scale, margin=margin,
+                             label=label, width=width, height=height, direction=direction)
+        link((self._color_scale, 'min'), (color_bar, 'min'))
+        link((self._color_scale, 'max'), (color_bar, 'max'))
+        return color_bar
+
+    @property
+    def color_scale(self):
+        return self._color_scale
 
     @property
     def power_scale_slider(self):
@@ -118,10 +150,6 @@ class ImageArtist(Artist):
         else:
             self._color_scale.colors = []
             self._color_scale.scheme = change['new']
-
-    @property
-    def color_bar(self):
-        return self._color_bar
 
     @default('extent')
     def _default_extent(self):
@@ -164,10 +192,9 @@ class ImageArtist(Artist):
                 self._mark.scales['image'].min = float(image.min())
                 self._mark.scales['image'].max = float(image.max())
 
-
-            with self._color_bar._mark.hold_sync():
-                self._color_bar.min = float(image.min())
-                self._color_bar.max = float(image.max())
+            # with self._color_bar._mark.hold_sync():
+            #    self._color_bar.min = float(image.min())
+            #    self._color_bar.max = float(image.max())
 
     def _set_extent(self):
         sampling = ((self.extent[0][1] - self.extent[0][0]) / self.image.shape[0],

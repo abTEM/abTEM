@@ -38,6 +38,9 @@ class Canvas(HasTraits):
 
         fig_margin = fig_margin or {'top': 0, 'bottom': 50, 'left': 50, 'right': 0}
 
+        margin_width = width - fig_margin['left'] - fig_margin['right']
+        margin_height = width - fig_margin['bottom'] - fig_margin['top']
+
         min_aspect_ratio = width / height
         max_aspect_ratio = width / height
 
@@ -53,7 +56,7 @@ class Canvas(HasTraits):
         super().__init__(figure=figure, **kwargs)
         link((self, 'x_label'), (x_axis, 'label'))
         link((self, 'y_label'), (y_axis, 'label'))
-        #link((self, 'title'), (figure, 'title'))
+        # link((self, 'title'), (figure, 'title'))
 
     @property
     def widget(self):
@@ -101,7 +104,7 @@ class Canvas(HasTraits):
         # if (self.y_scale.min is not None) or (self.y_scale.max is not None):
         #     adjust_y = True
 
-        #self.adjust_limits_to_artists(adjust_x=adjust_x, adjust_y=adjust_y)
+        # self.adjust_limits_to_artists(adjust_x=adjust_x, adjust_y=adjust_y)
 
     def _enforce_scale_lock(self, adjust_x=True, adjust_y=True):
         if not self.lock_scale:
