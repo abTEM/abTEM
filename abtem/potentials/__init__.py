@@ -1,1 +1,1 @@
-from abtem.potentials.potentials import *
+from abtem.potentials.potentials import Potential, PotentialArray

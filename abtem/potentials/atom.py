@@ -1,22 +1,33 @@
+from typing import Tuple
+
 import numpy as np
-from scipy.optimize import brentq
+from numba import jit
 from scipy.integrate import quad
 from scipy.interpolate import interp1d
-from typing import Tuple
-from abtem.potentials.parametrizations import load_lobato_parameters, load_kirkland_parameters
-from abtem.potentials.parametrizations import lobato, kirkland
+from scipy.optimize import brentq
+
+from abtem.basic.backend import cp, get_array_module
 from abtem.basic.grid import disc_meshgrid
-from numba import jit, prange
+from abtem.potentials.parametrizations import names as parametrization_names
+
+import matplotlib.pyplot as plt
+from ase.data import chemical_symbols, atomic_numbers
+from abtem.potentials.utils import kappa
+
+if cp is not None:
+    from abtem.basic.cuda import interpolate_radial_functions as interpolate_radial_functions_cuda
+else:
+    interpolate_radial_functions_cuda = None
 
 
-@jit(nopython=True, nogil=True, parallel=True)
+@jit(nopython=True, nogil=True)
 def interpolate_radial_functions(array: np.ndarray,
                                  positions: np.ndarray,
                                  disk_indices: np.ndarray,
                                  sampling: Tuple[float, float],
                                  radial_gpts: np.ndarray,
-                                 radial_potential: np.ndarray,
-                                 radial_potential_derivative: np.ndarray):
+                                 radial_functions: np.ndarray,
+                                 radial_derivative: np.ndarray):
     n = radial_gpts.shape[0]
     dt = np.log(radial_gpts[-1] / radial_gpts[0]) / (n - 1)
 
@@ -25,7 +36,7 @@ def interpolate_radial_functions(array: np.ndarray,
         px = int(round(positions[i, 0] / sampling[0]))
         py = int(round(positions[i, 1] / sampling[1]))
 
-        for j in prange(disk_indices.shape[0]):  # Thread safe loop
+        for j in range(disk_indices.shape[0]):
             k = px + disk_indices[j, 0]
             m = py + disk_indices[j, 1]
 
@@ -36,26 +47,28 @@ def interpolate_radial_functions(array: np.ndarray,
                 idx = int(np.floor(np.log(r_interp / radial_gpts[0] + 1e-12) / dt))
 
                 if idx < 0:
-                    array[k, m] += radial_potential[i, 0]
+                    array[k, m] += radial_functions[i, 0]
                 elif idx < n - 1:
-                    slope = radial_potential_derivative[i, idx]
-                    array[k, m] += radial_potential[i, idx] + (r_interp - radial_gpts[idx]) * slope
+                    slope = radial_derivative[i, idx]
+                    array[k, m] += radial_functions[i, idx] + (r_interp - radial_gpts[idx]) * slope
 
 
 class AtomicPotential:
 
-    def __init__(self, atomic_number, parametrization, radial_gpts, tolerance=1e-3):
-        self._atomic_number = atomic_number
+    def __init__(self, symbol, parametrization='lobato', core_size=.01, cutoff_tolerance=1e-3):
 
-        if parametrization == 'kirkland':
-            self._parameters = load_kirkland_parameters()[atomic_number]
-            self._potential = kirkland
-        elif parametrization == 'lobato':
-            self._parameters = load_lobato_parameters()[atomic_number]
-            self._potential = lobato
+        if not isinstance(symbol, str):
+            symbol = chemical_symbols[symbol]
 
-        self._tolerance = tolerance
-        self._radial_gpts = radial_gpts
+        self._symbol = symbol
+
+        parametrization = parametrization_names[parametrization]
+
+        self._parameters = parametrization.load_parameters()[symbol]
+        self._potential = parametrization.potential
+
+        self._cutoff_tolerance = cutoff_tolerance
+        self._core_size = core_size
         self._integral_table = None
         self._cutoff = None
 
@@ -64,56 +77,92 @@ class AtomicPotential:
         return self._parameters
 
     @property
-    def tolerance(self) -> float:
-        return self._tolerance
+    def cutoff_tolerance(self) -> float:
+        return self._cutoff_tolerance
+
+    @property
+    def radial_gpts(self):
+        num_points = int(np.ceil(self.cutoff / self._core_size))
+        return np.geomspace(self._core_size, self.cutoff, num_points)
 
     @property
     def cutoff(self) -> float:
         if self._cutoff is None:
-            self._calculate_cutoff()
+            self._cutoff = brentq(f=lambda r: self.evaluate(r) - self.cutoff_tolerance, a=1e-3, b=1e3)
 
         return self._cutoff
 
     def evaluate(self, r) -> np.ndarray:
-        return self._potential(r, self._parameters)
+        return self._potential(r, self._parameters) / kappa
 
-    def _calculate_cutoff(self):
-        self._cutoff = brentq(f=lambda r: self._potential(r, self.parameters) - self.tolerance, a=1e-3, b=1e3)
-
-    def _build_integral_table(self):
-        limits = np.linspace(-self.cutoff, 0, 100)
+    def build_integral_table(self, taper=.85):
+        limits = np.linspace(-self.cutoff, 0, 50)
         limits = np.concatenate((limits, -limits[::-1][1:]))
-        table = np.zeros((len(limits) - 1, len(self._radial_gpts)))
+        table = np.zeros((len(limits) - 1, len(self.radial_gpts)))
 
-        for i, Ri in enumerate(self._radial_gpts):
+        for i, Ri in enumerate(self.radial_gpts):
             R2 = Ri ** 2
-            v = lambda z: kirkland(np.sqrt(R2 + z ** 2), self.parameters)
+            v = lambda z: self.evaluate(np.sqrt(R2 + z ** 2))
 
             table[0, i] = quad(v, -np.inf, limits[0])[0]
             for j, limit in enumerate(limits[1:-1]):
                 table[j + 1, i] = table[j, i] + quad(v, limit, limits[j + 2])[0]
 
+        taper_start = taper * self.cutoff
+        taper_mask = self.radial_gpts > taper_start
+        taper_values = np.ones_like(self.radial_gpts)
+        taper_values[taper_mask] = (np.cos(
+            np.pi * (self.radial_gpts[taper_mask] - taper_start) / (self.cutoff - taper_start)) + 1.) / 2
+        table = table * taper_values[None]
+
         self._integral_table = limits[1:], table
 
+        return self._integral_table
+
     def project(self, a, b) -> np.ndarray:
-        if self._integral_table is None:
-            self._build_integral_table()
+        #if self._integral_table is None:
+        #    self.build_integral_table()
 
         f = interp1d(*self._integral_table, axis=0, kind='linear', fill_value='extrapolate')
         return f(b) - f(a)
 
     def project_on_grid(self, array, sampling, positions, a, b):
-        disk_indices = np.array(disc_meshgrid(int(np.ceil(self.cutoff / np.min(sampling))))).T
-        radial_potential = self.project(a, b)
+        if len(positions) == 0:
+            return array
 
-        radial_potential_derivative = np.zeros_like(radial_potential)
-        radial_potential_derivative[:, :-1] = np.diff(radial_potential, axis=1) / np.diff(self._radial_gpts)[None]
+        xp = get_array_module(array)
 
-        interpolate_radial_functions(array=array,
-                                     positions=positions,
-                                     disk_indices=disk_indices,
-                                     sampling=sampling,
-                                     radial_potential=radial_potential,
-                                     radial_gpts=self._radial_gpts,
-                                     radial_potential_derivative=radial_potential_derivative)
+        disk_indices = xp.asarray(disc_meshgrid(int(np.ceil(self.cutoff / np.min(sampling)))))
+        radial_potential = xp.asarray(self.project(a, b))
+
+        radial_potential_derivative = xp.zeros_like(radial_potential)
+        radial_potential_derivative[:, :-1] = xp.diff(radial_potential, axis=1) / xp.diff(self.radial_gpts)[None]
+
+        positions = xp.asarray(positions)
+
+        if xp is cp:
+            interpolate_radial_functions_cuda(array=array,
+                                              positions=positions,
+                                              disk_indices=disk_indices,
+                                              sampling=sampling,
+                                              radial_gpts=xp.asarray(self.radial_gpts),
+                                              radial_functions=radial_potential,
+                                              radial_derivative=radial_potential_derivative)
+        else:
+            interpolate_radial_functions(array=array,
+                                         positions=positions,
+                                         disk_indices=disk_indices,
+                                         sampling=sampling,
+
+                                         radial_gpts=self.radial_gpts,
+                                         radial_functions=radial_potential,
+                                         radial_derivative=radial_potential_derivative)
         return array
+
+    def show(self, ax=None):
+        if ax is None:
+            ax = plt.subplot()
+
+        ax.plot(self.radial_gpts, self.evaluate(self.radial_gpts), label=self._symbol)
+        ax.set_ylabel('V [V]')
+        ax.set_xlabel('r [Å]')

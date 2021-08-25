@@ -1,6 +1,6 @@
 import numpy as np
-
-from abtem.potentials.parametrizations import get_parameterization
+from ase.data import chemical_symbols
+from abtem.potentials.parametrizations import names as parametrization_names
 from abtem.potentials.utils import kappa
 from abtem.basic.backend import get_array_module
 from abtem.basic.fft import fft2, ifft2
@@ -15,14 +15,14 @@ def _sinc(gpts, sampling, xp):
 
 def calculate_scattering_factors(gpts, sampling, atomic_numbers, xp='numpy', parametrization='kirkland'):
     xp = get_array_module(xp)
+    parametrization = parametrization_names[parametrization]
+    parameters = parametrization.load_parameters()
 
     k, _ = polar_spatial_frequencies(gpts, sampling, delayed=False, xp=xp)
-    parameters, funcs = get_parameterization(parametrization)
-
     scattering_factors = xp.zeros((len(atomic_numbers),) + gpts, dtype=np.float32)
 
     for i, number in enumerate(atomic_numbers):
-        f = funcs['projected_fourier'](k, parameters[number])
+        f = parametrization.projected_scattering_factor(k, parameters[chemical_symbols[number]])
         scattering_factors[i] = f
 
     return scattering_factors / _sinc(gpts, sampling, xp)
