@@ -8,7 +8,7 @@ import dask.array as da
 import numpy as np
 from ase import Atoms
 
-from abtem.basic.antialias import HasAntialiasAperture
+from abtem.basic.antialias import HasAntialiasApertureMixin
 from abtem.basic.energy import HasAcceleratorMixin
 from abtem.basic.event import HasEventMixin, Event, watched_method
 from abtem.basic.grid import HasGridMixin
@@ -17,6 +17,7 @@ from abtem.measure.detect import AbstractDetector
 from abtem.measure.old_measure import Measurement
 from abtem.potentials import Potential
 from abtem.waves.scan import AbstractScan
+from abtem.basic.dask import HasDaskArray
 
 
 class BeamTilt(HasEventMixin):
@@ -48,16 +49,15 @@ class HasBeamTiltMixin:
         self.tilt = value
 
 
-class AbstractWaves(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin, HasBeamTiltMixin, HasAntialiasAperture,
-                    metaclass=ABCMeta):
+class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin, HasBeamTiltMixin, HasAntialiasApertureMixin):
 
-    @abstractmethod
-    def multislice(self, *args, **kwargs):
-        pass
+    # @abstractmethod
+    # def multislice(self, *args, **kwargs):
+    #    pass
 
-    @abstractmethod
-    def __copy__(self):
-        pass
+    # @abstractmethod
+    # def __copy__(self):
+    #    pass
 
     def copy(self):
         """Make a copy."""
@@ -73,11 +73,14 @@ class AbstractWaves(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin, HasBeamTi
 
     @property
     def _base_axes_metadata(self):
+        self.grid.check_is_defined()
         return [{'label': 'x', 'type': 'real_space', 'sampling': self.sampling[0]},
                 {'label': 'y', 'type': 'real_space', 'sampling': self.sampling[1]}]
 
-    # def _gpts_in_angle(self, angle):
-    #    return tuple(int(2 * np.ceil(angle / d)) + 1 for n, d in zip(self.gpts, self.angular_sampling))
+    @property
+    def _fourier_space_axes_metadata(self):
+        return [{'label': 'alpha_x', 'type': 'fourier_space', 'sampling': self.angular_sampling[0]},
+                {'label': 'alpha_y', 'type': 'fourier_space', 'sampling': self.angular_sampling[1]}]
 
     def _gpts_within_angle(self, angle):
 
@@ -119,7 +122,7 @@ class AbstractWaves(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin, HasBeamTi
         return potential
 
 
-class AbstractScannedWaves(AbstractWaves):
+class AbstractScannedWaves(WavesLikeMixin):
 
     def _compute_chunks(self, dims):
         chunk_size = dask.utils.parse_bytes(dask.config.get('array.chunk-size'))

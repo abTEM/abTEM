@@ -1,23 +1,20 @@
 from copy import copy
-from typing import Union, Sequence, Tuple, Dict
+from typing import Union, Sequence, Tuple, Dict, List
 
 import dask
 import dask.array as da
-import matplotlib.pyplot as plt
 import numpy as np
 from ase import Atoms
 
-from abtem.base_classes import Cache, cached_method, Event
 from abtem.basic.antialias import AntialiasAperture
 from abtem.basic.backend import get_array_module, cp
 from abtem.basic.complex import complex_exponential
-from abtem.basic.fft import fft2_shift_kernel
 from abtem.basic.grid import Grid
-from abtem.basic.utils import generate_array_chunks, reassemble_chunks_along, array_row_intersection
-from abtem.device import get_device_function, get_array_module_from_device, copy_to_device, get_device_from_array
+from abtem.basic.utils import generate_array_chunks, reassemble_chunks_along
+from abtem.device import get_array_module_from_device
 from abtem.measure.detect import AbstractDetector
 from abtem.measure.old_measure import Measurement, probe_profile
-from abtem.potentials import Potential, AbstractPotential
+from abtem.potentials.potentials import Potential, AbstractPotential
 from abtem.waves.base import BeamTilt, AbstractScannedWaves
 from abtem.waves.multislice import multislice
 from abtem.waves.scan import AbstractScan
@@ -31,6 +28,7 @@ else:
 
 
 def wrapped_slices(start, stop, n):
+
     if stop - start > n:
         raise NotImplementedError()
 
@@ -49,8 +47,8 @@ def wrapped_slices(start, stop, n):
 
 
 def wrapped_crop_2d(array, lower_corner, upper_corner):
-    a, c = wrapped_slices(lower_corner[0], upper_corner[0], array.shape[1])
-    b, d = wrapped_slices(lower_corner[1], upper_corner[1], array.shape[2])
+    a, c = wrapped_slices(lower_corner[0], upper_corner[0], array.shape[-2])
+    b, d = wrapped_slices(lower_corner[1], upper_corner[1], array.shape[-1])
 
     A = array[..., a, b]
     B = array[..., c, b]
@@ -62,14 +60,14 @@ def wrapped_crop_2d(array, lower_corner, upper_corner):
     elif B.size == 0:
         AB = A
     else:
-        AB = da.concatenate([A, B], axis=1)
+        AB = da.concatenate([A, B], axis=-2)
 
     if C.size == 0:
         CD = D
     elif D.size == 0:
         CD = C
     else:
-        CD = da.concatenate([C, D], axis=1)
+        CD = da.concatenate([C, D], axis=-2)
 
     if CD.size == 0:
         return AB
@@ -77,7 +75,7 @@ def wrapped_crop_2d(array, lower_corner, upper_corner):
     if AB.size == 0:
         return CD
 
-    return da.concatenate([AB, CD], axis=2)
+    return da.concatenate([AB, CD], axis=-1)
 
 
 def batch_crop_2d(array, corners, new_shape):
@@ -88,6 +86,9 @@ def batch_crop_2d(array, corners, new_shape):
     else:
         array = np.lib.stride_tricks.sliding_window_view(array, (1,) + new_shape)
         return array[xp.arange(array.shape[0]), corners[:, 0], corners[:, 1], 0]
+
+
+_plane_waves_axes_metadata = {'label': 'plane_waves', 'type': 'ensemble'}
 
 
 class SMatrixArray(AbstractScannedWaves):
@@ -128,7 +129,7 @@ class SMatrixArray(AbstractScannedWaves):
     """
 
     def __init__(self,
-                 array: np.ndarray,
+                 array: Union[np.ndarray, da.core.Array],
                  energy: float,
                  wave_vectors: np.ndarray,
                  interpolation: int = 1,
@@ -138,8 +139,8 @@ class SMatrixArray(AbstractScannedWaves):
                  ctf: CTF = None,
                  antialias_aperture: float = None,
                  device: str = 'cpu',
-                 axes_metadata=None,
-                 metadata=None):
+                 ensemble_axes_metadata: List[Dict] = None,
+                 metadata: Dict = None):
 
         if ctf is None:
             ctf = CTF()
@@ -147,7 +148,7 @@ class SMatrixArray(AbstractScannedWaves):
         if ctf.energy is None:
             ctf.energy = energy
 
-        if (ctf.energy != energy):
+        if ctf.energy != energy:
             raise RuntimeError
 
         self._interpolation = interpolation
@@ -163,12 +164,15 @@ class SMatrixArray(AbstractScannedWaves):
         self._array = array
         self._wave_vectors = wave_vectors
 
-        self._axes_metadata = axes_metadata
+        if ensemble_axes_metadata is None:
+            ensemble_axes_metadata = []
+
+        self._ensemble_axes_metadata = ensemble_axes_metadata
         self._metadata = metadata
 
     @property
     def axes_metadata(self):
-        return self._axes_metadata
+        return self._ensemble_axes_metadata + [_plane_waves_axes_metadata] + self._base_axes_metadata
 
     @property
     def metadata(self):
@@ -218,6 +222,7 @@ class SMatrixArray(AbstractScannedWaves):
                               ctf=self.ctf.copy(),
                               extent=self.extent,
                               energy=self.energy,
+                              ensemble_axes_metadata=self._ensemble_axes_metadata,
                               antialias_aperture=downsampled_waves.antialias_aperture,
                               device=self.device)
 
@@ -237,10 +242,31 @@ class SMatrixArray(AbstractScannedWaves):
         Waves object.
             Probe exit wave functions for the provided positions.
         """
-        return multislice(self, potential, splits=splits)
+
+        if potential.num_frozen_phonons == 1:
+            return multislice(self, potential, splits=splits)
+
+        exit_waves = []
+        for p in potential.frozen_phonon_potentials():
+            exit_waves.append(multislice(self.copy(), p, splits=splits))
+
+        array = da.stack([exit_wave.array for exit_wave in exit_waves], axis=0)
+
+        ensemble_axes_metadata = [{'label': 'frozen_phonons', 'type': 'ensemble'}]
+
+        return self.__class__(array=array,
+                              extent=self.extent,
+                              energy=self.energy,
+                              wave_vectors=self.wave_vectors,
+                              tilt=self.tilt,
+                              interpolation=self.interpolation,
+                              antialias_aperture=2 / 3.,
+                              ensemble_axes_metadata=ensemble_axes_metadata)
+
+        # return multislice(self, potential, splits=splits)
 
     def _get_coefficients(self, positions):
-        xp = get_array_module(self._array)
+        xp = get_array_module(self.device)
 
         positions = xp.asarray(positions)
         wave_vectors = xp.asarray(self.wave_vectors)
@@ -289,7 +315,7 @@ class SMatrixArray(AbstractScannedWaves):
         """
 
         if isinstance(positions, AbstractScan):
-            axes_metadata = positions.axes_metadata + self._base_axes_metadata
+            axes_metadata = self._ensemble_axes_metadata + positions.axes_metadata + self._base_axes_metadata
             positions = positions.get_positions()
 
         else:
@@ -300,11 +326,11 @@ class SMatrixArray(AbstractScannedWaves):
         xp = get_array_module(self._array)
 
         if chunks is None:
-            chunks = self._compute_chunks(len(positions.array) - 1)
+            chunks = self._compute_chunks(len(positions.shape) - 1)
 
         def _reduce_interpolated(positions, corners, array):
             coefficients = self._get_coefficients(positions.reshape((-1, 2)))
-            window = xp.tensordot(coefficients, array, axes=[-1, 0])
+            window = xp.tensordot(coefficients, array, axes=[-1, -3])
             window = batch_crop_2d(window, corners.reshape((-1, 2)), self.interpolated_gpts)
             window = window.reshape(positions.shape[:-1] + window.shape[-2:])
             return window
@@ -329,8 +355,11 @@ class SMatrixArray(AbstractScannedWaves):
             windows = da.concatenate(windows, axis=1)
 
         else:
-            coefficients = self._get_coefficients(positions)
-            windows = da.tensordot(coefficients, self.array, axes=[-1, 0])
+            coefficients = da.from_array(self._get_coefficients(positions), chunks=chunks[:-1] + (len(self),))
+            windows = da.tensordot(coefficients, self.array, axes=[-1, -3])
+
+        if len(windows) > 3:
+            windows = da.moveaxis(windows, range(2, len(self.array.shape) - 1), range(0, len(self.array.shape) - 3))
 
         return Waves(windows, sampling=self.sampling, energy=self.energy, tilt=self.tilt,
                      antialias_aperture=self.antialias_aperture, axes_metadata=axes_metadata)
@@ -500,6 +529,10 @@ class SMatrix(AbstractScannedWaves):
         self._num_partitions = num_partitions
 
     @property
+    def axes_metadata(self):
+        return [_plane_waves_axes_metadata] + self._base_axes_metadata
+
+    @property
     def chunks(self):
         return self._chunks
 
@@ -651,37 +684,6 @@ class SMatrix(AbstractScannedWaves):
         ky = ky[mask]
         return xp.asarray((kx, ky)).T
 
-    def get_parent_wavevectors(self):
-        rings = [np.array((0., 0.))]
-        n = 6
-        if self._num_partitions == 1:
-            raise NotImplementedError()
-
-        for r in np.linspace(self.expansion_cutoff / (self._num_partitions - 1), self.expansion_cutoff,
-                             self._num_partitions - 1):
-            angles = np.arange(n, dtype=np.int32) * 2 * np.pi / n + np.pi / 2
-            kx = np.round(r * np.sin(angles) / 1000. / self.wavelength * self.extent[0]) / self.extent[0]
-            ky = np.round(r * np.cos(-angles) / 1000. / self.wavelength * self.extent[1]) / self.extent[1]
-            n += 6
-            rings.append(np.array([kx, ky]).T)
-
-        return np.vstack(rings)
-
-    def _build_partial(self):
-        k_parent = self.get_parent_wavevectors()
-        array = self._build_planewaves(k_parent)
-
-        parent_s_matrix = SMatrixArray(array,
-                                       interpolation=self.interpolation,
-                                       extent=self.extent,
-                                       energy=self.energy,
-                                       tilt=self.tilt,
-                                       k=k_parent,
-                                       ctf=self.ctf.copy(),
-                                       antialias_aperture=self.antialias_aperture,
-                                       device=self._device)
-        return PartitionedSMatrix(parent_s_matrix, wave_vectors=self.get_wavevectors())
-
     def _build_convential(self):
         wave_vectors = self.wave_vectors
         wave_vectors = da.from_array(wave_vectors, chunks=(self.chunks, -1))
@@ -711,51 +713,19 @@ class SMatrix(AbstractScannedWaves):
                             ctf=self.ctf.copy(),
                             antialias_aperture=self.antialias_aperture,
                             device=self._device,
-                            axes_metadata=self._base_axes_metadata,
+                            ensemble_axes_metadata=None,
                             metadata={'energy': self.energy})
 
-    def build(self) -> Union[SMatrixArray, 'PartitionedSMatrix']:
+    def build(self) -> Union[SMatrixArray]:
         """Build the scattering matrix."""
 
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
-
-        if self._num_partitions is None:
-            return self._build_convential()
-        else:
-            return self._build_partial()
+        return self._build_convential()
 
     def profile(self, angle=0.) -> Measurement:
-        measurement = self.build().collapse((self.extent[0] / 2, self.extent[1] / 2)).intensity()
+        measurement = self.build().reduce((self.extent[0] / 2, self.extent[1] / 2)).intensity()
         return probe_profile(measurement, angle=angle)
-
-    def interact(self, sliders=None, profile: bool = False, throttling: float = 0.01):
-        from abtem.visualize.widgets import quick_sliders, throttle
-        from abtem.visualize.interactive.apps import MeasurementView1d, MeasurementView2d
-        import ipywidgets as widgets
-
-        if profile:
-            view = MeasurementView1d()
-
-            def callback(*args):
-                view.measurement = self.profile()
-        else:
-            view = MeasurementView2d()
-
-            def callback(*args):
-                view.measurement = self.build().collapse().intensity()[0]
-
-        if throttling:
-            callback = throttle(throttling)(callback)
-
-        self.observe(callback)
-        callback()
-
-        if sliders:
-            sliders = quick_sliders(self.ctf, **sliders)
-            return widgets.HBox([view.figure, widgets.VBox(sliders)])
-        else:
-            return view.figure
 
     def show(self, **kwargs):
         """
@@ -782,251 +752,3 @@ class SMatrix(AbstractScannedWaves):
     def copy(self) -> 'SMatrix':
         """Make a copy."""
         return copy(self)
-
-
-class PartitionedSMatrix(AbstractScannedWaves):
-
-    def __init__(self, parent_s_matrix, wave_vectors):
-        self._parent_s_matrix = parent_s_matrix
-        self._wave_vectors = wave_vectors
-
-        self._grid = self._parent_s_matrix.grid
-        self._ctf = self._parent_s_matrix.ctf
-        self._accelerator = self._parent_s_matrix.accelerator
-        self._antialias_aperture = self._parent_s_matrix.antialias_aperture
-        self._device = self._parent_s_matrix._device
-
-        self._event = Event()
-        self._beamlet_weights_cache = Cache(1)
-        self._beamlet_basis_cache = Cache(1)
-
-        self._ctf_has_changed = Event()
-
-        self._has_tilt = True
-        self._accumulated_defocus = 0.
-
-    @property
-    def parent_wave_vectors(self):
-        return self._parent_s_matrix.k
-
-    @property
-    def ctf(self):
-        return self._ctf
-
-    @property
-    def wave_vectors(self):
-        return self._wave_vectors
-
-    @cached_method('_beamlet_weights_cache')
-    def get_beamlet_weights(self):
-        from scipy.spatial import Delaunay
-        from abtem.waves.natural_neighbors import find_natural_neighbors, natural_neighbor_weights
-
-        parent_wavevectors = self.parent_wave_vectors
-        wave_vectors = self.wave_vectors
-
-        n = len(parent_wavevectors)
-        tri = Delaunay(parent_wavevectors)
-
-        kx, ky = self.get_spatial_frequencies()
-        kx, ky = np.meshgrid(kx, ky, indexing='ij')
-
-        k = np.asarray((kx.ravel(), ky.ravel())).T
-
-        weights = np.zeros((n,) + kx.shape)
-
-        intersection = np.where(array_row_intersection(k, wave_vectors))[0]
-
-        members, circumcenters = find_natural_neighbors(tri, k)
-
-        for i in intersection:
-            j, l = np.unravel_index(i, kx.shape)
-            weights[:, j, l] = natural_neighbor_weights(parent_wavevectors, k[i], tri, members[i],
-                                                        circumcenters)
-
-        return weights
-
-    def get_weights(self):
-        from scipy.spatial import Delaunay
-        from abtem.waves.natural_neighbors import find_natural_neighbors, natural_neighbor_weights
-
-        parent_wavevectors = self.parent_wave_vectors
-        n = len(parent_wavevectors)
-        tri = Delaunay(parent_wavevectors)
-
-        k = self.wave_vectors
-        weights = np.zeros((n, len(k)))
-
-        members, circumcenters = find_natural_neighbors(tri, k)
-        for i, p in enumerate(k):
-            weights[:, i] = natural_neighbor_weights(parent_wavevectors, p, tri, members[i], circumcenters)
-
-        return weights
-
-    def downsample(self, **kwargs):
-        new_s_matrix_array = self._parent_s_matrix.downsample(**kwargs)
-        return self.__class__(new_s_matrix_array, wave_vectors=self.wave_vectors)
-
-    def _add_plane_wave_tilt(self):
-        if self._has_tilt:
-            return
-
-    def _remove_plane_wave_tilt(self):
-        if not self._has_tilt:
-            return
-
-        xp = get_array_module(self._parent_s_matrix.array)
-        storage = get_device_from_array(self._parent_s_matrix.array)
-        complex_exponential = get_device_function(xp, 'complex_exponential')
-
-        x = xp.linspace(0, self.extent[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=np.float32)
-        y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=np.float32)
-
-        array = self._parent_s_matrix.array
-        k = self.parent_wave_vectors
-
-        alpha = xp.sqrt(k[:, 0] ** 2 + k[:, 1] ** 2) * self.wavelength
-        phi = xp.arctan2(k[:, 0], k[:, 1])
-
-        ctf = CTF(defocus=self._accumulated_defocus, energy=self.energy)
-        coeff = ctf.evaluate(alpha, phi)
-
-        array *= coeff[:, None, None]
-
-        for i in range(len(array)):
-            array[i] *= copy_to_device(complex_exponential(-2 * np.pi * k[i, 0, None, None] * x[:, None]) *
-                                       complex_exponential(-2 * np.pi * k[i, 1, None, None] * y[None, :]),
-                                       storage)
-
-        self._has_tilt = False
-
-    def multislice(self, potential: AbstractPotential,
-                   max_batch: int = None,
-                   multislice_pbar: Union[bool] = True,
-                   plane_waves_pbar: Union[bool] = True):
-
-        if isinstance(potential, Atoms):
-            potential = Potential(potential)
-
-        self._add_plane_wave_tilt()
-
-        self._accumulated_defocus += potential.thickness
-
-        self._parent_s_matrix.multislice(potential, max_batch, multislice_pbar, plane_waves_pbar)
-        return self
-
-    def _fourier_translation_operator(self, positions):
-        xp = get_array_module(positions)
-        # positions /= xp.array(self.sampling)
-        return fft2_shift_kernel(positions, self.gpts)
-
-    @cached_method('_beamlet_basis_cache')
-    def get_beamlet_basis(self):
-        alpha, phi = self.get_scattering_angles()
-
-        ctf = self._ctf.copy()
-        ctf.defocus = ctf.defocus - self._accumulated_defocus
-        # ctf = CTF(defocus=-self._accumulated_defocus, energy=self.energy, semiangle_cutoff=10)
-        coeff = ctf.evaluate(alpha, phi)
-        weights = self.get_beamlet_weights() * coeff
-        return np.fft.ifft2(weights, axes=(1, 2))
-
-    def _build_planewaves(self, k):
-        self.grid.check_is_defined()
-        self.accelerator.check_is_defined()
-
-        # xp = get_array_module_from_device(self._device)
-        xp = np
-        # storage_xp = get_array_module_from_device(self._storage)
-        complex_exponential = get_device_function(xp, 'complex_exponential')
-
-        x = xp.linspace(0, self.extent[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=np.float32)
-        y = xp.linspace(0, self.extent[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=np.float32)
-
-        shape = (len(k),) + self.gpts
-
-        array = xp.zeros(shape, dtype=np.complex64)
-        for i in range(len(k)):
-            array[i] = (complex_exponential(2 * np.pi * k[i, 0, None, None] * x[:, None]) *
-                        complex_exponential(2 * np.pi * k[i, 1, None, None] * y[None, :]))
-
-        return array
-
-    def interpolate_full(self):
-        self._remove_plane_wave_tilt()
-
-        plane_waves = self._build_planewaves(self.wave_vectors)
-        weights = self.get_weights()
-
-        for i, plane_wave in enumerate(plane_waves):
-            plane_wave *= (self._parent_s_matrix.array * weights[:, i, None, None]).sum(0)
-
-        alpha = np.sqrt(self.wave_vectors[:, 0] ** 2 + self.wave_vectors[:, 1] ** 2) * self.wavelength
-        phi = np.arctan2(self.wave_vectors[:, 0], self.wave_vectors[:, 1])
-
-        plane_waves *= CTF(defocus=-self._accumulated_defocus, energy=self.energy).evaluate(alpha, phi)[:, None, None]
-
-        return SMatrixArray(plane_waves, energy=self.energy, k=self.wave_vectors, extent=self.extent,
-                            interpolated_gpts=self.gpts, antialias_aperture=self._parent_s_matrix.antialias_aperture)
-
-    def get_beamlets(self, positions, subpixel_shift=False):
-        xp = get_array_module(positions)
-        positions = positions / xp.array(self.sampling)
-
-        if subpixel_shift:
-            weights = self.get_beamlet_weights() * self._fourier_translation_operator(positions)
-            return np.fft.ifft2(weights, axes=(1, 2))
-        else:
-            positions = np.round(positions).astype(np.int)
-            weights = np.roll(self.get_beamlet_basis(), positions, axis=(1, 2))
-            return weights
-
-    def reduce(self, positions, subpixel_shift=False):
-        self._remove_plane_wave_tilt()
-        beamlets = self.get_beamlets(positions, subpixel_shift=subpixel_shift)
-        array = np.einsum('ijk,ijk->jk', self._parent_s_matrix.array, beamlets)
-        return Waves(array=array, extent=self.extent, energy=self.energy,
-                     antialias_aperture=self._parent_s_matrix._antialias_aperture.antialias_aperture)
-
-    def show_interpolation_weights(self, ax=None):
-        from matplotlib.colors import to_rgb
-        from abtem.measure.old_measure import fourier_space_offset
-        weights = np.fft.fftshift(self.get_beamlet_weights(), axes=(1, 2))
-
-        color_cycle = [['c', 'r'], ['m', 'g'], ['b', 'y']]
-        colors = ['w']
-        i = 1
-        while True:
-            colors += color_cycle[(i - 1) % 3] * (3 + (i - 1) * 3)
-            i += 1
-            if len(colors) >= len(weights):
-                break
-
-        colors = np.array([to_rgb(color) for color in colors])
-        color_map = np.zeros(weights.shape[1:] + (3,))
-
-        for i, color in enumerate(colors):
-            color_map += weights[i, ..., None] * color[None, None]
-
-        alpha, phi = self.get_scattering_angles()
-        intensity = np.abs(self._ctf.evaluate(alpha, phi)) ** 2
-        color_map *= np.fft.fftshift(intensity[..., None])
-
-        if ax is None:
-            fig, ax = plt.subplots()
-
-        offsets = [fourier_space_offset(n, d) for n, d in zip(self.gpts, self.sampling)]
-
-        extent = [offsets[0], offsets[0] + 1 / self.extent[0] * self.gpts[0] - 1 / self.extent[0],
-                  offsets[1], offsets[1] + 1 / self.extent[1] * self.gpts[1] - 1 / self.extent[1]]
-        extent = [l * 1000 * self.wavelength for l in extent]
-
-        ax.imshow(color_map, extent=extent, origin='lower')
-        ax.set_xlim([min(self.wave_vectors[:, 0]) * 1.1 * 1000 * self.wavelength,
-                     max(self.wave_vectors[:, 0]) * 1.1 * 1000 * self.wavelength])
-        ax.set_ylim([min(self.wave_vectors[:, 1]) * 1.1 * 1000 * self.wavelength,
-                     max(self.wave_vectors[:, 1]) * 1.1 * 1000 * self.wavelength])
-
-        ax.set_xlabel('alpha_x [mrad]')
-        ax.set_ylabel('alpha_y [mrad]')
-        return ax

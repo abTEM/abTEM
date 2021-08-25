@@ -6,8 +6,8 @@ import dask
 import dask.array as da
 import numpy as np
 
-from abtem.potentials import AbstractPotential, AbstractPotentialBuilder
-from abtem.basic.antialias import AntialiasFilter
+from abtem.potentials.potentials import AbstractPotential, AbstractPotentialBuilder
+from abtem.basic.antialias import AntialiasFilter, antialias_kernel
 from abtem.basic.backend import get_array_module, xp_to_str, copy_to_device
 from abtem.basic.complex import complex_exponential
 from abtem.basic.grid import spatial_frequencies
@@ -35,7 +35,7 @@ class FresnelPropagator:
     The array representing the Fresnel propagator function is cached.
     """
 
-    def __init__(self, waves):
+    def __init__(self, waves, cache_size=1):
         self._gpts = waves.gpts
         self._sampling = waves.sampling
         self._wavelength = waves.wavelength
@@ -54,8 +54,10 @@ class FresnelPropagator:
 
         xp = self._xp
 
-        f = dask.delayed(fresnel, pure=True)(self._gpts, self._sampling, self._wavelength * dz, xp=xp_to_str(xp))
-        f = da.from_delayed(f, shape=self._gpts, meta=xp.array((), dtype=xp.complex64))
+        # f = dask.delayed(fresnel, pure=True)(self._gpts, self._sampling, self._wavelength * dz, xp=xp_to_str(xp))
+        # f = da.from_delayed(f, shape=self._gpts, meta=xp.array((), dtype=xp.complex64))
+
+        f = fresnel(self._gpts, self._sampling, self._wavelength * dz, xp=xp_to_str(xp))
 
         # if self._tilt is not None:
         #     f *= (complex_exponential(-kx[:, None] * self._xp.tan(self._tilt[0] / 1e3) * dz * 2 * np.pi) *
@@ -80,7 +82,9 @@ class FresnelPropagator:
         Waves or SMatrixArray object
             The propagated wave functions.
         """
-        waves._array = fft2_convolve(waves.array, self.build(dz))
+        p = self.build(dz)
+
+        waves._array = fft2_convolve(waves.array, p)
         waves.antialias_aperture = (2 / 3.,) * 2
         return waves
 
@@ -97,9 +101,14 @@ def chunk_sequence(seq, num):
     return out
 
 
-def _multislice(waves, transmission_function, slice_thicknesses, propagator):
+def _multislice(waves, transmission_functions, slice_thicknesses, propagator, first_dz, aa_kernel):
     xp = get_array_module(waves)
-    for t, d in zip(transmission_function, slice_thicknesses):
+    old_dz = first_dz
+    for t, dz in zip(transmission_functions, slice_thicknesses):
+        # if dz != old_dz:
+        #     propagator = fresnel(waves.gpts, waves.shape, dz * waves.wavelength, xp) * aa_kernel
+        #     old_dz = dz
+
         waves *= copy_to_device(t, xp)
         waves = fft2_convolve(waves, propagator, overwrite_x=False)
     return waves
@@ -124,12 +133,18 @@ def multislice(waves: Union['Waves', 'SMatrixArray'],
         waves = waves.build()
         waves_array = waves.array
 
-    propagator = FresnelPropagator(waves)
+    xp = get_array_module(waves.array)
 
-    propagator = propagator.build(.5)
+    aa_kernel = antialias_kernel(waves.gpts, waves.sampling, xp)
+
+    #import matplotlib.pyplot as plt
+    #plt.imshow(aa_kernel)
+    #plt.show()
+
+    def _fresnel(gpts, sampling, dz, aa_kernel, xp):
+        return fresnel(gpts, sampling, dz, xp) * aa_kernel
 
     chunks = potential_array.array.chunks[0]
-
     chunks = tuple(sum(chunk) for chunk in chunk_sequence(chunks, min(len(chunks), splits)))
 
     slics = [slice(start, start + length) for start, length in zip(np.cumsum((0,) + chunks), chunks)]
@@ -142,10 +157,19 @@ def multislice(waves: Union['Waves', 'SMatrixArray'],
         except AttributeError:
             transmission_function = potential_chunks.build().transmission_function(energy=waves.energy)
 
+        dz = transmission_function.slice_thicknesses[0]
+        propagator = dask.delayed(_fresnel, pure=True)(waves.gpts,
+                                                       waves.sampling,
+                                                       dz * waves.wavelength,
+                                                       aa_kernel=aa_kernel,
+                                                       xp=xp_to_str(xp))
+
         waves_array = waves_array.map_blocks(_multislice,
-                                             transmission_function=transmission_function.array,
+                                             transmission_functions=transmission_function.array,
                                              slice_thicknesses=transmission_function.slice_thicknesses,
                                              propagator=propagator,
+                                             first_dz=dz,
+                                             aa_kernel=aa_kernel,
                                              dtype=np.complex64)
 
     waves._array = waves_array

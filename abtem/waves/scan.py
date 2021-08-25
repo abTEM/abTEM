@@ -23,11 +23,6 @@ class AbstractScan(metaclass=ABCMeta):
         return self.num_positions
 
     @property
-    @abstractmethod
-    def sampling(self):
-        pass
-
-    @property
     def num_positions(self):
         return len(self.get_positions())
 
@@ -128,6 +123,11 @@ class LineScan(AbstractScan, HasGridMixin):
         return Calibration(offset=0, sampling=self.sampling[0], units='Å', name='x', endpoint=self.grid.endpoint[0]),
 
     @property
+    def axes_metadata(self):
+        return [{'label': 'x', 'type': 'linescan', 'sampling': self.sampling[0], 'start_x': self.start[0],
+                 'start_y': self.start[1], 'end_x': self.end[0], 'end_y': self.end[1]}]
+
+    @property
     def start(self) -> Tuple[float, float]:
         """
         Start point of the scan [Å].
@@ -198,7 +198,7 @@ class LineScan(AbstractScan, HasGridMixin):
         y = np.linspace(start[1], end[1], self.gpts[0], endpoint=self.grid.endpoint[0])
         return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
-    def add_to_mpl_plot(self, ax, linestyle: str = '-', color: str = 'r', **kwargs):
+    def add_to_plot(self, ax, linestyle: str = '-', color: str = 'r', **kwargs):
         """
         Add a visualization of a scan line to a matplotlib plot.
 
@@ -305,8 +305,8 @@ class GridScan(HasGridMixin, AbstractScan):
 
     @property
     def axes_metadata(self):
-        return [{'label': 'x', 'type': 'scan', 'sampling': self.sampling[0], 'offset': self.start[0]},
-                {'label': 'y', 'type': 'scan', 'sampling': self.sampling[1], 'offset': self.start[1]}]
+        return [{'label': 'x', 'type': 'gridscan', 'sampling': self.sampling[0], 'offset': self.start[0]},
+                {'label': 'y', 'type': 'gridscan', 'sampling': self.sampling[1], 'offset': self.start[1]}]
 
     def get_positions(self) -> np.ndarray:
         x = np.linspace(self.start[0], self.end[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=np.float32)
@@ -315,7 +315,7 @@ class GridScan(HasGridMixin, AbstractScan):
         x, y = np.meshgrid(x, y, indexing='ij')
         return np.stack((x, y), axis=-1)
 
-    def add_to_mpl_plot(self, ax, alpha: float = .33, facecolor: str = 'r', edgecolor: str = 'r', **kwargs):
+    def add_to_plot(self, ax, alpha: float = .33, facecolor: str = 'r', edgecolor: str = 'r', **kwargs):
         """
         Add a visualization of the scan area to a matplotlib plot.
 

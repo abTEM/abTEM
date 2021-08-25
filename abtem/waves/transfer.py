@@ -10,6 +10,7 @@ from abtem.basic.event import Event, HasEventMixin, watched_method, watched_prop
 from abtem.basic.grid import Grid, polar_spatial_frequencies
 from abtem.device import get_array_module
 from abtem.measure.old_measure import Measurement, Calibration
+from abtem.measure import LineProfiles
 
 #: Symbols for the polar representation of all optical aberrations up to the fifth order.
 polar_symbols = ('C10', 'C12', 'phi12',
@@ -313,8 +314,8 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         if self.semiangle_cutoff < np.inf:
             array *= self.evaluate_aperture(alpha)
 
-        # if self.focal_spread > 0.:
-        #     array *= self.evaluate_temporal_envelope(alpha)
+        if self.focal_spread > 0.:
+            array *= self.evaluate_temporal_envelope(alpha)
         #
         # if self.angular_spread > 0.:
         #     array *= self.evaluate_spatial_envelope(alpha, phi)
@@ -360,16 +361,16 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         calibration = Calibration(offset=0., sampling=(alpha[1] - alpha[0]) * 1000., units='mrad', name='alpha')
 
         profiles = {}
-        profiles['ctf'] = Measurement(aberrations.imag * envelope, calibrations=[calibration], name='CTF')
-        profiles['aperture'] = Measurement(aperture, calibrations=[calibration], name='Aperture')
-        profiles['temporal_envelope'] = Measurement(temporal_envelope,
-                                                    calibrations=[calibration],
-                                                    name='Temporal')
-        profiles['spatial_envelope'] = Measurement(spatial_envelope, calibrations=[calibration],
-                                                   name='Spatial')
-        profiles[' '] = Measurement(gaussian_envelope, calibrations=[calibration],
-                                    name='Gaussian')
-        profiles['envelope'] = Measurement(envelope, calibrations=[calibration], name='Envelope')
+        profiles['ctf'] = LineProfiles(aberrations.imag * envelope, calibrations=[calibration], name='CTF')
+        # profiles['aperture'] = Measurement(aperture, calibrations=[calibration], name='Aperture')
+        # profiles['temporal_envelope'] = Measurement(temporal_envelope,
+        #                                             calibrations=[calibration],
+        #                                             name='Temporal')
+        # profiles['spatial_envelope'] = Measurement(spatial_envelope, calibrations=[calibration],
+        #                                            name='Spatial')
+        # profiles[' '] = Measurement(gaussian_envelope, calibrations=[calibration],
+        #                             name='Gaussian')
+        # profiles['envelope'] = Measurement(envelope, calibrations=[calibration], name='Envelope')
         return profiles
 
     def apply(self, waves, interact=False, sliders=None, throttling=0.):
