@@ -2,11 +2,10 @@ numpy
 numba
 pytest
 scipy
-h5py
+zarr
 matplotlib
 ase
 imageio
 ipywidgets
 tqdm
-pyfftw
 psutil
