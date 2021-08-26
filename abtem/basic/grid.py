@@ -4,7 +4,6 @@ from typing import Union, Sequence, Tuple
 import dask
 import dask.array as da
 import numpy as np
-import xarray as xr
 
 from abtem.basic.backend import get_array_module, xp_to_str
 
@@ -178,16 +177,6 @@ class Grid:
 
         elif self.gpts is None:
             raise RuntimeError('Grid gpts are not defined')
-
-    def coords(self):
-        coords = []
-        names = ['x', 'y', 'z']
-
-        for i, (gpts, extent, endpoint) in enumerate(zip(self.gpts, self.extent, self.endpoint)):
-            coords.append(xr.DataArray(np.linspace(0, extent, gpts, endpoint=endpoint), name=names[i],
-                                       attrs={'units': 'Å'}))
-
-        return coords
 
     def match(self, other: Union['Grid', 'HasGridMixin'], check_match: bool = False):
         """
