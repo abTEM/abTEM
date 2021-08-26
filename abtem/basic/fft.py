@@ -77,7 +77,6 @@ def fft2_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
     -------
 
     """
-
     xp = get_array_module(positions)
 
     kx, ky = spatial_frequencies(shape, (1.,) * 2, delayed=False, xp=xp)
@@ -91,39 +90,76 @@ def fft2_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
     return result
 
 
-def fft2_interpolation_masks(shape1, shape2, xp=np, epsilon=1e-7):
-    kx1 = xp.fft.fftfreq(shape1[-2], 1 / shape1[-2])
-    ky1 = xp.fft.fftfreq(shape1[-1], 1 / shape1[-1])
+def _fft_interpolation_masks_1d(n1, n2):
+    mask1 = np.zeros(n1, dtype=bool)
+    mask2 = np.zeros(n2, dtype=bool)
 
-    kx2 = xp.fft.fftfreq(shape2[-2], 1 / shape2[-2])
-    ky2 = xp.fft.fftfreq(shape2[-1], 1 / shape2[-1])
+    if n2 > n1:
+        mask1[:] = True
+    else:
+        if n2 == 1:
+            mask1[0] = True
+        elif n2 % 2 == 0:
+            mask1[:n2 // 2] = True
+            mask1[-n2 // 2:] = True
+        else:
+            mask1[:n2 // 2 + 1] = True
+            mask1[-n2 // 2 + 1:] = True
 
-    kx_min = max(xp.min(kx1), xp.min(kx2)) - epsilon
-    kx_max = min(xp.max(kx1), xp.max(kx2)) + epsilon
-    ky_min = max(xp.min(ky1), xp.min(ky2)) - epsilon
-    ky_max = min(xp.max(ky1), xp.max(ky2)) + epsilon
+    if n1 > n2:
+        mask2[:] = True
+    else:
+        if n1 == 1:
+            mask2[0] = True
+        elif n1 % 2 == 0:
+            mask2[:n1 // 2] = True
+            mask2[-n1 // 2:] = True
+        else:
+            mask2[:n1 // 2 + 1] = True
+            mask2[-n1 // 2 + 1:] = True
 
-    kx1, ky1 = xp.meshgrid(kx1, ky1, indexing='ij')
-    kx2, ky2 = xp.meshgrid(kx2, ky2, indexing='ij')
-
-    mask1 = (kx1 <= kx_max) & (kx1 >= kx_min) & (ky1 <= ky_max) & (ky1 >= ky_min)
-    mask2 = (kx2 <= kx_max) & (kx2 >= kx_min) & (ky2 <= ky_max) & (ky2 >= ky_min)
     return mask1, mask2
 
 
-def fft2_crop(array, new_shape):
+def fft_interpolation_masks(shape1, shape2):
+    mask1_1d = []
+    mask2_1d = []
+
+    for i, (n1, n2) in enumerate(zip(shape1, shape2)):
+        m1, m2 = _fft_interpolation_masks_1d(n1, n2)
+
+        s = [np.newaxis] * len(shape1)
+        s[i] = slice(None)
+
+        mask1_1d += [m1[tuple(s)]]
+        mask2_1d += [m2[tuple(s)]]
+
+    mask1 = mask1_1d[0]
+    for m in mask1_1d[1:]:
+        mask1 = mask1 * m
+
+    mask2 = mask2_1d[0]
+    for m in mask2_1d[1:]:
+        mask2 = mask2 * m
+
+    return mask1, mask2
+
+
+def fft_crop(array, new_shape):
     xp = get_array_module(array)
-    mask_in, mask_out = fft2_interpolation_masks(array.shape, new_shape, xp=xp)
 
     if len(new_shape) < len(array.shape):
-        new_shape = array.shape[:-2] + new_shape
+        new_shape = array.shape[:-len(new_shape)] + new_shape
+
+    mask_in, mask_out = fft_interpolation_masks(array.shape, new_shape)
 
     new_array = xp.zeros(new_shape, dtype=array.dtype)
 
-    out_indices = xp.where(mask_out)
-    in_indices = xp.where(mask_in)
+    #out_indices = xp.where(mask_out)
+    #in_indices = xp.where(mask_in)
 
-    new_array[..., out_indices[0], out_indices[1]] = array[..., in_indices[0], in_indices[1]]
+    new_array[mask_out] = array[mask_in]
+
     return new_array
 
 
@@ -132,17 +168,29 @@ def fft2_interpolate(array, new_shape, normalization='values', overwrite_x=False
 
     old_size = array.shape[-2] * array.shape[-1]
 
+
     def _fft2_interpolate(array, new_shape):
-        return ifft2(fft2_crop(fft2(array), new_shape), overwrite_x=overwrite_x)
+        return ifft2(fft_crop(fft2(array), new_shape), overwrite_x=overwrite_x)
 
-    if np.iscomplexobj(array):
-        array = array.map_blocks(_fft2_interpolate, new_shape=new_shape[-2:],
-                                 chunks=array.chunks[:-2] + ((new_shape[-2],), (new_shape[-1],)),
-                                 dtype=np.complex64)
+    is_complex = np.iscomplexobj(array)
 
-    else:
-        array = xp.complex64(array)
-        array = ifft2(fft2_crop(fft2(array), new_shape), overwrite_x=overwrite_x).real
+    array = xp.complex64(array)
+
+    array = ifft2(fft_crop(fft2(array), new_shape), overwrite_x=overwrite_x)
+
+    if not is_complex:
+        array = array.real
+
+    # if np.iscomplexobj(array):
+    #     # array = array.map_blocks(_fft2_interpolate, new_shape=new_shape[-2:],
+    #     #                          chunks=array.chunks[:-2] + ((new_shape[-2],), (new_shape[-1],)),
+    #     #                          meta=xp.array((), dtype=xp.complex64))
+    #
+    #     array = xp.complex64(array)
+    #     array = ifft2(fft_crop(fft2(array), new_shape), overwrite_x=overwrite_x).real
+    #
+    # else:
+
 
     if normalization == 'values':
         array *= array.shape[-1] * array.shape[-2] / old_size

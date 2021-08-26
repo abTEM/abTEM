@@ -4,20 +4,29 @@ import numpy as np
 
 from abtem.basic.backend import get_array_module, xp_to_str
 from abtem.basic.grid import polar_spatial_frequencies
-from abtem.basic.fft import fft2_convolve, fft2_crop
+from abtem.basic.fft import fft2_convolve, fft_crop
+
+TAPER = 0.025
+CUTOFF = 2 / 3.
 
 
-def antialias_aperture(gpts, sampling, cutoff, taper, xp):
-    r, _ = polar_spatial_frequencies(gpts, sampling, delayed=False, xp=xp)
-    xp = get_array_module(r)
-    if taper > 0.:
-        array = .5 * (1 + xp.cos(np.pi * (r - cutoff + taper) / taper))
-        array[r > cutoff] = 0.
-        array = xp.where(r > cutoff - taper, array, xp.ones_like(r, dtype=np.float32))
-    else:
-        array = xp.array(r < cutoff).astype(np.float32)
+def antialias_kernel(gpts, sampling, xp):
+    def _antialias_kernel(gpts, sampling, cutoff, taper, xp):
+        xp = get_array_module(xp)
 
-    return array
+        r, _ = polar_spatial_frequencies(gpts, sampling, delayed=False, xp=xp)
+        if taper > 0.:
+            array = .5 * (1 + xp.cos(np.pi * (r - cutoff + taper) / taper))
+            array[r > cutoff] = 0.
+            array = xp.where(r > cutoff - taper, array, xp.ones_like(r, dtype=np.float32))
+        else:
+            array = xp.array(r < cutoff).astype(np.float32)
+        return array
+
+    cutoff = CUTOFF / max(sampling) / 2
+    taper = TAPER / max(sampling)
+    kernel = dask.delayed(_antialias_kernel, pure=True)(gpts, sampling, cutoff, taper, xp_to_str(xp))
+    return da.from_delayed(kernel, shape=gpts, meta=xp.array((), dtype=xp.float32))
 
 
 class AntialiasFilter:
@@ -37,28 +46,21 @@ class AntialiasFilter:
         return self._taper
 
     def _build_antialias_filter(self, gpts, sampling, xp):
-        cutoff = 1 / max(sampling) / 2 * self.cutoff
-        taper = self.taper / max(sampling)
-        return da.from_delayed(
-            dask.delayed(antialias_aperture, pure=True)(gpts, sampling, cutoff, taper, xp_to_str(xp)),
-            shape=gpts, meta=xp.array((), dtype=xp.float32))
+        return
 
     def build(self, gpts, sampling, xp=np):
         return self._build_antialias_filter(gpts, sampling, xp)
 
     def __call__(self, array, sampling, overwrite_x=True):
         xp = get_array_module(array)
-
         kernel = self.build(array.shape[-2:], sampling, xp)
-
         array = fft2_convolve(array, kernel, overwrite_x=False)
-
         return array
 
 
 class AntialiasAperture:
 
-    def __init__(self, cutoff=None):
+    def __init__(self, cutoff=2 / 3.):
         self._cutoff = cutoff
 
     @property
@@ -71,7 +73,7 @@ class AntialiasAperture:
         self._cutoff = value
 
 
-class HasAntialiasAperture:
+class HasAntialiasApertureMixin:
     _antialias_aperture: AntialiasAperture
     _antialias_taper = AntialiasFilter._taper
 

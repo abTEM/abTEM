@@ -369,10 +369,10 @@ def polar_spatial_frequencies(gpts, sampling, delayed=True, xp=np):
     return tuple(da.from_delayed(val, shape=gpts, dtype=np.float32) for val in out)
 
 
-def _disc_meshgrid(r):
+def disc_meshgrid(r):
     """Internal function to return all indices inside a disk with a given radius."""
     cols = np.zeros((2 * r + 1, 2 * r + 1)).astype(np.int32)
     cols[:] = np.linspace(0, 2 * r, 2 * r + 1) - r
     rows = cols.T
     inside = (rows ** 2 + cols ** 2) <= r ** 2
-    return rows[inside], cols[inside]
+    return np.array((rows[inside], cols[inside])).T
