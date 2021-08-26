@@ -213,8 +213,7 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
                               extent=self.extent,
                               energy=self.energy,
                               extra_axes_metadata=self._extra_axes_metadata,
-                              antialias_aperture=downsampled_waves.antialias_aperture,
-                              device=self.device)
+                              antialias_aperture=downsampled_waves.antialias_aperture)
 
     def multislice(self, potential: AbstractPotential, splits: int = 1):
         """
@@ -256,7 +255,7 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
         # return multislice(self, potential, splits=splits)
 
     def _get_coefficients(self, positions):
-        xp = get_array_module(self.device)
+        xp = get_array_module(self.array)
 
         positions = xp.asarray(positions)
         wave_vectors = xp.asarray(self.wave_vectors)
