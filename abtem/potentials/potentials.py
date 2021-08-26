@@ -10,17 +10,14 @@ import zarr
 from ase import Atoms
 
 from abtem.basic.antialias import antialias_kernel
-from abtem.basic.backend import get_array_module
-from abtem.basic.backend import xp_to_str
+from abtem.basic.backend import get_array_module, xp_to_str
 from abtem.basic.complex import complex_exponential
 from abtem.basic.energy import HasAcceleratorMixin, Accelerator, energy2sigma
-from abtem.basic.event import HasEventMixin, watched_property
+from abtem.basic.event import watched_property
 from abtem.basic.fft import fft2_convolve
 from abtem.basic.grid import Grid, HasGridMixin
 from abtem.basic.utils import generate_chunks
-from abtem.device import HasDeviceMixin, get_available_memory
 from abtem.measure.measure import Images
-from abtem.measure.old_measure import Measurement
 from abtem.potentials.atom import AtomicPotential
 from abtem.potentials.infinite import infinite_potential_projections, calculate_scattering_factors
 from abtem.potentials.temperature import AbstractFrozenPhonons, DummyFrozenPhonons
@@ -117,11 +114,6 @@ class AbstractPotentialBuilder(AbstractPotential):
     def device(self):
         return self._device
 
-    def _estimate_max_batch(self):
-        memory_per_wave = 2 * 4 * self.gpts[0] * self.gpts[1]
-        available_memory = .2 * get_available_memory(self._device)
-        return min(int(available_memory / memory_per_wave), len(self))
-
     def __getitem__(self, items):
         return self.build()[items]
 
@@ -133,7 +125,7 @@ class AbstractPotentialBuilder(AbstractPotential):
         return self.build().project()
 
 
-class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
+class Potential(AbstractPotentialBuilder):
     """
     Potential object.
 

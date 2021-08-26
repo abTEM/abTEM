@@ -33,7 +33,7 @@ def abs2(x, out):
 
 
 #
-# @jit(nopython=True, nogil=True, parallel=True)
+@jit(nopython=True, nogil=True, parallel=True)
 def interpolate_radial_functions(array: np.ndarray,
                                  rle_encoding: np.ndarray,
                                  disc_indices: np.ndarray,
@@ -91,7 +91,7 @@ def interpolate_radial_functions(array: np.ndarray,
 
 #
 #
-# @jit(nopython=True, nogil=True, parallel=True, fastmath=True)
+@jit(nopython=True, nogil=True, parallel=True, fastmath=True)
 def sum_run_length_encoded(array, result, separators):
     for x in prange(result.shape[1]):
         for i in range(result.shape[0]):

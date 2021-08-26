@@ -1,7 +1,5 @@
 """Module for applying Modulation Transfer function."""
 import numpy as np
-from abtem.utils import spatial_frequencies
-from abtem.measure.old_measure import Measurement
 
 def default_mtf_func(k: np.ndarray, c0: float, c1: float, c2: float, c3: float):
     """
@@ -47,7 +45,7 @@ class MTF:
             self.f = func
         self.params = kwargs
 
-    def __call__(self, measurement) -> Measurement:
+    def __call__(self, measurement):
         """
         Apply a modulation transfer function to the image.
 

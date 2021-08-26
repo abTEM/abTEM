@@ -1,16 +1,14 @@
 """Module for describing the detection of transmitted waves and different detector types."""
 from abc import ABCMeta, abstractmethod
 from copy import copy
-from typing import Tuple, List, Any, Union
+from typing import Tuple, Any, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-from abtem.device import get_array_module, get_device_function
+from abtem.basic.backend import get_array_module
 from abtem.measure.measure import DiffractionPatterns, PolarMeasurements
-from abtem.measure.old_measure import Calibration, calibrations_from_grid, Measurement
 from abtem.measure.utils import polar_detector_bins
-from abtem.visualize.mpl import show_measurement_2d
 from abtem.waves.scan import AbstractScan
 
 
@@ -51,192 +49,6 @@ class AbstractDetector(metaclass=ABCMeta):
     def copy(self):
         """Make a copy."""
         return copy(self)
-
-
-class _PolarDetector(AbstractDetector):
-    """Class to define a polar detector, forming the basis of annular and segmented detectors."""
-
-    def __init__(self,
-                 inner: float = None,
-                 outer: float = None,
-                 radial_steps: float = 1.,
-                 azimuthal_steps: float = None,
-                 offset: Tuple[float, float] = None,
-                 rotation: float = 0.,
-                 save_file: str = None):
-
-        self._inner = inner
-        self._outer = outer
-
-        self._radial_steps = radial_steps
-
-        if azimuthal_steps is None:
-            azimuthal_steps = 2 * np.pi
-
-        self._azimuthal_steps = azimuthal_steps
-
-        self._rotation = rotation
-        self._offset = offset
-
-        super().__init__(max_detected_angle=outer, save_file=save_file)
-
-    def _get_bins(self, cutoff_scattering_angle=None):
-        if self._inner is None:
-            inner = 0.
-        else:
-            inner = self._inner
-
-        if self._outer is None:
-            if cutoff_scattering_angle is None:
-                raise RuntimeError('The outer integration angle is not set.')
-
-            outer = cutoff_scattering_angle
-            outer = np.floor(outer / self._radial_steps) * self._radial_steps
-        else:
-            outer = self._outer
-
-        nbins_radial = int(np.ceil((outer - inner) / self._radial_steps))
-
-        nbins_azimuthal = int(np.ceil(2 * np.pi / self._azimuthal_steps))
-
-        return nbins_radial, nbins_azimuthal, inner, outer
-
-    def _get_regions(self,
-                     gpts: Tuple[int, int],
-                     angular_sampling: Tuple[float, float],
-                     cutoff_scattering_angle: float = None,
-                     xp=np) -> List[np.ndarray]:
-
-        nbins_radial, nbins_azimuthal, inner, outer = self._get_bins(cutoff_scattering_angle)
-
-        region_labels = polar_detector_regions(gpts,
-                                               (angular_sampling[0] / 1e3, angular_sampling[1] / 1e3),
-                                               inner / 1e3,
-                                               outer / 1e3,
-                                               nbins_radial,
-                                               nbins_azimuthal,
-                                               rotation=self._rotation)
-
-        if self._offset is not None:
-            offset = (int(round(self._offset[0] / angular_sampling[0])),
-                      int(round(self._offset[1] / angular_sampling[1])))
-
-            if (abs(offset[0]) > region_labels.shape[0]) or (abs(offset[1]) > region_labels.shape[1]):
-                raise RuntimeError('Detector offset exceeds maximum detected angle.')
-
-            region_labels = np.roll(region_labels, offset, (0, 1))
-
-        region_labels = xp.asarray(region_labels)
-
-        if np.all(region_labels == -1):
-            raise RuntimeError('Zero-sized detector region.')
-
-        region_indices = []
-        for indices in self._label_to_index(region_labels):
-            region_indices.append(indices)
-        return region_indices
-
-    def measurement_shape(self, waves):
-        nbins_radial, nbins_azimuthal, inner, _ = self._get_bins(min(waves.cutoff_scattering_angles))
-
-        shape = ()
-
-        if nbins_radial > 1:
-            shape += (nbins_radial,)
-
-        if nbins_azimuthal > 1:
-            shape += (nbins_azimuthal,)
-
-        return shape
-
-    def measurement_calibrations(self, waves):
-        nbins_radial, nbins_azimuthal, inner, _ = self._get_bins(min(waves.cutoff_scattering_angles))
-
-        calibrations = ()
-
-        if nbins_radial > 1:
-            calibrations += (Calibration(offset=inner, sampling=self._radial_steps, units='mrad'),)
-
-        if nbins_azimuthal > 1:
-            calibrations += (Calibration(offset=0, sampling=self._azimuthal_steps, units='rad'),)
-
-        return calibrations
-
-    def allocate_measurement(self, waves, scan: AbstractScan = None) -> Measurement:
-        """
-        Allocate a Measurement object or an hdf5 file.
-
-        Parameters
-        ----------
-        waves : Waves object
-            An example of the
-        scan : Scan object
-            The scan object that will define the scan dimensions the measurement.
-
-        Returns
-        -------
-        Measurement object or str
-            The allocated measurement or path to hdf5 file with the measurement data.
-        """
-
-        waves.grid.check_is_defined()
-        waves.accelerator.check_is_defined()
-
-        if scan is None:
-            shape = ()
-            calibrations = ()
-        else:
-            shape = scan.shape
-            calibrations = scan.calibrations
-
-        nbins_radial, nbins_azimuthal, inner, _ = self._get_bins(min(waves.cutoff_scattering_angles))
-
-        if nbins_radial > 1:
-            shape += (nbins_radial,)
-            calibrations += (Calibration(offset=inner, sampling=self._radial_steps, units='mrad'),)
-
-        if nbins_azimuthal > 1:
-            shape += (nbins_azimuthal,)
-            calibrations += (Calibration(offset=0, sampling=self._azimuthal_steps, units='rad'),)
-
-        array = np.zeros(shape, dtype=np.float32)
-        measurement = Measurement(array, calibrations=calibrations)
-        if isinstance(self.save_file, str):
-            measurement = measurement.write(self.save_file)
-        return measurement
-
-    def show(self, waves, **kwargs):
-        """
-        Visualize the detector region(s) of the detector as applied to a specified wave function.
-
-        Parameters
-        ----------
-        waves : Waves or SMatrix object
-            The wave function the visualization will be created to match
-        kwargs :
-            Additional keyword arguments for abtem.visualize.mpl.show_measurement_2d.
-        """
-
-        waves.grid.check_is_defined()
-        array = np.full(waves.gpts, -1, dtype=np.int)
-
-        for i, indices in enumerate(self._get_regions(waves.gpts,
-                                                      waves.angular_sampling,
-                                                      min(waves.cutoff_scattering_angles))):
-            array.ravel()[indices] = i
-
-        calibrations = calibrations_from_grid(waves.gpts,
-                                              waves.sampling,
-                                              names=['alpha_x', 'alpha_y'],
-                                              units='mrad',
-                                              scale_factor=waves.wavelength * 1e3,
-                                              fourier_space=True)
-
-        array = np.fft.fftshift(array, axes=(-1, -2))
-
-        measurement = Measurement(array, calibrations=calibrations, name='Detector regions')
-
-        return show_measurement_2d(measurement, discrete_cmap=True, **kwargs)
 
 
 class AnnularDetector(AbstractDetector):
@@ -592,7 +404,7 @@ class PixelatedDetector(AbstractDetector):
 
     def _interpolate(self, array, angular_sampling):
         xp = get_array_module(array)
-        interpolate_bilinear = get_device_function(xp, 'interpolate_bilinear')
+        #interpolate_bilinear = get_device_function(xp, 'interpolate_bilinear')
 
         new_gpts, new_angular_sampling = self._resampled_gpts(array.shape[-2:], angular_sampling)
         v, u, vw, uw = self._bilinear_nodes_and_weight(array.shape[-2:],
@@ -601,7 +413,7 @@ class PixelatedDetector(AbstractDetector):
                                                        new_angular_sampling,
                                                        xp)
 
-        return interpolate_bilinear(array, v, u, vw, uw)
+        #return interpolate_bilinear(array, v, u, vw, uw)
 
     def detect(self, waves) -> np.ndarray:
         measurements = waves.diffraction_patterns(max_angle=self.max_angle)
@@ -651,61 +463,3 @@ class PixelatedDetector(AbstractDetector):
     def copy(self) -> 'SegmentedDetector':
         """Make a copy."""
         return copy(self)
-
-
-class WavefunctionDetector(AbstractDetector):
-    """
-    Wave function detector object
-
-    The wave function detector records the raw exit wave functions.
-
-    Parameters
-    ----------
-    save_file: str
-        The path to the file used for saving the detector output.
-    """
-
-    def __init__(self, save_file: str = None):
-        super().__init__(max_detected_angle=None, save_file=save_file)
-
-    def allocate_measurement(self, waves, scan: AbstractScan) -> Measurement:
-        """
-        Allocate a Measurement object or an hdf5 file.
-
-        Parameters
-        ----------
-        waves : Waves or SMatrix object
-            The wave function that will define the shape of the diffraction patterns.
-        scan: Scan object
-            The scan object that will define the scan dimensions the measurement.
-
-        Returns
-        -------
-        Measurement object or str
-            The allocated measurement or path to hdf5 file with the measurement data.
-        """
-
-        waves.grid.check_is_defined()
-        calibrations = calibrations_from_grid(waves.gpts, waves.sampling, names=['x', 'y'], units='Å')
-
-        array = np.zeros(scan.shape + waves.gpts, dtype=np.complex64)
-        measurement = Measurement(array, calibrations=scan.calibrations + calibrations)
-        if isinstance(self.save_file, str):
-            measurement = measurement.write(self.save_file)
-        return measurement
-
-    def detect(self, waves) -> np.ndarray:
-        """
-        Detect the complex wave function.
-
-        Parameters
-        ----------
-        waves: Waves object
-            The batch of wave functions to detect.
-
-        Returns
-        -------
-        3d complex array
-            The arrays of the Waves object.
-        """
-        return waves.array

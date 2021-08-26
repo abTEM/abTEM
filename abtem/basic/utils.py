@@ -3,7 +3,7 @@
 import numpy as np
 from tqdm.auto import tqdm
 
-from abtem.device import get_array_module
+from abtem.basic.backend import get_array_module
 
 
 def array_row_intersection(a, b):

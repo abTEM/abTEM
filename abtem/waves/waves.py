@@ -1,10 +1,10 @@
 """Module to describe electron waves and their propagation."""
+from collections import Iterable
 from copy import copy
 from typing import Union, Sequence, Tuple, List
-from collections import Iterable
+
 import dask
 import dask.array as da
-import h5py
 import numpy as np
 import zarr
 from ase import Atoms
@@ -17,10 +17,8 @@ from abtem.basic.dask import computable, requires_dask_array, HasDaskArray, Buil
 from abtem.basic.energy import Accelerator
 from abtem.basic.fft import fft2, ifft2, fft2_convolve, fft2_shift_kernel, fft_crop, fft2_interpolate
 from abtem.basic.grid import Grid
-from abtem.device import get_array_module_from_device, get_device_from_array
 from abtem.measure.detect import AbstractDetector
 from abtem.measure.measure import DiffractionPatterns, Images
-from abtem.measure.old_measure import Measurement, probe_profile
 from abtem.potentials.potentials import Potential, AbstractPotential
 from abtem.waves.base import WavesLikeMixin, AbstractScannedWaves, BeamTilt
 from abtem.waves.multislice import multislice
@@ -71,7 +69,6 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         self._extra_axes_metadata = extra_axes_metadata
 
         super().__init__(array=array)
-        self._device = get_device_from_array(self._array)
 
     @property
     def axes_metadata(self):
@@ -370,7 +367,7 @@ class PlaneWave(WavesLikeMixin):
     @computable
     def build(self) -> Waves:
         """Build the plane wave function as a Waves object."""
-        xp = get_array_module_from_device(self._device)
+        xp = get_array_module(self._device)
         self.grid.check_is_defined()
         array = da.from_array(xp.ones((self.gpts[0], self.gpts[1]), dtype=xp.complex64), chunks=(-1, -1))
         return Waves(array, extent=self.extent, energy=self.energy)
@@ -523,7 +520,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
              detectors: Union[AbstractDetector, Sequence[AbstractDetector]],
              potential: Union[Atoms, AbstractPotential],
              chunk_size: int = None,
-             ) -> Union[Measurement, List[Measurement]]:
+             ):
 
         """
         Raster scan the probe across the potential and record a measurement for each detector.

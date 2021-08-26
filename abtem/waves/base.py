@@ -1,5 +1,4 @@
 """Module to describe electron waves and their propagation."""
-from abc import ABCMeta, abstractmethod
 from copy import copy
 from typing import Union, Sequence, Tuple
 
@@ -12,12 +11,9 @@ from abtem.basic.antialias import HasAntialiasApertureMixin
 from abtem.basic.energy import HasAcceleratorMixin
 from abtem.basic.event import HasEventMixin, Event, watched_method
 from abtem.basic.grid import HasGridMixin
-from abtem.device import HasDeviceMixin
 from abtem.measure.detect import AbstractDetector
-from abtem.measure.old_measure import Measurement
 from abtem.potentials import Potential
 from abtem.waves.scan import AbstractScan
-from abtem.basic.dask import HasDaskArray
 
 
 class BeamTilt(HasEventMixin):
@@ -49,7 +45,7 @@ class HasBeamTiltMixin:
         self.tilt = value
 
 
-class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasDeviceMixin, HasBeamTiltMixin, HasAntialiasApertureMixin):
+class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAntialiasApertureMixin):
 
     # @abstractmethod
     # def multislice(self, *args, **kwargs):
@@ -134,26 +130,6 @@ class AbstractScannedWaves(WavesLikeMixin):
         if isinstance(detectors, AbstractDetector):
             detectors = [detectors]
         return detectors
-
-    def _validate_scan_measurements(self, detectors, scan, measurements=None):
-
-        if isinstance(measurements, Measurement):
-            if len(detectors) > 1:
-                raise ValueError('more than one detector, measurements must be mapping or None')
-
-            return {detectors[0]: measurements}
-
-        if measurements is None:
-            measurements = {}
-
-        for detector in detectors:
-            if detector not in measurements.keys():
-                measurements[detector] = detector.allocate_measurement(self, scan)
-            # if not set(measurements.keys()) == set(detectors):
-            #    raise ValueError('measurements dict keys does not match detectors')
-        # else:
-        #    raise ValueError('measurements must be Measurement or dict of AbtractDetector: Measurement')
-        return measurements
 
     def _validate_positions(self, positions: Union[Sequence, AbstractScan] = None):
         if isinstance(positions, AbstractScan):

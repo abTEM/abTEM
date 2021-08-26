@@ -3,8 +3,8 @@ from typing import Tuple
 import numpy as np
 from numba import prange, jit
 
+from abtem.basic.backend import get_array_module
 from abtem.basic.grid import polar_spatial_frequencies
-from abtem.device import get_array_module
 
 
 def _label_to_index(labels):
@@ -78,14 +78,8 @@ def polar_detector_bins(gpts: Tuple[int, int],
 
         bins = np.roll(bins, offset, (0, 1))
 
-
     if fftshift:
         bins = np.fft.fftshift(bins)
-
-    # import matplotlib.pyplot as plt
-    # plt.imshow(bins == 0)
-    # plt.colorbar()
-    # plt.show()
 
     if return_indices:
         indices = []

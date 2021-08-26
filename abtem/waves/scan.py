@@ -9,8 +9,6 @@ from ase import Atom
 from matplotlib.patches import Rectangle
 
 from abtem.basic.grid import Grid, HasGridMixin
-from abtem.device import asnumpy
-from abtem.measure.old_measure import Calibration, Measurement
 
 
 class AbstractScan(metaclass=ABCMeta):
@@ -119,10 +117,6 @@ class LineScan(AbstractScan, HasGridMixin):
         return self.gpts[0],
 
     @property
-    def calibrations(self) -> Tuple[Calibration]:
-        return Calibration(offset=0, sampling=self.sampling[0], units='Å', name='x', endpoint=self.grid.endpoint[0]),
-
-    @property
     def axes_metadata(self):
         return [{'label': 'x', 'type': 'linescan', 'sampling': self.sampling[0], 'start_x': self.start[0],
                  'start_y': self.start[1], 'end_x': self.end[0], 'end_y': self.end[1]}]
@@ -171,17 +165,6 @@ class LineScan(AbstractScan, HasGridMixin):
     def margin(self) -> float:
         return self._margin
 
-    def insert_new_measurement(self,
-                               measurement: Measurement,
-                               indices,
-                               new_measurement_values: np.ndarray):
-
-        if isinstance(measurement, str):
-            with h5py.File(measurement, 'a') as f:
-                f['array'][indices] += asnumpy(new_measurement_values)
-
-        else:
-            measurement.array[indices] += asnumpy(new_measurement_values)
 
     @property
     def margin_start(self) -> Tuple[float, float]:
@@ -271,13 +254,6 @@ class GridScan(HasGridMixin, AbstractScan):
     @property
     def shape(self):
         return self.gpts
-
-    @property
-    def calibrations(self) -> tuple:
-        return (Calibration(offset=self.start[0], sampling=self.sampling[0], units='Å', name='x',
-                            endpoint=self.grid.endpoint[0]),
-                Calibration(offset=self.start[1], sampling=self.sampling[1], units='Å', name='y',
-                            endpoint=self.grid.endpoint[1]))
 
     @property
     def start(self) -> np.ndarray:

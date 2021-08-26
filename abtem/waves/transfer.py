@@ -4,12 +4,11 @@ from typing import Mapping, Union
 
 import numpy as np
 
+from abtem.basic.backend import get_array_module
 from abtem.basic.complex import complex_exponential
 from abtem.basic.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
 from abtem.basic.event import Event, HasEventMixin, watched_method, watched_property
 from abtem.basic.grid import Grid, polar_spatial_frequencies
-from abtem.device import get_array_module
-from abtem.measure.old_measure import Measurement, Calibration
 from abtem.measure import LineProfiles
 
 #: Symbols for the polar representation of all optical aberrations up to the fifth order.
@@ -358,7 +357,6 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         gaussian_envelope = self.evaluate_gaussian_envelope(alpha)
         envelope = aperture * temporal_envelope * spatial_envelope * gaussian_envelope
 
-        calibration = Calibration(offset=0., sampling=(alpha[1] - alpha[0]) * 1000., units='mrad', name='alpha')
 
         profiles = {}
         profiles['ctf'] = LineProfiles(aberrations.imag * envelope, calibrations=[calibration], name='CTF')

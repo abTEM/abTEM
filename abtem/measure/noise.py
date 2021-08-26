@@ -2,8 +2,6 @@
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
-from abtem.measure.old_measure import Measurement
-
 
 def _pixel_times(dwell_time, flyback_time, shape):
     """
@@ -116,7 +114,7 @@ def _apply_displacement_field(image, distortion_x, distortion_y):
     return warped.reshape(image.shape)
 
 
-def add_scan_noise(measurement: Measurement, dwell_time: float, flyback_time: float, max_frequency: float,
+def add_scan_noise(measurement, dwell_time: float, flyback_time: float, max_frequency: float,
                    rms_power: float, num_components: int = 200):
     """
     Add scan noise to a measurement.
@@ -155,7 +153,7 @@ def add_scan_noise(measurement: Measurement, dwell_time: float, flyback_time: fl
     return measurement
 
 
-def poisson_noise(measurement: Measurement, dose: float, pixel_area: float = None, negative_values='clip'):
+def poisson_noise(measurement, dose: float, pixel_area: float = None, negative_values='clip'):
     """
     Add Poisson noise to a measurment.
 

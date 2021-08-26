@@ -1,7 +1,6 @@
 from copy import copy
 from typing import Union, Sequence, Tuple, Dict, List
 
-import dask
 import dask.array as da
 import numpy as np
 from ase import Atoms
@@ -9,18 +8,16 @@ from ase import Atoms
 from abtem.basic.antialias import AntialiasAperture
 from abtem.basic.backend import get_array_module, cp
 from abtem.basic.complex import complex_exponential
+from abtem.basic.dask import HasDaskArray
 from abtem.basic.grid import Grid
 from abtem.basic.utils import generate_array_chunks, reassemble_chunks_along
-from abtem.device import get_array_module_from_device
 from abtem.measure.detect import AbstractDetector
-from abtem.measure.old_measure import Measurement, probe_profile
-from abtem.potentials.potentials import Potential, AbstractPotential
+from abtem.potentials.potentials import AbstractPotential
 from abtem.waves.base import BeamTilt, AbstractScannedWaves
 from abtem.waves.multislice import multislice
 from abtem.waves.scan import AbstractScan
 from abtem.waves.transfer import CTF
 from abtem.waves.waves import Waves
-from abtem.basic.dask import HasDaskArray
 
 if cp is not None:
     from abtem.basic.cuda import batch_crop_2d as batch_crop_2d_cuda
@@ -579,11 +576,7 @@ class SMatrix(AbstractScannedWaves):
     def scan(self,
              scan: AbstractScan,
              detectors: Sequence[AbstractDetector],
-             potential: Union[Atoms, AbstractPotential],
-             measurements: Union[Measurement, Dict[AbstractDetector, Measurement]] = None,
-             max_batch_probes: int = None,
-             max_batch_expansion: int = None,
-             pbar: bool = True) -> Union[Measurement, Sequence[Measurement]]:
+             potential: Union[Atoms, AbstractPotential]):
         """
         Build the scattering matrix. Raster scan the probe across the potential, record a measurement for each detector.
 
@@ -622,7 +615,7 @@ class SMatrix(AbstractScannedWaves):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
-        xp = get_array_module_from_device(self._device)
+        xp = get_array_module(self._device)
         n_max = int(xp.ceil(self.expansion_cutoff / 1.e3 / (self.wavelength / self.extent[0] * self.interpolation)))
         m_max = int(xp.ceil(self.expansion_cutoff / 1.e3 / (self.wavelength / self.extent[1] * self.interpolation)))
 
@@ -679,7 +672,7 @@ class SMatrix(AbstractScannedWaves):
         self.accelerator.check_is_defined()
         return self._build_convential()
 
-    def profile(self, angle=0.) -> Measurement:
+    def profile(self, angle=0.):
         measurement = self.build().reduce((self.extent[0] / 2, self.extent[1] / 2)).intensity()
         return probe_profile(measurement, angle=angle)
 

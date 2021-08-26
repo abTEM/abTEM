@@ -6,7 +6,7 @@ from ase import units
 from scipy.interpolate import interp1d, interpn
 
 from abtem.base_classes import Grid
-from abtem.device import get_device_function
+#from abtem.basic.backend import device import get_device_function
 from abtem.potentials import AbstractPotentialBuilder, PotentialArray, _disc_meshgrid, pad_atoms, \
     PotentialIntegrator
 from abtem.structures.structures import orthogonalize_cell
