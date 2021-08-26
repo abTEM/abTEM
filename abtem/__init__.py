@@ -6,6 +6,7 @@ from abtem.measure.detect import AnnularDetector, SegmentedDetector, FlexibleAnn
 from abtem.measure.measure import Images, LineProfiles, DiffractionPatterns, PolarMeasurements
 from abtem.visualize.atoms import show_atoms
 from abtem.potentials.temperature import FrozenPhonons
+from abtem.waves.prism import SMatrix, SMatrixArray
 
 # from abtem import waves
 # from abtem._version import __version__

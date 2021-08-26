@@ -103,15 +103,29 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
     def downsample(self, max_angle='valid') -> 'Waves':
         gpts = self._gpts_within_angle(max_angle)
 
-        array = self.array
+        xp = get_array_module(self.array)
 
-        if gpts != self.gpts:
-            array = fft2_interpolate(array, new_shape=self.array.shape[:-2] + gpts)
+        array = self.array.map_blocks(fft2_interpolate, new_shape=gpts,
+                                      chunks=self.array.chunks[:-2] + gpts,
+                                      meta=xp.array((), dtype=xp.complex64))
 
         antialias_aperture = self.antialias_aperture * min(self.gpts[0] / gpts[0], self.gpts[1] / gpts[1])
 
         return Waves(array, extent=self.extent, energy=self.energy, antialias_aperture=antialias_aperture,
-                     axes_metadata=self.axes_metadata)
+                     extra_axes_metadata=self.axes_metadata)
+
+    def detect(self, detectors):
+        if not isinstance(detectors, Iterable):
+            detectors = (detectors,)
+
+        measurements = ()
+        for detector in detectors:
+            measurements += (detector.detect(self),)
+
+        if len(measurements) == 1:
+            return measurements[0]
+
+        return measurements
 
     @requires_dask_array
     @computable
@@ -141,7 +155,6 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
             return array
 
         xp = get_array_module(self.array)
-
         new_gpts = self._gpts_within_angle(max_angle)
 
         pattern = self.array.map_blocks(_diffraction_pattern, new_gpts=new_gpts, fftshift=fftshift,
@@ -196,7 +209,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         return self.__class__(fft2_convolve(self.array, kernel, overwrite_x=in_place),
                               extent=self.extent,
                               energy=self.energy,
-                              axes_metadata=self._axes_metadata,
+                              extra_axes_metadata=self._extra_axes_metadata,
                               tilt=self.tilt)
 
     @computable
@@ -217,10 +230,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
             Wave function at the exit plane of the potential.
         """
 
-        if isinstance(potential, Atoms):
-            potential = Potential(potential)
-
-        self.grid.match(potential)
+        potential = self._validate_potential(potential)
 
         if potential.num_frozen_phonons == 1:
             return multislice(self, potential, splits=splits)
@@ -539,22 +549,9 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
             Dictionary of measurements with keys given by the detector.
         """
 
-        self.grid.match(potential.grid)
-        self.grid.check_is_defined()
-
         exit_waves = self.multislice(potential=potential, positions=scan)
 
-        if not isinstance(detectors, Iterable):
-            detectors = (detectors,)
-
-        measurements = ()
-        for detector in detectors:
-            measurements += (detector.detect(exit_waves),)
-
-        if len(measurements) == 1:
-            return measurements[0]
-
-        return measurements
+        return exit_waves.detect(detectors)
         # detectors = self._validate_detectors(detectors)
         #
         # positions = da.from_array(scan.get_positions(), chunks=(chunk_size, 2))

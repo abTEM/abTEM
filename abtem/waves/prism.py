@@ -20,6 +20,7 @@ from abtem.waves.multislice import multislice
 from abtem.waves.scan import AbstractScan
 from abtem.waves.transfer import CTF
 from abtem.waves.waves import Waves
+from abtem.basic.dask import HasDaskArray
 
 if cp is not None:
     from abtem.basic.cuda import batch_crop_2d as batch_crop_2d_cuda
@@ -28,7 +29,6 @@ else:
 
 
 def wrapped_slices(start, stop, n):
-
     if stop - start > n:
         raise NotImplementedError()
 
@@ -91,7 +91,7 @@ def batch_crop_2d(array, corners, new_shape):
 _plane_waves_axes_metadata = {'label': 'plane_waves', 'type': 'ensemble'}
 
 
-class SMatrixArray(AbstractScannedWaves):
+class SMatrixArray(HasDaskArray, AbstractScannedWaves):
     """
     Scattering matrix array object.
 
@@ -139,7 +139,7 @@ class SMatrixArray(AbstractScannedWaves):
                  ctf: CTF = None,
                  antialias_aperture: float = None,
                  device: str = 'cpu',
-                 ensemble_axes_metadata: List[Dict] = None,
+                 extra_axes_metadata: List[Dict] = None,
                  metadata: Dict = None):
 
         if ctf is None:
@@ -164,15 +164,17 @@ class SMatrixArray(AbstractScannedWaves):
         self._array = array
         self._wave_vectors = wave_vectors
 
-        if ensemble_axes_metadata is None:
-            ensemble_axes_metadata = []
+        if extra_axes_metadata is None:
+            extra_axes_metadata = []
 
-        self._ensemble_axes_metadata = ensemble_axes_metadata
+        self._extra_axes_metadata = extra_axes_metadata
         self._metadata = metadata
+
+        super().__init__(array)
 
     @property
     def axes_metadata(self):
-        return self._ensemble_axes_metadata + [_plane_waves_axes_metadata] + self._base_axes_metadata
+        return self._extra_axes_metadata + [_plane_waves_axes_metadata] + self._base_axes_metadata
 
     @property
     def metadata(self):
@@ -188,11 +190,6 @@ class SMatrixArray(AbstractScannedWaves):
         return self._ctf
 
     @property
-    def array(self) -> np.ndarray:
-        """Array representing the scattering matrix."""
-        return self._array
-
-    @property
     def wave_vectors(self) -> np.ndarray:
         """The spatial frequencies of each wave in the plane wave expansion."""
         return self._wave_vectors
@@ -206,10 +203,6 @@ class SMatrixArray(AbstractScannedWaves):
     def interpolated_gpts(self) -> Tuple[int, int]:
         return (self.gpts[0] // self.interpolation, self.gpts[1] // self.interpolation)
 
-    def __len__(self) -> int:
-        """Number of plane waves in expansion."""
-        return len(self._array)
-
     def downsample(self, max_angle='cutoff') -> 'SMatrixArray':
 
         waves = Waves(self.array, extent=self.extent, energy=self.energy, antialias_aperture=self.antialias_aperture)
@@ -222,7 +215,7 @@ class SMatrixArray(AbstractScannedWaves):
                               ctf=self.ctf.copy(),
                               extent=self.extent,
                               energy=self.energy,
-                              ensemble_axes_metadata=self._ensemble_axes_metadata,
+                              extra_axes_metadata=self._extra_axes_metadata,
                               antialias_aperture=downsampled_waves.antialias_aperture,
                               device=self.device)
 
@@ -252,7 +245,7 @@ class SMatrixArray(AbstractScannedWaves):
 
         array = da.stack([exit_wave.array for exit_wave in exit_waves], axis=0)
 
-        ensemble_axes_metadata = [{'label': 'frozen_phonons', 'type': 'ensemble'}]
+        extra_axes_metadata = [{'label': 'frozen_phonons', 'type': 'ensemble'}]
 
         return self.__class__(array=array,
                               extent=self.extent,
@@ -261,7 +254,7 @@ class SMatrixArray(AbstractScannedWaves):
                               tilt=self.tilt,
                               interpolation=self.interpolation,
                               antialias_aperture=2 / 3.,
-                              ensemble_axes_metadata=ensemble_axes_metadata)
+                              extra_axes_metadata=extra_axes_metadata)
 
         # return multislice(self, potential, splits=splits)
 
@@ -315,11 +308,11 @@ class SMatrixArray(AbstractScannedWaves):
         """
 
         if isinstance(positions, AbstractScan):
-            axes_metadata = self._ensemble_axes_metadata + positions.axes_metadata + self._base_axes_metadata
+            axes_metadata = self._extra_axes_metadata + positions.axes_metadata
             positions = positions.get_positions()
 
         else:
-            axes_metadata = [{'type': 'positions'}] + self._base_axes_metadata
+            axes_metadata = [{'type': 'positions'}]
 
         positions = self._validate_positions(positions)
 
@@ -328,11 +321,20 @@ class SMatrixArray(AbstractScannedWaves):
         if chunks is None:
             chunks = self._compute_chunks(len(positions.shape) - 1)
 
-        def _reduce_interpolated(positions, corners, array):
+        def _reduce_interpolated(array, positions, corners):
             coefficients = self._get_coefficients(positions.reshape((-1, 2)))
+            extra_axes = len(array.shape) - 3
+
+            if extra_axes:
+                array = array[(0,) * extra_axes]
+
             window = xp.tensordot(coefficients, array, axes=[-1, -3])
             window = batch_crop_2d(window, corners.reshape((-1, 2)), self.interpolated_gpts)
             window = window.reshape(positions.shape[:-1] + window.shape[-2:])
+
+            if extra_axes:
+                window = np.expand_dims(window, tuple(range(2, 2 + extra_axes)))
+
             return window
 
         if self.interpolated_gpts != self.gpts:
@@ -343,34 +345,38 @@ class SMatrixArray(AbstractScannedWaves):
                 upper_corner = (crop_corner[0] + size[0], crop_corner[1] + size[1])
 
                 array = wrapped_crop_2d(self.array, crop_corner, upper_corner)
+                array = array.rechunk(self.array.chunks[:-3] + self.array.shape[-3:])
+                chunks = positions_block.shape[:-1] + self.array.chunks[:-3] + self.interpolated_gpts
 
-                window = dask.delayed(_reduce_interpolated)(positions=positions_block, corners=corners, array=array)
+                window = array.map_blocks(_reduce_interpolated, positions=positions_block, corners=corners,
+                                          drop_axis=2 + (len(self.array.shape) - 3),
+                                          new_axis=tuple(range(len(positions_block.shape) - 1)),
+                                          meta=xp.array((), dtype=xp.complex64), chunks=chunks)
 
-                window = da.from_delayed(window, shape=positions_block.shape[:2] + self.interpolated_gpts,
-                                         meta=xp.array((), dtype=xp.complex64))
+                # window = dask.delayed(_reduce_interpolated)(positions=positions_block, corners=corners, array=array)
+
+                # window = da.from_delayed(window, shape=positions_block.shape[:2] + self.interpolated_gpts,
+                #                        meta=xp.array((), dtype=xp.complex64))
 
                 windows.append(window)
 
             windows = reassemble_chunks_along(windows, positions.shape[0], 0)
+
             windows = da.concatenate(windows, axis=1)
 
         else:
-            coefficients = da.from_array(self._get_coefficients(positions), chunks=chunks[:-1] + (len(self),))
+            coefficients = da.from_array(self._get_coefficients(positions), chunks=-1)
             windows = da.tensordot(coefficients, self.array, axes=[-1, -3])
 
-        if len(windows) > 3:
+        if len(windows.shape) > 3:
             windows = da.moveaxis(windows, range(2, len(self.array.shape) - 1), range(0, len(self.array.shape) - 3))
 
         return Waves(windows, sampling=self.sampling, energy=self.energy, tilt=self.tilt,
-                     antialias_aperture=self.antialias_aperture, axes_metadata=axes_metadata)
+                     antialias_aperture=self.antialias_aperture, extra_axes_metadata=axes_metadata)
 
     def scan(self,
              scan: AbstractScan,
-             detectors: Sequence[AbstractDetector],
-             measurements: Union[Measurement, Dict[AbstractDetector, Measurement]] = None,
-             max_batch_probes: int = None,
-             max_batch_expansion: int = None,
-             pbar: Union[bool] = True):
+             detectors: Sequence[AbstractDetector]):
 
         """
         Raster scan the probe across the potential and record a measurement for each detector.
@@ -393,30 +399,7 @@ class SMatrixArray(AbstractScannedWaves):
         dict
             Dictionary of measurements with keys given by the detector.
         """
-
-        self.grid.check_is_defined()
-
-        detectors = self._validate_detectors(detectors)
-        measurements = self._validate_scan_measurements(detectors, scan, measurements)
-
-        if isinstance(pbar, bool):
-            pbar = ProgressBar(total=len(scan), desc='Scan', disable=not pbar)
-
-        for indices, exit_probes in self._generate_probes(scan, max_batch_probes, max_batch_expansion):
-            for detector in detectors:
-                new_measurement = detector.detect(exit_probes)
-                scan.insert_new_measurement(measurements[detector], indices, new_measurement)
-
-            pbar.update(len(indices))
-
-        pbar.refresh()
-        pbar.close()
-
-        measurements = list(measurements.values())
-        if len(measurements) == 1:
-            return measurements[0]
-        else:
-            return measurements
+        return self.reduce(scan).detect(detectors)
 
     def __copy__(self):
         return self.__class__(array=self.array.copy(),
@@ -589,11 +572,8 @@ class SMatrix(AbstractScannedWaves):
             Probe exit wave functions as a Waves object.
         """
 
-        if isinstance(potential, Atoms):
-            potential = Potential(potential)
-
-        self.grid.match(potential)
-
+        potential = self._validate_potential(potential)
+        self.grid.check_is_defined()
         return self.build().multislice(potential)
 
     def scan(self,
@@ -628,31 +608,7 @@ class SMatrix(AbstractScannedWaves):
             Dictionary of measurements with keys given by the detector.
         """
 
-        if isinstance(potential, Atoms):
-            potential = Potential(potential)
-
-        self.grid.match(potential.grid)
-        self.grid.check_is_defined()
-
-        detectors = self._validate_detectors(detectors)
-        measurements = self._validate_scan_measurements(detectors, scan, measurements)
-
-        probe_generator = self._generate_probes(scan,
-                                                potential,
-                                                max_batch_probes=max_batch_probes,
-                                                max_batch_expansion=max_batch_expansion,
-                                                pbar=pbar)
-
-        for indices, exit_probes in probe_generator:
-            for detector in detectors:
-                new_measurement = detector.detect(exit_probes) / potential.num_frozen_phonon_configs
-                scan.insert_new_measurement(measurements[detector], indices, new_measurement)
-
-        measurements = list(measurements.values())
-        if len(measurements) == 1:
-            return measurements[0]
-        else:
-            return measurements
+        return self.multislice(potential).downsample().scan(scan, detectors)
 
     @property
     def is_partial(self):
@@ -713,7 +669,7 @@ class SMatrix(AbstractScannedWaves):
                             ctf=self.ctf.copy(),
                             antialias_aperture=self.antialias_aperture,
                             device=self._device,
-                            ensemble_axes_metadata=None,
+                            extra_axes_metadata=[],
                             metadata={'energy': self.energy})
 
     def build(self) -> Union[SMatrixArray]:
