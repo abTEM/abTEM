@@ -3,14 +3,13 @@ from abc import ABCMeta, abstractmethod
 from copy import copy
 from typing import Tuple, List, Any, Union
 
-import dask
+import matplotlib.pyplot as plt
 import numpy as np
 
-from abtem.base_classes import watched_property
-from abtem.basic.fft import fft2
 from abtem.device import get_array_module, get_device_function
-from abtem.device_func import abs2
+from abtem.measure.measure import DiffractionPatterns, PolarMeasurements
 from abtem.measure.old_measure import Calibration, calibrations_from_grid, Measurement
+from abtem.measure.utils import polar_detector_bins
 from abtem.visualize.mpl import show_measurement_2d
 from abtem.waves.scan import AbstractScan
 
@@ -34,13 +33,12 @@ def check_cutoff_angle(waves, angle):
 class AbstractDetector(metaclass=ABCMeta):
     """Abstract base class for all detectors."""
 
-    def __init__(self, path: str = None):
-        self._path = path
+    def __init__(self, ensemble_mean=True):
+        self._ensemble_mean = ensemble_mean
 
     @property
-    def path(self) -> str:
-        """The path to the file for saving the detector output."""
-        return self._path
+    def ensemble_mean(self):
+        return self._ensemble_mean
 
     @abstractmethod
     def detect(self, waves) -> Any:
@@ -260,11 +258,11 @@ class AnnularDetector(AbstractDetector):
         The path to the file for saving the detector output.
     """
 
-    def __init__(self, inner: float, outer: float, offset: Tuple[float, float] = None, path: str = None):
+    def __init__(self, inner: float, outer: float, offset: Tuple[float, float] = None, ensemble_mean=True):
         self._inner = inner
         self._outer = outer
         self._offset = offset
-        super().__init__(path=path)
+        super().__init__(ensemble_mean=ensemble_mean)
 
     @property
     def inner(self) -> float:
@@ -284,68 +282,29 @@ class AnnularDetector(AbstractDetector):
     def outer(self, value: float):
         self._outer = value
 
-    def check_cutoff_angle(self, waves):
-        if (self._outer > waves.cutoff_angles[0]) or (self._outer > waves.cutoff_angles[1]):
-            raise RuntimeError('Detector max angle exceeds the cutoff scattering angle.')
-
-    def get_detector_region(self, gpts, sampling):
-        bins = polar_detector_bins(gpts=gpts,
-                                   sampling=sampling,
+    def show(self, probes, ax=None):
+        bins = polar_detector_bins(gpts=probes.gpts,
+                                   sampling=probes.angular_sampling,
                                    inner=self.inner,
                                    outer=self.outer,
                                    nbins_radial=1,
-                                   nbins_azimuthal=1)
-        return bins == 0
+                                   nbins_azimuthal=1,
+                                   fftshift=True)
 
-    def integrate(self, measurement, axes=(-2, -1), fftshift=True):
-        if measurement.dimensions < 2:
-            raise ValueError()
+        image = DiffractionPatterns(bins, angular_sampling=probes.angular_sampling,
+                                    axes_metadata=probes._fourier_space_axes_metadata)
+        return image.show(ax=ax)
 
-        if not (measurement.calibrations[-2].units == measurement.calibrations[-1].units):
-            raise ValueError()
+    def detect(self, probes):
+        measurement = probes.diffraction_patterns().integrate_annular_disc(inner=self.inner, outer=self.outer)
 
-        sampling = (measurement.calibrations[-2].sampling, measurement.calibrations[-1].sampling)
+        if probes.num_ensemble_axes > 0 and self.ensemble_mean:
+            measurement = measurement.mean(probes.ensemble_axes)
 
-        calibrations = measurement.calibrations[:-2]
-        array = np.fft.ifftshift(measurement.array, axes=axes)
-
-        cutoff_scattering_angle = min(measurement.calibrations[-2].sampling *
-                                      (measurement.array.shape[-2] // 2),
-                                      measurement.calibrations[-1].sampling *
-                                      (measurement.array.shape[-1] // 2), )
-
-    def detect(self, waves, calibrations=None) -> Measurement:
-        """
-        Integrate the intensity of a the wave functions over the detector range.
-
-        Parameters
-        ----------
-        waves : Waves object
-            The batch of wave functions to detect.
-
-        Returns
-        -------
-        1d array
-            Detected values as a 1D array. The array has the same length as the batch size of the wave functions.
-        """
-
-        self.check_cutoff_angle(waves)
-
-        def integrate_fourier_space(array, bins):
-            xp = get_array_module(array)
-            return xp.sum(abs2(fft2(array, overwrite_x=False)) * bins, axis=(-2, -1))
-
-        bins = dask.delayed(self.get_detector_region)(waves.gpts, waves.angular_sampling, waves.wavelength)
-
-        integrated_intensity = waves.array.map_blocks(integrate_fourier_space, bins=bins,
-                                                      drop_axis=(len(waves.shape) - 2, len(waves.shape) - 1),
-                                                      dtype=np.float32)
-
-        calibrations = (None,) * (len(integrated_intensity.shape) - len(calibrations)) + calibrations
-        return Measurement(array=integrated_intensity, calibrations=calibrations)
+        return measurement
 
     def __copy__(self) -> 'AnnularDetector':
-        return self.__class__(self.inner, self.outer, path=self.path)
+        return self.__class__(self.inner, self.outer)
 
 
 class FlexibleAnnularDetector(AbstractDetector):
@@ -363,9 +322,9 @@ class FlexibleAnnularDetector(AbstractDetector):
         The path to the file used for saving the detector output.
     """
 
-    def __init__(self, step_size: float = 1., path: str = None):
+    def __init__(self, step_size: float = 1., ensemble_mean: bool = True):
         self.step_size = step_size
-        super().__init__(path=path)
+        super().__init__(ensemble_mean=ensemble_mean)
 
     @property
     def step_size(self) -> float:
@@ -377,6 +336,9 @@ class FlexibleAnnularDetector(AbstractDetector):
     @step_size.setter
     def step_size(self, value: float):
         self._radial_steps = value
+
+    def nbins_radial(self, waves):
+        return int(min(waves.cutoff_angles) / self._radial_steps)
 
     def detect(self, waves) -> np.ndarray:
         """
@@ -393,24 +355,38 @@ class FlexibleAnnularDetector(AbstractDetector):
             Detected values. The array has shape of (batch size, number of bins).
         """
 
-        xp = get_array_module(waves.array)
-        fft2 = get_device_function(xp, 'fft2')
-        abs2 = get_device_function(xp, 'abs2')
-        sum_run_length_encoded = get_device_function(xp, 'sum_run_length_encoded')
+        measurements = waves.diffraction_patterns(max_angle='cutoff').polar_binning(inner=0.,
+                                                                                    outer=min(waves.cutoff_angles),
+                                                                                    nbins_radial=self.nbins_radial(
+                                                                                        waves),
+                                                                                    nbins_azimuthal=1)
 
-        intensity = abs2(fft2(waves.array, overwrite_x=False))
+        if waves.num_ensemble_axes > 0:
+            measurements = measurements.mean(measurements.ensemble_axes)
 
-        indices = self._get_regions(waves.gpts, waves.angular_sampling, min(waves.cutoff_scattering_angles), xp)
+        return measurements
 
-        separators = xp.concatenate((xp.array([0]), xp.cumsum(xp.array([len(ring) for ring in indices]))))
-        intensity = intensity.reshape((intensity.shape[0], -1))[:, xp.concatenate(indices)]
-        result = xp.zeros((len(intensity), len(separators) - 1), dtype=xp.float32)
-        sum_run_length_encoded(intensity, result, separators)
+    def show(self, waves, ax=None):
+        bins = np.arange(0., self.nbins_radial(waves))[:, None]
 
-        return result
+        cmap = plt.get_cmap('prism', np.nanmax(bins) + 1)
+        cmap.set_under(color='white')
+
+        polar_measurements = PolarMeasurements(bins,
+                                               radial_sampling=self._radial_steps,
+                                               azimuthal_sampling=2 * np.pi,
+                                               radial_offset=0,
+                                               azimuthal_offset=0.)
+
+        ax, im = polar_measurements.show(ax=ax, cmap=cmap, vmin=-.5, vmax=np.max(bins) + .5)
+
+        plt.colorbar(im, extend='min', label='Detector region')
+        ax.set_rlim([-0, min(waves.cutoff_angles) * 1.1])
+
+        return ax, im
 
     def __copy__(self) -> 'FlexibleAnnularDetector':
-        return self.__class__(self.step_size, save_file=self.save_file)
+        return self.__class__(self.step_size, url=self.url, ensemble_mean=self.ensemble_mean)
 
     def copy(self) -> 'FlexibleAnnularDetector':
         """
@@ -419,7 +395,7 @@ class FlexibleAnnularDetector(AbstractDetector):
         return copy(self)
 
 
-class SegmentedDetector(_PolarDetector):
+class SegmentedDetector(AbstractDetector):
     """
     Segmented detector object.
 
@@ -440,12 +416,14 @@ class SegmentedDetector(_PolarDetector):
         The path to the file used for saving the detector output.
     """
 
-    def __init__(self, inner: float, outer: float, nbins_radial: int, nbins_angular: int, rotation: float = 0.,
-                 save_file: str = None):
-        radial_steps = (outer - inner) / nbins_radial
-        azimuthal_steps = 2 * np.pi / nbins_angular
-        super().__init__(inner=inner, outer=outer, radial_steps=radial_steps, azimuthal_steps=azimuthal_steps,
-                         rotation=rotation, save_file=save_file)
+    def __init__(self, inner: float, outer: float, nbins_radial: int, nbins_azimuthal: int, rotation: float = 0.,
+                 ensemble_mean: bool = True):
+        self._inner = inner
+        self._outer = outer
+        self._nbins_radial = nbins_radial
+        self._nbins_azimuthal = nbins_azimuthal
+        self._rotation = rotation
+        super().__init__(ensemble_mean=ensemble_mean)
 
     @property
     def inner(self) -> float:
@@ -453,7 +431,6 @@ class SegmentedDetector(_PolarDetector):
         return self._inner
 
     @inner.setter
-    @watched_property('changed')
     def inner(self, value: float):
         self._inner = value
 
@@ -463,71 +440,62 @@ class SegmentedDetector(_PolarDetector):
         return self._outer
 
     @outer.setter
-    @watched_property('changed')
     def outer(self, value: float):
         self._outer = value
 
     @property
     def nbins_radial(self) -> int:
         """Number of radial bins."""
-        return int((self.outer - self.inner) / self._radial_steps)
+        return self._nbins_radial
 
     @nbins_radial.setter
-    @watched_property('changed')
     def nbins_radial(self, value: int):
-        self._radial_steps = (self.outer - self.inner) / value
+        self._nbins_radial = value
 
     @property
-    def nbins_angular(self) -> int:
+    def nbins_azimuthal(self) -> int:
         """Number of angular bins."""
-        return int(2 * np.pi / self._azimuthal_steps)
+        return self._nbins_azimuthal
 
-    @nbins_angular.setter
-    @watched_property('changed')
-    def nbins_angular(self, value: float):
-        self._azimuthal_steps = 2 * np.pi / value
+    @nbins_azimuthal.setter
+    def nbins_azimuthal(self, value: float):
+        self._nbins_azimuthal = value
 
-    def detect(self, waves) -> np.ndarray:
-        """
-        Integrate the intensity of a the wave functions over the detector range.
+    def detect(self, probes):
+        measurement = probes.diffraction_patterns().polar_binning(nbins_radial=self.nbins_radial,
+                                                                  nbins_azimuthal=self.nbins_azimuthal,
+                                                                  inner=self.inner, outer=self.outer,
+                                                                  rotation=self._rotation)
 
-        Parameters
-        ----------
-        waves: Waves object
-            The batch of wave functions to detect.
+        if probes.num_ensemble_axes > 0:
+            measurement = measurement.mean(probes.ensemble_axes)
 
-        Returns
-        -------
-        3d array
-            Detected values. The first dimension indexes the batch size, the second and third indexes the radial and
-            angular bins, respectively.
-        """
+        return measurement
 
-        xp = get_array_module(waves.array)
-        fft2 = get_device_function(xp, 'fft2')
-        abs2 = get_device_function(xp, 'abs2')
-        sum_run_length_encoded = get_device_function(xp, 'sum_run_length_encoded')
-        intensity = abs2(fft2(waves.array, overwrite_x=False))
+    def show(self, ax=None):
+        bins = np.arange(0, self.nbins_radial * self.nbins_azimuthal).reshape((self.nbins_radial, self.nbins_azimuthal))
 
-        indices = self._get_regions(waves.gpts, waves.angular_sampling, min(waves.cutoff_scattering_angles), xp)
+        radial_sampling = (self.outer - self.inner) / self.nbins_radial
+        azimuthal_sampling = 2 * np.pi / self.nbins_azimuthal
 
-        separators = xp.concatenate((xp.array([0]), xp.cumsum(xp.array([len(ring) for ring in indices]))))
-        intensity = intensity.reshape((intensity.shape[0], -1))[:, xp.concatenate(indices)]
-        result = xp.zeros((len(intensity), len(separators) - 1), dtype=xp.float32)
-        sum_run_length_encoded(intensity, result, separators)
+        vmin = -.5
+        vmax = np.max(bins) + .5
+        cmap = plt.get_cmap('tab20', np.nanmax(bins) + 1)
+        cmap.set_under(color='white')
+        polar_measurements = PolarMeasurements(bins,
+                                               radial_sampling=radial_sampling,
+                                               azimuthal_sampling=azimuthal_sampling,
+                                               radial_offset=self.inner,
+                                               azimuthal_offset=self._rotation)
 
-        shape = (-1,)
-        if self.nbins_radial > 1:
-            shape += (self.nbins_radial,)
+        ax, im = polar_measurements.show(ax=ax, cmap=cmap, vmin=vmin, vmax=vmax)
 
-        if self.nbins_angular > 1:
-            shape += (self.nbins_angular,)
-
-        return result.reshape(shape)
+        plt.colorbar(im, extend='min', label='Detector region')
+        return ax, im
 
     def __copy__(self) -> 'SegmentedDetector':
         return self.__class__(inner=self.inner, outer=self.outer, nbins_radial=self.nbins_radial,
-                              nbins_angular=self.nbins_angular, save_file=self.save_file)
+                              nbins_azimuthal=self.nbins_azimuthal, url=self.url, ensemble_mean=self.ensemble_mean)
 
     def copy(self) -> 'SegmentedDetector':
         """Make a copy."""
@@ -556,13 +524,13 @@ class PixelatedDetector(AbstractDetector):
                  max_angle: Union[str, float] = 'valid',
                  resample: Union[str, float] = False,
                  mode='intensity',
-                 save_file: str = None):
+                 ensemble_mean: bool = True):
 
         self._max_angle = max_angle
         self._resample = resample
         self._mode = mode
 
-        super().__init__(save_file=save_file)
+        super().__init__(ensemble_mean=ensemble_mean)
 
     @property
     def max_angle(self):
@@ -635,95 +603,54 @@ class PixelatedDetector(AbstractDetector):
 
         return interpolate_bilinear(array, v, u, vw, uw)
 
-    def allocate_measurement(self, waves, scan: AbstractScan = None) -> Measurement:
-        """
-        Allocate a Measurement object or an hdf5 file.
-
-        Parameters
-        ----------
-        waves : Waves or SMatrix object
-            The wave function that will define the shape of the diffraction patterns.
-        scan: Scan object
-            The scan object that will define the scan dimensions the measurement.
-
-        Returns
-        -------
-        Measurement object or str
-            The allocated measurement or path to hdf5 file with the measurement data.
-        """
-
-        waves.grid.check_is_defined()
-        waves.accelerator.check_is_defined()
-        check_max_angle_exceeded(waves, self.max_angle)
-
-        gpts = waves.downsampled_gpts(self.max_angle)
-        gpts, new_angular_sampling = self._resampled_gpts(gpts, angular_sampling=waves.angular_sampling)
-
-        sampling = (1 / new_angular_sampling[0] / gpts[0] * waves.wavelength * 1000,
-                    1 / new_angular_sampling[1] / gpts[1] * waves.wavelength * 1000)
-
-        calibrations = calibrations_from_grid(gpts,
-                                              sampling,
-                                              names=['alpha_x', 'alpha_y'],
-                                              units='mrad',
-                                              scale_factor=waves.wavelength * 1000,
-                                              fourier_space=True)
-
-        if scan is None:
-            scan_shape = ()
-            scan_calibrations = ()
-        elif isinstance(scan, tuple):
-            scan_shape = scan
-            scan_calibrations = (None,) * len(scan)
-        else:
-            scan_shape = scan.shape
-            scan_calibrations = scan.calibrations
-
-        if self._mode == 'intensity':
-            array = np.zeros(scan_shape + gpts, dtype=np.float32)
-        elif self._mode == 'complex':
-            array = np.zeros(scan_shape + gpts, dtype=np.complex64)
-        else:
-            raise ValueError()
-
-        measurement = Measurement(array, calibrations=scan_calibrations + calibrations)
-        if isinstance(self.save_file, str):
-            measurement = measurement.write(self.save_file)
-        return measurement
-
     def detect(self, waves) -> np.ndarray:
-        """
-        Calculate the far field intensity of the wave functions. The output is cropped to include the non-suppressed
-        frequencies from the antialiased 2D fourier spectrum.
+        measurements = waves.diffraction_patterns(max_angle=self.max_angle)
 
-        Parameters
-        ----------
-        waves: Waves object
-            The batch of wave functions to detect.
+        if waves.num_ensemble_axes > 0:
+            measurements = measurements.mean(waves.ensemble_axes)
 
-        Returns
-        -------
-            Detected values. The first dimension indexes the batch size, the second and third indexes the two components
-            of the spatial frequency.
-        """
+        return measurements
 
-        xp = get_array_module(waves.array)
-        abs2 = get_device_function(xp, 'abs2')
+        # """
+        # Calculate the far field intensity of the wave functions. The output is cropped to include the non-suppressed
+        # frequencies from the antialiased 2D fourier spectrum.
+        #
+        # Parameters
+        # ----------
+        # waves: Waves object
+        #     The batch of wave functions to detect.
+        #
+        # Returns
+        # -------
+        #     Detected values. The first dimension indexes the batch size, the second and third indexes the two components
+        #     of the spatial frequency.
+        # """
+        #
+        # xp = get_array_module(waves.array)
+        # abs2 = get_device_function(xp, 'abs2')
+        #
+        # waves = waves.far_field(max_angle=self.max_angle)
+        #
+        # if self._mode == 'intensity':
+        #     array = abs2(waves.array)
+        # elif self._mode == 'complex':
+        #     array = waves.array
+        # else:
+        #     raise ValueError()
+        #
+        # array = xp.fft.fftshift(array, axes=(-2, -1))
+        #
+        # if self._resample:
+        #     array = self._interpolate(array, waves.angular_sampling)
+        # return array
 
-        waves = waves.far_field(max_angle=self.max_angle)
+    def __copy__(self) -> 'SegmentedDetector':
+        return self.__class__(inner=self.inner, outer=self.outer, nbins_radial=self.nbins_radial,
+                              nbins_azimuthal=self.nbins_azimuthal, url=self.url, ensemble_mean=self.ensemble_mean)
 
-        if self._mode == 'intensity':
-            array = abs2(waves.array)
-        elif self._mode == 'complex':
-            array = waves.array
-        else:
-            raise ValueError()
-
-        array = xp.fft.fftshift(array, axes=(-2, -1))
-
-        if self._resample:
-            array = self._interpolate(array, waves.angular_sampling)
-        return array
+    def copy(self) -> 'SegmentedDetector':
+        """Make a copy."""
+        return copy(self)
 
 
 class WavefunctionDetector(AbstractDetector):

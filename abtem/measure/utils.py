@@ -59,9 +59,10 @@ def polar_detector_bins(gpts: Tuple[int, int],
     phi = (phi + rotation) % (2 * np.pi)
 
     radial_bins = -np.ones(gpts, dtype=int)
-    valid = (alpha >= inner) & (alpha <= outer)
+    valid = (alpha >= inner) & (alpha < outer)
 
     radial_bins[valid] = (nbins_radial * (alpha[valid] - inner) / (outer - inner))
+    assert radial_bins.max() == nbins_radial - 1
 
     angular_bins = np.floor(nbins_azimuthal * (phi / (2 * np.pi)))
     angular_bins = np.clip(angular_bins, 0, nbins_azimuthal - 1).astype(np.int)

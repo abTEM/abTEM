@@ -81,7 +81,7 @@ class SlicedAtoms:
     def get_slice_exit(self, i):
         return min(self.get_slice_entrance(i) + self.slice_thicknesses[i], self.atoms.cell[2, 2])
 
-    def get_subsliced_atoms(self,
+    def get_atoms_in_slices(self,
                             start,
                             end=None,
                             atomic_number=None,
@@ -104,7 +104,7 @@ class SlicedAtoms:
         if padding:
             atoms = pad_atoms(atoms, padding)
 
-        return self.__class__(atoms, self.slice_thicknesses)
+        return atoms
 
     @property
     def num_slices(self):
