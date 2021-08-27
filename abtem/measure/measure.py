@@ -137,25 +137,26 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
     #
     #     return self.__class__
 
-    @requires_dask_array
-    def to_zarr(self, url, overwrite=False):
+    def _to_zarr(self, url, overwrite=False, **kwargs):
 
         with zarr.open(url, mode='w') as root:
             self.array.to_zarr(url, component='array', overwrite=overwrite)
             root.attrs['axes_metadata'] = self.axes_metadata
             root.attrs['metadata'] = self.metadata
+            root.attrs['kwargs'] = kwargs
             root.attrs['cls'] = self.__class__.__name__
 
     @staticmethod
-    def from_zarr(url, chunks=None):
+    def from_zarr(url):
 
         with zarr.open(url, mode='r') as f:
             axes_metadata = f.attrs['axes_metadata']
             metadata = f.attrs['metadata']
+            kwargs = f.attrs['kwargs']
             cls = globals()[f.attrs['cls']]
 
         array = da.from_zarr(url, component='array')
-        return cls(array, axes_metadata=axes_metadata, metadata=metadata)
+        return cls(array, axes_metadata=axes_metadata, metadata=metadata, **kwargs)
 
     def asnumpy(self):
         new_copy = self.copy(copy_array=False)
@@ -172,6 +173,9 @@ class Images(AbstractMeasurement):
     def __init__(self, array, sampling, axes_metadata=None, metadata=None):
         self._sampling = sampling
         super().__init__(array=array, axes_metadata=axes_metadata, metadata=metadata, base_axes=(-2, -1))
+
+    def to_zarr(self, url, overwrite=False):
+        self._to_zarr(url=url, overwrite=overwrite, sampling=self.sampling)
 
     def copy(self, copy_array=True):
         if copy_array:
