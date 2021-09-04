@@ -1,7 +1,7 @@
 import copy
 from abc import ABCMeta, abstractmethod
 from numbers import Number
-from typing import Union, Tuple
+from typing import Union, Tuple, TypeVar
 
 import dask
 import dask.array as da
@@ -12,14 +12,21 @@ import zarr
 from abtem.basic.axes import HasAxesMetadata
 from abtem.basic.backend import cp, asnumpy, get_array_module, get_scipy_module
 from abtem.basic.dask import computable, HasDaskArray, requires_dask_array
+from abtem.basic.interpolate import interpolate_bilinear
 from abtem.basic.fft import fft2_interpolate
 from abtem.measure.utils import polar_detector_bins, sum_run_length_encoded
 from abtem.visualize.utils import domain_coloring
 
+
 if cp is not None:
     from abtem.basic.cuda import sum_run_length_encoded as sum_run_length_encoded_cuda
+    from abtem.basic.cuda import interpolate_bilinear as interpolate_bilinear_cuda
 else:
     sum_run_length_encoded_cuda = None
+    interpolate_bilinear_cuda = None
+
+
+T = TypeVar('T', bound='AbstractMeasurement')
 
 
 class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
@@ -33,31 +40,31 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
         super().__init__(array)
 
     @property
-    def metadata(self):
+    def metadata(self) -> dict:
         return self._metadata
 
     @property
-    def axes_metadata(self):
+    def axes_metadata(self) -> list:
         return self._axes_metadata
 
     @property
-    def base_shape(self):
+    def base_shape(self) -> Tuple[float, ...]:
         return self.shape[-self.base_dimensions:]
 
     @property
-    def base_dimensions(self):
+    def base_dimensions(self) -> int:
         return len(self._base_axes)
 
     @property
-    def dimensions(self):
+    def dimensions(self) -> int:
         return len(self._array.shape)
 
     @property
-    def collection_dimensions(self):
+    def collection_dimensions(self) -> int:
         return self.dimensions - self.base_dimensions
 
     @property
-    def base_axes(self):
+    def base_axes(self) -> Tuple[float, ...]:
         base_axes = ()
         for base_axis in self._base_axes:
             if base_axis < 0:
@@ -67,7 +74,7 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
         return base_axes
 
     @property
-    def collection_axes(self):
+    def collection_axes(self) -> Tuple[float, ...]:
         return tuple(range(self.collection_dimensions))
 
     def _validate_axes(self, axes):
@@ -138,7 +145,6 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
     #     return self.__class__
 
     def _to_zarr(self, url, overwrite=False, **kwargs):
-
         with zarr.open(url, mode='w') as root:
             self.array.to_zarr(url, component='array', overwrite=overwrite)
             root.attrs['axes_metadata'] = self.axes_metadata
@@ -164,7 +170,7 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
         return new_copy
 
     @abstractmethod
-    def copy(self, copy_array=True):
+    def copy(self) -> T:
         pass
 
 
@@ -177,7 +183,7 @@ class Images(AbstractMeasurement):
     def to_zarr(self, url, overwrite=False):
         self._to_zarr(url=url, overwrite=overwrite, sampling=self.sampling)
 
-    def copy(self, copy_array=True):
+    def copy(self, copy_array=True) -> 'Images':
         if copy_array:
             array = self._array.copy()
         else:
@@ -185,12 +191,12 @@ class Images(AbstractMeasurement):
         return self.__class__(array, sampling=self.sampling, axes_metadata=copy.deepcopy(self.axes_metadata))
 
     @property
-    def sampling(self):
+    def sampling(self) -> Tuple[float, float]:
         return self._sampling
 
     @property
-    def extent(self):
-        return tuple(d * n for d, n in zip(self.sampling, self.base_shape))
+    def extent(self) -> Tuple[float, float]:
+        return (self.sampling[0] * self.base_shape[0], self.sampling[1] * self.base_shape[1])
 
     @computable
     @requires_dask_array
@@ -198,7 +204,7 @@ class Images(AbstractMeasurement):
                     sampling: Union[float, Tuple[float, float]] = None,
                     gpts: Union[int, Tuple[int, int]] = None,
                     method: str = 'fft',
-                    boundary: str = 'periodic'):
+                    boundary: str = 'periodic') -> 'Images':
 
         if method == 'fft' and boundary != 'periodic':
             raise ValueError()
@@ -220,11 +226,11 @@ class Images(AbstractMeasurement):
 
         array = dask.delayed(fft2_interpolate)(self.array, gpts)
 
-        array = da.from_delayed(array, shape=self.shape[:-2] + gpts, meta=xp.array((), dtype=xp.float32))
+        array = da.from_delayed(array, shape=self.shape[:-2] + gpts, meta=xp.array((), dtype=self.array.dtype))
 
         return self.__class__(array, sampling=sampling, axes_metadata=self.axes_metadata, metadata=self.metadata)
 
-    def is_compatible(self, other):
+    def is_compatible(self, other) -> bool:
 
         if self.shape != other.shape:
             return False
@@ -237,14 +243,14 @@ class Images(AbstractMeasurement):
 
         return True
 
-    def subtract(self, other):
+    def subtract(self, other) -> 'Images':
         self.is_compatible(other)
         return self.__class__(self.array - other.array,
                               sampling=self.sampling,
                               axes_metadata=copy.copy(self.axes_metadata),
                               metadata=copy.copy(self.metadata))
 
-    def tile(self, reps):
+    def tile(self, reps) -> 'Images':
         new_array = np.tile(self.array, reps)
         return self.__class__(new_array, sampling=self.sampling, axes_metadata=copy.copy(self.axes_metadata),
                               metadata=copy.copy(self.metadata))
@@ -267,6 +273,8 @@ class Images(AbstractMeasurement):
         return self.__class__(array, axes_metadata=self.axes_metadata, metadata=self.metadata)
 
     def show(self, ax=None, cbar=False, **kwargs):
+        self.compute()
+
         if ax is None:
             ax = plt.subplot()
 
@@ -352,6 +360,66 @@ class DiffractionPatterns(AbstractMeasurement):
                 limits += [(-self.shape[i] // 2 * self.angular_sampling[i],
                             (self.shape[i] // 2 - 1) * self.angular_sampling[i])]
         return limits
+
+    def interpolate(self, new_sampling):
+
+        def bilinear_nodes_and_weight(old_shape, new_shape, old_angular_sampling, new_angular_sampling, xp):
+            nodes = []
+            weights = []
+
+            old_sampling = (1 / old_angular_sampling[0] / old_shape[0],
+                            1 / old_angular_sampling[1] / old_shape[1])
+
+            new_sampling = (1 / new_angular_sampling[0] / new_shape[0],
+                            1 / new_angular_sampling[1] / new_shape[1])
+
+            for n, m, r, d in zip(old_shape, new_shape, old_sampling, new_sampling):
+                k = xp.fft.fftshift(xp.fft.fftfreq(n, r).astype(xp.float32))
+                k_new = xp.fft.fftshift(xp.fft.fftfreq(m, d).astype(xp.float32))
+                distances = k_new[None] - k[:, None]
+                distances[distances < 0.] = np.inf
+                w = distances.min(0) / (k[1] - k[0])
+                w[w == np.inf] = 0.
+                nodes.append(distances.argmin(0))
+                weights.append(w)
+
+            v, u = nodes
+            vw, uw = weights
+            v, u, vw, uw = xp.broadcast_arrays(v[:, None], u[None, :], vw[:, None], uw[None, :])
+            return v, u, vw, uw
+
+        def resampled_gpts(new_sampling, gpts, angular_sampling):
+            if new_sampling == 'uniform':
+                scale_factor = (angular_sampling[0] / max(angular_sampling),
+                                angular_sampling[1] / max(angular_sampling))
+
+                new_gpts = (int(np.ceil(gpts[0] * scale_factor[0])),
+                            int(np.ceil(gpts[1] * scale_factor[1])))
+
+                if np.abs(new_gpts[0] - new_gpts[1]) <= 2:
+                    new_gpts = (min(new_gpts),) * 2
+
+                new_angular_sampling = (angular_sampling[0] / scale_factor[0],
+                                        angular_sampling[1] / scale_factor[1])
+
+            else:
+                raise RuntimeError('')
+
+            return new_gpts, new_angular_sampling
+
+        xp = get_array_module(self.array)
+        # interpolate_bilinear = get_device_function(xp, 'interpolate_bilinear')
+
+        new_gpts, new_angular_sampling = resampled_gpts(new_sampling, self.array.shape[-2:], self.angular_sampling)
+        v, u, vw, uw = bilinear_nodes_and_weight(self.array.shape[-2:],
+                                                       new_gpts,
+                                                       self.angular_sampling,
+                                                       new_angular_sampling,
+                                                       xp)
+
+        # return interpolate_bilinear(array, v, u, vw, uw)
+
+
 
     def _check_max_angle(self, angle):
         if (angle > self.max_angles[0]) or (angle > self.max_angles[1]):
@@ -563,6 +631,8 @@ class DiffractionPatterns(AbstractMeasurement):
                               metadata=self.metadata, fftshift=self.fftshift)
 
     def show(self, ax=None, power=1., **kwargs):
+        self.compute()
+
         if ax is None:
             ax = plt.subplot()
 

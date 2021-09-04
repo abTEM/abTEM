@@ -1,10 +1,11 @@
 """Module for modifying ASE atoms objects for use in abTEM."""
 from fractions import Fraction
 from numbers import Number
-from typing import Union, Sequence
+from typing import Sequence
 
 import numpy as np
 from ase import Atoms
+from ase.build.tools import rotation_matrix, cut
 from scipy.linalg import polar
 
 
@@ -106,7 +107,7 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12):
 
     atoms.set_cell(np.abs(atoms.get_cell()))
 
-    atoms.wrap()
+    # atoms.wrap()
     return atoms
 
 
@@ -222,7 +223,77 @@ def cut_rectangle(atoms: Atoms, origin: Sequence[float], extent: Sequence[float]
     return atoms
 
 
-def pad_atoms(atoms: Atoms, margin: float, directions='xy', in_place=False):
+def atoms_in_box(atoms, box, margin=0., origin=(0., 0., 0.)):
+    mask = np.all(atoms.positions >= (np.array(origin) - margin - 1e-12)[None], axis=1) * \
+           np.all(atoms.positions < (np.array(origin) + box + margin)[None], axis=1)
+    atoms = atoms[mask]
+    return atoms
+
+
+def cut_box(atoms, box=None, plane=None, origin=(0., 0., 0.), margin=0.):
+    if box is None:
+        box = np.diag(atoms.cell)
+
+    if plane is None:
+        plane = 'xy'
+
+    if isinstance(margin, Number):
+        margin = (margin, margin, margin)
+
+    atoms = atoms.copy()
+    if not np.all(np.isclose(origin, (0., 0., 0.))):
+        atoms.positions[:] = atoms.positions - origin
+        atoms.wrap()
+
+    if isinstance(plane, str):
+        plane = [{'x': (1, 0, 0), 'y': (0, 1, 0), 'z': (0, 0, 1)}[axis] for axis in plane]
+
+    plane = plane / np.linalg.norm(plane, axis=1, keepdims=True)
+
+    if np.dot(plane[0], plane[1]) > 1e-12:
+        raise RuntimeError()
+
+    xy_plane = np.array([[1, 0, 0], [0, 1, 0]])
+    if np.any(plane != xy_plane):
+        R = rotation_matrix(xy_plane[0], plane[0], xy_plane[1], plane[1])
+        atoms.positions[:] = np.dot(R, atoms.positions[:].T).T
+        atoms.cell[:] = np.dot(R, atoms.cell[:].T).T
+
+    if is_cell_orthogonal(atoms):
+        if any(margin):
+            atoms = pad_atoms(atoms, margin, directions='xyz')
+
+        if np.all(np.isclose(np.diag(atoms.cell), box)):
+            return atoms
+
+        atoms = atoms_in_box(atoms, box=box, margin=margin)
+        atoms.cell = box
+        return atoms
+
+    scaled_margin = atoms.cell.scaled_positions(np.diag(margin))
+    scaled_margin = np.sign(scaled_margin) * (np.ceil(np.abs(scaled_margin)))
+    new_cell = np.diag(np.array(box)) + 2 * np.abs(atoms.cell.cartesian_positions(scaled_margin))
+    new_cell = np.dot(atoms.cell.scaled_positions(new_cell), atoms.cell)
+
+    scaled_corners_new_cell = np.array([[0., 0., 0.], [0., 0., 1.],
+                                        [0., 1., 0.], [0., 1., 1.],
+                                        [1., 0., 0.], [1., 0., 1.],
+                                        [1., 1., 0.], [1., 1., 1.]])
+    corners = np.dot(scaled_corners_new_cell, new_cell)
+    scaled_corners = np.linalg.solve(atoms.cell.T, corners.T).T
+    repetitions = np.ceil(scaled_corners.ptp(axis=0)).astype('int') + 1
+    new_atoms = atoms * repetitions
+
+    center_translate = np.dot(np.floor(scaled_corners.min(axis=0)), atoms.cell)
+    margin_translate = atoms.cell.cartesian_positions(scaled_margin).sum(0)
+    new_atoms.positions[:] += center_translate - margin_translate
+
+    new_atoms = atoms_in_box(new_atoms, box, margin=margin)
+    new_atoms.cell = box
+    return new_atoms
+
+
+def pad_atoms(atoms: Atoms, margins, directions='xy', in_place=False):
     """
     Repeat the atoms in x and y, retaining only the repeated atoms within the margin distance from the cell boundary.
 
@@ -250,7 +321,7 @@ def pad_atoms(atoms: Atoms, margin: float, directions='xy', in_place=False):
     axes = [{'x': 0, 'y': 1, 'z': 2}[direction] for direction in directions]
 
     reps = [1, 1, 1]
-    for axis in axes:
+    for axis, margin in zip(axes, margins):
         reps[axis] = int(1 + 2 * np.ceil(margin / atoms.cell[axis, axis]))
 
     if any([rep > 1 for rep in reps]):
@@ -258,24 +329,6 @@ def pad_atoms(atoms: Atoms, margin: float, directions='xy', in_place=False):
         atoms.positions[:] -= np.diag(old_cell) * [rep // 2 for rep in reps]
         atoms.cell = old_cell
 
-    # import matplotlib.pyplot as plt
-    # from abtem import show_atoms
-    # show_atoms(atoms, plane='xz')
-    # plt.show()
+    atoms = atoms_in_box(atoms, np.diag(atoms.cell), margins)
 
-    to_keep = np.ones(len(atoms), dtype=bool)
-    for axis in axes:
-        to_keep *= (atoms.positions[:, axis] > -margin) * (atoms.positions[:, axis] < atoms.cell[axis, axis] + margin)
-
-    atoms = atoms[to_keep]
-
-    # for axis in axes:
-    #     left = atoms[atoms.positions[:, axis] < margin]
-    #     left.positions[:, axis] += atoms.cell[axis, axis]
-    #     right = atoms[(atoms.positions[:, axis] > atoms.cell[axis, axis] - margin) &
-    #                   (atoms.positions[:, axis] < atoms.cell[axis, axis])]
-    #     right.positions[:, axis] -= atoms.cell[axis, axis]
-    #     atoms += left + right
     return atoms
-
-

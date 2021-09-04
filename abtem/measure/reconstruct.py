@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.ndimage import center_of_mass
 
-from abtem.device import get_array_module
+from abtem.basic.backend import get_array_module
 from abtem.waves.waves import Probe
 
 

@@ -1,9 +1,10 @@
 from numbers import Number
-from typing import Union
+from typing import List, Tuple
 
 import numpy as np
+from ase.data import atomic_numbers
 
-from abtem.structures.structures import pad_atoms
+from abtem.structures.structures import cut_box
 
 
 class SliceIndexedAtoms:
@@ -39,78 +40,112 @@ class SliceIndexedAtoms:
         return chunk_positions, chunk_numbers, chunk_slice_idx
 
 
+def _validate_slice_thickness(slice_thickness, thickness=None, num_slices=None):
+    if isinstance(slice_thickness, Number):
+        if thickness is not None:
+            n = np.ceil(thickness / slice_thickness)
+            slice_thickness = np.full(int(n), thickness / n)
+        elif num_slices is not None:
+            slice_thickness = [slice_thickness] * num_slices
+        else:
+            raise RuntimeError()
+
+    slice_thickness = np.array(slice_thickness)
+
+    if thickness is not None:
+        if not np.isclose(np.sum(slice_thickness), thickness):
+            raise RuntimeError()
+
+    if num_slices is not None:
+        if len(slice_thickness) != num_slices:
+            raise RuntimeError()
+
+    return slice_thickness
+
+
+def _slice_limits(slice_thickness):
+    cumulative_thickness = np.cumsum(np.concatenate(((0,), slice_thickness)))
+    return [(cumulative_thickness[i], cumulative_thickness[i + 1]) for i in range(len(cumulative_thickness) - 1)]
+
+
 class SlicedAtoms:
 
-    def __init__(self, atoms, slice_thicknesses):
+    def __init__(self, atoms, slice_thickness, plane='xy', box=None, origin=(0., 0., 0.), padding=0.):
+
+        if box is None:
+            box = np.diag(atoms.cell)
+
+        if isinstance(padding, dict):
+            new_padding = {}
+            for key, value in padding.items():
+                if isinstance(key, str):
+                    key = atomic_numbers[key]
+                new_padding[key] = value
+            padding = new_padding
+            max_padding = max(padding.values())
+        elif isinstance(padding, Number):
+            max_padding = padding
+        else:
+            raise ValueError()
+
+        atoms = cut_box(atoms, box, plane, origin=origin, margin=max_padding)
+
+        self._padding = padding
         self._atoms = atoms
-        self.slice_thicknesses = slice_thicknesses
+        self._slice_thickness = _validate_slice_thickness(slice_thickness, box[2])
+        self._slice_limits = _slice_limits(self._slice_thickness)
+        self._padding = padding
 
     @property
     def atoms(self):
         return self._atoms
 
     @property
-    def positions(self):
-        return self.atoms.positions
-
-    @property
-    def numbers(self):
-        return self.atoms.numbers
+    def num_slices(self):
+        """The number of projected potential slices."""
+        return len(self._slice_thickness)
 
     def __len__(self):
-        return len(self.atoms)
+        return self.num_slices
 
     @property
-    def slice_thicknesses(self):
-        return self._slice_thicknesses
+    def slice_thickness(self):
+        return self._slice_thickness
 
-    @slice_thicknesses.setter
-    def slice_thicknesses(self, slice_thicknesses):
-        if isinstance(slice_thicknesses, Number):
-            num_slices = int(np.ceil(self._atoms.cell[2, 2] / slice_thicknesses))
-            slice_thicknesses = np.full(num_slices, float(slice_thicknesses))
-        self._slice_thicknesses = slice_thicknesses
+    @property
+    def slice_limits(self) -> List[Tuple[float, float]]:
+        return self._slice_limits
 
-    def flip(self):
-        self._atoms.positions[:] = self._atoms.cell[2, 2] - self._atoms.positions[:]
-        self._slice_thicknesses[:] = self._slice_thicknesses[::-1]
+    # def flip(self):
+    #     self._atoms.positions[:] = self._atoms.cell[2, 2] - self._atoms.positions[:]
+    #     self._slice_thicknesses[:] = self._slice_thicknesses[::-1]
 
-    def get_slice_entrance(self, i):
-        return max(np.sum(self.slice_thicknesses[:i]), 0)
+    def get_atoms_in_slices(self, start, end=None, atomic_number=None):
 
-    def get_slice_exit(self, i):
-        return min(self.get_slice_entrance(i) + self.slice_thicknesses[i], self.atoms.cell[2, 2])
-
-    def get_atoms_in_slices(self,
-                            start,
-                            end=None,
-                            atomic_number=None,
-                            padding: Union[bool, float] = False,
-                            z_margin=0.):
+        if isinstance(atomic_number, str):
+            atomic_number = atomic_numbers[atomic_number]
 
         if end is None:
-            end = start + 1
+            end = start
 
-        a = self.get_slice_entrance(start) - z_margin
-        b = self.get_slice_entrance(end) + z_margin
+        if isinstance(self._padding, dict):
+            if atomic_number is None:
+                padding = max(self._padding.values())
+            else:
+                padding = self._padding[atomic_number]
+        elif isinstance(self._padding, Number):
+            padding = self._padding
+        else:
+            raise RuntimeError()
 
-        in_slice = (self.atoms.positions[:, 2] > a) * (self.atoms.positions[:, 2] < b)
+        a = self.slice_limits[start][0]
+        b = self.slice_limits[end][1]
+
+        in_slice = (self.atoms.positions[:, 2] >= (a - padding)) * (self.atoms.positions[:, 2] < (b + padding))
 
         if atomic_number is not None:
             in_slice = (self.atoms.numbers == atomic_number) * in_slice
 
         atoms = self.atoms[in_slice]
-
-        if padding:
-            atoms = pad_atoms(atoms, padding)
-
+        atoms.cell = tuple(np.diag(atoms.cell)[:2]) + (b - a,)
         return atoms
-
-    @property
-    def num_slices(self):
-        """The number of projected potential slices."""
-        return len(self._slice_thicknesses)
-
-    def get_slice_thickness(self, i):
-        """The thickness of the projected potential slices."""
-        return self._slice_thicknesses[i]

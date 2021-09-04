@@ -15,7 +15,7 @@ from abtem.basic.backend import get_array_module
 from abtem.basic.complex import abs2
 from abtem.basic.dask import computable, requires_dask_array, HasDaskArray, BuildsDaskArray
 from abtem.basic.energy import Accelerator
-from abtem.basic.fft import fft2, ifft2, fft2_convolve, fft2_shift_kernel, fft_crop, fft2_interpolate
+from abtem.basic.fft import fft2, ifft2, fft2_convolve, fft_crop, fft2_interpolate, fft_shift_kernel
 from abtem.basic.grid import Grid
 from abtem.measure.detect import AbstractDetector
 from abtem.measure.measure import DiffractionPatterns, Images
@@ -440,7 +440,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         positions /= xp.array(self.sampling).astype(np.float32)
         drop_axis = len(positions.shape) - 1
         new_axis = (len(positions.shape) - 1, len(positions.shape))
-        return positions.map_blocks(fft2_shift_kernel, shape=self.gpts, meta=xp.array((), dtype=np.complex64),
+        return positions.map_blocks(fft_shift_kernel, shape=self.gpts, meta=xp.array((), dtype=np.complex64),
                                     drop_axis=drop_axis, new_axis=new_axis,
                                     chunks=positions.chunks[:-1] + ((self.gpts[0],), (self.gpts[1],)))
 

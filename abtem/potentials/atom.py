@@ -1,6 +1,8 @@
 from typing import Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
+from ase.data import chemical_symbols
 from numba import jit
 from scipy.integrate import quad
 from scipy.interpolate import interp1d
@@ -9,9 +11,6 @@ from scipy.optimize import brentq
 from abtem.basic.backend import cp, get_array_module
 from abtem.basic.grid import disc_meshgrid
 from abtem.potentials.parametrizations import names as parametrization_names
-
-import matplotlib.pyplot as plt
-from ase.data import chemical_symbols, atomic_numbers
 from abtem.potentials.utils import kappa
 
 if cp is not None:
@@ -61,7 +60,6 @@ class AtomicPotential:
             symbol = chemical_symbols[symbol]
 
         self._symbol = symbol
-
         parametrization = parametrization_names[parametrization]
 
         self._parameters = parametrization.load_parameters()[symbol]
@@ -93,7 +91,7 @@ class AtomicPotential:
         return self._cutoff
 
     def evaluate(self, r) -> np.ndarray:
-        return self._potential(r, self._parameters) / kappa
+        return self._potential(r, self._parameters)
 
     def build_integral_table(self, taper=.85):
         limits = np.linspace(-self.cutoff, 0, 50)
@@ -101,8 +99,7 @@ class AtomicPotential:
         table = np.zeros((len(limits) - 1, len(self.radial_gpts)))
 
         for i, Ri in enumerate(self.radial_gpts):
-            R2 = Ri ** 2
-            v = lambda z: self.evaluate(np.sqrt(R2 + z ** 2))
+            v = lambda z: self.evaluate(np.sqrt(Ri ** 2 + z ** 2))
 
             table[0, i] = quad(v, -np.inf, limits[0])[0]
             for j, limit in enumerate(limits[1:-1]):
@@ -116,11 +113,10 @@ class AtomicPotential:
         table = table * taper_values[None]
 
         self._integral_table = limits[1:], table
-
         return self._integral_table
 
     def project(self, a, b) -> np.ndarray:
-        #if self._integral_table is None:
+        # if self._integral_table is None:
         #    self.build_integral_table()
 
         f = interp1d(*self._integral_table, axis=0, kind='linear', fill_value='extrapolate')
@@ -166,3 +162,46 @@ class AtomicPotential:
         ax.plot(self.radial_gpts, self.evaluate(self.radial_gpts), label=self._symbol)
         ax.set_ylabel('V [V]')
         ax.set_xlabel('r [Å]')
+
+
+from ase import units
+
+eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
+
+
+def squared_wavenumbers(shape, box):
+    Lx, Ly, Lz = box
+    k, l, m = (np.fft.fftfreq(n, d=1 / n) for n in shape)
+    k2 = k[:, None, None] ** 2 / Lx ** 2 + l[None, :, None] ** 2 / Ly ** 2 + m[None, None, :] ** 2 / Lz ** 2
+    return 2 ** 2 * np.pi ** 2 * k2
+
+
+def _solve_fourier_space(charge, box):
+    k2 = squared_wavenumbers(charge.shape, box)
+    V = np.zeros(charge.shape, dtype=np.complex)
+
+    nonzero = np.ones_like(V, dtype=bool)
+    nonzero[0, 0, 0] = False
+
+    V[nonzero] = charge[nonzero] / k2[nonzero]
+    V[0, 0, 0] = 0
+
+    V = - np.fft.ifftn(V).real / eps0
+    V -= V.min()
+    return V
+
+
+def solve_poisson_equation(atoms, charge_density):
+    def fourier_shift(kx, ky, kz, x, y, z):
+        return np.exp(-2 * np.pi * 1j * (kx[:, None, None] * x + ky[None, :, None] * y + kz[None, None, :] * z))
+
+    Lx, Ly, Lz = np.linalg.norm(atoms.cell, axis=0)
+    pixel_volume = np.prod(np.diag(atoms.cell)) / np.prod(charge_density.shape)
+
+    kx, ky, kz = (np.fft.fftfreq(n, d=L / n) for n, L in zip(charge_density.shape, (Lx, Ly, Lz)))
+    for atom in atoms:
+        scale = -atom.number / pixel_volume
+        x, y, z = atom.position
+        charge_density += scale * fourier_shift(kx, ky, kx, x, y, z)
+
+    return _solve_fourier_space(charge_density, (Lx, Ly, Lz))

@@ -1,4 +1,3 @@
-from abtem.potentials.parametrizations import lobato
-from abtem.potentials.parametrizations import kirkland
+from abtem.potentials.parametrizations import lobato, kirkland, ewald
 
-names = {'kirkland': kirkland, 'lobato': lobato}
+names = {'kirkland': kirkland, 'lobato': lobato, 'ewald': ewald}

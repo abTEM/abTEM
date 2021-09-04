@@ -64,7 +64,33 @@ def fft2_convolve(x, kernel, overwrite_x=True, ):
         return _fft2_convolve(x, kernel, overwrite_x)
 
 
-def fft2_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
+# def fft2_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
+#     """
+#     Create an array representing one or more phase ramp(s) for shifting another array.
+#
+#     Parameters
+#     ----------
+#     positions : array of xy-positions
+#     shape : two int
+#
+#     Returns
+#     -------
+#
+#     """
+#     xp = get_array_module(positions)
+#
+#     kx, ky = spatial_frequencies(shape, (1.,) * 2, delayed=False, xp=xp)
+#     kx = kx.reshape((1,) * (len(positions.shape) - 1) + (-1, 1)).astype(np.float32)
+#     ky = ky.reshape((1,) * (len(positions.shape) - 1) + (1, -1)).astype(np.float32)
+#     x = positions[..., 0][..., None, None]
+#     y = positions[..., 1][..., None, None]
+#
+#     twopi = np.float32(2. * np.pi)
+#     result = complex_exponential(-twopi * kx * x) * complex_exponential(-twopi * ky * y)
+#     return result
+
+
+def fft_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
     """
     Create an array representing one or more phase ramp(s) for shifting another array.
 
@@ -77,17 +103,26 @@ def fft2_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
     -------
 
     """
+
     xp = get_array_module(positions)
 
-    kx, ky = spatial_frequencies(shape, (1.,) * 2, delayed=False, xp=xp)
-    kx = kx.reshape((1,) * (len(positions.shape) - 1) + (-1, 1)).astype(np.float32)
-    ky = ky.reshape((1,) * (len(positions.shape) - 1) + (1, -1)).astype(np.float32)
-    x = positions[..., 0][..., None, None]
-    y = positions[..., 1][..., None, None]
+    assert positions.shape[-1] == len(shape)
+    dims = positions.shape[-1]
+    n = len(positions.shape) - 1
+    k = list(spatial_frequencies(shape, (1.,) * dims, delayed=False, xp=xp))
 
-    twopi = np.float32(2. * np.pi)
-    result = complex_exponential(-twopi * kx * x) * complex_exponential(-twopi * ky * y)
-    return result
+    positions = [np.expand_dims(positions[..., i], list(range(n, n + dims))) for i in range(dims)]
+
+    for i in range(dims):
+        d = list(range(0, n)) + list(range(n, n + dims))
+        del d[i + n]
+        k[i] = complex_exponential(- 2 * np.pi * np.expand_dims(k[i], d) * positions[i])
+
+    array = k[0]
+    for i in range(1, dims):
+        array = array * k[i]
+
+    return array
 
 
 def _fft_interpolation_masks_1d(n1, n2):
@@ -155,8 +190,8 @@ def fft_crop(array, new_shape):
 
     new_array = xp.zeros(new_shape, dtype=array.dtype)
 
-    #out_indices = xp.where(mask_out)
-    #in_indices = xp.where(mask_in)
+    # out_indices = xp.where(mask_out)
+    # in_indices = xp.where(mask_in)
 
     new_array[mask_out] = array[mask_in]
 
@@ -167,7 +202,6 @@ def fft2_interpolate(array, new_shape, normalization='values', overwrite_x=False
     xp = get_array_module(array)
 
     old_size = array.shape[-2] * array.shape[-1]
-
 
     def _fft2_interpolate(array, new_shape):
         return ifft2(fft_crop(fft2(array), new_shape), overwrite_x=overwrite_x)
@@ -190,7 +224,6 @@ def fft2_interpolate(array, new_shape, normalization='values', overwrite_x=False
     #     array = ifft2(fft_crop(fft2(array), new_shape), overwrite_x=overwrite_x).real
     #
     # else:
-
 
     if normalization == 'values':
         array *= array.shape[-1] * array.shape[-2] / old_size

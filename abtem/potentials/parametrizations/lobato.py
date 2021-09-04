@@ -4,6 +4,7 @@ import os
 import numpy as np
 from numba import jit
 from scipy.special import kn
+from abtem.potentials.utils import kappa
 
 
 def load_parameters(scale_parameters=True):
@@ -33,7 +34,7 @@ def scattering_factor(k2, p):
             (p[0, 1] * (2. + p[1, 1] * k2) / (1. + p[1, 1] * k2) ** 2) +
             (p[0, 2] * (2. + p[1, 2] * k2) / (1. + p[1, 2] * k2) ** 2) +
             (p[0, 3] * (2. + p[1, 3] * k2) / (1. + p[1, 3] * k2) ** 2) +
-            (p[0, 4] * (2. + p[1, 4] * k2) / (1. + p[1, 4] * k2) ** 2))
+            (p[0, 4] * (2. + p[1, 4] * k2) / (1. + p[1, 4] * k2) ** 2)) / kappa
 
 
 @jit(nopython=True, nogil=True)
@@ -42,7 +43,7 @@ def potential(r, p):
             p[0, 1] * (2. / (p[1, 1] * r) + 1.) * np.exp(-p[1, 1] * r) +
             p[0, 2] * (2. / (p[1, 2] * r) + 1.) * np.exp(-p[1, 2] * r) +
             p[0, 3] * (2. / (p[1, 3] * r) + 1.) * np.exp(-p[1, 3] * r) +
-            p[0, 4] * (2. / (p[1, 4] * r) + 1.) * np.exp(-p[1, 4] * r))
+            p[0, 4] * (2. / (p[1, 4] * r) + 1.) * np.exp(-p[1, 4] * r)) / kappa
 
 
 @jit(nopython=True, nogil=True)
@@ -51,7 +52,7 @@ def potential_derivative(r, p):
               p[0, 1] * (2. / (p[1, 1] * r ** 2) + 2. / r + p[1, 1]) * np.exp(-p[1, 1] * r) +
               p[0, 2] * (2. / (p[1, 2] * r ** 2) + 2. / r + p[1, 2]) * np.exp(-p[1, 2] * r) +
               p[0, 3] * (2. / (p[1, 3] * r ** 2) + 2. / r + p[1, 3]) * np.exp(-p[1, 3] * r) +
-              p[0, 4] * (2. / (p[1, 4] * r ** 2) + 2. / r + p[1, 4]) * np.exp(-p[1, 4] * r))
+              p[0, 4] * (2. / (p[1, 4] * r ** 2) + 2. / r + p[1, 4]) * np.exp(-p[1, 4] * r)) / kappa
 
     return dvdr
 
@@ -69,15 +70,15 @@ def potential_second_derivative(r, p):
               p[0, 4] * (2 * (p[1, 4] * r + 2) / (p[1, 4] * r ** 3) +
                          2 * (p[1, 4] * r + 1) / r ** 2 + p[1, 4] ** 2) * np.exp(-p[1, 4] * r))
 
-    return d2vdr2
+    return d2vdr2 / kappa
 
 
 def projected_potential(r, p):
     return 2 * (2 * p[0][:, None] / p[1][:, None] * kn(0, r[None] * p[1][:, None]) +
-                p[0][:, None] * r[None] * kn(1, r[None] * p[1][:, None])).sum(0)
+                p[0][:, None] * r[None] * kn(1, r[None] * p[1][:, None])).sum(0) / kappa
 
 
 def projected_scattering_factor(k, p):
     f = 8 * np.pi * (p[0][:, None] / p[1][:, None] * 1 / (4 * np.pi ** 2 * k[None] ** 2 + p[1][:, None] ** 2) +
                      p[0][:, None] * p[1][:, None] / (4 * np.pi ** 2 * k[None] ** 2 + p[1][:, None] ** 2) ** 2).sum(0)
-    return f
+    return f / kappa

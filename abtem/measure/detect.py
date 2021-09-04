@@ -9,17 +9,6 @@ import numpy as np
 from abtem.basic.backend import get_array_module
 from abtem.measure.measure import DiffractionPatterns, PolarMeasurements
 from abtem.measure.utils import polar_detector_bins
-from abtem.waves.scan import AbstractScan
-
-
-# if (nbins_radial == 1) & (nbins_azimuthal == 1):
-#    return np.where(bins == 0)
-
-# region_indices = []
-# for indices in self._label_to_index(region_labels):
-#     region_indices.append(indices)
-# return region_indices
-# return bins
 
 
 def check_cutoff_angle(waves, angle):
@@ -307,7 +296,7 @@ class SegmentedDetector(AbstractDetector):
 
     def __copy__(self) -> 'SegmentedDetector':
         return self.__class__(inner=self.inner, outer=self.outer, nbins_radial=self.nbins_radial,
-                              nbins_azimuthal=self.nbins_azimuthal, url=self.url, ensemble_mean=self.ensemble_mean)
+                              nbins_azimuthal=self.nbins_azimuthal, ensemble_mean=self.ensemble_mean)
 
     def copy(self) -> 'SegmentedDetector':
         """Make a copy."""
@@ -334,14 +323,9 @@ class PixelatedDetector(AbstractDetector):
 
     def __init__(self,
                  max_angle: Union[str, float] = 'valid',
-                 resample: Union[str, float] = False,
-                 mode='intensity',
                  ensemble_mean: bool = True):
 
         self._max_angle = max_angle
-        self._resample = resample
-        self._mode = mode
-
         super().__init__(ensemble_mean=ensemble_mean)
 
     @property
@@ -404,7 +388,7 @@ class PixelatedDetector(AbstractDetector):
 
     def _interpolate(self, array, angular_sampling):
         xp = get_array_module(array)
-        #interpolate_bilinear = get_device_function(xp, 'interpolate_bilinear')
+        # interpolate_bilinear = get_device_function(xp, 'interpolate_bilinear')
 
         new_gpts, new_angular_sampling = self._resampled_gpts(array.shape[-2:], angular_sampling)
         v, u, vw, uw = self._bilinear_nodes_and_weight(array.shape[-2:],
@@ -413,7 +397,7 @@ class PixelatedDetector(AbstractDetector):
                                                        new_angular_sampling,
                                                        xp)
 
-        #return interpolate_bilinear(array, v, u, vw, uw)
+        # return interpolate_bilinear(array, v, u, vw, uw)
 
     def detect(self, waves) -> np.ndarray:
         measurements = waves.diffraction_patterns(max_angle=self.max_angle)

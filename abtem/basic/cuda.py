@@ -92,3 +92,34 @@ def interpolate_radial_functions(array, positions, disk_indices, sampling, radia
                                                                   radial_functions,
                                                                   radial_derivative,
                                                                   dt)
+
+
+def interpolate_bilinear(x, v, u, vw, uw):
+    B, H, W = x.shape
+    out_H, out_W = v.shape
+    y = cp.empty((B, out_H, out_W), dtype=x.dtype)
+
+    cp.ElementwiseKernel(
+        'raw T x, S v, S u, T vw, T uw, S H, S W, S outsize', 'T y', '''
+        // indices
+        S v0 = v;
+        S v1 = min(v + 1, (S)(H - 1));
+        S u0 = u;
+        S u1 = min(u + 1, (S)(W - 1));
+        // weights
+        T w0 = (1 - vw) * (1 - uw);
+        T w1 = (1 - vw) * uw;
+        T w2 = vw * (1 - uw);
+        T w3 = vw * uw;
+        // fetch
+        S offset = i / outsize * H * W;
+        T px0 = x[offset + v0 * W + u0];
+        T px1 = x[offset + v0 * W + u1];
+        T px2 = x[offset + v1 * W + u0];
+        T px3 = x[offset + v1 * W + u1];
+        // interpolate
+        y = (w0 * px0 + w1 * px1) + (w2 * px2 + w3 * px3);
+        ''', 'resize_images_interpolate_bilinear'
+    )(x, v, u, vw, uw, H, W, out_H * out_W, y)
+
+    return y
