@@ -1,11 +1,12 @@
-from typing import Union, Callable
+from typing import Callable
+
 import numpy as np
 import psutil
 import pyfftw
+from numpy.core.numeric import normalize_axis_tuple
 
 from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions, sum_run_length_encoded
 from abtem.interpolate import interpolate_bilinear_cpu
-import numbers
 
 FFTW_EFFORT = 'FFTW_MEASURE'
 FFTW_THREADS = 12
@@ -118,6 +119,17 @@ def create_fftw_objects(array, allow_new_plan=True):
 
 
 def fft2_convolve(array, kernel, overwrite_x=True):
+    if not overwrite_x:
+        array = array.copy()
+
+    # array = mkl_fft.fft2(array, overwrite_x=overwrite_x)
+    # array *= kernel
+    # array = mkl_fft.ifft2(array, overwrite_x=overwrite_x)
+    #
+    # #print(array.real.max())
+    #
+    # return array
+
     def _fft_convolve(array, kernel):
         fftw_forward, fftw_backward = create_fftw_objects(array)
         fftw_forward()
@@ -125,13 +137,11 @@ def fft2_convolve(array, kernel, overwrite_x=True):
         fftw_backward()
         return array
 
-    if not overwrite_x:
-        array = array.copy()
-
     return _fft_convolve(array, kernel)
 
 
 def fft2(array, overwrite_x=True):
+    # return mkl_fft.fft2(array, overwrite_x=overwrite_x)
     if not overwrite_x:
         array = array.copy()
 
@@ -140,6 +150,7 @@ def fft2(array, overwrite_x=True):
 
 
 def ifft2(array, overwrite_x=True):
+    # return mkl_fft.ifft2(array, overwrite_x=overwrite_x)
     if not overwrite_x:
         array = array.copy()
 
@@ -147,41 +158,10 @@ def ifft2(array, overwrite_x=True):
     return fftw_backward()
 
 
-def view_as_windows(array, window_shape, step=1):
-    xp = get_array_module(array)
-    ndim = array.ndim
-
-    if isinstance(window_shape, numbers.Number):
-        window_shape = (window_shape,) * ndim
-
-    if not (len(window_shape) == ndim):
-        raise ValueError('`window_shape` is incompatible with `arr_in.shape`')
-
-    if isinstance(step, numbers.Number):
-        if step < 1:
-            raise ValueError('`step` must be >= 1')
-        step = (step,) * ndim
-    if len(step) != ndim:
-        raise ValueError("`step` is incompatible with `arr_in.shape`")
-
-    if ((xp.array(array.shape) - xp.array(window_shape)) < 0).any():
-        raise ValueError('`window_shape` is too large')
-
-    if ((xp.array(window_shape) - 1) < 0).any():
-        raise ValueError('`window_shape` is too small')
-
-    win_indices_shape = (((xp.array(array.shape) - xp.array(window_shape)) // xp.array(step)) + 1)
-    new_shape = tuple(win_indices_shape.tolist()) + window_shape
-
-    slices = tuple(slice(None, None, st) for st in step)
-    strides = tuple(array[slices].strides + array.strides)
-    array = xp.lib.stride_tricks.as_strided(array, shape=new_shape, strides=strides)
-    return array
-
-
 def batch_crop(array, corners, new_shape):
-    array = view_as_windows(array, (1,) + new_shape, 1)
-    return array[np.arange(len(array)), corners[:, 0], corners[:, 1], 0]
+    xp = get_array_module(array)
+    array = np.lib.stride_tricks.sliding_window_view(array, (1,) + new_shape)
+    return array[xp.arange(len(array)), corners[:, 0], corners[:, 1], 0]
 
 
 cpu_functions = {'fft2': fft2,
@@ -203,12 +183,12 @@ def get_device_function(xp, name: str) -> Callable:
     :param xp: The array library. Must numpy or cupy.
     :param name: Name of function.
     """
-    if (xp is cp):
+    if xp is cp:
         return gpu_functions[name]
     elif xp is np:
         return cpu_functions[name]
     else:
-        raise RuntimeError('The array library ')
+        raise RuntimeError(f'The array library {xp} is not recognized.')
 
 
 def get_array_module_from_device(device):
@@ -221,6 +201,15 @@ def get_array_module_from_device(device):
         return cp
 
     return get_array_module(device)
+
+
+def get_device_from_array(array):
+    xp = get_array_module(array)
+
+    if xp is np:
+        return 'cpu'
+
+    return 'gpu'
 
 
 def copy_to_device(array, device):

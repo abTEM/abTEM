@@ -3,11 +3,14 @@ from collections.abc import Iterable
 
 import matplotlib.pyplot as plt
 import numpy as np
-from ase.data import covalent_radii
+from ase.data import covalent_radii, chemical_symbols
 from ase.data.colors import jmol_colors
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import Circle
 from abtem.visualize.utils import format_label
+from typing import Union, Tuple
+from matplotlib.lines import Line2D
+from abtem.visualize.utils import domain_coloring
 
 #: Array to facilitate the display of cell boundaries.
 _cube = np.array([[[0, 0, 0], [0, 0, 1]],
@@ -41,7 +44,9 @@ def _plane2axes(plane):
     return axes + (last_axis[0],)
 
 
-def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atoms=.5, title=None, numbering=False):
+def show_atoms(atoms, repeat: Tuple[int, int] = (1, 1), scans=None, plane: Union[Tuple[float, float], str] = 'xy',
+               ax=None, scale_atoms: float = .5, title: str = None, numbering: bool = False, figsize=None,
+               legend=False):
     """
     Show atoms function
 
@@ -55,8 +60,9 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
         Tiling of the image. Default is (1,1), ie. no tiling.
     scans : ndarray, optional
         List of scans to apply. Default is None.
-    plane : str
-        The projection plane.
+    plane : str, two float
+        The projection plane given as a combination of 'x' 'y' and 'z', e.g. 'xy', or the as two floats representing the
+        azimuth and elevation angles in degrees of the viewing direction, e.g. (45, 45).
     ax : axes object
         pyplot axes object.
     scale_atoms : float
@@ -67,14 +73,29 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
         Option to set plot numbering. Default is False.
     """
 
-    if ax is None:
-        fig, ax = plt.subplots()
-
-    axes = _plane2axes(plane)
-
     atoms = atoms.copy()
-    cell = atoms.cell
     atoms *= repeat + (1,)
+
+    if isinstance(plane, str):
+        ax = _show_atoms_2d(atoms, scans, plane, ax, scale_atoms, title, numbering, figsize, legend=legend)
+    else:
+        if scans is not None:
+            raise NotImplementedError()
+
+        if numbering:
+            raise NotImplementedError()
+        ax = _show_atoms_3d(atoms, plane[0], plane[1], scale_atoms=scale_atoms, ax=ax, figsize=figsize)
+
+    return ax
+
+
+def _show_atoms_2d(atoms, scans=None, plane: Union[Tuple[float, float], str] = 'xy', ax=None, scale_atoms: float = .5,
+                   title: str = None, numbering: bool = False, figsize=None, legend=False):
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+
+    cell = atoms.cell
+    axes = _plane2axes(plane)
 
     for line in _cube:
         cell_lines = np.array([np.dot(line[0], cell), np.dot(line[1], cell)])
@@ -86,7 +107,6 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
         positions = positions[order]
 
         colors = jmol_colors[atoms.numbers[order]]
-
         sizes = covalent_radii[atoms.numbers[order]] * scale_atoms
 
         circles = []
@@ -106,6 +126,13 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
             for i, (position, size) in enumerate(zip(positions, sizes)):
                 ax.annotate('{}'.format(order[i]), xy=position, ha="center", va="center")
 
+    if legend:
+        legend_elements = [Line2D([0], [0], marker='o', color='w', markeredgecolor='k', label=chemical_symbols[unique],
+                                  markerfacecolor=jmol_colors[unique], markersize=12)
+                           for unique in np.unique(atoms.numbers)]
+
+        ax.legend(handles=legend_elements)
+
     if scans is not None:
         if not isinstance(scans, Iterable):
             scans = [scans]
@@ -116,10 +143,64 @@ def show_atoms(atoms, repeat=(1, 1), scans=None, plane='xy', ax=None, scale_atom
     return ax
 
 
+def _show_atoms_3d(atoms, azimuth=45., elevation=30., ax=None, scale_atoms=500., margin=1., figsize=None):
+    cell = atoms.cell
+    colors = jmol_colors[atoms.numbers]
+    sizes = covalent_radii[atoms.numbers] ** 2 * scale_atoms
+    positions = atoms.positions
+
+    for line in _cube:
+        cell_lines = np.array([np.dot(line[0], cell), np.dot(line[1], cell)])
+        start = cell_lines[0]
+        end = cell_lines[1]
+        cell_line_points = start + (end - start)[None] * np.linspace(0, 1, 100)[:, None]
+        positions = np.vstack((positions, cell_line_points))
+        sizes = np.concatenate((sizes, [1] * len(cell_line_points)))
+        colors = np.vstack((colors, [(0, 0, 0)] * len(cell_line_points)))
+
+    if ax is None:
+        fig = plt.figure(figsize=figsize)
+        ax = fig.add_subplot(projection='3d', proj_type='ortho')
+
+    ax.scatter(positions[:, 0],
+               positions[:, 1],
+               positions[:, 2],
+               c=colors,
+               marker='o',
+               s=sizes,
+               alpha=1,
+               linewidth=1,
+               edgecolor='k')
+
+    xmin = min(min(atoms.positions[:, 0]), min(atoms.cell[:, 0])) - margin
+    xmax = max(max(atoms.positions[:, 0]), max(atoms.cell[:, 0])) + margin
+    ymin = min(min(atoms.positions[:, 1]), min(atoms.cell[:, 1])) - margin
+    ymax = max(max(atoms.positions[:, 1]), max(atoms.cell[:, 1])) + margin
+    zmin = min(min(atoms.positions[:, 2]), min(atoms.cell[:, 2])) - margin
+    zmax = max(max(atoms.positions[:, 2]), max(atoms.cell[:, 2])) + margin
+
+    ax.set_xlim([xmin, xmax])
+    ax.set_ylim([ymin, ymax])
+    ax.set_zlim([zmin, zmax])
+
+    ax.set_xlabel('x [Å]')
+    ax.set_ylabel('y [Å]')
+    ax.set_zlabel('z [Å]')
+
+    ax.grid(False)
+
+    ax.azim = azimuth
+    ax.elev = elevation
+
+    ax.set_box_aspect([xmax - xmin, ymax - ymin, zmax - zmin])
+    return ax
+
+
 def show_measurement_2d(measurement,
                         ax=None,
                         figsize=None,
-                        colorbar=False,
+                        cbar=False,
+                        cbar_label=None,
                         cmap='gray',
                         discrete_cmap=False,
                         vmin=None,
@@ -127,6 +208,10 @@ def show_measurement_2d(measurement,
                         power=1.,
                         log_scale=False,
                         title=None,
+                        equal_ticks=False,
+                        is_rgb=False,
+                        x_label=None,
+                        y_label=None,
                         **kwargs):
     """
     Show image function
@@ -166,8 +251,18 @@ def show_measurement_2d(measurement,
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
 
-    calibrations = measurement.calibrations[-2:]
-    array = measurement.array[(0,) * (measurement.dimensions - 2) + (slice(None),) * 2]
+    if is_rgb:
+        calibrations = measurement.calibrations[-3:-1]
+    else:
+        calibrations = measurement.calibrations[-2:]
+
+    if not is_rgb:
+        array = measurement.array[(0,) * (measurement.dimensions - 2) + (slice(None),) * 2]
+    else:
+        array = measurement.array[:, :, :]
+
+    if np.iscomplexobj(array):
+        array = domain_coloring(array)
 
     if power != 1:
         array = array ** power
@@ -193,24 +288,45 @@ def show_measurement_2d(measurement,
     if discrete_cmap:
         cmap = plt.get_cmap(cmap, np.max(array) - np.min(array) + 1)
 
-    im = ax.imshow(array.T, extent=extent, cmap=cmap, origin='lower', vmin=vmin, vmax=vmax, interpolation='nearest',
+    im = ax.imshow(np.swapaxes(array, 0, 1), extent=extent, cmap=cmap, origin='lower', vmin=vmin, vmax=vmax,
+                   interpolation='nearest',
                    **kwargs)
 
-    if colorbar:
-        cax = plt.colorbar(im, ax=ax, label=format_label(measurement))
+    if cbar:
+        if cbar_label is None:
+            cbar_label = format_label(measurement)
+
+        cax = plt.colorbar(im, ax=ax, label=cbar_label)
         if discrete_cmap:
             cax.set_ticks(ticks=np.arange(np.min(array), np.max(array) + 1))
 
-    ax.set_xlabel(format_label(calibrations[-2]))
-    ax.set_ylabel(format_label(calibrations[-1]))
+    if x_label is None:
+        x_label = format_label(calibrations[-2])
+
+    if y_label is None:
+        y_label = format_label(calibrations[-1])
+
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
 
     if title is not None:
         ax.set_title(title)
+    elif len(measurement.array.shape) > 2:
+        if any([n > 1 for n in measurement.array.shape[:-2]]):
+            ax.set_title(f'Slice {(0,) * (len(measurement.array.shape) - 2)} of {measurement.array.shape} measurement')
+
+    if equal_ticks:
+        d = max(np.diff(ax.get_xticks())[0], np.diff(ax.get_yticks())[0])
+        xticks = np.arange(*ax.get_xlim(), d)
+        yticks = np.arange(*ax.get_ylim(), d)
+        ax.set_xticks(xticks)
+        ax.set_yticks(yticks)
 
     return ax, im
 
 
-def show_measurement_1d(measurement, ax=None, figsize=None, legend=False, title=None, label=None, **kwargs):
+def show_measurement_1d(measurement, ax=None, figsize=None, legend=False, title=None, label=None,
+                        x_label=None, y_label=None, **kwargs):
     """
     Show line function
 
@@ -234,7 +350,10 @@ def show_measurement_1d(measurement, ax=None, figsize=None, legend=False, title=
 
     calibration = measurement.calibrations[0]
     array = measurement.array
-    x = np.linspace(calibration.offset, calibration.offset + len(array) * calibration.sampling, len(array))
+    if calibration is None:
+        x = np.arange(len(array))
+    else:
+        x = np.linspace(calibration.offset, calibration.offset + len(array) * calibration.sampling, len(array))
 
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
@@ -243,8 +362,15 @@ def show_measurement_1d(measurement, ax=None, figsize=None, legend=False, title=
         label = measurement.name
 
     lines = ax.plot(x, array, label=label, **kwargs)
-    ax.set_xlabel(format_label(calibration))
-    ax.set_ylabel(format_label(measurement))
+
+    if x_label is None:
+        x_label = format_label(calibration)
+
+    if y_label is None:
+        y_label = format_label(measurement)
+
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
 
     if legend:
         ax.legend()

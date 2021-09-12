@@ -1,7 +1,7 @@
 """Module to calculate potentials using the independent atom model."""
 from abc import ABCMeta, abstractmethod
 from copy import copy
-from typing import Union, Sequence, Callable, Generator
+from typing import Union, Sequence, Callable, Generator, Tuple, Type
 
 import h5py
 import numpy as np
@@ -10,17 +10,17 @@ from ase import units
 from scipy.optimize import brentq
 
 from abtem.base_classes import Grid, HasGridMixin, Cache, cached_method, HasAcceleratorMixin, Accelerator, Event, \
-    watched_property, AntialiasFilter
+    watched_property, AntialiasFilter, cache_clear_callback, HasEventMixin
 from abtem.device import get_device_function, get_array_module, get_array_module_from_device, copy_to_device, \
     HasDeviceMixin, asnumpy, get_available_memory
 from abtem.measure import calibrations_from_grid, Measurement
 from abtem.parametrizations import kirkland, dvdr_kirkland, load_kirkland_parameters, kirkland_projected_fourier
 from abtem.parametrizations import lobato, dvdr_lobato, load_lobato_parameters
-from abtem.structures import is_cell_orthogonal
+from abtem.structures import is_cell_orthogonal, SlicedAtoms, pad_atoms
 from abtem.tanh_sinh import integrate, tanh_sinh_nodes_and_weights
 from abtem.temperature import AbstractFrozenPhonons, DummyFrozenPhonons
 from abtem.utils import energy2sigma, ProgressBar, generate_batches, _disc_meshgrid
-from abtem.structures import pad_atoms
+import warnings
 
 # Vacuum permitivity in ASE units
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
@@ -36,6 +36,9 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
     Base class common for all potentials.
     """
 
+    def __init__(self, precalculate):
+        self._precalculate = precalculate
+
     def __len__(self):
         return self.num_slices
 
@@ -44,6 +47,20 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
     def num_slices(self):
         """The number of projected potential slices."""
         pass
+
+    @property
+    @abstractmethod
+    def num_frozen_phonon_configs(self):
+        pass
+
+    @property
+    @abstractmethod
+    def generate_frozen_phonon_potentials(self, pbar=False):
+        pass
+
+    @property
+    def thickness(self):
+        return sum([self.get_slice_thickness(i) for i in range(len(self))])
 
     def check_slice_idx(self, i):
         """Raises an error if i is greater than the number of slices."""
@@ -139,6 +156,19 @@ class AbstractPotentialBuilder(AbstractPotential):
         self._precalculate = precalculate
         self._storage = storage
         self._device = device
+        super().__init__(precalculate)
+
+    @property
+    def precalculate(self):
+        return self._precalculate
+
+    @property
+    def storage(self):
+        return self._storage
+
+    @property
+    def device(self):
+        return self._device
 
     def _estimate_max_batch(self):
         memory_per_wave = 2 * 4 * self.gpts[0] * self.gpts[1]
@@ -228,10 +258,13 @@ class AbstractPotentialBuilder(AbstractPotential):
             close_pbar = False
 
         pbar.reset()
+        N = 0
         for start, end, potential_slice in generator:
-            array[start:end] = copy_to_device(potential_slice.array, self._storage)
-            slice_thicknesses[start:end] = potential_slice.slice_thicknesses
-            pbar.update(end - start)
+            n = end - start
+            array[N:N + n] = copy_to_device(potential_slice.array, self._storage)
+            slice_thicknesses[N:N + n] = potential_slice.slice_thicknesses
+            pbar.update(n)
+            N += n
 
         pbar.refresh()
 
@@ -249,22 +282,6 @@ class AbstractPotentialBuilder(AbstractPotential):
         for _, _, projected_chunk in self.generate_slices(max_batch=max_batch):
             projected._array += projected_chunk.array.sum(0)
         return projected.project()
-
-
-class AbstractTDSPotentialBuilder(AbstractPotentialBuilder):
-    """Thermal diffuse scattering builder abstract class."""
-
-    def __init__(self, precalculate=True, device='cpu', storage='cpu'):
-        super().__init__(precalculate=precalculate, device=device, storage=storage)
-
-    @property
-    @abstractmethod
-    def frozen_phonons(self):
-        pass
-
-    @abstractmethod
-    def generate_frozen_phonon_potentials(self, pbar):
-        pass
 
 
 class PotentialIntegrator:
@@ -323,7 +340,8 @@ class PotentialIntegrator:
     def cutoff(self):
         return self._cutoff
 
-    def integrate(self, z, a: float, b: float, xp):
+    def integrate(self, z: Union[float, Sequence[float]], a: Union[float, Sequence[float]],
+                  b: Union[float, Sequence[float]]):
         """
         Evaulate the integrals of the radial function at the evaluation points.
 
@@ -389,7 +407,158 @@ def superpose_deltas(positions, z, array):
     array[z, (rows + 1) % shape[0], (cols + 1) % shape[1]] += (rows - positions[:, 0]) * (cols - positions[:, 1])
 
 
-class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
+class CrystalPotential(AbstractPotential, HasEventMixin):
+    """
+    Crystal potential object
+
+    The crystal potential may be used to represent a potential consisting of a repeating unit. This may allow
+    calculations to be performed with lower memory and computational cost.
+
+    The crystal potential has an additional function in conjunction with frozen phonon calculations. The number of
+    frozen phonon configurations are not given by the FrozenPhonon objects, rather the ensemble of frozen phonon
+    potentials represented by a potential with frozen phonons represent a collection of units, which will be assembled
+    randomly to represent a random potential. The number of frozen phonon configurations should be given explicitely.
+    This may save computational cost since a smaller number of units can be combined to a larger frozen phonon ensemble.
+
+    Parameters
+    ----------
+    potential_unit : AbstractPotential
+        The potential unit that repeated will create the full potential.
+    repetitions : three int
+        The repetitions of the potential in x, y and z.
+    num_frozen_phonon_configs : int
+        Number of frozen phonon configurations.
+    """
+
+    def __init__(self,
+                 potential_unit: AbstractPotential,
+                 repetitions: Tuple[int, int, int],
+                 num_frozen_phonon_configs: int = 1):
+
+        self._potential_unit = potential_unit
+        self.repetitions = repetitions
+        self._num_frozen_phonon_configs = num_frozen_phonon_configs
+
+        if (potential_unit.num_frozen_phonon_configs == 1) & (num_frozen_phonon_configs > 1):
+            warnings.warn('"num_frozen_phonon_configs" is greater than one, but the potential unit does not have'
+                          'frozen phonons')
+
+        if (potential_unit.num_frozen_phonon_configs > 1) & (num_frozen_phonon_configs == 1):
+            warnings.warn('the potential unit has frozen phonons, but "num_frozen_phonon_configs" is set to 1')
+
+        self._cache = Cache(1)
+        self._event = Event()
+
+        gpts = (self._potential_unit.gpts[0] * self.repetitions[0],
+                self._potential_unit.gpts[1] * self.repetitions[1])
+        extent = (self._potential_unit.extent[0] * self.repetitions[0],
+                  self._potential_unit.extent[1] * self.repetitions[1])
+
+        self._grid = Grid(extent=extent, gpts=gpts, sampling=self._potential_unit.sampling, lock_extent=True)
+        self._grid.observe(self._event.notify)
+        self._event.observe(cache_clear_callback(self._cache))
+
+        super().__init__(precalculate=False)
+
+    @HasGridMixin.gpts.setter
+    def gpts(self, gpts):
+        if not ((gpts[0] % self.repetitions[0] == 0) and (gpts[1] % self.repetitions[0] == 0)):
+            raise ValueError('gpts must be divisible by the number of potential repetitions')
+        self.grid.gpts = gpts
+        self._potential_unit.gpts = (gpts[0] // self._repetitions[0], gpts[1] // self._repetitions[1])
+
+    @HasGridMixin.sampling.setter
+    def sampling(self, sampling):
+        self.sampling = sampling
+        self._potential_unit.sampling = sampling
+
+    @property
+    def num_frozen_phonon_configs(self):
+        return self._num_frozen_phonon_configs
+
+    def generate_frozen_phonon_potentials(self, pbar=False):
+        for i in range(self.num_frozen_phonon_configs):
+            yield self
+
+    @property
+    def repetitions(self) -> Tuple[int, int, int]:
+        return self._repetitions
+
+    @repetitions.setter
+    def repetitions(self, repetitions: Tuple[int, int, int]):
+        repetitions = tuple(repetitions)
+
+        if len(repetitions) != 3:
+            raise ValueError('repetitions must be sequence of length 3')
+
+        self._repetitions = repetitions
+
+    @property
+    def num_slices(self) -> int:
+        return self._potential_unit.num_slices * self.repetitions[2]
+
+    def get_slice_thickness(self, i) -> float:
+        return self._potential_unit.get_slice_thickness(i)
+
+    @cached_method('_cache')
+    def _calculate_configs(self, energy, max_batch=1):
+        potential_generators = self._potential_unit.generate_frozen_phonon_potentials(pbar=False)
+
+        potential_configs = []
+        for potential in potential_generators:
+
+            if isinstance(potential, AbstractPotentialBuilder):
+                potential = potential.build(max_batch=max_batch)
+            elif not isinstance(potential, PotentialArray):
+                raise RuntimeError()
+
+            if energy is not None:
+                potential = potential.as_transmission_function(energy=energy, max_batch=max_batch)
+
+            potential = potential.tile(self.repetitions[:2])
+            potential_configs.append(potential)
+
+        return potential_configs
+
+    def _generate_slices_base(self, first_slice=0, last_slice=None, max_batch=1, energy=None):
+
+        first_layer = first_slice // self._potential_unit.num_slices
+        if last_slice is None:
+            last_layer = self.repetitions[2]
+        else:
+            last_layer = last_slice // self._potential_unit.num_slices
+
+        first_slice = first_slice % self._potential_unit.num_slices
+        last_slice = None
+
+        configs = self._calculate_configs(energy, max_batch)
+
+        if len(configs) == 1:
+            layers = configs * self.repetitions[2]
+        else:
+            layers = [configs[np.random.randint(len(configs))] for _ in range(self.repetitions[2])]
+
+        for layer_num, layer in enumerate(layers[first_layer:last_layer]):
+
+            if layer_num == last_layer:
+                last_slice = last_slice % self._potential_unit.num_slices
+
+            for start, end, potential_slice in layer.generate_slices(first_slice=first_slice,
+                                                                     last_slice=last_slice,
+                                                                     max_batch=max_batch):
+                yield layer_num + start, layer_num + end, potential_slice
+
+                first_slice = 0
+
+    def generate_slices(self, first_slice=0, last_slice=None, max_batch=1):
+        return self._generate_slices_base(first_slice=first_slice, last_slice=last_slice, max_batch=max_batch)
+
+    def generate_transmission_functions(self, energy, first_slice=0, last_slice=None, max_batch=1):
+        return self._generate_slices_base(first_slice=first_slice, last_slice=last_slice, max_batch=max_batch,
+                                          energy=energy)
+
+
+class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
     """
     Potential object.
 
@@ -435,9 +604,10 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
                  parametrization: str = 'lobato',
                  projection: str = 'finite',
                  cutoff_tolerance: float = 1e-3,
-                 device='cpu',
+                 device: str = 'cpu',
                  precalculate: bool = True,
-                 storage=None):
+                 z_periodic: bool = True,
+                 storage: str = None):
 
         self._cutoff_tolerance = cutoff_tolerance
         self._parametrization = parametrization
@@ -489,11 +659,13 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
             self._integrators = {}
             self._disc_indices = {}
 
-        self.grid.changed.register(grid_changed_callback)
-        self.changed = Event()
+        self.grid.observe(grid_changed_callback)
+        self._event = Event()
 
         if storage is None:
             storage = device
+
+        self._z_periodic = z_periodic
 
         super().__init__(precalculate=precalculate, device=device, storage=storage)
 
@@ -528,6 +700,10 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         return self._frozen_phonons
 
     @property
+    def num_frozen_phonon_configs(self):
+        return len(self.frozen_phonons)
+
+    @property
     def cutoff_tolerance(self):
         """The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]."""
         return self._cutoff_tolerance
@@ -543,12 +719,15 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         return self._slice_thickness
 
     @slice_thickness.setter
-    @watched_property('changed')
+    @watched_property('_event')
     def slice_thickness(self, value):
         self._slice_thickness = value
 
-    def get_slice_thickness(self, i):
+    def get_slice_thickness(self, i) -> float:
         return self._atoms.cell[2, 2] / self.num_slices
+
+    def get_parameterized_function(self, number) -> Callable:
+        return lambda r: self._function(r, self.parameters[number])
 
     def get_cutoff(self, number: int) -> float:
         """
@@ -651,12 +830,16 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
             return self._generate_slices_infinite(first_slice=first_slice, last_slice=last_slice, max_batch=max_batch)
 
     def _generate_slices_infinite(self, first_slice=0, last_slice=None, max_batch=1) -> Generator:
+        # TODO : simplify method using the sliced atoms object
+
         xp = get_array_module_from_device(self._device)
 
         fft2_convolve = get_device_function(xp, 'fft2_convolve')
 
         atoms = self.atoms.copy()
+        atoms.pbc = True
         atoms.wrap()
+
         positions = atoms.get_positions().astype(np.float32)
         numbers = atoms.get_atomic_numbers()
         unique = np.unique(numbers)
@@ -670,7 +853,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
         kx, ky = xp.meshgrid(kx, ky, indexing='ij')
         k = xp.sqrt(kx ** 2 + ky ** 2)
 
-        sinc = xp.sinc(xp.sqrt((kx * self.sampling[0]) ** 2 + (kx * self.sampling[1]) ** 2))
+        sinc = xp.sinc(xp.sqrt((kx * self.sampling[0]) ** 2 + (ky * self.sampling[1]) ** 2))
 
         scattering_factors = {}
         for atomic_number in unique:
@@ -703,7 +886,7 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
                     chunk_positions = xp.asarray(chunk_positions[:, :2] / self.sampling)
 
                     superpose_deltas(chunk_positions, chunk_slice_idx, temp)
-                    fft2_convolve(temp, scattering_factors[number])
+                    temp = fft2_convolve(temp, scattering_factors[number])
 
                     array += temp
 
@@ -712,54 +895,54 @@ class Potential(AbstractTDSPotentialBuilder, HasDeviceMixin):
 
     def _generate_slices_finite(self, first_slice=0, last_slice=None, max_batch=1) -> Generator:
         xp = get_array_module_from_device(self._device)
-
         interpolate_radial_functions = get_device_function(xp, 'interpolate_radial_functions')
 
-        atoms = self.atoms.copy()
-        atoms.wrap()
-        indices_by_number = {number: np.where(atoms.numbers == number)[0] for number in np.unique(atoms.numbers)}
+        array = None
+        unique = np.unique(self.atoms.numbers)
 
-        start, end = next(generate_batches(last_slice - first_slice, max_batch=max_batch, start=first_slice))
-        array = xp.zeros((end - start,) + self.gpts, dtype=xp.float32)
+        if (self._z_periodic) & (len(self.atoms) > 0):
+            max_cutoff = max(self.get_integrator(number).cutoff for number in unique)
+            atoms = pad_atoms(self.atoms, margin=max_cutoff, directions='z', in_place=False)
+        else:
+            atoms = self.atoms
 
-        slice_edges = np.linspace(0, self.atoms.cell[2, 2], self.num_slices + 1)
+        sliced_atoms = SlicedAtoms(atoms, self.slice_thickness)
 
         for start, end in generate_batches(last_slice - first_slice, max_batch=max_batch, start=first_slice):
-            array[:] = 0.
+            if array is None:
+                array = xp.zeros((end - start,) + self.gpts, dtype=xp.float32)
+            else:
+                array[:] = 0.
 
-            for number, indices in indices_by_number.items():
-                species_atoms = atoms[indices]
+            for number in unique:
                 integrator = self.get_integrator(number)
                 disc_indices = xp.asarray(self._get_radial_interpolation_points(number))
-
-                a = slice_edges[start]
-                b = slice_edges[end]
-                chunk_atoms = species_atoms[(species_atoms.positions[:, 2] > a - integrator.cutoff) *
-                                            (species_atoms.positions[:, 2] < b + integrator.cutoff)]
-                chunk_atoms = pad_atoms(chunk_atoms, integrator.cutoff)
-                chunk_positions = chunk_atoms.positions
+                chunk_atoms = sliced_atoms.get_subsliced_atoms(start, end, number, z_margin=integrator.cutoff)
 
                 if len(chunk_atoms) == 0:
                     continue
 
                 positions = np.zeros((0, 3), dtype=xp.float32)
-                A = np.zeros((0,), dtype=xp.float32)
-                B = np.zeros((0,), dtype=xp.float32)
+                slice_entrances = np.zeros((0,), dtype=xp.float32)
+                slice_exits = np.zeros((0,), dtype=xp.float32)
                 run_length_enconding = np.zeros((end - start + 1,), dtype=xp.int32)
 
-                for i, j in enumerate(range(start, end)):
-                    a = slice_edges[j]
-                    b = slice_edges[j + 1]
-                    slice_positions = chunk_positions[(chunk_positions[:, 2] > a - integrator.cutoff) *
-                                                      (chunk_positions[:, 2] < b + integrator.cutoff)]
+                for i, slice_idx in enumerate(range(start, end)):
+                    slice_atoms = chunk_atoms.get_subsliced_atoms(slice_idx,
+                                                                  padding=integrator.cutoff,
+                                                                  z_margin=integrator.cutoff)
+
+                    slice_positions = slice_atoms.positions
+                    slice_entrance = slice_atoms.get_slice_entrance(slice_idx)
+                    slice_exit = slice_atoms.get_slice_exit(slice_idx)
 
                     positions = np.vstack((positions, slice_positions))
-                    A = np.concatenate((A, [a] * len(slice_positions)))
-                    B = np.concatenate((B, [b] * len(slice_positions)))
+                    slice_entrances = np.concatenate((slice_entrances, [slice_entrance] * len(slice_positions)))
+                    slice_exits = np.concatenate((slice_exits, [slice_exit] * len(slice_positions)))
 
                     run_length_enconding[i + 1] = run_length_enconding[i] + len(slice_positions)
 
-                vr, dvdr = integrator.integrate(positions[:, 2], A, B, xp=xp)
+                vr, dvdr = integrator.integrate(positions[:, 2], slice_entrances, slice_exits)
 
                 vr = xp.asarray(vr, dtype=xp.float32)
                 dvdr = xp.asarray(dvdr, dtype=xp.float32)
@@ -861,6 +1044,8 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         self._slice_thicknesses = slice_thicknesses
         self._grid = Grid(extent=extent, gpts=self.array.shape[-2:], sampling=sampling, lock_gpts=True)
 
+        super().__init__(precalculate=False)
+
     def __getitem__(self, items):
         if isinstance(items, int):
             return PotentialArray(self.array[items][None], self._slice_thicknesses[items][None], extent=self.extent)
@@ -903,9 +1088,17 @@ class PotentialArray(AbstractPotential, HasGridMixin):
             antialias_filter = AntialiasFilter()
 
         for start, end, potential_slices in t.generate_slices(max_batch=max_batch):
-            antialias_filter.bandlimit(potential_slices)
+            t._array[start:end] = antialias_filter.bandlimit(potential_slices).array
 
         return t
+
+    @property
+    def num_frozen_phonon_configs(self):
+        return 1
+
+    def generate_frozen_phonon_potentials(self, pbar=False):
+        for i in range(self.num_frozen_phonon_configs):
+            yield self
 
     @property
     def array(self):
@@ -937,14 +1130,15 @@ class PotentialArray(AbstractPotential, HasGridMixin):
                                              slice_thicknesses=slice_thicknesses,
                                              extent=self.extent)
 
-    def tile(self, multiples):
+    def tile(self, tile):
         """
         Tile the potential.
 
         Parameters
         ----------
-        multiples: two int
-            The number of repetitions of the potential along each axis.
+        multiples: two or three int
+            The number of repetitions of the potential along each axis. If three integers are given the first represents
+            the number of repetitions along the z-axis.
 
         Returns
         -------
@@ -952,24 +1146,43 @@ class PotentialArray(AbstractPotential, HasGridMixin):
             The tiled potential.
         """
 
-        assert len(multiples) == 2
-        new_array = np.tile(self.array, (1,) + multiples)
-        new_extent = (self.extent[0] * multiples[0], self.extent[1] * multiples[1])
-        return self.__class__(array=new_array, slice_thicknesses=self._slice_thicknesses, extent=new_extent)
+        if len(tile) == 2:
+            tile = tuple(tile) + (1,)
 
-    def write(self, path):
+        new_array = np.tile(self.array, (tile[2], tile[0], tile[1]))
+
+        new_extent = (self.extent[0] * tile[0], self.extent[1] * tile[1])
+        new_slice_thicknesses = np.tile(self._slice_thicknesses, tile[2])
+
+        return self.__class__(array=new_array, slice_thicknesses=new_slice_thicknesses, extent=new_extent)
+
+    def flip(self):
+        self._array = self._array[::-1]
+        self._slice_thicknesses = self._slice_thicknesses[::-1]
+        return self
+
+    def write(self, path, format="hdf5", **kwargs):
         """
-        Write potential to file.
+        Write potential to a file.
 
         Parameters
         ----------
         path: str
             Path to which the data is saved.
+        format: str
+            One of ["hdf5", "hspy"]. Default is "hdf5".
+        kwargs:
+            Any of the additional parameters for saving a hyperspy dataset.
         """
-        with h5py.File(path, 'w') as f:
-            f.create_dataset('array', data=self.array)
-            f.create_dataset('slice_thicknesses', data=self._slice_thicknesses)
-            f.create_dataset('extent', data=self.extent)
+        if format == "hdf5":
+            with h5py.File(path, 'w') as f:
+                f.create_dataset('array', data=asnumpy(self.array))
+                f.create_dataset('slice_thicknesses', data=self._slice_thicknesses)
+                f.create_dataset('extent', data=self.extent)
+        elif format == "hspy":
+            self.to_hyperspy().save(**kwargs)
+        else:
+            raise ValueError('Format must be one of "hdf5" or "hspy"')
 
     @classmethod
     def read(cls, path):
@@ -992,7 +1205,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
 
         return cls(array=datasets['array'], slice_thicknesses=datasets['slice_thicknesses'], extent=datasets['extent'])
 
-    def transmit(self, waves):
+    def transmit(self, waves, conjugate=False):
         """
         Transmit a wave function.
 
@@ -1005,7 +1218,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         -------
         TransmissionFunction
         """
-        return self.as_transmission_function(waves.energy).transmit(waves)
+        return self.as_transmission_function(waves.energy).transmit(waves, conjugate=conjugate)
 
     def project(self):
         """
@@ -1024,6 +1237,40 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         return self.__class__(array=self.array.copy(),
                               slice_thicknesses=self._slice_thicknesses.copy(),
                               extent=self.extent)
+    
+    def to_hyperspy(self):
+        """
+        Changes the PotentialArray object to a `hyperspy.Signal2D` Object.
+        """
+        from hyperspy._signals.signal2d import Signal2D
+        signal_shape = self.array.shape
+        axes = []
+        
+        # as the first dimension is always the thickness that is added first
+        axes.append({"offset": 0,
+                    "scale": self.thickness / self.num_slices,
+                    "units": "Å",
+                    "name": "z",
+                    "size": self.num_slices})
+
+        # loop for x and y axes
+        for i, size in zip(self.project().calibrations, signal_shape[1:]):
+            if i is None:
+                axes.append({"offset": 0,
+                            "scale": 1,
+                            "units": "",
+                            "name": "",
+                            "size": size})
+            else:
+                axes.append({"offset": i.offset,
+                            "scale": i.sampling,
+                            "units": i.units,
+                            "name": i.name,
+                            "size": size})
+                
+        sig = Signal2D(self.array, axes=axes)
+
+        return sig
 
 
 class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
@@ -1049,8 +1296,12 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
             raise RuntimeError()
         return self.generate_slices(first_slice=first_slice, last_slice=last_slice, max_batch=max_batch)
 
-    def transmit(self, waves):
+    def transmit(self, waves, conjugate=False):
         self.accelerator.check_match(waves)
         xp = get_array_module(waves._array)
-        waves._array *= copy_to_device(self.array, xp)
+
+        if conjugate:
+            waves._array *= xp.conjugate(copy_to_device(self.array, xp))
+        else:
+            waves._array *= copy_to_device(self.array, xp)
         return waves

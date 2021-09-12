@@ -1,0 +1,59 @@
+name: Tests
+
+on:
+  workflow_dispatch:
+    workflow: "*"
+  push:
+    branches:
+      - '*'
+  pull_request:
+    branches:
+      - '*'
+
+jobs:
+  tests:
+    name: ${{ matrix.os }}-py${{ matrix.PYTHON_VERSION }}
+    runs-on: ${{ matrix.os }}-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu, windows, macos]
+        PYTHON_VERSION: [3.7, 3.8, 3.9]
+    env:
+      MPLBACKEND: agg
+      DEPENDENCIES: numpy numba scipy h5py matplotlib-base ase imageio ipywidgets tqdm pyfftw psutil
+      OPTIONAL_DEPS: hyperspy-base
+      TEST_DEPS: pytest
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: conda-incubator/setup-miniconda@v2
+        with:
+          miniforge-variant: Mambaforge
+          miniforge-version: latest
+
+      - name: Conda info
+        run: |
+          conda info
+          conda list
+
+      - name: Install dependencies
+        run: |
+          mamba install ${{ env.DEPENDENCIES }} ${{ env.OPTIONAL_DEPS }} ${{ env.TEST_DEPS }}
+
+      - name: Install abTEM
+        run: |
+          pip install .
+
+      - name: Conda list
+        run: |
+          conda list
+
+      - name: Run Test Suite
+        run: |
+          cd test
+          python -m pytest

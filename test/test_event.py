@@ -6,11 +6,11 @@ def test_register_event():
 
     num_calls = {}
 
-    def callback():
+    def callback(*args):
         num_calls['a'] = 'a'
 
-    event.register(callback)
-    event.notify()
+    event.observe(callback)
+    event.notify(None)
 
     assert event.notify_count == 1
     assert num_calls['a'] == 'a'
@@ -22,13 +22,13 @@ def test_watched_method():
         def __init__(self):
             self._notify_count = 0
 
-            def callback(notifier, property_name, change):
+            def callback(*args):
                 self._notify_count += 1
 
             self._notified_property = 0
 
             self.event = Event()
-            self.event.register(callback)
+            self.event.observe(callback)
 
         @watched_method('event')
         def notified_method(self):

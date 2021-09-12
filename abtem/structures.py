@@ -110,7 +110,8 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12):
     return atoms
 
 
-def orthogonalize_cell(atoms: Atoms, limit_denominator: int = 10, return_strain=False):
+def orthogonalize_cell(atoms: Atoms, limit_denominator: int = 10, preserve_periodicity: bool = True,
+                       return_strain: bool = False):
     """
     Make the cell of an ASE atoms object orthogonal. This is accomplished by repeating the cell until the x-component
     of the lattice vectors in the xy-plane closely matches. If the ratio between the x-components is irrational this
@@ -124,6 +125,9 @@ def orthogonalize_cell(atoms: Atoms, limit_denominator: int = 10, return_strain=
     limit_denominator : int
         The maximum denominator in the rational approximation. Increase this to allow more repetitions and hence less
         strain.
+    preserve_periodicity : bool, optional
+        This function will make a structure periodic while preserving periodicity exactly, this will generally result in
+        repeating the structure. If preserving periodicity is not desired, this may be set to False. Default is True.
     return_strain : bool
         If true, return the strain tensor that were applied to make the atoms orthogonal.
 
@@ -139,6 +143,9 @@ def orthogonalize_cell(atoms: Atoms, limit_denominator: int = 10, return_strain=
 
     atoms = atoms.copy()
     atoms = standardize_cell(atoms)
+
+    if not preserve_periodicity:
+        return cut_rectangle(atoms, origin=(0, 0), extent=np.diag(atoms.cell)[:2])
 
     fraction = atoms.cell[0, 0] / atoms.cell[1, 0]
     fraction = Fraction(fraction).limit_denominator(limit_denominator)
@@ -191,8 +198,8 @@ def cut_rectangle(atoms: Atoms, origin: Sequence[float], extent: Sequence[float]
     extent = (extent[0], extent[1], atoms.cell[2, 2],)
     atoms.positions[:, :2] -= np.array(origin)
 
-    a = atoms.cell.scaled_positions(np.array((extent[0] + 2* margin, 0, 0)))
-    b = atoms.cell.scaled_positions(np.array((0, extent[1] + 2* margin, 0)))
+    a = atoms.cell.scaled_positions(np.array((extent[0] + 2 * margin, 0, 0)))
+    b = atoms.cell.scaled_positions(np.array((0, extent[1] + 2 * margin, 0)))
 
     repetitions = (int(np.ceil(abs(a[0])) + np.ceil(abs(b[0]))),
                    int(np.ceil(abs(a[1])) + np.ceil(abs(b[1]))), 1)
@@ -203,7 +210,7 @@ def cut_rectangle(atoms: Atoms, origin: Sequence[float], extent: Sequence[float]
 
     atoms *= repetitions
 
-    atoms.positions[:,:2] -= margin
+    atoms.positions[:, :2] -= margin
 
     atoms.set_cell([extent[0], extent[1], cell[2, 2]])
 
@@ -215,7 +222,7 @@ def cut_rectangle(atoms: Atoms, origin: Sequence[float], extent: Sequence[float]
     return atoms
 
 
-def pad_atoms(atoms: Atoms, margin: float):
+def pad_atoms(atoms: Atoms, margin: float, directions='xy', in_place=False):
     """
     Repeat the atoms in x and y, retaining only the repeated atoms within the margin distance from the cell boundary.
 
@@ -235,18 +242,46 @@ def pad_atoms(atoms: Atoms, margin: float):
     if not is_cell_orthogonal(atoms):
         raise RuntimeError('The cell of the atoms must be orthogonal.')
 
-    left = atoms[atoms.positions[:, 0] < margin]
-    left.positions[:, 0] += atoms.cell[0, 0]
-    right = atoms[atoms.positions[:, 0] > atoms.cell[0, 0] - margin]
-    right.positions[:, 0] -= atoms.cell[0, 0]
+    if not in_place:
+        atoms = atoms.copy()
 
-    atoms += left + right
+    old_cell = atoms.cell.copy()
 
-    top = atoms[atoms.positions[:, 1] < margin]
-    top.positions[:, 1] += atoms.cell[1, 1]
-    bottom = atoms[atoms.positions[:, 1] > atoms.cell[1, 1] - margin]
-    bottom.positions[:, 1] -= atoms.cell[1, 1]
-    atoms += top + bottom
+    axes = [{'x': 0, 'y': 1, 'z': 2}[direction] for direction in directions]
+
+    reps = [1, 1, 1]
+    for axis in axes:
+        reps[axis] = int(1 + 2 * np.ceil(margin / atoms.cell[axis, axis]))
+
+    if any([rep > 1 for rep in reps]):
+        atoms *= reps
+        atoms.positions[:] -= np.diag(old_cell) * [rep // 2 for rep in reps]
+        atoms.cell = old_cell
+
+    # import matplotlib.pyplot as plt
+    # from abtem import show_atoms
+    # show_atoms(atoms, plane='xz')
+    # plt.show()
+
+    to_keep = np.ones(len(atoms), dtype=bool)
+    for axis in axes:
+        to_keep *= (atoms.positions[:, axis] > -margin) * (atoms.positions[:, axis] < atoms.cell[axis, axis] + margin)
+
+    atoms = atoms[to_keep]
+
+    # for axis in axes:
+    #     left = atoms[atoms.positions[:, axis] < margin]
+    #     left.positions[:, axis] += atoms.cell[axis, axis]
+    #     right = atoms[(atoms.positions[:, axis] > atoms.cell[axis, axis] - margin) &
+    #                   (atoms.positions[:, axis] < atoms.cell[axis, axis])]
+    #     right.positions[:, axis] -= atoms.cell[axis, axis]
+    #     atoms += left + right
+    return atoms
+
+
+def flip_atoms(atoms):
+    atoms = atoms.copy()
+    atoms.positions[:] = atoms.cell[2, 2] - atoms.positions[:]
     return atoms
 
 
@@ -287,10 +322,10 @@ class SlicedAtoms:
         self._slice_thicknesses[:] = self._slice_thicknesses[::-1]
 
     def get_slice_entrance(self, i):
-        return np.sum(self.slice_thicknesses[:i])
+        return max(np.sum(self.slice_thicknesses[:i]), 0)
 
     def get_slice_exit(self, i):
-        return self.get_slice_entrance(i) + self.slice_thicknesses[i]
+        return min(self.get_slice_entrance(i) + self.slice_thicknesses[i], self.atoms.cell[2, 2])
 
     def get_subsliced_atoms(self,
                             start,
@@ -305,7 +340,7 @@ class SlicedAtoms:
         a = self.get_slice_entrance(start) - z_margin
         b = self.get_slice_entrance(end) + z_margin
 
-        in_slice = (self.atoms.positions[:, 2] > a) * (self.atoms.positions[:, 2] < b)
+        in_slice = (self.atoms.positions[:, 2] >= a) * (self.atoms.positions[:, 2] < b)
 
         if atomic_number is not None:
             in_slice = (self.atoms.numbers == atomic_number) * in_slice

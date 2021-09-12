@@ -175,7 +175,6 @@ def fft_interpolate_2d(array, new_shape, normalization='values', overwrite_x=Fal
 
     if np.iscomplexobj(array):
         cropped = fft_crop(fft2(array), new_shape)
-        print(cropped.shape)
         array = ifft2(cropped, overwrite_x=overwrite_x)
     else:
         array = xp.complex64(array)
@@ -232,7 +231,12 @@ def fourier_translation_operator(positions: np.ndarray, shape: tuple) -> np.ndar
 
 def fft_shift(array, positions):
     xp = get_array_module(array)
-    return xp.fft.ifft2(xp.fft.fft2(array) * fourier_translation_operator(positions, array.shape))
+    return xp.fft.ifft2(xp.fft.fft2(array) * fourier_translation_operator(positions, array.shape[-2:]))
+
+
+def array_row_intersection(a, b):
+    tmp = np.prod(np.swapaxes(a[:, :, None], 1, 2) == b, axis=2)
+    return np.sum(np.cumsum(tmp, axis=0) * tmp == 1, axis=1).astype(bool)
 
 
 def subdivide_into_batches(num_items: int, num_batches: int = None, max_batch: int = None):
@@ -327,3 +331,22 @@ class ProgressBar:
 
     def close(self):
         self.tqdm.close()
+
+
+class GaussianDistribution:
+
+    def __init__(self, center, sigma, num_samples, sampling_limit=4):
+        self.center = center
+        self.sigma = sigma
+        self.sampling_limit = sampling_limit
+        self.num_samples = num_samples
+
+    def __len__(self):
+        return self.num_samples
+
+    def __iter__(self):
+        samples = np.linspace(-self.sigma * self.sampling_limit, self.sigma * self.sampling_limit, self.num_samples)
+        values = 1 / (self.sigma * np.sqrt(2 * np.pi)) * np.exp(-.5 * samples ** 2 / self.sigma ** 2)
+        values /= values.sum()
+        for sample, value in zip(samples, values):
+            yield sample + self.center, value

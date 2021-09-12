@@ -1,7 +1,7 @@
 """Module for often-used base classes."""
 from collections import OrderedDict
 from copy import copy
-from typing import Optional, Union, Sequence, Any, Callable
+from typing import Optional, Union, Sequence, Any, Callable, Tuple
 
 import numpy as np
 
@@ -25,16 +25,16 @@ class Event(object):
         """
         return self._notify_count
 
-    def notify(self, *args, **kwargs):
+    def notify(self, change):
         """
         Notify this event. All registered callbacks are called.
         """
 
         self._notify_count += 1
         for callback in self.callbacks:
-            callback(*args, **kwargs)
+            callback(change)
 
-    def register(self, callbacks: Union[Callable, Sequence[Callable]]):
+    def observe(self, callbacks: Union[Callable, Sequence[Callable]]):
         """
         Register new callbacks.
 
@@ -46,6 +46,17 @@ class Event(object):
         if not isinstance(callbacks, list):
             callbacks = [callbacks]
         self.callbacks += callbacks
+
+
+class HasEventMixin:
+    _event: Event
+
+    @property
+    def event(self):
+        return self._event
+
+    def observe(self, callback):
+        self.event.observe(callback)
 
 
 def watched_method(event: 'str'):
@@ -64,7 +75,7 @@ def watched_method(event: 'str'):
         def new_func(*args, **kwargs):
             instance = args[0]
             result = func(*args, **kwargs)
-            getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': True})
+            getattr(instance, event).notify({'owner': instance, 'name': property_name, 'change': True})
             return result
 
         return new_func
@@ -90,7 +101,8 @@ def watched_property(event: 'str'):
             old = getattr(instance, property_name)
             result = func(*args)
             change = np.any(old != value)
-            getattr(instance, event).notify(**{'notifier': instance, 'property_name': property_name, 'change': change})
+            getattr(instance, event).notify({'notifier': instance, 'name': property_name, 'change': change,
+                                             'old': old, 'new': value})
             return result
 
         return new_func
@@ -109,8 +121,8 @@ def cache_clear_callback(target_cache: 'Cache'):
     """
 
     # noinspection PyUnusedLocal
-    def callback(notifier: Any, property_name: str, change: bool):
-        if change:
+    def callback(change):
+        if change['change']:
             target_cache.clear()
 
     return callback
@@ -148,6 +160,14 @@ def cached_method(target_cache_property: str):
             return result
 
         return new_func
+
+    return wrapper
+
+
+def copy_docstring_from(source):
+    def wrapper(func):
+        func.__doc__ = source.__doc__
+        return func
 
     return wrapper
 
@@ -244,7 +264,7 @@ class Cache:
         self._misses = 0
 
 
-class Grid:
+class Grid(HasEventMixin):
     """
     Grid object.
 
@@ -274,7 +294,7 @@ class Grid:
                  lock_gpts: bool = False,
                  lock_sampling: bool = False):
 
-        self.changed = Event()
+        self._event = Event()
         self._dimensions = dimensions
 
         if isinstance(endpoint, bool):
@@ -320,27 +340,21 @@ class Grid:
 
     @property
     def endpoint(self) -> tuple:
-        """
-        Include the grid endpoint.
-        """
+        """Include the grid endpoint."""
         return self._endpoint
 
     @property
     def dimensions(self) -> int:
-        """
-        Number of dimensions represented by the grid.
-        """
+        """Number of dimensions represented by the grid."""
         return self._dimensions
 
     @property
     def extent(self) -> tuple:
-        """
-        Grid extent in each dimension [Å].
-        """
+        """Grid extent in each dimension [Å]."""
         return self._extent
 
     @extent.setter
-    @watched_method('changed')
+    @watched_method('_event')
     def extent(self, extent: Union[float, Sequence[float]]):
         if self._lock_extent:
             raise RuntimeError('Extent cannot be modified')
@@ -357,13 +371,11 @@ class Grid:
 
     @property
     def gpts(self) -> tuple:
-        """
-        Number of grid points in each dimension.
-        """
+        """Number of grid points in each dimension."""
         return self._gpts
 
     @gpts.setter
-    @watched_method('changed')
+    @watched_method('_event')
     def gpts(self, gpts: Union[int, Sequence[int]]):
         if self._lock_gpts:
             raise RuntimeError('Grid gpts cannot be modified')
@@ -381,13 +393,11 @@ class Grid:
 
     @property
     def sampling(self) -> tuple:
-        """
-        Grid sampling in each dimension [1 / Å].
-        """
+        """Grid sampling in each dimension [1 / Å]."""
         return self._sampling
 
     @sampling.setter
-    @watched_method('changed')
+    @watched_method('_event')
     def sampling(self, sampling):
         if self._lock_sampling:
             raise RuntimeError('Sampling cannot be modified')
@@ -505,28 +515,6 @@ class Grid:
         return copy(self)
 
 
-class DelegatedAttribute:
-
-    def __init__(self, delegate_name, attr_name):
-        self.attr_name = attr_name
-        self.delegate_name = delegate_name
-
-    def __get__(self, instance, owner):
-        if instance is None:
-            return self
-        else:
-            return getattr(self.delegate(instance), self.attr_name)
-
-    def __set__(self, instance, value):
-        setattr(self.delegate(instance), self.attr_name, value)
-
-    def __delete__(self, instance):
-        delattr(self.delegate(instance), self.attr_name)
-
-    def delegate(self, instance):
-        return getattr(instance, self.delegate_name)
-
-
 class HasGridMixin:
     _grid: Grid
 
@@ -534,15 +522,38 @@ class HasGridMixin:
     def grid(self) -> Grid:
         return self._grid
 
-    extent = DelegatedAttribute('grid', 'extent')
-    gpts = DelegatedAttribute('grid', 'gpts')
-    sampling = DelegatedAttribute('grid', 'sampling')
+    @property
+    @copy_docstring_from(Grid.extent)
+    def extent(self):
+        return self.grid.extent
+
+    @extent.setter
+    def extent(self, extent):
+        self.grid.extent = extent
+
+    @property
+    @copy_docstring_from(Grid.gpts)
+    def gpts(self):
+        return self.grid.gpts
+
+    @gpts.setter
+    def gpts(self, gpts):
+        self.grid.gpts = gpts
+
+    @property
+    @copy_docstring_from(Grid.sampling)
+    def sampling(self):
+        return self.grid.sampling
+
+    @sampling.setter
+    def sampling(self, sampling):
+        self.grid.sampling = sampling
 
     def match_grid(self, other, check_match=False):
         self.grid.match(other, check_match=check_match)
 
 
-class Accelerator:
+class Accelerator(HasEventMixin):
     """
     Accelerator object describes the energy of wave functions and transfer functions.
 
@@ -556,7 +567,7 @@ class Accelerator:
         if energy is not None:
             energy = float(energy)
 
-        self.changed = Event()
+        self._event = Event()
         self._energy = energy
         self._lock_energy = lock_energy
 
@@ -568,7 +579,7 @@ class Accelerator:
         return self._energy
 
     @energy.setter
-    @watched_method('changed')
+    @watched_method('_event')
     def energy(self, value: float):
         if self._lock_energy:
             raise RuntimeError('Energy cannot be modified')
@@ -579,17 +590,13 @@ class Accelerator:
 
     @property
     def wavelength(self) -> float:
-        """
-        Relativistic wavelength [Å].
-        """
+        """ Relativistic wavelength [Å]. """
         self.check_is_defined()
         return energy2wavelength(self.energy)
 
     @property
     def sigma(self) -> float:
-        """
-        Interaction parameter.
-        """
+        """ Interaction parameter. """
         self.check_is_defined()
         return energy2sigma(self.energy)
 
@@ -640,9 +647,7 @@ class Accelerator:
         return self.__class__(self.energy)
 
     def copy(self):
-        """
-        Make a copy.
-        """
+        """Make a copy."""
         return copy(self)
 
 
@@ -656,26 +661,64 @@ class HasAcceleratorMixin:
     @accelerator.setter
     def accelerator(self, new: Accelerator):
         self._accelerator = new
-        self._accelerator.changed = new.changed
+        self._accelerator._event = new._event
 
-    energy = DelegatedAttribute('accelerator', 'energy')
-    wavelength = DelegatedAttribute('accelerator', 'wavelength')
+    @property
+    @copy_docstring_from(Accelerator.energy)
+    def energy(self):
+        return self.accelerator.energy
+
+    @energy.setter
+    def energy(self, energy):
+        self.accelerator.energy = energy
+
+    @property
+    @copy_docstring_from(Accelerator.wavelength)
+    def wavelength(self):
+        return self.accelerator.wavelength
 
 
-class AntialiasFilter:
+class BeamTilt(HasEventMixin):
+
+    def __init__(self, tilt: Tuple[float, float] = (0., 0.)):
+        self._tilt = tilt
+        self._event = Event()
+
+    @property
+    def tilt(self) -> Tuple[float, float]:
+        """Beam tilt [mrad]."""
+        return self._tilt
+
+    @tilt.setter
+    @watched_method('_event')
+    def tilt(self, value: Tuple[float, float]):
+        self._tilt = value
+
+
+class HasBeamTiltMixin:
+    _beam_tilt: BeamTilt
+
+    @property
+    @copy_docstring_from(BeamTilt.tilt)
+    def tilt(self) -> Tuple[float, float]:
+        return self._beam_tilt.tilt
+
+    @tilt.setter
+    def tilt(self, value: Tuple[float, float]):
+        self.tilt = value
+
+
+class AntialiasFilter(HasEventMixin):
     """
     Antialias filter object.
     """
-
-    cutoff = 2 / 3
+    cutoff = 2 / 3.
     rolloff = .1
 
-    def __init__(self, cutoff=None):
-        if cutoff is None:
-            cutoff = self.cutoff
-
-        self.cutoff = cutoff
+    def __init__(self):
         self._mask_cache = Cache(1)
+        self._event = Event()
+        self._event.observe(cache_clear_callback(self._mask_cache))
 
     @cached_method('_mask_cache')
     def get_mask(self, gpts, sampling, xp):
@@ -700,7 +743,7 @@ class AntialiasFilter:
     def _bandlimit(self, array):
         xp = get_array_module(array)
         fft2_convolve = get_device_function(xp, 'fft2_convolve')
-        fft2_convolve(array, self.get_mask(array.shape[-2:], (1, 1), xp), overwrite_x=True)
+        array = fft2_convolve(array, self.get_mask(array.shape[-2:], (1, 1), xp), overwrite_x=True)
         return array
 
     def bandlimit(self, waves):
@@ -716,5 +759,33 @@ class AntialiasFilter:
         """
         xp = get_array_module(waves.array)
         fft2_convolve = get_device_function(xp, 'fft2_convolve')
-        fft2_convolve(waves.array, self.get_mask(waves.gpts, waves.sampling, xp), overwrite_x=True)
+        waves._array = fft2_convolve(waves.array, self.get_mask(waves.gpts, waves.sampling, xp), overwrite_x=True)
         return waves
+
+
+class AntialiasAperture:
+
+    def __init__(self, antialias_aperture=(2 / 3., 2 / 3.)):
+        self._antialias_aperture = antialias_aperture
+
+    @property
+    def antialias_aperture(self) -> Tuple[float, float]:
+        """Anti-aliasing aperture as a fraction of the Nyquist frequency."""
+        return self._antialias_aperture
+
+    @antialias_aperture.setter
+    def antialias_aperture(self, value: Tuple[float, float]):
+        self._antialias_aperture = value
+
+
+class HasAntialiasAperture(HasEventMixin):
+    _antialias_aperture: AntialiasAperture
+
+    @property
+    @copy_docstring_from(AntialiasAperture.antialias_aperture)
+    def antialias_aperture(self) -> Tuple[float, float]:
+        return self._antialias_aperture.antialias_aperture
+
+    @antialias_aperture.setter
+    def antialias_aperture(self, value: Tuple[float, float]):
+        self._antialias_aperture.antialias_aperture = value

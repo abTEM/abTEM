@@ -1,0 +1,1 @@
+Notebook accompanying "Interferometric 4D-STEM for Lattice Distortion and Interlayer Spacing Measurements of Bilayer and Trilayer 2D Materials" ([doi:10.1002/smll.202100388](https://doi.org/10.1002/smll.202100388)) demonstrating the simulation of ADF images and 4D-STEM data of twisted bilayer graphene.

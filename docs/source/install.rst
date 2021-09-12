@@ -9,20 +9,28 @@ To install ``abtem`` with pip run::
 
 This installs ``abtem`` with its strict dependencies (see below); some functionality requires additional actions.
 
+For a development installation::
+
+    git clone https://github.com/jacobjma/abTEM
+    cd abtem
+    pip install -e .
+
 GPU calculations (CUDA only)
 ****************************
-GPU calculations with abTEM require CUDA Toolkit 10 and CuPy.
+GPU calculations with abTEM require CUDA Toolkit and CuPy.
 
-`Download <https://developer.nvidia.com/cuda-10.2-download-archive>`_ and install CUDA toolkit 10 from NVIDIA's website (CUDA toolkit 11 is not supported). On Windows, you may be prompted to install Visual Studio for some features, but this is *not* required to use abTEM.
+`Download <https://developer.nvidia.com/cuda-10.2-download-archive>`_ and install CUDA toolkit 11 from NVIDIA's website. On Windows, you may be prompted to install Visual Studio for some features, but this is *not* required to use abTEM.
 
 Install CuPy from pip::
 
-    pip install cupy-cuda102
+    pip install cupy-cuda*
 
-See `CuPy's installation guide <https://docs.cupy.dev/en/stable/install.html>`_ for more details.
+where * should be substituted for the CUDA Toolkit version. See `CuPy's installation guide <https://docs.cupy.dev/en/stable/install.html>`_ for details.
 
-DFT potentials with GPAW
-************************
+DFT potentials with GPAW (optional)
+***********************************
+
+abTEM can simulate bond-sensitive
 GPAW can be installed from pip (note that GPAW is not officially supported on Windows)::
 
     pip install GPAW
@@ -60,31 +68,31 @@ Dependencies
 ------------
 Strict dependencies:
 
-- `Numpy <https://www.numpy.org/>`_
-- `scipy <https://scipy.org/>`_
-- `Numba <https://www.numba.org/>`_
-- `pyfftw <https://hgomersall.github.io/pyFFTW/>`_
-- `imageio <https://imageio.github.io/>`_
-- `h5py <https://h5py.org/>`_
-- `matplotlib <https://matplotlib.org/>`_
-- `ase <https://wiki.fysik.dtu.dk/ase/>`_
-- `tqdm <https://tqdm.github.io/>`_
-- `psutil <https://github.com/giampaolo/psutil>`_
+* `Numpy <https://www.numpy.org/>`_
+* `scipy <https://scipy.org/>`_
+* `Numba <https://www.numba.org/>`_
+* `pyfftw <https://hgomersall.github.io/pyFFTW/>`_
+* `imageio <https://imageio.github.io/>`_
+* `h5py <https://h5py.org/>`_
+* `matplotlib <https://matplotlib.org/>`_
+* `ase <https://wiki.fysik.dtu.dk/ase/>`_
+* `tqdm <https://tqdm.github.io/>`_
+* `psutil <https://github.com/giampaolo/psutil>`_
 
 Only for GPU calculations:
 
-- `CuPy <https://cupy.dev/>`_
+* `CuPy <https://cupy.dev/>`_
 
 Only for DFT potentials with GPAW:
 
-- `GPAW <https://wiki.fysik.dtu.dk/gpaw/>`_
+* `GPAW <https://wiki.fysik.dtu.dk/gpaw/>`_
 
 Only for interactive graphical interfaces:
 
-- `Bokeh <https://docs.bokeh.org/en/latest/index.html>`_
-- `ipywidgets <https://ipywidgets.readthedocs.io/en/stable/>`_
+* `bqplot <https://bqplot.readthedocs.io/en/latest/>`_
+* `bqplot-image-gl <https://github.com/glue-viz/bqplot-image-gl>`_
+* `ipywidgets <https://ipywidgets.readthedocs.io/en/stable/>`_
 
 Only for testing:
 
-- `pytest <http://www.pytest.org/>`_
-- `hypothesis <https://hypothesis.readthedocs.io/en/latest/>`_
+* `pytest <http://www.pytest.org/>`_

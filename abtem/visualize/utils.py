@@ -1,10 +1,15 @@
-
 from colorsys import hls_to_rgb
 
 import numpy as np
+from scipy.interpolate import interpn, interp1d
+from abtem.visualize.colors import hsluv
+from matplotlib.colors import ListedColormap
 
 
 def format_label(calibration):
+    if calibration is None:
+        return ''
+
     label = ''
     if calibration.name:
         label += f'{calibration.name}'
@@ -15,7 +20,7 @@ def format_label(calibration):
     return label
 
 
-def domain_coloring(z, fade_to_white=False, saturation=1.0, k=.5):
+def domain_coloring(z, pure_phase=False):
     """
     Domain coloring function.
 
@@ -25,24 +30,22 @@ def domain_coloring(z, fade_to_white=False, saturation=1.0, k=.5):
     ----------
     z : ndarray, complex
         Complex number to be colored.
-    fade_to_white : bool, optional
-        Option to fade the coloring to white instead of black. Default is False.
     saturation : float, optional
         RGB color saturation. Default is 1.0.
     k : float, optional
         Scaling factor for the coloring. Default is 0.5.
     """
 
-    h = (np.angle(z) + np.pi) / (2 * np.pi) + 0.5
-    if fade_to_white:
-        r = k ** np.abs(z)
-    else:
-        r = 1 - k ** np.abs(z)
-    c = np.vectorize(hls_to_rgb)(h, r, saturation)
-    c = np.array(c).T
+    phase = (np.angle(z) + np.pi) / (2 * np.pi)
 
-    c = (c - c.min()) / c.ptp()
-    return c
+    cmap = ListedColormap(hsluv)
+    colors = cmap(phase)[..., :3]
+    if not pure_phase:
+        abs_z = np.abs(z)
+        abs_z = (abs_z - abs_z.min()) / abs_z.ptp()
+        colors = colors * abs_z[..., None]
+
+    return colors
 
 
 def _line_intersect_rectangle(point0, point1, lower_corner, upper_corner):
@@ -68,5 +71,3 @@ def _line_intersect_rectangle(point0, point1, lower_corner, upper_corner):
         intersect1 = (upper_corner[0], y(upper_corner[0]))
 
     return intersect0, intersect1
-
-

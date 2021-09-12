@@ -1,8 +1,10 @@
 """Module to handle ab initio electrostatic potentials from the DFT code GPAW."""
+import warnings
 from typing import Sequence, Tuple, Union
 
 import numpy as np
 from ase import units
+from ase.build.tools import cut
 from scipy.interpolate import interp1d, interpn
 
 from abtem.base_classes import Grid
@@ -11,8 +13,6 @@ from abtem.potentials import AbstractPotentialBuilder, PotentialArray, _disc_mes
     PotentialIntegrator
 from abtem.structures import orthogonalize_cell
 from abtem.utils import subdivide_into_batches
-
-import warnings
 
 try:
     from gpaw.atom.shapefunc import shape_functions
@@ -70,6 +70,41 @@ def interpolate_rectangle(array: np.ndarray,
 
     interpolated = interpn((x, y), padded_array, p, method='splinef2d')
     return interpolated.reshape((gpts[0], gpts[1]))
+
+
+def interpolate_cube(array, old_cell, new_cell, new_gpts, origin=None):
+    from scipy.interpolate import RegularGridInterpolator
+
+    if origin is None:
+        origin = (0., 0., 0.)
+
+    padded_array = np.zeros((array.shape[0] + 1, array.shape[1] + 1, array.shape[2] + 1))
+    padded_array[:-1, :-1, :-1] = array
+    padded_array[-1] = padded_array[0]
+    padded_array[:, -1] = padded_array[:, 0]
+    padded_array[:, :, -1] = padded_array[:, :, 0]
+
+    x = np.linspace(0, 1, padded_array.shape[0], endpoint=True)
+    y = np.linspace(0, 1, padded_array.shape[1], endpoint=True)
+    z = np.linspace(0, 1, padded_array.shape[2], endpoint=True)
+
+    interpolator = RegularGridInterpolator((x, y, z), padded_array)
+
+    x = np.linspace(origin[0], origin[0] + new_cell[0], new_gpts[0], endpoint=False)
+    y = np.linspace(origin[1], origin[1] + new_cell[1], new_gpts[1], endpoint=False)
+    z = np.linspace(origin[2], origin[2] + new_cell[2], new_gpts[2], endpoint=False)
+
+    x, y, z = np.meshgrid(x, y, z, indexing='xy')
+
+    points = np.array([x.ravel(), y.ravel(), z.ravel()]).T
+
+    P = np.array(old_cell)
+    P_inv = np.linalg.inv(P)
+
+    scaled_points = np.dot(points, P_inv) % 1.0
+    interpolated = interpolator(scaled_points)
+
+    return interpolated.reshape(new_gpts)
 
 
 def get_paw_corrections(atom_index: int, calculator, rcgauss: float = 0.005) -> Tuple[np.ndarray, np.ndarray]:
@@ -146,33 +181,52 @@ class GPAWPotential(AbstractPotentialBuilder):
                  calculator,
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
-                 # origin: Union[float, Sequence[float]] = None,
+                 origin: Union[float, Sequence[float]] = None,
+                 orthogonal_cell: Sequence[float] = None,
+                 periodic_z: bool = True,
                  slice_thickness=.5,
                  core_size=.005,
-                 storage='cpu'):
+                 storage='cpu',
+                 precalculate=True):
 
         self._calculator = calculator
         self._core_size = core_size
 
-        thickness = calculator.atoms.cell[2, 2]
-        nz = calculator.hamiltonian.finegd.N_c[2]
-        num_slices = int(np.ceil(nz / np.floor(slice_thickness / (thickness / nz))))
+        if orthogonal_cell is None:
+            thickness = calculator.atoms.cell[2, 2]
+            nz = calculator.hamiltonian.finegd.N_c[2]
+            extent = np.diag(orthogonalize_cell(calculator.atoms.copy()).cell)[:2]
+        else:
+            thickness = orthogonal_cell[2]
+            nz = calculator.hamiltonian.finegd.N_c / np.linalg.norm(calculator.atoms.cell, axis=0) * orthogonal_cell[2]
+            nz = int(np.ceil(np.max(nz)))
+            extent = orthogonal_cell[:2]
 
+        num_slices = int(np.ceil(nz / np.floor(slice_thickness / (thickness / nz))))
+        self._orthogonal_cell = orthogonal_cell
         self._voxel_height = thickness / nz
         self._slice_vertical_voxels = subdivide_into_batches(nz, num_slices)
-
-        # TODO: implement support for non-periodic extent
-
-        self._origin = (0., 0.)
-        extent = np.diag(orthogonalize_cell(calculator.atoms.copy()).cell)[:2]
+        self._origin = (0., 0., 0.)
+        self._periodic_z = periodic_z
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling, lock_extent=True)
 
-        super().__init__(storage=storage)
+        super().__init__(precalculate=precalculate, storage=storage)
 
     @property
     def calculator(self):
         return self._calculator
+
+    @property
+    def num_frozen_phonon_configs(self):
+        return 1
+
+    def generate_frozen_phonon_potentials(self, pbar=False):
+        for i in range(self.num_frozen_phonon_configs):
+            if self._precalculate:
+                yield self.build(pbar=pbar)
+            else:
+                yield self
 
     @property
     def core_size(self):
@@ -190,18 +244,58 @@ class GPAWPotential(AbstractPotentialBuilder):
         return self._slice_vertical_voxels[i] * self._voxel_height
 
     def generate_slices(self, first_slice=0, last_slice=None, max_batch=1):
-
         interpolate_radial_functions = get_device_function(np, 'interpolate_radial_functions')
 
         if last_slice is None:
             last_slice = len(self)
 
-        valence = self._calculator.get_electrostatic_potential()
-        cell = self._calculator.atoms.cell[:2, :2]
+        old_cell = self._calculator.atoms.cell
 
         atoms = self._calculator.atoms.copy()
         atoms.set_tags(range(len(atoms)))
-        atoms = orthogonalize_cell(atoms)
+
+        if self._orthogonal_cell is None:
+            atoms = orthogonalize_cell(atoms)
+        else:
+            scaled = atoms.cell.scaled_positions(np.diag(self._orthogonal_cell))
+            atoms = cut(atoms, a=scaled[0], b=scaled[1], c=scaled[2])
+
+        valence = self._calculator.get_electrostatic_potential()
+        new_gpts = self.gpts + (sum(self._slice_vertical_voxels),)
+        array = valence
+
+        from scipy.interpolate import RegularGridInterpolator
+
+        origin = (0., 0., 0.)
+
+        padded_array = np.zeros((array.shape[0] + 1, array.shape[1] + 1, array.shape[2] + 1))
+        padded_array[:-1, :-1, :-1] = array
+        padded_array[-1] = padded_array[0]
+        padded_array[:, -1] = padded_array[:, 0]
+        padded_array[:, :, -1] = padded_array[:, :, 0]
+
+        x = np.linspace(0, 1, padded_array.shape[0], endpoint=True)
+        y = np.linspace(0, 1, padded_array.shape[1], endpoint=True)
+        z = np.linspace(0, 1, padded_array.shape[2], endpoint=True)
+
+        interpolator = RegularGridInterpolator((x, y, z), padded_array)
+
+        new_cell = np.diag(atoms.cell)
+        x = np.linspace(origin[0], origin[0] + new_cell[0], new_gpts[0], endpoint=False)
+        y = np.linspace(origin[1], origin[1] + new_cell[1], new_gpts[1], endpoint=False)
+        z = np.linspace(origin[2], origin[2] + new_cell[2], new_gpts[2], endpoint=False)
+
+        P = np.array(old_cell)
+        P_inv = np.linalg.inv(P)
+
+        cutoffs = {}
+        for number in np.unique(atoms.numbers):
+            indices = np.where(atoms.numbers == number)[0]
+            r = self._calculator.density.setups[indices[0]].xc_correction.rgd.r_g[1:] * units.Bohr
+            cutoffs[number] = r[-1]
+
+        if self._periodic_z:
+            atoms = pad_atoms(atoms, margin=max(cutoffs.values()), directions='z', in_place=True)
 
         indices_by_number = {number: np.where(atoms.numbers == number)[0] for number in np.unique(atoms.numbers)}
 
@@ -211,8 +305,14 @@ class GPAWPotential(AbstractPotentialBuilder):
             nb = na + self._slice_vertical_voxels[i]
             b = a + self._slice_vertical_voxels[i] * self._voxel_height
 
-            projected_valence = valence[..., na:nb].sum(axis=-1) * self._voxel_height
-            projected_valence = interpolate_rectangle(projected_valence, cell, self.extent, self.gpts, self._origin)
+            X, Y, Z = np.meshgrid(x, y, z[na:nb], indexing='ij')
+
+            points = np.array([X.ravel(), Y.ravel(), Z.ravel()]).T
+
+            scaled_points = np.dot(points, P_inv) % 1.0
+
+            projected_valence = interpolator(scaled_points).reshape(self.gpts + (nb - na,)).sum(
+                axis=-1) * self._voxel_height
 
             array = np.zeros((1,) + self.gpts, dtype=np.float32)
             for number, indices in indices_by_number.items():
@@ -221,9 +321,7 @@ class GPAWPotential(AbstractPotentialBuilder):
                 if len(slice_atoms) == 0:
                     continue
 
-                r = self._calculator.density.setups[indices[0]].xc_correction.rgd.r_g[1:] * units.Bohr
-                cutoff = r[-1]
-
+                cutoff = cutoffs[number]
                 margin = np.int(np.ceil(cutoff / np.min(self.sampling)))
                 rows, cols = _disc_meshgrid(margin)
                 disc_indices = np.hstack((rows[:, None], cols[:, None]))
@@ -231,12 +329,13 @@ class GPAWPotential(AbstractPotentialBuilder):
                 slice_atoms = slice_atoms[(slice_atoms.positions[:, 2] > a - cutoff) *
                                           (slice_atoms.positions[:, 2] < b + cutoff)]
 
-                slice_atoms = pad_atoms(slice_atoms, cutoff)
+                slice_atoms = pad_atoms(slice_atoms, margin=cutoff, directions='xy', )
 
-                R = np.geomspace(np.min(self.sampling)/2, cutoff, int(np.ceil(cutoff / np.min(self.sampling))) * 10)
+                R = np.geomspace(np.min(self.sampling) / 2, cutoff, int(np.ceil(cutoff / np.min(self.sampling))) * 10)
 
                 vr = np.zeros((len(slice_atoms), len(R)), np.float32)
                 dvdr = np.zeros((len(slice_atoms), len(R)), np.float32)
+                # TODO : improve speed of this
                 for j, atom in enumerate(slice_atoms):
                     r, v = get_paw_corrections(atom.tag, self._calculator, self._core_size)
 
@@ -244,8 +343,7 @@ class GPAWPotential(AbstractPotentialBuilder):
 
                     integrator = PotentialIntegrator(f, R, self.get_slice_thickness(i), tolerance=1e-6)
 
-                    vr[j], dvdr[j] = integrator.integrate(np.array([atom.z]), a, b, xp=np)
-
+                    vr[j], dvdr[j] = integrator.integrate(np.array([atom.z]), a, b)
 
                 sampling = np.asarray(self.sampling, dtype=np.float32)
                 run_length_enconding = np.zeros((2,), dtype=np.int32)

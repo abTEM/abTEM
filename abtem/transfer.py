@@ -3,8 +3,8 @@ from collections import defaultdict
 from typing import Mapping, Union
 
 import numpy as np
-
-from abtem.base_classes import HasAcceleratorMixin, Accelerator, watched_method, watched_property, Event
+from abtem.base_classes import HasAcceleratorMixin, HasEventMixin, Accelerator, watched_method, watched_property, Event, \
+    Grid
 from abtem.device import get_array_module, get_device_function
 from abtem.measure import Measurement, Calibration
 from abtem.utils import energy2wavelength, spatial_frequencies, polar_coordinates
@@ -23,7 +23,7 @@ polar_aliases = {'defocus': 'C10', 'astigmatism': 'C12', 'astigmatism_angle': 'p
                  'C5': 'C50'}
 
 
-class CTF(HasAcceleratorMixin):
+class CTF(HasAcceleratorMixin, HasEventMixin):
     """
     Contrast transfer function object
 
@@ -43,7 +43,7 @@ class CTF(HasAcceleratorMixin):
     semiangle_cutoff: float
         The semiangle cutoff describes the sharp Fourier space cutoff due to the objective aperture [mrad].
     rolloff: float
-        Softens the cutoff. A value of 0 gives a hard cutoff, while 1 gives the softest possible cutoff [Å].
+        Tapers the cutoff edge over the given angular range [mrad].
     focal_spread: float
         The 1/e width of the focal spread due to chromatic aberration and lens current instability [Å].
     angular_spread: float
@@ -53,7 +53,8 @@ class CTF(HasAcceleratorMixin):
     energy: float
         The electron energy of the wave functions this contrast transfer function will be applied to [eV].
     parameters: dict
-        Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in Å.
+        Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in Å
+        and angles should be given in radians.
     kwargs:
         Provide the aberration coefficients as keyword arguments.
 
@@ -63,7 +64,7 @@ class CTF(HasAcceleratorMixin):
 
     """
 
-    def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 0.1, focal_spread: float = 0.,
+    def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 2, focal_spread: float = 0.,
                  angular_spread: float = 0., gaussian_spread: float = 0., energy: float = None,
                  parameters: Mapping[str, float] = None, **kwargs):
 
@@ -71,10 +72,10 @@ class CTF(HasAcceleratorMixin):
             if (key not in polar_symbols) and (key not in polar_aliases.keys()):
                 raise ValueError('{} not a recognized parameter'.format(key))
 
-        self.changed = Event()
+        self._event = Event()
 
         self._accelerator = Accelerator(energy=energy)
-        self._accelerator.changed.register(self.changed.notify)
+        self._accelerator.observe(self.event.notify)
 
         self._semiangle_cutoff = semiangle_cutoff
         self._rolloff = rolloff
@@ -97,7 +98,7 @@ class CTF(HasAcceleratorMixin):
             def setter(self, value):
                 old = getattr(self, key)
                 self._parameters[key] = value
-                self.changed.notify(**{'notifier': self, 'property_name': key, 'change': old != value})
+                self.event.notify({'notifier': self, 'name': key, 'change': old != value})
 
             return property(getter, setter)
 
@@ -132,7 +133,7 @@ class CTF(HasAcceleratorMixin):
         return self._semiangle_cutoff
 
     @semiangle_cutoff.setter
-    @watched_property('changed')
+    @watched_property('_event')
     def semiangle_cutoff(self, value: float):
         self._semiangle_cutoff = value
 
@@ -142,7 +143,7 @@ class CTF(HasAcceleratorMixin):
         return self._rolloff
 
     @rolloff.setter
-    @watched_property('changed')
+    @watched_property('_event')
     def rolloff(self, value: float):
         self._rolloff = value
 
@@ -152,7 +153,7 @@ class CTF(HasAcceleratorMixin):
         return self._focal_spread
 
     @focal_spread.setter
-    @watched_property('changed')
+    @watched_property('_event')
     def focal_spread(self, value: float):
         """The angular spread [mrad]."""
         self._focal_spread = value
@@ -162,7 +163,7 @@ class CTF(HasAcceleratorMixin):
         return self._angular_spread
 
     @angular_spread.setter
-    @watched_property('changed')
+    @watched_property('_event')
     def angular_spread(self, value: float):
         self._angular_spread = value
 
@@ -172,11 +173,11 @@ class CTF(HasAcceleratorMixin):
         return self._gaussian_spread
 
     @gaussian_spread.setter
-    @watched_property('changed')
+    @watched_property('_event')
     def gaussian_spread(self, value: float):
         self._gaussian_spread = value
 
-    @watched_method('changed')
+    @watched_method('_event')
     def set_parameters(self, parameters: dict):
         """
         Set the phase of the phase aberration.
@@ -210,7 +211,7 @@ class CTF(HasAcceleratorMixin):
             return xp.ones_like(alpha)
 
         if self.rolloff > 0.:
-            rolloff = self.rolloff * semiangle_cutoff
+            rolloff = self.rolloff / 1000. #* semiangle_cutoff
             array = .5 * (1 + xp.cos(np.pi * (alpha - semiangle_cutoff + rolloff) / rolloff))
             array[alpha > semiangle_cutoff] = 0.
             array = xp.where(alpha > semiangle_cutoff - rolloff, array, xp.ones_like(alpha, dtype=xp.float32))
@@ -322,8 +323,13 @@ class CTF(HasAcceleratorMixin):
 
         return array
 
-    def evaluate_on_grid(self, grid, xp=np):
-        kx, ky = spatial_frequencies(grid.gpts, grid.sampling)
+    def evaluate_on_grid(self, gpts=None, extent=None, sampling=None, xp=np):
+        grid = Grid(gpts=gpts, extent=extent, sampling=sampling)
+
+        gpts = grid.gpts
+        sampling = grid.sampling
+
+        kx, ky = spatial_frequencies(gpts, sampling)
         kx = kx.reshape((1, -1, 1))
         ky = ky.reshape((1, 1, -1))
         kx = xp.asarray(kx)
@@ -357,32 +363,40 @@ class CTF(HasAcceleratorMixin):
                                                     name='Temporal')
         profiles['spatial_envelope'] = Measurement(spatial_envelope, calibrations=[calibration],
                                                    name='Spatial')
-        profiles['gaussian_spread'] = Measurement(gaussian_envelope, calibrations=[calibration],
-                                                  name='Gaussian')
+        profiles[' '] = Measurement(gaussian_envelope, calibrations=[calibration],
+                                    name='Gaussian')
         profiles['envelope'] = Measurement(envelope, calibrations=[calibration], name='Envelope')
         return profiles
 
     def apply(self, waves, interact=False, sliders=None, throttling=0.):
-        from abtem.visualize.bqplot import show_measurement_2d
-        from abtem.visualize.widgets import quick_sliders, throttle
-        import ipywidgets as widgets
-
         if interact:
+            from abtem.visualize.interactive import Canvas, MeasurementArtist2d
+            from abtem.visualize.widgets import quick_sliders, throttle
+            import ipywidgets as widgets
+
             image_waves = waves.copy()
+            canvas = Canvas()
+            artist = MeasurementArtist2d()
+            canvas.artists = {'artist': artist}
 
-            def update():
-                image_waves._array[:] = waves.apply_ctf(self).array
-                return image_waves.intensity()
-
-            figure, callback = show_measurement_2d(update)
+            def update(*args):
+                image_waves.array[:] = waves.apply_ctf(self).array
+                artist.measurement = image_waves.intensity()[0]
+                canvas.adjust_limits_to_artists()
+                canvas.adjust_labels_to_artists()
 
             if throttling:
-                callback = throttle(throttling)(callback)
+                update = throttle(throttling)(update)
 
-            self.changed.register(callback)
+            self.observe(update)
+            update()
+
             if sliders:
                 sliders = quick_sliders(self, **sliders)
-                figure = widgets.HBox([figure, widgets.VBox(sliders)])
+                figure = widgets.HBox([canvas.figure, widgets.VBox(sliders)])
+            else:
+                figure = canvas.figure
+
             return image_waves, figure
         else:
             if sliders:
@@ -391,27 +405,37 @@ class CTF(HasAcceleratorMixin):
             return waves.apply_ctf(self)
 
     def interact(self, max_semiangle: float = None, phi: float = 0., sliders=None, throttling=False):
-        import bqplot.pyplot as plt
-        from abtem.visualize.bqplot import show_measurement_1d
-        from abtem.visualize.widgets import quick_sliders, throttle
+        from abtem.visualize.interactive.utils import quick_sliders, throttle
+        from abtem.visualize.interactive import Canvas, MeasurementArtist1d
         import ipywidgets as widgets
 
-        figure = plt.figure(fig_margin={'top': 0, 'bottom': 50, 'left': 50, 'right': 0})
-        figure.layout.height = '250px'
-        figure.layout.width = '300px'
+        canvas = Canvas(lock_scale=False)
+        ctf_artist = MeasurementArtist1d()
+        envelope_artist = MeasurementArtist1d()
+        canvas.artists = {'ctf': ctf_artist, 'envelope': envelope_artist}
+        canvas.y_scale.min = -1.1
+        canvas.y_scale.max = 1.1
 
-        _, callback = show_measurement_1d(lambda: self.profiles(max_semiangle, phi).values(), figure)
+        def callback(*args):
+            profiles = self.profiles(max_semiangle, phi)
+
+            for name, artist in canvas.artists.items():
+                artist.measurement = profiles[name]
 
         if throttling:
             callback = throttle(throttling)(callback)
 
-        self.changed.register(callback)
+        self.observe(callback)
+
+        callback()
+        canvas.adjust_limits_to_artists(adjust_y=False)
+        canvas.adjust_labels_to_artists()
 
         if sliders:
             sliders = quick_sliders(self, **sliders)
-            return widgets.HBox([figure, widgets.VBox(sliders)])
+            return widgets.HBox([canvas.figure, widgets.VBox(sliders)])
         else:
-            return figure
+            return canvas.figure
 
     def show(self, max_semiangle: float = None, phi: float = 0, ax=None, **kwargs):
         """

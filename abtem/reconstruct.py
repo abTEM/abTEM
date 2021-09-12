@@ -16,7 +16,8 @@ def _run_epie(object,
               beta: float = 1.,
               fix_probe: bool = False,
               fix_com: bool = False,
-              return_iterations: bool = False):
+              return_iterations: bool = False,
+              seed=None):
     xp = get_array_module(probe)
 
     object = xp.array(object)
@@ -43,6 +44,9 @@ def _run_epie(object,
         object_iterations = []
         probe_iterations = []
         SSE_iterations = []
+
+    if seed is not None:
+        np.random.seed(seed)
 
     diffraction_patterns = np.fft.ifftshift(np.sqrt(diffraction_patterns), axes=(-2, -1))
 
@@ -113,7 +117,9 @@ def epie(measurement: Measurement,
          fix_probe: bool = False,
          fix_com: bool = False,
          return_iterations: bool = False,
-         device='cpu'):
+         max_angle=None,
+         seed=None,
+         device='cpu', ):
     """
     Reconstruct the phase of a 4D-STEM measurement using the extended Ptychographical Iterative Engine.
 
@@ -137,6 +143,10 @@ def epie(measurement: Measurement,
         If True, the center of mass of the probe will be centered. Default is True.
     return_iterations : bool
         If True, return the reconstruction after every iteration. Default is False.
+    max_angle : float, optional
+        The maximum reconstructed scattering angle. If this is larger than the input data, the data will be zero-padded.
+    seed : int, optional
+        Seed the random number generator.
     device : str
         Set the calculation device.
 
@@ -148,11 +158,18 @@ def epie(measurement: Measurement,
 
     diffraction_patterns = measurement.array.reshape((-1,) + measurement.array.shape[2:])
 
+    if max_angle:
+        padding_x = int((max_angle / abs(measurement.calibrations[-2].offset) *
+                         diffraction_patterns.shape[-2]) // 2) - diffraction_patterns.shape[-2] // 2
+        padding_y = int((max_angle / abs(measurement.calibrations[-1].offset) *
+                         diffraction_patterns.shape[-1]) // 2) - diffraction_patterns.shape[-1] // 2
+        diffraction_patterns = np.pad(diffraction_patterns, ((0,) * 2, (padding_x,) * 2, (padding_y,) * 2))
+
     extent = (probe_guess.wavelength * 1e3 / measurement.calibrations[2].sampling,
               probe_guess.wavelength * 1e3 / measurement.calibrations[3].sampling)
 
-    sampling = (extent[0] / measurement.shape[2],
-                extent[1] / measurement.shape[3])
+    sampling = (extent[0] / diffraction_patterns.shape[-2],
+                extent[1] / diffraction_patterns.shape[-1])
 
     x = measurement.calibrations[0].coordinates(measurement.shape[0]) / sampling[0]
     y = measurement.calibrations[1].coordinates(measurement.shape[1]) / sampling[1]
@@ -160,13 +177,14 @@ def epie(measurement: Measurement,
     positions = np.array([x.ravel(), y.ravel()]).T
 
     probe_guess.extent = extent
-    probe_guess.gpts = measurement.shape[2:]
+    probe_guess.gpts = diffraction_patterns.shape[-2:]
+
     calibrations = calibrations_from_grid(probe_guess.gpts, probe_guess.sampling, names=['x', 'y'], units='Å')
 
     probe_guess._device = device
     probe_guess = probe_guess.build(np.array([0, 0])).array[0]
 
-    result = _run_epie(measurement.shape[2:],
+    result = _run_epie(diffraction_patterns.shape[-2:],
                        probe_guess,
                        diffraction_patterns,
                        positions,
@@ -175,7 +193,8 @@ def epie(measurement: Measurement,
                        beta=beta,
                        return_iterations=return_iterations,
                        fix_probe=fix_probe,
-                       fix_com=fix_com)
+                       fix_com=fix_com,
+                       seed=seed)
 
     if return_iterations:
         object_iterations = [Measurement(object, calibrations=calibrations) for object in result[0]]

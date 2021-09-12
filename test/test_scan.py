@@ -2,7 +2,7 @@ import os
 
 import numpy as np
 import pytest
-from abtem.detect import AnnularDetector
+from abtem.detect import AnnularDetector, PixelatedDetector
 from abtem.potentials import Potential
 from abtem.scan import PositionScan, LineScan, GridScan
 from abtem.waves import Probe
@@ -15,13 +15,6 @@ def test_custom_scan():
 
     assert np.all(next(scan.generate_positions(1))[1] == positions[0])
     assert np.all(next(scan.generate_positions(2))[1] == positions)
-
-
-def test_linescan_raises():
-    with pytest.raises(ValueError) as e:
-        LineScan(start=0, end=1)
-
-    assert str(e.value) == 'Scan start/end has incorrect shape'
 
 
 def test_line_scan():
@@ -104,3 +97,28 @@ def test_partition_measurement():
         probe.scan(scan, detector, potential, measurements=partitioned_measurements, pbar=False)
 
     assert np.allclose(partitioned_measurements.array, measurements.array)
+
+
+def test_preallocated_measurement():
+    atoms = read(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data/amorphous_carbon.cif'))
+    potential = Potential(atoms, gpts=256, slice_thickness=1, projection='infinite',
+                          parametrization='kirkland').build(pbar=False)
+    scan = GridScan(start=[0, 0], end=potential.extent, gpts=4)
+
+    detector1 = AnnularDetector(inner=70, outer=100)
+    probe = Probe(semiangle_cutoff=15, energy=300e3, extent=potential.extent, gpts=512)
+
+    measurement = detector1.allocate_measurement(probe, scan)
+    probe.scan(scan, detector1, potential, measurement, pbar=False)
+
+    assert np.any(measurement.array > 0)
+
+    detector2 = PixelatedDetector()
+
+    measurement1 = detector1.allocate_measurement(probe, scan)
+    measurement2 = detector2.allocate_measurement(probe, scan)
+
+    with pytest.raises(ValueError) as e:
+        probe.scan(scan, [detector1, detector2], potential, measurement1, pbar=False)
+
+    probe.scan(scan, [detector1, detector2], potential, {detector1: measurement1, detector2: measurement2}, pbar=False)

@@ -47,4 +47,4 @@ def test_accelerator_event():
     accelerator = Accelerator(300e3)
 
     accelerator.energy = 200e3
-    assert accelerator.changed._notify_count == 1
+    assert accelerator.event._notify_count == 1

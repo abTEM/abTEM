@@ -22,3 +22,4 @@ It should be noted that following this walkthrough requires a basic understandin
     09_prism.ipynb
     10_DFT.ipynb
     11_GPU_calculations.ipynb
+    12_EELS.ipynb
