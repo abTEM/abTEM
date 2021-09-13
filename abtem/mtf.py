@@ -80,13 +80,16 @@ class MTF:
 
         # Get spatial frequencies
         kx, ky = spatial_frequencies(gpts, sampling)
-        k = np.sqrt(kx ** 2 + ky ** 2)
+        
+        # Create 2D grid
+        Ky, Kx = np.meshgrid(ky,kx)
+        K = np.sqrt(Kx ** 2 + Ky ** 2)
 
         # Compute MTF
-        mtf = self.f(k, **self.params)
+        mtf = self.f(K, **self.params)
 
         # Apply MTF
-        img = np.fft.ifft2(np.fft.fft2(img) * np.sqrt(mtf))
+        img = np.fft.ifft2(np.fft.fft2(img) * mtf)
         measurement.array[:] = img.real
 
         return measurement
