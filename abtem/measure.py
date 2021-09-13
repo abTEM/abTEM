@@ -737,7 +737,7 @@ class Measurement(AbstractMeasurement):
         kwargs:
             Any of the additional parameters for saving a hyperspy dataset
         """
-        if format is "hdf5":
+        if format == "hdf5":
             with h5py.File(path, mode) as f:
                 f.create_dataset('array', data=self.array)
 
@@ -765,7 +765,7 @@ class Measurement(AbstractMeasurement):
                 f.create_dataset('units', (len(units),), 'S10', units)
                 f.create_dataset('name', (len(names),), 'S10', names)
                 f.create_dataset('is_none', data=is_none)
-        elif format is "hspy":
+        elif format == "hspy":
             self.to_hyperspy().save(path, **kwargs)
         else:
             raise ValueError('Format must be one of "hdf5" or "hspy"')
