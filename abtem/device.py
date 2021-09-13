@@ -3,13 +3,14 @@ from typing import Callable
 import numpy as np
 import psutil
 import pyfftw
+import os
 from numpy.core.numeric import normalize_axis_tuple
 
 from abtem.cpu_kernels import abs2, complex_exponential, interpolate_radial_functions, sum_run_length_encoded
 from abtem.interpolate import interpolate_bilinear_cpu
 
 FFTW_EFFORT = 'FFTW_MEASURE'
-FFTW_THREADS = 12
+FFTW_THREADS = int(os.getenv('ABTEM_FFTW_THREADS', '12'))
 FFTW_TIMELIMIT = 600
 
 try:  # This should be the only place import cupy, to make it a non-essential dependency
