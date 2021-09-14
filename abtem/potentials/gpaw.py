@@ -22,6 +22,7 @@ class GPAWPotential(ChargeDensityPotential):
                  origin: Tuple[float, float, float] = (0., 0., 0.),
                  chunks: int = 1,
                  fft_singularities: bool = False):
+
         charge_density = calc.get_all_electron_density(gridrefinement=4)
         atoms = calc.atoms
         super().__init__(charge_density=charge_density, atoms=atoms, gpts=gpts, sampling=sampling,

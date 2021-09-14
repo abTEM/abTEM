@@ -22,8 +22,8 @@ def squared_wavenumbers(shape, box):
     return 2 ** 2 * np.pi ** 2 * k2
 
 
-def _solve_fourier_space(charge, box):
-    k2 = squared_wavenumbers(charge.shape, box)
+def _solve_fourier_space(charge, k2):
+    # k2 = squared_wavenumbers(charge.shape, box)
     V = np.zeros(charge.shape, dtype=np.complex)
 
     nonzero = np.ones_like(V, dtype=bool)
@@ -73,18 +73,31 @@ def solve_point_charges(atoms, shape=None, array=None, width=0.):
     if array is None:
         array = np.zeros(shape, dtype=np.complex64)
 
+    # def fourier_shift(kx, ky, kz, x, y, z):
+    #     return np.exp(-2 * np.pi * 1j * (kx[:, None, None] * x + ky[None, :, None] * y + kz[None, None, :] * z))
+    #
+    # def fourier_gaussian(kx, ky, kz):
+    #     a = np.sqrt(1 / (2 * width ** 2)) / (2 * np.pi)
+    #     return np.exp(- 1 / (4 * a ** 2) * (kx[:, None, None] ** 2 + ky[None, :, None] ** 2 + kz[None, None, :] ** 2))
+
     def fourier_shift(kx, ky, kz, x, y, z):
-        return np.exp(-2 * np.pi * 1j * (kx[:, None, None] * x + ky[None, :, None] * y + kz[None, None, :] * z))
+        return np.exp(-2 * np.pi * 1j * (kx * x + ky * y + kz * z))
 
     def fourier_gaussian(kx, ky, kz):
         a = np.sqrt(1 / (2 * width ** 2)) / (2 * np.pi)
-        return np.exp(- 1 / (4 * a ** 2) * (kx[:, None, None] ** 2 + ky[None, :, None] ** 2 + kz[None, None, :] ** 2))
+        return np.exp(- 1 / (4 * a ** 2) * (kx ** 2 + ky ** 2 + kz ** 2))
 
-    Lx, Ly, Lz = np.linalg.norm(atoms.cell, axis=0)
+    kx, ky, kz = np.meshgrid(*(np.fft.fftfreq(n, d=1 / n) for n in array.shape), indexing='ij')
+    kp = np.array([kx.ravel(), ky.ravel(), kz.ravel()]).T
+    kx, ky, kz = np.dot(kp, atoms.cell.reciprocal()).T
+
+    kx, ky, kz = kx.reshape(array.shape), ky.reshape(array.shape), kz.reshape(array.shape)
+    k2 = 2 ** 2 * np.pi ** 2 * (kx ** 2 + ky ** 2 + kz ** 2)
+
+    # Lx, Ly, Lz = np.linalg.norm(atoms.cell, axis=0)
+    # kxold, kyold, kzold = (np.fft.fftfreq(n, d=L / n) for n, L in zip(array.shape, (Lx, Ly, Lz)))
+
     pixel_volume = np.prod(np.diag(atoms.cell)) / np.prod(array.shape)
-
-    kx, ky, kz = (np.fft.fftfreq(n, d=L / n) for n, L in zip(array.shape, (Lx, Ly, Lz)))
-
     for atom in atoms:
         scale = atom.number / pixel_volume
         x, y, z = atom.position
@@ -96,7 +109,7 @@ def solve_point_charges(atoms, shape=None, array=None, width=0.):
         else:
             array += scale * fourier_shift(kx, ky, kz, x, y, z)
 
-    return _solve_fourier_space(array, (Lx, Ly, Lz))
+    return _solve_fourier_space(array, k2)
 
 
 class ChargeDensityPotential(AbstractPotentialFromAtoms):
@@ -135,6 +148,8 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
 
     def _build(self):
         def create_potential_interpolator(atoms, charge_density):
+            #atoms = atoms[atoms.numbers == 0]
+
             array = solve_point_charges(atoms,
                                         array=-np.fft.fftn(charge_density),
                                         width=ewald_sigma)
@@ -151,8 +166,8 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
             return RegularGridInterpolator((x, y, z), padded_array)
 
         def interpolate_slice(a, b, h, gpts, old_cell, new_cell, interpolator):
-            x = np.linspace(0, 1, self.gpts[0], endpoint=False)
-            y = np.linspace(0, 1, self.gpts[1], endpoint=False)
+            x = np.linspace(0, 1, gpts[0], endpoint=False)
+            y = np.linspace(0, 1, gpts[1], endpoint=False)
             z = np.linspace(0, 1, int((b - a) / h), endpoint=False)
 
             x, y, z = np.meshgrid(x, y, z, indexing='ij')
@@ -167,8 +182,10 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
 
             P_inv = np.linalg.inv(np.array(old_cell))
             scaled_points = np.dot(points, P_inv) % 1.0
+
             interpolated = interpolator(scaled_points)
-            return interpolated.reshape(x.shape).mean(-1).reshape(self.gpts).astype(np.float32)
+            interpolated = interpolated.reshape(x.shape).mean(-1).reshape(gpts).astype(np.float32)
+            return interpolated
 
         def interpolate_chunk(first_slice, last_slice, slice_limits, h, gpts, old_cell, new_cell, interpolator):
             chunk = np.zeros((last_slice - first_slice,) + gpts, dtype=np.float32)
@@ -177,7 +194,7 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
             return chunk
 
         old_cell = self.atoms.cell
-        new_cell = old_cell
+        new_cell = np.diag(self.box)
 
         interpolator = create_potential_interpolator(self.atoms, self._charge_density)
         h = min(self.sampling)

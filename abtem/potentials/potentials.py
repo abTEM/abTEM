@@ -23,7 +23,7 @@ from abtem.potentials.atom import AtomicPotential
 from abtem.potentials.infinite import infinite_potential_projections, calculate_scattering_factors
 from abtem.potentials.temperature import AbstractFrozenPhonons, DummyFrozenPhonons
 from abtem.structures.slicing import SliceIndexedAtoms, SlicedAtoms, _validate_slice_thickness
-from abtem.structures.structures import is_cell_orthogonal
+from abtem.structures.structures import is_cell_orthogonal, orthogonalize_cell
 
 
 class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
@@ -159,9 +159,14 @@ class AbstractPotentialFromAtoms(AbstractPotential):
 
         if box is None:
             if not is_cell_orthogonal(atoms):
-                raise RuntimeError('atoms are not orthogonal')
+                try:
+                    ortho_atoms = orthogonalize_cell(atoms)
+                except:
+                    ortho_atoms = atoms
 
-            box = np.diag(atoms.cell)
+                box = np.diag(ortho_atoms.cell)
+            else:
+                box = np.diag(atoms.cell)
 
         self._box = box
         self._plane = plane
