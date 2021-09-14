@@ -1173,7 +1173,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
     def _max_batch_expansion(self) -> int:
         memory_per_wave = 2 * 4 * self.gpts[0] * self.gpts[1]
         available_memory = .2 * get_available_memory(self._device)
-        return min(int(available_memory / memory_per_wave), len(self))
+        return max(min(int(available_memory / memory_per_wave), len(self)), 1)
 
     def _max_batch_probes(self) -> int:
         max_batch_plane_waves = self._max_batch_expansion()
@@ -1186,6 +1186,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
         if max_batch is None:
             n_batches = 1
         else:
+
             n_batches = (len(self) + (-len(self) % max_batch)) // max_batch
 
         if isinstance(pbar, bool):
