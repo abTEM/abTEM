@@ -11,7 +11,7 @@ from abtem.base_classes import Grid
 from abtem.device import get_device_function
 from abtem.potentials import AbstractPotentialBuilder, PotentialArray, _disc_meshgrid, pad_atoms, \
     PotentialIntegrator
-from abtem.structures import orthogonalize_cell
+from abtem.structures import orthogonalize_cell, rotate_atoms_to_plane, plane_to_axes
 from abtem.utils import subdivide_into_batches
 
 try:
@@ -186,17 +186,23 @@ class GPAWPotential(AbstractPotentialBuilder):
                  periodic_z: bool = True,
                  slice_thickness=.5,
                  core_size=.005,
+                 plane='xy',
                  storage='cpu',
                  precalculate=True):
 
         self._calculator = calculator
         self._core_size = core_size
+        self._plane = plane
 
         if orthogonal_cell is None:
-            thickness = calculator.atoms.cell[2, 2]
-            nz = calculator.hamiltonian.finegd.N_c[2]
-            extent = np.diag(orthogonalize_cell(calculator.atoms.copy()).cell)[:2]
+            atoms = rotate_atoms_to_plane(calculator.atoms, plane)
+            thickness = atoms.cell[2, 2]
+            nz = calculator.hamiltonian.finegd.N_c[plane_to_axes(plane)[-1]]
+            extent = np.diag(orthogonalize_cell(atoms.copy()).cell)[:2]
         else:
+            if plane != 'xy':
+                raise NotImplementedError()
+
             thickness = orthogonal_cell[2]
             nz = calculator.hamiltonian.finegd.N_c / np.linalg.norm(calculator.atoms.cell, axis=0) * orthogonal_cell[2]
             nz = int(np.ceil(np.max(nz)))
@@ -249,9 +255,9 @@ class GPAWPotential(AbstractPotentialBuilder):
         if last_slice is None:
             last_slice = len(self)
 
-        old_cell = self._calculator.atoms.cell
+        atoms = rotate_atoms_to_plane(self._calculator.atoms.copy(), self._plane)
+        old_cell = atoms.cell
 
-        atoms = self._calculator.atoms.copy()
         atoms.set_tags(range(len(atoms)))
 
         if self._orthogonal_cell is None:
@@ -262,7 +268,10 @@ class GPAWPotential(AbstractPotentialBuilder):
 
         valence = self._calculator.get_electrostatic_potential()
         new_gpts = self.gpts + (sum(self._slice_vertical_voxels),)
-        array = valence
+
+        axes = plane_to_axes(self._plane)
+        array = np.moveaxis(valence, axes[0], 0)
+        array = np.moveaxis(array, axes[1], 1)
 
         from scipy.interpolate import RegularGridInterpolator
 

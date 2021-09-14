@@ -279,6 +279,38 @@ def pad_atoms(atoms: Atoms, margin: float, directions='xy', in_place=False):
     return atoms
 
 
+def plane_to_axes(plane):
+    """Internal function for extracting axes from a plane."""
+    axes = ()
+    last_axis = [0, 1, 2]
+    for axis in list(plane):
+        if axis == 'x':
+            axes += (0,)
+            last_axis.remove(0)
+        if axis == 'y':
+            axes += (1,)
+            last_axis.remove(1)
+        if axis == 'z':
+            axes += (2,)
+            last_axis.remove(2)
+    return axes + (last_axis[0],)
+
+
+def rotate_atoms_to_plane(atoms, plane='xy'):
+    if plane == 'xy':
+        return atoms
+
+    axes = plane_to_axes(plane)
+
+    positions = atoms.positions[:, axes]
+    cell = atoms.cell[:, axes]
+
+    atoms = atoms.copy()
+    atoms.positions[:] = positions
+    atoms.cell[:] = cell
+    return standardize_cell(atoms)
+
+
 def flip_atoms(atoms):
     atoms = atoms.copy()
     atoms.positions[:] = atoms.cell[2, 2] - atoms.positions[:]
