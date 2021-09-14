@@ -1,16 +1,19 @@
 """Module for plotting atoms, images, line scans, and diffraction patterns."""
 from collections.abc import Iterable
+from typing import Union, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 from ase.data import covalent_radii, chemical_symbols
 from ase.data.colors import jmol_colors
 from matplotlib.collections import PatchCollection
-from matplotlib.patches import Circle
-from abtem.visualize.utils import format_label
-from typing import Union, Tuple
 from matplotlib.lines import Line2D
+from matplotlib.patches import Circle
+from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.spatial.distance import pdist
+
 from abtem.visualize.utils import domain_coloring
+from abtem.visualize.utils import format_label
 
 #: Array to facilitate the display of cell boundaries.
 _cube = np.array([[[0, 0, 0], [0, 0, 1]],
@@ -42,6 +45,33 @@ def _plane2axes(plane):
             axes += (2,)
             last_axis.remove(2)
     return axes + (last_axis[0],)
+
+
+def label_to_index_generator(labels, first_label=0):
+    labels = labels.flatten()
+    labels_order = labels.argsort()
+    sorted_labels = labels[labels_order]
+    indices = np.arange(0, len(labels) + 1)[labels_order]
+    index = np.arange(first_label, np.max(labels) + 1)
+    lo = np.searchsorted(sorted_labels, index, side='left')
+    hi = np.searchsorted(sorted_labels, index, side='right')
+    for i, (l, h) in enumerate(zip(lo, hi)):
+        yield indices[l:h]
+
+
+def merge_close_points(points, distance):
+    if len(points) < 2:
+        return points, np.arange(len(points))
+
+    clusters = fcluster(linkage(pdist(points), method='complete'), distance, criterion='distance')
+    new_points = np.zeros_like(points)
+    indices = np.zeros(len(points), dtype=np.int)
+    k = 0
+    for i, cluster in enumerate(label_to_index_generator(clusters, 1)):
+        new_points[i] = np.mean(points[cluster], axis=0)
+        indices[i] = np.min(indices)
+        k += 1
+    return new_points[:k], indices[:k]
 
 
 def show_atoms(atoms, repeat: Tuple[int, int] = (1, 1), scans=None, plane: Union[Tuple[float, float], str] = 'xy',
@@ -90,6 +120,7 @@ def show_atoms(atoms, repeat: Tuple[int, int] = (1, 1), scans=None, plane: Union
 
 
 def _show_atoms_2d(atoms, scans=None, plane: Union[Tuple[float, float], str] = 'xy', ax=None, scale_atoms: float = .5,
+
                    title: str = None, numbering: bool = False, figsize=None, legend=False):
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
@@ -105,6 +136,10 @@ def _show_atoms_2d(atoms, scans=None, plane: Union[Tuple[float, float], str] = '
         positions = atoms.positions[:, axes[:2]]
         order = np.argsort(atoms.positions[:, axes[2]])
         positions = positions[order]
+
+        #distance = .1
+        #positions, indices = merge_close_points(positions, distance)
+
 
         colors = jmol_colors[atoms.numbers[order]]
         sizes = covalent_radii[atoms.numbers[order]] * scale_atoms
