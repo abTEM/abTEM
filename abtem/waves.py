@@ -550,7 +550,7 @@ class Waves(_WavesLike):
         """
 
         with h5py.File(path, 'w') as f:
-            f.create_dataset('array', data=self.array)
+            f.create_dataset('array', data=asnumpy(self.array))
             f.create_dataset('energy', data=self.energy)
             f.create_dataset('extent', data=self.extent)
 

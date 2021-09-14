@@ -1176,7 +1176,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         """
         if format == "hdf5":
             with h5py.File(path, 'w') as f:
-                f.create_dataset('array', data=self.array)
+                f.create_dataset('array', data=asnumpy(self.array))
                 f.create_dataset('slice_thicknesses', data=self._slice_thicknesses)
                 f.create_dataset('extent', data=self.extent)
         elif format == "hspy":
