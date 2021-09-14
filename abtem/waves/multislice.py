@@ -136,10 +136,6 @@ def multislice(waves: Union['Waves', 'SMatrixArray'],
 
     aa_kernel = antialias_kernel(waves.gpts, waves.sampling, xp)
 
-    # import matplotlib.pyplot as plt
-    # plt.imshow(aa_kernel)
-    # plt.show()
-
     def _fresnel(gpts, sampling, dz, aa_kernel, xp):
         return fresnel(gpts, sampling, dz, xp) * aa_kernel
 
