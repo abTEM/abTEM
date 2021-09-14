@@ -253,9 +253,8 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
             url to which the data is saved.
         """
 
-        self.array.to_zarr(url, component='array', overwrite=overwrite)
-
         with zarr.open(url, mode='w') as root:
+            self.array.to_zarr(url, component='array', overwrite=overwrite)
             root.attrs['energy'] = self.energy
             root.attrs['extent'] = self.extent
 
