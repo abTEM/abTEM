@@ -15,15 +15,16 @@ from ase import Atoms
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
 
-def squared_wavenumbers(shape, box):
-    Lx, Ly, Lz = box
-    k, l, m = (np.fft.fftfreq(n, d=1 / n) for n in shape)
-    k2 = k[:, None, None] ** 2 / Lx ** 2 + l[None, :, None] ** 2 / Ly ** 2 + m[None, None, :] ** 2 / Lz ** 2
-    return 2 ** 2 * np.pi ** 2 * k2
+def spatial_frequencies(shape, cell):
+    kx, ky, kz = np.meshgrid(*(np.fft.fftfreq(n, d=1 / n) for n in shape), indexing='ij')
+    kp = np.array([kx.ravel(), ky.ravel(), kz.ravel()]).T
+    kx, ky, kz = np.dot(kp, cell.reciprocal()).T
+    kx, ky, kz = kx.reshape(shape), ky.reshape(shape), kz.reshape(shape)
+    return kx, ky, kz
 
 
-def _solve_fourier_space(charge, k2):
-    # k2 = squared_wavenumbers(charge.shape, box)
+def _solve_fourier_space(charge, kx, ky, kz):
+    k2 = 2 ** 2 * np.pi ** 2 * (kx ** 2 + ky ** 2 + kz ** 2)
     V = np.zeros(charge.shape, dtype=np.complex)
 
     nonzero = np.ones_like(V, dtype=bool)
@@ -36,49 +37,14 @@ def _solve_fourier_space(charge, k2):
     return V
 
 
-def map_coordinates(array, old_cell, new_cell, new_gpts, offset=(0., 0., 0.)):
-    padded_array = np.zeros((array.shape[0] + 1, array.shape[1] + 1, array.shape[2] + 1))
-    padded_array[:-1, :-1, :-1] = array
-    padded_array[-1] = padded_array[0]
-    padded_array[:, -1] = padded_array[:, 0]
-    padded_array[:, :, -1] = padded_array[:, :, 0]
-
-    x = np.linspace(0, 1, padded_array.shape[0], endpoint=True)
-    y = np.linspace(0, 1, padded_array.shape[1], endpoint=True)
-    z = np.linspace(0, 1, padded_array.shape[2], endpoint=True)
-
-    interpolator = RegularGridInterpolator((x, y, z), padded_array)
-
-    x = np.linspace(0, 1, new_gpts[0], endpoint=False)
-    y = np.linspace(0, 1, new_gpts[1], endpoint=False)
-    z = np.linspace(0, 1, new_gpts[2], endpoint=False)
-
-    x, y, z = np.meshgrid(x, y, z, indexing='xy')
-
-    points = np.array([x.ravel(), y.ravel(), z.ravel()]).T
-    points = np.dot(points, new_cell) + offset
-
-    P_inv = np.linalg.inv(np.array(old_cell))
-    scaled_points = np.dot(points, P_inv) % 1.0
-    interpolated = interpolator(scaled_points)
-    return interpolated.reshape(new_gpts)
-
-
 def solve_poisson_equation(charge_density, cell):
-    box = np.diag(cell)
-    return _solve_fourier_space(np.fft.fftn(charge_density), box)
+    kx, ky, kz = spatial_frequencies(charge_density.shape, cell)
+    return _solve_fourier_space(np.fft.fftn(charge_density), kx, ky, kz)
 
 
 def solve_point_charges(atoms, shape=None, array=None, width=0.):
     if array is None:
         array = np.zeros(shape, dtype=np.complex64)
-
-    # def fourier_shift(kx, ky, kz, x, y, z):
-    #     return np.exp(-2 * np.pi * 1j * (kx[:, None, None] * x + ky[None, :, None] * y + kz[None, None, :] * z))
-    #
-    # def fourier_gaussian(kx, ky, kz):
-    #     a = np.sqrt(1 / (2 * width ** 2)) / (2 * np.pi)
-    #     return np.exp(- 1 / (4 * a ** 2) * (kx[:, None, None] ** 2 + ky[None, :, None] ** 2 + kz[None, None, :] ** 2))
 
     def fourier_shift(kx, ky, kz, x, y, z):
         return np.exp(-2 * np.pi * 1j * (kx * x + ky * y + kz * z))
@@ -87,15 +53,7 @@ def solve_point_charges(atoms, shape=None, array=None, width=0.):
         a = np.sqrt(1 / (2 * width ** 2)) / (2 * np.pi)
         return np.exp(- 1 / (4 * a ** 2) * (kx ** 2 + ky ** 2 + kz ** 2))
 
-    kx, ky, kz = np.meshgrid(*(np.fft.fftfreq(n, d=1 / n) for n in array.shape), indexing='ij')
-    kp = np.array([kx.ravel(), ky.ravel(), kz.ravel()]).T
-    kx, ky, kz = np.dot(kp, atoms.cell.reciprocal()).T
-
-    kx, ky, kz = kx.reshape(array.shape), ky.reshape(array.shape), kz.reshape(array.shape)
-    k2 = 2 ** 2 * np.pi ** 2 * (kx ** 2 + ky ** 2 + kz ** 2)
-
-    # Lx, Ly, Lz = np.linalg.norm(atoms.cell, axis=0)
-    # kxold, kyold, kzold = (np.fft.fftfreq(n, d=L / n) for n, L in zip(array.shape, (Lx, Ly, Lz)))
+    kx, ky, kz = spatial_frequencies(array.shape, atoms.cell)
 
     pixel_volume = np.prod(np.diag(atoms.cell)) / np.prod(array.shape)
     for atom in atoms:
@@ -103,13 +61,11 @@ def solve_point_charges(atoms, shape=None, array=None, width=0.):
         x, y, z = atom.position
 
         if width > 0.:
-            # array += scale * (fourier_gaussian(kx, ky, kz) * fourier_shift(kx, ky, kz, x, y, z) +
-            #                  -fourier_shift(kx, ky, kz, x, y, z))
             array += scale * fourier_gaussian(kx, ky, kz) * fourier_shift(kx, ky, kz, x, y, z)
         else:
             array += scale * fourier_shift(kx, ky, kz, x, y, z)
 
-    return _solve_fourier_space(array, k2)
+    return _solve_fourier_space(array, kx, ky, kz)
 
 
 class ChargeDensityPotential(AbstractPotentialFromAtoms):
@@ -148,7 +104,7 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
 
     def _build(self):
         def create_potential_interpolator(atoms, charge_density):
-            #atoms = atoms[atoms.numbers == 0]
+            # atoms = atoms[atoms.numbers == 0]
 
             array = solve_point_charges(atoms,
                                         array=-np.fft.fftn(charge_density),
