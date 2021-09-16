@@ -30,7 +30,7 @@ setup(
         'scipy',
         'numba',
         'imageio',
-        'h5py',
+        'zarr',
         'matplotlib',
         'ase',
         'tqdm',
