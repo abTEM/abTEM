@@ -109,8 +109,16 @@ def _multislice(waves, transmission_functions, slice_thickness, propagator, firs
         #     old_dz = dz
 
         waves *= copy_to_device(t, xp)
-        waves = fft2_convolve(waves, propagator, overwrite_x=False)
+        waves = fft2_convolve(waves, propagator, overwrite_x=True)
     return waves
+
+
+def _run_multislice_precalculated():
+    pass
+
+
+def _run_multislice_generated():
+    pass
 
 
 def multislice(waves: Union['Waves', 'SMatrixArray'],
@@ -121,14 +129,14 @@ def multislice(waves: Union['Waves', 'SMatrixArray'],
     waves.accelerator.check_is_defined()
     waves.grid.check_is_defined()
 
-    try:
-        potential_array = potential.build()
-    except:
+    if hasattr(potential, 'array'):
         potential_array = potential
+    else:
+        potential_array = potential.build()
 
-    try:
+    if hasattr(waves, 'array'):
         waves_array = waves.array
-    except AttributeError:
+    else:
         waves = waves.build()
         waves_array = waves.array
 
