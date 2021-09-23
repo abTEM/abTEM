@@ -3,14 +3,14 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-abTEM: ab initio Transmission Electron Microscopy
-====================================================
+The abTEM code: transmission electron microscopy from first principles
+======================================================================
 **This document is under construction. Please be aware and report issues.**
 
-abTEM provides a Python API for running simulations of Transmission Electron Microscopy images. It is written entirely
-in Python, which enables easy integration with first-principles codes and analysis tools accessible from Python,
-and allows for a simple and intuitive user interface. The computationally demanding parts are implemented using
-jit-compiled Numba code and high-performance libraries, maintaining speed while ensuring portability.
+abTEM provides a Python API for running simulations of (scanning) transmission electron microscopy images and diffraction 
+patterns. It is written entirely in Python, which enables easy integration with first-principles codes and analysis tools 
+accessible from Python, and allows for a simple and intuitive user interface. The computationally demanding parts are 
+implemented using jit-compiled Numba code and high-performance libraries, maintaining speed while ensuring portability.
 
 abTEM works with the Atomic Simulation Environment and the density functional theory code GPAW to provide an seamless
 environment for simulating images from first principles.

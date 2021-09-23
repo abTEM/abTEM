@@ -1,22 +1,25 @@
 About
 =====
 
-abTEM has been developed at the Faculty of Physics of the University of Vienna, Austria. Please consult the credits page
-for information on how to cite abTEM. abTEM and its development are hosted on github. Bugs and feature requests are
-ideally submitted via the github issue tracker.
+abTEM has been developed at the [Faculty of Physics of the University of Vienna](https://physnano.univie.ac.at/research/susi-group/), Austria. 
+Please consult the section below for information on how to cite abTEM. abTEM and its development are hosted on github. Bugs and feature requests are
+ideally submitted via the [GitHub issue tracker](https://github.com/jacobjma/abTEM/issues).
 
 How to cite abTEM
 -----------------
 If you use abTEM and its implemented methods in your research, we kindly ask that you cite the relevant publications::
 
-abTEM implementation (tentative reference)::
+Main citation of the abTEM code::
 
     @article{abtem,
-    title = {abTEM: ab Initio Transmission Electron Microscopy Image Simulation},
+    title = {The abTEM code: transmission electron microscopy from first principles},
     author = {Jacob Madsen and Toma Susi},
-    journal = {Microscopy and Microanalysis},
-    year = {2020},
-    doi = {10.1017/S1431927620014701},
+    journal = {Open Research Europe},
+    volume = {1},
+    issue = {24},
+    pages = {13015},
+    year = {2021},
+    doi = {10.12688/openreseurope.13015.1},
     }
 
 ab initio electrostatic potentials from GPAW::
@@ -63,7 +66,7 @@ The PRISM algorithm by Colin Ophus::
         volume = {3}
     }
 
-The atomic simulation environment (ASE) for setting up atomic structures::
+The Atomic Simulation Environment (ASE) for setting up atomic structures::
 
     @article{ase,
         author={Ask Hjorth Larsen and Jens Jørgen Mortensen and Jakob Blomqvist and Ivano E Castelli and Rune Christensen and Marcin Dułak and Jesper Friis and Michael N Groves and Bjørk Hammer and Cory Hargus and Eric D Hermes and Paul C Jennings and Peter Bjerre Jensen and James Kermode and John R Kitchin and Esben Leonhard Kolsbjerg and Joseph Kubal and Kristen Kaasbjerg and Steen Lysgaard and Jón Bergmann Maronsson and Tristan Maxson and Thomas Olsen and Lars Pastewka and Andrew Peterson and Carsten Rostgaard and Jakob Schiøtz and Ole Schütt and Mikkel Strange and Kristian S Thygesen and Tejs Vegge and Lasse Vilhelmsen and Michael Walter and Zhenhua Zeng and Karsten W Jacobsen},
