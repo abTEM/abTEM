@@ -7,7 +7,7 @@ To install ``abtem`` with pip run::
 
     pip install abtem
 
-This installs ``abtem`` with its strict dependencies (see below); some functionality requires additional actions.
+This installs ``abtem`` with its strict dependencies (see below); some functionality requires additional packages.
 
 For a development installation::
 
