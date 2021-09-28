@@ -6,7 +6,7 @@ from bqplot_image_gl.interacts import MouseInteraction
 from traitlets import HasTraits, Int, default, Bool, List, Float, Instance, observe
 from traittypes import Array
 
-from abtem.visualize.interactive.artists import ScatterArtist, CircleArtist
+from abtem.visualize.interactive.artists import ScatterArtist, CircleArtist, LinesArtist
 from abtem.visualize.interactive.utils import link
 
 
@@ -159,19 +159,30 @@ class BoxSelectPixelTool(HasTraits):
         canvas.figure.interaction = None
 
 
-class SelectPositionTool(HasTraits):
+class SelectPositionTool1d(HasTraits):
     position = Array()
     marker = Bool()
 
-    def __init__(self, allow_drag=True, **kwargs):
-        self._point_artist = ScatterArtist()
+    def __init__(self, allow_drag=True, direction='x', **kwargs):
+        self._point_artist = LinesArtist()
         self._allow_drag = allow_drag
         self._interaction = MouseInteraction()
+        self._direction = direction
         super().__init__(**kwargs)
 
     @default('position')
     def _default_position(self):
-        return np.array((0., 0.))
+        return 0.
+
+    @observe('position')
+    def _update_line(self, *args):
+        if self.marker:
+            if self._direction == 'y':
+                self._point_artist.y = [self.position, self.position]
+                self._point_artist.x = [-100, 100]
+            else:
+                self._point_artist.x = [self.position, self.position]
+                self._point_artist.y = [-100, 100]
 
     def activate(self, canvas):
         if self.marker:
@@ -182,11 +193,7 @@ class SelectPositionTool(HasTraits):
 
         def on_mouse_msg(_, change, __):
             if change['event'] in ('dragmove', 'click'):
-                self.position = np.array([change['domain']['x'], change['domain']['y']])
-
-                if self.marker:
-                    self._point_artist.x = [self.position[0]]
-                    self._point_artist.y = [self.position[1]]
+                self.position = change['domain'][self._direction]
 
         canvas.figure.interaction = self._interaction
 
