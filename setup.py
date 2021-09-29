@@ -26,7 +26,7 @@ setup(
     platforms=['any'],
     python_requires='>=3.6',
     install_requires=[
-        'numpy',
+        'numpy>=1.17,<=1.21.0',
         'scipy',
         'numba',
         'imageio',
