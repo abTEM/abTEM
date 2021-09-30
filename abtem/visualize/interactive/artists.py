@@ -511,8 +511,12 @@ class MeasurementArtist1d(Artist):
         return self._lines_artist.limits
 
 
+from abtem.visualize.mpl import _plane2axes
+
+
 class AtomsArtist(Artist):
     atoms = Instance(Atoms)
+    direction = Unicode('xy')
 
     def __init__(self, scale_atoms=500, **kwargs):
         self._scatter_artist = ScatterArtist()
@@ -522,8 +526,8 @@ class AtomsArtist(Artist):
 
         link((self._scatter_artist._mark, 'visible'), (self, 'visible'))
 
-        self.x_label = 'x [Å]'
-        self.y_label = 'y [Å]'
+        self.x_label = f'{self.direction[0]} [Å]'
+        self.y_label = f'{self.direction[0]} [Å]'
 
     def _add_to_canvas(self, canvas):
         self._scatter_artist._add_to_canvas(canvas)
@@ -534,9 +538,10 @@ class AtomsArtist(Artist):
 
     @observe('atoms')
     def _observe_atoms(self, change):
-        x, y = self.atoms.get_positions()[:, :2].T
-        self._scatter_artist.x = x
-        self._scatter_artist.y = y
+        axes = _plane2axes(self.direction)
+        self._scatter_artist.x = self.atoms.get_positions()[:, axes[0]]
+        self._scatter_artist.y = self.atoms.get_positions()[:, axes[1]]
+
         colors = ['#%02x%02x%02x' % tuple((jmol_colors[i] * 255).astype(np.int)) for i in self.atoms.numbers]
         sizes = [int(covalent_radii[i] * self._scale_atoms) for i in self.atoms.numbers]
         self._scatter_artist._mark.colors = colors
