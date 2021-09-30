@@ -64,9 +64,16 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
 
     """
 
-    def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 2, focal_spread: float = 0.,
-                 angular_spread: float = 0., gaussian_spread: float = 0., energy: float = None,
-                 parameters: Mapping[str, float] = None, **kwargs):
+    def __init__(self,
+                 semiangle_cutoff: float = np.inf,
+                 rolloff: float = 2,
+                 focal_spread: float = 0.,
+                 angular_spread: float = 0.,
+                 gaussian_spread: float = 0.,
+                 energy: float = None,
+                 parameters: Mapping[str, float] = None,
+                 aperture=None,
+                 **kwargs):
 
         for key in kwargs.keys():
             if (key not in polar_symbols) and (key not in polar_aliases.keys()):
@@ -82,7 +89,13 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         self._focal_spread = focal_spread
         self._angular_spread = angular_spread
         self._gaussian_spread = gaussian_spread
+
         self._parameters = dict(zip(polar_symbols, [0.] * len(polar_symbols)))
+
+        self._aperture = aperture
+
+        if self._aperture is not None:
+            self._aperture.accelerator.match(self)
 
         if parameters is None:
             parameters = {}
@@ -203,7 +216,13 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
 
         return parameters
 
-    def evaluate_aperture(self, alpha: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+    def evaluate_aperture(self,
+                          alpha: Union[float, np.ndarray],
+                          phi: Union[float, np.ndarray] = None) -> Union[float, np.ndarray]:
+
+        if self._aperture is not None:
+            return self._aperture.evaluate(alpha, phi)
+
         xp = get_array_module(alpha)
         semiangle_cutoff = self.semiangle_cutoff / 1000
 
@@ -211,7 +230,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
             return xp.ones_like(alpha)
 
         if self.rolloff > 0.:
-            rolloff = self.rolloff / 1000. #* semiangle_cutoff
+            rolloff = self.rolloff / 1000.  # * semiangle_cutoff
             array = .5 * (1 + xp.cos(np.pi * (alpha - semiangle_cutoff + rolloff) / rolloff))
             array[alpha > semiangle_cutoff] = 0.
             array = xp.where(alpha > semiangle_cutoff - rolloff, array, xp.ones_like(alpha, dtype=xp.float32))
@@ -309,8 +328,8 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
     def evaluate(self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
         array = self.evaluate_aberrations(alpha, phi)
 
-        if self.semiangle_cutoff < np.inf:
-            array *= self.evaluate_aperture(alpha)
+        if (self.semiangle_cutoff < np.inf) or (self._aperture is not None):
+            array *= self.evaluate_aperture(alpha, phi)
 
         if self.focal_spread > 0.:
             array *= self.evaluate_temporal_envelope(alpha)
@@ -323,7 +342,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
 
         return array
 
-    def evaluate_on_grid(self, gpts=None, extent=None, sampling=None, xp=np):
+    def _polar_coordinates(self, gpts=None, extent=None, sampling=None, xp=np):
         grid = Grid(gpts=gpts, extent=extent, sampling=sampling)
 
         gpts = grid.gpts
@@ -334,8 +353,10 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         ky = ky.reshape((1, 1, -1))
         kx = xp.asarray(kx)
         ky = xp.asarray(ky)
-        alpha, phi = polar_coordinates(xp.asarray(kx * self.wavelength), xp.asarray(ky * self.wavelength))
-        return self.evaluate(alpha, phi)
+        return polar_coordinates(xp.asarray(kx * self.wavelength), xp.asarray(ky * self.wavelength))
+
+    def evaluate_on_grid(self, gpts=None, extent=None, sampling=None, xp=np):
+        return self.evaluate(*self._polar_coordinates(gpts, extent, sampling, xp))
 
     def profiles(self, max_semiangle: float = None, phi: float = 0.):
         if max_semiangle is None:

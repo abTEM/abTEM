@@ -753,7 +753,7 @@ class Probe(_Scanable, HasEventMixin):
                  **kwargs):
 
         if ctf is None:
-            ctf = CTF(energy=energy, **kwargs)
+            ctf = CTF(energy=energy, aperture=aperture, **kwargs)
 
         if ctf.energy is None:
             ctf.energy = energy
