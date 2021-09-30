@@ -215,7 +215,7 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
                               extra_axes_metadata=self._extra_axes_metadata,
                               antialias_aperture=downsampled_waves.antialias_aperture)
 
-    def multislice(self, potential: AbstractPotential, splits: int = 1):
+    def multislice(self, potential: AbstractPotential, chunks: int = 1):
         """
         Propagate the scattering matrix through the provided potential.
 
@@ -233,11 +233,11 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
         """
 
         if potential.num_frozen_phonons == 1:
-            return multislice(self, potential, splits=splits)
+            return multislice(self, potential, chunks=chunks)
 
         exit_waves = []
         for p in potential.frozen_phonon_potentials():
-            exit_waves.append(multislice(self.copy(), p, splits=splits))
+            exit_waves.append(multislice(self.copy(), p, chunks=chunks))
 
         array = da.stack([exit_wave.array for exit_wave in exit_waves], axis=0)
 
@@ -335,16 +335,21 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
 
         if self.interpolated_gpts != self.gpts:
             windows = []
+
             for positions_block in generate_array_chunks(positions, chunks):
                 crop_corner, size, corners = self._get_minimum_crop(positions_block)
 
                 upper_corner = (crop_corner[0] + size[0], crop_corner[1] + size[1])
 
                 array = wrapped_crop_2d(self.array, crop_corner, upper_corner)
+
                 array = array.rechunk(self.array.chunks[:-3] + self.array.shape[-3:])
+
                 chunks = positions_block.shape[:-1] + self.array.chunks[:-3] + self.interpolated_gpts
 
-                window = array.map_blocks(_reduce_interpolated, positions=positions_block, corners=corners,
+                window = array.map_blocks(_reduce_interpolated,
+                                          positions=positions_block,
+                                          corners=corners,
                                           drop_axis=2 + (len(self.array.shape) - 3),
                                           new_axis=tuple(range(len(positions_block.shape) - 1)),
                                           meta=xp.array((), dtype=xp.complex64), chunks=chunks)
@@ -365,7 +370,8 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
             windows = da.tensordot(coefficients, self.array, axes=[-1, -3])
 
         if len(windows.shape) > 3:
-            windows = da.moveaxis(windows, range(2, len(self.array.shape) - 1), range(0, len(self.array.shape) - 3))
+            #print(range(1, len(self.array.shape) - 2), range(0, len(self.array.shape) - 3))
+            windows = da.moveaxis(windows, range(1, len(self.array.shape) - 2), range(0, len(self.array.shape) - 3))
 
         return Waves(windows, sampling=self.sampling, energy=self.energy, tilt=self.tilt,
                      antialias_aperture=self.antialias_aperture, extra_axes_metadata=axes_metadata)
@@ -403,8 +409,7 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
                               ctf=self.ctf.copy(),
                               extent=self.extent,
                               energy=self.energy,
-                              antialias_aperture=self.antialias_aperture,
-                              device=self.device)
+                              antialias_aperture=self.antialias_aperture)
 
     def copy(self):
         """Make a copy."""
@@ -548,8 +553,8 @@ class SMatrix(AbstractScannedWaves):
 
     def multislice(self,
                    potential: AbstractPotential,
-                   max_batch: int = None,
-                   pbar: Union[bool] = True):
+                   chunks=1,
+                   ):
         """
         Build scattering matrix and propagate the scattering matrix through the provided potential.
 
@@ -570,7 +575,7 @@ class SMatrix(AbstractScannedWaves):
 
         potential = self._validate_potential(potential)
         self.grid.check_is_defined()
-        return self.build().multislice(potential)
+        return self.build().multislice(potential, chunks=chunks)
 
     def scan(self,
              scan: AbstractScan,

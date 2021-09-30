@@ -9,7 +9,7 @@ from abtem.basic.complex import complex_exponential
 from abtem.basic.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
 from abtem.basic.event import Event, HasEventMixin, watched_method, watched_property
 from abtem.basic.grid import Grid, polar_spatial_frequencies
-from abtem.measure import LineProfiles
+from abtem.measure import RadialFourierSpaceLineProfiles
 
 #: Symbols for the polar representation of all optical aberrations up to the fifth order.
 polar_symbols = ('C10', 'C12', 'phi12',
@@ -348,7 +348,9 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
             else:
                 max_semiangle = self._semiangle_cutoff * 1.6
 
-        alpha = np.linspace(0, max_semiangle / 1000., 500)
+        sampling = max_semiangle / 1000. / 1000.
+
+        alpha = np.arange(0, max_semiangle / 1000., sampling)
 
         aberrations = self.evaluate_aberrations(alpha, phi)
         aperture = self.evaluate_aperture(alpha)
@@ -357,18 +359,13 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         gaussian_envelope = self.evaluate_gaussian_envelope(alpha)
         envelope = aperture * temporal_envelope * spatial_envelope * gaussian_envelope
 
-
         profiles = {}
-        profiles['ctf'] = LineProfiles(aberrations.imag * envelope, calibrations=[calibration], name='CTF')
-        # profiles['aperture'] = Measurement(aperture, calibrations=[calibration], name='Aperture')
-        # profiles['temporal_envelope'] = Measurement(temporal_envelope,
-        #                                             calibrations=[calibration],
-        #                                             name='Temporal')
-        # profiles['spatial_envelope'] = Measurement(spatial_envelope, calibrations=[calibration],
-        #                                            name='Spatial')
-        # profiles[' '] = Measurement(gaussian_envelope, calibrations=[calibration],
-        #                             name='Gaussian')
-        # profiles['envelope'] = Measurement(envelope, calibrations=[calibration], name='Envelope')
+        profiles['ctf'] = RadialFourierSpaceLineProfiles(aberrations.imag * envelope, sampling=sampling)
+        profiles['aperture'] = RadialFourierSpaceLineProfiles(aperture, sampling=sampling)
+        profiles['envelope'] = RadialFourierSpaceLineProfiles(envelope, sampling=sampling)
+        profiles['temporal_envelope'] = RadialFourierSpaceLineProfiles(temporal_envelope, sampling=sampling)
+        profiles['spatial_envelope'] = RadialFourierSpaceLineProfiles(spatial_envelope, sampling=sampling)
+        profiles['gaussian_envelope'] = RadialFourierSpaceLineProfiles(gaussian_envelope, sampling=sampling)
         return profiles
 
     def apply(self, waves, interact=False, sliders=None, throttling=0.):
@@ -407,39 +404,6 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
 
             return waves.apply_ctf(self)
 
-    def interact(self, max_semiangle: float = None, phi: float = 0., sliders=None, throttling=False):
-        from abtem.visualize.interactive.utils import quick_sliders, throttle
-        from abtem.visualize.interactive import Canvas, MeasurementArtist1d
-        import ipywidgets as widgets
-
-        canvas = Canvas(lock_scale=False)
-        ctf_artist = MeasurementArtist1d()
-        envelope_artist = MeasurementArtist1d()
-        canvas.artists = {'ctf': ctf_artist, 'envelope': envelope_artist}
-        canvas.y_scale.min = -1.1
-        canvas.y_scale.max = 1.1
-
-        def callback(*args):
-            profiles = self.profiles(max_semiangle, phi)
-
-            for name, artist in canvas.artists.items():
-                artist.measurement = profiles[name]
-
-        if throttling:
-            callback = throttle(throttling)(callback)
-
-        self.observe(callback)
-
-        callback()
-        canvas.adjust_limits_to_artists(adjust_y=False)
-        canvas.adjust_labels_to_artists()
-
-        if sliders:
-            sliders = quick_sliders(self, **sliders)
-            return widgets.HBox([canvas.figure, widgets.VBox(sliders)])
-        else:
-            return canvas.figure
-
     def show(self, max_semiangle: float = None, phi: float = 0, ax=None, **kwargs):
         """
         Show the contrast transfer function.
@@ -466,7 +430,9 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
 
         for key, profile in self.profiles(max_semiangle, phi).items():
             if not np.all(profile.array == 1.):
-                ax, lines = profile.show(legend=True, ax=ax, **kwargs)
+                ax, lines = profile.show(ax=ax, label=key, **kwargs)
+
+        ax.legend()
 
         return ax
 

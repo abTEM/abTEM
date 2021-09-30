@@ -1,7 +1,7 @@
 """Module to describe electron waves and their propagation."""
 from collections import Iterable
 from copy import copy
-from typing import Union, Sequence, Tuple, List
+from typing import Union, Sequence, Tuple
 
 import dask
 import dask.array as da
@@ -164,7 +164,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
                                                    axes_metadata=axes_metadata)
 
         if block_direct:
-            diffraction_patterns = diffraction_patterns.block_direct()
+            diffraction_patterns = diffraction_patterns.block_direct(radius=block_direct)
 
         return diffraction_patterns
 
@@ -210,7 +210,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
                               tilt=self.tilt)
 
     @computable
-    def multislice(self, potential: AbstractPotential, splits=1) -> 'Waves':
+    def multislice(self, potential: AbstractPotential, chunks=1) -> 'Waves':
         """
         Propagate and transmit wave function through the provided potential.
 
@@ -230,11 +230,11 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         potential = self._validate_potential(potential)
 
         if potential.num_frozen_phonons == 1:
-            return multislice(self, potential, splits=splits)
+            return multislice(self, potential, chunks=chunks)
 
         exit_waves = []
         for p in potential.frozen_phonon_potentials():
-            exit_waves.append(multislice(self.copy(), p, splits=splits))
+            exit_waves.append(multislice(self.copy(), p, chunks=chunks))
 
         array = da.stack([exit_wave.array for exit_wave in exit_waves], axis=0)
 
@@ -340,7 +340,7 @@ class PlaneWave(WavesLikeMixin):
         self._device = device
 
     @computable
-    def multislice(self, potential: Union[AbstractPotential, Atoms], splits=1) -> Waves:
+    def multislice(self, potential: Union[AbstractPotential, Atoms], chunks=1) -> Waves:
         """
         Build plane wave function and propagate it through the potential. The grid of the two will be matched.
 
@@ -361,7 +361,7 @@ class PlaneWave(WavesLikeMixin):
             potential = Potential(atoms=potential)
 
         potential.grid.match(self)
-        return self.build(compute=False).multislice(potential, splits=splits, compute=False)
+        return self.build(compute=False).multislice(potential, chunks=chunks, compute=False)
 
     @computable
     def build(self) -> Waves:
@@ -518,7 +518,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
              scan: AbstractScan,
              detectors: Union[AbstractDetector, Sequence[AbstractDetector]],
              potential: Union[Atoms, AbstractPotential],
-             chunk_size: int = None,
+             chunks: int = None,
              ):
 
         """
@@ -548,30 +548,41 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         exit_waves = self.multislice(potential=potential, positions=scan)
 
         return exit_waves.detect(detectors)
-        # detectors = self._validate_detectors(detectors)
-        #
-        # positions = da.from_array(scan.get_positions(), chunks=(chunk_size, 2))
-        # exit_probes = self.multislice(positions, potential)
-        #
-        # measurements = []
-        #
-        # for i, potential_config in enumerate(potential.frozen_phonon_potentials()):
-        #     for detector in detectors:
-        #         if i == 0:
-        #             measurement = detector.detect(exit_probes, scan) / potential.num_frozen_phonon_configs
-        #             measurements.append(measurement)
-        #         else:
-        #             measurements[i] += detector.detect(exit_probes, scan) / potential.num_frozen_phonon_configs
-        #
-        # if len(measurements) == 1:
-        #     return measurements[0]
-        # else:
-        #     return measurements
 
     def profile(self, angle=0.):
         self.grid.check_is_defined()
-        measurement = self.build((self.extent[0] / 2, self.extent[1] / 2)).intensity()
-        return probe_profile(measurement, angle=angle)
+
+        def _line_intersect_rectangle(point0, point1, lower_corner, upper_corner):
+            if point0[0] == point1[0]:
+                return (point0[0], lower_corner[1]), (point0[0], upper_corner[1])
+
+            m = (point1[1] - point0[1]) / (point1[0] - point0[0])
+
+            def y(x):
+                return m * (x - point0[0]) + point0[1]
+
+            def x(y):
+                return (y - point0[1]) / m + point0[0]
+
+            if y(0) < lower_corner[1]:
+                intersect0 = (x(lower_corner[1]), y(x(lower_corner[1])))
+            else:
+                intersect0 = (0, y(lower_corner[0]))
+
+            if y(upper_corner[0]) > upper_corner[1]:
+                intersect1 = (x(upper_corner[1]), y(x(upper_corner[1])))
+            else:
+                intersect1 = (upper_corner[0], y(upper_corner[0]))
+
+            return intersect0, intersect1
+
+        point1 = np.array((self.extent[0] / 2, self.extent[1] / 2))
+
+        measurement = self.build(point1).intensity()
+
+        point2 = point1 + np.array([np.cos(np.pi * angle / 180), np.sin(np.pi * angle / 180)])
+        point1, point2 = _line_intersect_rectangle(point1, point2, (0., 0.), self.extent)
+        return measurement.interpolate_line(point1, point2)
 
     def interact(self, sliders=None, profile=False, throttling: float = 0.01):
         from abtem.visualize.interactive.utils import quick_sliders, throttle
@@ -611,8 +622,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
                               extent=self.extent,
                               sampling=self.sampling,
                               energy=self.energy,
-                              ctf=self.ctf.copy(),
-                              device=self.device)
+                              ctf=self.ctf.copy())
 
     def show(self, **kwargs):
         """

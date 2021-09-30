@@ -3,7 +3,6 @@ from abc import ABCMeta, abstractmethod
 from copy import copy
 from typing import Union, Sequence, Tuple
 
-import h5py
 import numpy as np
 from ase import Atom
 from matplotlib.patches import Rectangle
@@ -165,7 +164,6 @@ class LineScan(AbstractScan, HasGridMixin):
     def margin(self) -> float:
         return self._margin
 
-
     @property
     def margin_start(self) -> Tuple[float, float]:
         return self.start[0] - self.direction[0] * self.margin, self.start[1] - self.direction[1] * self.margin
@@ -281,8 +279,8 @@ class GridScan(HasGridMixin, AbstractScan):
 
     @property
     def axes_metadata(self):
-        return [{'label': 'x', 'type': 'gridscan', 'sampling': self.sampling[0], 'offset': self.start[0]},
-                {'label': 'y', 'type': 'gridscan', 'sampling': self.sampling[1], 'offset': self.start[1]}]
+        return [{'label': 'x', 'type': 'gridscan', 'sampling': float(self.sampling[0]), 'offset': float(self.start[0])},
+                {'label': 'y', 'type': 'gridscan', 'sampling': float(self.sampling[1]), 'offset': float(self.start[1])}]
 
     def get_positions(self) -> np.ndarray:
         x = np.linspace(self.start[0], self.end[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=np.float32)
