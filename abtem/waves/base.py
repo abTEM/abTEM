@@ -45,6 +45,9 @@ class HasBeamTiltMixin:
         self.tilt = value
 
 
+
+
+
 class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAntialiasApertureMixin):
 
     # @abstractmethod
