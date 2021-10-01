@@ -540,7 +540,7 @@ class AtomsArtist(Artist):
     def limits(self):
         return self._scatter_artist.limits
 
-    @observe('atoms', 'scale')
+    @observe('atoms', 'scale', 'plane')
     def _observe_atoms(self, change):
         axes = _plane2axes(self.plane)
 
