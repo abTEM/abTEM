@@ -10,7 +10,7 @@ from abtem.basic.grid import spatial_frequencies, polar_spatial_frequencies
 def _sinc(gpts, sampling, xp):
     kx, ky = spatial_frequencies(gpts, sampling, return_grid=False, xp=xp, delayed=False)
     sinc = np.sinc(np.sqrt((kx[:, None] * sampling[0]) ** 2 + (ky[None] * sampling[1]) ** 2))
-    return sinc * sampling[0] * sampling[1] * kappa
+    return sinc * sampling[0] * sampling[1]
 
 
 def calculate_scattering_factors(gpts, sampling, atomic_numbers, xp='numpy', parametrization='kirkland'):
@@ -71,4 +71,8 @@ def infinite_potential_projections(positions, numbers, slice_idx, shape, samplin
 
         array += fft2(temp, overwrite_x=False) * scattering_factors[i]
 
-    return ifft2(array, overwrite_x=False).real
+    array = ifft2(array, overwrite_x=False).real
+
+    array -= array.min()
+
+    return array

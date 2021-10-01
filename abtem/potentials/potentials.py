@@ -2,7 +2,6 @@
 from abc import ABCMeta, abstractmethod
 from copy import copy
 from typing import Union, Sequence, Tuple
-from numbers import Number
 
 import dask
 import dask.array as da
@@ -12,8 +11,8 @@ from ase import Atoms
 
 from abtem.basic.antialias import antialias_kernel
 from abtem.basic.backend import get_array_module, xp_to_str
-from abtem.basic.dask import computable
 from abtem.basic.complex import complex_exponential
+from abtem.basic.dask import computable, HasDaskArray, requires_dask_array
 from abtem.basic.energy import HasAcceleratorMixin, Accelerator, energy2sigma
 from abtem.basic.fft import fft2_convolve
 from abtem.basic.grid import Grid, HasGridMixin
@@ -33,8 +32,13 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
     Base class common for all potentials.
     """
 
-    def __init__(self, slice_thickness):
+    def __init__(self, slice_thickness, precalculate):
         self._slice_thickness = slice_thickness
+        self._precalculate = precalculate
+
+    @property
+    def precalculate(self):
+        return self._precalculate
 
     @property
     @abstractmethod
@@ -98,56 +102,10 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         return copy(self)
 
 
-# class AbstractPotentialBuilder(AbstractPotential):
-#     """Potential builder abstract class."""
-#
-#     def __init__(self, slice_thickness, chunks: int = 1, device='cpu', storage='cpu'):
-#         self._chunks = chunks
-#         self._storage = storage
-#         self._device = device
-#         self._slice_thickness = slice_thickness
-#         super().__init__()
-#
-#     @property
-#     def storage(self):
-#         return self._storage
-#
-#     @property
-#     def device(self):
-#         return self._device
-#
-#     @property
-#     def num_slices(self):
-#         """The number of projected potential slices."""
-#         return self._slice_thickness
-#
-#     @property
-#     def slice_thickness(self):
-#         """The thickness of the projected potential slices."""
-#         return self._slice_thickness
-#
-#     @slice_thickness.setter
-#     def slice_thickness(self, value):
-#         if isinstance(value, Number):
-#             num_slices = int(np.ceil(self.thickness / value))
-#             value = np.full(num_slices, self.thickness / num_slices)
-#
-#         self._slice_thickness = value
-#
-#     def __getitem__(self, items):
-#         return self.build()[items]
-#
-#     @abstractmethod
-#     def build(self):
-#         pass
-#
-#     def project(self):
-#         return self.build().project()
-
-
 class AbstractPotentialFromAtoms(AbstractPotential):
 
-    def __init__(self, atoms, gpts, sampling, slice_thickness, box=None, plane='xy', origin=(0., 0., 0.)):
+    def __init__(self, atoms, gpts, sampling, slice_thickness, box=None, plane='xy', origin=(0., 0., 0.),
+                 precalculate=True):
 
         if np.abs(atoms.cell[2, 2]) < 1e-12:
             raise RuntimeError('cell has no thickness')
@@ -173,7 +131,7 @@ class AbstractPotentialFromAtoms(AbstractPotential):
         self._origin = origin
         self._grid = Grid(extent=box[:2], gpts=gpts, sampling=sampling, lock_extent=True)
         slice_thickness = _validate_slice_thickness(slice_thickness, box[2])
-        super().__init__(slice_thickness=slice_thickness)
+        super().__init__(slice_thickness=slice_thickness, precalculate=precalculate)
 
     @property
     def plane(self):
@@ -247,8 +205,9 @@ class Potential(AbstractPotentialFromAtoms):
                  sampling: Union[float, Tuple[float, float]] = None,
                  slice_thickness: Union[float, np.ndarray] = .5,
                  parametrization: str = 'lobato',
-                 projection: str = 'finite',
+                 projection: str = 'infinite',
                  chunks: int = 1,
+                 precalculate: bool = True,
                  device: str = 'cpu',
                  plane: str = 'xy',
                  box: Tuple[float, float, float] = None,
@@ -272,7 +231,8 @@ class Potential(AbstractPotentialFromAtoms):
                          slice_thickness=slice_thickness,
                          plane=plane,
                          box=box,
-                         origin=origin)
+                         origin=origin,
+                         precalculate=precalculate)
 
     @property
     def parametrization(self):
@@ -341,6 +301,30 @@ class Potential(AbstractPotentialFromAtoms):
 
         return PotentialArray(da.concatenate(array), self.slice_thickness, extent=self.extent)
 
+    def _generate_infinite(self):
+        xp = get_array_module(self._device)
+
+        # if self._box is not None:
+        #    atoms = cut_cube(self.atoms, box=self._box, plane=self._plane)
+
+        slice_index_atoms = SliceIndexedAtoms(self.atoms, self.num_slices)
+        unique = np.unique(self.atoms.numbers)
+        scattering_factors = calculate_scattering_factors(self.gpts, self.sampling, unique, xp_to_str(xp))
+
+        for first_slice, last_slice in generate_chunks(len(self), chunks=self._chunks):
+            positions, numbers, slice_idx = slice_index_atoms.get_atoms_in_slices(first_slice, last_slice)
+            shape = (last_slice - first_slice,) + self.gpts
+
+            chunk = infinite_potential_projections(positions,
+                                                   numbers,
+                                                   slice_idx,
+                                                   shape,
+                                                   self.sampling,
+                                                   scattering_factors,
+                                                   unique)
+
+            yield PotentialArray(chunk, self.slice_thickness[first_slice:last_slice], extent=self.extent)
+
     def _build_infinite(self):
         xp = get_array_module(self._device)
 
@@ -355,7 +339,8 @@ class Potential(AbstractPotentialFromAtoms):
                                                                                    unique,
                                                                                    xp_to_str(xp))
 
-        scattering_factors = da.from_delayed(scattering_factors, shape=(len(unique),) + self.gpts,
+        scattering_factors = da.from_delayed(scattering_factors,
+                                             shape=(len(unique),) + self.gpts,
                                              meta=xp.array((), dtype=np.float32))
 
         array = []
@@ -384,6 +369,13 @@ class Potential(AbstractPotentialFromAtoms):
         else:
             return self._build_infinite()
 
+    def generate(self):
+        if self._projection == 'finite':
+            raise NotImplementedError
+            # return self._generate_finite()
+        else:
+            return self._generate_infinite()
+
     def frozen_phonon_potentials(self):
         """
         Function to generate scattering potentials for a set of frozen phonon configurations.
@@ -397,7 +389,8 @@ class Potential(AbstractPotentialFromAtoms):
         potentials = []
         for atoms in self.frozen_phonons:
             potential = Potential(atoms, slice_thickness=self.slice_thickness, gpts=self.gpts, chunks=self._chunks,
-                                  device=self._device, projection=self.projection, parametrization=self.parametrization)
+                                  device=self._device, projection=self.projection, parametrization=self.parametrization,
+                                  precalculate=self.precalculate)
             potentials.append(potential)
 
         return potentials
@@ -411,7 +404,7 @@ class Potential(AbstractPotentialFromAtoms):
                               device=self.device)
 
 
-class PotentialArray(AbstractPotential, HasGridMixin):
+class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
     """
     Potential array object
 
@@ -444,29 +437,10 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         self._grid = Grid(extent=extent, gpts=self.array.shape[-2:], sampling=sampling, lock_gpts=True)
         slice_thickness = _validate_slice_thickness(slice_thickness, num_slices=array.shape[0])
 
-        super().__init__(slice_thickness=slice_thickness)
+        super().__init__(slice_thickness=slice_thickness, precalculate=True)
 
     def build(self):
         return self
-
-    def visualize_graph(self, **kwargs):
-        return self.array.visualize()
-
-    @property
-    def array(self):
-        """The potential array."""
-        return self._array
-
-    def compute(self, **kwargs):
-        self._array = self.array.compute(**kwargs)
-        return self
-
-    def delayed(self, chunks=1):
-        if isinstance(self.array, da.core.Array):
-            return self
-
-        array = da.from_array(self.array, name=str(id(self.array)), chunks=(chunks, -1, -1))
-        return self.__class__(array=array, slice_thickness=self.slice_thickness.copy(), extent=self.extent)
 
     def split_chunks(self):
         return [self[a:a + b] for a, b in zip(np.cumsum((0,) + self.array.chunks[0]), self.array.chunks[0])]
@@ -481,7 +455,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         else:
             raise TypeError('Potential must be indexed with integers or slices, not {}'.format(type(items)))
 
-    def transmission_function(self, energy: float):
+    def transmission_function(self, energy: float, antialias=True):
         """
         Calculate the transmission functions for a specific energy.
 
@@ -497,18 +471,31 @@ class PotentialArray(AbstractPotential, HasGridMixin):
 
         xp = get_array_module(self.array)
 
-        def _transmission_function(array, kernel, energy):
+        def _transmission_function(array, energy, aa_kernel=None):
             array = complex_exponential(xp.float32(energy2sigma(energy)) * array)
-            array = fft2_convolve(array, kernel, overwrite_x=False)
+
+            if aa_kernel is not None:
+                array = fft2_convolve(array, aa_kernel, overwrite_x=False)
             return array
 
-        kernel = antialias_kernel(self.gpts, self.sampling, xp)
+        if self.is_delayed:
+            if antialias:
+                kernel = antialias_kernel(self.gpts, self.sampling, xp, delay=True)
+            else:
+                kernel = None
 
-        array = self._array.map_blocks(_transmission_function, kernel=kernel, energy=energy,
-                                       meta=xp.array((), dtype=xp.complex64))
+            array = self._array.map_blocks(_transmission_function, aa_kernel=kernel, energy=energy,
+                                           meta=xp.array((), dtype=xp.complex64))
+
+        else:
+            if antialias:
+                aa_kernel = antialias_kernel(self.gpts, self.sampling, xp, delay=False)
+            else:
+                aa_kernel = None
+
+            array = _transmission_function(self._array, energy=energy, aa_kernel=aa_kernel)
 
         t = TransmissionFunction(array, slice_thickness=self.slice_thickness.copy(), extent=self.extent, energy=energy)
-
         return t
 
     @property
