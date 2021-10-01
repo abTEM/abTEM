@@ -517,13 +517,13 @@ from abtem.visualize.mpl import _plane2axes, _cube
 class AtomsArtist(Artist):
     atoms = Instance(Atoms)
     visible = Bool(True)
+    scale = Float(100.)
     direction = Unicode('xy')
 
-    def __init__(self, scale_atoms=500, **kwargs):
+    def __init__(self, **kwargs):
         self._scatter_artist = ScatterArtist()
         self._lines_artist = LinesArtist(colors='black')
         self._scatter_artist._mark.stroke = 'black'
-        self._scale_atoms = scale_atoms
         super().__init__(**kwargs)
 
         link((self._scatter_artist._mark, 'visible'), (self, 'visible'))
@@ -540,7 +540,7 @@ class AtomsArtist(Artist):
     def limits(self):
         return self._scatter_artist.limits
 
-    @observe('atoms')
+    @observe('atoms', 'scale')
     def _observe_atoms(self, change):
         axes = _plane2axes(self.direction)
 
@@ -559,6 +559,6 @@ class AtomsArtist(Artist):
             self._scatter_artist.y = self.atoms.get_positions()[:, axes[1]]
 
         colors = ['#%02x%02x%02x' % tuple((jmol_colors[i] * 255).astype(np.int)) for i in self.atoms.numbers]
-        sizes = [int(covalent_radii[i] * self._scale_atoms) for i in self.atoms.numbers]
+        sizes = [int(covalent_radii[i] * self.scale) for i in self.atoms.numbers]
         self._scatter_artist._mark.colors = colors
         self._scatter_artist._mark.size = sizes
