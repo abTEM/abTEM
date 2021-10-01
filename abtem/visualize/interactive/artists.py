@@ -543,8 +543,6 @@ class AtomsArtist(Artist):
     @observe('atoms')
     def _observe_atoms(self, change):
         axes = _plane2axes(self.direction)
-        self._scatter_artist.x = self.atoms.get_positions()[:, axes[0]]
-        self._scatter_artist.y = self.atoms.get_positions()[:, axes[1]]
 
         cell_lines_x = []
         cell_lines_y = []
@@ -554,11 +552,11 @@ class AtomsArtist(Artist):
             cell_lines_x.append(cell_line[:, axes[0]])
             cell_lines_y.append(cell_line[:, axes[1]])
 
-        self._lines_artist.x = cell_lines_x
-        self._lines_artist.y = cell_lines_y
-
-        # print(cell_lines_x)
-        # ax.plot(cell_lines[:, axes[0]], cell_lines[:, axes[1]], 'k-')
+        with self._lines_artist._mark.hold_sync(), self._scatter_artist._mark.hold_sync():
+            self._lines_artist.x = cell_lines_x
+            self._lines_artist.y = cell_lines_y
+            self._scatter_artist.x = self.atoms.get_positions()[:, axes[0]]
+            self._scatter_artist.y = self.atoms.get_positions()[:, axes[1]]
 
         colors = ['#%02x%02x%02x' % tuple((jmol_colors[i] * 255).astype(np.int)) for i in self.atoms.numbers]
         sizes = [int(covalent_radii[i] * self._scale_atoms) for i in self.atoms.numbers]
