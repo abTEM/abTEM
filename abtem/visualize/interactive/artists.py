@@ -518,7 +518,7 @@ class AtomsArtist(Artist):
     atoms = Instance(Atoms)
     visible = Bool(True)
     scale = Float(100.)
-    direction = Unicode('xy')
+    plane = Unicode('xy')
 
     def __init__(self, **kwargs):
         self._scatter_artist = ScatterArtist()
@@ -529,8 +529,8 @@ class AtomsArtist(Artist):
         link((self._scatter_artist._mark, 'visible'), (self, 'visible'))
         link((self._lines_artist._mark, 'visible'), (self, 'visible'))
 
-        self.x_label = f'{self.direction[0]} [Å]'
-        self.y_label = f'{self.direction[0]} [Å]'
+        self.x_label = f'{self.plane[0]} [Å]'
+        self.y_label = f'{self.plane[1]} [Å]'
 
     def _add_to_canvas(self, canvas):
         self._scatter_artist._add_to_canvas(canvas)
@@ -542,7 +542,7 @@ class AtomsArtist(Artist):
 
     @observe('atoms', 'scale')
     def _observe_atoms(self, change):
-        axes = _plane2axes(self.direction)
+        axes = _plane2axes(self.plane)
 
         cell_lines_x = []
         cell_lines_y = []
