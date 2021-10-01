@@ -97,7 +97,7 @@ class AnnularDetector(AbstractDetector):
         return image.show(ax=ax)
 
     def detect(self, probes):
-        measurement = probes.diffraction_patterns().integrate_annular_disc(inner=self.inner, outer=self.outer)
+        measurement = probes.diffraction_patterns().integrate_radial(inner=self.inner, outer=self.outer)
 
         if probes.num_ensemble_axes > 0 and self.ensemble_mean:
             measurement = measurement.mean(probes.ensemble_axes)
@@ -162,7 +162,7 @@ class FlexibleAnnularDetector(AbstractDetector):
                                                                                         waves),
                                                                                     nbins_azimuthal=1)
 
-        if waves.num_ensemble_axes > 0:
+        if (waves.num_ensemble_axes > 0) and self.ensemble_mean:
             measurements = measurements.mean(measurements.ensemble_axes)
 
         return measurements
