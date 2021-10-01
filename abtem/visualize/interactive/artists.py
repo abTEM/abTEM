@@ -511,26 +511,30 @@ class MeasurementArtist1d(Artist):
         return self._lines_artist.limits
 
 
-from abtem.visualize.mpl import _plane2axes
+from abtem.visualize.mpl import _plane2axes, _cube
 
 
 class AtomsArtist(Artist):
     atoms = Instance(Atoms)
+    visible = Bool(True)
     direction = Unicode('xy')
 
     def __init__(self, scale_atoms=500, **kwargs):
         self._scatter_artist = ScatterArtist()
+        self._lines_artist = LinesArtist(colors='black')
         self._scatter_artist._mark.stroke = 'black'
         self._scale_atoms = scale_atoms
         super().__init__(**kwargs)
 
         link((self._scatter_artist._mark, 'visible'), (self, 'visible'))
+        link((self._lines_artist._mark, 'visible'), (self, 'visible'))
 
         self.x_label = f'{self.direction[0]} [Å]'
         self.y_label = f'{self.direction[0]} [Å]'
 
     def _add_to_canvas(self, canvas):
         self._scatter_artist._add_to_canvas(canvas)
+        self._lines_artist._add_to_canvas(canvas)
 
     @property
     def limits(self):
@@ -541,6 +545,20 @@ class AtomsArtist(Artist):
         axes = _plane2axes(self.direction)
         self._scatter_artist.x = self.atoms.get_positions()[:, axes[0]]
         self._scatter_artist.y = self.atoms.get_positions()[:, axes[1]]
+
+        cell_lines_x = []
+        cell_lines_y = []
+
+        for line in _cube:
+            cell_line = np.array([np.dot(line[0], self.atoms.cell), np.dot(line[1], self.atoms.cell)])
+            cell_lines_x.append(cell_line[:, axes[0]])
+            cell_lines_y.append(cell_line[:, axes[1]])
+
+        self._lines_artist.x = cell_lines_x
+        self._lines_artist.y = cell_lines_y
+
+        # print(cell_lines_x)
+        # ax.plot(cell_lines[:, axes[0]], cell_lines[:, axes[1]], 'k-')
 
         colors = ['#%02x%02x%02x' % tuple((jmol_colors[i] * 255).astype(np.int)) for i in self.atoms.numbers]
         sizes = [int(covalent_radii[i] * self._scale_atoms) for i in self.atoms.numbers]
