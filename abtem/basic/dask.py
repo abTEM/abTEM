@@ -1,16 +1,29 @@
 import dask.array as da
+from dask.diagnostics import ProgressBar
+import dask
+
+
+def compute_dask_array_wrappers(dask_array_wrappers):
+    with ProgressBar():
+        arrays = dask.compute([wrapper.array for wrapper in dask_array_wrappers])[0]
+
+    for array, wrapper in zip(arrays, dask_array_wrappers):
+        wrapper._array = array
+
+    return dask_array_wrappers
 
 
 def computable(func):
     def wrapper(*args, compute=False, **kwargs):
+        result = func(*args, **kwargs)
+
+        if isinstance(result, tuple) and compute:
+            return compute_dask_array_wrappers(result)
+
         if compute:
-            result = func(*args, **kwargs)
-            if isinstance(result, tuple):
-                return tuple(partial_result.compute() for partial_result in result)
-            else:
-                return result.compute()
-        else:
-            return func(*args, **kwargs)
+            return result.compute()
+
+        return result
 
     return wrapper
 
@@ -59,14 +72,20 @@ class HasDaskArray:
         if self.is_delayed:
             return self
 
-        self._array = da.from_array(self._array)
+        self._array = da.from_array(self._array, chunks=-1)
+
         return self
 
-    def compute(self, **kwargs):
+    def compute(self, pbar=True, **kwargs):
         if not self.is_delayed:
             return self
 
-        self._array = self.array.compute(**kwargs)
+        if pbar:
+            with ProgressBar():
+                self._array = self.array.compute(**kwargs)
+        else:
+            self._array = self.array.compute(**kwargs)
+
         return self
 
     def visualize_graph(self, **kwargs):

@@ -45,8 +45,8 @@ class Grid:
 
         self._endpoint = tuple(endpoint)
 
-        if sum([lock_extent, lock_gpts, lock_sampling]) > 1:
-            raise RuntimeError('At most one of extent, gpts, and sampling may be locked')
+        #if sum([lock_extent, lock_gpts, lock_sampling]) > 1:
+        #    raise RuntimeError('At most one of extent, gpts, and sampling may be locked')
 
         self._lock_extent = lock_extent
         self._lock_gpts = lock_gpts

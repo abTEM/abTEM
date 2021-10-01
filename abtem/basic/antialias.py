@@ -3,14 +3,14 @@ import dask.array as da
 import numpy as np
 
 from abtem.basic.backend import get_array_module, xp_to_str
+from abtem.basic.fft import fft2_convolve
 from abtem.basic.grid import polar_spatial_frequencies
-from abtem.basic.fft import fft2_convolve, fft_crop
 
 TAPER = 0.025
 CUTOFF = 2 / 3.
 
 
-def antialias_kernel(gpts, sampling, xp):
+def antialias_kernel(gpts, sampling, xp, delay=True):
     def _antialias_kernel(gpts, sampling, cutoff, taper, xp):
         xp = get_array_module(xp)
 
@@ -25,8 +25,12 @@ def antialias_kernel(gpts, sampling, xp):
 
     cutoff = CUTOFF / max(sampling) / 2
     taper = TAPER / max(sampling)
-    kernel = dask.delayed(_antialias_kernel, pure=True)(gpts, sampling, cutoff, taper, xp_to_str(xp))
-    return da.from_delayed(kernel, shape=gpts, meta=xp.array((), dtype=xp.float32))
+
+    if delay:
+        kernel = dask.delayed(_antialias_kernel, pure=True)(gpts, sampling, cutoff, taper, xp_to_str(xp))
+        return da.from_delayed(kernel, shape=gpts, meta=xp.array((), dtype=xp.float32))
+    else:
+        return _antialias_kernel(gpts, sampling, cutoff, taper, xp_to_str(xp))
 
 
 class AntialiasFilter:

@@ -1,7 +1,6 @@
 """Module for various convenient utilities."""
 
 import numpy as np
-from tqdm.auto import tqdm
 
 from abtem.basic.backend import get_array_module
 
@@ -96,6 +95,7 @@ def reassemble_chunks_along(blocks, shape, axis):
 
     return new_blocks
 
+
 def tapered_cutoff(x, cutoff, rolloff=.1):
     xp = get_array_module(x)
 
@@ -109,33 +109,3 @@ def tapered_cutoff(x, cutoff, rolloff=.1):
         array = xp.array(x < cutoff).astype(xp.float32)
 
     return array
-
-
-class ProgressBar:
-    """Object to describe progress bar indicators for computations."""
-
-    def __init__(self, **kwargs):
-        self._tqdm = tqdm(**kwargs)
-
-    @property
-    def tqdm(self):
-        return self._tqdm
-
-    @property
-    def disable(self):
-        return self.tqdm.disable
-
-    def update(self, n):
-        if not self.disable:
-            self.tqdm.update(n)
-
-    def reset(self):
-        if not self.disable:
-            self.tqdm.reset()
-
-    def refresh(self):
-        if not self.disable:
-            self.tqdm.refresh()
-
-    def close(self):
-        self.tqdm.close()
