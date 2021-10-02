@@ -5,8 +5,6 @@ from typing import Optional
 import numpy as np
 from ase import units
 
-from abtem.basic.event import HasEventMixin, Event, watched_method
-
 
 def relativistic_mass_correction(energy: float) -> float:
     return (1 + units._e * energy / (units._me * units._c ** 2))
@@ -68,7 +66,7 @@ def energy2sigma(energy: float) -> float:
             units._hplanck * units.s * units.J) ** 2)
 
 
-class Accelerator(HasEventMixin):
+class Accelerator:
     """
     Accelerator object describes the energy of wave functions and transfer functions.
 
@@ -82,7 +80,6 @@ class Accelerator(HasEventMixin):
         if energy is not None:
             energy = float(energy)
 
-        self._event = Event()
         self._energy = energy
         self._lock_energy = lock_energy
 
@@ -94,7 +91,6 @@ class Accelerator(HasEventMixin):
         return self._energy
 
     @energy.setter
-    @watched_method('_event')
     def energy(self, value: float):
         if self._lock_energy:
             raise RuntimeError('Energy cannot be modified')
@@ -176,7 +172,6 @@ class HasAcceleratorMixin:
     @accelerator.setter
     def accelerator(self, new: Accelerator):
         self._accelerator = new
-        self._accelerator._event = new._event
 
     @property
     def energy(self):

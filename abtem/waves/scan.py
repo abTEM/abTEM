@@ -279,8 +279,10 @@ class GridScan(HasGridMixin, AbstractScan):
 
     @property
     def axes_metadata(self):
-        return [{'label': 'x', 'type': 'gridscan', 'sampling': float(self.sampling[0]), 'offset': float(self.start[0])},
-                {'label': 'y', 'type': 'gridscan', 'sampling': float(self.sampling[1]), 'offset': float(self.start[1])}]
+        return [{'label': 'x', 'type': 'gridscan', 'sampling': float(self.sampling[0]), 'offset': float(self.start[0]),
+                 'units': 'Å'},
+                {'label': 'y', 'type': 'gridscan', 'sampling': float(self.sampling[1]), 'offset': float(self.start[1]),
+                 'units': 'Å'}]
 
     def get_positions(self) -> np.ndarray:
         x = np.linspace(self.start[0], self.end[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=np.float32)

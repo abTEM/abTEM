@@ -243,6 +243,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         return self.__class__(array=array, extent=self.extent, energy=self.energy, tilt=self.tilt,
                               antialias_aperture=2 / 3., extra_axes_metadata=axes_metadata)
 
+    @requires_dask_array
     def to_zarr(self, url, overwrite=False):
         """
         Write potential to a zarr file.
@@ -583,39 +584,6 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         point2 = point1 + np.array([np.cos(np.pi * angle / 180), np.sin(np.pi * angle / 180)])
         point1, point2 = _line_intersect_rectangle(point1, point2, (0., 0.), self.extent)
         return measurement.interpolate_line(point1, point2)
-
-    def interact(self, sliders=None, profile=False, throttling: float = 0.01):
-        from abtem.visualize.interactive.utils import quick_sliders, throttle
-        from abtem.visualize.interactive import Canvas, MeasurementArtist2d
-        from abtem.visualize.interactive.apps import MeasurementView1d
-        import ipywidgets as widgets
-
-        if profile:
-            view = MeasurementView1d()
-
-            def callback(*args):
-                view.measurement = self.profile()
-        else:
-            canvas = Canvas(lock_scale=False)
-            artist = MeasurementArtist2d()
-            canvas.artists = {'image': artist}
-
-            def callback(*args):
-                artist.measurement = self.build().intensity()[0]
-                canvas.adjust_limits_to_artists(adjust_y=False)
-                canvas.adjust_labels_to_artists()
-
-        if throttling:
-            callback = throttle(throttling)(callback)
-
-        self.observe(callback)
-        callback()
-
-        if sliders:
-            sliders = quick_sliders(self.ctf, **sliders)
-            return widgets.HBox([canvas.figure, widgets.VBox(sliders)])
-        else:
-            return canvas.figure
 
     def __copy__(self):
         return self.__class__(gpts=self.gpts,

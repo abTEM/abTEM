@@ -16,7 +16,7 @@ from abtem.basic.dask import computable, HasDaskArray, requires_dask_array
 from abtem.basic.fft import fft2_interpolate
 from abtem.basic.interpolate import interpolate_bilinear
 from abtem.measure.utils import polar_detector_bins, sum_run_length_encoded
-from abtem.visualize.utils import domain_coloring
+from abtem.visualize.utils import domain_coloring, add_domain_coloring_cbar
 
 if cp is not None:
     from abtem.basic.cuda import sum_run_length_encoded as sum_run_length_encoded_cuda
@@ -25,6 +25,28 @@ else:
     interpolate_bilinear_cuda = None
 
 T = TypeVar('T', bound='AbstractMeasurement')
+
+
+def _to_hyperspy_axes_metadata(axes_metadata, shape):
+    hyperspy_axes = []
+    for metadata, n in zip(axes_metadata, shape):
+        hyperspy_axes.append({'size': n})
+
+        if 'sampling' in metadata:
+            hyperspy_axes[-1]['scale'] = metadata['sampling']
+
+        if 'units' in metadata:
+            hyperspy_axes[-1]['units'] = metadata['units']
+
+        if 'label' in metadata:
+            hyperspy_axes[-1]['name'] = metadata['label']
+
+        if 'offset' in metadata:
+            hyperspy_axes[-1]['offset'] = metadata['offset']
+        else:
+            hyperspy_axes[-1]['offset'] = 0.
+
+    return hyperspy_axes
 
 
 class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
@@ -262,6 +284,8 @@ class Images(AbstractMeasurement):
 
         xp = get_array_module(self.array)
 
+        sampling = (self.extent[0] / gpts[0], self.extent[1] / gpts[1])
+
         array = dask.delayed(fft2_interpolate)(self.array, gpts)
 
         array = da.from_delayed(array, shape=self.shape[:-2] + gpts, meta=xp.array((), dtype=self.array.dtype))
@@ -406,7 +430,7 @@ class Images(AbstractMeasurement):
         return self.__class__(array, axes_metadata=self.axes_metadata, metadata=self.metadata)
 
     def show(self, ax=None, cbar=False, power=1., **kwargs):
-        self.compute()
+        self.compute(pbar=False)
 
         if ax is None:
             ax = plt.subplot()
@@ -415,7 +439,9 @@ class Images(AbstractMeasurement):
 
         array = asnumpy(self._array)[slic].T ** power
 
-        if np.iscomplexobj(array):
+        is_complex = np.iscomplexobj(array)
+
+        if is_complex:
             array = domain_coloring(array)
 
         im = ax.imshow(array, extent=[0, self.extent[0], 0, self.extent[1]], origin='lower', **kwargs)
@@ -423,7 +449,11 @@ class Images(AbstractMeasurement):
         ax.set_ylabel('y [Å]')
 
         if cbar:
-            plt.colorbar(im, ax=ax)
+            if is_complex:
+                abs_array = np.abs(array)
+                add_domain_coloring_cbar(ax, (abs_array.min(), abs_array.max()))
+            else:
+                plt.colorbar(im, ax=ax)
 
         return ax, im
 
@@ -449,26 +479,27 @@ class LineProfiles(AbstractMeasurement):
         super().__init__(array=array, axes_metadata=axes_metadata, metadata=metadata, base_axes=(-1,))
 
     @property
-    def start(self):
+    def start(self) -> Tuple[float, float]:
         return self._linescan.start
 
     @property
-    def end(self):
+    def end(self) -> Tuple[float, float]:
         return self._linescan.end
 
     @property
-    def extent(self):
+    def extent(self) -> float:
         return self._linescan.extent[0]
 
     @property
-    def sampling(self):
+    def sampling(self) -> float:
         return self._linescan.sampling[0]
 
     def base_axes_metadata(self) -> list:
-        raise NotImplementedError
+        raise [{'sampling': self.sampling}]
 
     def to_hyperspy(self):
-        raise NotImplementedError
+        from hyperspy._signals.signal1d import Signal1D
+        return Signal1D(self.array, axes=_to_hyperspy_axes_metadata(self.axes_metadata, self.shape)).as_lazy()
 
     def to_zarr(self, url, overwrite=False):
         self._to_zarr(url=url, overwrite=overwrite, sampling=self.sampling)
@@ -519,24 +550,17 @@ class DiffractionPatterns(AbstractMeasurement):
 
     @property
     def base_axes_metadata(self):
-        return [{'label': 'x', 'type': 'fourier_space', 'sampling': self.angular_sampling[0]},
-                {'label': 'x', 'type': 'fourier_space', 'sampling': self.angular_sampling[1]}]
+        return [{'label': 'scattering_angle_x', 'type': 'fourier_space', 'sampling': self.angular_sampling[0],
+                 'offset': self.fourier_space_extent[0][0], 'units': 'mrad'},
+                {'label': 'scattering_angle_y', 'type': 'fourier_space', 'sampling': self.angular_sampling[1],
+                 'offset': self.fourier_space_extent[1][0], 'units': 'mrad'}]
 
     def to_zarr(self, url, overwrite=False):
         self._to_zarr(url=url, overwrite=overwrite, angular_sampling=self.angular_sampling, fftshift=self.fftshift)
 
     def to_hyperspy(self):
         from hyperspy._signals.signal2d import Signal2D
-
-        base_axes = [
-            {'scale': self.angular_sampling[0], 'units': 'mrad', 'name': 'x', 'offset': self.fourier_space_extent[0][0],
-             'size': self.array.shape[0]},
-            {'scale': self.angular_sampling[1], 'units': 'mrad', 'name': 'y', 'offset': self.fourier_space_extent[1][0],
-             'size': self.array.shape[1]}]
-
-        extra_axes = [{'size': n} for n in self.array.shape[:-2]]
-
-        return Signal2D(self.array, axes=extra_axes + base_axes).as_lazy()
+        return Signal2D(self.array, axes=_to_hyperspy_axes_metadata(self.axes_metadata, self.shape)).as_lazy()
 
     def copy(self, copy_array=True):
         if copy_array:
@@ -730,7 +754,7 @@ class DiffractionPatterns(AbstractMeasurement):
         sampling = [self.axes_metadata[axis]['sampling'] for axis in self.scan_axes]
 
         if len(self.scan_axes) == 1:
-            return LineProfiles(integrated_intensity, sampling=sampling[0])
+            return LineProfiles(integrated_intensity, sampling=sampling[0], axes_metadata=self.axes_metadata[:-2])
         else:
 
             return Images(integrated_intensity, sampling=sampling, axes_metadata=self.axes_metadata[:-2])
@@ -794,7 +818,7 @@ class DiffractionPatterns(AbstractMeasurement):
         return self.__class__(array, angular_sampling=self.angular_sampling, axes_metadata=self.axes_metadata,
                               metadata=self.metadata, fftshift=self.fftshift)
 
-    def show(self, ax=None, power=1., **kwargs):
+    def show(self, ax=None, cbar=False, power=1., **kwargs):
         self.compute()
 
         if ax is None:
@@ -808,6 +832,10 @@ class DiffractionPatterns(AbstractMeasurement):
         im = ax.imshow(array, extent=extent, origin='lower', **kwargs)
         ax.set_xlabel('Scattering angle x [mrad]')
         ax.set_ylabel('Scattering angle y [mrad]')
+
+        if cbar:
+            plt.colorbar(im, ax=ax)
+
         return ax, im
 
 

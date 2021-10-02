@@ -105,7 +105,7 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 class AbstractPotentialFromAtoms(AbstractPotential):
 
     def __init__(self, atoms, gpts, sampling, slice_thickness, box=None, plane='xy', origin=(0., 0., 0.),
-                 precalculate=True):
+                 precalculate=False):
 
         if np.abs(atoms.cell[2, 2]) < 1e-12:
             raise RuntimeError('cell has no thickness')
@@ -207,7 +207,7 @@ class Potential(AbstractPotentialFromAtoms):
                  parametrization: str = 'lobato',
                  projection: str = 'infinite',
                  chunks: int = 1,
-                 precalculate: bool = True,
+                 precalculate: bool = False,
                  device: str = 'cpu',
                  plane: str = 'xy',
                  box: Tuple[float, float, float] = None,
@@ -256,7 +256,8 @@ class Potential(AbstractPotentialFromAtoms):
                 core_size = min(self.sampling)
                 self._atomic_potentials = {}
                 for Z in np.unique(self.atoms.numbers):
-                    self._atomic_potentials[Z] = AtomicPotential(Z, self.parametrization, core_size)
+                    self._atomic_potentials[Z] = AtomicPotential(Z, self.parametrization, core_size,
+                                                                 cutoff_tolerance=self.cutoff_tolerance)
                     self._atomic_potentials[Z].build_integral_table()
 
             return self._atomic_potentials
@@ -471,29 +472,15 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
 
         xp = get_array_module(self.array)
 
-        def _transmission_function(array, energy, aa_kernel=None):
+        def _transmission_function(array, energy):
             array = complex_exponential(xp.float32(energy2sigma(energy)) * array)
-
-            if aa_kernel is not None:
-                array = fft2_convolve(array, aa_kernel, overwrite_x=False)
             return array
 
         if self.is_delayed:
-            if antialias:
-                kernel = antialias_kernel(self.gpts, self.sampling, xp, delay=True)
-            else:
-                kernel = None
-
-            array = self._array.map_blocks(_transmission_function, aa_kernel=kernel, energy=energy,
-                                           meta=xp.array((), dtype=xp.complex64))
+            array = self._array.map_blocks(_transmission_function, energy=energy, meta=xp.array((), dtype=xp.complex64))
 
         else:
-            if antialias:
-                aa_kernel = antialias_kernel(self.gpts, self.sampling, xp, delay=False)
-            else:
-                aa_kernel = None
-
-            array = _transmission_function(self._array, energy=energy, aa_kernel=aa_kernel)
+            array = _transmission_function(self._array, energy=energy)
 
         t = TransmissionFunction(array, slice_thickness=self.slice_thickness.copy(), extent=self.extent, energy=energy)
         return t

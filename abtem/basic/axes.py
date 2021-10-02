@@ -1,14 +1,6 @@
 from numbers import Number
 
 
-# class AxesMetadata:
-#
-#     def __init__(self, axes_metadata):
-#         self._axes_metadata = axes_metadata
-#
-#
-
-
 class HasAxesMetadata:
     axes_metadata: list
 

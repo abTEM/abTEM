@@ -370,8 +370,20 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
             windows = da.tensordot(coefficients, self.array, axes=[-1, -3])
 
         if len(windows.shape) > 3:
-            #print(range(1, len(self.array.shape) - 2), range(0, len(self.array.shape) - 3))
-            windows = da.moveaxis(windows, range(1, len(self.array.shape) - 2), range(0, len(self.array.shape) - 3))
+            scan_dims = len(positions.shape) - 1
+            ensemble_dims = len(windows.shape) - 2 - scan_dims
+
+            src = range(0, scan_dims)
+            dst = range(ensemble_dims, scan_dims + ensemble_dims)
+
+            print(src, dst)
+
+            # print(range(1, len(self.array.shape) - 2), range(0, len(self.array.shape) - 3))
+            windows = da.moveaxis(windows, src, dst)
+
+            print(windows.shape)
+
+            #ss
 
         return Waves(windows, sampling=self.sampling, energy=self.energy, tilt=self.tilt,
                      antialias_aperture=self.antialias_aperture, extra_axes_metadata=axes_metadata)

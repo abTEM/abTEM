@@ -7,7 +7,6 @@ import numpy as np
 from abtem.basic.backend import get_array_module
 from abtem.basic.complex import complex_exponential
 from abtem.basic.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
-from abtem.basic.event import Event, HasEventMixin, watched_method, watched_property
 from abtem.basic.grid import Grid, polar_spatial_frequencies
 from abtem.measure import RadialFourierSpaceLineProfiles
 
@@ -25,7 +24,7 @@ polar_aliases = {'defocus': 'C10', 'astigmatism': 'C12', 'astigmatism_angle': 'p
                  'C5': 'C50'}
 
 
-class CTF(HasAcceleratorMixin, HasEventMixin):
+class CTF(HasAcceleratorMixin):
     """
     Contrast transfer function object
 
@@ -66,19 +65,21 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
 
     """
 
-    def __init__(self, semiangle_cutoff: float = np.inf, rolloff: float = 2, focal_spread: float = 0.,
-                 angular_spread: float = 0., gaussian_spread: float = 0., energy: float = None,
-                 parameters: Mapping[str, float] = None, **kwargs):
+    def __init__(self,
+                 semiangle_cutoff: float = np.inf,
+                 rolloff: float = 2,
+                 focal_spread: float = 0.,
+                 angular_spread: float = 0.,
+                 gaussian_spread: float = 0.,
+                 energy: float = None,
+                 parameters: Mapping[str, float] = None,
+                 **kwargs):
 
         for key in kwargs.keys():
             if (key not in polar_symbols) and (key not in polar_aliases.keys()):
                 raise ValueError('{} not a recognized parameter'.format(key))
 
-        self._event = Event()
-
         self._accelerator = Accelerator(energy=energy)
-        self._accelerator.observe(self.event.notify)
-
         self._semiangle_cutoff = semiangle_cutoff
         self._rolloff = rolloff
         self._focal_spread = focal_spread
@@ -100,7 +101,6 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
             def setter(self, value):
                 old = getattr(self, key)
                 self._parameters[key] = value
-                self.event.notify({'notifier': self, 'name': key, 'change': old != value})
 
             return property(getter, setter)
 
@@ -135,7 +135,6 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         return self._semiangle_cutoff
 
     @semiangle_cutoff.setter
-    @watched_property('_event')
     def semiangle_cutoff(self, value: float):
         self._semiangle_cutoff = value
 
@@ -145,7 +144,6 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         return self._rolloff
 
     @rolloff.setter
-    @watched_property('_event')
     def rolloff(self, value: float):
         self._rolloff = value
 
@@ -155,7 +153,6 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         return self._focal_spread
 
     @focal_spread.setter
-    @watched_property('_event')
     def focal_spread(self, value: float):
         """The angular spread [mrad]."""
         self._focal_spread = value
@@ -165,7 +162,6 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         return self._angular_spread
 
     @angular_spread.setter
-    @watched_property('_event')
     def angular_spread(self, value: float):
         self._angular_spread = value
 
@@ -175,11 +171,9 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         return self._gaussian_spread
 
     @gaussian_spread.setter
-    @watched_property('_event')
     def gaussian_spread(self, value: float):
         self._gaussian_spread = value
 
-    @watched_method('_event')
     def set_parameters(self, parameters: dict):
         """
         Set the phase of the phase aberration.
@@ -315,22 +309,18 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
 
         if self.focal_spread > 0.:
             array *= self.evaluate_temporal_envelope(alpha)
-        #
-        # if self.angular_spread > 0.:
-        #     array *= self.evaluate_spatial_envelope(alpha, phi)
-        #
-        # if self.gaussian_spread > 0.:
-        #     array *= self.evaluate_gaussian_envelope(alpha)
+
+        if self.angular_spread > 0.:
+            array *= self.evaluate_spatial_envelope(alpha, phi)
+
+        if self.gaussian_spread > 0.:
+            array *= self.evaluate_gaussian_envelope(alpha)
 
         return array
 
     def evaluate_on_grid(self, gpts=None, extent=None, sampling=None, xp=np):
         grid = Grid(gpts=gpts, extent=extent, sampling=sampling)
-
-        gpts = grid.gpts
-        sampling = grid.sampling
-
-        alpha, phi = polar_spatial_frequencies(gpts, sampling, delayed=False, xp=xp)
+        alpha, phi = polar_spatial_frequencies(grid.gpts, grid.sampling, delayed=False, xp=xp)
 
         # kx, ky = spatial_frequencies(gpts, sampling)
         # kx = kx.reshape((1, -1, 1))

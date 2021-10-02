@@ -1,9 +1,8 @@
-from colorsys import hls_to_rgb
-
 import numpy as np
-from scipy.interpolate import interpn, interp1d
-from abtem.visualize.colors import hsluv
 from matplotlib.colors import ListedColormap
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+from abtem.visualize.colors import hsluv
 
 
 def format_label(calibration):
@@ -20,7 +19,26 @@ def format_label(calibration):
     return label
 
 
-def domain_coloring(z, pure_phase=False):
+def add_domain_coloring_cbar(ax, abs_range, aspect=7):
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="20%", pad=0.2, aspect=aspect)
+    cax.yaxis.tick_right()
+    cax.yaxis.set_label_position('right')
+
+    cbar_array = np.linspace(0, 1, 100)
+    cbar_array = cbar_array[None] * np.exp(1.j * np.linspace(0, 2 * np.pi, 100))[:, None]
+
+    cax.set_xticks([0, 99])
+    cax.set_xticklabels([f'{n:.2}' for n in abs_range])
+    cax.set_yticks(np.linspace(0, 99, 5))
+    cax.set_yticklabels(["-π", "-π/2", "0", "π/2", "π"])
+    cax.set_xlabel('abs')
+    cax.set_ylabel('arg')
+
+    cax.imshow(domain_coloring(cbar_array), aspect=aspect)
+
+
+def domain_coloring(z):
     """
     Domain coloring function.
 
@@ -40,10 +58,10 @@ def domain_coloring(z, pure_phase=False):
 
     cmap = ListedColormap(hsluv)
     colors = cmap(phase)[..., :3]
-    if not pure_phase:
-        abs_z = np.abs(z)
-        abs_z = (abs_z - abs_z.min()) / abs_z.ptp()
-        colors = colors * abs_z[..., None]
+
+    abs_z = np.abs(z)
+    abs_z = (abs_z - abs_z.min()) / abs_z.ptp()
+    colors = colors * abs_z[..., None]
 
     return colors
 
