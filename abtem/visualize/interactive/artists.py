@@ -538,7 +538,7 @@ class AtomsArtist(Artist):
 
     @property
     def limits(self):
-        return self._scatter_artist.limits
+        return self._lines_artist.limits
 
     @observe('atoms', 'scale', 'plane')
     def _observe_atoms(self, change):
@@ -559,6 +559,6 @@ class AtomsArtist(Artist):
             self._scatter_artist.y = self.atoms.get_positions()[:, axes[1]]
 
         colors = ['#%02x%02x%02x' % tuple((jmol_colors[i] * 255).astype(np.int)) for i in self.atoms.numbers]
-        sizes = [int(covalent_radii[i] * self.scale) for i in self.atoms.numbers]
+        sizes = [covalent_radii[i] * self.scale for i in self.atoms.numbers]
         self._scatter_artist._mark.colors = colors
         self._scatter_artist._mark.size = sizes

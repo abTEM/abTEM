@@ -197,11 +197,9 @@ class Canvas(HasTraits):
 
         with self.x_scale.hold_trait_notifications(), self.y_scale.hold_trait_notifications():
             if adjust_x:
-                self.x_scale.min = float(xmin)
-                self.x_scale.max = float(xmax)
+                self.x_limits = [float(xmin), float(xmax)]
 
             if adjust_y:
-                self.y_scale.min = float(ymin)
-                self.y_scale.max = float(ymax)
+                self.y_limits = [float(ymin), float(ymax)]
 
             self._enforce_scale_lock()
