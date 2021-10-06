@@ -247,7 +247,7 @@ class _Scanable(_WavesLike):
             detectors = [detectors]
         return detectors
 
-    def _validate_scan_measurements(self, detectors, scan, measurements=None):
+    def validate_scan_measurements(self, detectors, scan, measurements=None):
 
         if isinstance(measurements, Measurement):
             if len(detectors) > 1:
@@ -861,7 +861,7 @@ class Probe(_Scanable, HasEventMixin):
         available_memory = get_available_memory(self._device)
         return min(int(available_memory * .4 / memory_per_wave), 32)
 
-    def _generate_probes(self, scan, potential, max_batch, pbar):
+    def generate_probes(self, scan, potential, max_batch, pbar):
 
         potential_pbar = ProgressBar(total=len(potential), desc='Potential',
                                      disable=(not pbar) or (not potential._precalculate))
@@ -926,9 +926,9 @@ class Probe(_Scanable, HasEventMixin):
         self.grid.check_is_defined()
 
         detectors = self._validate_detectors(detectors)
-        measurements = self._validate_scan_measurements(detectors, scan, measurements)
+        measurements = self.validate_scan_measurements(detectors, scan, measurements)
 
-        for indices, exit_probes in self._generate_probes(scan, potential, max_batch, pbar):
+        for indices, exit_probes in self.generate_probes(scan, potential, max_batch, pbar):
             for detector, measurement in measurements.items():
                 new_entries = detector.detect(exit_probes) / potential.num_frozen_phonon_configs
                 scan.insert_new_measurement(measurement, indices, new_entries)
@@ -1400,7 +1400,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
         self.grid.check_is_defined()
 
         detectors = self._validate_detectors(detectors)
-        measurements = self._validate_scan_measurements(detectors, scan, measurements)
+        measurements = self.validate_scan_measurements(detectors, scan, measurements)
 
         if isinstance(pbar, bool):
             pbar = ProgressBar(total=len(scan), desc='Scan', disable=not pbar)
@@ -1943,7 +1943,7 @@ class SMatrix(_Scanable, HasEventMixin):
         self.grid.check_is_defined()
 
         detectors = self._validate_detectors(detectors)
-        measurements = self._validate_scan_measurements(detectors, scan, measurements)
+        measurements = self.validate_scan_measurements(detectors, scan, measurements)
 
         probe_generator = self._generate_probes(scan,
                                                 potential,
