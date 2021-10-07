@@ -515,7 +515,7 @@ from abtem.visualize.mpl import _plane2axes, _cube
 
 
 class AtomsArtist(Artist):
-    atoms = Instance(Atoms)
+    atoms = Instance(Atoms, allow_none=True)
     visible = Bool(True)
     scale = Float(100.)
     plane = Unicode('xy')
@@ -542,6 +542,9 @@ class AtomsArtist(Artist):
 
     @observe('atoms', 'scale', 'plane')
     def _observe_atoms(self, change):
+        if self.atoms is None:
+            return
+
         axes = _plane2axes(self.plane)
 
         cell_lines_x = []

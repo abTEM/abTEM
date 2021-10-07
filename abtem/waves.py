@@ -1186,7 +1186,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
         if max_batch is None:
             n_batches = 1
         else:
-
+            max_batch = max(max_batch, 1)
             n_batches = (len(self) + (-len(self) % max_batch)) // max_batch
 
         if isinstance(pbar, bool):
