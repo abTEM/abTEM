@@ -1,12 +1,12 @@
 """Module for various convenient utilities."""
 import os
+from typing import Tuple
 
 import numpy as np
 from ase import units
 from tqdm.auto import tqdm
 
 from abtem.device import get_array_module, get_device_function
-from typing import Tuple
 
 _ROOT = os.path.abspath(os.path.dirname(__file__))
 
@@ -128,23 +128,78 @@ def periodic_crop(array, corners, new_shape: Tuple[int, int]):
     return array
 
 
-def fft_interpolation_masks(shape1, shape2, xp=np, epsilon=1e-7):
-    kx1 = xp.fft.fftfreq(shape1[-2], 1 / shape1[-2])
-    ky1 = xp.fft.fftfreq(shape1[-1], 1 / shape1[-1])
+# def fft_interpolation_masks(shape1, shape2, xp=np, epsilon=1e-7):
+#     kx1 = xp.fft.fftfreq(shape1[-2], 1 / shape1[-2])
+#     ky1 = xp.fft.fftfreq(shape1[-1], 1 / shape1[-1])
+#
+#     kx2 = xp.fft.fftfreq(shape2[-2], 1 / shape2[-2])
+#     ky2 = xp.fft.fftfreq(shape2[-1], 1 / shape2[-1])
+#
+#     kx_min = max(xp.min(kx1), xp.min(kx2)) - epsilon
+#     kx_max = min(xp.max(kx1), xp.max(kx2)) + epsilon
+#     ky_min = max(xp.min(ky1), xp.min(ky2)) - epsilon
+#     ky_max = min(xp.max(ky1), xp.max(ky2)) + epsilon
+#
+#     kx1, ky1 = xp.meshgrid(kx1, ky1, indexing='ij')
+#     kx2, ky2 = xp.meshgrid(kx2, ky2, indexing='ij')
+#
+#     mask1 = (kx1 <= kx_max) & (kx1 >= kx_min) & (ky1 <= ky_max) & (ky1 >= ky_min)
+#     mask2 = (kx2 <= kx_max) & (kx2 >= kx_min) & (ky2 <= ky_max) & (ky2 >= ky_min)
+#
+#     return mask1, mask2
 
-    kx2 = xp.fft.fftfreq(shape2[-2], 1 / shape2[-2])
-    ky2 = xp.fft.fftfreq(shape2[-1], 1 / shape2[-1])
 
-    kx_min = max(xp.min(kx1), xp.min(kx2)) - epsilon
-    kx_max = min(xp.max(kx1), xp.max(kx2)) + epsilon
-    ky_min = max(xp.min(ky1), xp.min(ky2)) - epsilon
-    ky_max = min(xp.max(ky1), xp.max(ky2)) + epsilon
+def _fft_interpolation_masks_1d(n1, n2, xp):
+    mask1 = xp.zeros(n1, dtype=bool)
+    mask2 = xp.zeros(n2, dtype=bool)
 
-    kx1, ky1 = xp.meshgrid(kx1, ky1, indexing='ij')
-    kx2, ky2 = xp.meshgrid(kx2, ky2, indexing='ij')
+    if n2 > n1:
+        mask1[:] = True
+    else:
+        if n2 == 1:
+            mask1[0] = True
+        elif n2 % 2 == 0:
+            mask1[:n2 // 2] = True
+            mask1[-n2 // 2:] = True
+        else:
+            mask1[:n2 // 2 + 1] = True
+            mask1[-n2 // 2 + 1:] = True
 
-    mask1 = (kx1 <= kx_max) & (kx1 >= kx_min) & (ky1 <= ky_max) & (ky1 >= ky_min)
-    mask2 = (kx2 <= kx_max) & (kx2 >= kx_min) & (ky2 <= ky_max) & (ky2 >= ky_min)
+    if n1 > n2:
+        mask2[:] = True
+    else:
+        if n1 == 1:
+            mask2[0] = True
+        elif n1 % 2 == 0:
+            mask2[:n1 // 2] = True
+            mask2[-n1 // 2:] = True
+        else:
+            mask2[:n1 // 2 + 1] = True
+            mask2[-n1 // 2 + 1:] = True
+
+    return mask1, mask2
+
+
+def fft_interpolation_masks(shape1, shape2, xp):
+    mask1_1d = []
+    mask2_1d = []
+
+    for i, (n1, n2) in enumerate(zip(shape1, shape2)):
+        m1, m2 = _fft_interpolation_masks_1d(n1, n2, xp)
+
+        s = [np.newaxis] * len(shape1)
+        s[i] = slice(None)
+
+        mask1_1d += [m1[tuple(s)]]
+        mask2_1d += [m2[tuple(s)]]
+
+    mask1 = mask1_1d[0]
+    for m in mask1_1d[1:]:
+        mask1 = mask1 * m
+
+    mask2 = mask2_1d[0]
+    for m in mask2_1d[1:]:
+        mask2 = mask2 * m
 
     return mask1, mask2
 
@@ -152,18 +207,35 @@ def fft_interpolation_masks(shape1, shape2, xp=np, epsilon=1e-7):
 def fft_crop(array, new_shape):
     xp = get_array_module(array)
 
-    mask_in, mask_out = fft_interpolation_masks(array.shape, new_shape, xp=xp)
+    mask_in, mask_out = fft_interpolation_masks(array.shape, new_shape, xp)
 
     if len(new_shape) < len(array.shape):
-        new_shape = array.shape[:-2] + new_shape
+        new_shape = array.shape[:-len(new_shape)] + new_shape
 
     new_array = xp.zeros(new_shape, dtype=array.dtype)
 
     out_indices = xp.where(mask_out)
     in_indices = xp.where(mask_in)
 
-    new_array[..., out_indices[0], out_indices[1]] = array[..., in_indices[0], in_indices[1]]
+    new_array[out_indices] = array[in_indices]
     return new_array
+
+
+# def fft_crop(array, new_shape):
+#     xp = get_array_module(array)
+#
+#     mask_in, mask_out = fft_interpolation_masks(array.shape, new_shape, xp=xp)
+#
+#     if len(new_shape) < len(array.shape):
+#         new_shape = array.shape[:-2] + new_shape
+#
+#     new_array = xp.zeros(new_shape, dtype=array.dtype)
+#
+#     out_indices = xp.where(mask_out)
+#     in_indices = xp.where(mask_in)
+#
+#     new_array[..., out_indices[0], out_indices[1]] = array[..., in_indices[0], in_indices[1]]
+#     return new_array
 
 
 def fft_interpolate_2d(array, new_shape, normalization='values', overwrite_x=False):
@@ -344,9 +416,18 @@ class GaussianDistribution:
     def __len__(self):
         return self.num_samples
 
-    def __iter__(self):
-        samples = np.linspace(-self.sigma * self.sampling_limit, self.sigma * self.sampling_limit, self.num_samples)
+    @property
+    def samples(self):
+        return self.center + np.linspace(-self.sigma * self.sampling_limit, self.sigma * self.sampling_limit,
+                                         self.num_samples)
+
+    @property
+    def values(self):
+        samples = self.samples
         values = 1 / (self.sigma * np.sqrt(2 * np.pi)) * np.exp(-.5 * samples ** 2 / self.sigma ** 2)
         values /= values.sum()
-        for sample, value in zip(samples, values):
-            yield sample + self.center, value
+        return values
+
+    def __iter__(self):
+        for sample, value in zip(self.samples, self.values):
+            yield sample, value
