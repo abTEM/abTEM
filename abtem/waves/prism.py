@@ -6,7 +6,7 @@ import numpy as np
 from ase import Atoms
 
 from abtem.basic.antialias import AntialiasAperture
-from abtem.basic.backend import get_array_module, cp
+from abtem.basic.backend import get_array_module, cp, copy_to_device
 from abtem.basic.complex import complex_exponential
 from abtem.basic.dask import HasDaskArray
 from abtem.basic.grid import Grid
@@ -17,7 +17,7 @@ from abtem.waves.base import BeamTilt, AbstractScannedWaves
 from abtem.waves.multislice import multislice
 from abtem.waves.scan import AbstractScan
 from abtem.waves.transfer import CTF
-from abtem.waves.waves import Waves
+from abtem.waves.waves import Waves, Probe
 
 if cp is not None:
     from abtem.basic.cuda import batch_crop_2d as batch_crop_2d_cuda
@@ -44,6 +44,8 @@ def wrapped_slices(start, stop, n):
 
 
 def wrapped_crop_2d(array, lower_corner, upper_corner):
+    xp = get_array_module(array)
+
     a, c = wrapped_slices(lower_corner[0], upper_corner[0], array.shape[-2])
     b, d = wrapped_slices(lower_corner[1], upper_corner[1], array.shape[-1])
 
@@ -57,14 +59,14 @@ def wrapped_crop_2d(array, lower_corner, upper_corner):
     elif B.size == 0:
         AB = A
     else:
-        AB = da.concatenate([A, B], axis=-2)
+        AB = xp.concatenate([A, B], axis=-2)
 
     if C.size == 0:
         CD = D
     elif D.size == 0:
         CD = C
     else:
-        CD = da.concatenate([C, D], axis=-2)
+        CD = xp.concatenate([C, D], axis=-2)
 
     if CD.size == 0:
         return AB
@@ -72,7 +74,7 @@ def wrapped_crop_2d(array, lower_corner, upper_corner):
     if AB.size == 0:
         return CD
 
-    return da.concatenate([AB, CD], axis=-1)
+    return xp.concatenate([AB, CD], axis=-1)
 
 
 def batch_crop_2d(array, corners, new_shape):
@@ -252,13 +254,9 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
                               antialias_aperture=2 / 3.,
                               extra_axes_metadata=extra_axes_metadata)
 
-        # return multislice(self, potential, splits=splits)
-
-    def _get_coefficients(self, positions):
-        xp = get_array_module(self.array)
-
-        positions = xp.asarray(positions)
-        wave_vectors = xp.asarray(self.wave_vectors)
+    def _get_coefficients(self, positions, wave_vectors):
+        xp = get_array_module(wave_vectors)
+        positions = copy_to_device(positions, xp)
 
         def _calculate_ctf_coefficient(wave_vectors, wavelength, ctf):
             alpha = xp.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2) * wavelength
@@ -284,6 +282,69 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
                 np.max(upper_corners[..., 1]).item() - crop_corner[1])
         corners -= crop_corner
         return crop_corner, size, corners
+
+    def _do_reduce(self, positions):
+        xp = get_array_module(self.array)
+
+        def block_reduce_interpolated_S_matrix(positions, S, wave_vectors):
+
+            # if sub_chunks is None:
+            #     sub_chunks = positions.shape
+            # else:
+            #     sub_chunks = sub_chunks + (2,)
+
+            # windows = []
+            # for positions in generate_array_chunks(positions, sub_chunks):
+            coefficients = self._get_coefficients(positions.reshape((-1, 2)), wave_vectors)
+            crop_corner, size, corners = self._get_minimum_crop(positions)
+            upper_corner = (crop_corner[0] + size[0], crop_corner[1] + size[1])
+
+            cropped_S = wrapped_crop_2d(S, crop_corner, upper_corner)
+
+            window = xp.tensordot(coefficients, cropped_S, axes=[-1, -3])
+            window = batch_crop_2d(window, corners.reshape((-1, 2)), self.interpolated_gpts)
+            window = window.reshape(positions.shape[:-1] + window.shape[-2:])
+            # windows.append(window)
+            # windows = reassemble_chunks_along(windows, positions.shape[0], 0)
+            # windows = xp.concatenate(windows, axis=1)[..., None, :, :]
+
+            return window[..., None, :, :]
+
+        if self.interpolated_gpts != self.gpts:
+            reduced = None
+        else:
+            reduced = da.blockwise(block_reduce_interpolated_S_matrix,
+                                   'ijklm',
+                                   positions, 'ijo',
+                                   self.array, 'klm',
+                                   self.wave_vectors, 'kp',
+                                   adjust_chunks={'k': (1,) * len(self.array.chunks[-3])},
+                                   concatenate=True,
+                                   meta=xp.array((), dtype=xp.complex64))
+
+        return reduced.sum(-3)
+
+    def reduce_by_block(self, positions, chunks):
+
+        # if isinstance(positions, AbstractScan):
+        #     axes_metadata = self._extra_axes_metadata + positions.axes_metadata
+        #     positions = positions.get_positions()
+        #
+        # else:
+        #     axes_metadata = [{'type': 'positions'}]
+
+        positions = positions.get_positions(chunks)
+
+        reduced = da.blockwise(block_reduce,
+                               'ijklm',
+                               positions, 'ijo',
+                               self.array, 'klm',
+                               self.wave_vectors, 'kp',
+                               adjust_chunks={'k': (1,) * len(self.array.chunks[-3])},
+                               concatenate=True,
+                               meta=xp.array((), dtype=xp.complex64))
+
+        return reduced.sum(-3)
 
     def reduce(self, positions: Sequence[Sequence[float]] = None, chunks: int = None) -> Waves:
         """
@@ -317,14 +378,21 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
         if chunks is None:
             chunks = self._compute_chunks(len(positions.shape) - 1)
 
-        def _reduce_interpolated(array, positions, corners):
-            coefficients = self._get_coefficients(positions.reshape((-1, 2)))
+        def _reduce_interpolated(array, positions, corners, wave_vectors):
+            xp = get_array_module(array)
+
+            positions = copy_to_device(positions, xp)
+
+            coefficients = self._get_coefficients(positions.reshape((-1, 2)), wave_vectors)
+
             extra_axes = len(array.shape) - 3
 
             if extra_axes:
                 array = array[(0,) * extra_axes]
 
             window = xp.tensordot(coefficients, array, axes=[-1, -3])
+
+            corners = xp.asarray(corners)
             window = batch_crop_2d(window, corners.reshape((-1, 2)), self.interpolated_gpts)
             window = window.reshape(positions.shape[:-1] + window.shape[-2:])
 
@@ -350,18 +418,14 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
                 window = array.map_blocks(_reduce_interpolated,
                                           positions=positions_block,
                                           corners=corners,
+                                          wave_vectors=self.wave_vectors,
                                           drop_axis=2 + (len(self.array.shape) - 3),
                                           new_axis=tuple(range(len(positions_block.shape) - 1)),
                                           meta=xp.array((), dtype=xp.complex64), chunks=chunks)
 
-                # window = dask.delayed(_reduce_interpolated)(positions=positions_block, corners=corners, array=array)
-
-                # window = da.from_delayed(window, shape=positions_block.shape[:2] + self.interpolated_gpts,
-                #                        meta=xp.array((), dtype=xp.complex64))
-
                 windows.append(window)
 
-            windows = reassemble_chunks_along(windows, positions.shape[0], 0)
+            windows = reassemble_chunks_along(windows, positions.shape[0], 0, delayed=True)
 
             windows = da.concatenate(windows, axis=1)
 
@@ -372,18 +436,9 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
         if len(windows.shape) > 3:
             scan_dims = len(positions.shape) - 1
             ensemble_dims = len(windows.shape) - 2 - scan_dims
-
             src = range(0, scan_dims)
             dst = range(ensemble_dims, scan_dims + ensemble_dims)
-
-            print(src, dst)
-
-            # print(range(1, len(self.array.shape) - 2), range(0, len(self.array.shape) - 3))
             windows = da.moveaxis(windows, src, dst)
-
-            print(windows.shape)
-
-            #ss
 
         return Waves(windows, sampling=self.sampling, energy=self.energy, tilt=self.tilt,
                      antialias_aperture=self.antialias_aperture, extra_axes_metadata=axes_metadata)
@@ -559,7 +614,7 @@ class SMatrix(AbstractScannedWaves):
     def interpolated_gpts(self) -> Tuple[int, int]:
         return (self.gpts[0] // self.interpolation, self.gpts[1] // self.interpolation)
 
-    def to_probe(self):
+    def as_probe(self):
         return Probe(extent=self.extent, gpts=self.gpts, sampling=self.sampling, energy=self.energy, ctf=self.ctf,
                      device=self.device)
 
@@ -647,15 +702,13 @@ class SMatrix(AbstractScannedWaves):
         kx, ky = xp.meshgrid(kx, ky, indexing='ij')
         kx = kx[mask]
         ky = ky[mask]
-        return xp.asarray((kx, ky)).T
+        return da.from_array(xp.asarray((kx, ky)).T, chunks=(self.chunks, -1))
 
     def _build_convential(self):
         wave_vectors = self.wave_vectors
-        wave_vectors = da.from_array(wave_vectors, chunks=(self.chunks, -1))
-
         xp = get_array_module(self._device)
 
-        def _build_s_matrix(k, extent, gpts, interpolation):
+        def _build_plane_waves(k, extent, gpts, interpolation):
             array = plane_waves(k, extent, gpts)
             # xp = get_array_module(array)
             # interpolated_gpts = (gpts[0] // interpolation, self.gpts[1] // interpolation)
@@ -663,7 +716,7 @@ class SMatrix(AbstractScannedWaves):
             # array /= xp.sqrt(probe.sum()) * xp.sqrt(interpolated_gpts[0] * interpolated_gpts[1])
             return array
 
-        array = wave_vectors.map_blocks(_build_s_matrix, extent=self.extent, gpts=self.gpts,
+        array = wave_vectors.map_blocks(_build_plane_waves, extent=self.extent, gpts=self.gpts,
                                         interpolation=self.interpolation,
                                         drop_axis=1, new_axis=(1, 2),
                                         chunks=wave_vectors.chunks[:-1] + ((self.gpts[0],), (self.gpts[1],)),
@@ -689,8 +742,7 @@ class SMatrix(AbstractScannedWaves):
         return self._build_convential()
 
     def profile(self, angle=0.):
-        measurement = self.build().reduce((self.extent[0] / 2, self.extent[1] / 2)).intensity()
-        return probe_profile(measurement, angle=angle)
+        return self.as_probe().profile(angle=angle)
 
     def show(self, **kwargs):
         """
