@@ -384,7 +384,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
                                                     name='Temporal')
         profiles['spatial_envelope'] = Measurement(spatial_envelope, calibrations=[calibration],
                                                    name='Spatial')
-        profiles[' '] = Measurement(gaussian_envelope, calibrations=[calibration],
+        profiles['gaussian_envelope'] = Measurement(gaussian_envelope, calibrations=[calibration],
                                     name='Gaussian')
         profiles['envelope'] = Measurement(envelope, calibrations=[calibration], name='Envelope')
         return profiles

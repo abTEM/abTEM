@@ -203,6 +203,7 @@ class AbstractMeasurement(metaclass=ABCMeta):
     def show(self):
         pass
 
+
 # TODO : ensure diffraction pattern centering
 class Measurement(AbstractMeasurement):
     """
@@ -693,7 +694,7 @@ class Measurement(AbstractMeasurement):
 
         return cls(datasets['array'], calibrations)
 
-    def to_hyperspy(self,signal_type=None):
+    def to_hyperspy(self, signal_type=None):
         """
         Changes the Measurement object to a `hyperspy.BaseSignal` Object or a defined signal type.
 
@@ -713,10 +714,10 @@ class Measurement(AbstractMeasurement):
                              "size": size})
             else:
                 axes.append({"offset": i.offset,
-                            "scale": i.sampling,
-                            "units": i.units,
-                            "name": i.name,
-                            "size": size})
+                             "scale": i.sampling,
+                             "units": i.units,
+                             "name": i.name,
+                             "size": size})
         if len(signal_shape) == 3:
             # This could change depending on the type of measurement
             sig = Signal1D(self.array, axes=axes)
@@ -787,9 +788,9 @@ class Measurement(AbstractMeasurement):
         imageio.imwrite(path, array.T)
 
     def __copy__(self) -> 'Measurement':
-        calibrations = []
+        calibrations = ()
         for calibration in self.calibrations:
-            calibrations.append(copy(calibration))
+            calibrations += (copy(calibration),)
         return self.__class__(self._array.copy(), calibrations=calibrations)
 
     def copy(self) -> 'Measurement':
@@ -962,8 +963,6 @@ class Measurement(AbstractMeasurement):
             Additional keyword arguments for the abtem.plot.show_image function.
         """
 
-
-
         # TODO : implement interactive show method
 
         if self.dimensions == 1:
@@ -1122,12 +1121,12 @@ def interpolate_2d(measurement,
                         endpoint=endpoint[axes[1]])
         new_array = interpolator(x, y).T
 
-    #if rolled_shape is not None:
+    # if rolled_shape is not None:
     new_array = new_array.reshape(rolled_shape[:len(axes)] + new_array.shape[-2:])
     new_array = np.moveaxis(new_array, range(len(axes)), axes)
 
     calibrations = [copy(calibration) for calibration in measurement.calibrations]
-    #for i, axis in enumerate(range(len(measurement.array.shape)) - set(axes)):
+    # for i, axis in enumerate(range(len(measurement.array.shape)) - set(axes)):
     #    calibrations.append(copy(measurement.calibrations[axis]))
     #    calibrations[-1].sampling = new_grid.sampling[i]
 

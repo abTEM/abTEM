@@ -140,17 +140,15 @@ def fft2_convolve(array, kernel, overwrite_x=True):
 
 
 def fft2(array, overwrite_x=True):
-
     # return mkl_fft.fft2(array, overwrite_x=overwrite_x)
     if not overwrite_x:
-       array = array.copy()
+        array = array.copy()
 
     fftw_forward, fftw_backward = create_fftw_objects(array)
     return fftw_forward()
 
 
 def ifft2(array, overwrite_x=True):
-
     # return mkl_fft.ifft2(array, overwrite_x=overwrite_x)
     if not overwrite_x:
         array = array.copy()
@@ -181,7 +179,6 @@ def view_as_windows(array, window_shape, step=1):
 
     if ((xp.array(window_shape) - 1) < 0).any():
         raise ValueError('`window_shape` is too small')
-
 
     win_indices_shape = (((xp.array(array.shape) - xp.array(window_shape)) // xp.array(step)) + 1)
     new_shape = tuple(win_indices_shape.tolist()) + window_shape
@@ -234,6 +231,17 @@ def get_array_module_from_device(device):
         return cp
 
     return get_array_module(device)
+
+
+def get_scipy_module(xp):
+    if xp is cp:
+        from cupyx import scipy
+        return scipy
+    elif xp is np:
+        import scipy
+        return scipy
+    else:
+        raise RuntimeError(f'The array library {xp} is not recognized.')
 
 
 def get_device_from_array(array):
