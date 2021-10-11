@@ -513,7 +513,7 @@ class CrystalPotential(AbstractPotential, HasEventMixin):
                 raise RuntimeError()
 
             if energy is not None:
-                potential = potential.as_transmission_function(energy=energy, max_batch=max_batch)
+                potential = potential.as_transmission_function(energy=energy, max_batch=max_batch, in_place=False)
 
             potential = potential.tile(self.repetitions[:2])
             potential_configs.append(potential)
@@ -1088,7 +1088,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
             antialias_filter = AntialiasFilter()
 
         for start, end, potential_slices in t.generate_slices(max_batch=max_batch):
-            t._array[start:end] = antialias_filter.bandlimit(potential_slices).array
+            t._array[start:end] = antialias_filter._bandlimit(potential_slices._array.copy())
 
         return t
 
