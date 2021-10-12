@@ -3,9 +3,9 @@ import pytest
 
 from abtem import GridScan, AnnularDetector, PixelatedDetector, Probe, Potential, PlaneWave, FlexibleAnnularDetector, \
     Measurement
-from abtem.noise import poisson_noise
 from abtem.measure import center_of_mass
-import hyperspy.api as hs
+from abtem.noise import poisson_noise
+
 
 def test_calibration_coordinates():
     for endpoint in (True, False):
@@ -63,7 +63,7 @@ def test_subtract_measurements(stem_data):
     stem_data = stem_data - stem_data
     stem_data -= stem_data
 
-
+@pytest.mark.hyperspy
 @pytest.mark.parametrize("signal_type", [None, "diffraction"])
 def test_to_hyperspy(stem_data, signal_type):
     for key in stem_data:
@@ -71,6 +71,7 @@ def test_to_hyperspy(stem_data, signal_type):
         assert isinstance(sig, hs.signals.BaseSignal)
 
 
+@pytest.mark.hyperspy
 def test_to_hyperspy_hrtem(hrtem_image):
     hrtem_image.to_hyperspy()
 
@@ -89,10 +90,11 @@ def test_read_write_measurement(tmp_path, stem_data, hrtem_image):
     stem_data['pixelated'].write(path)
     Measurement.read(path)
 
-    hrtem_image.write(path)
-    Measurement.read(path)
+    #hrtem_image.write(path)
+    #Measurement.read(path)
 
 
+@pytest.mark.hyperspy
 def test_write_hspy(tmp_path, stem_data, hrtem_image):
     d = tmp_path / 'sub'
     d.mkdir()
@@ -104,7 +106,7 @@ def test_write_hspy(tmp_path, stem_data, hrtem_image):
 
     stem_data['pixelated'].write(path, format="hspy")
 
-    hrtem_image.write(path, format="hspy")
+    #hrtem_image.write(path, format="hspy")
 
 
 def test_indexing(stem_data):
@@ -116,4 +118,3 @@ def test_indexing(stem_data):
 def test_center_of_mass(stem_data):
     center_of_mass(stem_data['pixelated'])
     center_of_mass(stem_data['pixelated'], return_icom=True)
-

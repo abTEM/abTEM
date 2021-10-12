@@ -19,11 +19,13 @@ def graphene_atoms(data_path):
 def pytest_configure(config):
     config.addinivalue_line("markers", "gpaw")
     config.addinivalue_line("markers", "gpu")
+    config.addinivalue_line("markers", "hyperspy")
 
 
 def pytest_addoption(parser):
     parser.addoption("--rungpaw", action="store_true", help="run gpaw tests")
     parser.addoption("--rungpu", action="store_true", help="run gpu tests")
+    parser.addoption("--runhyperspy", action="store_true", help="run hyperspy tests")
 
 
 def pytest_runtest_setup(item):
@@ -32,3 +34,6 @@ def pytest_runtest_setup(item):
 
     if 'gpu' in item.keywords and not item.config.getvalue("rungpu"):
         pytest.skip("need --rungpu option to run")
+
+    if 'hyperspy' in item.keywords and not item.config.getvalue("rungpu"):
+        pytest.skip("need --runhyperspy option to run")
