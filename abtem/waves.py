@@ -367,6 +367,30 @@ class Waves(_WavesLike):
     def far_field(self, max_angle='valid'):
         return self.downsample(max_angle=max_angle, return_fourier_space=True)
 
+    def tile(self, reps):
+        """
+        Tile wave function.
+
+        Parameters
+        ----------
+        reps : to int
+            Number of repetitions in x and y
+
+        Returns
+        -------
+        Waves
+            The tiled wave function.
+        """
+        reps = tuple(reps)
+
+        if len(reps) != 2:
+            raise ValueError()
+
+        new_copy = self.copy()
+        new_copy._array = np.tile(new_copy._array, (1,) * (len(self.array.shape) - 2) + reps)
+        new_copy.extent = (self.extent[0] * reps[0], self.extent[1] * reps[1])
+        return new_copy
+
     def diffraction_pattern(self, max_angle='valid', block_zeroth_order=False) -> Measurement:
         """
         Calculate the intensity of the wave functions at the diffraction plane.
