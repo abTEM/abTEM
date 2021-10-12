@@ -3,7 +3,7 @@
 import numpy as np
 
 from abtem.basic.backend import get_array_module
-
+import dask.array as da
 
 def array_row_intersection(a, b):
     tmp = np.prod(np.swapaxes(a[:, :, None], 1, 2) == b, axis=2)
@@ -77,7 +77,11 @@ def generate_array_chunks(array, chunks):
     return _recursive_generate_array_chunks(array, chunks)
 
 
-def reassemble_chunks_along(blocks, shape, axis):
+def reassemble_chunks_along(blocks, shape, axis, concatenate=True, delayed=False):
+    xp = get_array_module(blocks[0])
+    if delayed:
+        xp = da
+
     row_blocks = []
     new_blocks = []
     row_tally = 0
@@ -86,7 +90,11 @@ def reassemble_chunks_along(blocks, shape, axis):
         row_tally += block.shape[axis]
 
         if row_tally == shape:
-            new_blocks.append(np.concatenate(row_blocks, axis=axis))
+            if concatenate:
+                new_blocks.append(xp.concatenate(row_blocks, axis=axis))
+            else:
+                new_blocks.append(row_blocks)
+
             row_blocks = []
             row_tally = 0
 

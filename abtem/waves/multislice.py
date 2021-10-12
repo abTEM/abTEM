@@ -8,11 +8,11 @@ import numpy as np
 from abtem.basic.antialias import antialias_kernel
 from abtem.basic.backend import get_array_module, xp_to_str, copy_to_device
 from abtem.basic.complex import complex_exponential
-from abtem.basic.energy import energy2wavelength
+from abtem.basic.energy import energy2wavelength, energy2sigma
 from abtem.basic.fft import fft2_convolve
 from abtem.basic.grid import spatial_frequencies
 from abtem.basic.utils import generate_chunks
-from abtem.potentials.potentials import AbstractPotential
+from abtem.potentials.potentials import PotentialGenerator, PotentialArray
 
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves
@@ -32,30 +32,33 @@ def fresnel_propagator(gpts, sampling, dz, energy, xp):
     return f
 
 
-def _run_multislice_precalculated(waves_array,
-                                  transmission_functions,
-                                  antialias_kernel_array,
-                                  initial_fresnel_propagator):
+def _multislice(waves_array,
+                gpts,
+                sampling,
+                energy,
+                slice_thickness,
+                potential,
+                antialias_kernel_array):
     xp = get_array_module(waves_array)
 
-    for transmission_function in transmission_functions:
-        transmission_function = fft2_convolve(transmission_function, antialias_kernel_array, overwrite_x=True)
-        waves_array *= copy_to_device(transmission_function, xp)
-        waves_array = fft2_convolve(waves_array, initial_fresnel_propagator, overwrite_x=False)
+    initial_fresnel_propagator = fresnel_propagator(gpts,
+                                                    sampling,
+                                                    slice_thickness[0],
+                                                    energy,
+                                                    xp_to_str(xp))
 
-    return waves_array
+    initial_fresnel_propagator *= antialias_kernel_array
 
+    def _transmission_function(array, energy):
+        array = complex_exponential(xp.float32(energy2sigma(energy)) * array)
+        return array
 
-def _run_multislice_generated(waves_array,
-                              energy,
-                              potential,
-                              antialias_kernel_array,
-                              initial_fresnel_propagator):
-    xp = get_array_module(waves_array)
-
-    for potential_slice in potential.generate():
-        transmission_function = potential_slice.transmission_function(energy=energy).array
+    for potential_slice in potential:
+        transmission_function = _transmission_function(potential_slice, energy=energy)
         transmission_function = fft2_convolve(transmission_function, antialias_kernel_array, overwrite_x=False)
+
+        if len(transmission_function.shape) == 2:
+            transmission_function = transmission_function[None]
 
         for transmission_function_slice in transmission_function:
             waves_array *= copy_to_device(transmission_function_slice, xp)
@@ -64,10 +67,9 @@ def _run_multislice_generated(waves_array,
     return waves_array
 
 
-def multislice(waves: Union['Waves', 'SMatrixArray'],
-               potential: AbstractPotential,
-               chunks=1,
+def multislice(waves: Union['Waves', 'SMatrixArray'], potential: Union[PotentialArray, PotentialGenerator]
                ) -> Union['Waves', 'SMatrixArray']:
+
     waves.grid.match(potential)
     waves.accelerator.check_is_defined()
     waves.grid.check_is_defined()
@@ -82,36 +84,22 @@ def multislice(waves: Union['Waves', 'SMatrixArray'],
 
     antialias_kernel_array = antialias_kernel(waves.gpts, waves.sampling, xp)
 
-    initial_fresnel_propagator = dask.delayed(fresnel_propagator, pure=True)(waves.gpts,
-                                                                             waves.sampling,
-                                                                             potential.slice_thickness[0],
-                                                                             waves.energy,
-                                                                             xp_to_str(xp))
+    # initial_fresnel_propagator = dask.delayed(fresnel_propagator, pure=True)(waves.gpts,
+    #                                                                          waves.sampling,
+    #                                                                          potential.slice_thickness[0],
+    #                                                                          waves.energy,
+    #                                                                          xp_to_str(xp))
 
-    initial_fresnel_propagator *= antialias_kernel_array
+    # initial_fresnel_propagator *= antialias_kernel_array
 
-    if potential.precalculate:
-        if hasattr(potential, 'array'):
-            potential_array = potential
-        else:
-            potential_array = potential.build()
-
-        for start, end in generate_chunks(len(potential_array), chunks=chunks):
-            potential_slics = potential_array[start:end].transmission_function(energy=waves.energy, antialias=True)
-
-            waves_array = waves_array.map_blocks(_run_multislice_precalculated,
-                                                 transmission_functions=potential_slics.array,
-                                                 antialias_kernel_array=antialias_kernel_array,
-                                                 initial_fresnel_propagator=initial_fresnel_propagator,
-                                                 dtype=np.complex64)
-
-    else:
-        waves_array = waves_array.map_blocks(_run_multislice_generated,
-                                             energy=waves.energy,
-                                             potential=potential,
-                                             antialias_kernel_array=antialias_kernel_array,
-                                             initial_fresnel_propagator=initial_fresnel_propagator,
-                                             dtype=np.complex64)
+    waves_array = waves_array.map_blocks(_multislice,
+                                         gpts=waves.gpts,
+                                         sampling=waves.sampling,
+                                         energy=waves.energy,
+                                         slice_thickness=potential.slice_thickness,
+                                         potential=potential.array,
+                                         antialias_kernel_array=antialias_kernel_array,
+                                         meta=xp.array((), dtype=xp.complex64))
 
     waves._array = waves_array
 

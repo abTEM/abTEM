@@ -1,23 +1,9 @@
 from ase.data import chemical_symbols
 
-from abtem.utils import _set_path
+from abtem.ionization.electron_configurations import electron_configurations
 
 azimuthal_number = {'s': 0, 'p': 1, 'd': 2, 'f': 3, 'g': 4, 'h': 5, 'i': 6}
 azimuthal_letter = {value: key for key, value in azimuthal_number.items()}
-
-
-def load_electronic_configurations():
-    configurations = {}
-    with open(_set_path('electron_configurations.txt')) as f:
-        for i, line in enumerate(f):
-            line = line.strip()
-            prefix_start = line.find('[')
-            prefix_end = line.find(']')
-            if prefix_start > -1:
-                line = configurations[line[prefix_start + 1:prefix_end]] + line[prefix_end + 1:]
-
-            configurations[chemical_symbols[i + 1]] = line
-    return configurations
 
 
 def config_str_to_config_tuples(config_str):
@@ -46,7 +32,7 @@ def remove_electron_from_config_str(config_str, n, ell):
 
 def check_valid_quantum_number(Z, n, ell):
     symbol = chemical_symbols[Z]
-    config_tuple = config_str_to_config_tuples(load_electronic_configurations()[symbol])
+    config_tuple = config_str_to_config_tuples(electron_configurations[symbol])
 
     if not any([shell[:2] == (n, ell) for shell in config_tuple]):
         raise RuntimeError(f'Quantum numbers (n, ell) = ({n}, {ell}) not valid for element {symbol}')

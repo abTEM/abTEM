@@ -1,12 +1,13 @@
 from copy import copy
 from typing import Union, Sequence, Tuple, Dict, List
 
+import dask
 import dask.array as da
 import numpy as np
 from ase import Atoms
 
 from abtem.basic.antialias import AntialiasAperture
-from abtem.basic.backend import get_array_module, cp, copy_to_device
+from abtem.basic.backend import get_array_module, cp, copy_to_device, xp_to_str
 from abtem.basic.complex import complex_exponential
 from abtem.basic.dask import HasDaskArray
 from abtem.basic.grid import Grid
@@ -287,14 +288,6 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
         xp = get_array_module(self.array)
 
         def block_reduce_interpolated_S_matrix(positions, S, wave_vectors):
-
-            # if sub_chunks is None:
-            #     sub_chunks = positions.shape
-            # else:
-            #     sub_chunks = sub_chunks + (2,)
-
-            # windows = []
-            # for positions in generate_array_chunks(positions, sub_chunks):
             coefficients = self._get_coefficients(positions.reshape((-1, 2)), wave_vectors)
             crop_corner, size, corners = self._get_minimum_crop(positions)
             upper_corner = (crop_corner[0] + size[0], crop_corner[1] + size[1])
@@ -304,14 +297,17 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
             window = xp.tensordot(coefficients, cropped_S, axes=[-1, -3])
             window = batch_crop_2d(window, corners.reshape((-1, 2)), self.interpolated_gpts)
             window = window.reshape(positions.shape[:-1] + window.shape[-2:])
-            # windows.append(window)
-            # windows = reassemble_chunks_along(windows, positions.shape[0], 0)
-            # windows = xp.concatenate(windows, axis=1)[..., None, :, :]
-
             return window[..., None, :, :]
 
         if self.interpolated_gpts != self.gpts:
-            reduced = None
+            reduced = da.blockwise(block_reduce_interpolated_S_matrix,
+                                   'ijklm',
+                                   positions, 'ijo',
+                                   self.array, 'klm',
+                                   self.wave_vectors, 'kp',
+                                   adjust_chunks={'k': (1,) * len(self.array.chunks[-3])},
+                                   concatenate=True,
+                                   meta=xp.array((), dtype=xp.complex64))
         else:
             reduced = da.blockwise(block_reduce_interpolated_S_matrix,
                                    'ijklm',
@@ -335,16 +331,18 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
 
         positions = positions.get_positions(chunks)
 
-        reduced = da.blockwise(block_reduce,
-                               'ijklm',
-                               positions, 'ijo',
-                               self.array, 'klm',
-                               self.wave_vectors, 'kp',
-                               adjust_chunks={'k': (1,) * len(self.array.chunks[-3])},
-                               concatenate=True,
-                               meta=xp.array((), dtype=xp.complex64))
+        return self._do_reduce(positions)
 
-        return reduced.sum(-3)
+        # reduced = da.blockwise(block_reduce,
+        #                        'ijklm',
+        #                        positions, 'ijo',
+        #                        self.array, 'klm',
+        #                        self.wave_vectors, 'kp',
+        #                        adjust_chunks={'k': (1,) * len(self.array.chunks[-3])},
+        #                        concatenate=True,
+        #                        meta=xp.array((), dtype=xp.complex64))
+
+        # return reduced.sum(-3)
 
     def reduce(self, positions: Sequence[Sequence[float]] = None, chunks: int = None) -> Waves:
         """
@@ -674,10 +672,6 @@ class SMatrix(AbstractScannedWaves):
 
         return self.multislice(potential).downsample().scan(scan, detectors)
 
-    @property
-    def is_partial(self):
-        return self._num_partitions is not None
-
     def __len__(self):
         return len(self.wave_vectors)
 
@@ -686,23 +680,41 @@ class SMatrix(AbstractScannedWaves):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
+        def prism_wave_vectors(cutoff, extent, wavelength, interpolation, xp):
+            xp = get_array_module(xp)
+
+            n_max = int(xp.ceil(cutoff / 1.e3 / (wavelength / extent[0] * interpolation)))
+            m_max = int(xp.ceil(cutoff / 1.e3 / (wavelength / extent[1] * interpolation)))
+
+            n = xp.arange(-n_max, n_max + 1, dtype=np.float32)
+            w = xp.asarray(extent[0], dtype=np.float32)
+            m = xp.arange(-m_max, m_max + 1, dtype=np.float32)
+            h = xp.asarray(extent[1], dtype=np.float32)
+
+            kx = n / w * np.float32(interpolation)
+            ky = m / h * np.float32(interpolation)
+
+            mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (cutoff / 1.e3 / wavelength) ** 2
+            kx, ky = xp.meshgrid(kx, ky, indexing='ij')
+            kx = kx[mask]
+            ky = ky[mask]
+            return xp.asarray((kx, ky)).T
+
         xp = get_array_module(self._device)
-        n_max = int(xp.ceil(self.expansion_cutoff / 1.e3 / (self.wavelength / self.extent[0] * self.interpolation)))
-        m_max = int(xp.ceil(self.expansion_cutoff / 1.e3 / (self.wavelength / self.extent[1] * self.interpolation)))
+        wave_vectors = dask.delayed(prism_wave_vectors)(self.expansion_cutoff,
+                                                        self.extent,
+                                                        self.wavelength,
+                                                        self.interpolation,
+                                                        xp_to_str(xp))
 
-        n = xp.arange(-n_max, n_max + 1, dtype=np.float32)
-        w = xp.asarray(self.extent[0], dtype=np.float32)
-        m = xp.arange(-m_max, m_max + 1, dtype=np.float32)
-        h = xp.asarray(self.extent[1], dtype=np.float32)
+        n = len(prism_wave_vectors(self.expansion_cutoff,
+                                   self.extent,
+                                   self.wavelength,
+                                   self.interpolation,
+                                   xp_to_str(xp)))
 
-        kx = n / w * np.float32(self.interpolation)
-        ky = m / h * np.float32(self.interpolation)
-
-        mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (self.expansion_cutoff / 1.e3 / self.wavelength) ** 2
-        kx, ky = xp.meshgrid(kx, ky, indexing='ij')
-        kx = kx[mask]
-        ky = ky[mask]
-        return da.from_array(xp.asarray((kx, ky)).T, chunks=(self.chunks, -1))
+        wave_vectors = da.from_delayed(wave_vectors, shape=(n, 2), dtype=np.float32)
+        return wave_vectors.rechunk(chunks=(self.chunks, 2))
 
     def _build_convential(self):
         wave_vectors = self.wave_vectors

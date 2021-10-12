@@ -111,12 +111,12 @@ def fft_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
     n = len(positions.shape) - 1
     k = list(spatial_frequencies(shape, (1.,) * dims, delayed=False, xp=xp))
 
-    positions = [np.expand_dims(positions[..., i], list(range(n, n + dims))) for i in range(dims)]
+    positions = [np.expand_dims(positions[..., i], tuple(range(n, n + dims))) for i in range(dims)]
 
     for i in range(dims):
         d = list(range(0, n)) + list(range(n, n + dims))
         del d[i + n]
-        k[i] = complex_exponential(- 2 * np.pi * np.expand_dims(k[i], d) * positions[i])
+        k[i] = complex_exponential(- 2 * np.pi * np.expand_dims(k[i], tuple(d)) * positions[i])
 
     array = k[0]
     for i in range(1, dims):
@@ -203,27 +203,16 @@ def fft2_interpolate(array, new_shape, normalization='values', overwrite_x=False
 
     old_size = array.shape[-2] * array.shape[-1]
 
-    def _fft2_interpolate(array, new_shape):
-        return ifft2(fft_crop(fft2(array), new_shape), overwrite_x=overwrite_x)
+    #def _fft2_interpolate(array, new_shape):
+    #    return ifft2(fft_crop(fft2(array), new_shape), overwrite_x=overwrite_x)
 
     is_complex = np.iscomplexobj(array)
-
-    array = xp.complex64(array)
+    array = array.astype(xp.complex64)
 
     array = ifft2(fft_crop(fft2(array), new_shape), overwrite_x=overwrite_x)
 
     if not is_complex:
         array = array.real
-
-    # if np.iscomplexobj(array):
-    #     # array = array.map_blocks(_fft2_interpolate, new_shape=new_shape[-2:],
-    #     #                          chunks=array.chunks[:-2] + ((new_shape[-2],), (new_shape[-1],)),
-    #     #                          meta=xp.array((), dtype=xp.complex64))
-    #
-    #     array = xp.complex64(array)
-    #     array = ifft2(fft_crop(fft2(array), new_shape), overwrite_x=overwrite_x).real
-    #
-    # else:
 
     if normalization == 'values':
         array *= array.shape[-1] * array.shape[-2] / old_size

@@ -19,23 +19,23 @@ def format_label(calibration):
     return label
 
 
-def add_domain_coloring_cbar(ax, abs_range, aspect=7):
+def add_domain_coloring_cbar(ax, abs_range, aspect=4):
     divider = make_axes_locatable(ax)
-    cax = divider.append_axes("right", size="20%", pad=0.2, aspect=aspect)
+    cax = divider.append_axes("right", size="30%", pad=0.3, aspect=aspect)
     cax.yaxis.tick_right()
     cax.yaxis.set_label_position('right')
 
     cbar_array = np.linspace(0, 1, 100)
-    cbar_array = cbar_array[None] * np.exp(1.j * np.linspace(0, 2 * np.pi, 100))[:, None]
+    cbar_array = cbar_array[None] * np.exp(1.j * np.linspace(-np.pi, np.pi, 100))[:, None]
 
     cax.set_xticks([0, 99])
-    cax.set_xticklabels([f'{n:.2}' for n in abs_range])
+    cax.set_xticklabels([f'{n:.1e}' for n in abs_range])
     cax.set_yticks(np.linspace(0, 99, 5))
     cax.set_yticklabels(["-π", "-π/2", "0", "π/2", "π"])
     cax.set_xlabel('abs')
     cax.set_ylabel('arg')
 
-    cax.imshow(domain_coloring(cbar_array), aspect=aspect)
+    cax.imshow(domain_coloring(cbar_array), aspect=aspect, origin='lower')
 
 
 def domain_coloring(z):

@@ -11,7 +11,7 @@ import zarr
 from ase import Atom
 
 from abtem.basic.axes import HasAxesMetadata
-from abtem.basic.backend import cp, asnumpy, get_array_module, get_scipy_module
+from abtem.basic.backend import cp, asnumpy, get_array_module, get_scipy_module, get_ndimage_module
 from abtem.basic.dask import computable, HasDaskArray, requires_dask_array
 from abtem.basic.fft import fft2_interpolate
 from abtem.basic.interpolate import interpolate_bilinear
@@ -111,16 +111,16 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
         axes = self._validate_axes(axes)
         return len(set(axes).intersection(self.base_axes)) > 0
 
-    def mean(self, axes=None):
-        return self._reduction(da.mean, axes=axes)
+    def mean(self, axes=None, split_every=2):
+        return self._reduction(da.mean, axes=axes, split_every=split_every)
 
-    def sum(self, axes=None):
-        return self._reduction(da.mean, axes=axes)
+    def sum(self, axes=None, split_every=2):
+        return self._reduction(da.sum, axes=axes, split_every=split_every)
 
-    def std(self, axes=None):
-        return self._reduction(da.std, axes=axes)
+    def std(self, axes=None, split_every=2):
+        return self._reduction(da.std, axes=axes, split_every=split_every)
 
-    def _reduction(self, reduction_func, axes=None):
+    def _reduction(self, reduction_func, axes=None, split_every=2):
         if axes is None:
             axes = self.collection_axes
 
@@ -129,7 +129,7 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
 
         axes_metadata = self._remove_axes_metadata(axes)
         new_copy = self.copy(copy_array=False)
-        new_copy._array = reduction_func(new_copy._array, axes)
+        new_copy._array = reduction_func(new_copy._array, axes, split_every=split_every)
         new_copy._axes_metadata = axes_metadata
         return new_copy
 
@@ -202,7 +202,7 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
     def to_zarr(self, url, overwrite=False):
         pass
 
-    def asnumpy(self):
+    def to_cpu(self):
         new_copy = self.copy(copy_array=False)
         new_copy._array = asnumpy(self._array)
         return new_copy
@@ -412,22 +412,25 @@ class Images(AbstractMeasurement):
         return self.__class__(new_array, sampling=self.sampling, axes_metadata=copy.copy(self.axes_metadata),
                               metadata=copy.copy(self.metadata))
 
+    @requires_dask_array
     def gaussian_filter(self, sigma: Union[float, Tuple[float, float]], boundary: str = 'periodic'):
         xp = get_array_module(self.array)
-        scipy = get_scipy_module(self._array)
+        ndimage = get_ndimage_module(self._array)
+
+        gaussian_filter = ndimage.gaussian_filter
 
         if isinstance(sigma, Number):
             sigma = (sigma,) * 2
 
         sigma = (0,) * (len(self.shape) - 2) + tuple(s / d for s, d in zip(sigma, self.sampling))
 
-        array = self.array.map_overlap(scipy.ndimage.gaussian_filter,
+        array = self.array.map_overlap(gaussian_filter,
                                        sigma=sigma,
                                        boundary=boundary,
                                        depth=(0,) * (len(self.shape) - 2) + (int(np.ceil(4.0 * max(sigma))),) * 2,
                                        meta=xp.array((), dtype=xp.float32))
 
-        return self.__class__(array, axes_metadata=self.axes_metadata, metadata=self.metadata)
+        return self.__class__(array, sampling=self.sampling, axes_metadata=self.axes_metadata, metadata=self.metadata)
 
     def show(self, ax=None, cbar=False, power=1., **kwargs):
         self.compute(pbar=False)
@@ -439,17 +442,17 @@ class Images(AbstractMeasurement):
 
         array = asnumpy(self._array)[slic].T ** power
 
-        is_complex = np.iscomplexobj(array)
+        if np.iscomplexobj(array):
+            colored_array = domain_coloring(array)
+        else:
+            colored_array = array
 
-        if is_complex:
-            array = domain_coloring(array)
-
-        im = ax.imshow(array, extent=[0, self.extent[0], 0, self.extent[1]], origin='lower', **kwargs)
+        im = ax.imshow(colored_array, extent=[0, self.extent[0], 0, self.extent[1]], origin='lower', **kwargs)
         ax.set_xlabel('x [Å]')
         ax.set_ylabel('y [Å]')
 
         if cbar:
-            if is_complex:
+            if np.iscomplexobj(array):
                 abs_array = np.abs(array)
                 add_domain_coloring_cbar(ax, (abs_array.min(), abs_array.max()))
             else:
@@ -494,8 +497,13 @@ class LineProfiles(AbstractMeasurement):
     def sampling(self) -> float:
         return self._linescan.sampling[0]
 
+    @property
     def base_axes_metadata(self) -> list:
-        raise [{'sampling': self.sampling}]
+        return [{'sampling': self.sampling}]
+
+    def tile(self):
+        new_copy = self.copy(copy_array=False)
+        # new_copy._array
 
     def to_hyperspy(self):
         from hyperspy._signals.signal1d import Signal1D
@@ -504,17 +512,21 @@ class LineProfiles(AbstractMeasurement):
     def to_zarr(self, url, overwrite=False):
         self._to_zarr(url=url, overwrite=overwrite, sampling=self.sampling)
 
-    def show(self, ax=None, title=''):
+    def show(self, ax=None, title='', label=None):
         if ax is None:
             ax = plt.subplot()
 
-        ax.plot(self.array.reshape((-1, self.array.shape[-1])).T)
+        ax.plot(self.array.reshape((-1, self.array.shape[-1])).T, label=label)
         ax.set_title(title)
 
         return ax
 
-    def copy(self):
-        pass
+    def copy(self, copy_array=True) -> 'LineProfiles':
+        if copy_array:
+            array = self._array.copy()
+        else:
+            array = self._array
+        return self.__class__(array, start=self.start, end=self.end, axes_metadata=copy.deepcopy(self.axes_metadata))
 
 
 class RadialFourierSpaceLineProfiles(LineProfiles):
@@ -662,6 +674,28 @@ class DiffractionPatterns(AbstractMeasurement):
         if (angle > self.max_angles[0]) or (angle > self.max_angles[1]):
             raise RuntimeError('integration angle exceeds the maximum simulated angle')
 
+    def gaussian_filter(self, sigma: Union[float, Tuple[float, float]], boundary: str = 'periodic'):
+        xp = get_array_module(self.array)
+        ndimage = get_ndimage_module(self._array)
+
+        gaussian_filter = ndimage.gaussian_filter
+
+        if isinstance(sigma, Number):
+            sigma = (sigma,) * 2
+
+        sampling = [self.axes_metadata[axis]['sampling'] for axis in self.scan_axes]
+
+        sigma = (0,) + tuple(s / d for s, d in zip(sigma, sampling)) + (0,) * 2
+
+        array = self.array.map_overlap(gaussian_filter,
+                                       sigma=sigma,
+                                       boundary=boundary,
+                                       depth=(0,) + (int(np.ceil(4.0 * max(sigma))),) * 2 + (0,) * 2,
+                                       meta=xp.array((), dtype=xp.float32))
+
+        return self.__class__(array, angular_sampling=self.angular_sampling, axes_metadata=self.axes_metadata,
+                              metadata=self.metadata, fftshift=self.fftshift)
+
     @computable
     @requires_dask_array
     def polar_binning(self, nbins_radial, nbins_azimuthal, inner, outer, rotation=0.):
@@ -781,6 +815,7 @@ class DiffractionPatterns(AbstractMeasurement):
 
         return Images(array=icom, sampling=sampling, axes_metadata=self.axes_metadata, metadata=self.metadata)
 
+    @requires_dask_array
     def center_of_mass(self):
 
         x, y = self.angular_coordinates()
@@ -795,8 +830,9 @@ class DiffractionPatterns(AbstractMeasurement):
         return Images(array=com, sampling=sampling, axes_metadata=self.axes_metadata, metadata=self.metadata)
 
     def angular_coordinates(self):
-        alpha_x = np.linspace(self.fourier_space_extent[0][0], self.fourier_space_extent[0][1], self.shape[-2])
-        alpha_y = np.linspace(self.fourier_space_extent[1][0], self.fourier_space_extent[1][1], self.shape[-1])
+        xp = get_array_module(self.array)
+        alpha_x = xp.linspace(self.fourier_space_extent[0][0], self.fourier_space_extent[0][1], self.shape[-2])
+        alpha_y = xp.linspace(self.fourier_space_extent[1][0], self.fourier_space_extent[1][1], self.shape[-1])
         return alpha_x, alpha_y
 
     @computable

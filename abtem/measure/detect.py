@@ -20,12 +20,17 @@ def check_cutoff_angle(waves, angle):
 class AbstractDetector(metaclass=ABCMeta):
     """Abstract base class for all detectors."""
 
-    def __init__(self, ensemble_mean=True):
+    def __init__(self, ensemble_mean=True, to_cpu=True):
         self._ensemble_mean = ensemble_mean
+        self._to_cpu = to_cpu
 
     @property
     def ensemble_mean(self):
         return self._ensemble_mean
+
+    @property
+    def to_cpu(self):
+        return self._to_cpu
 
     @abstractmethod
     def detect(self, waves) -> Any:
@@ -59,11 +64,11 @@ class AnnularDetector(AbstractDetector):
         The path to the file for saving the detector output.
     """
 
-    def __init__(self, inner: float, outer: float, offset: Tuple[float, float] = None, ensemble_mean=True):
+    def __init__(self, inner: float, outer: float, offset: Tuple[float, float] = None, ensemble_mean=True, to_cpu=True):
         self._inner = inner
         self._outer = outer
         self._offset = offset
-        super().__init__(ensemble_mean=ensemble_mean)
+        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu)
 
     @property
     def inner(self) -> float:
@@ -98,6 +103,9 @@ class AnnularDetector(AbstractDetector):
 
     def detect(self, probes):
         measurement = probes.diffraction_patterns().integrate_radial(inner=self.inner, outer=self.outer)
+
+        if self._to_cpu:
+            measurement = measurement.to_cpu()
 
         if probes.num_ensemble_axes > 0 and self.ensemble_mean:
             measurement = measurement.mean(probes.ensemble_axes)
@@ -323,10 +331,11 @@ class PixelatedDetector(AbstractDetector):
 
     def __init__(self,
                  max_angle: Union[str, float] = 'valid',
-                 ensemble_mean: bool = True):
+                 ensemble_mean: bool = True,
+                 to_cpu=True):
 
         self._max_angle = max_angle
-        super().__init__(ensemble_mean=ensemble_mean)
+        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu)
 
     @property
     def max_angle(self):
@@ -402,8 +411,11 @@ class PixelatedDetector(AbstractDetector):
     def detect(self, waves) -> np.ndarray:
         measurements = waves.diffraction_patterns(max_angle=self.max_angle)
 
-        if waves.num_ensemble_axes > 0:
+        if (waves.num_ensemble_axes > 0) & self.ensemble_mean:
             measurements = measurements.mean(waves.ensemble_axes)
+
+        if self.to_cpu:
+            measurements = measurements.to_cpu()
 
         return measurements
 

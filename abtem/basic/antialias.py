@@ -6,7 +6,7 @@ from abtem.basic.backend import get_array_module, xp_to_str
 from abtem.basic.fft import fft2_convolve
 from abtem.basic.grid import polar_spatial_frequencies
 
-TAPER = 0.025
+TAPER = 0.01
 CUTOFF = 2 / 3.
 
 
@@ -38,7 +38,7 @@ class AntialiasFilter:
     Antialias filter object.
     """
 
-    _taper = 0.025
+    _taper = 0.01
     _cutoff = 2 / 3.
 
     @property

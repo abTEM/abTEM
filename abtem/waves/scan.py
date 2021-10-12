@@ -1,13 +1,17 @@
 """Module for describing different types of scans."""
 from abc import ABCMeta, abstractmethod
 from copy import copy
+from numbers import Number
 from typing import Union, Sequence, Tuple
 
+import dask.bag
 import numpy as np
 from ase import Atom
 from matplotlib.patches import Rectangle
 
 from abtem.basic.grid import Grid, HasGridMixin
+import dask
+import dask.array as da
 
 
 class AbstractScan(metaclass=ABCMeta):
@@ -35,7 +39,7 @@ class AbstractScan(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def get_positions(self):
+    def get_positions(self, *args, **kwargs):
         """Get the scan positions as numpy array."""
         pass
 
@@ -173,6 +177,7 @@ class LineScan(AbstractScan, HasGridMixin):
         return self.end[0] + self.direction[0] * self.margin, self.end[1] + self.direction[1] * self.margin
 
     def get_positions(self) -> np.ndarray:
+
         start = self.margin_start
         end = self.margin_end
         x = np.linspace(start[0], end[0], self.gpts[0], endpoint=self.grid.endpoint[0])
@@ -284,12 +289,21 @@ class GridScan(HasGridMixin, AbstractScan):
                 {'label': 'y', 'type': 'gridscan', 'sampling': float(self.sampling[1]), 'offset': float(self.start[1]),
                  'units': 'Å'}]
 
-    def get_positions(self) -> np.ndarray:
-        x = np.linspace(self.start[0], self.end[0], self.gpts[0], endpoint=self.grid.endpoint[0], dtype=np.float32)
-        y = np.linspace(self.start[1], self.end[1], self.gpts[1], endpoint=self.grid.endpoint[1], dtype=np.float32)
+    def get_positions(self, chunks) -> np.ndarray:
+        def gridscan_positions(start, end, gpts, endpoint):
+            x = np.linspace(start[0], end[0], gpts[0], endpoint=endpoint[0], dtype=np.float32)
+            y = np.linspace(start[1], end[1], gpts[1], endpoint=endpoint[1], dtype=np.float32)
 
-        x, y = np.meshgrid(x, y, indexing='ij')
-        return np.stack((x, y), axis=-1)
+            x, y = np.meshgrid(x, y, indexing='ij')
+            return np.stack((x, y), axis=-1)
+
+        if isinstance(chunks, Number):
+            chunks = (int(np.floor(np.sqrt(chunks))),) * 2
+
+        positions = dask.delayed(gridscan_positions, pure=True)(self.start, self.end, self.gpts, self.grid.endpoint)
+        positions = da.from_delayed(positions, shape=self.gpts + (2,), dtype=np.float32)
+        positions = positions.rechunk(chunks + (2,))
+        return positions
 
     def add_to_plot(self, ax, alpha: float = .33, facecolor: str = 'r', edgecolor: str = 'r', **kwargs):
         """

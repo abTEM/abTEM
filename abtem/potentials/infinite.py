@@ -44,7 +44,7 @@ def superpose_deltas(positions, slice_idx, array):
     return array
 
 
-def infinite_potential_projections(positions, numbers, slice_idx, shape, sampling, scattering_factors, unique):
+def infinite_potential_projections(positions, numbers, slice_idx, shape, sampling, scattering_factors):
     xp = get_array_module(scattering_factors)
 
     if len(positions) == 0:
@@ -55,6 +55,8 @@ def infinite_potential_projections(positions, numbers, slice_idx, shape, samplin
     positions = xp.asarray(positions / sampling)
 
     temp = xp.zeros_like(array, dtype=np.complex64)
+
+    unique = np.unique(numbers)
     for i, number in enumerate(unique):
         if len(unique) > 1:
             if i > 0:
@@ -76,3 +78,5 @@ def infinite_potential_projections(positions, numbers, slice_idx, shape, samplin
     array -= array.min()
 
     return array
+
+

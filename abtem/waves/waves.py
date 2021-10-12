@@ -11,7 +11,7 @@ from ase import Atoms
 
 from abtem.basic.antialias import AntialiasAperture
 from abtem.basic.axes import HasAxesMetadata
-from abtem.basic.backend import get_array_module
+from abtem.basic.backend import get_array_module, xp_to_str
 from abtem.basic.complex import abs2
 from abtem.basic.dask import computable, requires_dask_array, HasDaskArray, BuildsDaskArray
 from abtem.basic.energy import Accelerator
@@ -229,12 +229,9 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
 
         potential = self._validate_potential(potential)
 
-        if potential.num_frozen_phonons == 1:
-            return multislice(self, potential, chunks=chunks)
-
         exit_waves = []
         for p in potential.frozen_phonon_potentials():
-            exit_waves.append(multislice(self.copy(), p, chunks=chunks))
+            exit_waves.append(multislice(self.copy(), p))
 
         array = da.stack([exit_wave.array for exit_wave in exit_waves], axis=0)
 
@@ -369,11 +366,18 @@ class PlaneWave(WavesLikeMixin):
         """Build the plane wave function as a Waves object."""
         xp = get_array_module(self._device)
         self.grid.check_is_defined()
-        array = da.from_array(xp.ones((self.gpts[0], self.gpts[1]), dtype=xp.complex64), chunks=(-1, -1))
+
+        def plane_wave(gpts, xp):
+            xp = get_array_module(xp)
+            return xp.ones(gpts, dtype=xp.complex64)
+
+        array = dask.delayed(plane_wave)(self.gpts, xp_to_str(xp))
+        array = da.from_delayed(array, shape=self.gpts, meta=xp.array((), dtype=xp.complex64))
         return Waves(array, extent=self.extent, energy=self.energy)
 
     def __copy__(self) -> 'PlaneWave':
-        return self.__class__(extent=self.extent, gpts=self.gpts, sampling=self.sampling, energy=self.energy)
+        return self.__class__(extent=self.extent, gpts=self.gpts, sampling=self.sampling, energy=self.energy,
+                              device=self._device)
 
 
 class Probe(AbstractScannedWaves, BuildsDaskArray):
@@ -451,7 +455,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         return array
 
     @computable
-    def build(self, positions: Union[Sequence[Sequence[float]], AbstractScan] = None) -> Waves:
+    def build(self, positions: Union[Sequence[Sequence[float]], AbstractScan] = None, chunks=1) -> Waves:
         """
         Build probe wave functions at the provided positions.
 
@@ -470,13 +474,13 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
 
         if isinstance(positions, AbstractScan):
             axes_metadata = positions.axes_metadata
-            positions = positions.get_positions()
+            positions = positions.get_positions(chunks)
         else:
             axes_metadata = [{'type': 'positions'}]
 
-        positions = self._validate_positions(positions)
+        # positions = self._validate_positions(positions)
 
-        positions = da.from_array(positions, chunks=self._compute_chunks(len(positions.shape) - 1))
+        # positions = da.from_array(positions, chunks=self._compute_chunks(len(positions.shape) - 1))
 
         xp = get_array_module(self._device)
 
@@ -491,7 +495,8 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
 
     def multislice(self,
                    potential: AbstractPotential,
-                   positions: Union[Sequence[Sequence[float]], AbstractScan] = None) -> Waves:
+                   positions: Union[Sequence[Sequence[float]], AbstractScan] = None,
+                   chunks=1) -> Waves:
         """
         Build probe wave functions at the provided positions and propagate them through the potential.
 
@@ -512,7 +517,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
 
         potential = self._validate_potential(potential)
 
-        return self.build(positions).multislice(potential)
+        return self.build(positions, chunks=chunks).multislice(potential)
 
     @computable
     def scan(self,
@@ -545,9 +550,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         dict
             Dictionary of measurements with keys given by the detector.
         """
-
-        exit_waves = self.multislice(potential=potential, positions=scan)
-
+        exit_waves = self.multislice(potential=potential, positions=scan, chunks=chunks)
         return exit_waves.detect(detectors)
 
     def profile(self, angle=0.):

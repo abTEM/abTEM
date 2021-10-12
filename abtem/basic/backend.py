@@ -71,6 +71,18 @@ def get_scipy_module(x):
         return cupyx.scipy
 
 
+def get_ndimage_module(x):
+    xp = get_array_module(x)
+
+    if xp is np:
+        import scipy.ndimage
+        return scipy.ndimage
+
+    if xp is cp:
+        import cupyx.scipy.ndimage
+        return cupyx.scipy.ndimage
+
+
 def asnumpy(array):
     if cp is None:
         return array
@@ -82,12 +94,16 @@ def asnumpy(array):
 
 
 def copy_to_device(array, device):
-    xp = get_array_module(device)
+    old_xp = get_array_module(array)
+    new_xp = get_array_module(device)
 
-    if xp is np:
+    if old_xp is new_xp:
         return array
 
-    if xp is cp:
+    if new_xp is np:
+        return cp.asnumpy(array)
+
+    if new_xp is cp:
         return cp.asarray(array)
 
     raise RuntimeError()

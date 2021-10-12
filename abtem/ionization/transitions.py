@@ -6,20 +6,23 @@ from typing import Union, Sequence, Tuple
 import numpy as np
 from ase import units
 from ase.data import chemical_symbols
-
 from scipy import integrate
 from scipy.interpolate import interp1d
 from scipy.special import spherical_jn, sph_harm
 
-from abtem.base_classes import HasAcceleratorMixin, HasGridMixin, Grid, Accelerator, Cache, cached_method
-from abtem.device import get_array_module, get_device_function
+from abtem.basic.backend import get_array_module
+from abtem.basic.energy import HasAcceleratorMixin, Accelerator, energy2wavelength, relativistic_mass_correction
+from abtem.basic.fft import fft_shift_kernel
+from abtem.basic.grid import HasGridMixin, Grid, polar_spatial_frequencies
+from abtem.ionization.electron_configurations import electron_configurations
 from abtem.ionization.utils import check_valid_quantum_number, config_str_to_config_tuples, \
-    remove_electron_from_config_str, load_electronic_configurations
-from abtem.measure import Measurement, calibrations_from_grid
-from abtem.utils import energy2wavelength, spatial_frequencies, polar_coordinates, \
-    relativistic_mass_correction, fourier_translation_operator
-from abtem.utils import ProgressBar
-from abtem.structures import SlicedAtoms
+    remove_electron_from_config_str
+from abtem.structures.slicing import SlicedAtoms
+from abtem.measure.measure import Images
+
+
+# spatial_frequencies, polar_coordinates, \
+# relativistic_mass_correction,
 
 
 class AbstractTransitionCollection(metaclass=ABCMeta):
@@ -46,9 +49,6 @@ class SubshellTransitions(AbstractTransitionCollection):
         self._min_contrast = min_contrast
         self._epsilon = epsilon
         self._xc = xc
-
-        self._bound_cache = Cache(1)
-        self._continuum_cache = Cache(1)
         super().__init__(Z)
 
     @property
@@ -97,18 +97,17 @@ class SubshellTransitions(AbstractTransitionCollection):
 
     @property
     def bound_configuration(self):
-        return load_electronic_configurations()[chemical_symbols[self.Z]]
+        return electron_configurations[chemical_symbols[self.Z]]
 
     @property
     def excited_configuration(self):
         return remove_electron_from_config_str(self.bound_configuration, self.n, self.l)
 
-    @cached_method('_bound_cache')
     def _calculate_bound(self):
         from gpaw.atom.all_electron import AllElectron
 
         check_valid_quantum_number(self.Z, self.n, self.l)
-        config_tuples = config_str_to_config_tuples(load_electronic_configurations()[chemical_symbols[self.Z]])
+        config_tuples = config_str_to_config_tuples(electron_configurations[chemical_symbols[self.Z]])
         subshell_index = [shell[:2] for shell in config_tuples].index((self.n, self.l))
 
         with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
@@ -118,12 +117,11 @@ class SubshellTransitions(AbstractTransitionCollection):
         # wave = interp1d(ae.r, ae.u_j[subshell_index], kind='cubic', fill_value='extrapolate', bounds_error=False)
         return ae.ETotal * units.Hartree, (ae.r, ae.u_j[subshell_index])
 
-    @cached_method('_continuum_cache')
     def _calculate_continuum(self):
         from gpaw.atom.all_electron import AllElectron
 
         check_valid_quantum_number(self.Z, self.n, self.l)
-        config_tuples = config_str_to_config_tuples(load_electronic_configurations()[chemical_symbols[self.Z]])
+        config_tuples = config_str_to_config_tuples(electron_configurations[chemical_symbols[self.Z]])
         subshell_index = [shell[:2] for shell in config_tuples].index((self.n, self.l))
 
         with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
@@ -193,12 +191,9 @@ class SubshellTransitions(AbstractTransitionCollection):
                                   extent: Union[float, Sequence[float]] = None,
                                   gpts: Union[float, Sequence[float]] = None,
                                   sampling: Union[float, Sequence[float]] = None,
-                                  energy: float = None,
-                                  pbar=True):
+                                  energy: float = None, ):
 
         transitions = []
-        if isinstance(pbar, bool):
-            pbar = ProgressBar(total=len(self), desc='Transitions', disable=(not pbar))
 
         _, bound_wave = self._calculate_bound()
         _, continuum_waves = self._calculate_continuum()
@@ -223,10 +218,7 @@ class SubshellTransitions(AbstractTransitionCollection):
                                                    energy=energy
                                                    )
             transitions += [transition]
-            pbar.update(1)
 
-        pbar.refresh()
-        pbar.close()
         return transitions
 
 
@@ -253,8 +245,7 @@ class SubshellTransitionsArrays:
                                   extent: Union[float, Sequence[float]] = None,
                                   gpts: Union[float, Sequence[float]] = None,
                                   sampling: Union[float, Sequence[float]] = None,
-                                  energy: float = None,
-                                  pbar=True):
+                                  energy: float = None):
         transitions = []
 
         bound_wave = self._bound_wave
@@ -293,7 +284,6 @@ class SubshellTransitionsArrays:
 
     @classmethod
     def read(cls, f):
-
         data = np.load(f, allow_pickle=True)
         Z = data['Z']
         bound_wave = data['bound_wave']
@@ -301,15 +291,6 @@ class SubshellTransitionsArrays:
         bound_state = tuple(data['bound_state'])
         continuum_states = [tuple(state) for state in data['continuum_states']]
         energy_loss = data['energy_loss']
-
-        #print(bound_state)
-        #print(continuum_states)
-        #print(Z)
-        #print(bound_wave)
-        #print(continuum_waves)
-        #print(energy_loss)
-
-
         return cls(Z=Z, bound_wave=bound_wave, continuum_waves=continuum_waves, bound_state=bound_state,
                    continuum_states=continuum_states, energy_loss=energy_loss)
 
@@ -341,9 +322,6 @@ class ProjectedAtomicTransition(AbstractProjectedAtomicTransition):
         self._bound_state = bound_state
         self._continuum_state = continuum_state
         self._energy_loss = energy_loss
-
-        self._cache = Cache(1)
-
         super().__init__(Z, extent, gpts, sampling, energy)
 
     def __str__(self):
@@ -360,7 +338,7 @@ class ProjectedAtomicTransition(AbstractProjectedAtomicTransition):
         return k0 - kn
 
     def _fourier_translation_operator(self, positions):
-        return fourier_translation_operator(positions, self.gpts)
+        return fft_shift_kernel(positions, self.gpts)
 
     def build(self, positions=None):
         if positions is None:
@@ -390,7 +368,6 @@ class ProjectedAtomicTransition(AbstractProjectedAtomicTransition):
                   self._continuum_wave(r))
         return np.trapz(values, r, axis=1)
 
-    @cached_method('_cache')
     def _evaluate_potential(self):
         from sympy.physics.wigner import wigner_3j
 
@@ -399,10 +376,10 @@ class ProjectedAtomicTransition(AbstractProjectedAtomicTransition):
 
         potential = np.zeros(self.gpts, dtype=np.complex64)
 
-        kx, ky = spatial_frequencies(self.gpts, self.sampling)
+        # kx, ky = spatial_frequencies(self.gpts, self.sampling)
         kz = self.momentum_transfer
 
-        kt, phi = polar_coordinates(kx, ky)
+        kt, phi = polar_spatial_frequencies(self.gpts, self.sampling, delayed=False)
         k = np.sqrt(kt ** 2 + kz ** 2)
         theta = np.pi - np.arctan(kt / kz)
 
@@ -454,18 +431,18 @@ class ProjectedAtomicTransition(AbstractProjectedAtomicTransition):
         )
         return potential
 
-    def measure(self):
+    def to_images(self):
         array = np.fft.fftshift(self.build())[0]
-        calibrations = calibrations_from_grid(self.gpts, self.sampling, ['x', 'y'])
-        abs2 = get_device_function(get_array_module(array), 'abs2')
-        return Measurement(array, calibrations, name=str(self))
+        return Images(array, sampling=self.sampling)
 
-    def show(self, ax, **kwargs):
-        # array = np.fft.fftshift(self.build())[0]
-        # calibrations = calibrations_from_grid(self.gpts, self.sampling, ['x', 'y'])
-        # abs2 = get_device_function(get_array_module(array), 'abs2')
-        self.measure().show(ax=ax)
-        # Measurement(abs2(array), calibrations, name=str(self)).show(**kwargs)
+    def show(self, **kwargs):
+        self.to_images().show(**kwargs)
+
+    #     # array = np.fft.fftshift(self.build())[0]
+    #     # calibrations = calibrations_from_grid(self.gpts, self.sampling, ['x', 'y'])
+    #     # abs2 = get_device_function(get_array_module(array), 'abs2')
+    #     self.to_images().show(ax=ax)
+    # Measurement(abs2(array), calibrations, name=str(self)).show(**kwargs)
 
 
 class TransitionPotential(HasAcceleratorMixin, HasGridMixin):
@@ -491,9 +468,7 @@ class TransitionPotential(HasAcceleratorMixin, HasGridMixin):
 
         self._accelerator = Accelerator(energy=energy)
 
-        self._sliced_atoms = SlicedAtoms(atoms, slice_thicknesses=self._slice_thickness)
-
-        self._potentials_cache = Cache(1)
+        self._sliced_atoms = SlicedAtoms(atoms, slice_thickness=self._slice_thickness)
 
     @property
     def atoms(self):
@@ -505,7 +480,7 @@ class TransitionPotential(HasAcceleratorMixin, HasGridMixin):
 
         if atoms is not None:
             self.extent = np.diag(atoms.cell)[:2]
-            self._sliced_atoms = SlicedAtoms(atoms, slice_thicknesses=self._slice_thickness)
+            self._sliced_atoms = SlicedAtoms(atoms, slice_thickness=self._slice_thickness)
         else:
             self._sliced_atoms = None
 
@@ -517,31 +492,23 @@ class TransitionPotential(HasAcceleratorMixin, HasGridMixin):
     def num_slices(self):
         return self._sliced_atoms.num_slices
 
-    @cached_method('_potentials_cache')
     def _calculate_potentials(self, transitions_idx):
         transitions = self._transitions[transitions_idx]
-        return transitions.get_transition_potentials(extent=self.extent, gpts=self.gpts, energy=self.energy, pbar=False)
+        return transitions.get_transition_potentials(extent=self.extent, gpts=self.gpts, energy=self.energy)
 
     def _generate_slice_transition_potentials(self, slice_idx, transitions_idx):
         transitions = self._transitions[transitions_idx]
         Z = transitions.Z
 
-        atoms_slice = self._sliced_atoms.get_subsliced_atoms(slice_idx, atomic_number=Z).atoms
+        atoms_slice = self._sliced_atoms.get_atoms_in_slices(slice_idx, atomic_number=Z)
 
         for transition in self._calculate_potentials(transitions_idx):
             for atom in atoms_slice:
                 t = np.asarray(transition.build(atom.position[:2]))
                 yield t
 
-    def show(self, transitions_idx=0):
+    def project(self, transitions_idx=0):
         intensity = None
-
-        if self._sliced_atoms.slice_thicknesses is None:
-            none_slice_thickess = True
-            self._sliced_atoms.slice_thicknesses = self._sliced_atoms.atoms.cell[2, 2]
-        else:
-            none_slice_thickess = False
-
         for slice_idx in range(self.num_slices):
             for t in self._generate_slice_transition_potentials(slice_idx, transitions_idx):
                 if intensity is None:
@@ -549,8 +516,7 @@ class TransitionPotential(HasAcceleratorMixin, HasGridMixin):
                 else:
                     intensity += np.abs(t) ** 2
 
-        if none_slice_thickess:
-            self._sliced_atoms.slice_thicknesses = None
+        return Images(intensity[0], sampling=self.sampling)
 
-        calibrations = calibrations_from_grid(self.gpts, self.sampling, ['x', 'y'])
-        Measurement(intensity[0], calibrations, name=str(self)).show()
+    def show(self, transitions_idx=0, **kwargs):
+        self.project(transitions_idx=transitions_idx).show(**kwargs)

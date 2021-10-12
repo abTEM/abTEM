@@ -8,6 +8,9 @@ from typing import Mapping, Union, Sequence
 import numpy as np
 from ase import Atoms
 from ase.data import atomic_numbers
+import dask.array as da
+import dask
+from ase.data import chemical_symbols
 
 
 class AbstractFrozenPhonons(metaclass=ABCMeta):
@@ -15,13 +18,6 @@ class AbstractFrozenPhonons(metaclass=ABCMeta):
 
     @abstractmethod
     def __len__(self):
-        pass
-
-    @abstractmethod
-    def generate_atoms(self):
-        """
-        Generate frozen phonon configurations.
-        """
         pass
 
     def __iter__(self):
@@ -51,7 +47,7 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
     """
 
     def __init__(self, atoms: Atoms):
-        self._atoms = atoms.copy()
+        self._atoms = atoms
 
     @property
     def atoms(self):
@@ -59,6 +55,12 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
 
     def __len__(self):
         return 1
+
+    def get_configurations(self):
+        def _inject_atoms():
+            return self._atoms
+
+        return [dask.delayed(_inject_atoms)()]
 
     def generate_atoms(self):
         yield self._atoms
@@ -99,35 +101,25 @@ class FrozenPhonons(AbstractFrozenPhonons):
                  directions: str = 'xyz',
                  seed=None):
 
+        self._unique_numbers = np.unique(atoms.numbers)
+        unique_symbols = [chemical_symbols[number] for number in self._unique_numbers]
+
         if isinstance(sigmas, Number):
-            sigmas_array = np.array(sigmas, dtype=np.float)
-            sigmas_array = np.tile(sigmas_array, len(atoms))
+            for symbol in unique_symbols:
+                sigmas = {symbol: sigmas}
 
         elif isinstance(sigmas, dict):
-            sigmas_array = np.zeros(len(atoms), dtype=np.float)
-            new_sigmas = {}
-            for key, sigma in sigmas.items():
-                try:
-                    new_sigmas[atomic_numbers[key]] = sigma
-                except KeyError:
-                    pass
-
-            for unique in np.unique(atoms.numbers):
-                try:
-                    sigmas_array[atoms.numbers == unique] = new_sigmas[unique]
-                except KeyError:
-                    raise RuntimeError('Displacement standard deviation must be provided for all atomic species.')
+            if not all([symbol in unique_symbols for symbol in sigmas.keys()]):
+                raise RuntimeError('Displacement standard deviation must be provided for all atomic species.')
 
         elif isinstance(sigmas, Iterable):
-            sigmas_array = np.array(sigmas, dtype=np.float)
-
+            sigmas = np.array(sigmas, dtype=np.float32)
+            if len(sigmas) != len(atoms):
+                raise RuntimeError('Displacement standard deviation must be provided for all atoms.')
         else:
             raise ValueError()
 
-        if len(sigmas_array) != len(atoms):
-            raise RuntimeError('Displacement standard deviation must be provided for all atoms.')
-
-        self._sigmas = sigmas_array
+        self._sigmas = sigmas
 
         new_directions = []
         for direction in list(set(directions.lower())):
@@ -156,15 +148,60 @@ class FrozenPhonons(AbstractFrozenPhonons):
     def __len__(self):
         return self._num_configs
 
-    def generate_atoms(self):
+    def get_configurations(self):
         if self._seed:
             np.random.seed(self._seed)
 
-        for i in range(len(self)):
-            atoms = self._atoms.copy()
-            for direction in self._directions:
-                atoms.positions[:, direction] += self._sigmas * np.random.randn(len(atoms))
-            yield atoms
+        def _inject_atoms():
+            return self._atoms
+
+        atoms = dask.delayed(_inject_atoms)()
+
+        if isinstance(self._sigmas, np.ndarray):
+            sigmas = da.from_array(self._sigmas)
+
+        elif isinstance(self._sigmas, dict):
+            def _sigmas(atoms, sigmas):
+                sigmas_array = np.zeros(len(atoms.numbers), dtype=np.float32)
+                for unique in np.unique(atoms.numbers):
+                    sigmas_array[atoms.numbers == unique] = np.float32(sigmas[chemical_symbols[unique]])
+                return sigmas_array
+
+            sigmas = dask.delayed(_sigmas)(atoms, self._sigmas)
+        else:
+            raise RuntimeError()
+
+        def _jiggle_atoms(atoms, directions, sigmas):
+            atoms = atoms.copy()
+
+            for direction in directions:
+                atoms.positions[:, direction] += sigmas * np.random.randn(len(atoms))
+
+            return atoms
+
+        # positions = da.from_array(self._atoms.positions.astype(np.float32))
+        # numbers = da.from_array(self._atoms.numbers)
+        # unique_numbers = np.unique(self._atoms.numbers)
+
+        configurations = []
+        for i in range(self._num_configs):
+            configurations.append(dask.delayed(_jiggle_atoms)(atoms, self._directions, sigmas))
+
+            # configuration = FrozenPhononConfiguration(positions=positions,
+            #                                           numbers=numbers,
+            #                                           unique_numbers=unique_numbers,
+            #                                           sigmas=self._sigmas,
+            #                                           cell=self._atoms.cell,
+            #                                           directions=self._directions)
+            # configurations.append(configuration)
+
+        return configurations
+
+    # for i in range(len(self)):
+    #     atoms = self._atoms.copy()
+    #     for direction in self._directions:
+    #         atoms.positions[:, direction] += self._sigmas * np.random.randn(len(atoms))
+    #     yield atoms
 
     def __copy__(self):
         return self.__class__(atoms=self.atoms.copy(), num_configs=len(self), sigmas=self._sigmas.copy(),

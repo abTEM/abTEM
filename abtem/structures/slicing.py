@@ -1,6 +1,8 @@
 from numbers import Number
 from typing import List, Tuple
 
+import dask.array as da
+import dask.delayed
 import numpy as np
 from ase.data import atomic_numbers
 
@@ -10,34 +12,38 @@ from abtem.structures.structures import cut_box
 class SliceIndexedAtoms:
 
     def __init__(self, atoms, num_slices):
-        self._atoms = atoms.copy()
+        order = np.argsort(atoms.positions[:, 2])
         self._num_slices = num_slices
-        self._unique_numbers = np.unique(self.atoms.numbers)
-        self.atoms.wrap(pbc=True)
 
-        positions = self.atoms.positions.astype(np.float32)
-        order = np.argsort(positions[:, 2])
-        positions = positions[order]
+        self._positions = atoms.positions[order][:, :2]
+        self._numbers = atoms.numbers[order]
+        self._slice_idx = np.floor(atoms.positions[order][:, 2] / atoms.cell[2, 2] * num_slices).astype(np.int)
 
-        self._positions = positions[:, :2]
-        self._numbers = self.atoms.numbers[order]
-        self._slice_idx = np.floor(positions[:, 2] / self.atoms.cell[2, 2] * self._num_slices).astype(np.int)
-
-    @property
-    def atoms(self):
-        return self._atoms
+    def __len__(self):
+        return self._num_slices
 
     def get_atoms_in_slices(self, first_slice, last_slice):
-        start_idx = np.searchsorted(self._slice_idx, first_slice)
-        end_idx = np.searchsorted(self._slice_idx, last_slice)
+        def _get_atoms_in_slice(slice_idx, first_slice, last_slice, positions, numbers):
+            start_idx = np.searchsorted(slice_idx, first_slice)
+            end_idx = np.searchsorted(slice_idx, last_slice)
 
-        if start_idx == end_idx:
-            return np.zeros((0, 2), dtype=np.float32), np.zeros((0,)), np.zeros((0,))
+            if start_idx == end_idx:
+                return np.zeros((0, 2), dtype=np.float32), np.zeros((0,)), np.zeros((0,))
 
-        chunk_positions = self._positions[start_idx:end_idx]
-        chunk_numbers = self._numbers[start_idx:end_idx]
-        chunk_slice_idx = self._slice_idx[start_idx:end_idx] - first_slice
-        return chunk_positions, chunk_numbers, chunk_slice_idx
+            chunk_positions = positions[start_idx:end_idx]
+            chunk_numbers = numbers[start_idx:end_idx]
+            chunk_slice_idx = slice_idx[start_idx:end_idx] - first_slice
+            return chunk_positions, chunk_numbers, chunk_slice_idx
+
+        return _get_atoms_in_slice(self._slice_idx, first_slice, last_slice, self._positions, self._numbers)
+
+        # positions, numbers, slice_idx = dask.delayed(_get_atoms_in_slice, nout=3)(self._slice_idx,
+        #                                                                           first_slice,
+        #                                                                           last_slice,
+        #                                                                           self._atoms.positions,
+        #                                                                           self._atoms.numbers)
+        #
+        # return positions, numbers, slice_idx
 
 
 def _validate_slice_thickness(slice_thickness, thickness=None, num_slices=None):
