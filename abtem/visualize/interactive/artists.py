@@ -197,6 +197,9 @@ class ImageArtist(Artist):
             #    self._color_bar.max = float(image.max())
 
     def _set_extent(self):
+        if self.extent is None:
+            return
+
         sampling = ((self.extent[0][1] - self.extent[0][0]) / self.image.shape[0],
                     (self.extent[1][1] - self.extent[1][0]) / self.image.shape[1])
 
