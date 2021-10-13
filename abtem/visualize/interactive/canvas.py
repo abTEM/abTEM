@@ -5,11 +5,10 @@ from traitlets import HasTraits, observe, Dict, Instance, link, Bool, List, defa
 from traitlets import Unicode
 
 
-class Canvas(HasTraits):
+class Canvas(widgets.HBox):
     artists = Dict()
     tools = Dict()
     tool = Unicode('None')
-    figure = Instance(Figure)
     title = Unicode()
     x_label = Unicode()
     y_label = Unicode()
@@ -53,10 +52,46 @@ class Canvas(HasTraits):
         figure.layout.height = f'{height}px'
         figure.layout.width = f'{width}px'
 
-        super().__init__(figure=figure, **kwargs)
+        whitespace = widgets.HBox([])
+        whitespace.layout.width = f'{figure.fig_margin["left"]}px'
+
+        title = widgets.HTML(value=f"<p style='font-size:16px;text-align:center'> {self.title} </p>")
+        title.layout.width = f'{float(figure.layout.width[:-2]) - figure.fig_margin["left"]}px'
+        canvas_widgets = widgets.VBox([widgets.HBox([whitespace, title]), figure])
+        self._figure = figure
+
+        super().__init__(children=[canvas_widgets], **kwargs)
         link((self, 'x_label'), (x_axis, 'label'))
         link((self, 'y_label'), (y_axis, 'label'))
+
         # link((self, 'title'), (figure, 'title'))
+
+    @property
+    def figure(self):
+        return self._figure
+
+    @property
+    def figure_width(self):
+        return int(float(self.figure.layout.width[:-2]))
+
+    @property
+    def figure_height(self):
+        return int(float(self.figure.layout.width[:-2]))
+
+    def pixel_to_domain(self, x, y):
+        pixel_margin_width = self.figure.fig_margin['left'] + self.figure.fig_margin['right']
+        pixel_margin_height = self.figure.fig_margin['top'] + self.figure.fig_margin['bottom']
+
+        pixel_width = self.figure_width - pixel_margin_width
+        pixel_height = self.figure_height - pixel_margin_height
+
+        domain_width = self.x_scale.max - self.x_scale.min
+        domain_height = self.y_scale.max - self.y_scale.min
+
+        x = domain_width / pixel_width * (x - self.figure.fig_margin['left']) + self.x_scale.min
+        y = domain_height / pixel_height * (y - self.figure.fig_margin['top']) + self.y_scale.min
+        y = domain_height - y
+        return x, y
 
     @property
     def widget(self):
