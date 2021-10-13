@@ -53,6 +53,10 @@ def _multislice(waves_array,
         array = complex_exponential(xp.float32(energy2sigma(energy)) * array)
         return array
 
+    import time
+
+    start = time.time()
+
     for potential_slice in potential:
         transmission_function = _transmission_function(potential_slice, energy=energy)
         transmission_function = fft2_convolve(transmission_function, antialias_kernel_array, overwrite_x=False)
@@ -61,8 +65,15 @@ def _multislice(waves_array,
             transmission_function = transmission_function[None]
 
         for transmission_function_slice in transmission_function:
-            waves_array *= copy_to_device(transmission_function_slice, xp)
+            waves_array *= transmission_function_slice
+
+            #print(waves_array.dtype, transmission_function_slice.dtype)
+            #waves_array *= copy_to_device(transmission_function_slice, xp)
             waves_array = fft2_convolve(waves_array, initial_fresnel_propagator, overwrite_x=False)
+    end = time.time()
+
+    print(end-start)
+
 
     return waves_array
 

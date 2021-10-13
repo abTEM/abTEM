@@ -51,9 +51,7 @@ def infinite_potential_projections(positions, numbers, slice_idx, shape, samplin
         return xp.zeros(shape, dtype=xp.float32)
 
     array = xp.zeros(shape, dtype=xp.complex64)
-
     positions = xp.asarray(positions / sampling)
-
     temp = xp.zeros_like(array, dtype=np.complex64)
 
     unique = np.unique(numbers)
@@ -71,11 +69,11 @@ def infinite_potential_projections(positions, numbers, slice_idx, shape, samplin
         else:
             temp = superpose_deltas(positions, slice_idx, temp)
 
-        array += fft2(temp, overwrite_x=False) * scattering_factors[i]
+        array += fft2(temp, overwrite_x=True) * scattering_factors[i]
 
-    array = ifft2(array, overwrite_x=False).real
+    array = ifft2(array, overwrite_x=True).real
 
-    array -= array.min()
+    #array -= array.min()
 
     return array
 

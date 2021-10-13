@@ -27,7 +27,7 @@ def antialias_kernel(gpts, sampling, xp, delay=True):
     taper = TAPER / max(sampling)
 
     if delay:
-        kernel = dask.delayed(_antialias_kernel, pure=True)(gpts, sampling, cutoff, taper, xp_to_str(xp))
+        kernel = dask.delayed(_antialias_kernel)(gpts, sampling, cutoff, taper, xp_to_str(xp))
         return da.from_delayed(kernel, shape=gpts, meta=xp.array((), dtype=xp.float32))
     else:
         return _antialias_kernel(gpts, sampling, cutoff, taper, xp_to_str(xp))

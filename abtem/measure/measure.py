@@ -672,7 +672,7 @@ class DiffractionPatterns(AbstractMeasurement):
 
     def _check_max_angle(self, angle):
         if (angle > self.max_angles[0]) or (angle > self.max_angles[1]):
-            raise RuntimeError('integration angle exceeds the maximum simulated angle')
+            raise RuntimeError(f'integration angle exceeds the maximum simulated angle ({angle} > {min(self.max_angles)})')
 
     def gaussian_filter(self, sigma: Union[float, Tuple[float, float]], boundary: str = 'periodic'):
         xp = get_array_module(self.array)
@@ -702,15 +702,15 @@ class DiffractionPatterns(AbstractMeasurement):
         self._check_max_angle(outer)
         xp = get_array_module(self.array)
 
-        indices = dask.delayed(polar_detector_bins, pure=True)(gpts=self.array.shape[-2:],
-                                                               sampling=self.angular_sampling,
-                                                               inner=inner,
-                                                               outer=outer,
-                                                               nbins_radial=nbins_radial,
-                                                               nbins_azimuthal=nbins_azimuthal,
-                                                               fftshift=self.fftshift,
-                                                               rotation=rotation,
-                                                               return_indices=True)
+        indices = dask.delayed(polar_detector_bins)(gpts=self.array.shape[-2:],
+                                                    sampling=self.angular_sampling,
+                                                    inner=inner,
+                                                    outer=outer,
+                                                    nbins_radial=nbins_radial,
+                                                    nbins_azimuthal=nbins_azimuthal,
+                                                    fftshift=self.fftshift,
+                                                    rotation=rotation,
+                                                    return_indices=True)
 
         def radial_binning(array, indices, nbins_radial, nbins_azimuthal):
             xp = get_array_module(array)
@@ -765,23 +765,28 @@ class DiffractionPatterns(AbstractMeasurement):
     def integrate_radial(self, inner, outer):
         self._check_max_angle(outer)
 
-        bins = dask.delayed(polar_detector_bins, pure=True)(gpts=self.array.shape[-2:],
-                                                            sampling=self.angular_sampling,
-                                                            inner=inner,
-                                                            outer=outer,
-                                                            nbins_radial=1,
-                                                            nbins_azimuthal=1,
-                                                            fftshift=self.fftshift)
-
         xp = get_array_module(self.array)
-        bins = da.from_delayed(bins, shape=self.array.shape[-2:], dtype=xp.float32)
-        bins = bins.map_blocks(xp.array)
 
-        def integrate_fourier_space(array, bins):
+        # bins = da.from_delayed(bins, shape=self.array.shape[-2:], dtype=xp.float32)
+        # bins = bins.map_blocks(xp.array)
+
+        def integrate_fourier_space(array, sampling):
+
+            bins = polar_detector_bins(gpts=array.shape[-2:],
+                                       sampling=sampling,
+                                       inner=inner,
+                                       outer=outer,
+                                       nbins_radial=1,
+                                       nbins_azimuthal=1,
+                                       fftshift=self.fftshift)
+
             xp = get_array_module(array)
+            bins = xp.asarray(bins, dtype=xp.float32)
+
             return xp.sum(array * (bins == 0), axis=(-2, -1))
 
-        integrated_intensity = self.array.map_blocks(integrate_fourier_space, bins=bins,
+        integrated_intensity = self.array.map_blocks(integrate_fourier_space,
+                                                     sampling=self.angular_sampling,
                                                      drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
                                                      dtype=xp.array((), dtype=xp.float32))
 

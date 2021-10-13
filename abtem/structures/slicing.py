@@ -23,12 +23,14 @@ class SliceIndexedAtoms:
         return self._num_slices
 
     def get_atoms_in_slices(self, first_slice, last_slice):
+        #return np.zeros((0, 2), dtype=np.float32), np.zeros((0,)), np.zeros((0,))
+
         def _get_atoms_in_slice(slice_idx, first_slice, last_slice, positions, numbers):
             start_idx = np.searchsorted(slice_idx, first_slice)
             end_idx = np.searchsorted(slice_idx, last_slice)
 
-            if start_idx == end_idx:
-                return np.zeros((0, 2), dtype=np.float32), np.zeros((0,)), np.zeros((0,))
+            #if start_idx == end_idx:
+            #return np.zeros((0, 2), dtype=np.float32), np.zeros((0,)), np.zeros((0,))
 
             chunk_positions = positions[start_idx:end_idx]
             chunk_numbers = numbers[start_idx:end_idx]
