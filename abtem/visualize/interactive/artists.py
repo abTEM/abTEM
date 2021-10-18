@@ -3,7 +3,7 @@ import numpy as np
 from ase import Atoms
 from ase.data import covalent_radii
 from ase.data.colors import jmol_colors
-from bqplot import LinearScale, ColorScale, Lines, Scatter, Figure, Axis
+from bqplot import LinearScale, ColorScale, Lines, Scatter, Figure, Axis, ScatterGL
 from bqplot_image_gl import ImageGL
 from traitlets import HasTraits, observe, default, List, link, Float, Unicode, Instance, Bool, Int, Any
 
@@ -405,7 +405,7 @@ class Artist1d(Artist):
 class ScatterArtist(Artist1d):
     color = Any()
 
-    def __init__(self, colors='red', **kwargs):
+    def __init__(self, colors='red', gl=False, **kwargs):
         if isinstance(colors, str):
             colors = [colors]
 
@@ -416,7 +416,11 @@ class ScatterArtist(Artist1d):
                   'color': color_scale,
                   'size': LinearScale(min=0, max=1),
                   }
-        mark = Scatter(x=np.zeros((1,)), y=np.zeros((1,)), scales=scales, colors=['red'])
+
+        if gl:
+            mark = ScatterGL(x=np.zeros((1,)), y=np.zeros((1,)), scales=scales, colors=['red'])
+        else:
+            mark = Scatter(x=np.zeros((1,)), y=np.zeros((1,)), scales=scales, colors=['red'])
 
         # link((self, 'color'), (mark, 'color'))
 
