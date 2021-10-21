@@ -90,7 +90,7 @@ class Canvas(widgets.HBox):
 
         x = domain_width / pixel_width * (x - self.figure.fig_margin['left']) + self.x_scale.min
         y = domain_height / pixel_height * (y - self.figure.fig_margin['top']) + self.y_scale.min
-        y = domain_height - y
+        y = - y + self.y_scale.max +self.y_scale.min
         return x, y
 
     @property
