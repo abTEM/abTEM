@@ -23,7 +23,7 @@ def _polar_regions(gpts: Tuple[int, int], angular_sampling: Tuple[float, float],
     gpts : two int
         Number of grid points describing the detector regions.
     angular_sampling : two float
-        Angular sampling of the discretized detector regions in radians.
+        Angular sampling of the discretized dete ctor regions in radians.
     inner : float
         Inner boundary of the detector regions [rad].
     outer : float
@@ -656,18 +656,18 @@ class PixelatedDetector(AbstractDetector):
             scale_factor = (angular_sampling[0] / max(angular_sampling),
                             angular_sampling[1] / max(angular_sampling))
 
-            new_gpts = (int(np.ceil(gpts[0] * scale_factor[0])),
-                        int(np.ceil(gpts[1] * scale_factor[1])))
-
-            if np.abs(new_gpts[0] - new_gpts[1]) <= 2:
-                new_gpts = (min(new_gpts),) * 2
-
-            new_angular_sampling = (angular_sampling[0] / scale_factor[0],
-                                    angular_sampling[1] / scale_factor[1])
-
         else:
-            raise RuntimeError('')
+            scale_factor = (angular_sampling[0] / self._resample[0],
+                            angular_sampling[1] / self._resample[1])
 
+        new_gpts = (int(np.ceil(gpts[0] * scale_factor[0])),
+                    int(np.ceil(gpts[1] * scale_factor[1])))
+
+        if np.abs(new_gpts[0] - new_gpts[1]) <= 2:
+            new_gpts = (min(new_gpts),) * 2
+
+        new_angular_sampling = (angular_sampling[0] / scale_factor[0],
+                                angular_sampling[1] / scale_factor[1])
         return new_gpts, new_angular_sampling
 
     def _interpolate(self, array, angular_sampling):
