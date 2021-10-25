@@ -203,16 +203,23 @@ def epie(measurement: Measurement,
                        fix_com=fix_com,
                        seed=seed)
 
-    if crop_to_valid:
-        valid_extent = (measurement.calibration_limits[0][1] - measurement.calibration_limits[0][0],
-                        measurement.calibration_limits[1][1] - measurement.calibration_limits[1][0])
-        result = [obj.crop(valid_extent) for obj in result[0]]
+    valid_extent = (measurement.calibration_limits[0][1] - measurement.calibration_limits[0][0],
+                    measurement.calibration_limits[1][1] - measurement.calibration_limits[1][0])
 
     if return_iterations:
         object_iterations = [Measurement(obj, calibrations=calibrations) for obj in result[0]]
         probe_iterations = [Measurement(np.fft.fftshift(probe), calibrations=calibrations) for probe in result[1]]
+
+        if crop_to_valid:
+            object_iterations = [object_iteration.crop(valid_extent) for object_iteration in object_iterations]
+
         return object_iterations, probe_iterations, result[2]
     else:
-        return (Measurement(result[0], calibrations=calibrations),
+        object = Measurement(result[0], calibrations=calibrations)
+
+        if crop_to_valid:
+            result = object.crop(valid_extent)
+
+        return (object,
                 Measurement(np.fft.fftshift(result[1]), calibrations=calibrations),
                 result[2])
