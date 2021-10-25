@@ -624,33 +624,6 @@ class Measurement(AbstractMeasurement):
         if self.dimensions == 2:
             return self._interpolate_2d(new_sampling=new_sampling, new_gpts=new_gpts, padding=padding, kind=kind)
 
-        if len(axes) > 2:
-            raise ValueError()
-
-        array = measurement.array
-
-        old_shape = array.shape
-
-        # print(old_shape)
-
-        # array = array.reshape(array.shape[:2] + (-1,))
-
-        axes = (2, 3)
-
-        array = np.moveaxis(array, axes, range(len(axes)))
-
-        rolled_shape = array.shape
-
-        array = array.reshape((-1,) + array.shape[-2:])
-        array = fft_interpolate_2d(array, (60, 60))
-        array = array.reshape(rolled_shape[:len(axes)] + array.shape[-2:])
-        array = np.moveaxis(array, range(len(axes)), axes)
-
-        return self._interpolate_2d(new_sampling=new_sampling, new_gpts=new_gpts, padding=padding, kind=kind, axes=axes)
-
-        # else:
-        #    raise RuntimeError(f'interpolate not implemented for {self.dimensions}d measurements')
-
     def tile(self, multiples: Sequence[int]) -> 'Measurement':
         """
         Construct a measurement by repeating the measurement number of times given by multiples.
@@ -813,6 +786,19 @@ class Measurement(AbstractMeasurement):
         new_meaurement._array = np.squeeze(asnumpy(new_meaurement.array))
         return new_meaurement
 
+    def bin(self, factors):
+        from skimage.transform import downscale_local_mean
+
+        array = downscale_local_mean(self._array, factors)
+
+        calibrations = []
+        for calibration, factor in zip(self.calibrations, factors):
+            calibration = calibration.copy()
+            calibration.sampling = calibration.sampling * factor
+            calibrations.append(calibration)
+
+        return Measurement(array=array, calibrations=calibrations, name=self.name, units=self.units)
+
     def integrate(self, start: float, end: float, axis=-1, interactive=False):
         """
         Perform 1d integration measurement from e.g. the FlexibleAnnularDetector
@@ -870,6 +856,16 @@ class Measurement(AbstractMeasurement):
             return new_measurement, widgets.HBox([canvas.figure, slider])
         else:
             return new_measurement
+
+    def crop(self, extent):
+
+        old_extent = (self.calibration_limits[0][1] - self.calibration_limits[0][0],
+                      self.calibration_limits[1][1] - self.calibration_limits[1][0])
+
+        new_shape = (int(np.floor(extent[0] / old_extent[0] * self.shape[0])),
+                     int(np.floor(extent[1] / old_extent[1] * self.shape[1])))
+
+        return self[:new_shape[0], :new_shape[1]]
 
     def interpolate_line(self,
                          start: Union[Tuple[float, float], Atom],

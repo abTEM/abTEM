@@ -80,6 +80,7 @@ def _run_epie(object,
                         xp.max(xp.abs(illuminated_object)) ** 2)
 
             # SSE += xp.sum(xp.abs(G) ** 2 - diffraction_pattern) ** 2
+
             inner_pbar.update(1)
 
         object = fft_shift(object, position)
@@ -89,6 +90,8 @@ def _run_epie(object,
             probe = xp.fft.ifftshift(fft_shift(probe, - xp.array(com)))
 
         # SSE = SSE / np.prod(diffraction_patterns.shape)
+
+        # print(SSE)
 
         if return_iterations:
             object_iterations.append(object)
@@ -118,9 +121,10 @@ def epie(measurement: Measurement,
          fix_probe: bool = False,
          fix_com: bool = False,
          return_iterations: bool = False,
-         max_angle=None,
-         seed=None,
-         device='cpu', ):
+         max_angle: float = None,
+         crop_to_valid: bool = False,
+         seed: int = None,
+         device: str = 'cpu', ):
     """
     Reconstruct the phase of a 4D-STEM measurement using the extended Ptychographical Iterative Engine.
 
@@ -146,6 +150,8 @@ def epie(measurement: Measurement,
         If True, return the reconstruction after every iteration. Default is False.
     max_angle : float, optional
         The maximum reconstructed scattering angle. If this is larger than the input data, the data will be zero-padded.
+    crop_to_valid : bool
+        If true, the output is cropped to the scan area.
     seed : int, optional
         Seed the random number generator.
     device : str
@@ -197,8 +203,13 @@ def epie(measurement: Measurement,
                        fix_com=fix_com,
                        seed=seed)
 
+    if crop_to_valid:
+        valid_extent = (measurement.calibration_limits[0][1] - measurement.calibration_limits[0][0],
+                        measurement.calibration_limits[1][1] - measurement.calibration_limits[1][0])
+        result = [obj.crop(valid_extent) for obj in result[0]]
+
     if return_iterations:
-        object_iterations = [Measurement(object, calibrations=calibrations) for object in result[0]]
+        object_iterations = [Measurement(obj, calibrations=calibrations) for obj in result[0]]
         probe_iterations = [Measurement(np.fft.fftshift(probe), calibrations=calibrations) for probe in result[1]]
         return object_iterations, probe_iterations, result[2]
     else:
