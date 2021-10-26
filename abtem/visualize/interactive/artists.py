@@ -81,7 +81,8 @@ class ColorBar(widgets.HBox):
 class Artist(HasTraits):
     x_label = Unicode(None, allow_none=True)
     y_label = Unicode(None, allow_none=True)
-    visible = Bool()
+
+    visible = Bool(True)
 
     def _add_to_canvas(self, canvas):
         raise NotImplementedError()
@@ -97,6 +98,7 @@ class ImageArtist(Artist):
     power = Float(1.)
     color_scheme = Unicode('Greys')
     autoadjust_colorscale = Bool(True)
+    center_pixels = Bool(True)
 
     def __init__(self, rgb=False, **kwargs):
         self._color_scale = ColorScale(colors=['black', 'white'], min=0, max=1)
@@ -189,8 +191,16 @@ class ImageArtist(Artist):
 
         if (not self.image.size == 0) & self.autoadjust_colorscale:
             with self._mark.hold_sync():
-                self._mark.scales['image'].min = float(image.min())
-                self._mark.scales['image'].max = float(image.max())
+
+                col_min = float(image.min())
+                col_max = float(image.max())
+
+                if np.isclose(col_min, col_max):
+                    col_max = col_min + 1e-3
+
+
+                self._mark.scales['image'].min = col_min
+                self._mark.scales['image'].max = col_max
 
             # with self._color_bar._mark.hold_sync():
             #    self._color_bar.min = float(image.min())
@@ -203,8 +213,12 @@ class ImageArtist(Artist):
         sampling = ((self.extent[0][1] - self.extent[0][0]) / self.image.shape[0],
                     (self.extent[1][1] - self.extent[1][0]) / self.image.shape[1])
 
-        self._mark.x = [value - .5 * sampling[0] for value in self.extent[0]]
-        self._mark.y = [value - .5 * sampling[1] for value in self.extent[1]]
+        if self.center_pixels:
+            self._mark.x = [value - .5 * sampling[0] for value in self.extent[0]]
+            self._mark.y = [value - .5 * sampling[1] for value in self.extent[1]]
+        else:
+            self._mark.x = [value for value in self.extent[0]]
+            self._mark.y = [value for value in self.extent[1]]
 
     @observe('image')
     def _observe_image(self, *args):
@@ -245,7 +259,10 @@ class ImageArtist(Artist):
         if (self.extent is None) or (self.display_sampling is None):
             return [(-.5, self.image.shape[0] - .5), (-.5, self.image.shape[1] - .5)]
 
-        return [tuple([l - .5 * s for l in L]) for L, s in zip(self.extent, self.display_sampling)]
+        if self.center_pixels:
+            return [tuple([l - .5 * s for l in L]) for L, s in zip(self.extent, self.display_sampling)]
+        else:
+            return [tuple([l for l in L]) for L, s in zip(self.extent, self.display_sampling)]
 
 
 class ItemSelector(HasTraits):

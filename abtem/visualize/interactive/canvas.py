@@ -229,7 +229,6 @@ class Canvas(widgets.HBox):
         xmax = np.max([artist.limits[0][1] for artist in self.artists.values()])
         ymin = np.min([artist.limits[1][0] for artist in self.artists.values()])
         ymax = np.max([artist.limits[1][1] for artist in self.artists.values()])
-
         with self.x_scale.hold_trait_notifications(), self.y_scale.hold_trait_notifications():
             if adjust_x:
                 self.x_limits = [float(xmin), float(xmax)]
