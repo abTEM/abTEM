@@ -45,9 +45,6 @@ class HasBeamTiltMixin:
         self.tilt = value
 
 
-
-
-
 class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAntialiasApertureMixin):
 
     # @abstractmethod
@@ -123,6 +120,14 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAnt
 
 class AbstractScannedWaves(WavesLikeMixin):
 
+    # def _get_positions_metadata(self, positions):
+    #     if isinstance(positions, AbstractScan):
+    #         return
+    #     elif positions is None:
+    #         return [{'type': 'positions'}]
+    #     else:
+    #         return [{'type': 'positions'}] * (len(np.array(positions).shape) - 1)
+
     def _compute_chunks(self, dims):
         chunk_size = dask.utils.parse_bytes(dask.config.get('array.chunk-size'))
         chunks = int(np.floor(chunk_size / (2 * 4 * np.prod(self.gpts))))
@@ -134,9 +139,9 @@ class AbstractScannedWaves(WavesLikeMixin):
             detectors = [detectors]
         return detectors
 
-    def _validate_positions(self, positions: Union[Sequence, AbstractScan] = None):
-        if isinstance(positions, AbstractScan):
-            positions = positions.get_positions()
+    def _validate_positions(self, positions: Union[Sequence, AbstractScan] = None, lazy=True, chunks=1):
+        if hasattr(positions, 'get_positions'):
+            return positions.get_positions(lazy=lazy, chunks=chunks), positions.axes_metadata
 
         if positions is None:
             positions = (self.extent[0] / 2, self.extent[1] / 2)
@@ -144,10 +149,13 @@ class AbstractScannedWaves(WavesLikeMixin):
         if not isinstance(positions, da.core.Array):
             positions = np.array(positions, dtype=np.float32)
 
+        if isinstance(positions, np.ndarray) and lazy:
+            positions = da.from_array(positions)
+
         if len(positions.shape) == 1:
             positions = positions[None]
 
         if positions.shape[-1] != 2:
             raise ValueError()
 
-        return positions
+        return positions, [{'type': 'positions'}] * (len(np.array(positions).shape) - 1)

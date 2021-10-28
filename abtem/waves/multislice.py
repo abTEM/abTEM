@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 from typing import Union
 
 import dask
+import dask.array.core
 import numpy as np
 
 from abtem.basic.antialias import antialias_kernel
@@ -13,6 +14,7 @@ from abtem.basic.fft import fft2_convolve
 from abtem.basic.grid import spatial_frequencies
 from abtem.basic.utils import generate_chunks
 from abtem.potentials.potentials import PotentialGenerator, PotentialArray
+import dask.array as da
 
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves
@@ -36,10 +38,12 @@ def _multislice(waves_array,
                 gpts,
                 sampling,
                 energy,
-                slice_thickness,
-                potential,
-                antialias_kernel_array):
+                potential):
     xp = get_array_module(waves_array)
+
+    slice_thickness = potential.slice_thickness
+
+    antialias_kernel_array = antialias_kernel(gpts, sampling, xp, delay=False)
 
     initial_fresnel_propagator = fresnel_propagator(gpts,
                                                     sampling,
@@ -53,66 +57,43 @@ def _multislice(waves_array,
         array = complex_exponential(xp.float32(energy2sigma(energy)) * array)
         return array
 
-    import time
+    chunks = potential._chunks
 
-    start = time.time()
+    for start, end in chunks:
+        potential_slice = potential._get_chunk(start, end)
 
-    for potential_slice in potential:
         transmission_function = _transmission_function(potential_slice, energy=energy)
-        transmission_function = fft2_convolve(transmission_function, antialias_kernel_array, overwrite_x=False)
+        #transmission_function = fft2_convolve(transmission_function, antialias_kernel_array, overwrite_x=False)
 
         if len(transmission_function.shape) == 2:
             transmission_function = transmission_function[None]
 
         for transmission_function_slice in transmission_function:
-            waves_array *= transmission_function_slice
-
-            #print(waves_array.dtype, transmission_function_slice.dtype)
-            #waves_array *= copy_to_device(transmission_function_slice, xp)
+            waves_array = waves_array * transmission_function_slice
+            #     #print(waves_array.dtype, transmission_function_slice.dtype)
+            #     #waves_array *= copy_to_device(transmission_function_slice, xp)
             waves_array = fft2_convolve(waves_array, initial_fresnel_propagator, overwrite_x=False)
-    end = time.time()
-
-    print(end-start)
-
 
     return waves_array
 
 
-def multislice(waves: Union['Waves', 'SMatrixArray'], potential: Union[PotentialArray, PotentialGenerator]
+def multislice(waves: Union['Waves', 'SMatrixArray'],
+               potential: Union[PotentialArray, PotentialGenerator]
                ) -> Union['Waves', 'SMatrixArray']:
-
-    waves.grid.match(potential)
-    waves.accelerator.check_is_defined()
-    waves.grid.check_is_defined()
-
-    if hasattr(waves, 'array'):
-        waves_array = waves.array
+    if waves.is_lazy:
+        xp = get_array_module(waves.array)
+        waves._array = waves.array.map_blocks(_multislice,
+                                              gpts=waves.gpts,
+                                              sampling=waves.sampling,
+                                              energy=waves.energy,
+                                              potential=potential,
+                                              meta=xp.array((), dtype=xp.complex64))
     else:
-        waves = waves.build()
-        waves_array = waves.array
-
-    xp = get_array_module(waves_array)
-
-    antialias_kernel_array = antialias_kernel(waves.gpts, waves.sampling, xp)
-
-    # initial_fresnel_propagator = dask.delayed(fresnel_propagator, pure=True)(waves.gpts,
-    #                                                                          waves.sampling,
-    #                                                                          potential.slice_thickness[0],
-    #                                                                          waves.energy,
-    #                                                                          xp_to_str(xp))
-
-    # initial_fresnel_propagator *= antialias_kernel_array
-
-    waves_array = waves_array.map_blocks(_multislice,
-                                         gpts=waves.gpts,
-                                         sampling=waves.sampling,
-                                         energy=waves.energy,
-                                         slice_thickness=potential.slice_thickness,
-                                         potential=potential.array,
-                                         antialias_kernel_array=antialias_kernel_array,
-                                         meta=xp.array((), dtype=xp.complex64))
-
-    waves._array = waves_array
+        waves._array = _multislice(waves._array,
+                                   gpts=waves.gpts,
+                                   sampling=waves.sampling,
+                                   energy=waves.energy,
+                                   potential=potential)
 
     waves.antialias_aperture = 2 / 3.
     return waves

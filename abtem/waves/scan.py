@@ -117,7 +117,7 @@ class LineScan(AbstractScan, HasGridMixin):
 
     @property
     def shape(self) -> Tuple[int]:
-        return self.gpts[0],
+        return self.gpts
 
     @property
     def axes_metadata(self):
@@ -176,13 +176,32 @@ class LineScan(AbstractScan, HasGridMixin):
     def margin_end(self) -> Tuple[float, float]:
         return self.end[0] + self.direction[0] * self.margin, self.end[1] + self.direction[1] * self.margin
 
-    def get_positions(self) -> np.ndarray:
+    def get_positions(self, chunks, lazy=True) -> np.ndarray:
+        def linescan_positions(start, end, gpts, endpoint):
+            x = np.linspace(start[0], end[0], gpts[0], endpoint=endpoint[0], dtype=np.float32)
+            y = np.linspace(start[1], end[1], gpts[0], endpoint=endpoint[0], dtype=np.float32)
 
-        start = self.margin_start
-        end = self.margin_end
-        x = np.linspace(start[0], end[0], self.gpts[0], endpoint=self.grid.endpoint[0])
-        y = np.linspace(start[1], end[1], self.gpts[0], endpoint=self.grid.endpoint[0])
-        return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
+            return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
+
+        chunks = (chunks,)
+
+        if lazy:
+            positions = dask.delayed(linescan_positions)(self.start, self.end, self.gpts, self.grid.endpoint)
+            positions = da.from_delayed(positions, shape=self.gpts + (2,), dtype=np.float32)
+            positions = positions.rechunk(chunks + (2,))
+        else:
+            positions = linescan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
+
+        return positions
+    #
+    #
+    # def get_positions(self, chunks, lazy=True) -> np.ndarray:
+    #
+    #     start = self.margin_start
+    #     end = self.margin_end
+    #     x = np.linspace(start[0], end[0], self.gpts[0], endpoint=self.grid.endpoint[0])
+    #     y = np.linspace(start[1], end[1], self.gpts[0], endpoint=self.grid.endpoint[0])
+    #     return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
     def add_to_plot(self, ax, linestyle: str = '-', color: str = 'r', **kwargs):
         """
@@ -234,48 +253,68 @@ class GridScan(HasGridMixin, AbstractScan):
     """
 
     def __init__(self,
-                 start: Sequence[float],
-                 end: Sequence[float],
+                 start: Sequence[float] = None,
+                 end: Sequence[float] = None,
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
                  endpoint: bool = False):
 
         super().__init__()
 
-        try:
-            self._start = np.array(start)[:2]
-            end = np.array(end)[:2]
-            assert (self._start.shape == (2,)) & (end.shape == (2,))
-        except:
-            raise ValueError('Scan start/end has incorrect shape')
+        if (start is None) and (end is None):
+            self._start = None
+            self._end = None
+            extent = None
+        else:
+            try:
+                self._start = np.array(start)[:2]
+                end = np.array(end)[:2]
+                assert (self._start.shape == (2,)) & (end.shape == (2,))
+            except:
+                raise ValueError('Scan start/end has incorrect shape')
 
-        if (gpts is None) & (sampling is None):
-            raise RuntimeError('Grid gpts or sampling must be set')
+            if (gpts is None) & (sampling is None):
+                raise RuntimeError('Grid gpts or sampling must be set')
 
-        self._grid = Grid(extent=end - start, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint)
+            extent = end - start
+
+        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint)
 
     @property
     def shape(self):
         return self.gpts
 
     @property
-    def start(self) -> np.ndarray:
+    def start(self) -> Union[np.ndarray, None]:
         """Start corner of the scan [Å]."""
         return self._start
 
     @start.setter
     def start(self, start: Sequence[float]):
         self._start = np.array(start)
-        self.extent = self.end - self._start
+        if self.end is not None:
+            self.extent = self.end - self._start
+
+    def match(self, potential=None, probe=None):
+        if (self.extent is None) and (potential is not None):
+            self.start = (0., 0.)
+            self.end = potential.extent
+
+        if (self.sampling is None) and (probe is not None):
+            self.sampling = .9 * probe.ctf.nyquist_sampling
 
     @property
-    def end(self) -> np.ndarray:
+    def end(self) -> Union[np.ndarray, None]:
         """End corner of the scan [Å]."""
+        if self.extent is None:
+            return
+
         return self.start + self.extent
 
     @end.setter
     def end(self, end: Sequence[float]):
-        self.extent = np.array(end) - self.start
+        if self.start is not None:
+            self.extent = np.array(end) - self.start
 
     @property
     def area(self) -> float:
@@ -289,20 +328,23 @@ class GridScan(HasGridMixin, AbstractScan):
                 {'label': 'y', 'type': 'gridscan', 'sampling': float(self.sampling[1]), 'offset': float(self.start[1]),
                  'units': 'Å'}]
 
-    def get_positions(self, chunks) -> np.ndarray:
+    def get_positions(self, chunks, lazy=True) -> np.ndarray:
         def gridscan_positions(start, end, gpts, endpoint):
             x = np.linspace(start[0], end[0], gpts[0], endpoint=endpoint[0], dtype=np.float32)
             y = np.linspace(start[1], end[1], gpts[1], endpoint=endpoint[1], dtype=np.float32)
-
             x, y = np.meshgrid(x, y, indexing='ij')
             return np.stack((x, y), axis=-1)
 
         if isinstance(chunks, Number):
             chunks = (int(np.floor(np.sqrt(chunks))),) * 2
 
-        positions = dask.delayed(gridscan_positions, pure=True)(self.start, self.end, self.gpts, self.grid.endpoint)
-        positions = da.from_delayed(positions, shape=self.gpts + (2,), dtype=np.float32)
-        positions = positions.rechunk(chunks + (2,))
+        if lazy:
+            positions = dask.delayed(gridscan_positions)(self.start, self.end, self.gpts, self.grid.endpoint)
+            positions = da.from_delayed(positions, shape=self.gpts + (2,), dtype=np.float32)
+            positions = positions.rechunk(chunks + (2,))
+        else:
+            positions = gridscan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
+
         return positions
 
     def add_to_plot(self, ax, alpha: float = .33, facecolor: str = 'r', edgecolor: str = 'r', **kwargs):

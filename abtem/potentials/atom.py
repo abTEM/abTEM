@@ -11,7 +11,6 @@ from scipy.optimize import brentq
 from abtem.basic.backend import cp, get_array_module
 from abtem.basic.grid import disc_meshgrid
 from abtem.potentials.parametrizations import names as parametrization_names
-from abtem.potentials.utils import kappa
 
 if cp is not None:
     from abtem.basic.cuda import interpolate_radial_functions as interpolate_radial_functions_cuda

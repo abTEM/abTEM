@@ -65,11 +65,11 @@ class HasDaskArray:
         pass
 
     @property
-    def is_delayed(self):
+    def is_lazy(self):
         return isinstance(self.array, da.core.Array)
 
     def delay(self, chunks=None):
-        if self.is_delayed:
+        if self.is_lazy:
             return self
 
         self._array = da.from_array(self._array, chunks=-1)
@@ -77,7 +77,7 @@ class HasDaskArray:
         return self
 
     def compute(self, pbar=True, **kwargs):
-        if not self.is_delayed:
+        if not self.is_lazy:
             return self
 
         if pbar:

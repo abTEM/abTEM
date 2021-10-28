@@ -42,13 +42,13 @@ def ifft2(x, overwrite_x=False):
         return cp.fft.ifft2(x)
 
 
-def _fft2_convolve(x, kernel, overwrite_x=True):
+def _fft2_convolve(x, kernel, overwrite_x=False):
     x = fft2(x, overwrite_x=overwrite_x)
     x *= kernel
     return ifft2(x, overwrite_x=overwrite_x)
 
 
-def fft2_convolve(x, kernel, overwrite_x=True, ):
+def fft2_convolve(x, kernel, overwrite_x=False, ):
     xp = get_array_module(x)
 
     if isinstance(x, np.ndarray):

@@ -34,39 +34,44 @@ class AbstractFrozenPhonons(metaclass=ABCMeta):
         return copy(self)
 
 
-class DummyFrozenPhonons(AbstractFrozenPhonons):
-    """
-    Dummy frozen phonons object.
+class FrozenPhononConfiguration:
 
-    Generates the input Atoms object. Used as a stand-in for simulations without frozen phonons.
-
-    Parameters
-    ----------
-    atoms: ASE Atoms object
-        Generated Atoms object.
-    """
-
-    def __init__(self, atoms: Atoms):
+    def __init__(self, atoms, sigmas, directions):
         self._atoms = atoms
+        self._sigmas = sigmas
+        self._directions = directions
 
     @property
-    def atoms(self):
-        return self._atoms
+    def positions(self):
+        return self._atoms.positions
 
-    def __len__(self):
-        return 1
+    @property
+    def numbers(self):
+        return self._atoms._numbers
 
-    def get_configurations(self):
-        def _inject_atoms():
-            return self._atoms
+    @property
+    def cell(self):
+        return self._atoms.cell
 
-        return [dask.delayed(_inject_atoms)()]
+    def jiggle_atoms(self):
+        def _jiggle_atoms(atoms, sigmas, directions):
 
-    def generate_atoms(self):
-        yield self._atoms
+            if isinstance(sigmas, dict):
+                temp = np.zeros(len(atoms.numbers), dtype=np.float32)
+                for unique in np.unique(atoms.numbers):
+                    temp[atoms.numbers == unique] = np.float32(sigmas[chemical_symbols[unique]])
+                sigmas = temp
+            elif not isinstance(sigmas, np.ndarray):
+                raise RuntimeError()
 
-    def __copy__(self):
-        return self.__class__(self._atoms.copy())
+            atoms = atoms.copy()
+
+            for direction in directions:
+                atoms.positions[:, direction] += sigmas * np.random.randn(len(atoms))
+
+            return atoms
+
+        return _jiggle_atoms(self._atoms, self._sigmas, self._directions)
 
 
 class FrozenPhonons(AbstractFrozenPhonons):
@@ -105,8 +110,11 @@ class FrozenPhonons(AbstractFrozenPhonons):
         unique_symbols = [chemical_symbols[number] for number in self._unique_numbers]
 
         if isinstance(sigmas, Number):
+            new_sigmas = {}
             for symbol in unique_symbols:
-                sigmas = {symbol: sigmas}
+                new_sigmas[symbol] = sigmas
+
+            sigmas = new_sigmas
 
         elif isinstance(sigmas, dict):
             if not all([symbol in unique_symbols for symbol in sigmas.keys()]):
@@ -148,60 +156,31 @@ class FrozenPhonons(AbstractFrozenPhonons):
     def __len__(self):
         return self._num_configs
 
-    def get_configurations(self):
+    def get_configurations(self, lazy=True):
         if self._seed:
             np.random.seed(self._seed)
 
-        def _inject_atoms():
+        def load_atoms():
             return self._atoms
 
-        atoms = dask.delayed(_inject_atoms)()
+        def apply_frozen_phonons(atoms):
+            return FrozenPhononConfiguration(atoms,
+                                             sigmas=self._sigmas,
+                                             directions=self._directions)
 
-        if isinstance(self._sigmas, np.ndarray):
-            sigmas = da.from_array(self._sigmas)
-
-        elif isinstance(self._sigmas, dict):
-            def _sigmas(atoms, sigmas):
-                sigmas_array = np.zeros(len(atoms.numbers), dtype=np.float32)
-                for unique in np.unique(atoms.numbers):
-                    sigmas_array[atoms.numbers == unique] = np.float32(sigmas[chemical_symbols[unique]])
-                return sigmas_array
-
-            sigmas = dask.delayed(_sigmas)(atoms, self._sigmas)
+        if lazy:
+            atoms = dask.delayed(load_atoms)()
         else:
-            raise RuntimeError()
-
-        def _jiggle_atoms(atoms, directions, sigmas):
-            atoms = atoms.copy()
-
-            for direction in directions:
-                atoms.positions[:, direction] += sigmas * np.random.randn(len(atoms))
-
-            return atoms
-
-        # positions = da.from_array(self._atoms.positions.astype(np.float32))
-        # numbers = da.from_array(self._atoms.numbers)
-        # unique_numbers = np.unique(self._atoms.numbers)
+            atoms = self._atoms
 
         configurations = []
         for i in range(self._num_configs):
-            configurations.append(dask.delayed(_jiggle_atoms)(atoms, self._directions, sigmas))
-
-            # configuration = FrozenPhononConfiguration(positions=positions,
-            #                                           numbers=numbers,
-            #                                           unique_numbers=unique_numbers,
-            #                                           sigmas=self._sigmas,
-            #                                           cell=self._atoms.cell,
-            #                                           directions=self._directions)
-            # configurations.append(configuration)
+            if lazy:
+                configurations.append(dask.delayed(apply_frozen_phonons)(atoms))
+            else:
+                configurations.append(apply_frozen_phonons(self._atoms))
 
         return configurations
-
-    # for i in range(len(self)):
-    #     atoms = self._atoms.copy()
-    #     for direction in self._directions:
-    #         atoms.positions[:, direction] += self._sigmas * np.random.randn(len(atoms))
-    #     yield atoms
 
     def __copy__(self):
         return self.__class__(atoms=self.atoms.copy(), num_configs=len(self), sigmas=self._sigmas.copy(),

@@ -11,7 +11,7 @@ from abtem.basic.backend import get_array_module, cp, copy_to_device, xp_to_str
 from abtem.basic.complex import complex_exponential
 from abtem.basic.dask import HasDaskArray
 from abtem.basic.grid import Grid
-from abtem.basic.utils import generate_array_chunks, reassemble_chunks_along
+from abtem.basic.utils import generate_array_chunks, reassemble_chunks_along, generate_chunks
 from abtem.measure.detect import AbstractDetector
 from abtem.potentials.potentials import AbstractPotential
 from abtem.waves.base import BeamTilt, AbstractScannedWaves
@@ -238,7 +238,7 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
         exit_waves = []
         exit_waves.append(multislice(self, potential))
 
-        #for p in potential.frozen_phonon_potentials():
+        # for p in potential.frozen_phonon_potentials():
         #    exit_waves.append(multislice(self.copy(), p))
 
         array = da.stack([exit_wave.array for exit_wave in exit_waves], axis=0)
@@ -297,28 +297,32 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
             raise RuntimeError()
 
         def block_reduce_interpolated_S_matrix(positions, S, wave_vectors):
-            S = S[0]
-            coefficients = self._get_coefficients(positions.reshape((-1, 2)), wave_vectors)
-            crop_corner, size, corners = self._get_minimum_crop(positions)
-            upper_corner = (crop_corner[0] + size[0], crop_corner[1] + size[1])
-            cropped_S = wrapped_crop_2d(S, crop_corner, upper_corner)
+            return xp.zeros((1, positions.shape[0], positions.shape[1]), dtype=xp.complex64)
 
-            window = xp.tensordot(coefficients, cropped_S, axes=[-1, -3])
-            window = batch_crop_2d(window, corners.reshape((-1, 2)), self.interpolated_gpts)
-            window = window.reshape(positions.shape[:-1] + window.shape[-2:])
-            return window[None] #, ..., None, :, :]
+            # S = S[0]
+            # coefficients = self._get_coefficients(positions.reshape((-1, 2)), wave_vectors)
+            # crop_corner, size, corners = self._get_minimum_crop(positions)
+            # upper_corner = (crop_corner[0] + size[0], crop_corner[1] + size[1])
+            # cropped_S = wrapped_crop_2d(S, crop_corner, upper_corner)
+            #
+            # window = xp.tensordot(coefficients, cropped_S, axes=[-1, -3])
+            # window = batch_crop_2d(window, corners.reshape((-1, 2)), self.interpolated_gpts)
+            # window = window.reshape(positions.shape[:-1] + window.shape[-2:])
+            # return window[None].sum((-2,-1)) #, ..., None, :, :]
 
         if self.interpolated_gpts != self.gpts:
             reduced = da.blockwise(block_reduce_interpolated_S_matrix,
-                                   'qijlm',
+                                   'qij',
                                    positions, 'ijo',
                                    array, 'qklm',
-                                   self.wave_vectors, 'kp',
-                                   adjust_chunks={#'k': (1,) * len(self.array.chunks[-3]),
-                                                  'l': (self.interpolated_gpts[0],),
-                                                  'm': (self.interpolated_gpts[1],)},
+                                   # self.wave_vectors, 'kp',
+                                   # adjust_chunks={  # 'k': (1,) * len(self.array.chunks[-3]),
+                                   #    'l': (self.interpolated_gpts[0],),
+                                   #    'm': (self.interpolated_gpts[1],)},
                                    concatenate=True,
                                    meta=xp.array((), dtype=xp.complex64))
+            # print(array.numblocks)
+            # print(reduced.numblocks)
 
         else:
             reduced = da.blockwise(block_reduce_interpolated_S_matrix,
@@ -326,16 +330,16 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
                                    positions, 'ijo',
                                    self.array, 'klm',
                                    self.wave_vectors, 'kp',
-                                   adjust_chunks={#'k': (1,) * len(self.array.chunks[-3]),
-                                                  'l': (self.interpolated_gpts[0],),
-                                                  'm': (self.interpolated_gpts[1],)},
+                                   adjust_chunks={  # 'k': (1,) * len(self.array.chunks[-3]),
+                                       'l': (self.interpolated_gpts[0],),
+                                       'm': (self.interpolated_gpts[1],)},
                                    concatenate=True,
                                    meta=xp.array((), dtype=xp.complex64))
 
         if len(in_shape) == 3:
             reduced = reduced[0]
 
-        return reduced#.sum(-3)
+        return reduced  # .sum(-3)
 
     def reduce_by_block(self, positions, chunks):
 
@@ -345,9 +349,8 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
         #
         # else:
         #     axes_metadata = [{'type': 'positions'}]
-        #axes_metadata = self._extra_axes_metadata + positions.axes_metadata
+        # axes_metadata = self._extra_axes_metadata + positions.axes_metadata
         axes_metadata = []
-
 
         reduced = self._do_reduce(positions)
 
@@ -659,31 +662,59 @@ class SMatrix(AbstractScannedWaves):
         potential = self._validate_potential(potential)
         self.grid.check_is_defined()
 
-        #exit_waves.append(multislice(self.build(), p))
+        # exit_waves.append(multislice(self.build(), p))
 
-        exit_waves = []
-        exit_waves.append(multislice(self.build(), potential))
-        #for p in potential.frozen_phonon_potentials():
-        #    exit_waves.append(multislice(self.build(), p))
+        def multislice_reduce(wave_vectors, potential, extent, gpts, energy):
+            array = plane_waves(wave_vectors, extent, gpts)
+            waves = Waves(array, extent=extent, energy=energy)
 
-        if len(exit_waves) > 1:
-            array = da.stack([exit_wave.array for exit_wave in exit_waves], axis=0)
-            extra_axes_metadata = [{'label': 'frozen_phonons', 'type': 'ensemble'}]
-        else:
-            array = exit_waves[0].array
-            extra_axes_metadata = []
+            return array
 
-        return SMatrixArray(array,
-                            interpolation=self.interpolation,
-                            extent=self.extent,
-                            energy=self.energy,
-                            tilt=self.tilt,
-                            wave_vectors=self.wave_vectors,
-                            ctf=self.ctf.copy(),
-                            antialias_aperture=self.antialias_aperture,
-                            device=self._device,
-                            extra_axes_metadata=extra_axes_metadata,
-                            metadata={'energy': self.energy})
+        wave_vectors = self.wave_vectors
+
+        xp = get_array_module(self._device)
+
+        for p in potential.frozen_phonon_potentials():
+            s_matrix_chunks = []
+            for start, end in generate_chunks(len(wave_vectors), chunks=self.chunks):
+                chunk = dask.delayed(multislice_reduce)(wave_vectors[start:end],
+                                                        potential=p,
+                                                        extent=self.extent,
+                                                        gpts=self.gpts,
+                                                        energy=self.energy
+                                                        )
+
+                chunk = da.from_delayed(chunk, shape=(end - start,) + self.gpts, meta=xp.array((), dtype=xp.complex64))
+
+                s_matrix_chunks.append(chunk)
+
+            stack = da.concatenate(s_matrix_chunks)
+
+        return stack
+
+        # exit_waves = []
+        # exit_waves.append(multislice(self.build(), potential))
+        # # for p in potential.frozen_phonon_potentials():
+        # #    exit_waves.append(multislice(self.build(), p))
+        #
+        # if len(exit_waves) > 1:
+        #     array = da.stack([exit_wave.array for exit_wave in exit_waves], axis=0)
+        #     extra_axes_metadata = [{'label': 'frozen_phonons', 'type': 'ensemble'}]
+        # else:
+        #     array = exit_waves[0].array
+        #     extra_axes_metadata = []
+        #
+        # return SMatrixArray(array,
+        #                     interpolation=self.interpolation,
+        #                     extent=self.extent,
+        #                     energy=self.energy,
+        #                     tilt=self.tilt,
+        #                     wave_vectors=self.wave_vectors,
+        #                     ctf=self.ctf.copy(),
+        #                     antialias_aperture=self.antialias_aperture,
+        #                     device=self._device,
+        #                     extra_axes_metadata=extra_axes_metadata,
+        #                     metadata={'energy': self.energy})
 
         # return self.build().multislice(potential)
 
@@ -746,20 +777,23 @@ class SMatrix(AbstractScannedWaves):
             return xp.asarray((kx, ky)).T
 
         xp = get_array_module(self._device)
-        wave_vectors = dask.delayed(prism_wave_vectors)(self.expansion_cutoff,
-                                                        self.extent,
-                                                        self.wavelength,
-                                                        self.interpolation,
-                                                        xp_to_str(xp))
-        n=51
+        wave_vectors = prism_wave_vectors(self.expansion_cutoff,
+                                          self.extent,
+                                          self.wavelength,
+                                          self.interpolation,
+                                          xp_to_str(xp))
+        return wave_vectors
+        # # n=51
         # n = len(prism_wave_vectors(self.expansion_cutoff,
         #                            self.extent,
         #                            self.wavelength,
         #                            self.interpolation,
         #                            xp_to_str(xp)))
+        #
+        # wave_vectors = da.from_delayed(wave_vectors, shape=(n, 2), dtype=np.float32)
+        # return wave_vectors.rechunk(chunks=(self.chunks, 2))
 
-        wave_vectors = da.from_delayed(wave_vectors, shape=(n, 2), dtype=np.float32)
-        return wave_vectors.rechunk(chunks=(self.chunks, 2))
+    # def _get_plane_waves(self, wave_vectors):
 
     def _build_convential(self):
         wave_vectors = self.wave_vectors
@@ -767,6 +801,7 @@ class SMatrix(AbstractScannedWaves):
 
         def _build_plane_waves(k, extent, gpts, interpolation):
             array = plane_waves(k, extent, gpts)
+
             # xp = get_array_module(array)
             # interpolated_gpts = (gpts[0] // interpolation, self.gpts[1] // interpolation)
             # probe = (xp.abs(array.sum(0)) ** 2)[:interpolated_gpts[0], :interpolated_gpts[1]]
