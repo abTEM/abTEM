@@ -258,6 +258,7 @@ class CTF(HasAcceleratorMixin):
 
     def evaluate_chi(self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
+
         p = self.parameters
 
         alpha2 = alpha ** 2

@@ -5,11 +5,9 @@ from copy import copy
 from numbers import Number
 from typing import Mapping, Union, Sequence
 
+import dask
 import numpy as np
 from ase import Atoms
-from ase.data import atomic_numbers
-import dask.array as da
-import dask
 from ase.data import chemical_symbols
 
 
@@ -68,6 +66,8 @@ class FrozenPhononConfiguration:
 
             for direction in directions:
                 atoms.positions[:, direction] += sigmas * np.random.randn(len(atoms))
+
+            atoms.wrap()
 
             return atoms
 
@@ -155,6 +155,9 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
     def __len__(self):
         return self._num_configs
+
+    def get_atoms(self, i=0):
+        return self.get_configurations(lazy=False)[i].jiggle_atoms()
 
     def get_configurations(self, lazy=True):
         if self._seed:

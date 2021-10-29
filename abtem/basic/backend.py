@@ -2,6 +2,7 @@ import numpy as np
 import dask.array as da
 from typing import Union
 import scipy
+from numbers import Number
 
 try:
     import cupy as cp
@@ -57,6 +58,9 @@ def get_array_module(x):
 
     if x is cp:
         return cp
+
+    if isinstance(x, Number):
+        return np
 
     raise ValueError(f'array module specification {x} not recognized')
 

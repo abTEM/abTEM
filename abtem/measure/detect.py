@@ -8,7 +8,6 @@ import numpy as np
 
 from abtem.basic.backend import get_array_module
 from abtem.measure.measure import DiffractionPatterns, PolarMeasurements, Images, LineProfiles
-from abtem.measure.utils import polar_detector_bins
 
 
 def check_cutoff_angle(waves, angle):
@@ -20,9 +19,10 @@ def check_cutoff_angle(waves, angle):
 class AbstractDetector(metaclass=ABCMeta):
     """Abstract base class for all detectors."""
 
-    def __init__(self, ensemble_mean=True, to_cpu=True):
+    def __init__(self, ensemble_mean=True, to_cpu=True, url: str = None):
         self._ensemble_mean = ensemble_mean
         self._to_cpu = to_cpu
+        self._url = url
 
     @property
     def ensemble_mean(self):
@@ -48,6 +48,10 @@ class AbstractDetector(metaclass=ABCMeta):
     @abstractmethod
     def detect(self, waves) -> Any:
         pass
+
+    @property
+    def url(self):
+        return self._url
 
     @abstractmethod
     def __copy__(self):
@@ -77,11 +81,18 @@ class AnnularDetector(AbstractDetector):
         The path to the file for saving the detector output.
     """
 
-    def __init__(self, inner: float, outer: float, offset: Tuple[float, float] = None, ensemble_mean=True, to_cpu=True):
+    def __init__(self,
+                 inner: float,
+                 outer: float,
+                 offset: Tuple[float, float] = None,
+                 ensemble_mean: bool = True,
+                 to_cpu: bool = True,
+                 url: str = None):
+
         self._inner = inner
         self._outer = outer
         self._offset = offset
-        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu)
+        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url)
 
     @property
     def inner(self) -> float:
@@ -108,14 +119,14 @@ class AnnularDetector(AbstractDetector):
     def detected_dtype(self):
         return np.float32
 
-    def measurement_from_array(self, array, scan=None, waves=None, axes_metadata=None):
+    def measurement_from_array(self, array, scan=None, waves=None, axes_metadata=None) -> Union[LineProfiles, Images]:
         from abtem.waves.scan import AbstractScan
 
         if axes_metadata is None:
             axes_metadata = []
 
         if isinstance(scan, AbstractScan):
-            sampling = [axis['sampling'] for axis in scan.axes_metadata]
+            sampling = (scan.axes_metadata[0]['sampling'], scan.axes_metadata[1]['sampling'])
         else:
             raise RuntimeError()
 
@@ -125,11 +136,18 @@ class AnnularDetector(AbstractDetector):
             axes_metadata += []
 
         if len(scan.shape) == 1:
-            return LineProfiles(array, sampling=sampling[0], axes_metadata=axes_metadata)
+            measurement = LineProfiles(array, sampling=sampling[0], axes_metadata=axes_metadata)
         elif len(scan.shape) == 2:
-            return Images(array, sampling=sampling, axes_metadata=axes_metadata)
+            measurement = Images(array, sampling=sampling, axes_metadata=axes_metadata)
+        else:
+            raise NotImplementedError
 
-    def detect(self, probes):
+        if self._url is not None:
+            return measurement.to_zarr(self.url, overwrite=True, compute=False)
+        else:
+            return measurement
+
+    def detect(self, probes) -> Images:
         measurement = probes.diffraction_patterns().integrate_radial(inner=self.inner, outer=self.outer)
 
         if self._to_cpu:
@@ -159,20 +177,6 @@ class AnnularDetector(AbstractDetector):
 
         plt.colorbar(im, extend='min', label='Detector region')
         return ax, im
-
-    #
-    # def show(self, probes, ax=None):
-    #     bins = polar_detector_bins(gpts=probes.gpts,
-    #                                sampling=probes.angular_sampling,
-    #                                inner=self.inner,
-    #                                outer=self.outer,
-    #                                nbins_radial=1,
-    #                                nbins_azimuthal=1,
-    #                                fftshift=True)
-    #
-    #     image = DiffractionPatterns(bins, angular_sampling=probes.angular_sampling,
-    #                                 axes_metadata=probes._fourier_space_axes_metadata)
-    #     return image.show(ax=ax)
 
     def __copy__(self) -> 'AnnularDetector':
         return self.__class__(self.inner, self.outer)
@@ -209,7 +213,7 @@ class FlexibleAnnularDetector(AbstractDetector):
         self._radial_steps = value
 
     def nbins_radial(self, waves):
-        return int(min(waves.cutoff_angles) / self._radial_steps)
+        return int(np.floor(min(waves.cutoff_angles)) / (self._radial_steps))
 
     def detected_shape(self, waves):
         return (self.nbins_radial(waves), 1)
@@ -250,11 +254,10 @@ class FlexibleAnnularDetector(AbstractDetector):
             Detected values. The array has shape of (batch size, number of bins).
         """
 
-        measurements = waves.diffraction_patterns(max_angle='cutoff').polar_binning(inner=0.,
-                                                                                    outer=min(waves.cutoff_angles),
-                                                                                    nbins_radial=self.nbins_radial(
-                                                                                        waves),
-                                                                                    nbins_azimuthal=1)
+        diffraction_patterns = waves.diffraction_patterns(max_angle='cutoff')
+
+        measurements = diffraction_patterns.polar_binning(inner=0., outer=np.floor(min(waves.cutoff_angles)),
+                                                          nbins_radial=self.nbins_radial(waves), nbins_azimuthal=1)
 
         if (waves.num_ensemble_axes > 0) and self.ensemble_mean:
             measurements = measurements.mean(measurements.ensemble_axes)
@@ -539,10 +542,11 @@ class PixelatedDetector(AbstractDetector):
 
         axes_metadata = axes_metadata + scan.axes_metadata
 
-        return DiffractionPatterns(array, angular_sampling=waves.angular_sampling, axes_metadata=axes_metadata)
+        return DiffractionPatterns(array, angular_sampling=waves.angular_sampling, axes_metadata=axes_metadata,
+                                   fftshift=True)
 
     def detect(self, waves) -> np.ndarray:
-        measurements = waves.diffraction_patterns(max_angle=self.max_angle)
+        measurements = waves.diffraction_patterns()
 
         if (waves.num_ensemble_axes > 0) & self.ensemble_mean:
             measurements = measurements.mean(waves.ensemble_axes)

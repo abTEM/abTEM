@@ -674,7 +674,7 @@ class SMatrix(AbstractScannedWaves):
 
         xp = get_array_module(self._device)
 
-        for p in potential.frozen_phonon_potentials():
+        for p in potential.get_slice_iterators():
             s_matrix_chunks = []
             for start, end in generate_chunks(len(wave_vectors), chunks=self.chunks):
                 chunk = dask.delayed(multislice_reduce)(wave_vectors[start:end],
@@ -746,7 +746,8 @@ class SMatrix(AbstractScannedWaves):
             Dictionary of measurements with keys given by the detector.
         """
 
-        return self.multislice(potential).downsample().scan(scan, detectors)
+
+        #return self.multislice(potential).downsample().scan(scan, detectors)
 
     def __len__(self):
         return len(self.wave_vectors)
@@ -782,16 +783,21 @@ class SMatrix(AbstractScannedWaves):
                                           self.wavelength,
                                           self.interpolation,
                                           xp_to_str(xp))
-        return wave_vectors
-        # # n=51
+        #return wave_vectors
+        # n=51
+
         # n = len(prism_wave_vectors(self.expansion_cutoff,
         #                            self.extent,
         #                            self.wavelength,
         #                            self.interpolation,
         #                            xp_to_str(xp)))
-        #
-        # wave_vectors = da.from_delayed(wave_vectors, shape=(n, 2), dtype=np.float32)
-        # return wave_vectors.rechunk(chunks=(self.chunks, 2))
+
+        wave_vectors = da.from_array(wave_vectors, chunks=(self.chunks, 2))
+
+        return wave_vectors
+
+        #wave_vectors = da.from_delayed(wave_vectors, shape=(n, 2), dtype=np.float32)
+        #return wave_vectors.rechunk(chunks=(self.chunks, 2))
 
     # def _get_plane_waves(self, wave_vectors):
 

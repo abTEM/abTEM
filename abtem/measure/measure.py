@@ -1,7 +1,7 @@
 import copy
 from abc import ABCMeta, abstractmethod
 from numbers import Number
-from typing import Union, Tuple, TypeVar
+from typing import Union, Tuple, TypeVar, Dict, List
 
 import dask
 import dask.array as da
@@ -12,7 +12,7 @@ from ase import Atom
 
 from abtem.basic.axes import HasAxesMetadata
 from abtem.basic.backend import cp, asnumpy, get_array_module, get_ndimage_module
-from abtem.basic.dask import computable, HasDaskArray, requires_dask_array
+from abtem.basic.dask import HasDaskArray, requires_dask_array
 from abtem.basic.fft import fft2_interpolate
 from abtem.basic.interpolate import interpolate_bilinear
 from abtem.measure.utils import polar_detector_bins, sum_run_length_encoded
@@ -49,14 +49,31 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
     return hyperspy_axes
 
 
+def from_zarr(url):
+    with zarr.open(url, mode='r') as f:
+        axes_metadata = f.attrs['axes_metadata']
+        metadata = f.attrs['metadata']
+        kwargs = f.attrs['kwargs']
+        cls = globals()[f.attrs['cls']]
+
+    array = da.from_zarr(url, component='array')
+    return cls(array, axes_metadata=axes_metadata, metadata=metadata, **kwargs)
+
+
 class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
 
     def __init__(self, array, axes_metadata, metadata, base_axes):
         self._array = array
+
+        if axes_metadata is None:
+            axes_metadata = []
+
+        if metadata is None:
+            metadata = {}
+
         self._axes_metadata = axes_metadata
         self._metadata = metadata
         self._base_axes = base_axes
-
         super().__init__(array)
 
     @property
@@ -69,7 +86,7 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
         return self._metadata
 
     @property
-    def axes_metadata(self) -> list:
+    def axes_metadata(self) -> List[Dict]:
         return self._axes_metadata + self.base_axes_metadata
 
     @property
@@ -173,33 +190,28 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
     #
     #     return self.__class__
 
-    @requires_dask_array
-    def _to_zarr(self, url, overwrite=False, **kwargs):
+    def _to_zarr(self, url, compute=True, overwrite=False, **kwargs):
         with zarr.open(url, mode='w') as root:
-            self.array.to_zarr(url, component='array', overwrite=overwrite)
+            print(self.array, url)
+            print()
+
+            array = self.array.to_zarr(url, compute=compute, component='array', overwrite=overwrite)
             root.attrs['axes_metadata'] = self._axes_metadata
             root.attrs['metadata'] = self.metadata
             root.attrs['kwargs'] = kwargs
             root.attrs['cls'] = self.__class__.__name__
+        return array
 
     @staticmethod
     def from_zarr(url):
-
-        with zarr.open(url, mode='r') as f:
-            axes_metadata = f.attrs['axes_metadata']
-            metadata = f.attrs['metadata']
-            kwargs = f.attrs['kwargs']
-            cls = globals()[f.attrs['cls']]
-
-        array = da.from_zarr(url, component='array')
-        return cls(array, axes_metadata=axes_metadata, metadata=metadata, **kwargs)
+        return from_zarr(url)
 
     @abstractmethod
     def to_hyperspy(self):
         pass
 
     @abstractmethod
-    def to_zarr(self, url, overwrite=False):
+    def to_zarr(self, url: str, compute: bool = True, overwrite: bool = False):
         pass
 
     def to_cpu(self):
@@ -214,17 +226,26 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
 
 class Images(AbstractMeasurement):
 
-    def __init__(self, array, sampling, axes_metadata=None, metadata=None):
+    def __init__(self,
+                 array: Union[da.core.Array, np.array],
+                 sampling: Union[float, Tuple[float, float]],
+                 axes_metadata: List[Dict] = None,
+                 metadata: Dict = None):
+
+        if isinstance(sampling, Number):
+            sampling = (sampling,) * 2
+
         self._sampling = sampling
         super().__init__(array=array, axes_metadata=axes_metadata, metadata=metadata, base_axes=(-2, -1))
 
     @property
-    def base_axes_metadata(self):
+    def base_axes_metadata(self) -> List[Dict]:
         return [{'label': 'x', 'type': 'real-space', 'sampling': self.sampling[0]},
                 {'label': 'y', 'type': 'real-space', 'sampling': self.sampling[1]}]
 
-    def to_zarr(self, url, overwrite=False):
-        self._to_zarr(url=url, overwrite=overwrite, sampling=self.sampling)
+    @requires_dask_array
+    def to_zarr(self, url: str, compute: bool = True, overwrite: bool = False, **kwargs):
+        return self._to_zarr(url=url, overwrite=overwrite, sampling=self.sampling, compute=compute, **kwargs)
 
     def to_hyperspy(self):
         from hyperspy._signals.signal2d import Signal2D
@@ -258,8 +279,6 @@ class Images(AbstractMeasurement):
     def extent(self) -> Tuple[float, float]:
         return (self.sampling[0] * self.base_shape[0], self.sampling[1] * self.base_shape[1])
 
-    @computable
-    @requires_dask_array
     def interpolate(self,
                     sampling: Union[float, Tuple[float, float]] = None,
                     gpts: Union[int, Tuple[int, int]] = None,
@@ -286,9 +305,11 @@ class Images(AbstractMeasurement):
 
         sampling = (self.extent[0] / gpts[0], self.extent[1] / gpts[1])
 
-        array = dask.delayed(fft2_interpolate)(self.array, gpts)
-
-        array = da.from_delayed(array, shape=self.shape[:-2] + gpts, meta=xp.array((), dtype=self.array.dtype))
+        if self.is_lazy:
+            array = dask.delayed(fft2_interpolate)(self.array, gpts)
+            array = da.from_delayed(array, shape=self.shape[:-2] + gpts, meta=xp.array((), dtype=self.array.dtype))
+        else:
+            array = fft2_interpolate(self.array, gpts)
 
         return self.__class__(array, sampling=sampling, axes_metadata=self.axes_metadata[:-2], metadata=self.metadata)
 
@@ -366,26 +387,6 @@ class Images(AbstractMeasurement):
                                       meta=np.array((), dtype=np.float32))
 
         return LineProfiles(array=array, start=scan.start, end=scan.end)
-
-        # if width is not None:
-        #     direction = scan.direction
-        #     perpendicular_direction = np.array([-direction[1], direction[0]])
-        #     n = int(np.ceil(width / scan.sampling[0]))
-        #     perpendicular_positions = np.linspace(-width, width, n)[:, None] * perpendicular_direction[None]
-        #     positions = scan.get_positions()[None] + perpendicular_positions[:, None]
-        #     positions = positions.reshape((-1, 2))
-        #     interpolated_array = interpn((x, y), self.array, positions, method=interpolation_method,
-        #                                  bounds_error=False, fill_value=0)
-        #
-        #     interpolated_array = interpolated_array.reshape((n, -1)).mean(0)
-        #
-        # else:
-        # interpolated_array = interpn((x, y), self.array, scan.get_positions(), method=interpolation_method,
-        #                              bounds_error=False, fill_value=0)
-        #
-        # return LineProfiles(interpolated_array, start=start, end=end,
-        #                     calibration_units=measurement.calibrations[0].units,
-        #                     calibration_name=measurement.calibrations[0].name)
 
     def is_compatible(self, other) -> bool:
 
@@ -508,8 +509,9 @@ class LineProfiles(AbstractMeasurement):
         from hyperspy._signals.signal1d import Signal1D
         return Signal1D(self.array, axes=_to_hyperspy_axes_metadata(self.axes_metadata, self.shape)).as_lazy()
 
-    def to_zarr(self, url, overwrite=False):
-        self._to_zarr(url=url, overwrite=overwrite, sampling=self.sampling)
+    @requires_dask_array
+    def to_zarr(self, url: str, compute: bool = True, overwrite: bool = False):
+        self._to_zarr(url=url, compute=compute, overwrite=overwrite, sampling=self.sampling)
 
     def show(self, ax=None, title='', label=None):
         if ax is None:
@@ -550,13 +552,13 @@ class DiffractionPatterns(AbstractMeasurement):
 
     def __init__(self,
                  array,
-                 angular_sampling,
+                 angular_sampling: Tuple[float, float],
                  fftshift: bool = False,
                  axes_metadata=None,
                  metadata=None):
 
         self._fftshift = fftshift
-        self._angular_sampling = tuple(float(d) for d in angular_sampling)
+        self._angular_sampling = (float(angular_sampling[0]), float(angular_sampling[1]))
         super().__init__(array=array, axes_metadata=axes_metadata, metadata=metadata, base_axes=(-2, -1))
 
     @property
@@ -566,8 +568,14 @@ class DiffractionPatterns(AbstractMeasurement):
                 {'label': 'scattering_angle_y', 'type': 'fourier_space', 'sampling': self.angular_sampling[1],
                  'offset': self.fourier_space_extent[1][0], 'units': 'mrad'}]
 
-    def to_zarr(self, url, overwrite=False):
-        self._to_zarr(url=url, overwrite=overwrite, angular_sampling=self.angular_sampling, fftshift=self.fftshift)
+    @requires_dask_array
+    def to_zarr(self, url: str, compute: bool = True, overwrite: bool = False, **kwargs):
+        return self._to_zarr(url=url,
+                             compute=compute,
+                             overwrite=overwrite,
+                             angular_sampling=self.angular_sampling,
+                             fftshift=self.fftshift,
+                             **kwargs)
 
     def to_hyperspy(self):
         from hyperspy._signals.signal2d import Signal2D
@@ -592,7 +600,7 @@ class DiffractionPatterns(AbstractMeasurement):
         return self._fftshift
 
     @property
-    def angular_sampling(self):
+    def angular_sampling(self) -> Tuple[float, float]:
         return self._angular_sampling
 
     @property
@@ -739,8 +747,7 @@ class DiffractionPatterns(AbstractMeasurement):
                                           meta=xp.array((), dtype=xp.float32))
         else:
 
-            array = radial_binning(self.array, nbins_radial=nbins_radial,
-                                   nbins_azimuthal=nbins_azimuthal)
+            array = radial_binning(self.array, nbins_radial=nbins_radial, nbins_azimuthal=nbins_azimuthal)
 
         radial_sampling = (outer - inner) / nbins_radial
         azimuthal_sampling = 2 * np.pi / nbins_azimuthal
@@ -766,6 +773,7 @@ class DiffractionPatterns(AbstractMeasurement):
         self._check_max_angle(outer)
 
         xp = get_array_module(self.array)
+
         def integrate_fourier_space(array, sampling):
 
             bins = polar_detector_bins(gpts=array.shape[-2:],
@@ -856,7 +864,7 @@ class DiffractionPatterns(AbstractMeasurement):
 
         if self.is_lazy:
             array = da.from_delayed(dask.delayed(block_direct)(self.array), shape=self.shape,
-                                meta=xp.array((), dtype=xp.float32))
+                                    meta=xp.array((), dtype=xp.float32))
         else:
             array = block_direct(self.array)
 
@@ -903,11 +911,18 @@ class PolarMeasurements(AbstractMeasurement):
     def to_hyperspy(self):
         pass
 
-    def to_zarr(self, url, overwrite=False):
-        pass
+    @requires_dask_array
+    def to_zarr(self, url: str, compute: bool = True, overwrite: bool = False):
+        return self._to_zarr(url=url,
+                             compute=compute,
+                             overwrite=overwrite,
+                             radial_sampling=self.radial_sampling,
+                             azimuthal_sampling=self.azimuthal_sampling,
+                             radial_offset=self.radial_offset,
+                             azimuthal_offset=self.azimuthal_offset)
 
     @property
-    def inner_angle(self):
+    def radial_offset(self):
         return self._radial_offset
 
     @property
@@ -927,7 +942,7 @@ class PolarMeasurements(AbstractMeasurement):
         return self._azimuthal_offset
 
     def _check_radial_angle(self, angle):
-        if angle < self.inner_angle or angle > self.outer_angle:
+        if angle < self.radial_offset or angle > self.outer_angle:
             raise RuntimeError()
 
     def integrate_radial(self, inner, outer):
@@ -935,7 +950,8 @@ class PolarMeasurements(AbstractMeasurement):
 
     def integrate(self, radial_limits=None, azimutal_limits=None, detector_regions=None):
 
-        sampling = [self.axes_metadata[axis]['sampling'] for axis in self.scan_axes]
+        sampling = (self.axes_metadata[self.scan_axes[0]]['sampling'],
+                    self.axes_metadata[self.scan_axes[1]]['sampling'])
 
         if detector_regions is not None:
             array = self.array.reshape(self.shape[:-2] + (-1,))[..., list(detector_regions)].sum(axis=-1)
@@ -944,8 +960,8 @@ class PolarMeasurements(AbstractMeasurement):
         if radial_limits is None:
             radial_slice = slice(None)
         else:
-            inner_index = int((radial_limits[0] - self.inner_angle) / self.radial_sampling)
-            outer_index = int((radial_limits[1] - self.inner_angle) / self.radial_sampling)
+            inner_index = int((radial_limits[0] - self.radial_offset) / self.radial_sampling)
+            outer_index = int((radial_limits[1] - self.radial_offset) / self.radial_sampling)
             radial_slice = slice(inner_index, outer_index)
 
         if azimutal_limits is None:

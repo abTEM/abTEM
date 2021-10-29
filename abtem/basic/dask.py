@@ -3,9 +3,29 @@ from dask.diagnostics import ProgressBar
 import dask
 
 
-def compute_dask_array_wrappers(dask_array_wrappers):
+class ComputableList(list):
+
+    def compute(self, **kwargs):
+        computables = []
+
+        for computable in self:
+            if hasattr(computable, 'array'):
+                computables.append(computable.array)
+            else:
+                computables.append(computable)
+
+        with ProgressBar():
+            arrays = dask.compute(computables, **kwargs)[0]
+
+        for array, wrapper in zip(arrays, self):
+            wrapper._array = array
+
+        return
+
+
+def _compute(dask_array_wrappers, **kwargs):
     with ProgressBar():
-        arrays = dask.compute([wrapper.array for wrapper in dask_array_wrappers])[0]
+        arrays = dask.compute([wrapper.array for wrapper in dask_array_wrappers], **kwargs)[0]
 
     for array, wrapper in zip(arrays, dask_array_wrappers):
         wrapper._array = array
@@ -13,12 +33,16 @@ def compute_dask_array_wrappers(dask_array_wrappers):
     return dask_array_wrappers
 
 
+def compute(dask_array_wrappers, **kwargs):
+    return _compute(dask_array_wrappers, **kwargs)
+
+
 def computable(func):
     def wrapper(*args, compute=False, **kwargs):
         result = func(*args, **kwargs)
 
         if isinstance(result, tuple) and compute:
-            return compute_dask_array_wrappers(result)
+            return _compute(result)
 
         if compute:
             return result.compute()
@@ -53,6 +77,12 @@ class HasDaskArray:
     @property
     def array(self):
         return self._array
+
+    def as_delayed(self):
+        def _as_delayed(array):
+            self._array = array
+            return self
+        return dask.delayed(_as_delayed)(self.array)
 
     def __len__(self):
         return len(self.array)

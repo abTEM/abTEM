@@ -1,8 +1,6 @@
 from numbers import Number
-from typing import List, Tuple
+from typing import List, Tuple, Union, Sequence
 
-import dask.array as da
-import dask.delayed
 import numpy as np
 from ase.data import atomic_numbers
 
@@ -23,14 +21,14 @@ class SliceIndexedAtoms:
         return self._num_slices
 
     def get_atoms_in_slices(self, first_slice, last_slice):
-        #return np.zeros((0, 2), dtype=np.float32), np.zeros((0,)), np.zeros((0,))
+        # return np.zeros((0, 2), dtype=np.float32), np.zeros((0,)), np.zeros((0,))
 
         def _get_atoms_in_slice(slice_idx, first_slice, last_slice, positions, numbers):
             start_idx = np.searchsorted(slice_idx, first_slice)
             end_idx = np.searchsorted(slice_idx, last_slice)
 
-            #if start_idx == end_idx:
-            #return np.zeros((0, 2), dtype=np.float32), np.zeros((0,)), np.zeros((0,))
+            # if start_idx == end_idx:
+            # return np.zeros((0, 2), dtype=np.float32), np.zeros((0,)), np.zeros((0,))
 
             chunk_positions = positions[start_idx:end_idx]
             chunk_numbers = numbers[start_idx:end_idx]
@@ -48,8 +46,10 @@ class SliceIndexedAtoms:
         # return positions, numbers, slice_idx
 
 
-def _validate_slice_thickness(slice_thickness, thickness=None, num_slices=None):
-    if isinstance(slice_thickness, Number):
+def _validate_slice_thickness(slice_thickness: Union[float, np.ndarray, Sequence[float]],
+                              thickness: float = None,
+                              num_slices: int = None) -> np.ndarray:
+    if np.isscalar(slice_thickness):
         if thickness is not None:
             n = np.ceil(thickness / slice_thickness)
             slice_thickness = np.full(int(n), thickness / n)

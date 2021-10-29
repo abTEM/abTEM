@@ -2,19 +2,15 @@
 from typing import TYPE_CHECKING
 from typing import Union
 
-import dask
-import dask.array.core
 import numpy as np
 
 from abtem.basic.antialias import antialias_kernel
-from abtem.basic.backend import get_array_module, xp_to_str, copy_to_device
+from abtem.basic.backend import get_array_module, xp_to_str
 from abtem.basic.complex import complex_exponential
 from abtem.basic.energy import energy2wavelength, energy2sigma
 from abtem.basic.fft import fft2_convolve
 from abtem.basic.grid import spatial_frequencies
-from abtem.basic.utils import generate_chunks
-from abtem.potentials.potentials import PotentialGenerator, PotentialArray
-import dask.array as da
+from abtem.potentials.potentials import PotentialArray
 
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves
@@ -63,7 +59,7 @@ def _multislice(waves_array,
         potential_slice = potential._get_chunk(start, end)
 
         transmission_function = _transmission_function(potential_slice, energy=energy)
-        #transmission_function = fft2_convolve(transmission_function, antialias_kernel_array, overwrite_x=False)
+        # transmission_function = fft2_convolve(transmission_function, antialias_kernel_array, overwrite_x=False)
 
         if len(transmission_function.shape) == 2:
             transmission_function = transmission_function[None]
@@ -78,7 +74,7 @@ def _multislice(waves_array,
 
 
 def multislice(waves: Union['Waves', 'SMatrixArray'],
-               potential: Union[PotentialArray, PotentialGenerator]
+               potential: Union[PotentialArray]
                ) -> Union['Waves', 'SMatrixArray']:
     if waves.is_lazy:
         xp = get_array_module(waves.array)

@@ -1,7 +1,7 @@
 """Module to calculate potentials using the independent atom model."""
 from abc import ABCMeta, abstractmethod
 from copy import copy
-from typing import Union, Sequence, Tuple
+from typing import Union, Sequence, Tuple, List
 
 import dask
 import dask.array as da
@@ -9,12 +9,10 @@ import numpy as np
 import zarr
 from ase import Atoms
 
-from abtem.basic.antialias import antialias_kernel
 from abtem.basic.backend import get_array_module, xp_to_str
 from abtem.basic.complex import complex_exponential
-from abtem.basic.dask import computable, HasDaskArray, requires_dask_array
+from abtem.basic.dask import HasDaskArray
 from abtem.basic.energy import HasAcceleratorMixin, Accelerator, energy2sigma
-from abtem.basic.fft import fft2_convolve
 from abtem.basic.grid import Grid, HasGridMixin
 from abtem.basic.utils import generate_chunks
 from abtem.measure.measure import Images
@@ -32,19 +30,9 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
     Base class common for all potentials.
     """
 
-    def __init__(self, slice_thickness):
-        self._slice_thickness = slice_thickness
+    def __init__(self, slice_thickness: Union[Sequence, np.ndarray]):
+        self._slice_thickness = np.array(slice_thickness)
 
-    # @property
-    # @abstractmethod
-    # def num_frozen_phonons(self) -> int:
-    #     pass
-    #
-    # @property
-    # @abstractmethod
-    # def frozen_phonon_potentials(self):
-    #     pass
-    #
     @abstractmethod
     def build(self) -> 'PotentialArray':
         pass
@@ -62,7 +50,7 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         return self._slice_thickness
 
     @property
-    def slice_limits(self):
+    def slice_limits(self) -> List[Tuple[float, float]]:
         cumulative_thickness = np.cumsum(np.concatenate(((0,), self.slice_thickness)))
         return [(cumulative_thickness[i], cumulative_thickness[i + 1]) for i in range(len(cumulative_thickness) - 1)]
 
@@ -75,10 +63,10 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         if i >= self.num_slices:
             raise RuntimeError('Slice index {} too large for potential with {} slices'.format(i, self.num_slices))
 
-    def __getitem__(self, items):
+    def __getitem__(self, items) -> 'PotentialArray':
         return self.build()[items]
 
-    def project(self):
+    def project(self) -> 'Images':
         return self.build().project()
 
     def show(self, **kwargs):
@@ -92,6 +80,10 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         """
         return self.project().show(**kwargs)
 
+    @abstractmethod
+    def __copy__(self):
+        pass
+
     def copy(self):
         """Make a copy."""
         return copy(self)
@@ -100,14 +92,14 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 class AbstractPotentialFromAtoms(AbstractPotential):
 
     def __init__(self,
-                 atoms,
-                 gpts,
-                 sampling,
-                 slice_thickness,
-                 box=None,
-                 plane='xy',
-                 origin=(0., 0., 0.),
-                 precalculate=False):
+                 atoms: Union[Atoms, AbstractFrozenPhonons],
+                 gpts: Union[int, Tuple[int, int]],
+                 sampling: Union[float, Tuple[float, float]],
+                 slice_thickness: Union[np.ndarray, Sequence[float]],
+                 box: Tuple[float, float, float] = None,
+                 plane: str = 'xy',
+                 origin: Tuple[float, float, float] = (0., 0., 0.),
+                 precalculate: bool = False):
 
         if np.abs(atoms.cell[2, 2]) < 1e-12:
             raise RuntimeError('cell has no thickness')
@@ -141,37 +133,37 @@ class AbstractPotentialFromAtoms(AbstractPotential):
         super().__init__(slice_thickness=slice_thickness)
 
     @property
-    def precalculate(self):
+    def precalculate(self) -> bool:
         return self._precalculate
 
     @property
-    def plane(self):
+    def plane(self) -> str:
         return self._plane
 
     @property
-    def box(self):
+    def box(self) -> Tuple[float, float, float]:
         return self._box
 
     @property
-    def origin(self):
+    def origin(self) -> Tuple[float, float, float]:
         return self._origin
 
     @AbstractPotential.slice_thickness.setter
     def slice_thickness(self, value):
-        self._slice_thickness = _validate_slice_thickness(value, self._frozen_phonons[0].cell[2, 2])
+        self._slice_thickness = _validate_slice_thickness(value, self.atoms.cell[2, 2])
 
     @property
-    def atoms(self):
+    def atoms(self) -> Atoms:
         """Atoms object defining the atomic configuration."""
         return self._frozen_phonons.atoms
 
     @property
-    def frozen_phonons(self):
+    def frozen_phonons(self) -> AbstractFrozenPhonons:
         """FrozenPhonons object defining the atomic configuration(s)."""
         return self._frozen_phonons
 
     @property
-    def num_frozen_phonons(self):
+    def num_frozen_phonons(self) -> int:
         return len(self._frozen_phonons)
 
 
@@ -277,72 +269,19 @@ class Potential(AbstractPotentialFromAtoms):
         self._chunks = chunks
 
     @property
-    def parametrization(self):
+    def parametrization(self) -> str:
         """The potential parametrization."""
         return self._parametrization
 
     @property
-    def projection(self):
+    def projection(self) -> str:
         """The projection method."""
         return self._projection
 
     @property
-    def cutoff_tolerance(self):
+    def cutoff_tolerance(self) -> float:
         """The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]."""
         return self._cutoff_tolerance
-
-    def _build_finite(self):
-
-        def calculate_atomic_potentials():
-            if self._atomic_potentials is None:
-                core_size = min(self.sampling)
-                self._atomic_potentials = {}
-                for Z in np.unique(self.atoms.numbers):
-                    self._atomic_potentials[Z] = AtomicPotential(Z, self.parametrization, core_size,
-                                                                 cutoff_tolerance=self.cutoff_tolerance)
-                    self._atomic_potentials[Z].build_integral_table()
-
-            return self._atomic_potentials
-
-        def calculate_potential_chunk(first_slice,
-                                      last_slice,
-                                      atoms,
-                                      slice_thickness,
-                                      plane,
-                                      box,
-                                      atomic_potentials):
-
-            array = xp.zeros((last_slice - first_slice,) + self.gpts, dtype=np.float32)
-
-            cutoffs = {Z: atomic_potential.cutoff for Z, atomic_potential in atomic_potentials.items()}
-            sliced_atoms = SlicedAtoms(atoms, slice_thickness, plane=plane, box=box, padding=cutoffs)
-
-            for i, slice_idx in enumerate(range(first_slice, last_slice)):
-                for Z, atomic_potential in atomic_potentials.items():
-                    atoms = sliced_atoms.get_atoms_in_slices(slice_idx, atomic_number=Z)
-                    a = sliced_atoms.slice_limits[slice_idx][0] - atoms.positions[:, 2]
-                    b = sliced_atoms.slice_limits[slice_idx][1] - atoms.positions[:, 2]
-                    atomic_potential.project_on_grid(array[i], self.sampling, atoms.positions, a, b)
-
-            return array
-
-        xp = get_array_module(self._device)
-        atomic_potentials = dask.delayed(calculate_atomic_potentials, pure=True)()
-
-        array = []
-        for first_slice, last_slice in generate_chunks(len(self), chunks=self._chunks):
-            shape = (last_slice - first_slice,) + self.gpts
-            chunk = dask.delayed(calculate_potential_chunk)(first_slice,
-                                                            last_slice,
-                                                            self.atoms,
-                                                            self.slice_thickness,
-                                                            self.plane,
-                                                            self.box,
-                                                            atomic_potentials)
-
-            array.append(da.from_delayed(chunk, shape=shape, meta=xp.array((), dtype=np.float32)))
-
-        return PotentialArray(da.concatenate(array), self.slice_thickness, extent=self.extent)
 
     def build(self):
         self.grid.check_is_defined()
@@ -355,7 +294,6 @@ class Potential(AbstractPotentialFromAtoms):
 
         def get_chunk(slice_iterator, first_slice, last_slice):
             return slice_iterator._get_chunk(first_slice, last_slice)
-
 
         array = []
         for first_slice, last_slice in generate_chunks(len(self), chunks=self._chunks):
@@ -528,21 +466,6 @@ class Potential(AbstractPotentialFromAtoms):
                               parametrization=self.parametrization,
                               cutoff_tolerance=self.cutoff_tolerance,
                               device=self.device)
-
-
-class PotentialGenerator(AbstractPotential, HasGridMixin):
-
-    def __init__(self, iterator, slice_thickness, gpts=None, sampling=None, extent=None):
-        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
-        self._iterator = iterator
-        super().__init__(slice_thickness=slice_thickness)
-
-    @property
-    def array(self):
-        return self._iterator
-
-    def build(self):
-        pass
 
 
 class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):

@@ -120,14 +120,6 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAnt
 
 class AbstractScannedWaves(WavesLikeMixin):
 
-    # def _get_positions_metadata(self, positions):
-    #     if isinstance(positions, AbstractScan):
-    #         return
-    #     elif positions is None:
-    #         return [{'type': 'positions'}]
-    #     else:
-    #         return [{'type': 'positions'}] * (len(np.array(positions).shape) - 1)
-
     def _compute_chunks(self, dims):
         chunk_size = dask.utils.parse_bytes(dask.config.get('array.chunk-size'))
         chunks = int(np.floor(chunk_size / (2 * 4 * np.prod(self.gpts))))
