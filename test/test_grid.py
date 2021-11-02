@@ -1,6 +1,6 @@
 import pytest
 
-from abtem.base_classes import Grid
+from abtem.basic.grid import Grid
 
 
 def test_create_grid():
@@ -55,19 +55,6 @@ def test_grid_raises():
     assert str(e.value) == 'Grid value length of 3 != 2'
 
 
-def test_grid_event():
-    grid = Grid()
-
-    grid.extent = 5
-    assert grid.event._notify_count == 1
-
-    grid.gpts = 100
-    assert grid.event._notify_count == 2
-
-    grid.sampling = .1
-    assert grid.event._notify_count == 3
-
-
 def test_locked_grid():
     grid = Grid(gpts=200, lock_gpts=True)
 
@@ -94,25 +81,3 @@ def test_grid_match():
         grid1.check_match(grid2)
 
     assert str(e.value) == 'Inconsistent grid gpts ((10, 10) != (50, 50))'
-
-# def test_gridscan_calibration():
-#     gridscan = GridScan(start=[0, 0],
-#                         end=[4, 4],
-#                         sampling=.7,
-#                         endpoint=False)
-#
-#     gridscan.calibrations[0].coordinates(gridscan.gpts[0]) == gridscan.get_positions()[:, 0][::7]
-
-# def test_scattering_angle():
-#     probe = Probe(extent=18, gpts=(250, 251), energy=80e3)
-#     probe = probe.build()
-#
-#     alpha_x = np.fft.fftfreq(probe.gpts[0], probe.sampling[0]) * probe.wavelength * 1000
-#     alpha_y = np.fft.fftfreq(probe.gpts[1], probe.sampling[1]) * probe.wavelength * 1000
-#
-#     assert np.isclose(alpha_x.min(), probe.max_scattering_angles[0][0])
-#     assert np.isclose(alpha_x.max(), probe.max_scattering_angles[0][1])
-#     assert np.isclose(alpha_y.min(), probe.max_scattering_angles[1][0])
-#     assert np.isclose(alpha_y.max(), probe.max_scattering_angles[1][1])
-    #assert np.sum(np.abs(alpha_x) < 65) == probe._resampled_gpts(65)[0]
-    #assert np.sum(np.abs(alpha_y) < 65) == probe._resampled_gpts(65)[1]

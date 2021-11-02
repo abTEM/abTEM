@@ -3,25 +3,48 @@ import pytest
 from ase import Atoms
 from ase.build import bulk
 
-from abtem.potentials import Potential, CrystalPotential
-from abtem.device import asnumpy, cp
+from abtem.potentials import Potential  # , CrystalPotential
 
 
-def test_create_potential():
-    atoms = Atoms('C', positions=[(2, 3, 2)], cell=(4, 6, 4.3))
-
+@pytest.fixture
+def potential():
+    atoms = Atoms('C', positions=[(0, 0, 0)], cell=(4, 6, 4))
     potential = Potential(atoms=atoms, sampling=.1)
+    return potential
 
+
+def test_potential(potential):
     assert (potential.extent[0] == 4) & (potential.extent[1] == 6)
-    assert potential.num_slices == 9
-    assert potential.get_slice_thickness(0) == 4.3 / 9
+    assert potential.thickness == 4
+    assert potential.num_slices == 8
+    assert np.all(potential.slice_thickness == potential.thickness / potential.num_slices)
+    assert potential[0].array.shape == (1, 40, 60)
+    assert potential.build().array.shape == (8, 40, 60)
+    assert potential.build().compute(pbar=False).array.shape == (8, 40, 60)
+
+
+def test_potential_projection():
+    atoms = Atoms('C', positions=[(3, 3, 10)], cell=(6, 6, 20))
+
+    potential = Potential(atoms=atoms, sampling=.05, projection='finite', cutoff_tolerance=1e-3)
+    finite_array = potential.build().compute(pbar=False).array.sum(0)
+
+    potential = Potential(atoms=atoms, sampling=.05, projection='infinite')
+    infinite_array = potential.build().compute(pbar=False).array.sum(0)
+
+    abs_error = finite_array - infinite_array
+    rel_error = np.zeros_like(abs_error)
+    tol = 2e-3
+    rel_error[abs_error > tol] = abs_error[abs_error > tol] / infinite_array[abs_error > tol]
+
+    assert np.all(rel_error < .03)
 
 
 def test_potential_raises():
     with pytest.raises(RuntimeError) as e:
         Potential(Atoms('C', positions=[(2, 2, 2)], cell=(4, 4, 0)))
 
-    assert str(e.value) == 'Atoms cell has no thickness'
+    assert str(e.value) == 'cell has no thickness'
 
 
 def test_potential_centered():
@@ -39,13 +62,6 @@ def test_potential_centered():
                        np.roll(potential2[0].array[0, :, gpts_y // 2], gpts_x // 2))
     assert np.allclose(potential2[0].array[0, :, gpts_y // 2][1:], (potential2[0].array[0, :, gpts_y // 2])[::-1][:-1])
     assert np.allclose(potential2[0].array[0, gpts_x // 2][1:], potential2[0].array[0, gpts_x // 2][::-1][:-1])
-
-
-def test_potential_build():
-    atoms = Atoms('CO', positions=[(2, 3, 1), (3, 2, 3)], cell=(4, 6, 4.3))
-    potential = Potential(atoms=atoms, sampling=.1)
-    array_potential = potential.build()
-    assert np.all(array_potential[2].array == potential[2].array)
 
 
 def test_crystal_potential(graphene_atoms):

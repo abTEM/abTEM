@@ -3,10 +3,11 @@ import os
 import numpy as np
 import pytest
 from abtem.measure.detect import AnnularDetector, FlexibleAnnularDetector
-from abtem.device import asnumpy, cp
+#from abtem.device import asnumpy, cp
 from abtem.potentials import Potential
 from abtem.waves.scan import LineScan, GridScan
-from abtem.waves.waves import Probe, SMatrix
+from abtem.waves.waves import Probe
+from abtem.waves.prism import SMatrix
 from ase import Atoms
 from ase.io import read
 
@@ -27,7 +28,7 @@ def test_prism_raises():
 def test_prism_match_probe():
     S = SMatrix(semiangle_cutoff=30., energy=60e3, interpolation=1, extent=5, gpts=50, rolloff=0.)
     probe = Probe(extent=5, gpts=50, energy=60e3, semiangle_cutoff=30., rolloff=0.)
-    assert np.allclose(probe.build([(0., 0.)]).array, S.build().collapse([(0., 0.)]).array, atol=2e-5)
+    assert np.allclose(probe.build([(0., 0.)]).array, S.build().reduce([(0., 0.)]).array, atol=2e-5)
 
 
 def test_prism_translate():

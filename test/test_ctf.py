@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from abtem.base_classes import energy2wavelength
+from abtem.basic.energy import energy2wavelength
 from abtem.waves.transfer import CTF, polar_aliases, scherzer_defocus, polar_symbols
 
 
@@ -55,9 +55,3 @@ def test_ctf_raises():
 
     ctf.energy = 200e3
     ctf.evaluate(np.array([0]), np.array([0]))
-
-
-def test_ctf_event():
-    ctf = CTF(energy=80e3)
-    ctf.semiangle_cutoff = 1
-    assert ctf.event.notify_count == 2

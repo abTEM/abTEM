@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from abtem.base_classes import Accelerator
-from abtem.utils import energy2mass, energy2wavelength, energy2sigma
+from abtem.basic.energy import Accelerator
+from abtem.basic.energy import energy2mass, energy2wavelength, energy2sigma
 
 
 def test_energy2mass():

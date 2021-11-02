@@ -1,56 +1,55 @@
-from copy import copy
-
+import dask.array as da
 import numpy as np
 import pytest
+from ase import Atoms
 
-from abtem.base_classes import Grid, AntialiasFilter
 from abtem.measure.detect import AbstractDetector
-from abtem.measure.old_measure import Measurement
-from abtem.potentials import AbstractPotential, PotentialArray
+# from abtem.measure.old_measure import Measurement
+from abtem.potentials import Potential
 from abtem.waves.scan import LineScan, GridScan
 from abtem.waves.waves import Waves, PlaneWave, Probe
 
 
-class DummyPotential(AbstractPotential):
-
-    def __init__(self, extent=None, gpts=None, sampling=None, num_slices=10):
-        self._num_slices = num_slices
-        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
-
-        super().__init__(precalculate=False)
-
-    @property
-    def num_frozen_phonon_configs(self):
-        return 1
-
-    def generate_frozen_phonon_potentials(self, pbar=False):
-        for i in range(self.num_frozen_phonon_configs):
-            yield self
-
-    @property
-    def num_slices(self):
-        return 10
-
-    def get_slice_thickness(self, i):
-        return .5
-
-    def generate_slices(self, start=0, end=None, max_batch=1):
-        for i in range(self.num_slices):
-            array = np.zeros(self.gpts, dtype=np.float32)
-            array[:self.gpts[0] // 2] = 1
-            yield start, end, PotentialArray(array[None],
-                                             slice_thicknesses=np.array([self.get_slice_thickness(i)]),
-                                             extent=self.extent)
-
+# class DummyPotential(AbstractPotential):
+#
+#     def __init__(self, extent=None, gpts=None, sampling=None, num_slices=10):
+#         self._num_slices = num_slices
+#         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
+#
+#         super().__init__(precalculate=False)
+#
+#     @property
+#     def num_frozen_phonon_configs(self):
+#         return 1
+#
+#     def generate_frozen_phonon_potentials(self, pbar=False):
+#         for i in range(self.num_frozen_phonon_configs):
+#             yield self
+#
+#     @property
+#     def num_slices(self):
+#         return 10
+#
+#     def get_slice_thickness(self, i):
+#         return .5
+#
+#     def generate_slices(self, start=0, end=None, max_batch=1):
+#         for i in range(self.num_slices):
+#             array = np.zeros(self.gpts, dtype=np.float32)
+#             array[:self.gpts[0] // 2] = 1
+#             yield start, end, PotentialArray(array[None],
+#                                              slice_thicknesses=np.array([self.get_slice_thickness(i)]),
+#                                              extent=self.extent)
+#
 
 @pytest.fixture
 def potential():
-    return DummyPotential(extent=5, gpts=50)
+    return Potential(Atoms(), gpts=50)
 
 
 def test_create_waves():
     array = np.ones((1, 25, 25), dtype=np.complex64)
-    waves = Waves(array)
+    waves = Waves(array, energy=300e3)
     waves.extent = 10
 
     assert (waves.sampling[0] == 10 / array.shape[1]) & (waves.sampling[1] == 10 / array.shape[2])
@@ -58,18 +57,18 @@ def test_create_waves():
     with pytest.raises(RuntimeError):
         waves.gpts = 200
 
-    waves = Waves(array, sampling=.2)
+    waves = Waves(array, sampling=.2, energy=300e3)
     assert (waves.extent[0] == array.shape[1] * .2) & (waves.extent[1] == array.shape[2] * .2)
 
 
 def test_waves_raises():
     array = np.ones((1, 25, 25), dtype=np.complex64)
-    waves = Waves(array)
+    waves = Waves(array, energy=300e3)
 
     with pytest.raises(RuntimeError):
         waves.grid.check_is_defined()
 
-    waves = Waves(array, extent=5)
+    waves = Waves(array, extent=5, energy=300e3)
 
     with pytest.raises(RuntimeError):
         waves.accelerator.check_is_defined()
@@ -84,57 +83,50 @@ def test_multislice():
     array = np.ones((1, 25, 25), dtype=np.complex64)
     waves = Waves(array, energy=60e3)
 
-    potential = DummyPotential(extent=5)
+    potential = Potential(Atoms(cell=(5, 5, .5)))
+    waves = waves.multislice(potential)
 
-    new_waves = waves.multislice(potential, pbar=False)
-
-    assert potential.gpts is not None
-    assert waves.extent is not None
-    assert new_waves is waves
-
-    new_waves = copy(new_waves)
-    new_waves = new_waves.multislice(potential, pbar=False)
-
-    assert potential.gpts is not None
-    assert waves.extent is not None
-    assert not np.all(np.isclose(new_waves.array, waves.array))
+    assert potential.gpts == waves.gpts
+    assert waves.extent == potential.extent
 
 
 def test_multislice_raises():
     array = np.ones((1, 25, 25), dtype=np.complex64)
-    potential = DummyPotential(extent=5)
+    potential = Potential(Atoms(cell=(5, 5, .5)))
 
     waves = Waves(array, extent=5)
     with pytest.raises(RuntimeError) as e:
-        waves.multislice(potential, pbar=False)
+        waves.multislice(potential)
 
     assert str(e.value) == 'Energy is not defined'
 
     waves.energy = 60e3
-    waves.multislice(potential, pbar=False)
+    waves.multislice(potential)
 
 
-def test_create_plane_waves():
+def test_build_plane_waves():
     plane_wave = PlaneWave(extent=2, gpts=10, energy=60e3)
     waves = plane_wave.build()
+
+    assert isinstance(waves.array, da.core.Array)
+    waves.compute()
     assert np.all(waves.array == np.ones((10, 10), dtype=np.complex64))
 
 
 def test_plane_waves_raises():
     plane_waves = PlaneWave(energy=60e3)
+    potential = Potential(Atoms(cell=(5, 5, .5)))
 
     with pytest.raises(RuntimeError) as e:
-        plane_waves.multislice(DummyPotential(extent=5), pbar=False)
+        plane_waves.multislice(potential)
 
     assert str(e.value) == 'Grid gpts cannot be inferred'
 
 
 def test_plane_waves_multislice():
     plane_waves = PlaneWave(gpts=50, energy=60e3)
-    plane_waves.multislice(DummyPotential(extent=5))
-
-    plane_waves = PlaneWave(sampling=.1, energy=60e3)
-    plane_waves.multislice(DummyPotential(extent=5))
+    potential = Potential(Atoms(cell=(5, 5, .5)))
+    plane_waves.multislice(potential)
 
 
 def test_create_probe_waves():
