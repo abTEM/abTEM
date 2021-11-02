@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -53,7 +53,8 @@ def interpolate_radial_functions(array: np.ndarray,
 
 class AtomicPotential:
 
-    def __init__(self, symbol, parametrization='lobato', core_size=.01, cutoff_tolerance=1e-3):
+    def __init__(self, symbol: Union[int, str], parametrization: str = 'lobato', core_size: float = .01,
+                 cutoff_tolerance: float = 1e-3):
 
         if not isinstance(symbol, str):
             symbol = chemical_symbols[symbol]
@@ -78,7 +79,7 @@ class AtomicPotential:
         return self._cutoff_tolerance
 
     @property
-    def radial_gpts(self):
+    def radial_gpts(self) -> np.ndarray:
         num_points = int(np.ceil(self.cutoff / self._core_size))
         return np.geomspace(self._core_size, self.cutoff, num_points)
 
@@ -92,7 +93,7 @@ class AtomicPotential:
     def evaluate(self, r) -> np.ndarray:
         return self._potential(r, self._parameters)
 
-    def build_integral_table(self, taper=.85):
+    def build_integral_table(self, taper: float = .85) -> Tuple[np.ndarray, np.ndarray]:
         limits = np.linspace(-self.cutoff, 0, 50)
         limits = np.concatenate((limits, -limits[::-1][1:]))
         table = np.zeros((len(limits) - 1, len(self.radial_gpts)))
@@ -114,14 +115,19 @@ class AtomicPotential:
         self._integral_table = limits[1:], table
         return self._integral_table
 
-    def project(self, a, b) -> np.ndarray:
-        # if self._integral_table is None:
-        #    self.build_integral_table()
+    def project(self, a: float, b: float) -> np.ndarray:
+        if self._integral_table is None:
+            self.build_integral_table()
 
         f = interp1d(*self._integral_table, axis=0, kind='linear', fill_value='extrapolate')
         return f(b) - f(a)
 
-    def project_on_grid(self, array, sampling, positions, a, b):
+    def project_on_grid(self,
+                        array: np.ndarray,
+                        sampling: Tuple[float, float],
+                        positions: np.ndarray,
+                        a: float,
+                        b: float) -> np.ndarray:
         if len(positions) == 0:
             return array
 

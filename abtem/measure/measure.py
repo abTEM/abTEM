@@ -292,11 +292,11 @@ class Images(AbstractMeasurement):
             raise ValueError()
 
         if gpts is None and sampling is not None:
-            if isinstance(sampling, Number):
+            if np.isscalar(sampling):
                 sampling = (sampling,) * 2
             gpts = tuple(int(np.ceil(l / d)) for d, l in zip(sampling, self.extent))
         elif gpts is not None:
-            if isinstance(gpts, Number):
+            if np.isscalar(gpts):
                 gpts = (gpts,) * 2
         else:
             raise ValueError()
@@ -419,7 +419,7 @@ class Images(AbstractMeasurement):
 
         gaussian_filter = ndimage.gaussian_filter
 
-        if isinstance(sigma, Number):
+        if np.isscalar(sigma):
             sigma = (sigma,) * 2
 
         sigma = (0,) * (len(self.shape) - 2) + tuple(s / d for s, d in zip(sigma, self.sampling))
@@ -688,7 +688,7 @@ class DiffractionPatterns(AbstractMeasurement):
 
         gaussian_filter = ndimage.gaussian_filter
 
-        if isinstance(sigma, Number):
+        if np.isscalar(sigma):
             sigma = (sigma,) * 2
 
         sampling = [self.axes_metadata[axis]['sampling'] for axis in self.scan_axes]

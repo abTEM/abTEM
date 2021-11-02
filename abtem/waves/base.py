@@ -132,6 +132,7 @@ class AbstractScannedWaves(WavesLikeMixin):
         return detectors
 
     def _validate_positions(self, positions: Union[Sequence, AbstractScan] = None, lazy=True, chunks=1):
+
         if hasattr(positions, 'get_positions'):
             return positions.get_positions(lazy=lazy, chunks=chunks), positions.axes_metadata
 
@@ -150,4 +151,4 @@ class AbstractScannedWaves(WavesLikeMixin):
         if positions.shape[-1] != 2:
             raise ValueError()
 
-        return positions, [{'type': 'positions'}] * (len(np.array(positions).shape) - 1)
+        return positions, [{'type': 'positions'}] * (len(positions.shape) - 1)

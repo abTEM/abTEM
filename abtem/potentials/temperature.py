@@ -18,8 +18,14 @@ class AbstractFrozenPhonons(metaclass=ABCMeta):
     def __len__(self):
         pass
 
-    def __iter__(self):
-        return self.generate_atoms()
+    @property
+    @abstractmethod
+    def cell(self):
+        pass
+
+    @abstractmethod
+    def get_configurations(self, lazy: bool = True):
+        pass
 
     @abstractmethod
     def __copy__(self):
@@ -155,9 +161,6 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
     def __len__(self):
         return self._num_configs
-
-    def get_atoms(self, i=0):
-        return self.get_configurations(lazy=False)[i].jiggle_atoms()
 
     def get_configurations(self, lazy=True):
         if self._seed:

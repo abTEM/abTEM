@@ -1,7 +1,7 @@
 """Module to calculate potentials using the independent atom model."""
 from abc import ABCMeta, abstractmethod
 from copy import copy
-from typing import Union, Sequence, Tuple, List
+from typing import Union, Sequence, Tuple, List, Dict
 
 import dask
 import dask.array as da
@@ -223,8 +223,6 @@ class Potential(AbstractPotentialFromAtoms):
         relevant for potentials using the 'finite' projection scheme.
     device : str, optional
         The device used for calculating the potential. The default is 'cpu'.
-    storage : str, optional
-        The device on which to store the created potential. The default is 'None', defaulting to the chosen device.
     """
 
     def __init__(self,
@@ -279,16 +277,23 @@ class Potential(AbstractPotentialFromAtoms):
         return self._projection
 
     @property
+    def device(self):
+        return self._device
+
+    @property
     def cutoff_tolerance(self) -> float:
         """The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]."""
         return self._cutoff_tolerance
 
-    def build(self):
+    def build(self) -> 'PotentialArray':
         self.grid.check_is_defined()
+
         if self.projection == 'finite':
             slice_iterator = self._frozen_phonon_potentials_finite(lazy=True)[0]
-        else:
+        elif self.projection == 'infinite':
             slice_iterator = self._frozen_phonon_potentials_infinite(lazy=True)[0]
+        else:
+            raise RuntimeError(f'projection must be "finite" or "infinite"')
 
         xp = get_array_module(self._device)
 
@@ -307,7 +312,7 @@ class Potential(AbstractPotentialFromAtoms):
 
         return PotentialArray(array, self.slice_thickness, extent=self.extent)
 
-    def _calculate_atomic_potentials(self):
+    def _calculate_atomic_potentials(self) -> Dict[int, AtomicPotential]:
         core_size = min(self.sampling)
         atomic_potentials = {}
         for Z in np.unique(self.atoms.numbers):
@@ -317,7 +322,7 @@ class Potential(AbstractPotentialFromAtoms):
 
         return atomic_potentials
 
-    def _frozen_phonon_potentials_finite(self, lazy=True):
+    def _frozen_phonon_potentials_finite(self, lazy: bool = True):
 
         if lazy:
             atomic_potentials = dask.delayed(self._calculate_atomic_potentials)()
@@ -393,7 +398,7 @@ class Potential(AbstractPotentialFromAtoms):
         xp = get_array_module(self._device)
         return calculate_scattering_factors(self.gpts, self.sampling, np.unique(self.atoms.numbers), xp_to_str(xp))
 
-    def _frozen_phonon_potentials_infinite(self, lazy=True):
+    def _frozen_phonon_potentials_infinite(self, lazy: bool = True):
 
         if lazy:
             scattering_factors = dask.delayed(self._calculate_scattering_factors)()
@@ -490,9 +495,9 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
 
     def __init__(self,
                  array: Union[np.ndarray, da.core.Array],
-                 slice_thickness: Union[float, Sequence[float]] = None,
-                 extent: Union[float, Sequence[float]] = None,
-                 sampling: Union[float, Sequence[float]] = None):
+                 slice_thickness: Union[np.ndarray, float, Sequence[float]] = None,
+                 extent: Union[float, Tuple[float, float]] = None,
+                 sampling: Union[float, Tuple[float, float]] = None):
 
         if len(array.shape) != 3:
             raise RuntimeError(f'PotentialArray must be 3d, not {len(array.shape)}d')
@@ -519,7 +524,7 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
         else:
             raise TypeError('Potential must be indexed with integers or slices, not {}'.format(type(items)))
 
-    def transmission_function(self, energy: float, antialias=True):
+    def transmission_function(self, energy: float):
         """
         Calculate the transmission functions for a specific energy.
 
@@ -539,7 +544,7 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
             array = complex_exponential(xp.float32(energy2sigma(energy)) * array)
             return array
 
-        if self.is_delayed:
+        if self.is_lazy:
             array = self._array.map_blocks(_transmission_function, energy=energy, meta=xp.array((), dtype=xp.complex64))
 
         else:
@@ -555,7 +560,7 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
     def frozen_phonon_potentials(self):
         return [self]
 
-    def tile(self, tile):
+    def tile(self, multiples):
         """
         Tile the potential.
 
@@ -571,17 +576,17 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
             The tiled potential.
         """
 
-        if len(tile) == 2:
-            tile = tuple(tile) + (1,)
+        if len(multiples) == 2:
+            multiples = tuple(multiples) + (1,)
 
-        new_array = np.tile(self.array, (tile[2], tile[0], tile[1]))
+        new_array = np.tile(self.array, (multiples[2], multiples[0], multiples[1]))
 
-        new_extent = (self.extent[0] * tile[0], self.extent[1] * tile[1])
-        new_slice_thickness = np.tile(self.slice_thickness, tile[2])
+        new_extent = (self.extent[0] * multiples[0], self.extent[1] * multiples[1])
+        new_slice_thickness = np.tile(self.slice_thickness, multiples[2])
 
         return self.__class__(array=new_array, slice_thickness=new_slice_thickness, extent=new_extent)
 
-    def to_zarr(self, url, overwrite=False):
+    def to_zarr(self, url: str, overwrite: bool = False):
         """
         Write potential to a zarr file.
 
@@ -672,11 +677,6 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
             return self.__class__(array, self.slice_thickness[items], extent=self.extent, energy=self.energy)
         else:
             raise TypeError('Potential must indexed with integers or slices, not {}'.format(type(items)))
-
-    def delayed(self, chunks=1):
-        new = super().delayed(chunks=chunks)
-        new.energy = self.energy
-        return new
 
     def transmission_function(self, energy):
         if energy != self.energy:

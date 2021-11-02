@@ -1,19 +1,25 @@
+from typing import Tuple, Sequence
+
 import numpy as np
 from ase.data import chemical_symbols
-from abtem.potentials.parametrizations import names as parametrization_names
-from abtem.potentials.utils import kappa
+
 from abtem.basic.backend import get_array_module
 from abtem.basic.fft import fft2, ifft2
 from abtem.basic.grid import spatial_frequencies, polar_spatial_frequencies
+from abtem.potentials.parametrizations import names as parametrization_names
 
 
-def _sinc(gpts, sampling, xp):
+def _sinc(gpts: Tuple[int, int], sampling: Tuple[float, float], xp):
     kx, ky = spatial_frequencies(gpts, sampling, return_grid=False, xp=xp, delayed=False)
     sinc = np.sinc(np.sqrt((kx[:, None] * sampling[0]) ** 2 + (ky[None] * sampling[1]) ** 2))
     return sinc * sampling[0] * sampling[1]
 
 
-def calculate_scattering_factors(gpts, sampling, atomic_numbers, xp='numpy', parametrization='kirkland'):
+def calculate_scattering_factors(gpts: Tuple[int, int],
+                                 sampling: Tuple[float, float],
+                                 atomic_numbers: Sequence[int],
+                                 xp: str = 'numpy',
+                                 parametrization: str = 'kirkland') -> np.ndarray:
     xp = get_array_module(xp)
     parametrization = parametrization_names[parametrization]
     parameters = parametrization.load_parameters()
@@ -28,7 +34,7 @@ def calculate_scattering_factors(gpts, sampling, atomic_numbers, xp='numpy', par
     return scattering_factors / _sinc(gpts, sampling, xp)
 
 
-def superpose_deltas(positions, slice_idx, array):
+def superpose_deltas(positions: np.ndarray, slice_idx: np.ndarray, array: np.ndarray) -> np.ndarray:
     xp = get_array_module(positions)
     shape = array.shape
 
@@ -72,9 +78,4 @@ def infinite_potential_projections(positions, numbers, slice_idx, shape, samplin
         array += fft2(temp, overwrite_x=False) * scattering_factors[i]
 
     array = ifft2(array, overwrite_x=False).real
-
-    #array -= array.min()
-
     return array
-
-
