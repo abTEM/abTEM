@@ -104,7 +104,7 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12):
     if not is_cell_valid(atoms, tol):
         raise RuntimeError('This cell cannot be made orthogonal using currently implemented methods.')
 
-    atoms.set_cell(np.abs(atoms.get_cell()))
+    #atoms.set_cell(np.abs(atoms.get_cell()))
 
     atoms.wrap()
     return atoms
@@ -147,13 +147,10 @@ def orthogonalize_cell(atoms: Atoms, limit_denominator: int = 10, preserve_perio
     if not preserve_periodicity:
         return cut_rectangle(atoms, origin=(0, 0), extent=np.diag(atoms.cell)[:2])
 
-    fraction = atoms.cell[0, 0] / atoms.cell[1, 0]
-    fraction = Fraction(fraction).limit_denominator(limit_denominator)
-
-    atoms *= (fraction.denominator, fraction.numerator, 1)
+    fraction = Fraction(atoms.cell[0,0] / atoms.cell[1,0]).limit_denominator(limit_denominator)
 
     new_cell = atoms.cell.copy()
-    new_cell[1, 0] = new_cell[0, 0]
+    new_cell[1,0] = atoms.cell[0,0] / fraction
 
     a = np.linalg.solve(atoms.cell[:2, :2], new_cell[:2, :2])
     _, strain_tensor = polar(a, side='left')
@@ -161,6 +158,9 @@ def orthogonalize_cell(atoms: Atoms, limit_denominator: int = 10, preserve_perio
     strain_tensor[1, 1] -= 1
 
     atoms.set_cell(new_cell, scale_atoms=True)
+
+    atoms *= (abs(fraction.denominator), abs(fraction.numerator), 1)
+
     atoms.set_cell(np.diag(atoms.cell))
     atoms.wrap()
 
