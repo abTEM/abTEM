@@ -70,6 +70,13 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
 
         super().__init__(array=array)
 
+    def squeeze(self):
+        shape = self.shape[:-2]
+        squeezed = tuple(np.where([n == 1 for n in shape])[0])
+        self._axes_metadata = self._remove_axes_metadata(squeezed)
+        self._array = np.squeeze(self.array, axis=squeezed)
+        return self
+
     @property
     def axes_metadata(self) -> List[Dict]:
         return self._axes_metadata + self._base_axes_metadata
@@ -565,7 +572,9 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         else:
             raise RuntimeError()
 
-        return Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt, axes_metadata=axes_metadata)
+        waves = Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt, axes_metadata=axes_metadata)
+        waves = waves.squeeze()
+        return waves
 
     def scan(self,
              positions: Union[AbstractScan, np.ndarray, Sequence],
@@ -604,6 +613,8 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         validated_positions, axes_metadata = self._validate_positions(positions, lazy=lazy, chunks=chunks)
         detectors = self._validate_detectors(detectors)
 
+        print(validated_positions)
+
         def build_probes_multislice_detect(positions, potential, detectors):
             waves = self.multislice(potential, positions, lazy=False)
             measurements = waves.detect(detectors)
@@ -632,6 +643,8 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
             if isinstance(validated_positions, da.core.Array):
                 signature, output_sizes = gufunc_signature_and_output_size(detectors, self)
                 dtypes = tuple([detector.detected_dtype for detector in detectors])
+
+                print(output_sizes, signature)
 
                 return da.apply_gufunc(build_probes_multislice_detect,
                                        signature,

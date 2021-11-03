@@ -112,23 +112,17 @@ class AnnularDetector(AbstractDetector):
     def outer(self, value: float):
         self._outer = value
 
-    def detected_shape(self, waves):
+    def detected_shape(self, waves) -> Tuple:
         return ()
 
     @property
-    def detected_dtype(self):
+    def detected_dtype(self) -> type:
         return np.float32
 
     def measurement_from_array(self, array, scan=None, waves=None, axes_metadata=None) -> Union[LineProfiles, Images]:
-        from abtem.waves.scan import AbstractScan
 
         if axes_metadata is None:
             axes_metadata = []
-
-        if isinstance(scan, AbstractScan):
-            sampling = (scan.axes_metadata[0]['sampling'], scan.axes_metadata[1]['sampling'])
-        else:
-            raise RuntimeError()
 
         if hasattr(waves, 'ensemble_axes'):
             axes_metadata += waves.ensemble_axes
@@ -136,8 +130,10 @@ class AnnularDetector(AbstractDetector):
             axes_metadata += []
 
         if len(scan.shape) == 1:
-            measurement = LineProfiles(array, sampling=sampling[0], axes_metadata=axes_metadata)
+            sampling = scan.axes_metadata[0]['sampling']
+            measurement = LineProfiles(array, sampling=sampling, axes_metadata=axes_metadata)
         elif len(scan.shape) == 2:
+            sampling = (scan.axes_metadata[0]['sampling'], scan.axes_metadata[1]['sampling'])
             measurement = Images(array, sampling=sampling, axes_metadata=axes_metadata)
         else:
             raise NotImplementedError

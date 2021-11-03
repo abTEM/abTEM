@@ -9,18 +9,16 @@ from ase import Atoms
 
 from abtem.basic.antialias import HasAntialiasApertureMixin
 from abtem.basic.energy import HasAcceleratorMixin
-from abtem.basic.event import HasEventMixin, Event, watched_method
 from abtem.basic.grid import HasGridMixin
 from abtem.measure.detect import AbstractDetector
 from abtem.potentials import Potential
 from abtem.waves.scan import AbstractScan
 
 
-class BeamTilt(HasEventMixin):
+class BeamTilt:
 
     def __init__(self, tilt: Tuple[float, float] = (0., 0.)):
         self._tilt = tilt
-        self._event = Event()
 
     @property
     def tilt(self) -> Tuple[float, float]:
@@ -28,7 +26,6 @@ class BeamTilt(HasEventMixin):
         return self._tilt
 
     @tilt.setter
-    @watched_method('_event')
     def tilt(self, value: Tuple[float, float]):
         self._tilt = value
 
@@ -127,7 +124,7 @@ class AbstractScannedWaves(WavesLikeMixin):
         return (chunks,) * dims + (2,)
 
     def _validate_detectors(self, detectors):
-        if isinstance(detectors, AbstractDetector):
+        if hasattr(detectors, 'detect'):
             detectors = [detectors]
         return detectors
 

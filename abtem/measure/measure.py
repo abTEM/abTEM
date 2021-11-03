@@ -76,6 +76,17 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
         self._base_axes = base_axes
         super().__init__(array)
 
+    def squeeze(self):
+
+        shape = self.shape[:self.base_shape]
+
+        print(shape)
+
+
+        #self._array =
+
+
+
     @property
     @abstractmethod
     def base_axes_metadata(self) -> list:
@@ -88,6 +99,10 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
     @property
     def axes_metadata(self) -> List[Dict]:
         return self._axes_metadata + self.base_axes_metadata
+
+    @property
+    def extra_axes_metadata(self) -> List[Dict]:
+        return self._axes_metadata
 
     @property
     def base_shape(self) -> Tuple[float, ...]:
@@ -128,6 +143,10 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
         axes = self._validate_axes(axes)
         return len(set(axes).intersection(self.base_axes)) > 0
 
+    def _check_axes_metadata(self):
+        if len(self.axes_metadata) != len(self.array.shape):
+            raise RuntimeError()
+
     def mean(self, axes=None, split_every=2):
         return self._reduction(da.mean, axes=axes, split_every=split_every)
 
@@ -144,10 +163,12 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
         if self._check_is_base_axes(axes):
             raise RuntimeError('base axes cannot be reduced')
 
-        axes_metadata = self._remove_axes_metadata(axes)
+        axes_metadata = self._remove_axes_metadata(axes)[:-len(self.base_shape)]
+
         new_copy = self.copy(copy_array=False)
         new_copy._array = reduction_func(new_copy._array, axes, split_every=split_every)
         new_copy._axes_metadata = axes_metadata
+
         return new_copy
 
     def _get_measurements(self, items, **kwargs):
@@ -192,9 +213,6 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
 
     def _to_zarr(self, url, compute=True, overwrite=False, **kwargs):
         with zarr.open(url, mode='w') as root:
-            print(self.array, url)
-            print()
-
             array = self.array.to_zarr(url, compute=compute, component='array', overwrite=overwrite)
             root.attrs['axes_metadata'] = self._axes_metadata
             root.attrs['metadata'] = self.metadata
@@ -256,7 +274,7 @@ class Images(AbstractMeasurement):
 
         extra_axes = [{'size': n} for n in self.array.shape[:-2]]
 
-        return Signal2D(self.array, axes=extra_axes + base_axes).as_lazy()
+        return Signal2D(self.array, axes=extra_axes + base_axes)
 
     def copy(self, copy_array=True) -> 'Images':
         if copy_array:
@@ -527,7 +545,7 @@ class LineProfiles(AbstractMeasurement):
             array = self._array.copy()
         else:
             array = self._array
-        return self.__class__(array, start=self.start, end=self.end, axes_metadata=copy.deepcopy(self.axes_metadata))
+        return self.__class__(array, start=self.start, end=self.end, axes_metadata=copy.deepcopy(self.extra_axes_metadata))
 
 
 class RadialFourierSpaceLineProfiles(LineProfiles):
@@ -561,6 +579,8 @@ class DiffractionPatterns(AbstractMeasurement):
         self._angular_sampling = (float(angular_sampling[0]), float(angular_sampling[1]))
         super().__init__(array=array, axes_metadata=axes_metadata, metadata=metadata, base_axes=(-2, -1))
 
+        self._check_axes_metadata()
+
     @property
     def base_axes_metadata(self):
         return [{'label': 'scattering_angle_x', 'type': 'fourier_space', 'sampling': self.angular_sampling[0],
@@ -588,8 +608,8 @@ class DiffractionPatterns(AbstractMeasurement):
             array = self._array
         return self.__class__(array,
                               angular_sampling=self.angular_sampling,
-                              axes_metadata=copy.deepcopy(self.axes_metadata),
-                              metadata=copy.deepcopy(self.axes_metadata),
+                              axes_metadata=copy.deepcopy(self.extra_axes_metadata),
+                              metadata=copy.deepcopy(self.metadata),
                               fftshift=self.fftshift)
 
     def __getitem__(self, items):
@@ -981,7 +1001,7 @@ class PolarMeasurements(AbstractMeasurement):
         else:
             array = self._array
         return self.__class__(array, axes_metadata=copy.deepcopy(self.axes_metadata),
-                              metadata=copy.deepcopy(self.axes_metadata))
+                              metadata=copy.deepcopy(self.extra_axes_metadata))
 
     def compute(self, **kwargs):
         array = self._array.compute(**kwargs)

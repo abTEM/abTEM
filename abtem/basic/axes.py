@@ -32,7 +32,7 @@ class HasAxesMetadata:
         if isinstance(axes, Number):
             axes = (axes,)
 
-        return [element for i, element in enumerate(self.axes_metadata) if not i in axes]
+        return [element for i, element in enumerate(self._axes_metadata) if not i in axes]
 
     def _axis_by_key(self):
         pass
