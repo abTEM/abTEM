@@ -1,4 +1,5 @@
 """Module for often-used base classes."""
+import warnings
 from collections import OrderedDict
 from copy import copy
 from typing import Optional, Union, Sequence, Any, Callable, Tuple
@@ -438,7 +439,7 @@ class Grid(HasEventMixin):
         elif self.gpts is None:
             raise RuntimeError('Grid gpts are not defined')
 
-    def match(self, other: Union['Grid', 'HasGridMixin'], check_match: bool = False):
+    def match(self, other: Union['Grid', 'HasGridMixin'], check_match: bool = True):
         """
         Set the parameters of this grid to match another grid.
 
@@ -479,11 +480,15 @@ class Grid(HasEventMixin):
 
         if (self.extent is not None) & (other.extent is not None):
             if not np.all(np.isclose(self.extent, other.extent)):
-                raise RuntimeError('Inconsistent grid extent ({} != {})'.format(self.extent, other.extent))
+                warnings.warn(f'Overspecified simulation grid extent ({self.extent} != {other.extent})')
 
         if (self.gpts is not None) & (other.gpts is not None):
             if not np.all(self.gpts == other.gpts):
-                raise RuntimeError('Inconsistent grid gpts ({} != {})'.format(self.gpts, other.gpts))
+                warnings.warn(f'Overspecified simulation grid gpts ({self.gpts} != {other.gpts})')
+
+        if (self.sampling is not None) & (other.sampling is not None):
+            if not np.all(np.isclose(self.sampling, other.sampling)):
+                warnings.warn(f'Overspecified simulation grid sampling ({self.sampling} != {other.sampling})')
 
     def round_to_power(self, power: int = 2):
         """
