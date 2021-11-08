@@ -500,13 +500,16 @@ class Measurement(AbstractMeasurement):
             units = '1 / Å'
             names = ['k_x', 'k_y']
 
-        calibrations = calibrations_from_grid(gpts=gpts, sampling=sampling, fourier_space=True,
+        calibrations = self.calibrations[:-2]
+
+        calibrations += calibrations_from_grid(gpts=gpts, sampling=sampling, fourier_space=True,
                                               names=names,
                                               units=units,
                                               scale_factor=scale_factor,
                                               )
 
         array = np.fft.fftshift(np.abs(array) ** 2, axes=axes)
+
         return self.__class__(array=array, calibrations=calibrations)
 
     def gaussian_filter(self, sigma: Union[float, Sequence[float]], padding_mode: str = 'wrap'):
