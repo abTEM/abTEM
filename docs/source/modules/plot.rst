@@ -1,6 +1,6 @@
-Plotting
-========
+Visualize
+=========
 
-.. automodule:: abtem.plot
+.. automodule:: abtem.visualize
     :members:
     :inherited-members:
