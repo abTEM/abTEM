@@ -1,14 +1,15 @@
 """Module to describe the detection of scattered electron waves."""
+from abc import ABCMeta, abstractmethod
 from collections.abc import Iterable, Callable
 from copy import copy
 from typing import Sequence, Tuple, List, Union
-from abc import ABCMeta, abstractmethod
 
 import h5py
 import imageio
 import numpy as np
 import scipy.misc
 import scipy.ndimage
+from ase import Atom
 from scipy import ndimage
 from scipy.interpolate import interp1d, interp2d, interpn
 from scipy.ndimage import gaussian_filter
@@ -16,10 +17,10 @@ from scipy.ndimage import gaussian_filter
 from abtem.base_classes import Grid
 from abtem.cpu_kernels import abs2
 from abtem.device import asnumpy
+from abtem.utils import energy2wavelength
+from abtem.utils import fft_interpolate_2d
 from abtem.utils import periodic_crop, tapered_cutoff
 from abtem.visualize.mpl import show_measurement_2d, show_measurement_1d
-from abtem.utils import fft_interpolate_2d
-from ase import Atom
 
 
 class Calibration:
@@ -462,7 +463,7 @@ class Measurement(AbstractMeasurement):
         new_measurement._array = abs2(new_measurement._array)
         return new_measurement
 
-    def diffractograms(self, axes: Tuple[int] = None) -> 'Measurement':
+    def diffractograms(self, axes: Tuple[int] = None, energy: float = None) -> 'Measurement':
         """
         Calculate the diffractograms of this measurement.
 
@@ -490,7 +491,21 @@ class Measurement(AbstractMeasurement):
             sampling += [self.calibrations[i].sampling]
             gpts += [self.array.shape[i]]
 
-        calibrations = calibrations_from_grid(gpts=gpts, sampling=sampling, fourier_space=True)
+        if energy is not None:
+            scale_factor = energy2wavelength(energy) * 1000
+            units = 'mrad'
+            names = ['alpha_x', 'alpha_y']
+        else:
+            scale_factor = 1
+            units = '1 / Å'
+            names = ['k_x', 'k_y']
+
+        calibrations = calibrations_from_grid(gpts=gpts, sampling=sampling, fourier_space=True,
+                                              names=names,
+                                              units=units,
+                                              scale_factor=scale_factor,
+                                              )
+
         array = np.fft.fftshift(np.abs(array) ** 2, axes=axes)
         return self.__class__(array=array, calibrations=calibrations)
 
