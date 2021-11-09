@@ -893,6 +893,7 @@ class Measurement(AbstractMeasurement):
                          sampling: float = None,
                          width: float = None,
                          margin: float = 0.,
+                         endpoint: bool = True,
                          interpolation_method: str = 'splinef2d') -> 'LineProfile':
         """
         Interpolate 2d measurement along a line.
@@ -933,7 +934,8 @@ class Measurement(AbstractMeasurement):
         if (gpts is None) & (sampling is None):
             sampling = (measurement.calibrations[0].sampling + measurement.calibrations[1].sampling) / 2.
 
-        scan = LineScan(start=start, end=end, angle=angle, gpts=gpts, sampling=sampling, margin=margin)
+        scan = LineScan(start=start, end=end, angle=angle, gpts=gpts, sampling=sampling, margin=margin,
+                        endpoint=endpoint)
 
         x = np.linspace(measurement.calibrations[0].offset,
                         measurement.shape[0] * measurement.calibrations[0].sampling +
@@ -1036,9 +1038,10 @@ class LineProfile(AbstractMeasurement):
     def show(self, ax=None, adjust_range: bool = False, **kwargs):
 
         if adjust_range:
-            axis = np.array(self._start) == np.array(self._end)
+            axis = np.isclose(np.array(self._start), np.array(self._end))
+
             if axis.sum() != 1:
-                raise RuntimeError()
+                raise RuntimeError('adjust_range only implmented for axis-aligned line profiles')
             else:
                 axis = np.where(axis == 0)[0][0]
 
