@@ -7,16 +7,18 @@ import numpy as np
 from ase import Atoms
 
 from abtem.basic.antialias import AntialiasAperture
-from abtem.basic.backend import get_array_module, cp, copy_to_device, xp_to_str
+from abtem.basic.axes import frozen_phonons_axes_metadata
+from abtem.basic.backend import get_array_module, cp, copy_to_device
 from abtem.basic.complex import complex_exponential
 from abtem.basic.dask import HasDaskArray
+from abtem.basic.energy import energy2wavelength
 from abtem.basic.grid import Grid
-from abtem.basic.utils import generate_array_chunks, reassemble_chunks_along, generate_chunks
+from abtem.basic.utils import generate_chunks
 from abtem.measure.detect import AbstractDetector
 from abtem.potentials.potentials import AbstractPotential
 from abtem.waves.base import BeamTilt, AbstractScannedWaves
 from abtem.waves.multislice import multislice
-from abtem.waves.scan import AbstractScan
+from abtem.waves.scan import AbstractScan, GridScan
 from abtem.waves.transfer import CTF
 from abtem.waves.waves import Waves, Probe
 
@@ -28,7 +30,7 @@ else:
 
 def wrapped_slices(start, stop, n):
     if stop - start > n:
-        raise NotImplementedError()
+        raise RuntimeError(f'{start} {stop} {n} {stop - start}')
 
     if start < 0:
         a = slice(start % n, None)
@@ -44,11 +46,13 @@ def wrapped_slices(start, stop, n):
     return a, b
 
 
-def wrapped_crop_2d(array, lower_corner, upper_corner):
+def wrapped_crop_2d(array, corner, size):
+    upper_corner = (corner[0] + size[0], corner[1] + size[1])
+
     xp = get_array_module(array)
 
-    a, c = wrapped_slices(lower_corner[0], upper_corner[0], array.shape[-2])
-    b, d = wrapped_slices(lower_corner[1], upper_corner[1], array.shape[-1])
+    a, c = wrapped_slices(corner[0], upper_corner[0], array.shape[-2])
+    b, d = wrapped_slices(corner[1], upper_corner[1], array.shape[-1])
 
     A = array[..., a, b]
     B = array[..., c, b]
@@ -89,6 +93,64 @@ def batch_crop_2d(array, corners, new_shape):
 
 
 _plane_waves_axes_metadata = {'label': 'plane_waves', 'type': 'ensemble'}
+
+
+def prism_coefficients(positions, wave_vectors, wavelength, ctf):
+    xp = get_array_module(wave_vectors)
+    positions = copy_to_device(positions, xp)
+
+    def _calculate_ctf_coefficient(wave_vectors, wavelength, ctf):
+        alpha = xp.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2) * wavelength
+        phi = xp.arctan2(wave_vectors[:, 0], wave_vectors[:, 1])
+        coefficients = ctf.evaluate(alpha, phi)
+        return coefficients
+
+    def _calculate_coefficents(wave_vectors, positions):
+        coefficients = complex_exponential(-2. * xp.pi * positions[..., 0, None] * wave_vectors[:, 0][None])
+        coefficients *= complex_exponential(-2. * xp.pi * positions[..., 1, None] * wave_vectors[:, 1][None])
+        return coefficients
+
+    coefficients = _calculate_coefficents(wave_vectors, positions)
+    ctf_coefficients = _calculate_ctf_coefficient(wave_vectors, wavelength=wavelength, ctf=ctf)
+    return coefficients * ctf_coefficients
+
+
+def prism_wave_vectors(cutoff, extent, energy, interpolation, xp):
+    xp = get_array_module(xp)
+    wavelength = energy2wavelength(energy)
+
+    n_max = int(xp.ceil(cutoff / 1.e3 / (wavelength / extent[0] * interpolation)))
+    m_max = int(xp.ceil(cutoff / 1.e3 / (wavelength / extent[1] * interpolation)))
+
+    n = xp.arange(-n_max, n_max + 1, dtype=np.float32)
+    w = xp.asarray(extent[0], dtype=np.float32)
+    m = xp.arange(-m_max, m_max + 1, dtype=np.float32)
+    h = xp.asarray(extent[1], dtype=np.float32)
+
+    kx = n / w * np.float32(interpolation)
+    ky = m / h * np.float32(interpolation)
+
+    mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (cutoff / 1.e3 / wavelength) ** 2
+    kx, ky = xp.meshgrid(kx, ky, indexing='ij')
+    kx = kx[mask]
+    ky = ky[mask]
+    return xp.asarray((kx, ky)).T
+
+
+def _minimum_crop(positions: Union[Sequence[float], GridScan], sampling, shape):
+    if all(hasattr(positions, attr) for attr in ('start', 'end')):
+        positions = [positions.start, positions.end]
+
+    offset = (shape[0] // 2, shape[1] // 2)
+    corners = np.rint(np.array(positions) / sampling - offset).astype(np.int)
+    upper_corners = corners + np.asarray(shape)
+    crop_corner = (np.min(corners[..., 0]).item(), np.min(corners[..., 1]).item())
+
+    size = (np.max(upper_corners[..., 0]).item() - crop_corner[0],
+            np.max(upper_corners[..., 1]).item() - crop_corner[1])
+
+    corners -= crop_corner
+    return crop_corner, size, corners
 
 
 class SMatrixArray(HasDaskArray, AbstractScannedWaves):
@@ -139,7 +201,7 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
                  ctf: CTF = None,
                  antialias_aperture: float = None,
                  device: str = 'cpu',
-                 extra_axes_metadata: List[Dict] = None,
+                 axes_metadata: List[Dict] = None,
                  metadata: Dict = None):
 
         if ctf is None:
@@ -164,17 +226,20 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
         self._array = array
         self._wave_vectors = wave_vectors
 
-        if extra_axes_metadata is None:
-            extra_axes_metadata = []
+        if axes_metadata is None:
+            axes_metadata = []
 
-        self._extra_axes_metadata = extra_axes_metadata
+        self._axes_metadata = axes_metadata
         self._metadata = metadata
-
         super().__init__(array)
 
     @property
+    def chunks(self):
+        return self.array.chunks[:-2]
+
+    @property
     def axes_metadata(self):
-        return self._extra_axes_metadata + [_plane_waves_axes_metadata] + self._base_axes_metadata
+        return self._axes_metadata + [_plane_waves_axes_metadata] + self._base_axes_metadata
 
     @property
     def metadata(self):
@@ -254,216 +319,253 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
                               antialias_aperture=2 / 3.,
                               extra_axes_metadata=extra_axes_metadata)
 
-    def _get_coefficients(self, positions, wave_vectors):
-        xp = get_array_module(wave_vectors)
-        positions = copy_to_device(positions, xp)
+    def _get_coefficient(self, positions):
+        return prism_coefficients(positions, self.wave_vectors, self.wavelength, self.ctf)
 
-        def _calculate_ctf_coefficient(wave_vectors, wavelength, ctf):
-            alpha = xp.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2) * wavelength
-            phi = xp.arctan2(wave_vectors[:, 0], wave_vectors[:, 1])
-            coefficients = ctf.evaluate(alpha, phi)
-            return coefficients
+    def _get_minimum_crop(self, positions):
+        return _minimum_crop(positions, self.sampling, self.interpolated_gpts)
 
-        def _calculate_coefficents(wave_vectors, positions):
-            coefficients = complex_exponential(-2. * xp.pi * positions[..., 0, None] * wave_vectors[:, 0][None])
-            coefficients *= complex_exponential(-2. * xp.pi * positions[..., 1, None] * wave_vectors[:, 1][None])
-            return coefficients
+    def reduce(self, positions, detectors, chunks, sub_chunks):
 
-        coefficients = _calculate_coefficents(wave_vectors, positions)
-        ctf_coefficients = _calculate_ctf_coefficient(wave_vectors, wavelength=self.wavelength, ctf=self.ctf)
-        return coefficients * ctf_coefficients
-
-    def _get_minimum_crop(self, positions: Sequence[float]):
-        offset = (self.interpolated_gpts[0] // 2, self.interpolated_gpts[1] // 2)
-        corners = np.rint(np.array(positions) / self.sampling - offset).astype(np.int)
-        upper_corners = corners + np.asarray(self.interpolated_gpts)
-        crop_corner = (np.min(corners[..., 0]).item(), np.min(corners[..., 1]).item())
-        size = (np.max(upper_corners[..., 0]).item() - crop_corner[0],
-                np.max(upper_corners[..., 1]).item() - crop_corner[1])
-        corners -= crop_corner
-        return crop_corner, size, corners
-
-    def _do_reduce(self, positions):
+        scans = positions.divide(chunks)
         xp = get_array_module(self.array)
 
-        in_shape = self.array.shape
+        def reduce_subchunk(array,
+                            positions,
+                            corner,
+                            wave_vectors,
+                            wavelength,
+                            ctf,
+                            sampling,
+                            interpolated_gpts):
 
-        if len(self.array.shape) == 3:
-            array = self.array[None]
-        else:
-            array = self.array
+            xp = get_array_module(array)
+            coefficients = prism_coefficients(positions.reshape((-1, 2)), wave_vectors, wavelength, ctf)
+            shifted_positions = positions - np.array(corner) * np.array(sampling)
 
-        if len(self.array.shape) > 4:
-            raise RuntimeError()
+            if not array.shape[-2:] == interpolated_gpts:
+                crop_corner, size, corners = _minimum_crop(shifted_positions, sampling, interpolated_gpts)
+                array = wrapped_crop_2d(array, crop_corner, size)
+                window = xp.tensordot(coefficients, array, axes=[-1, -3])
+                window = batch_crop_2d(window, corners.reshape((-1, 2)), self.interpolated_gpts)
+            else:
+                window = xp.tensordot(coefficients, array, axes=[-1, -3])
 
-        def block_reduce_interpolated_S_matrix(positions, S, wave_vectors):
-            return xp.zeros((1, positions.shape[0], positions.shape[1]), dtype=xp.complex64)
+            window = window.reshape(positions.shape[:-1] + window.shape[-2:])
+            axes_metadata = [{'type': 'positions'}, {'type': 'positions'}]
+            return Waves(window, sampling=self.sampling, energy=self.energy, axes_metadata=axes_metadata)
 
-            # S = S[0]
-            # coefficients = self._get_coefficients(positions.reshape((-1, 2)), wave_vectors)
-            # crop_corner, size, corners = self._get_minimum_crop(positions)
-            # upper_corner = (crop_corner[0] + size[0], crop_corner[1] + size[1])
-            # cropped_S = wrapped_crop_2d(S, crop_corner, upper_corner)
-            #
-            # window = xp.tensordot(coefficients, cropped_S, axes=[-1, -3])
-            # window = batch_crop_2d(window, corners.reshape((-1, 2)), self.interpolated_gpts)
-            # window = window.reshape(positions.shape[:-1] + window.shape[-2:])
-            # return window[None].sum((-2,-1)) #, ..., None, :, :]
+        def reduce(array,
+                   scan,
+                   sub_chunks,
+                   corner,
+                   wave_vectors,
+                   wavelength,
+                   ctf,
+                   sampling,
+                   interpolated_gpts):
 
-        if self.interpolated_gpts != self.gpts:
-            reduced = da.blockwise(block_reduce_interpolated_S_matrix,
-                                   'qij',
-                                   positions, 'ijo',
-                                   array, 'qklm',
-                                   # self.wave_vectors, 'kp',
-                                   # adjust_chunks={  # 'k': (1,) * len(self.array.chunks[-3]),
-                                   #    'l': (self.interpolated_gpts[0],),
-                                   #    'm': (self.interpolated_gpts[1],)},
-                                   concatenate=True,
-                                   meta=xp.array((), dtype=xp.complex64))
-            # print(array.numblocks)
-            # print(reduced.numblocks)
-
-        else:
-            reduced = da.blockwise(block_reduce_interpolated_S_matrix,
-                                   'ijklm',
-                                   positions, 'ijo',
-                                   self.array, 'klm',
-                                   self.wave_vectors, 'kp',
-                                   adjust_chunks={  # 'k': (1,) * len(self.array.chunks[-3]),
-                                       'l': (self.interpolated_gpts[0],),
-                                       'm': (self.interpolated_gpts[1],)},
-                                   concatenate=True,
-                                   meta=xp.array((), dtype=xp.complex64))
-
-        if len(in_shape) == 3:
-            reduced = reduced[0]
-
-        return reduced  # .sum(-3)
-
-    def reduce_by_block(self, positions, chunks):
-
-        # if isinstance(positions, AbstractScan):
-        #     axes_metadata = self._extra_axes_metadata + positions.axes_metadata
-        #     positions = positions.get_positions()
-        #
-        # else:
-        #     axes_metadata = [{'type': 'positions'}]
-        # axes_metadata = self._extra_axes_metadata + positions.axes_metadata
-        axes_metadata = []
-
-        reduced = self._do_reduce(positions)
-
-        return Waves(reduced, sampling=self.sampling, energy=self.energy, tilt=self.tilt,
-                     antialias_aperture=self.antialias_aperture, extra_axes_metadata=axes_metadata)
-
-        # reduced = da.blockwise(block_reduce,
-        #                        'ijklm',
-        #                        positions, 'ijo',
-        #                        self.array, 'klm',
-        #                        self.wave_vectors, 'kp',
-        #                        adjust_chunks={'k': (1,) * len(self.array.chunks[-3])},
-        #                        concatenate=True,
-        #                        meta=xp.array((), dtype=xp.complex64))
-
-        # return reduced.sum(-3)
-
-    def reduce(self, positions: Sequence[Sequence[float]] = None, chunks: int = None) -> Waves:
-        """
-        Reduce the scattering matrix to probe wave functions centered on the provided positions.
-
-        Parameters
-        ----------
-        positions : array of xy-positions
-            The positions of the probe wave functions.
-        max_batch_expansion : int, optional
-            The maximum number of plane waves the reduction is applied to simultanously. If set to None, the number is
-            chosen automatically based on available memory. Default is None.
-
-        Returns
-        -------
-        Waves object
-            Probe wave functions for the provided positions.
-        """
-
-        if isinstance(positions, AbstractScan):
-            axes_metadata = self._extra_axes_metadata + positions.axes_metadata
-            positions = positions.get_positions()
-
-        else:
-            axes_metadata = [{'type': 'positions'}]
-
-        positions = self._validate_positions(positions)
-
-        xp = get_array_module(self._array)
-
-        if chunks is None:
-            chunks = self._compute_chunks(len(positions.shape) - 1)
-
-        def _reduce_interpolated(array, positions, corners, wave_vectors):
+            positions = scan.get_positions(chunks=sub_chunks, lazy=False)
             xp = get_array_module(array)
 
-            positions = copy_to_device(positions, xp)
+            arrays = []
+            for positions_i in positions:
+                inner_arrays = []
+                for positions_ij in positions_i:
+                    waves = reduce_subchunk(array,
+                                            positions_ij,
+                                            corner,
+                                            wave_vectors,
+                                            wavelength,
+                                            ctf,
+                                            sampling,
+                                            interpolated_gpts
+                                            )
 
-            coefficients = self._get_coefficients(positions.reshape((-1, 2)), wave_vectors)
+                    detected_array = detectors.detect(waves).array
+                    inner_arrays.append(detected_array)
 
-            extra_axes = len(array.shape) - 3
+                arrays.append(inner_arrays)
 
-            if extra_axes:
-                array = array[(0,) * extra_axes]
+            return xp.block(arrays)
 
-            window = xp.tensordot(coefficients, array, axes=[-1, -3])
+        def scan_reduce(array, scans):
+            arrays = []
+            for scans_i in scans:
+                inner_arrays = []
 
-            corners = xp.asarray(corners)
-            window = batch_crop_2d(window, corners.reshape((-1, 2)), self.interpolated_gpts)
-            window = window.reshape(positions.shape[:-1] + window.shape[-2:])
+                for scan_ij in scans_i:
 
-            if extra_axes:
-                window = np.expand_dims(window, tuple(range(2, 2 + extra_axes)))
+                    if self.interpolation == 1:
+                        corner = [0., 0.]
+                        reduced_array = dask.delayed(reduce)(array,
+                                                             scan_ij,
+                                                             sub_chunks,
+                                                             corner,
+                                                             wave_vectors=self.wave_vectors,
+                                                             wavelength=self.wavelength,
+                                                             ctf=self.ctf,
+                                                             sampling=self.sampling,
+                                                             interpolated_gpts=self.interpolated_gpts)
+                    else:
+                        corner, size, _ = self._get_minimum_crop(scan_ij)
+                        cropped_array = array.map_blocks(wrapped_crop_2d,
+                                                         corner=corner,
+                                                         size=size,
+                                                         chunks=(self.array.chunks[1], (size[0],), (size[1],)),
+                                                         meta=xp.array((), dtype=xp.complex64))
 
-            return window
+                        reduced_array = dask.delayed(reduce)(cropped_array,
+                                                             scan_ij,
+                                                             sub_chunks,
+                                                             corner,
+                                                             wave_vectors=self.wave_vectors,
+                                                             wavelength=self.wavelength,
+                                                             ctf=self.ctf,
+                                                             sampling=self.sampling,
+                                                             interpolated_gpts=self.interpolated_gpts)
 
-        if self.interpolated_gpts != self.gpts:
-            windows = []
 
-            for positions_block in generate_array_chunks(positions, chunks):
-                crop_corner, size, corners = self._get_minimum_crop(positions_block)
+                    reduced_array = da.from_delayed(reduced_array,
+                                                    shape=scan_ij.gpts,
+                                                    meta=xp.array((), dtype=xp.float32))
 
-                upper_corner = (crop_corner[0] + size[0], crop_corner[1] + size[1])
+                    inner_arrays.append(reduced_array)
 
-                array = wrapped_crop_2d(self.array, crop_corner, upper_corner)
+                arrays.append(inner_arrays)
 
-                array = array.rechunk(self.array.chunks[:-3] + self.array.shape[-3:])
+            return da.block(arrays)
 
-                chunks = positions_block.shape[:-1] + self.array.chunks[:-3] + self.interpolated_gpts
+        arrays = []
+        for i in range(len(self)):
+            arrays.append(scan_reduce(self.array[i], scans))
 
-                window = array.map_blocks(_reduce_interpolated,
-                                          positions=positions_block,
-                                          corners=corners,
-                                          wave_vectors=self.wave_vectors,
-                                          drop_axis=2 + (len(self.array.shape) - 3),
-                                          new_axis=tuple(range(len(positions_block.shape) - 1)),
-                                          meta=xp.array((), dtype=xp.complex64), chunks=chunks)
+        array = da.stack(arrays)
+        return array
 
-                windows.append(window)
+    # def reduce_by_block(self, positions, chunks):
+    #
+    #     # if isinstance(positions, AbstractScan):
+    #     #     axes_metadata = self._extra_axes_metadata + positions.axes_metadata
+    #     #     positions = positions.get_positions()
+    #     #
+    #     # else:
+    #     #     axes_metadata = [{'type': 'positions'}]
+    #     # axes_metadata = self._extra_axes_metadata + positions.axes_metadata
+    #     axes_metadata = []
+    #
+    #     reduced = self._do_reduce(positions)
+    #
+    #     return Waves(reduced, sampling=self.sampling, energy=self.energy, tilt=self.tilt,
+    #                  antialias_aperture=self.antialias_aperture, extra_axes_metadata=axes_metadata)
 
-            windows = reassemble_chunks_along(windows, positions.shape[0], 0, delayed=True)
+    # reduced = da.blockwise(block_reduce,
+    #                        'ijklm',
+    #                        positions, 'ijo',
+    #                        self.array, 'klm',
+    #                        self.wave_vectors, 'kp',
+    #                        adjust_chunks={'k': (1,) * len(self.array.chunks[-3])},
+    #                        concatenate=True,
+    #                        meta=xp.array((), dtype=xp.complex64))
 
-            windows = da.concatenate(windows, axis=1)
+    # return reduced.sum(-3)
 
-        else:
-            coefficients = da.from_array(self._get_coefficients(positions), chunks=-1)
-            windows = da.tensordot(coefficients, self.array, axes=[-1, -3])
-
-        if len(windows.shape) > 3:
-            scan_dims = len(positions.shape) - 1
-            ensemble_dims = len(windows.shape) - 2 - scan_dims
-            src = range(0, scan_dims)
-            dst = range(ensemble_dims, scan_dims + ensemble_dims)
-            windows = da.moveaxis(windows, src, dst)
-
-        return Waves(windows, sampling=self.sampling, energy=self.energy, tilt=self.tilt,
-                     antialias_aperture=self.antialias_aperture, extra_axes_metadata=axes_metadata)
+    # def reduce(self, positions: Sequence[Sequence[float]] = None, chunks: int = None) -> Waves:
+    #     """
+    #     Reduce the scattering matrix to probe wave functions centered on the provided positions.
+    #
+    #     Parameters
+    #     ----------
+    #     positions : array of xy-positions
+    #         The positions of the probe wave functions.
+    #     max_batch_expansion : int, optional
+    #         The maximum number of plane waves the reduction is applied to simultanously. If set to None, the number is
+    #         chosen automatically based on available memory. Default is None.
+    #
+    #     Returns
+    #     -------
+    #     Waves object
+    #         Probe wave functions for the provided positions.
+    #     """
+    #
+    #     if isinstance(positions, AbstractScan):
+    #         axes_metadata = self._extra_axes_metadata + positions.axes_metadata
+    #         positions = positions.get_positions()
+    #
+    #     else:
+    #         axes_metadata = [{'type': 'positions'}]
+    #
+    #     positions = self._validate_positions(positions)
+    #
+    #     xp = get_array_module(self._array)
+    #
+    #     if chunks is None:
+    #         chunks = self._compute_chunks(len(positions.shape) - 1)
+    #
+    #     def _reduce_interpolated(array, positions, corners, wave_vectors):
+    #         xp = get_array_module(array)
+    #
+    #         positions = copy_to_device(positions, xp)
+    #
+    #         coefficients = self._get_coefficients(positions.reshape((-1, 2)), wave_vectors)
+    #
+    #         extra_axes = len(array.shape) - 3
+    #
+    #         if extra_axes:
+    #             array = array[(0,) * extra_axes]
+    #
+    #         window = xp.tensordot(coefficients, array, axes=[-1, -3])
+    #
+    #         corners = xp.asarray(corners)
+    #         window = batch_crop_2d(window, corners.reshape((-1, 2)), self.interpolated_gpts)
+    #         window = window.reshape(positions.shape[:-1] + window.shape[-2:])
+    #
+    #         if extra_axes:
+    #             window = np.expand_dims(window, tuple(range(2, 2 + extra_axes)))
+    #
+    #         return window
+    #
+    #     if self.interpolated_gpts != self.gpts:
+    #         windows = []
+    #
+    #         for positions_block in generate_array_chunks(positions, chunks):
+    #             crop_corner, size, corners = self._get_minimum_crop(positions_block)
+    #
+    #             upper_corner = (crop_corner[0] + size[0], crop_corner[1] + size[1])
+    #
+    #             array = wrapped_crop_2d(self.array, crop_corner, upper_corner)
+    #
+    #             array = array.rechunk(self.array.chunks[:-3] + self.array.shape[-3:])
+    #
+    #             chunks = positions_block.shape[:-1] + self.array.chunks[:-3] + self.interpolated_gpts
+    #
+    #             window = array.map_blocks(_reduce_interpolated,
+    #                                       positions=positions_block,
+    #                                       corners=corners,
+    #                                       wave_vectors=self.wave_vectors,
+    #                                       drop_axis=2 + (len(self.array.shape) - 3),
+    #                                       new_axis=tuple(range(len(positions_block.shape) - 1)),
+    #                                       meta=xp.array((), dtype=xp.complex64), chunks=chunks)
+    #
+    #             windows.append(window)
+    #
+    #         windows = reassemble_chunks_along(windows, positions.shape[0], 0, delayed=True)
+    #
+    #         windows = da.concatenate(windows, axis=1)
+    #
+    #     else:
+    #         coefficients = da.from_array(self._get_coefficients(positions), chunks=-1)
+    #         windows = da.tensordot(coefficients, self.array, axes=[-1, -3])
+    #
+    #     if len(windows.shape) > 3:
+    #         scan_dims = len(positions.shape) - 1
+    #         ensemble_dims = len(windows.shape) - 2 - scan_dims
+    #         src = range(0, scan_dims)
+    #         dst = range(ensemble_dims, scan_dims + ensemble_dims)
+    #         windows = da.moveaxis(windows, src, dst)
+    #
+    #     return Waves(windows, sampling=self.sampling, energy=self.energy, tilt=self.tilt,
+    #                  antialias_aperture=self.antialias_aperture, extra_axes_metadata=axes_metadata)
 
     def scan(self,
              scan: AbstractScan,
@@ -637,8 +739,13 @@ class SMatrix(AbstractScannedWaves):
         return (self.gpts[0] // self.interpolation, self.gpts[1] // self.interpolation)
 
     def as_probe(self):
-        return Probe(extent=self.extent, gpts=self.gpts, sampling=self.sampling, energy=self.energy, ctf=self.ctf,
-                     device=self.device)
+        extent = (self.extent[0] / self.interpolation, self.extent[1] / self.interpolation)
+
+        return Probe(extent=extent,
+                     gpts=self.interpolated_gpts,
+                     energy=self.energy,
+                     ctf=self.ctf,
+                     device=self._device)
 
     def multislice(self, potential: AbstractPotential):
         """
@@ -746,8 +853,7 @@ class SMatrix(AbstractScannedWaves):
             Dictionary of measurements with keys given by the detector.
         """
 
-
-        #return self.multislice(potential).downsample().scan(scan, detectors)
+        # return self.multislice(potential).downsample().scan(scan, detectors)
 
     def __len__(self):
         return len(self.wave_vectors)
@@ -757,56 +863,76 @@ class SMatrix(AbstractScannedWaves):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
-        def prism_wave_vectors(cutoff, extent, wavelength, interpolation, xp):
-            xp = get_array_module(xp)
-
-            n_max = int(xp.ceil(cutoff / 1.e3 / (wavelength / extent[0] * interpolation)))
-            m_max = int(xp.ceil(cutoff / 1.e3 / (wavelength / extent[1] * interpolation)))
-
-            n = xp.arange(-n_max, n_max + 1, dtype=np.float32)
-            w = xp.asarray(extent[0], dtype=np.float32)
-            m = xp.arange(-m_max, m_max + 1, dtype=np.float32)
-            h = xp.asarray(extent[1], dtype=np.float32)
-
-            kx = n / w * np.float32(interpolation)
-            ky = m / h * np.float32(interpolation)
-
-            mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (cutoff / 1.e3 / wavelength) ** 2
-            kx, ky = xp.meshgrid(kx, ky, indexing='ij')
-            kx = kx[mask]
-            ky = ky[mask]
-            return xp.asarray((kx, ky)).T
-
-        xp = get_array_module(self._device)
         wave_vectors = prism_wave_vectors(self.expansion_cutoff,
                                           self.extent,
-                                          self.wavelength,
+                                          self.energy,
                                           self.interpolation,
-                                          xp_to_str(xp))
-        #return wave_vectors
-        # n=51
-
-        # n = len(prism_wave_vectors(self.expansion_cutoff,
-        #                            self.extent,
-        #                            self.wavelength,
-        #                            self.interpolation,
-        #                            xp_to_str(xp)))
-
-        wave_vectors = da.from_array(wave_vectors, chunks=(self.chunks, 2))
+                                          self._device)
 
         return wave_vectors
 
-        #wave_vectors = da.from_delayed(wave_vectors, shape=(n, 2), dtype=np.float32)
-        #return wave_vectors.rechunk(chunks=(self.chunks, 2))
+    def _build_multislice_downsample(self, potential):
 
-    # def _get_plane_waves(self, wave_vectors):
+        def build_multislice_downsample(start, end, potential):
 
-    def _build_convential(self):
-        wave_vectors = self.wave_vectors
+            xp = get_array_module(self._device)
+            wave_vectors = prism_wave_vectors(self.expansion_cutoff, self.extent, self.energy, self.interpolation, xp)
+            array = plane_waves(wave_vectors[start:end], self.extent, self.gpts)
+            waves = Waves(array, extent=self.extent, energy=self.energy)
+            waves = waves.multislice(potential, lazy=False)
+            waves = waves.downsample(max_angle='cutoff')
+            return waves.array
+
         xp = get_array_module(self._device)
 
-        def _build_plane_waves(k, extent, gpts, interpolation):
-            array = plane_waves(k, extent, gpts)
+        frozen_phonon_arrays = []
+        for i, projected_potential in enumerate(potential.get_projected_potentials(lazy=True)):
+
+            arrays = []
+            for start, end in generate_chunks(len(self), chunks=self.chunks):
+                array = dask.delayed(build_multislice_downsample)(start,
+                                                                  end,
+                                                                  self.expansion_cutoff,
+                                                                  self.extent,
+                                                                  self.gpts,
+                                                                  self.energy,
+                                                                  self.interpolation,
+                                                                  projected_potential,
+                                                                  self._device)
+
+                array = da.from_delayed(array,
+                                        shape=(end - start,) + self.antialias_cutoff_gpts,
+                                        meta=xp.array((), dtype=xp.complex64))
+
+                arrays.append(array)
+
+            frozen_phonon_arrays.append(da.concatenate(arrays, axis=0))
+
+        array = da.stack(frozen_phonon_arrays)
+        axes_metadata = [frozen_phonons_axes_metadata]
+
+        return SMatrixArray(array,
+                            interpolation=self.interpolation,
+                            extent=self.extent,
+                            energy=self.energy,
+                            tilt=self.tilt,
+                            wave_vectors=self.wave_vectors,
+                            ctf=self.ctf.copy(),
+                            antialias_aperture=self.antialias_aperture,
+                            device=self._device,
+                            axes_metadata=axes_metadata,
+                            metadata={'energy': self.energy})
+
+    def build(self, lazy=True) -> Union[SMatrixArray]:
+        """Build the scattering matrix."""
+
+        self.grid.check_is_defined()
+        self.accelerator.check_is_defined()
+
+        def _build_plane_waves(start, end, expansion_cutoff, extent, gpts, energy, interpolation, device):
+            xp = get_array_module(device)
+            wave_vectors = prism_wave_vectors(expansion_cutoff, extent, energy, interpolation, xp)[start:end]
+            array = plane_waves(wave_vectors, extent, gpts)
 
             # xp = get_array_module(array)
             # interpolated_gpts = (gpts[0] // interpolation, self.gpts[1] // interpolation)
@@ -814,30 +940,25 @@ class SMatrix(AbstractScannedWaves):
             # array /= xp.sqrt(probe.sum()) * xp.sqrt(interpolated_gpts[0] * interpolated_gpts[1])
             return array
 
-        array = wave_vectors.map_blocks(_build_plane_waves, extent=self.extent, gpts=self.gpts,
-                                        interpolation=self.interpolation,
-                                        drop_axis=1, new_axis=(1, 2),
-                                        chunks=wave_vectors.chunks[:-1] + ((self.gpts[0],), (self.gpts[1],)),
-                                        meta=xp.array((), dtype=xp.complex64))
+        arrays = []
+        for start, end in generate_chunks(len(self), chunks=self.chunks):
+            array = _build_plane_waves(start, end, self.expansion_cutoff, self.extent, self.gpts, self.energy,
+                               self.interpolation, self._device)
+
+            arrays.append(array)
+        array = da.concatenate(arrays)
 
         return SMatrixArray(array,
                             interpolation=self.interpolation,
                             extent=self.extent,
                             energy=self.energy,
                             tilt=self.tilt,
-                            wave_vectors=wave_vectors,
+                            wave_vectors=self.wave_vectors,
                             ctf=self.ctf.copy(),
                             antialias_aperture=self.antialias_aperture,
                             device=self._device,
-                            extra_axes_metadata=[],
+                            axes_metadata=[],
                             metadata={'energy': self.energy})
-
-    def build(self) -> Union[SMatrixArray]:
-        """Build the scattering matrix."""
-
-        self.grid.check_is_defined()
-        self.accelerator.check_is_defined()
-        return self._build_convential()
 
     def profile(self, angle=0.):
         return self.as_probe().profile(angle=angle)
