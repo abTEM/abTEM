@@ -832,6 +832,7 @@ class SMatrix(AbstractScannedWaves):
                             ctf=self.ctf.copy(),
                             antialias_aperture=self.antialias_aperture,
                             device=self._device,
+                            max_concurrent=self._max_concurrent,
                             axes_metadata=axes_metadata,
                             metadata={'energy': self.energy})
 
