@@ -70,6 +70,9 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
 
         super().__init__(array=array)
 
+    def lazy(self):
+        self._array = da.from_array(self.array)
+
     def squeeze(self):
         shape = self.shape[:-2]
         squeezed = tuple(np.where([n == 1 for n in shape])[0])
@@ -104,9 +107,12 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         xp = get_array_module(self.array)
         gpts = self._gpts_within_angle(max_angle)
 
-        array = self.array.map_blocks(fft2_interpolate, new_shape=gpts,
-                                      chunks=self.array.chunks[:-2] + gpts,
-                                      meta=xp.array((), dtype=xp.complex64))
+        if self.is_lazy:
+            array = self.array.map_blocks(fft2_interpolate, new_shape=gpts,
+                                          chunks=self.array.chunks[:-2] + gpts,
+                                          meta=xp.array((), dtype=xp.complex64))
+        else:
+            array = fft2_interpolate(self.array, new_shape=gpts)
 
         antialias_aperture = self.antialias_aperture * min(self.gpts[0] / gpts[0], self.gpts[1] / gpts[1])
 
@@ -215,7 +221,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
                               axes_metadata=self._axes_metadata,
                               tilt=self.tilt)
 
-    def multislice(self, potential: AbstractPotential) -> 'Waves':
+    def multislice(self, potential: AbstractPotential, lazy: bool = False) -> 'Waves':
         """
         Propagate and transmit wave function through the provided potential.
 
@@ -232,7 +238,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
             Wave function at the exit plane of the potential.
         """
 
-        if hasattr(potential, '_get_chunk'):
+        if hasattr(potential, 'get_chunk'):
             return multislice(self, potential)
 
         self.grid.match(potential)
@@ -248,8 +254,13 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         array = da.stack([exit_wave.array for exit_wave in exit_waves], axis=0)
         axes_metadata = [{'label': 'frozen_phonons', 'type': 'ensemble'}] + self._axes_metadata
 
-        return self.__class__(array=array, extent=self.extent, energy=self.energy, tilt=self.tilt,
-                              antialias_aperture=2 / 3., axes_metadata=axes_metadata)
+        waves = self.__class__(array=array, extent=self.extent, energy=self.energy, tilt=self.tilt,
+                               antialias_aperture=2 / 3., axes_metadata=axes_metadata)
+
+        if not lazy:
+            waves.compute()
+
+        return waves
 
     def to_zarr(self, url: str, overwrite: bool = False):
         """
@@ -262,6 +273,9 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         """
 
         with zarr.open(url, mode='w') as root:
+            if not self.is_lazy:
+                self.lazy()
+
             self.array.to_zarr(url, component='array', overwrite=overwrite)
             root.attrs['energy'] = self.energy
             root.attrs['extent'] = self.extent
@@ -354,7 +368,7 @@ class PlaneWave(WavesLikeMixin):
         self._antialias_aperture = AntialiasAperture()
         self._device = device
 
-    def multislice(self, potential: Union[AbstractPotential, Atoms]) -> Waves:
+    def multislice(self, potential: Union[AbstractPotential, Atoms], lazy: bool = False) -> Waves:
         """
         Build plane wave function and propagate it through the potential. The grid of the two will be matched.
 
@@ -376,9 +390,14 @@ class PlaneWave(WavesLikeMixin):
 
         potential.grid.match(self)
 
-        return self.build().multislice(potential)
+        waves = self.build(lazy=True).multislice(potential)
 
-    def build(self) -> Waves:
+        if not lazy:
+            waves.compute()
+
+        return waves
+
+    def build(self, lazy: bool = False) -> Waves:
         """Build the plane wave function as a Waves object."""
         xp = get_array_module(self._device)
         self.grid.check_is_defined()
@@ -389,7 +408,12 @@ class PlaneWave(WavesLikeMixin):
 
         array = dask.delayed(plane_wave)(self.gpts, xp_to_str(xp))
         array = da.from_delayed(array, shape=self.gpts, meta=xp.array((), dtype=xp.complex64))
-        return Waves(array, extent=self.extent, energy=self.energy)
+        waves = Waves(array, extent=self.extent, energy=self.energy)
+
+        if not lazy:
+            waves.compute()
+
+        return waves
 
     def __copy__(self) -> 'PlaneWave':
         return self.__class__(extent=self.extent, gpts=self.gpts, sampling=self.sampling, energy=self.energy,
@@ -467,7 +491,11 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         array = array / xp.sqrt(abs2(array).sum())
         return array
 
-    def build(self, positions: Union[AbstractScan, Sequence] = None, chunks: int = 1, lazy: bool = True) -> Waves:
+    def build(self,
+              positions: Union[AbstractScan, Sequence] = None,
+              chunks: Union[int, str] = 'auto',
+              lazy: bool = True) -> Waves:
+
         """
         Build probe wave functions at the provided positions.
 
@@ -508,8 +536,8 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
     def multislice(self,
                    potential: Union[AbstractPotential],
                    positions: Union[AbstractScan, Sequence] = None,
-                   chunks: int = 1,
-                   lazy: bool = True) -> Waves:
+                   chunks: Union[int, str] = 'auto',
+                   lazy: bool = False, ) -> Waves:
         """
         Build probe wave functions at the provided positions and propagate them through the potential.
 
@@ -537,7 +565,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         if hasattr(positions, 'match'):
             positions.match(potential, self)
 
-        positions, axes_metadata = self._validate_positions(positions, lazy=lazy, chunks=chunks)
+        positions, axes_metadata = self._validate_positions(positions, lazy=True, chunks=chunks)
         xp = get_array_module(positions)
 
         def build_probes_multislice(positions, potential):
@@ -560,28 +588,34 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
 
             return array
 
-        if hasattr(potential, '_get_chunk'):
+        if hasattr(potential, 'get_chunk'):
             array = multislice_iteration(potential)
 
-        elif hasattr(potential, 'get_slice_iterators'):
+        elif hasattr(potential, 'get_projected_potentials'):
             exit_waves_arrays = []
-            for p in potential.get_slice_iterators(lazy=lazy):
-                exit_waves_arrays.append(multislice_iteration(p))
+
+            for projected_potential in potential.get_projected_potentials(lazy=True):
+                exit_waves_arrays.append(multislice_iteration(projected_potential))
+
             array = da.stack([array for array in exit_waves_arrays], axis=0)
             axes_metadata = [{'label': 'frozen_phonons', 'type': 'ensemble'}] + axes_metadata
         else:
             raise RuntimeError()
 
         waves = Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt, axes_metadata=axes_metadata)
-        waves = waves.squeeze()
+
+        if not lazy:
+            waves.compute()
+
         return waves
 
     def scan(self,
              positions: Union[AbstractScan, np.ndarray, Sequence],
              detectors: Union[AbstractDetector, Sequence[AbstractDetector]],
              potential: Union[AbstractPotential],
-             chunks: int = 1,
-             lazy: bool = True) -> Union[List, AbstractMeasurement]:
+             chunks: Union[int, str] = 'auto',
+             lazy: bool = False) -> Union[List, AbstractMeasurement]:
+
         """
         Raster scan the probe across the potential and record a measurement for each detector.
 
@@ -610,16 +644,14 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         if hasattr(positions, 'match'):
             positions.match(potential, self)
 
-        validated_positions, axes_metadata = self._validate_positions(positions, lazy=lazy, chunks=chunks)
+        validated_positions, axes_metadata = self._validate_positions(positions, lazy=True, chunks=chunks)
         detectors = self._validate_detectors(detectors)
 
-        print(validated_positions)
-
         def build_probes_multislice_detect(positions, potential, detectors):
-            waves = self.multislice(potential, positions, lazy=False)
+            waves = self.build(positions, lazy=False)
+            waves = waves.multislice(potential)
             measurements = waves.detect(detectors)
-
-            if isinstance(measurements, tuple):
+            if isinstance(measurements, (tuple, list)):
                 return tuple(measurement.array for measurement in measurements)
             else:
                 return measurements.array
@@ -644,8 +676,6 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
                 signature, output_sizes = gufunc_signature_and_output_size(detectors, self)
                 dtypes = tuple([detector.detected_dtype for detector in detectors])
 
-                print(output_sizes, signature)
-
                 return da.apply_gufunc(build_probes_multislice_detect,
                                        signature,
                                        validated_positions,
@@ -658,30 +688,39 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
             else:
                 return build_probes_multislice_detect(validated_positions, slice_iterator, detectors)
 
-        if hasattr(potential, 'get_slice_iterators'):
+        if hasattr(potential, 'get_projected_potentials'):
             measurement_arrays = []
 
-            for p in potential.get_slice_iterators(lazy=lazy):
+            for p in potential.get_projected_potentials(lazy=True):
                 measurement_arrays.append(multislice_iteration(p))
 
             if isinstance(measurement_arrays[0], tuple):
                 measurement_arrays = list(map(da.stack, map(list, zip(*measurement_arrays))))
             else:
-                measurement_arrays = [measurement_array[None] for measurement_array in measurement_arrays]
+                measurement_arrays = [da.stack(measurement_arrays)]
 
             measurements = []
             for detector, measurement_array in zip(detectors, measurement_arrays):
                 if detector.ensemble_mean:
                     measurement_array = measurement_array.mean(0)
+                    axes_metadata = []
+                else:
+                    axes_metadata = [{'label': 'frozen_phonons', 'type': 'ensemble'}]
 
-                measurements.append(detector.measurement_from_array(measurement_array, scan=positions, waves=self))
+                measurements.append(detector.measurement_from_array(measurement_array, scan=positions, waves=self,
+                                                                    axes_metadata=axes_metadata))
         else:
             raise RuntimeError()
 
         if len(measurements) == 1:
-            return measurements[0]
+            output = measurements[0]
         else:
-            return ComputableList(measurements)
+            output = ComputableList(measurements)
+
+        if not lazy:
+            output.compute()
+
+        return output
 
     def profile(self, angle=0.):
         self.grid.check_is_defined()

@@ -1,5 +1,7 @@
 from numbers import Number
 
+frozen_phonons_axes_metadata = {'label': 'frozen_phonons', 'type': 'ensemble'}
+
 
 class HasAxesMetadata:
     axes_metadata: list
@@ -11,6 +13,10 @@ class HasAxesMetadata:
                 axes_indices += (axes_index,)
 
         return axes_indices
+
+    @property
+    def real_space_axes(self):
+        return self._type_indices(('scan', 'linescan', 'gridscan', 'positions'))
 
     @property
     def scan_axes(self):

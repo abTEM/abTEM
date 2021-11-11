@@ -27,6 +27,10 @@ class AbstractFrozenPhonons(metaclass=ABCMeta):
     def get_configurations(self, lazy: bool = True):
         pass
 
+    def __getitem__(self, item):
+        configurations = self.get_configurations(lazy=False)
+        return configurations[item].jiggle_atoms()
+
     @abstractmethod
     def __copy__(self):
         pass
@@ -162,7 +166,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
     def __len__(self):
         return self._num_configs
 
-    def get_configurations(self, lazy=True):
+    def get_configurations(self, lazy: bool = False):
         if self._seed:
             np.random.seed(self._seed)
 
@@ -174,13 +178,15 @@ class FrozenPhonons(AbstractFrozenPhonons):
                                              sigmas=self._sigmas,
                                              directions=self._directions)
 
-        if lazy:
-            atoms = dask.delayed(load_atoms)()
-        else:
-            atoms = self._atoms
+
 
         configurations = []
         for i in range(self._num_configs):
+            if lazy:
+                atoms = dask.delayed(load_atoms)()
+            else:
+                atoms = self._atoms
+
             if lazy:
                 configurations.append(dask.delayed(apply_frozen_phonons)(atoms))
             else:
@@ -209,14 +215,32 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
     def __len__(self):
         return len(self._trajectory)
 
+    @property
+    def atoms(self):
+        return self[0]
+
+    @property
+    def numbers(self):
+        return np.unique(self[0].numbers)
+
+    @property
+    def cell(self):
+        return self[0].cell
+
+    def __getitem__(self, item):
+        return self._trajectory[0]
+
     def standard_deviations(self):
         mean_positions = np.mean([atoms.positions for atoms in self], axis=0)
         squared_deviations = [(atoms.positions - mean_positions) ** 2 for atoms in self]
         return np.sqrt(np.sum(squared_deviations, axis=0) / (len(self) - 1))
 
-    def generate_atoms(self):
-        for i in range(len(self)):
-            yield self._trajectory[i]
+    def get_configurations(self, lazy: bool = True):
+        return self._trajectory
+
+    #def generate_atoms(self):
+    #    for i in range(len(self)):
+    #        yield self._trajectory[i]
 
     def __copy__(self):
         return self.__class__(trajectory=[atoms.copy() for atoms in self._trajectory])

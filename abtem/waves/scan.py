@@ -4,14 +4,15 @@ from copy import copy
 from numbers import Number
 from typing import Union, Sequence, Tuple
 
+import dask
+import dask.array as da
 import dask.bag
 import numpy as np
 from ase import Atom
 from matplotlib.patches import Rectangle
 
 from abtem.basic.grid import Grid, HasGridMixin
-import dask
-import dask.array as da
+from abtem.basic.utils import subdivide_into_chunks
 
 
 class AbstractScan(metaclass=ABCMeta):
@@ -176,12 +177,15 @@ class LineScan(AbstractScan, HasGridMixin):
     def margin_end(self) -> Tuple[float, float]:
         return self.end[0] + self.direction[0] * self.margin, self.end[1] + self.direction[1] * self.margin
 
-    def get_positions(self, chunks, lazy=True) -> np.ndarray:
+    def get_positions(self, chunks: int = None, lazy: bool = False) -> np.ndarray:
         def linescan_positions(start, end, gpts, endpoint):
             x = np.linspace(start[0], end[0], gpts[0], endpoint=endpoint[0], dtype=np.float32)
             y = np.linspace(start[1], end[1], gpts[0], endpoint=endpoint[0], dtype=np.float32)
 
             return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
+
+        if chunks is None:
+            return linescan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
 
         chunks = (chunks,)
 
@@ -193,15 +197,6 @@ class LineScan(AbstractScan, HasGridMixin):
             positions = linescan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
 
         return positions
-    #
-    #
-    # def get_positions(self, chunks, lazy=True) -> np.ndarray:
-    #
-    #     start = self.margin_start
-    #     end = self.margin_end
-    #     x = np.linspace(start[0], end[0], self.gpts[0], endpoint=self.grid.endpoint[0])
-    #     y = np.linspace(start[1], end[1], self.gpts[0], endpoint=self.grid.endpoint[0])
-    #     return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
     def add_to_plot(self, ax, linestyle: str = '-', color: str = 'r', **kwargs):
         """
@@ -295,12 +290,12 @@ class GridScan(HasGridMixin, AbstractScan):
         if self.end is not None:
             self.extent = self.end - self._start
 
-    def match(self, potential=None, probe=None):
-        if (self.extent is None) and (potential is not None):
+    def match(self, probe):
+        if self.extent is None:
             self.start = (0., 0.)
-            self.end = potential.extent
+            self.end = probe.extent
 
-        if (self.sampling is None) and (probe is not None):
+        if self.sampling is None:
             self.sampling = .9 * probe.ctf.nyquist_sampling
 
     @property
@@ -328,24 +323,78 @@ class GridScan(HasGridMixin, AbstractScan):
                 {'label': 'y', 'type': 'gridscan', 'sampling': float(self.sampling[1]), 'offset': float(self.start[1]),
                  'units': 'Å'}]
 
-    def get_positions(self, chunks, lazy=True) -> np.ndarray:
+    def get_positions(self, chunks=None, lazy=False) -> np.ndarray:
         def gridscan_positions(start, end, gpts, endpoint):
             x = np.linspace(start[0], end[0], gpts[0], endpoint=endpoint[0], dtype=np.float32)
             y = np.linspace(start[1], end[1], gpts[1], endpoint=endpoint[1], dtype=np.float32)
             x, y = np.meshgrid(x, y, indexing='ij')
             return np.stack((x, y), axis=-1)
 
+        if chunks is None:
+            return gridscan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
+
         if isinstance(chunks, Number):
             chunks = (int(np.floor(np.sqrt(chunks))),) * 2
+
+        chunks = (subdivide_into_chunks(self.gpts[0], chunks=chunks[0]),
+                  subdivide_into_chunks(self.gpts[1], chunks=chunks[1]), 2)
 
         if lazy:
             positions = dask.delayed(gridscan_positions)(self.start, self.end, self.gpts, self.grid.endpoint)
             positions = da.from_delayed(positions, shape=self.gpts + (2,), dtype=np.float32)
-            positions = positions.rechunk(chunks + (2,))
+            positions = positions.rechunk(chunks)
         else:
             positions = gridscan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
+            positions = [np.split(p, np.cumsum(chunks[1][:-1]), axis=1)
+                         for p in np.split(positions, np.cumsum(chunks[0][:-1]), axis=0)]
 
         return positions
+
+    def divide(self, partitions: Sequence[int]):
+        """
+        Partition the scan into smaller grid scans
+
+        Parameters
+        ----------
+        partitions : two int
+            The number of partitions to create in x and y.
+
+        Returns
+        -------
+        List of GridScan objects
+        """
+
+        Nx = subdivide_into_chunks(self.gpts[0], partitions[0])
+        Ny = subdivide_into_chunks(self.gpts[1], partitions[1])
+        Sx = np.concatenate(([0], np.cumsum(Nx)))
+        Sy = np.concatenate(([0], np.cumsum(Ny)))
+
+        scans = []
+        for i, nx in enumerate(Nx):
+            inner_scans = []
+            for j, ny in enumerate(Ny):
+                start = [Sx[i] * self.sampling[0], Sy[j] * self.sampling[1]]
+                end = [start[0] + nx * self.sampling[0], start[1] + ny * self.sampling[1]]
+                endpoint = False
+
+                if i + 1 == partitions[0]:
+                    endpoint = self.grid.endpoint[0]
+                    if endpoint:
+                        end[0] -= self.sampling[0]
+
+                if j + 1 == partitions[1]:
+                    endpoint = self.grid.endpoint[1]
+                    if endpoint:
+                        end[1] -= self.sampling[1]
+
+                scan = self.__class__(start,
+                                      end,
+                                      gpts=(nx, ny),
+                                      endpoint=endpoint)
+
+                inner_scans.append(scan)
+            scans.append(inner_scans)
+        return scans
 
     def add_to_plot(self, ax, alpha: float = .33, facecolor: str = 'r', edgecolor: str = 'r', **kwargs):
         """

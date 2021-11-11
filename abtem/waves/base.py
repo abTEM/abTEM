@@ -10,7 +10,6 @@ from ase import Atoms
 from abtem.basic.antialias import HasAntialiasApertureMixin
 from abtem.basic.energy import HasAcceleratorMixin
 from abtem.basic.grid import HasGridMixin
-from abtem.measure.detect import AbstractDetector
 from abtem.potentials import Potential
 from abtem.waves.scan import AbstractScan
 
@@ -128,7 +127,22 @@ class AbstractScannedWaves(WavesLikeMixin):
             detectors = [detectors]
         return detectors
 
-    def _validate_positions(self, positions: Union[Sequence, AbstractScan] = None, lazy=True, chunks=1):
+    def _bytes_per_wave(self):
+        return 2 * 4 * np.prod(self.gpts)
+
+    def _validate_chunks(self, chunks):
+        if chunks == 'auto':
+            chunk_size = dask.utils.parse_bytes(dask.config.get('array.chunk-size'))
+            return int(chunk_size / self._bytes_per_wave())
+
+        return chunks
+
+    def _validate_positions(self,
+                            positions: Union[Sequence, AbstractScan] = None,
+                            lazy: bool = True,
+                            chunks: Union[int, str] = 'auto'):
+
+        chunks = self._validate_chunks(chunks)
 
         if hasattr(positions, 'get_positions'):
             return positions.get_positions(lazy=lazy, chunks=chunks), positions.axes_metadata

@@ -11,6 +11,7 @@ from abtem.basic.energy import energy2wavelength, energy2sigma
 from abtem.basic.fft import fft2_convolve
 from abtem.basic.grid import spatial_frequencies
 from abtem.potentials.potentials import PotentialArray
+from abtem.potentials.project import ProjectedPotential
 
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves
@@ -53,28 +54,24 @@ def _multislice(waves_array,
         array = complex_exponential(xp.float32(energy2sigma(energy)) * array)
         return array
 
-    chunks = potential._chunks
+    for start, end in potential.chunk_limits:
+        potential_slices = potential.get_chunk(start, end)
 
-    for start, end in chunks:
-        potential_slice = potential._get_chunk(start, end)
-
-        transmission_function = _transmission_function(potential_slice, energy=energy)
-        # transmission_function = fft2_convolve(transmission_function, antialias_kernel_array, overwrite_x=False)
+        transmission_function = _transmission_function(potential_slices, energy=energy)
+        transmission_function = fft2_convolve(transmission_function, antialias_kernel_array, overwrite_x=True)
 
         if len(transmission_function.shape) == 2:
             transmission_function = transmission_function[None]
 
         for transmission_function_slice in transmission_function:
             waves_array = waves_array * transmission_function_slice
-            #     #print(waves_array.dtype, transmission_function_slice.dtype)
-            #     #waves_array *= copy_to_device(transmission_function_slice, xp)
-            waves_array = fft2_convolve(waves_array, initial_fresnel_propagator, overwrite_x=False)
+            waves_array = fft2_convolve(waves_array, initial_fresnel_propagator, overwrite_x=True)
 
     return waves_array
 
 
 def multislice(waves: Union['Waves', 'SMatrixArray'],
-               potential: Union[PotentialArray]
+               potential: Union[PotentialArray, ProjectedPotential]
                ) -> Union['Waves', 'SMatrixArray']:
     if waves.is_lazy:
         xp = get_array_module(waves.array)

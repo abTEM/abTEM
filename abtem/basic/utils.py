@@ -35,7 +35,7 @@ def subdivide_into_chunks(num_items: int, num_chunks: int = None, chunks: int = 
         raise RuntimeError('num_chunks may not be larger than num_items')
 
     elif num_items % num_chunks == 0:
-        return [num_items // num_chunks] * num_chunks
+        return tuple([num_items // num_chunks] * num_chunks)
     else:
         v = []
         zp = num_chunks - (num_items % num_chunks)
@@ -45,7 +45,7 @@ def subdivide_into_chunks(num_items: int, num_chunks: int = None, chunks: int = 
                 v = [pp + 1] + v
             else:
                 v = [pp] + v
-        return v
+        return tuple(v)
 
 
 def generate_chunks(num_items: int, num_chunks: int = None, chunks: int = None, start=0):

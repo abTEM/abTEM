@@ -1,7 +1,7 @@
 import copy
 from abc import ABCMeta, abstractmethod
 from numbers import Number
-from typing import Union, Tuple, TypeVar, Dict, List
+from typing import Union, Tuple, TypeVar, Dict, List, Sequence
 
 import dask
 import dask.array as da
@@ -76,16 +76,17 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
         self._base_axes = base_axes
         super().__init__(array)
 
-    def squeeze(self):
+        self._check_axes_metadata()
 
-        shape = self.shape[:self.base_shape]
-
-        print(shape)
-
-
-        #self._array =
-
-
+    # def squeeze(self):
+    #
+    #     shape = self.shape[:self.base_shape]
+    #
+    #     print(shape)
+    #
+    #
+    #     #self._array =
+    #
 
     @property
     @abstractmethod
@@ -281,7 +282,7 @@ class Images(AbstractMeasurement):
             array = self._array.copy()
         else:
             array = self._array
-        return self.__class__(array, sampling=self.sampling, axes_metadata=copy.deepcopy(self.axes_metadata))
+        return self.__class__(array, sampling=self.sampling, axes_metadata=copy.deepcopy(self._axes_metadata))
 
     @property
     def sampling(self) -> Tuple[float, float]:
@@ -404,7 +405,7 @@ class Images(AbstractMeasurement):
                                       new_axis=(self.num_ensemble_axes,),
                                       meta=np.array((), dtype=np.float32))
 
-        return LineProfiles(array=array, start=scan.start, end=scan.end)
+        return LineProfiles(array=array, start=scan.start, end=scan.end, axes_metadata=self._axes_metadata)
 
     def is_compatible(self, other) -> bool:
 
@@ -423,12 +424,12 @@ class Images(AbstractMeasurement):
         self.is_compatible(other)
         return self.__class__(self.array - other.array,
                               sampling=self.sampling,
-                              axes_metadata=copy.copy(self.axes_metadata),
+                              axes_metadata=copy.copy(self._axes_metadata),
                               metadata=copy.copy(self.metadata))
 
     def tile(self, reps) -> 'Images':
         new_array = np.tile(self.array, reps)
-        return self.__class__(new_array, sampling=self.sampling, axes_metadata=copy.copy(self.axes_metadata),
+        return self.__class__(new_array, sampling=self.sampling, axes_metadata=copy.copy(self._axes_metadata),
                               metadata=copy.copy(self.metadata))
 
     def gaussian_filter(self, sigma: Union[float, Tuple[float, float]], boundary: str = 'periodic'):
@@ -545,7 +546,8 @@ class LineProfiles(AbstractMeasurement):
             array = self._array.copy()
         else:
             array = self._array
-        return self.__class__(array, start=self.start, end=self.end, axes_metadata=copy.deepcopy(self.extra_axes_metadata))
+        return self.__class__(array, start=self.start, end=self.end,
+                              axes_metadata=copy.deepcopy(self.extra_axes_metadata))
 
 
 class RadialFourierSpaceLineProfiles(LineProfiles):
@@ -578,8 +580,6 @@ class DiffractionPatterns(AbstractMeasurement):
         self._fftshift = fftshift
         self._angular_sampling = (float(angular_sampling[0]), float(angular_sampling[1]))
         super().__init__(array=array, axes_metadata=axes_metadata, metadata=metadata, base_axes=(-2, -1))
-
-        self._check_axes_metadata()
 
     @property
     def base_axes_metadata(self):
@@ -772,7 +772,7 @@ class DiffractionPatterns(AbstractMeasurement):
         radial_sampling = (outer - inner) / nbins_radial
         azimuthal_sampling = 2 * np.pi / nbins_azimuthal
 
-        axes_metadata = self.axes_metadata
+        axes_metadata = self.axes_metadata[:-2]
 
         return PolarMeasurements(array,
                                  radial_sampling=radial_sampling,
@@ -822,13 +822,12 @@ class DiffractionPatterns(AbstractMeasurement):
         else:
             sampling = (1., 1.)
 
-        if len(self.scan_axes) == 1:
-            return LineProfiles(integrated_intensity, sampling=sampling[0], axes_metadata=self.axes_metadata[:-2])
+        if len(self.real_space_axes) == 1:
+            return LineProfiles(integrated_intensity, sampling=sampling[0], axes_metadata=self.axes_metadata[:-3])
         else:
+            return Images(integrated_intensity, sampling=sampling, axes_metadata=self.axes_metadata[:-4])
 
-            return Images(integrated_intensity, sampling=sampling, axes_metadata=self.axes_metadata[:-2])
-
-    def integrated_center_of_mass(self):
+    def integrated_center_of_mass(self) -> Images:
         def intgrad2d(gradient, sampling):
             gx, gy = gradient
             (nx, ny) = gx.shape
@@ -844,32 +843,33 @@ class DiffractionPatterns(AbstractMeasurement):
 
         com = self.center_of_mass()
 
-        sampling = tuple(self.axes_metadata[axis]['sampling'] for axis in self.scan_axes)
+        sampling = (self.axes_metadata[self.scan_axes[0]]['sampling'],
+                    self.axes_metadata[self.scan_axes[1]]['sampling'])
 
         icom = intgrad2d((com.array.real, com.array.imag), sampling)
 
-        return Images(array=icom, sampling=sampling, axes_metadata=self.axes_metadata, metadata=self.metadata)
+        return Images(array=icom, sampling=sampling, axes_metadata=self._axes_metadata[:-2], metadata=self.metadata)
 
-    def center_of_mass(self):
-
+    def center_of_mass(self) -> Images:
         x, y = self.angular_coordinates()
 
         com_x = (self.array * x[:, None]).sum(axis=(-2, -1))
         com_y = (self.array * y[None]).sum(axis=(-2, -1))
 
-        sampling = tuple(self.axes_metadata[axis]['sampling'] for axis in self.scan_axes)
+        sampling = (self.axes_metadata[self.scan_axes[0]]['sampling'],
+                    self.axes_metadata[self.scan_axes[1]]['sampling'])
 
         com = com_x + 1.j * com_y
 
-        return Images(array=com, sampling=sampling, axes_metadata=self.axes_metadata, metadata=self.metadata)
+        return Images(array=com, sampling=sampling, axes_metadata=self._axes_metadata[:-2], metadata=self.metadata)
 
-    def angular_coordinates(self):
+    def angular_coordinates(self) -> Tuple[np.ndarray, np.ndarray]:
         xp = get_array_module(self.array)
         alpha_x = xp.linspace(self.fourier_space_extent[0][0], self.fourier_space_extent[0][1], self.shape[-2])
         alpha_y = xp.linspace(self.fourier_space_extent[1][0], self.fourier_space_extent[1][1], self.shape[-1])
         return alpha_x, alpha_y
 
-    def block_direct(self, radius=None):
+    def block_direct(self, radius: float = None) -> 'DiffractionPatterns':
 
         if radius is None:
             radius = max(self.angular_sampling) * 1.1
@@ -888,7 +888,7 @@ class DiffractionPatterns(AbstractMeasurement):
         else:
             array = block_direct(self.array)
 
-        return self.__class__(array, angular_sampling=self.angular_sampling, axes_metadata=self.axes_metadata,
+        return self.__class__(array, angular_sampling=self.angular_sampling, axes_metadata=self._axes_metadata,
                               metadata=self.metadata, fftshift=self.fftshift)
 
     def show(self, ax=None, cbar=False, power=1., **kwargs):
@@ -921,12 +921,14 @@ class PolarMeasurements(AbstractMeasurement):
         self._azimuthal_sampling = azimuthal_sampling
         self._radial_offset = radial_offset
         self._azimuthal_offset = azimuthal_offset
-
         super().__init__(array, axes_metadata, metadata, base_axes=(-2, -1))
 
     @property
     def base_axes_metadata(self) -> list:
-        return []
+        return [{'label': 'scattering_angle_x', 'type': 'fourier_space', 'sampling': self.radial_sampling,
+                 'offset': self.radial_offset, 'units': 'mrad'},
+                {'label': 'scattering_angle_y', 'type': 'fourier_space', 'sampling': self.azimuthal_sampling,
+                 'offset': self.azimuthal_offset, 'units': 'rad'}]
 
     def to_hyperspy(self):
         pass
@@ -942,33 +944,36 @@ class PolarMeasurements(AbstractMeasurement):
                              azimuthal_offset=self.azimuthal_offset)
 
     @property
-    def radial_offset(self):
+    def radial_offset(self) -> float:
         return self._radial_offset
 
     @property
-    def outer_angle(self):
+    def outer_angle(self) -> float:
         return self._radial_offset + self.radial_sampling * self.shape[-2]
 
     @property
-    def radial_sampling(self):
+    def radial_sampling(self) -> float:
         return self._radial_sampling
 
     @property
-    def azimuthal_sampling(self):
+    def azimuthal_sampling(self) -> float:
         return self._azimuthal_sampling
 
     @property
-    def azimuthal_offset(self):
+    def azimuthal_offset(self) -> float:
         return self._azimuthal_offset
 
     def _check_radial_angle(self, angle):
         if angle < self.radial_offset or angle > self.outer_angle:
             raise RuntimeError()
 
-    def integrate_radial(self, inner, outer):
+    def integrate_radial(self, inner, outer) -> Union[Images, LineProfiles]:
         return self.integrate(radial_limits=(inner, outer))
 
-    def integrate(self, radial_limits=None, azimutal_limits=None, detector_regions=None):
+    def integrate(self,
+                  radial_limits: Tuple[float, float] = None,
+                  azimutal_limits: Tuple[float, float] = None,
+                  detector_regions: Sequence[int] = None) -> Union[Images, LineProfiles]:
 
         sampling = (self.axes_metadata[self.scan_axes[0]]['sampling'],
                     self.axes_metadata[self.scan_axes[1]]['sampling'])
@@ -1000,8 +1005,13 @@ class PolarMeasurements(AbstractMeasurement):
             array = self._array.copy()
         else:
             array = self._array
-        return self.__class__(array, axes_metadata=copy.deepcopy(self.axes_metadata),
-                              metadata=copy.deepcopy(self.extra_axes_metadata))
+        return self.__class__(array,
+                              radial_offset=self.radial_offset,
+                              radial_sampling=self.radial_sampling,
+                              azimuthal_offset=self.azimuthal_offset,
+                              azimuthal_sampling=self.azimuthal_sampling,
+                              axes_metadata=copy.deepcopy(self._axes_metadata),
+                              metadata=copy.deepcopy(self._axes_metadata))
 
     def compute(self, **kwargs):
         array = self._array.compute(**kwargs)
@@ -1010,7 +1020,7 @@ class PolarMeasurements(AbstractMeasurement):
                               azimuthal_sampling=self.azimuthal_sampling,
                               radial_offset=self._radial_offset,
                               azimuthal_offset=self._azimuthal_offset,
-                              axes_metadata=self.axes_metadata,
+                              axes_metadata=self._axes_metadata,
                               metadata=self.metadata)
 
     def show(self, ax=None, min_azimuthal_division=np.pi / 20, **kwargs):
@@ -1023,8 +1033,8 @@ class PolarMeasurements(AbstractMeasurement):
         r = np.pi / (4 * repeat) + self.azimuthal_offset
         azimuthal_grid = np.linspace(r, 2 * np.pi + r, self.shape[-1] * repeat, endpoint=False)
 
-        d = (self.outer_angle - self.inner_angle) / 2 / self.shape[-2]
-        radial_grid = np.linspace(self.inner_angle + d, self.outer_angle - d, self.shape[-2])
+        d = (self.outer_angle - self.radial_offset) / 2 / self.shape[-2]
+        radial_grid = np.linspace(self.radial_offset + d, self.outer_angle - d, self.shape[-2])
 
         z = np.repeat(array, repeat, axis=-1)
         r, th = np.meshgrid(radial_grid, azimuthal_grid)
