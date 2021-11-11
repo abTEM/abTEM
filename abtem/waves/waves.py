@@ -563,7 +563,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         self.accelerator.check_is_defined()
 
         if hasattr(positions, 'match'):
-            positions.match(potential, self)
+            positions.match(self)
 
         positions, axes_metadata = self._validate_positions(positions, lazy=True, chunks=chunks)
         xp = get_array_module(positions)
@@ -642,7 +642,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         self.accelerator.check_is_defined()
 
         if hasattr(positions, 'match'):
-            positions.match(potential, self)
+            positions.match(self)
 
         validated_positions, axes_metadata = self._validate_positions(positions, lazy=True, chunks=chunks)
         detectors = self._validate_detectors(detectors)
