@@ -18,9 +18,9 @@ from abtem.basic.utils import generate_chunks
 from abtem.measure.measure import Images
 from abtem.potentials.atom import AtomicPotential
 from abtem.potentials.infinite import calculate_scattering_factors
-from abtem.potentials.project import InfiniteProjectePotential
+from abtem.potentials.project import InfiniteProjectePotential, FiniteProjectedPotential
 from abtem.potentials.temperature import AbstractFrozenPhonons, FrozenPhonons
-from abtem.structures.slicing import SlicedAtoms, _validate_slice_thickness
+from abtem.structures.slicing import _validate_slice_thickness
 from abtem.structures.structures import is_cell_orthogonal, orthogonalize_cell
 
 
@@ -265,16 +265,16 @@ class Potential(AbstractPotentialFromAtoms):
         self.grid.check_is_defined()
 
         if self.projection == 'finite':
-            slice_iterator = self._frozen_phonon_potentials_finite(lazy=True)[0]
+            slice_iterator = self._get_projected_potentials_finite(lazy=True)[0]
         elif self.projection == 'infinite':
-            slice_iterator = self._frozen_phonon_potentials_infinite(lazy=True)[0]
+            slice_iterator = self._get_projected_potentials_infinite(lazy=True)[0]
         else:
             raise RuntimeError(f'projection must be "finite" or "infinite"')
 
         xp = get_array_module(self._device)
 
         def get_chunk(slice_iterator, first_slice, last_slice):
-            return slice_iterator._get_chunk(first_slice, last_slice)
+            return slice_iterator.get_chunk(first_slice, last_slice)
 
         array = []
         for first_slice, last_slice in generate_chunks(len(self), chunks=self._chunks):
@@ -298,71 +298,24 @@ class Potential(AbstractPotentialFromAtoms):
 
         return atomic_potentials
 
-    def _frozen_phonon_potentials_finite(self, lazy: bool = True):
+    def _get_projected_potentials_finite(self, lazy: bool = True):
 
         if lazy:
             atomic_potentials = dask.delayed(self._calculate_atomic_potentials)()
         else:
             atomic_potentials = self._calculate_atomic_potentials()
 
-        class FinitePotentialIterator(ChunkIterator):
+        def _potential_iterator(atoms, atomic_potentials):
+            if hasattr(atoms, 'jiggle_atoms'):
+                atoms = atoms.jiggle_atoms()
 
-            def __init__(self,
-                         configuration,
-                         atomic_potentials,
-                         gpts,
-                         sampling,
-                         slice_thickness,
-                         plane,
-                         box,
-                         xp,
-                         chunks=1):
-
-                self._configuration = configuration
-                self._atomic_potentials = atomic_potentials
-                self._gpts = gpts
-                self._sampling = sampling
-                self._slice_thickness = slice_thickness
-                self._plane = plane
-                self._box = box
-                self._xp = xp
-
-                if hasattr(self._configuration, 'jiggle_atoms'):
-                    self._atoms = self._configuration.jiggle_atoms()
-                else:
-                    self._atoms = self._configuration
-
-                super().__init__(size=len(slice_thickness), chunks=chunks)
-
-            @property
-            def slice_thickness(self):
-                return self._slice_thickness
-
-            def _get_chunk(self, first_slice, last_slice):
-                array = self._xp.zeros((last_slice - first_slice,) + self._gpts, dtype=np.float32)
-
-                cutoffs = {Z: atomic_potential.cutoff for Z, atomic_potential in self._atomic_potentials.items()}
-                sliced_atoms = SlicedAtoms(self._atoms, self._slice_thickness, plane=self._plane, box=self._box,
-                                           padding=cutoffs)
-
-                for i, slice_idx in enumerate(range(first_slice, last_slice)):
-                    for Z, atomic_potential in self._atomic_potentials.items():
-                        atoms = sliced_atoms.get_atoms_in_slices(slice_idx, atomic_number=Z)
-                        a = sliced_atoms.slice_limits[slice_idx][0] - atoms.positions[:, 2]
-                        b = sliced_atoms.slice_limits[slice_idx][1] - atoms.positions[:, 2]
-                        atomic_potential.project_on_grid(array[i], self._sampling, atoms.positions, a, b)
-
-                return array
-
-        def _potential_iterator(configuration, atomic_potentials):
-            return FinitePotentialIterator(configuration,
-                                           atomic_potentials=atomic_potentials,
-                                           gpts=self.gpts,
-                                           sampling=self.sampling,
-                                           slice_thickness=self.slice_thickness,
-                                           plane=self.plane,
-                                           box=self.box,
-                                           xp=get_array_module(self._device))
+            return FiniteProjectedPotential(atoms,
+                                            atomic_potentials=atomic_potentials,
+                                            gpts=self.gpts,
+                                            slice_thickness=self.slice_thickness,
+                                            plane=self.plane,
+                                            box=self.box,
+                                            xp=get_array_module(self._device))
 
         potentials = []
         for configuration in self.frozen_phonons.get_configurations(lazy=lazy):
@@ -411,7 +364,7 @@ class Potential(AbstractPotentialFromAtoms):
         """
 
         if self._projection == 'finite':
-            return self._frozen_phonon_potentials_finite(lazy=lazy)
+            return self._get_projected_potentials_finite(lazy=lazy)
         else:
             return self._get_projected_potentials_infinite(lazy=lazy)
 

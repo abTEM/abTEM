@@ -726,8 +726,8 @@ class SMatrix(AbstractScannedWaves):
              scan: AbstractScan,
              detectors: Sequence[AbstractDetector],
              potential: Union[Atoms, AbstractPotential],
-             scan_partitions,
-             positions_per_reduction,
+             scan_partitions=None,
+             positions_per_reduction=100,
              lazy: bool = False):
         """
         Build the scattering matrix. Raster scan the probe across the potential, record a measurement for each detector.
@@ -756,6 +756,9 @@ class SMatrix(AbstractScannedWaves):
         self.grid.match(potential.grid)
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
+
+        if scan_partitions is None:
+            scan_partitions = (self.interpolation,)*2
 
         if hasattr(scan, 'match'):
             scan.match(self)

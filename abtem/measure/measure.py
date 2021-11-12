@@ -270,12 +270,13 @@ class Images(AbstractMeasurement):
         from hyperspy._signals.signal2d import Signal2D
 
         base_axes = [
-            {'scale': self.sampling[0], 'units': 'Å', 'name': 'x', 'offset': 0., 'size': self.array.shape[0]},
-            {'scale': self.sampling[1], 'units': 'Å', 'name': 'y', 'offset': 0., 'size': self.array.shape[1]}]
+            {'scale': self.sampling[1], 'units': 'Å', 'name': 'y', 'offset': 0., 'size': self.array.shape[1]},
+            {'scale': self.sampling[0], 'units': 'Å', 'name': 'x', 'offset': 0., 'size': self.array.shape[0]}
+            ]
 
         extra_axes = [{'size': n} for n in self.array.shape[:-2]]
 
-        return Signal2D(self.array, axes=extra_axes + base_axes)
+        return Signal2D(self.array.T, axes=extra_axes + base_axes)
 
     def copy(self, copy_array=True) -> 'Images':
         if copy_array:

@@ -248,7 +248,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         potential = self._validate_potential(potential)
 
         exit_waves = []
-        for p in potential.get_slice_iterators(lazy=self.is_lazy):
+        for p in potential.get_projected_potentials(lazy=self.is_lazy):
             exit_waves.append(multislice(self.copy(), p))
 
         array = da.stack([exit_wave.array for exit_wave in exit_waves], axis=0)
@@ -390,7 +390,7 @@ class PlaneWave(WavesLikeMixin):
 
         potential.grid.match(self)
 
-        waves = self.build(lazy=True).multislice(potential)
+        waves = self.build(lazy=True).multislice(potential, lazy=lazy)
 
         if not lazy:
             waves.compute()
