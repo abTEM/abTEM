@@ -9,14 +9,14 @@ import numpy as np
 import zarr
 from ase import Atoms
 
-from abtem.basic.antialias import AntialiasAperture
-from abtem.basic.axes import HasAxesMetadata
-from abtem.basic.backend import get_array_module, xp_to_str
-from abtem.basic.complex import abs2
-from abtem.basic.dask import computable, HasDaskArray, BuildsDaskArray, ComputableList
-from abtem.basic.energy import Accelerator
-from abtem.basic.fft import fft2, ifft2, fft2_convolve, fft_crop, fft2_interpolate, fft_shift_kernel
-from abtem.basic.grid import Grid
+from abtem.core.antialias import AntialiasAperture
+from abtem.core.axes import HasAxesMetadata
+from abtem.core.backend import get_array_module, copy_to_device, _validate_device
+from abtem.core.complex import abs2
+from abtem.core.dask import computable, HasDaskArray, BuildsDaskArray, ComputableList, _validate_lazy
+from abtem.core.energy import Accelerator
+from abtem.core.fft import fft2, ifft2, fft2_convolve, fft_crop, fft2_interpolate, fft_shift_kernel
+from abtem.core.grid import Grid
 from abtem.measure.detect import AbstractDetector
 from abtem.measure.measure import DiffractionPatterns, Images, AbstractMeasurement
 from abtem.potentials.potentials import Potential, AbstractPotential
@@ -366,9 +366,9 @@ class PlaneWave(WavesLikeMixin):
         self._accelerator = Accelerator(energy=energy)
         self._beam_tilt = BeamTilt(tilt=tilt)
         self._antialias_aperture = AntialiasAperture()
-        self._device = device
+        self._device = _validate_device(device)
 
-    def multislice(self, potential: Union[AbstractPotential, Atoms], lazy: bool = False) -> Waves:
+    def multislice(self, potential: Union[AbstractPotential, Atoms], lazy: bool = None) -> Waves:
         """
         Build plane wave function and propagate it through the potential. The grid of the two will be matched.
 
@@ -376,8 +376,8 @@ class PlaneWave(WavesLikeMixin):
         ----------
         potential : Potential or Atoms object
             The potential through which to propagate the wave function.
-        pbar : bool, optional
-            Display a progress bar. Default is True.
+        lazy : bool, optional
+            Return lazy computation. Default is True.
 
         Returns
         -------
@@ -392,28 +392,26 @@ class PlaneWave(WavesLikeMixin):
 
         waves = self.build(lazy=True).multislice(potential, lazy=lazy)
 
-        if not lazy:
+        if not _validate_lazy(lazy):
             waves.compute()
 
         return waves
 
-    def build(self, lazy: bool = False) -> Waves:
+    def build(self, lazy: bool = None) -> Waves:
         """Build the plane wave function as a Waves object."""
         xp = get_array_module(self._device)
         self.grid.check_is_defined()
 
         def plane_wave(gpts, xp):
-            xp = get_array_module(xp)
             return xp.ones(gpts, dtype=xp.complex64)
 
-        array = dask.delayed(plane_wave)(self.gpts, xp_to_str(xp))
-        array = da.from_delayed(array, shape=self.gpts, meta=xp.array((), dtype=xp.complex64))
-        waves = Waves(array, extent=self.extent, energy=self.energy)
+        if _validate_lazy(lazy):
+            array = dask.delayed(plane_wave)(self.gpts, xp)
+            array = da.from_delayed(array, shape=self.gpts, meta=xp.array((), dtype=xp.complex64))
+        else:
+            array = plane_wave(self.gpts, xp)
 
-        if not lazy:
-            waves.compute()
-
-        return waves
+        return Waves(array, extent=self.extent, energy=self.energy)
 
     def __copy__(self) -> 'PlaneWave':
         return self.__class__(extent=self.extent, gpts=self.gpts, sampling=self.sampling, energy=self.energy,
@@ -455,7 +453,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
                  energy: float = None,
                  ctf: CTF = None,
                  tilt: Tuple[float, float] = None,
-                 device: str = 'cpu',
+                 device: str = None,
                  **kwargs):
 
         if ctf is None:
@@ -472,29 +470,18 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._antialias_aperture = AntialiasAperture()
         self._beam_tilt = BeamTilt(tilt=tilt)
-        self._device = device
+        self._device = _validate_device(device)
 
     @property
     def ctf(self) -> CTF:
         """Probe contrast transfer function."""
         return self._ctf
 
-    def _fourier_translation_operator(self, positions) -> np.ndarray:
-        xp = get_array_module(self._device)
-        positions = xp.asarray(positions)
-        positions = positions / xp.array(self.sampling).astype(np.float32)
-        return fft_shift_kernel(positions, shape=self.gpts)
-
-    def _evaluate_ctf(self) -> np.ndarray:
-        xp = get_array_module(self._device)
-        array = self._ctf.evaluate_on_grid(gpts=self.gpts, sampling=self.sampling, xp=xp)
-        array = array / xp.sqrt(abs2(array).sum())
-        return array
 
     def build(self,
               positions: Union[AbstractScan, Sequence] = None,
               chunks: Union[int, str] = 'auto',
-              lazy: bool = True) -> Waves:
+              lazy: bool = None) -> Waves:
 
         """
         Build probe wave functions at the provided positions.
@@ -515,21 +502,31 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
 
         positions, axes_metadata = self._validate_positions(positions, lazy=lazy, chunks=chunks)
 
-        xp = get_array_module(positions)
+        xp = get_array_module(self._device)
 
-        def calculate_probes(positions):
-            return ifft2(self._evaluate_ctf() * self._fourier_translation_operator(positions))
+        def _evaluate_probe(positions):
+            xp = get_array_module(positions)
+            positions = positions / xp.array(self.sampling).astype(np.float32)
+            array = fft_shift_kernel(positions, shape=self.gpts)
+            array *= self._ctf.evaluate_on_grid(gpts=self.gpts, sampling=self.sampling, xp=xp)
+            array /= xp.sqrt(abs2(array).sum())
+            return array
+
+        def calculate_probes(positions, xp):
+            positions = xp.asarray(positions)
+            return ifft2(_evaluate_probe(positions))
 
         if isinstance(positions, da.core.Array):
             drop_axis = len(positions.shape) - 1
             new_axis = (len(positions.shape) - 1, len(positions.shape))
             array = positions.map_blocks(calculate_probes,
+                                         xp=xp,
                                          meta=xp.array((), dtype=np.complex64),
                                          drop_axis=drop_axis, new_axis=new_axis,
                                          chunks=positions.chunks[:-1] + ((self.gpts[0],), (self.gpts[1],)))
 
         else:
-            array = calculate_probes(positions)
+            array = calculate_probes(positions, xp)
 
         return Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt, axes_metadata=axes_metadata)
 
@@ -537,7 +534,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
                    potential: Union[AbstractPotential],
                    positions: Union[AbstractScan, Sequence] = None,
                    chunks: Union[int, str] = 'auto',
-                   lazy: bool = False, ) -> Waves:
+                   lazy: bool = None) -> Waves:
         """
         Build probe wave functions at the provided positions and propagate them through the potential.
 
@@ -566,7 +563,8 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
             positions.match(self)
 
         positions, axes_metadata = self._validate_positions(positions, lazy=True, chunks=chunks)
-        xp = get_array_module(positions)
+
+        xp = get_array_module(self._device)
 
         def build_probes_multislice(positions, potential):
             waves = self.build(positions, lazy=False)
@@ -604,7 +602,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
 
         waves = Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt, axes_metadata=axes_metadata)
 
-        if not lazy:
+        if not _validate_lazy(lazy):
             waves.compute()
 
         return waves
@@ -614,7 +612,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
              detectors: Union[AbstractDetector, Sequence[AbstractDetector]],
              potential: Union[AbstractPotential],
              chunks: Union[int, str] = 'auto',
-             lazy: bool = False) -> Union[List, AbstractMeasurement]:
+             lazy: bool = None) -> Union[List, AbstractMeasurement]:
 
         """
         Raster scan the probe across the potential and record a measurement for each detector.
@@ -717,7 +715,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         else:
             output = ComputableList(measurements)
 
-        if not lazy:
+        if not _validate_lazy(lazy):
             output.compute()
 
         return output

@@ -9,12 +9,12 @@ import numpy as np
 import zarr
 from ase import Atoms
 
-from abtem.basic.backend import get_array_module, xp_to_str
-from abtem.basic.complex import complex_exponential
-from abtem.basic.dask import HasDaskArray
-from abtem.basic.energy import HasAcceleratorMixin, Accelerator, energy2sigma
-from abtem.basic.grid import Grid, HasGridMixin
-from abtem.basic.utils import generate_chunks
+from abtem.core.backend import get_array_module, xp_to_str, _validate_device
+from abtem.core.complex import complex_exponential
+from abtem.core.dask import HasDaskArray
+from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
+from abtem.core.grid import Grid, HasGridMixin
+from abtem.core.utils import generate_chunks
 from abtem.measure.measure import Images
 from abtem.potentials.atom import AtomicPotential
 from abtem.potentials.infinite import calculate_scattering_factors
@@ -210,7 +210,7 @@ class Potential(AbstractPotentialFromAtoms):
                  projection: str = 'infinite',
                  chunks: Union[int, str] = 'auto',
                  precalculate: bool = False,
-                 device: str = 'cpu',
+                 device: str = None,
                  plane: str = 'xy',
                  box: Tuple[float, float, float] = None,
                  origin: Tuple[float, float, float] = (0., 0., 0.),
@@ -223,7 +223,7 @@ class Potential(AbstractPotentialFromAtoms):
             raise RuntimeError('Projection must be "finite" or "infinite"')
 
         self._projection = projection
-        self._device = device
+        self._device = _validate_device(device)
 
         super().__init__(atoms=atoms,
                          gpts=gpts,

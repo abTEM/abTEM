@@ -3,9 +3,9 @@ from typing import Tuple, Sequence
 import numpy as np
 from ase.data import chemical_symbols
 
-from abtem.basic.backend import get_array_module
-from abtem.basic.fft import fft2, ifft2
-from abtem.basic.grid import spatial_frequencies, polar_spatial_frequencies
+from abtem.core.backend import get_array_module
+from abtem.core.fft import fft2, ifft2
+from abtem.core.grid import spatial_frequencies, polar_spatial_frequencies
 from abtem.potentials.parametrizations import names as parametrization_names
 
 

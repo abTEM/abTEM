@@ -2,7 +2,7 @@ import dask.array as da
 import numba as nb
 import numpy as np
 
-from abtem.basic.backend import check_cupy_is_installed, cp
+from abtem.core.backend import check_cupy_is_installed, cp
 
 
 @nb.vectorize([nb.complex64(nb.float32), nb.complex128(nb.float64)])

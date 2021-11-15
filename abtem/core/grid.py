@@ -5,7 +5,7 @@ import dask
 import dask.array as da
 import numpy as np
 
-from abtem.basic.backend import get_array_module, xp_to_str
+from abtem.core.backend import get_array_module, xp_to_str
 
 
 class Grid:

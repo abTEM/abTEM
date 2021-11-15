@@ -10,10 +10,10 @@ from scipy import integrate
 from scipy.interpolate import interp1d
 from scipy.special import spherical_jn, sph_harm
 
-from abtem.basic.backend import get_array_module
-from abtem.basic.energy import HasAcceleratorMixin, Accelerator, energy2wavelength, relativistic_mass_correction
-from abtem.basic.fft import fft_shift_kernel
-from abtem.basic.grid import HasGridMixin, Grid, polar_spatial_frequencies
+from abtem.core.backend import get_array_module
+from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2wavelength, relativistic_mass_correction
+from abtem.core.fft import fft_shift_kernel
+from abtem.core.grid import HasGridMixin, Grid, polar_spatial_frequencies
 from abtem.ionization.electron_configurations import electron_configurations
 from abtem.ionization.utils import check_valid_quantum_number, config_str_to_config_tuples, \
     remove_electron_from_config_str

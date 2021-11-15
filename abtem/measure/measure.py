@@ -10,16 +10,16 @@ import numpy as np
 import zarr
 from ase import Atom
 
-from abtem.basic.axes import HasAxesMetadata
-from abtem.basic.backend import cp, asnumpy, get_array_module, get_ndimage_module
-from abtem.basic.dask import HasDaskArray, requires_dask_array
-from abtem.basic.fft import fft2_interpolate
-from abtem.basic.interpolate import interpolate_bilinear
+from abtem.core.axes import HasAxesMetadata
+from abtem.core.backend import cp, asnumpy, get_array_module, get_ndimage_module
+from abtem.core.dask import HasDaskArray, requires_dask_array
+from abtem.core.fft import fft2_interpolate
+from abtem.core.interpolate import interpolate_bilinear
 from abtem.measure.utils import polar_detector_bins, sum_run_length_encoded
 from abtem.visualize.utils import domain_coloring, add_domain_coloring_cbar
 
 if cp is not None:
-    from abtem.basic.cuda import sum_run_length_encoded as sum_run_length_encoded_cuda
+    from abtem.core.cuda import sum_run_length_encoded as sum_run_length_encoded_cuda
 else:
     sum_run_length_encoded_cuda = None
     interpolate_bilinear_cuda = None

@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from abtem.basic.backend import get_array_module
+from abtem.core.backend import get_array_module
 import dask.array as da
 
 def array_row_intersection(a, b):

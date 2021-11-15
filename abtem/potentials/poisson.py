@@ -5,11 +5,11 @@ from ase import units
 from scipy.interpolate import RegularGridInterpolator
 from typing import Tuple, Union
 
-from abtem.basic.fft import fft_crop
-from abtem.basic.utils import generate_chunks
+from abtem.core.fft import fft_crop
+from abtem.core.utils import generate_chunks
 from abtem.potentials.parametrizations.ewald import ewald_sigma
 from abtem.potentials.potentials import AbstractPotentialFromAtoms, Potential
-from abtem.basic.dask import computable
+from abtem.core.dask import computable
 from ase import Atoms
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)

@@ -2,9 +2,9 @@ import dask
 import dask.array as da
 import numpy as np
 
-from abtem.basic.backend import get_array_module, xp_to_str
-from abtem.basic.fft import fft2_convolve
-from abtem.basic.grid import polar_spatial_frequencies
+from abtem.core.backend import get_array_module, xp_to_str
+from abtem.core.fft import fft2_convolve
+from abtem.core.grid import polar_spatial_frequencies
 
 TAPER = 0.01
 CUTOFF = 2 / 3.

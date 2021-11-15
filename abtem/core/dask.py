@@ -1,6 +1,7 @@
 import dask.array as da
 from dask.diagnostics import ProgressBar
 import dask
+from abtem.core import config
 
 
 class ComputableList(list):
@@ -69,6 +70,13 @@ class BuildsDaskArray:
         self.build(compute=False).visualize_graph(**kwargs)
 
 
+def _validate_lazy(lazy):
+    if lazy is None:
+        return config.get('lazy')
+
+    return lazy
+
+
 class HasDaskArray:
 
     def __init__(self, array):
@@ -82,6 +90,7 @@ class HasDaskArray:
         def _as_delayed(array):
             self._array = array
             return self
+
         return dask.delayed(_as_delayed)(self.array)
 
     def __len__(self):

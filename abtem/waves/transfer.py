@@ -4,10 +4,10 @@ from typing import Mapping, Union
 
 import numpy as np
 
-from abtem.basic.backend import get_array_module
-from abtem.basic.complex import complex_exponential
-from abtem.basic.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
-from abtem.basic.grid import Grid, polar_spatial_frequencies
+from abtem.core.backend import get_array_module
+from abtem.core.complex import complex_exponential
+from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
+from abtem.core.grid import Grid, polar_spatial_frequencies
 from abtem.measure import RadialFourierSpaceLineProfiles
 
 #: Symbols for the polar representation of all optical aberrations up to the fifth order.

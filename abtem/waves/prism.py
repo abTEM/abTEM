@@ -7,14 +7,14 @@ import dask.array as da
 import numpy as np
 from ase import Atoms
 
-from abtem.basic.antialias import AntialiasAperture
-from abtem.basic.axes import frozen_phonons_axes_metadata
-from abtem.basic.backend import get_array_module, cp, copy_to_device
-from abtem.basic.complex import complex_exponential
-from abtem.basic.dask import HasDaskArray, ComputableList
-from abtem.basic.energy import energy2wavelength
-from abtem.basic.grid import Grid
-from abtem.basic.utils import generate_chunks
+from abtem.core.antialias import AntialiasAperture
+from abtem.core.axes import frozen_phonons_axes_metadata
+from abtem.core.backend import get_array_module, cp, copy_to_device, _validate_device
+from abtem.core.complex import complex_exponential
+from abtem.core.dask import HasDaskArray, ComputableList, _validate_lazy
+from abtem.core.energy import energy2wavelength
+from abtem.core.grid import Grid
+from abtem.core.utils import generate_chunks
 from abtem.measure.detect import AbstractDetector
 from abtem.potentials.potentials import AbstractPotential
 from abtem.waves.base import BeamTilt, AbstractScannedWaves
@@ -27,7 +27,7 @@ from dask import graph_manipulation
 from abtem.waves.waves import Waves, Probe
 
 if cp is not None:
-    from abtem.basic.cuda import batch_crop_2d as batch_crop_2d_cuda
+    from abtem.core.cuda import batch_crop_2d as batch_crop_2d_cuda
 else:
     batch_crop_2d_cuda = None
 
@@ -210,7 +210,7 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
                  tilt: Tuple[float, float] = None,
                  ctf: CTF = None,
                  antialias_aperture: float = None,
-                 device: str = 'cpu',
+                 device: str = None,
                  max_concurrent: int = None,
                  axes_metadata: List[Dict] = None,
                  metadata: Dict = None):
@@ -234,7 +234,7 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
         self._accelerator = self._ctf._accelerator
         self._max_concurrent = max_concurrent
 
-        self._device = device
+        self._device = _validate_device(device)
         self._array = array
         self._wave_vectors = wave_vectors
 
@@ -319,10 +319,13 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
     def _get_minimum_crop(self, positions):
         return _minimum_crop(positions, self.sampling, self.interpolated_gpts)
 
-    def reduce(self, positions, detectors, scan_partitions, positions_per_reduction, lazy: bool = False):
+    def reduce(self, positions, detectors, scan_partitions, positions_per_reduction, lazy: bool = None):
         detectors = self._validate_detectors(detectors)
         scans = positions.divide(scan_partitions)
         xp = get_array_module(self.array)
+
+        if scan_partitions[0] < self.interpolation or scan_partitions[1] < self.interpolation:
+            raise RuntimeError()
 
         def reduce_subchunk(array,
                             positions,
@@ -342,7 +345,12 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
 
             window = window.reshape(positions.shape[:-1] + window.shape[-2:])
             axes_metadata = [{'type': 'positions'}, {'type': 'positions'}]
-            waves = Waves(window, sampling=self.sampling, energy=self.energy, axes_metadata=axes_metadata)
+            waves = Waves(window,
+                          sampling=sampling,
+                          energy=self.energy,
+                          axes_metadata=axes_metadata,
+                          antialias_aperture=self.antialias_aperture)
+
             return waves
 
         def reshape_list(l, n):
@@ -380,7 +388,9 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
 
             result = {}
             for detector, measurement in measurements.items():
-                result[detector] = xp.block(reshape_list(measurement, len(positions[0])))
+                blocks = reshape_list(measurement, len(positions[0]))
+                xp = get_array_module(blocks[0][0])
+                result[detector] = xp.concatenate([xp.concatenate(block, axis=1) for block in blocks], axis=0)
 
             return list(result.values())
 
@@ -457,7 +467,7 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
         else:
             output = ComputableList(measurements)
 
-        if not lazy:
+        if not _validate_lazy(lazy):
             output.compute()
 
         return output
@@ -558,7 +568,7 @@ class SMatrix(AbstractScannedWaves):
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
                  tilt: Tuple[float, float] = None,
-                 device: str = 'cpu',
+                 device: str = None,
                  storage: str = None,
                  **kwargs):
 
@@ -591,7 +601,7 @@ class SMatrix(AbstractScannedWaves):
         self._beam_tilt = BeamTilt(tilt=tilt)
         self._max_concurrent = max_concurrent
 
-        self._device = device
+        self._device = _validate_device(device)
 
         if storage is None:
             storage = device
@@ -728,7 +738,7 @@ class SMatrix(AbstractScannedWaves):
              potential: Union[Atoms, AbstractPotential],
              scan_partitions=None,
              positions_per_reduction=100,
-             lazy: bool = False):
+             lazy: bool = None):
         """
         Build the scattering matrix. Raster scan the probe across the potential, record a measurement for each detector.
 
@@ -758,7 +768,7 @@ class SMatrix(AbstractScannedWaves):
         self.accelerator.check_is_defined()
 
         if scan_partitions is None:
-            scan_partitions = (self.interpolation,)*2
+            scan_partitions = (self.interpolation,) * 2
 
         if hasattr(scan, 'match'):
             scan.match(self)
@@ -790,6 +800,7 @@ class SMatrix(AbstractScannedWaves):
 
     def _build_partial(self, start, end):
         xp = get_array_module(self._device)
+
         wave_vectors = prism_wave_vectors(self.expansion_cutoff, self.extent, self.energy, self.interpolation, xp)
         array = plane_waves(wave_vectors[start:end], self.extent, self.gpts)
         # xp = get_array_module(array)
@@ -833,7 +844,7 @@ class SMatrix(AbstractScannedWaves):
                             tilt=self.tilt,
                             wave_vectors=self.wave_vectors,
                             ctf=self.ctf.copy(),
-                            antialias_aperture=self.antialias_aperture,
+                            antialias_aperture=1,
                             device=self._device,
                             max_concurrent=self._max_concurrent,
                             axes_metadata=axes_metadata,
@@ -844,11 +855,12 @@ class SMatrix(AbstractScannedWaves):
 
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
+        xp = get_array_module(self._device)
 
         arrays = []
         for start, end in generate_chunks(len(self), chunks=self.chunks):
             array = dask.delayed(self._build_partial)(start, end)
-            array = da.from_delayed(array, shape=(end - start,) + self.gpts, dtype=np.complex64)
+            array = da.from_delayed(array, shape=(end - start,) + self.gpts, meta=xp.array((), xp.complex64))
             arrays.append(array)
 
         array = da.concatenate(arrays)

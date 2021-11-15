@@ -1,14 +1,24 @@
 import dask.array as da
-import mkl_fft
 import numpy as np
 
-from abtem.basic.backend import get_array_module, check_cupy_is_installed
-from abtem.basic.complex import complex_exponential
-from abtem.basic.grid import spatial_frequencies
+from abtem.core import config
+from abtem.core.backend import get_array_module, check_cupy_is_installed
+from abtem.core.complex import complex_exponential
+from abtem.core.grid import spatial_frequencies
+
+try:
+    import mkl_fft
+except ModuleNotFoundError:
+    mkl_fft = None
+
+try:
+    import pyfftw
+except ModuleNotFoundError:
+    pyfftw = None
 
 try:
     import cupy as cp
-except:
+except ModuleNotFoundError:
     cp = None
 
 
@@ -16,7 +26,16 @@ def fft2(x, overwrite_x=False):
     xp = get_array_module(x)
 
     if isinstance(x, np.ndarray):
-        return mkl_fft.fft2(x, overwrite_x=overwrite_x)
+        if config.get('fft') == 'mkl':
+            return mkl_fft.fft2(x, overwrite_x=overwrite_x)
+        elif config.get('fft') == 'fftw':
+            fftw_obj = pyfftw.builders.fft2(x,
+                                            overwrite_input=overwrite_x,
+                                            planner_effort=config.get('fftw.planning_effort'),
+                                            threads=config.get('fftw.threads'))
+            return fftw_obj()
+        else:
+            raise RuntimeError()
 
     if isinstance(x, da.core.Array):
         return x.map_blocks(fft2, meta=xp.array((), dtype=np.complex64))
@@ -31,7 +50,16 @@ def ifft2(x, overwrite_x=False):
     xp = get_array_module(x)
 
     if isinstance(x, np.ndarray):
-        return mkl_fft.ifft2(x, overwrite_x=overwrite_x)
+        if config.get('fft') == 'mkl':
+            return mkl_fft.ifft2(x, overwrite_x=overwrite_x)
+        elif config.get('fft') == 'fftw':
+            fftw_obj = pyfftw.builders.ifft2(x,
+                                             overwrite_input=overwrite_x,
+                                             planner_effort=config.get('fftw.planning_effort'),
+                                             threads=config.get('fftw.threads'))
+            return fftw_obj()
+        else:
+            raise RuntimeError()
 
     if isinstance(x, da.core.Array):
         return x.map_blocks(ifft2, meta=xp.array((), dtype=np.complex64))
@@ -62,32 +90,6 @@ def fft2_convolve(x, kernel, overwrite_x=False, ):
 
     if isinstance(x, cp.ndarray):
         return _fft2_convolve(x, kernel, overwrite_x)
-
-
-# def fft2_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
-#     """
-#     Create an array representing one or more phase ramp(s) for shifting another array.
-#
-#     Parameters
-#     ----------
-#     positions : array of xy-positions
-#     shape : two int
-#
-#     Returns
-#     -------
-#
-#     """
-#     xp = get_array_module(positions)
-#
-#     kx, ky = spatial_frequencies(shape, (1.,) * 2, delayed=False, xp=xp)
-#     kx = kx.reshape((1,) * (len(positions.shape) - 1) + (-1, 1)).astype(np.float32)
-#     ky = ky.reshape((1,) * (len(positions.shape) - 1) + (1, -1)).astype(np.float32)
-#     x = positions[..., 0][..., None, None]
-#     y = positions[..., 1][..., None, None]
-#
-#     twopi = np.float32(2. * np.pi)
-#     result = complex_exponential(-twopi * kx * x) * complex_exponential(-twopi * ky * y)
-#     return result
 
 
 def fft_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
@@ -203,7 +205,7 @@ def fft2_interpolate(array, new_shape, normalization='values', overwrite_x=False
 
     old_size = array.shape[-2] * array.shape[-1]
 
-    #def _fft2_interpolate(array, new_shape):
+    # def _fft2_interpolate(array, new_shape):
     #    return ifft2(fft_crop(fft2(array), new_shape), overwrite_x=overwrite_x)
 
     is_complex = np.iscomplexobj(array)

@@ -1,6 +1,6 @@
 import numpy as np
 
-from abtem.basic.utils import generate_chunks
+from abtem.core.utils import generate_chunks
 from abtem.potentials.infinite import infinite_potential_projections
 from abtem.structures.slicing import SliceIndexedAtoms, SlicedAtoms
 

@@ -1,0 +1,6 @@
+device: cpu
+fft: mkl
+lazy: true
+fftw:
+  threads: 4
+  planning_effort: FFTW_MEASURE

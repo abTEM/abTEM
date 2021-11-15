@@ -6,7 +6,7 @@ from typing import Tuple, Any, Union
 import matplotlib.pyplot as plt
 import numpy as np
 
-from abtem.basic.backend import get_array_module
+from abtem.core.backend import get_array_module
 from abtem.measure.measure import DiffractionPatterns, PolarMeasurements, Images, LineProfiles
 
 

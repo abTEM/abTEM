@@ -3,8 +3,8 @@ from typing import Tuple
 import numpy as np
 from numba import prange, jit
 
-from abtem.basic.backend import get_array_module
-from abtem.basic.grid import polar_spatial_frequencies
+from abtem.core.backend import get_array_module
+from abtem.core.grid import polar_spatial_frequencies
 
 
 def _label_to_index(labels):

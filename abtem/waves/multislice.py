@@ -4,12 +4,12 @@ from typing import Union
 
 import numpy as np
 
-from abtem.basic.antialias import antialias_kernel
-from abtem.basic.backend import get_array_module, xp_to_str
-from abtem.basic.complex import complex_exponential
-from abtem.basic.energy import energy2wavelength, energy2sigma
-from abtem.basic.fft import fft2_convolve
-from abtem.basic.grid import spatial_frequencies
+from abtem.core.antialias import antialias_kernel
+from abtem.core.backend import get_array_module, xp_to_str
+from abtem.core.complex import complex_exponential
+from abtem.core.energy import energy2wavelength, energy2sigma
+from abtem.core.fft import fft2_convolve
+from abtem.core.grid import spatial_frequencies
 from abtem.potentials.potentials import PotentialArray
 from abtem.potentials.project import ProjectedPotential
 
@@ -58,6 +58,7 @@ def _multislice(waves_array,
         potential_slices = potential.get_chunk(start, end)
 
         transmission_function = _transmission_function(potential_slices, energy=energy)
+
         transmission_function = fft2_convolve(transmission_function, antialias_kernel_array, overwrite_x=True)
 
         if len(transmission_function.shape) == 2:
@@ -75,6 +76,8 @@ def multislice(waves: Union['Waves', 'SMatrixArray'],
                ) -> Union['Waves', 'SMatrixArray']:
     if waves.is_lazy:
         xp = get_array_module(waves.array)
+
+
         waves._array = waves.array.map_blocks(_multislice,
                                               gpts=waves.gpts,
                                               sampling=waves.sampling,

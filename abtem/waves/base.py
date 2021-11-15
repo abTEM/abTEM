@@ -7,9 +7,10 @@ import dask.array as da
 import numpy as np
 from ase import Atoms
 
-from abtem.basic.antialias import HasAntialiasApertureMixin
-from abtem.basic.energy import HasAcceleratorMixin
-from abtem.basic.grid import HasGridMixin
+from abtem.core.antialias import HasAntialiasApertureMixin
+from abtem.core.dask import _validate_lazy
+from abtem.core.energy import HasAcceleratorMixin
+from abtem.core.grid import HasGridMixin
 from abtem.potentials import Potential
 from abtem.waves.scan import AbstractScan
 
@@ -141,6 +142,8 @@ class AbstractScannedWaves(WavesLikeMixin):
                             positions: Union[Sequence, AbstractScan] = None,
                             lazy: bool = True,
                             chunks: Union[int, str] = 'auto'):
+
+        lazy = _validate_lazy(lazy)
 
         chunks = self._validate_chunks(chunks)
 

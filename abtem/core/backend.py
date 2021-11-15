@@ -1,8 +1,10 @@
-import numpy as np
-import dask.array as da
-from typing import Union
-import scipy
 from numbers import Number
+
+import dask.array as da
+import numpy as np
+import scipy
+
+from abtem.core.config import config
 
 try:
     import cupy as cp
@@ -32,7 +34,17 @@ def xp_to_str(xp):
     raise ValueError(f'array module must be NumPy or CuPy')
 
 
+def _validate_device(device):
+    if device is None:
+        return config.get('device')
+
+    return device
+
+
 def get_array_module(x):
+    if x is None:
+        return get_array_module(config.get('device'))
+
     if isinstance(x, da.core.Array):
         return get_array_module(x._meta)
 

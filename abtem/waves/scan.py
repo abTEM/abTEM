@@ -11,8 +11,8 @@ import numpy as np
 from ase import Atom
 from matplotlib.patches import Rectangle
 
-from abtem.basic.grid import Grid, HasGridMixin
-from abtem.basic.utils import subdivide_into_chunks
+from abtem.core.grid import Grid, HasGridMixin
+from abtem.core.utils import subdivide_into_chunks
 
 
 class AbstractScan(metaclass=ABCMeta):
