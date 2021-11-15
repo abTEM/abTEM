@@ -150,8 +150,8 @@ def add_scan_noise(measurement: Measurement, dwell_time: float, flyback_time: fl
 
     time = _pixel_times(dwell_time, flyback_time, array.T.shape)
     displacement_x, displacement_y = _make_displacement_field(time, max_frequency, num_components, rms_power)
-    array = _apply_displacement_field(array[:].T, displacement_x, displacement_y)
-    array[:] = array.T
+    array[:] = _apply_displacement_field(array.T, displacement_x, displacement_y).T
+
     return measurement
 
 
