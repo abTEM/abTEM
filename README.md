@@ -17,7 +17,12 @@ abTEM (pronounced "ab-tem", as in "*ab initio*") provides a Python API for runni
 You can install abTEM using `pip`:
 
 ```sh
-$ pip install abtem
+pip install abtem
+```
+
+or `conda`:
+```sh
+conda install -c conda-forge abtem
 ```
 
 For detailed instructions on installing abTEM, see [the installation guide](https://abtem.readthedocs.io/en/latest/install.html).
