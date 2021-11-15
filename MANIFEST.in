@@ -1,4 +1,5 @@
 recursive-include abtem *.txt
+recursive-include abtem *.yaml
 recursive-include abtem *.json
 recursive-include abtem *.traj
 include LICENSE
