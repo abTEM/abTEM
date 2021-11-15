@@ -137,9 +137,8 @@ def _show_atoms_2d(atoms, scans=None, plane: Union[Tuple[float, float], str] = '
         order = np.argsort(atoms.positions[:, axes[2]])
         positions = positions[order]
 
-        #distance = .1
-        #positions, indices = merge_close_points(positions, distance)
-
+        # distance = .1
+        # positions, indices = merge_close_points(positions, distance)
 
         colors = jmol_colors[atoms.numbers[order]]
         sizes = covalent_radii[atoms.numbers[order]] * scale_atoms
@@ -361,7 +360,7 @@ def show_measurement_2d(measurement,
 
 
 def show_measurement_1d(measurement, ax=None, figsize=None, legend=False, title=None, label=None,
-                        x_label=None, y_label=None, **kwargs):
+                        x_label=None, y_label=None, x=None, **kwargs):
     """
     Show line function
 
@@ -385,10 +384,12 @@ def show_measurement_1d(measurement, ax=None, figsize=None, legend=False, title=
 
     calibration = measurement.calibrations[0]
     array = measurement.array
-    if calibration is None:
-        x = np.arange(len(array))
-    else:
-        x = np.linspace(calibration.offset, calibration.offset + len(array) * calibration.sampling, len(array))
+
+    if x is None:
+        if calibration is None:
+            x = np.arange(len(array))
+        else:
+            x = np.linspace(calibration.offset, calibration.offset + len(array) * calibration.sampling, len(array))
 
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)

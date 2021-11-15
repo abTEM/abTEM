@@ -503,10 +503,10 @@ class Measurement(AbstractMeasurement):
         calibrations = self.calibrations[:-2]
 
         calibrations += calibrations_from_grid(gpts=gpts, sampling=sampling, fourier_space=True,
-                                              names=names,
-                                              units=units,
-                                              scale_factor=scale_factor,
-                                              )
+                                               names=names,
+                                               units=units,
+                                               scale_factor=scale_factor,
+                                               )
 
         array = np.fft.fftshift(np.abs(array) ** 2, axes=axes)
 
@@ -893,6 +893,7 @@ class Measurement(AbstractMeasurement):
                          sampling: float = None,
                          width: float = None,
                          margin: float = 0.,
+                         endpoint: bool = True,
                          interpolation_method: str = 'splinef2d') -> 'LineProfile':
         """
         Interpolate 2d measurement along a line.
@@ -933,7 +934,8 @@ class Measurement(AbstractMeasurement):
         if (gpts is None) & (sampling is None):
             sampling = (measurement.calibrations[0].sampling + measurement.calibrations[1].sampling) / 2.
 
-        scan = LineScan(start=start, end=end, angle=angle, gpts=gpts, sampling=sampling, margin=margin)
+        scan = LineScan(start=start, end=end, angle=angle, gpts=gpts, sampling=sampling, margin=margin,
+                        endpoint=endpoint)
 
         x = np.linspace(measurement.calibrations[0].offset,
                         measurement.shape[0] * measurement.calibrations[0].sampling +
@@ -1033,8 +1035,21 @@ class LineProfile(AbstractMeasurement):
         from abtem.scan import LineScan
         return LineScan(start=self.start, end=self.end, sampling=self.sampling).add_to_mpl_plot(ax, **kwargs)
 
-    def show(self, ax=None, **kwargs):
-        return show_measurement_1d(self, ax=ax, **kwargs)
+    def show(self, ax=None, adjust_range: bool = False, **kwargs):
+
+        if adjust_range:
+            axis = np.isclose(np.array(self._start), np.array(self._end))
+
+            if axis.sum() != 1:
+                raise RuntimeError('adjust_range only implmented for axis-aligned line profiles')
+            else:
+                axis = np.where(axis == 0)[0][0]
+
+            x = np.linspace(self._start[axis], self._end[axis], self.array.shape[-1], endpoint=self._endpoint)
+        else:
+            x = None
+
+        return show_measurement_1d(self, ax=ax, x=x, **kwargs)
 
 
 def stack_measurements(measurements):
