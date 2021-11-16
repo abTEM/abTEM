@@ -420,7 +420,7 @@ class Grid(HasEventMixin):
 
     def _adjust_gpts(self, extent: tuple, sampling: tuple):
         if (extent is not None) & (sampling is not None):
-            self._gpts = tuple(int(np.ceil(r / d)) + 1 if e else int(np.ceil(r / d))
+            self._gpts = tuple(int(np.round(r / d)) + 1 if e else int(np.round(r / d))
                                for r, d, e in zip(extent, sampling, self._endpoint))
 
     def _adjust_sampling(self, extent: tuple, gpts: tuple):
