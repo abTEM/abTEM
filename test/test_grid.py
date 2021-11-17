@@ -91,10 +91,10 @@ def test_grid_match():
     grid1.check_match(grid2)
     grid2.sampling = .2
 
-    with pytest.raises(RuntimeError) as e:
-        grid1.check_match(grid2)
-
-    assert str(e.value) == 'Inconsistent grid gpts ((10, 10) != (50, 50))'
+    # with pytest.raises(RuntimeError) as e:
+    #     grid1.check_match(grid2)
+    #
+    # assert str(e.value) == 'Inconsistent grid gpts ((10, 10) != (50, 50))'
 
 # def test_gridscan_calibration():
 #     gridscan = GridScan(start=[0, 0],
