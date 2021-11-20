@@ -2,20 +2,21 @@ import os
 
 import numpy as np
 import pytest
+from ase import Atoms
+from ase.io import read
+
 from abtem.detect import AnnularDetector, FlexibleAnnularDetector
 from abtem.device import asnumpy, cp
 from abtem.potentials import Potential
 from abtem.scan import LineScan, GridScan
 from abtem.waves import Probe, SMatrix
-from ase import Atoms
-from ase.io import read
 
 
 def test_prism_raises():
     with pytest.raises(ValueError) as e:
         SMatrix(.01, 80e3, .5)
 
-    assert str(e.value) == 'Interpolation factor must be int'
+    assert str(e.value) == 'Interpolation factor must be int or tuple of int'
 
     with pytest.raises(RuntimeError) as e:
         prism = SMatrix(10, 80e3, 1)
@@ -38,7 +39,7 @@ def test_prism_translate():
 
 
 def test_prism_tilt():
-    S = SMatrix(semiangle_cutoff=30., energy=60e3, interpolation=1,  extent=5, gpts=50, tilt=(1, 2))
+    S = SMatrix(semiangle_cutoff=30., energy=60e3, interpolation=1, extent=5, gpts=50, tilt=(1, 2))
     S_array = S.build()
     wave = S_array.collapse()
     assert S_array.tilt == S.tilt == wave.tilt
@@ -150,6 +151,42 @@ def test_downsample_detect():
     assert np.allclose(measurement.array, downsampled_measurement.array)
 
 
+def test_unequal_interpolation():
+    from ase.build import nanotube
+
+    def make_atoms(l):
+        atoms = nanotube(6, 0, length=l)
+        atoms.rotate(-90, 'x', rotate_cell=True)
+        atoms.center(vacuum=5, axis=(0, 1))
+
+        cell = atoms.cell.copy()
+        cell[1] = np.abs(atoms.cell[2])
+        cell[2] = np.abs(atoms.cell[1])
+
+        atoms.set_cell(cell)
+        return atoms
+
+    detector = AnnularDetector(50, 150)
+
+    atoms1 = make_atoms(8)
+    S1 = SMatrix(energy=80e3, expansion_cutoff=10, semiangle_cutoff=10, interpolation=(2, 4), device='cpu',
+                 gpts=(256, 512))
+    S1.extent = np.diag(atoms1.cell)[:2]
+    scan = GridScan((0, 0), (atoms1.cell[0, 0], atoms1.cell[1, 1] / 2), sampling=S1.ctf.nyquist_sampling * .9)
+    measurement1 = S1.scan(scan, detector, atoms1, pbar=False)
+
+    atoms2 = make_atoms(4)
+    S2 = SMatrix(energy=80e3, expansion_cutoff=10, semiangle_cutoff=10, interpolation=(2, 2), device='cpu',
+                 gpts=(256, 256))
+    S2.extent = np.diag(atoms2.cell)[:2]
+    scan = GridScan((0, 0), (atoms2.cell[0, 0], atoms2.cell[1, 1]), sampling=S2.ctf.nyquist_sampling * .9)
+    measurement2 = S2.scan(scan, detector, atoms2, pbar=False)
+
+    assert len(S1) == len(S2)
+    assert np.allclose((S1.build().collapse().intensity() - S2.build().collapse().intensity()).array, 0)
+    assert np.allclose((measurement2 - measurement1).array, 0, atol=1e-5)
+
+
 def test_crop():
     S = SMatrix(expansion_cutoff=30, interpolation=3, energy=300e3, extent=10, sampling=.02).build()
     gridscan = GridScan(start=[0, 0], end=S.extent, gpts=64)
@@ -213,4 +250,3 @@ def test_cropped_scan():
         cropped.scan(scan, detector, measurements=cropped_measurements, pbar=False)
 
     assert np.allclose(cropped_measurements.array, measurements.array)
-

@@ -21,6 +21,7 @@ from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, sub
     fft_crop, fourier_translation_operator, array_row_intersection
 from abtem.structures import SlicedAtoms
 from abtem.ionization import SubshellTransitions
+from typing import Iterable
 
 
 class FresnelPropagator:
@@ -1760,7 +1761,7 @@ class SMatrix(_Scanable, HasEventMixin):
     def __init__(self,
                  energy: float,
                  expansion_cutoff: float = None,
-                 interpolation: int = 1,
+                 interpolation: Union[int, Tuple[int, int]] = 1,
                  ctf: CTF = None,
                  num_partitions: int = None,
                  extent: Union[float, Sequence[float]] = None,
@@ -1771,8 +1772,11 @@ class SMatrix(_Scanable, HasEventMixin):
                  storage: str = None,
                  **kwargs):
 
-        if not isinstance(interpolation, int):
-            raise ValueError('Interpolation factor must be int')
+        if not isinstance(interpolation, Iterable):
+            interpolation = (interpolation,) * 2
+
+        if not isinstance(interpolation[0], int) or not isinstance(interpolation[1], int):
+            raise ValueError('Interpolation factor must be int or tuple of int')
 
         self._interpolation = interpolation
 
@@ -1831,7 +1835,7 @@ class SMatrix(_Scanable, HasEventMixin):
         self._expansion_cutoff = value
 
     @property
-    def interpolation(self) -> int:
+    def interpolation(self) -> Tuple[int, int]:
         """Interpolation factor."""
         return self._interpolation
 
@@ -1841,12 +1845,12 @@ class SMatrix(_Scanable, HasEventMixin):
 
     @property
     def interpolated_gpts(self) -> Tuple[int, int]:
-        return (self.gpts[0] // self.interpolation, self.gpts[1] // self.interpolation)
+        return (self.gpts[0] // self.interpolation[0], self.gpts[1] // self.interpolation[1])
 
     @property
     def _interpolated_grid(self) -> Grid:
         """The grid of the interpolated probe wave functions."""
-        interpolated_gpts = tuple(n // self.interpolation for n in self.gpts)
+        interpolated_gpts = tuple(n // i for n, i in zip(self.gpts, self.interpolation))
         return Grid(gpts=interpolated_gpts, sampling=self.sampling, lock_gpts=True)
 
     def get_equivalent_probe(self):
@@ -2032,7 +2036,7 @@ class SMatrix(_Scanable, HasEventMixin):
                 for t in transition_potential._generate_slice_transition_potentials(slice_idx=i,
                                                                                     transitions_idx=transition_idx):
 
-                    if self.interpolation == 1:
+                    if self.interpolation == (1, 1):
                         tmp = copy_to_device(t, xp) * S1.array
 
                         SHn0 = xp.tensordot(S2.array.reshape((len(S2), -1)), tmp.reshape((len(S1), -1)).T, axes=1)
@@ -2083,16 +2087,16 @@ class SMatrix(_Scanable, HasEventMixin):
         self.accelerator.check_is_defined()
 
         xp = get_array_module_from_device(self._device)
-        n_max = int(xp.ceil(self.expansion_cutoff / 1000. / (self.wavelength / self.extent[0] * self.interpolation)))
-        m_max = int(xp.ceil(self.expansion_cutoff / 1000. / (self.wavelength / self.extent[1] * self.interpolation)))
+        n_max = int(xp.ceil(self.expansion_cutoff / 1000. / (self.wavelength / self.extent[0] * self.interpolation[0])))
+        m_max = int(xp.ceil(self.expansion_cutoff / 1000. / (self.wavelength / self.extent[1] * self.interpolation[1])))
 
         n = xp.arange(-n_max, n_max + 1, dtype=xp.float32)
         w = xp.asarray(self.extent[0], dtype=xp.float32)
         m = xp.arange(-m_max, m_max + 1, dtype=xp.float32)
         h = xp.asarray(self.extent[1], dtype=xp.float32)
 
-        kx = n / w * xp.float32(self.interpolation)
-        ky = m / h * xp.float32(self.interpolation)
+        kx = n / w * xp.float32(self.interpolation[0])
+        ky = m / h * xp.float32(self.interpolation[1])
 
         mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (self.expansion_cutoff / 1000. / self.wavelength) ** 2
         kx, ky = xp.meshgrid(kx, ky, indexing='ij')
@@ -2157,7 +2161,7 @@ class SMatrix(_Scanable, HasEventMixin):
         array = self._build_planewaves(k)
         xp = get_array_module(array)
 
-        interpolated_gpts = (self.gpts[0] // self.interpolation, self.gpts[1] // self.interpolation)
+        interpolated_gpts = (self.gpts[0] // self.interpolation[0], self.gpts[1] // self.interpolation[1])
 
         if normalize:
             probe = (xp.abs(array.sum(0)) ** 2)[:interpolated_gpts[0], :interpolated_gpts[1]]

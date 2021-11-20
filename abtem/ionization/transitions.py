@@ -115,8 +115,8 @@ class SubshellTransitions(AbstractTransitionCollection):
             ae = AllElectron(chemical_symbols[self.Z], xcname=self.xc)
             ae.run()
 
-        wave = interp1d(ae.r, ae.u_j[subshell_index], kind='cubic', fill_value='extrapolate', bounds_error=False)
-        return ae.ETotal * units.Hartree, wave
+        # wave = interp1d(ae.r, ae.u_j[subshell_index], kind='cubic', fill_value='extrapolate', bounds_error=False)
+        return ae.ETotal * units.Hartree, (ae.r, ae.u_j[subshell_index])
 
     @cached_method('_continuum_cache')
     def _calculate_continuum(self):
@@ -146,7 +146,8 @@ class SubshellTransitions(AbstractTransitionCollection):
                     1 + units.alpha ** 2 * self.epsilon / units.Hartree / 2)) ** .25
             ur = ur[:, 0] / ur[:, 0].max() / self.epsilon ** .5 * units.Rydberg ** 0.25 / sqrt_k / np.sqrt(np.pi)
 
-            continuum_waves[lprime] = interp1d(r, ur, kind='cubic', fill_value='extrapolate', bounds_error=False)
+            continuum_waves[lprime] = (
+                r, ur)  # interp1d(r, ur, kind='cubic', fill_value='extrapolate', bounds_error=False)
         return ae.ETotal * units.Hartree, continuum_waves
 
     def get_bound_wave(self):
@@ -169,6 +170,25 @@ class SubshellTransitions(AbstractTransitionCollection):
                     transitions.append([(self.l, ml), (new_l, new_ml)])
         return transitions
 
+    def as_arrays(self):
+
+        _, bound_wave = self._calculate_bound()
+        _, continuum_waves = self._calculate_continuum()
+
+        bound_state = self.get_transition_quantum_numbers()[0][0]
+        continuum_states = [state[1] for state in self.get_transition_quantum_numbers()]
+        _, continuum_waves = self._calculate_continuum()
+
+        arrays = SubshellTransitionsArrays(Z=self.Z,
+                                           bound_wave=bound_wave,
+                                           continuum_waves=continuum_waves,
+                                           bound_state=bound_state,
+                                           continuum_states=continuum_states,
+                                           energy_loss=self.energy_loss,
+                                           )
+
+        return arrays
+
     def get_transition_potentials(self,
                                   extent: Union[float, Sequence[float]] = None,
                                   gpts: Union[float, Sequence[float]] = None,
@@ -184,8 +204,12 @@ class SubshellTransitions(AbstractTransitionCollection):
         _, continuum_waves = self._calculate_continuum()
         energy_loss = self.energy_loss
 
+        bound_wave = interp1d(*bound_wave, kind='cubic', fill_value='extrapolate', bounds_error=False)
+
         for bound_state, continuum_state in self.get_transition_quantum_numbers():
             continuum_wave = continuum_waves[continuum_state[0]]
+
+            continuum_wave = interp1d(*continuum_wave, kind='cubic', fill_value='extrapolate', bounds_error=False)
 
             transition = ProjectedAtomicTransition(Z=self.Z,
                                                    bound_wave=bound_wave,
@@ -204,6 +228,90 @@ class SubshellTransitions(AbstractTransitionCollection):
         pbar.refresh()
         pbar.close()
         return transitions
+
+
+class SubshellTransitionsArrays:
+
+    def __init__(self, Z, bound_wave, continuum_waves, bound_state, continuum_states, energy_loss):
+        self._Z = Z
+        self._bound_wave = bound_wave
+        self._continuum_waves = continuum_waves
+        self._bound_state = bound_state
+        self._continuum_states = continuum_states
+        self._energy_loss = energy_loss
+
+    @property
+    def Z(self):
+        return self._Z
+
+    def get_transition_quantum_numbers(self):
+
+        for continuum_state in self._continuum_states:
+            yield self._bound_state, continuum_state
+
+    def get_transition_potentials(self,
+                                  extent: Union[float, Sequence[float]] = None,
+                                  gpts: Union[float, Sequence[float]] = None,
+                                  sampling: Union[float, Sequence[float]] = None,
+                                  energy: float = None,
+                                  pbar=True):
+        transitions = []
+
+        bound_wave = self._bound_wave
+        continuum_waves = self._continuum_waves
+        energy_loss = self._energy_loss
+
+        bound_state = self._bound_state
+        bound_wave = interp1d(*bound_wave, kind='cubic', fill_value='extrapolate', bounds_error=False)
+
+        for continuum_state in self._continuum_states:
+            continuum_wave = continuum_waves[continuum_state[0]]
+
+            continuum_wave = interp1d(*continuum_wave, kind='cubic', fill_value='extrapolate', bounds_error=False)
+
+            transition = ProjectedAtomicTransition(Z=self._Z,
+                                                   bound_wave=bound_wave,
+                                                   continuum_wave=continuum_wave,
+                                                   bound_state=bound_state,
+                                                   continuum_state=continuum_state,
+                                                   energy_loss=energy_loss,
+                                                   extent=extent,
+                                                   gpts=gpts,
+                                                   sampling=sampling,
+                                                   energy=energy
+                                                   )
+            transitions += [transition]
+
+        return transitions
+
+    def write(self, f):
+        d = {'Z': self._Z, 'bound_wave': self._bound_wave, 'continuum_waves': self._continuum_waves,
+             'bound_state': self._bound_state, 'continuum_states': self._continuum_states,
+             'energy_loss': self._energy_loss}
+
+        np.savez(f, **d)
+
+    @classmethod
+    def read(cls, f):
+
+        data = np.load(f, allow_pickle=True)
+        Z = data['Z']
+        bound_wave = data['bound_wave']
+        continuum_waves = data['continuum_waves'][()]
+        bound_state = tuple(data['bound_state'])
+        continuum_states = [tuple(state) for state in data['continuum_states']]
+        energy_loss = data['energy_loss']
+
+        #print(bound_state)
+        #print(continuum_states)
+        #print(Z)
+        #print(bound_wave)
+        #print(continuum_waves)
+        #print(energy_loss)
+
+
+        return cls(Z=Z, bound_wave=bound_wave, continuum_waves=continuum_waves, bound_state=bound_state,
+                   continuum_states=continuum_states, energy_loss=energy_loss)
 
 
 class AbstractProjectedAtomicTransition(HasAcceleratorMixin, HasGridMixin):
@@ -371,7 +479,7 @@ class TransitionPotential(HasAcceleratorMixin, HasGridMixin):
                  energy: float = None,
                  min_contrast=.95):
 
-        if isinstance(transitions, SubshellTransitions):
+        if isinstance(transitions, (SubshellTransitions, SubshellTransitionsArrays)):
             transitions = [transitions]
 
         self._slice_thickness = slice_thickness
