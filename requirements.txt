@@ -1,4 +1,5 @@
 numpy
+pyfftw
 numba
 pytest
 scipy

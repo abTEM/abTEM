@@ -1,11 +1,13 @@
 import itertools
 from copy import copy
+from numbers import Number
 from typing import Union, Sequence, Tuple, Dict, List
 
 import dask
 import dask.array as da
 import numpy as np
 from ase import Atoms
+from dask import graph_manipulation
 
 from abtem.core.antialias import AntialiasAperture
 from abtem.core.axes import frozen_phonons_axes_metadata
@@ -18,18 +20,9 @@ from abtem.core.utils import generate_chunks
 from abtem.measure.detect import AbstractDetector
 from abtem.potentials.potentials import AbstractPotential
 from abtem.waves.base import BeamTilt, AbstractScannedWaves
-from abtem.waves.multislice import multislice
 from abtem.waves.scan import AbstractScan, GridScan
 from abtem.waves.transfer import CTF
-
-from dask import graph_manipulation
-
 from abtem.waves.waves import Waves, Probe
-
-if cp is not None:
-    from abtem.core.cuda import batch_crop_2d as batch_crop_2d_cuda
-else:
-    batch_crop_2d_cuda = None
 
 
 def wrapped_slices(start, stop, n):
@@ -92,11 +85,47 @@ def wrapped_crop_2d(array, corner, size):
     return xp.concatenate([AB, CD], axis=-1)
 
 
+def view_as_windows(array, window_shape, step=1):
+    xp = get_array_module(array)
+    ndim = array.ndim
+
+    if isinstance(window_shape, Number):
+        window_shape = (window_shape,) * ndim
+
+    if not (len(window_shape) == ndim):
+        raise ValueError('`window_shape` is incompatible with `arr_in.shape`')
+
+    if isinstance(step, Number):
+        if step < 1:
+            raise ValueError('`step` must be >= 1')
+        step = (step,) * ndim
+    if len(step) != ndim:
+        raise ValueError("`step` is incompatible with `arr_in.shape`")
+
+    if ((xp.array(array.shape) - xp.array(window_shape)) < 0).any():
+        raise ValueError('`window_shape` is too large')
+
+    if ((xp.array(window_shape) - 1) < 0).any():
+        raise ValueError('`window_shape` is too small')
+
+    win_indices_shape = (((xp.array(array.shape) - xp.array(window_shape)) // xp.array(step)) + 1)
+    new_shape = tuple(win_indices_shape.tolist()) + window_shape
+
+    slices = tuple(slice(None, None, st) for st in step)
+    strides = tuple(array[slices].strides + array.strides)
+    array = xp.lib.stride_tricks.as_strided(array, shape=new_shape, strides=strides)
+    return array
+
+
 def batch_crop_2d(array, corners, new_shape):
     xp = get_array_module(array)
-
     if xp is cp:
-        return batch_crop_2d_cuda(array, corners, new_shape)
+        i = xp.arange(array.shape[0])[:, None, None]
+        ix = cp.arange(new_shape[0]) + cp.asarray(corners[:, 0, None])
+        iy = cp.arange(new_shape[1]) + cp.asarray(corners[:, 1, None])
+        ix = ix[:, :, None]
+        iy = iy[:, None]
+        return array[i, ix, iy]
     else:
         array = np.lib.stride_tricks.sliding_window_view(array, (1,) + new_shape)
         return array[xp.arange(array.shape[0]), corners[:, 0], corners[:, 1], 0]
@@ -450,7 +479,6 @@ class SMatrixArray(HasDaskArray, AbstractScannedWaves):
         measurements = list(map(da.stack, map(list, zip(*measurements))))
 
         for i, (detector, measurement) in enumerate(zip(detectors, measurements)):
-            from dask.graph_manipulation import wait_on
             if detector.ensemble_mean:
                 # measurement = wait_on(measurement)
 
