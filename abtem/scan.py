@@ -203,7 +203,7 @@ class LineScan(AbstractScan, HasGridMixin):
         if isinstance(end, Atom):
             end = (end.x, end.y)
 
-        #if (end is not None) & (angle is not None):
+        # if (end is not None) & (angle is not None):
         #    raise ValueError('only one of "end" and "angle" may be specified')
 
         if (gpts is None) & (sampling is None):
@@ -308,7 +308,7 @@ class LineScan(AbstractScan, HasGridMixin):
         y = np.linspace(start[1], end[1], self.gpts[0], endpoint=self.grid.endpoint[0])
         return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
-    def add_to_mpl_plot(self, ax, linestyle: str = '-', color: str = 'r', **kwargs):
+    def add_to_mpl_plot(self, ax, color: str = 'r', width: float = 0.2, **kwargs):
         """
         Add a visualization of a scan line to a matplotlib plot.
 
@@ -325,7 +325,32 @@ class LineScan(AbstractScan, HasGridMixin):
         """
         start = self.margin_start
         end = self.margin_end
-        ax.plot([start[0], end[0]], [start[1], end[1]], linestyle=linestyle, color=color, **kwargs)
+
+        from matplotlib.lines import Line2D
+
+        class LineDataUnits(Line2D):
+            def __init__(self, *args, **kwargs):
+                _lw_data = kwargs.pop("linewidth", 1)
+                super().__init__(*args, **kwargs)
+                self._lw_data = _lw_data
+
+            def _get_lw(self):
+                if self.axes is not None:
+                    ppd = 72. / self.axes.figure.dpi
+                    trans = self.axes.transData.transform
+                    return ((trans((1, self._lw_data)) - trans((0, 0))) * ppd)[1]
+                else:
+                    return 1
+
+            def _set_lw(self, lw):
+                self._lw_data = lw
+
+            _linewidth = property(_get_lw, _set_lw)
+
+        line = LineDataUnits([start[0], end[0]], [start[1], end[1]], linewidth=width, color=color, **kwargs)
+        ax.add_line(line)
+
+        # ax.plot([start[0], end[0]], [start[1], end[1]], linestyle=linestyle, color=color, **kwargs)
 
     def __copy__(self):
         return self.__class__(start=self.start, end=self.end, gpts=self.gpts, endpoint=self.grid.endpoint[0])

@@ -1031,9 +1031,10 @@ class LineProfile(AbstractMeasurement):
         return [Calibration(offset=0, sampling=self.sampling, units=self._calibration_units,
                             name=self._calibration_name, endpoint=self._endpoint)]
 
-    def add_to_mpl_plot(self, ax, **kwargs):
+    def add_to_mpl_plot(self, ax, width: float = 0.2, **kwargs):
         from abtem.scan import LineScan
-        return LineScan(start=self.start, end=self.end, sampling=self.sampling).add_to_mpl_plot(ax, **kwargs)
+        scan = LineScan(start=self.start, end=self.end, sampling=self.sampling)
+        return scan.add_to_mpl_plot(ax, width=width, **kwargs)
 
     def show(self, ax=None, adjust_range: bool = False, **kwargs):
 
