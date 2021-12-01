@@ -62,7 +62,7 @@ class Calibration:
         return np.linspace(*self.extent(n), n, endpoint=False)
 
     def __copy__(self):
-        return self.__class__(self.offset, self.sampling, self.units, self.name)
+        return self.__class__(self.offset, self.sampling, self.units, self.name, endpoint=self.endpoint)
 
     def copy(self):
         """
