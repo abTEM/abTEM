@@ -16,7 +16,7 @@ from abtem.device import get_device_function, get_array_module, get_array_module
 from abtem.measure import calibrations_from_grid, Measurement
 from abtem.parametrizations import kirkland, dvdr_kirkland, load_kirkland_parameters, kirkland_projected_fourier
 from abtem.parametrizations import lobato, dvdr_lobato, load_lobato_parameters
-from abtem.structures import is_cell_orthogonal, SlicedAtoms, pad_atoms
+from abtem.structures import is_cell_orthogonal, SlicedAtoms, pad_atoms, rotate_atoms_to_plane
 from abtem.tanh_sinh import integrate, tanh_sinh_nodes_and_weights
 from abtem.temperature import AbstractFrozenPhonons, DummyFrozenPhonons
 from abtem.utils import energy2sigma, ProgressBar, generate_batches, _disc_meshgrid
@@ -607,6 +607,7 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
                  device: str = 'cpu',
                  precalculate: bool = True,
                  z_periodic: bool = True,
+                 plane: str = 'xy',
                  storage: str = None):
 
         self._cutoff_tolerance = cutoff_tolerance
@@ -649,6 +650,8 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
             raise RuntimeError('Atoms are not orthogonal')
 
         self._atoms = atoms
+        self._plane = plane
+
         self._grid = Grid(extent=np.diag(atoms.cell)[:2], gpts=gpts, sampling=sampling, lock_extent=True)
 
         self._cutoffs = {}
@@ -837,6 +840,8 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
         fft2_convolve = get_device_function(xp, 'fft2_convolve')
 
         atoms = self.atoms.copy()
+        atoms = rotate_atoms_to_plane(atoms, self._plane)
+
         atoms.pbc = True
         atoms.wrap()
 
@@ -900,11 +905,11 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
         array = None
         unique = np.unique(self.atoms.numbers)
 
+        atoms = rotate_atoms_to_plane(self.atoms, self._plane)
+
         if (self._z_periodic) & (len(self.atoms) > 0):
             max_cutoff = max(self.get_integrator(number).cutoff for number in unique)
-            atoms = pad_atoms(self.atoms, margin=max_cutoff, directions='z', in_place=False)
-        else:
-            atoms = self.atoms
+            atoms = pad_atoms(atoms, margin=max_cutoff, directions='z', in_place=False)
 
         sliced_atoms = SlicedAtoms(atoms, self.slice_thickness)
 
@@ -1237,7 +1242,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         return self.__class__(array=self.array.copy(),
                               slice_thicknesses=self._slice_thicknesses.copy(),
                               extent=self.extent)
-    
+
     def to_hyperspy(self):
         """
         Changes the PotentialArray object to a `hyperspy.Signal2D` Object.
@@ -1245,29 +1250,29 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         from hyperspy._signals.signal2d import Signal2D
         signal_shape = self.array.shape
         axes = []
-        
+
         # as the first dimension is always the thickness that is added first
         axes.append({"offset": 0,
-                    "scale": self.thickness / self.num_slices,
-                    "units": "Å",
-                    "name": "z",
-                    "size": self.num_slices})
+                     "scale": self.thickness / self.num_slices,
+                     "units": "Å",
+                     "name": "z",
+                     "size": self.num_slices})
 
         # loop for x and y axes
         for i, size in zip(self.project().calibrations, signal_shape[1:]):
             if i is None:
                 axes.append({"offset": 0,
-                            "scale": 1,
-                            "units": "",
-                            "name": "",
-                            "size": size})
+                             "scale": 1,
+                             "units": "",
+                             "name": "",
+                             "size": size})
             else:
                 axes.append({"offset": i.offset,
-                            "scale": i.sampling,
-                            "units": i.units,
-                            "name": i.name,
-                            "size": size})
-                
+                             "scale": i.sampling,
+                             "units": i.units,
+                             "name": i.name,
+                             "size": size})
+
         sig = Signal2D(self.array, axes=axes)
 
         return sig
