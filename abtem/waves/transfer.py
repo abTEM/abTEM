@@ -321,15 +321,7 @@ class CTF(HasAcceleratorMixin):
 
     def evaluate_on_grid(self, gpts=None, extent=None, sampling=None, xp=np):
         grid = Grid(gpts=gpts, extent=extent, sampling=sampling)
-        alpha, phi = polar_spatial_frequencies(grid.gpts, grid.sampling, delayed=False, xp=xp)
-
-        # kx, ky = spatial_frequencies(gpts, sampling)
-        # kx = kx.reshape((1, -1, 1))
-        # ky = ky.reshape((1, 1, -1))
-        # kx = xp.asarray(kx)
-        # ky = xp.asarray(ky)
-        # alpha, phi = polar_coordinates(xp.asarray(kx * self.wavelength), xp.asarray(ky * self.wavelength))
-
+        alpha, phi = polar_spatial_frequencies(grid.gpts, grid.sampling, xp=xp)
         return self.evaluate(alpha * self.wavelength, phi)
 
     def profiles(self, max_semiangle: float = None, phi: float = 0.):

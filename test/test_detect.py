@@ -1,7 +1,6 @@
 import numpy as np
 from ase.build import bulk
 
-from abtem.basic.dask import compute
 from abtem.measure.detect import AnnularDetector, FlexibleAnnularDetector, PixelatedDetector
 from abtem.potentials import Potential
 from abtem.waves.scan import GridScan
@@ -29,7 +28,6 @@ def test_detector_consistency():
 
     assert np.allclose(measurements[1].integrate_radial(50, 90).array, measurements[2].array)
     assert np.allclose(measurements[0].integrate_radial(50, 90).array, measurements[2].array)
-
 
 # def test_pixelated_detector():
 #     gpts = (512, 512)

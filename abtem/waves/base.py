@@ -1,6 +1,6 @@
 """Module to describe electron waves and their propagation."""
 from copy import copy
-from typing import Union, Sequence, Tuple
+from typing import Union, Sequence, Tuple, List, Dict
 
 import dask
 import dask.array as da
@@ -11,82 +11,53 @@ from abtem.core.antialias import HasAntialiasApertureMixin
 from abtem.core.dask import _validate_lazy
 from abtem.core.energy import HasAcceleratorMixin
 from abtem.core.grid import HasGridMixin
-from abtem.potentials import Potential
+from abtem.potentials.potentials import Potential, AbstractPotential
 from abtem.waves.scan import AbstractScan
-
-
-class BeamTilt:
-
-    def __init__(self, tilt: Tuple[float, float] = (0., 0.)):
-        self._tilt = tilt
-
-    @property
-    def tilt(self) -> Tuple[float, float]:
-        """Beam tilt [mrad]."""
-        return self._tilt
-
-    @tilt.setter
-    def tilt(self, value: Tuple[float, float]):
-        self._tilt = value
-
-
-class HasBeamTiltMixin:
-    _beam_tilt: BeamTilt
-
-    @property
-    def tilt(self) -> Tuple[float, float]:
-        return self._beam_tilt.tilt
-
-    @tilt.setter
-    def tilt(self, value: Tuple[float, float]):
-        self.tilt = value
+from abtem.waves.multislice import FresnelPropagator
+from abtem.waves.tilt import HasBeamTiltMixin
+from abtem.measure.detect import AbstractDetector, WavesDetector
 
 
 class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAntialiasApertureMixin):
 
-    # @abstractmethod
-    # def multislice(self, *args, **kwargs):
-    #    pass
-
-    # @abstractmethod
-    # def __copy__(self):
-    #    pass
-
-    def copy(self):
-        """Make a copy."""
-        return copy(self)
+    @property
+    def num_base_axes(self) -> int:
+        return 2
 
     @property
-    def antialias_valid_gpts(self):
-        return self._valid_rectangle(self.gpts, self.sampling)
-
-    @property
-    def antialias_cutoff_gpts(self):
-        return self._cutoff_rectangle(self.gpts, self.sampling)
-
-    @property
-    def _base_axes_metadata(self):
+    def _base_axes_metadata(self) -> List[Dict]:
         self.grid.check_is_defined()
         return [{'label': 'x', 'type': 'real_space', 'sampling': self.sampling[0]},
                 {'label': 'y', 'type': 'real_space', 'sampling': self.sampling[1]}]
 
+
+
     @property
-    def _fourier_space_axes_metadata(self):
+    def antialias_valid_gpts(self) -> Tuple[int, int]:
+        return self._valid_rectangle(self.gpts, self.sampling)
+
+    @property
+    def antialias_cutoff_gpts(self) -> Tuple[int, int]:
+        return self._cutoff_rectangle(self.gpts, self.sampling)
+
+    @property
+    def _fourier_space_axes_metadata(self) -> List[Dict]:
         return [{'label': 'alpha_x', 'type': 'fourier_space', 'sampling': self.angular_sampling[0]},
                 {'label': 'alpha_y', 'type': 'fourier_space', 'sampling': self.angular_sampling[1]}]
 
-    def _gpts_within_angle(self, angle):
+    def _gpts_within_angle(self, angle: Union[None, float, str]) -> Tuple[int, int]:
 
         if angle is None:
             return self.gpts
 
-        if not isinstance(angle, str):
-            return tuple(int(2 * np.ceil(angle / d)) + 1 for n, d in zip(self.gpts, self.angular_sampling))
+        elif not isinstance(angle, str):
+            return (int(2 * np.ceil(angle / self.angular_sampling[0])) + 1,
+                    int(2 * np.ceil(angle / self.angular_sampling[1])) + 1)
 
-        if angle == 'cutoff':
+        elif angle == 'cutoff':
             return self.antialias_cutoff_gpts
 
-        if angle == 'valid':
+        elif angle == 'valid':
             return self.antialias_valid_gpts
 
         raise ValueError()
@@ -102,12 +73,12 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAnt
                 self.antialias_valid_gpts[1] // 2 * self.angular_sampling[1])
 
     @property
-    def angular_sampling(self):
+    def angular_sampling(self) -> Tuple[float, float]:
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
-        return tuple(1 / l * self.wavelength * 1e3 for l in self.extent)
+        return 1 / self.extent[0] * self.wavelength * 1e3, 1 / self.extent[1] * self.wavelength * 1e3
 
-    def _validate_potential(self, potential):
+    def _validate_potential(self, potential: Union[Atoms, AbstractPotential]) -> AbstractPotential:
         if isinstance(potential, Atoms):
             potential = Potential(potential)
 
@@ -117,52 +88,28 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAnt
 
 class AbstractScannedWaves(WavesLikeMixin):
 
-    def _compute_chunks(self, dims):
+    def _compute_chunks(self, dims: int) -> Tuple[int, ...]:
         chunk_size = dask.utils.parse_bytes(dask.config.get('array.chunk-size'))
         chunks = int(np.floor(chunk_size / (2 * 4 * np.prod(self.gpts))))
         chunks = int(np.floor(chunks ** (1 / dims)))
         return (chunks,) * dims + (2,)
 
-    def _validate_detectors(self, detectors):
+    def _validate_detectors(self, detectors) -> List[AbstractDetector]:
         if hasattr(detectors, 'detect'):
             detectors = [detectors]
+
+        if detectors is None:
+            detectors = [WavesDetector()]
+
         return detectors
 
-    def _bytes_per_wave(self):
+    def _bytes_per_wave(self) -> int:
         return 2 * 4 * np.prod(self.gpts)
 
-    def _validate_chunks(self, chunks):
+    def _validate_chunks(self, chunks: int) -> int:
         if chunks == 'auto':
             chunk_size = dask.utils.parse_bytes(dask.config.get('array.chunk-size'))
             return int(chunk_size / self._bytes_per_wave())
 
         return chunks
 
-    def _validate_positions(self,
-                            positions: Union[Sequence, AbstractScan] = None,
-                            lazy: bool = True,
-                            chunks: Union[int, str] = 'auto'):
-
-        lazy = _validate_lazy(lazy)
-
-        chunks = self._validate_chunks(chunks)
-
-        if hasattr(positions, 'get_positions'):
-            return positions.get_positions(lazy=lazy, chunks=chunks), positions.axes_metadata
-
-        if positions is None:
-            positions = (self.extent[0] / 2, self.extent[1] / 2)
-
-        if not isinstance(positions, da.core.Array):
-            positions = np.array(positions, dtype=np.float32)
-
-        if isinstance(positions, np.ndarray) and lazy:
-            positions = da.from_array(positions)
-
-        if len(positions.shape) == 1:
-            positions = positions[None]
-
-        if positions.shape[-1] != 2:
-            raise ValueError()
-
-        return positions, [{'type': 'positions'}] * (len(positions.shape) - 1)

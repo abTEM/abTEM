@@ -53,6 +53,11 @@ class AbstractScan(metaclass=ABCMeta):
         return copy(self)
 
 
+# class CustomScan:
+#
+#     def __init__(self):
+
+
 class LineScan(AbstractScan, HasGridMixin):
     """
     Line scan object.
@@ -268,8 +273,8 @@ class GridScan(HasGridMixin, AbstractScan):
             except:
                 raise ValueError('Scan start/end has incorrect shape')
 
-            if (gpts is None) & (sampling is None):
-                raise RuntimeError('Grid gpts or sampling must be set')
+            #if (gpts is None) & (sampling is None):
+            #    raise RuntimeError('Grid gpts or sampling must be set')
 
             extent = end - start
 
@@ -331,7 +336,12 @@ class GridScan(HasGridMixin, AbstractScan):
             return np.stack((x, y), axis=-1)
 
         if chunks is None:
-            return gridscan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
+            if lazy:
+                positions = dask.delayed(gridscan_positions)(self.start, self.end, self.gpts, self.grid.endpoint)
+                positions = da.from_delayed(positions, shape=self.gpts +(2,), dtype=np.float32)
+                return positions
+            else:
+                return gridscan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
 
         if isinstance(chunks, Number):
             chunks = (int(np.floor(np.sqrt(chunks))),) * 2

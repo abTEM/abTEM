@@ -10,8 +10,8 @@ import zarr
 from ase import Atoms
 
 from abtem.core.antialias import AntialiasAperture
-from abtem.core.axes import HasAxesMetadata
-from abtem.core.backend import get_array_module, copy_to_device, _validate_device
+from abtem.core.axes import HasAxesMetadata, frozen_phonons_axes_metadata
+from abtem.core.backend import get_array_module, _validate_device
 from abtem.core.complex import abs2
 from abtem.core.dask import computable, HasDaskArray, BuildsDaskArray, ComputableList, _validate_lazy
 from abtem.core.energy import Accelerator
@@ -20,9 +20,10 @@ from abtem.core.grid import Grid
 from abtem.measure.detect import AbstractDetector
 from abtem.measure.measure import DiffractionPatterns, Images, AbstractMeasurement
 from abtem.potentials.potentials import Potential, AbstractPotential
-from abtem.waves.base import WavesLikeMixin, AbstractScannedWaves, BeamTilt
+from abtem.waves.base import WavesLikeMixin, AbstractScannedWaves
 from abtem.waves.multislice import multislice
 from abtem.waves.scan import AbstractScan
+from abtem.waves.tilt import BeamTilt
 from abtem.waves.transfer import CTF
 
 
@@ -42,18 +43,19 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         Electron energy [eV].
     tilt : two float
         Small angle beam tilt [mrad].
-    antialiasing_aperture : float
+    antialias_aperture : float
         Assumed antialiasing aperture as a fraction of the real space Nyquist frequency. Default is 2/3.
     """
 
     def __init__(self,
                  array: np.ndarray,
                  energy: float = None,
-                 extent: Union[float, Sequence[float]] = None,
-                 sampling: Union[float, Sequence[float]] = None,
+                 extent: Union[float, Tuple[float, float]] = None,
+                 sampling: Union[float, Tuple[float, float]] = None,
                  tilt: Tuple[float, float] = (0., 0.),
                  antialias_aperture: float = 2 / 3.,
-                 axes_metadata: list = None):
+                 extra_axes_metadata: List[Dict] = None,
+                 metadata: Dict = None):
 
         if len(array.shape) < 2:
             raise RuntimeError('Wave function array should be have 2 dimensions or more')
@@ -63,26 +65,36 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         self._beam_tilt = BeamTilt(tilt=tilt)
         self._antialias_aperture = AntialiasAperture(cutoff=antialias_aperture)
 
-        if axes_metadata is None:
-            axes_metadata = []
-
-        self._axes_metadata = axes_metadata
-
         super().__init__(array=array)
+
+        self._extra_axes_metadata = self._validate_extra_axes_metadata(extra_axes_metadata)
+
+        if metadata is None:
+            metadata = {}
+
+        self._metadata = metadata
 
     def lazy(self):
         self._array = da.from_array(self.array)
 
-    def squeeze(self):
+    def squeeze(self) -> 'Waves':
         shape = self.shape[:-2]
         squeezed = tuple(np.where([n == 1 for n in shape])[0])
-        self._axes_metadata = self._remove_axes_metadata(squeezed)
+        self._extra_axes_metadata = self._remove_axes_metadata(squeezed)
         self._array = np.squeeze(self.array, axis=squeezed)
         return self
 
     @property
-    def axes_metadata(self) -> List[Dict]:
-        return self._axes_metadata + self._base_axes_metadata
+    def metadata(self) -> Dict:
+        return self._metadata
+
+    @property
+    def num_axes(self) -> int:
+        return len(self.array.shape)
+
+    @property
+    def extra_axes_metadata(self) -> List[Dict]:
+        return self._extra_axes_metadata
 
     def __len__(self) -> int:
         return len(self.array)
@@ -101,7 +113,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         Measurement
             The wave function intensity.
         """
-        return Images(abs2(self.array), sampling=self.sampling, axes_metadata=self._axes_metadata)
+        return Images(abs2(self.array), sampling=self.sampling, axes_metadata=self.extra_axes_metadata)
 
     def downsample(self, max_angle: str = 'valid') -> 'Waves':
         xp = get_array_module(self.array)
@@ -117,7 +129,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         antialias_aperture = self.antialias_aperture * min(self.gpts[0] / gpts[0], self.gpts[1] / gpts[1])
 
         return Waves(array, extent=self.extent, energy=self.energy, antialias_aperture=antialias_aperture,
-                     axes_metadata=self._axes_metadata)
+                     extra_axes_metadata=self.extra_axes_metadata)
 
     def detect(self, detectors: Union[AbstractDetector, List[AbstractDetector]]) \
             -> Union[AbstractMeasurement, List[AbstractMeasurement]]:
@@ -170,10 +182,8 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         else:
             pattern = _diffraction_pattern(self.array, new_gpts=new_gpts, fftshift=fftshift)
 
-        axes_metadata = self.axes_metadata[:-2]
-
         diffraction_patterns = DiffractionPatterns(pattern, angular_sampling=self.angular_sampling, fftshift=fftshift,
-                                                   axes_metadata=axes_metadata)
+                                                   axes_metadata=self.extra_axes_metadata)
 
         if block_direct:
             diffraction_patterns = diffraction_patterns.block_direct(radius=block_direct)
@@ -218,10 +228,10 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         return self.__class__(fft2_convolve(self.array, kernel, overwrite_x=in_place),
                               extent=self.extent,
                               energy=self.energy,
-                              axes_metadata=self._axes_metadata,
+                              extra_axes_metadata=self.extra_axes_metadata,
                               tilt=self.tilt)
 
-    def multislice(self, potential: AbstractPotential, lazy: bool = False) -> 'Waves':
+    def multislice(self, potential: AbstractPotential) -> 'Waves':
         """
         Propagate and transmit wave function through the provided potential.
 
@@ -229,17 +239,12 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         ----------
         potential : Potential
             The potential through which to propagate the wave function.
-        pbar : bool
-            If true, display a progress bar.
 
         Returns
         -------
         Waves object
             Wave function at the exit plane of the potential.
         """
-
-        if hasattr(potential, 'get_chunk'):
-            return multislice(self, potential)
 
         self.grid.match(potential)
         self.grid.check_is_defined()
@@ -248,19 +253,25 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         potential = self._validate_potential(potential)
 
         exit_waves = []
-        for p in potential.get_projected_potentials(lazy=self.is_lazy):
+        for p in potential.get_potential_configurations(lazy=self.is_lazy):
             exit_waves.append(multislice(self.copy(), p))
 
-        array = da.stack([exit_wave.array for exit_wave in exit_waves], axis=0)
-        axes_metadata = [{'label': 'frozen_phonons', 'type': 'ensemble'}] + self._axes_metadata
+        if len(exit_waves) > 1:
+            if self.is_lazy:
+                array = da.stack([exit_wave.array for exit_wave in exit_waves], axis=0)
+            else:
+                array = np.stack([exit_wave.array for exit_wave in exit_waves], axis=0)
 
-        waves = self.__class__(array=array, extent=self.extent, energy=self.energy, tilt=self.tilt,
-                               antialias_aperture=2 / 3., axes_metadata=axes_metadata)
+            extra_axes_metadata = [frozen_phonons_axes_metadata] + self.extra_axes_metadata
 
-        if not lazy:
-            waves.compute()
+            exit_waves = self.__class__(array=array,
+                                        extent=self.extent, energy=self.energy, tilt=self.tilt,
+                                        antialias_aperture=2 / 3., extra_axes_metadata=extra_axes_metadata,
+                                        metadata=self._metadata)
+        else:
+            exit_waves = exit_waves[0]
 
-        return waves
+        return exit_waves
 
     def to_zarr(self, url: str, overwrite: bool = False):
         """
@@ -281,7 +292,8 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
             root.attrs['extent'] = self.extent
             root.attrs['tilt'] = self.tilt
             root.attrs['antialias_aperture'] = self.antialias_aperture
-            root.attrs['axes_metadata'] = self._axes_metadata
+            root.attrs['extra_axes_metadata'] = self.extra_axes_metadata
+            root.attrs['metadata'] = self.metadata
 
     @classmethod
     def from_zarr(cls, url: str, chunks: int = None) -> 'Waves':
@@ -297,7 +309,8 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
             extent = f.attrs['extent']
             tilt = f.attrs['tilt']
             antialias_aperture = f.attrs['antialias_aperture']
-            axes_metadata = f.attrs['axes_metadata']
+            extra_axes_metadata = f.attrs['extra_axes_metadata']
+            metadata = f.attrs['metadata']
             shape = f['array'].shape
 
         if chunks is None:
@@ -305,7 +318,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
 
         array = da.from_zarr(url, component='array', chunks=chunks + (-1, -1))
         return cls(array=array, energy=energy, extent=extent, tilt=tilt, antialias_aperture=antialias_aperture,
-                   axes_metadata=axes_metadata)
+                   extra_axes_metadata=extra_axes_metadata)
 
     def __getitem__(self, item) -> 'Waves':
         if len(self.array.shape) <= self.grid.dimensions:
@@ -321,16 +334,18 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         """
         return self.intensity().show(ax=ax, **kwargs)
 
-    def __copy__(self) -> 'Waves':
-        new_copy = self.__class__(array=self._array.copy(), tilt=self.tilt, energy=self.energy,
-                                  antialias_aperture=self.antialias_aperture, axes_metadata=copy(self._axes_metadata))
-        new_copy._grid = copy(self.grid)
-        new_copy._accelerator = copy(self.accelerator)
-        return new_copy
+    def copy(self, copy_array: bool = True) -> 'Waves':
+        array = self.array
+        if copy_array:
+            array = array.copy()
+        new_copy = self.__class__(array=array,
+                                  tilt=self.tilt,
+                                  energy=self.energy,
+                                  extent=self.extent,
+                                  antialias_aperture=self.antialias_aperture,
+                                  extra_axes_metadata=copy(self._extra_axes_metadata))
 
-    def copy(self) -> 'Waves':
-        """Make a copy."""
-        return copy(self)
+        return new_copy
 
 
 class PlaneWave(WavesLikeMixin):
@@ -390,7 +405,7 @@ class PlaneWave(WavesLikeMixin):
 
         potential.grid.match(self)
 
-        waves = self.build(lazy=True).multislice(potential, lazy=lazy)
+        waves = self.build(lazy=True).multislice(potential)
 
         if not _validate_lazy(lazy):
             waves.compute()
@@ -477,6 +492,34 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         """Probe contrast transfer function."""
         return self._ctf
 
+    def _validate_positions(self,
+                            positions: Union[Sequence, AbstractScan] = None,
+                            lazy: bool = True,
+                            chunks: Union[int, str] = 'auto'):
+
+        lazy = _validate_lazy(lazy)
+
+        chunks = self._validate_chunks(chunks)
+
+        if hasattr(positions, 'get_positions'):
+            return positions.get_positions(lazy=lazy, chunks=chunks), positions.axes_metadata
+
+        if positions is None:
+            positions = (self.extent[0] / 2, self.extent[1] / 2)
+
+        if not isinstance(positions, da.core.Array):
+            positions = np.array(positions, dtype=np.float32)
+
+        if isinstance(positions, np.ndarray) and lazy:
+            positions = da.from_array(positions)
+
+        if len(positions.shape) == 1:
+            positions = positions[None]
+
+        if positions.shape[-1] != 2:
+            raise ValueError()
+
+        return positions, [{'type': 'positions'}] * (len(positions.shape) - 1)
 
     def build(self,
               positions: Union[AbstractScan, Sequence] = None,
@@ -500,7 +543,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
-        positions, axes_metadata = self._validate_positions(positions, lazy=lazy, chunks=chunks)
+        positions, extra_axes_metadata = self._validate_positions(positions, lazy=lazy, chunks=chunks)
 
         xp = get_array_module(self._device)
 
@@ -509,7 +552,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
             positions = positions / xp.array(self.sampling).astype(np.float32)
             array = fft_shift_kernel(positions, shape=self.gpts)
             array *= self._ctf.evaluate_on_grid(gpts=self.gpts, sampling=self.sampling, xp=xp)
-            array /= xp.sqrt(abs2(array).sum())
+            array /= xp.sqrt(abs2(array).sum((-2, -1), keepdims=True))
             return array
 
         def calculate_probes(positions, xp):
@@ -528,7 +571,8 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         else:
             array = calculate_probes(positions, xp)
 
-        return Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt, axes_metadata=axes_metadata)
+        return Waves(array, extent=self.extent,
+                     energy=self.energy, tilt=self.tilt, extra_axes_metadata=extra_axes_metadata)
 
     def multislice(self,
                    potential: Union[AbstractPotential],
@@ -562,7 +606,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         if hasattr(positions, 'match'):
             positions.match(self)
 
-        positions, axes_metadata = self._validate_positions(positions, lazy=True, chunks=chunks)
+        positions, extra_axes_metadata = self._validate_positions(positions, lazy=True, chunks=chunks)
 
         xp = get_array_module(self._device)
 
@@ -596,11 +640,12 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
                 exit_waves_arrays.append(multislice_iteration(projected_potential))
 
             array = da.stack([array for array in exit_waves_arrays], axis=0)
-            axes_metadata = [{'label': 'frozen_phonons', 'type': 'ensemble'}] + axes_metadata
+            extra_axes_metadata = [frozen_phonons_axes_metadata] + extra_axes_metadata
         else:
             raise RuntimeError()
 
-        waves = Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt, axes_metadata=axes_metadata)
+        waves = Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt,
+                      extra_axes_metadata=extra_axes_metadata)
 
         if not _validate_lazy(lazy):
             waves.compute()
@@ -619,7 +664,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
 
         Parameters
         ----------
-        scan : Scan object
+        positions : Scan object or nx2 np.ndarray or
             Scan object defining the positions of the probe wave functions.
         detectors : Detector or list of detectors
             The detectors recording the measurements.
@@ -634,7 +679,6 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
         -------
 
         """
-
         self.grid.match(potential.grid)
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
@@ -672,7 +716,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
 
             if isinstance(validated_positions, da.core.Array):
                 signature, output_sizes = gufunc_signature_and_output_size(detectors, self)
-                dtypes = tuple([detector.detected_dtype for detector in detectors])
+                dtypes = list([detector.detected_dtype for detector in detectors])
 
                 return da.apply_gufunc(build_probes_multislice_detect,
                                        signature,
@@ -686,29 +730,25 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
             else:
                 return build_probes_multislice_detect(validated_positions, slice_iterator, detectors)
 
-        if hasattr(potential, 'get_projected_potentials'):
-            measurement_arrays = []
+        measurement_arrays = []
+        for p in potential.get_potential_configurations(lazy=True):
+            measurement_arrays.append(multislice_iteration(p))
 
-            for p in potential.get_projected_potentials(lazy=True):
-                measurement_arrays.append(multislice_iteration(p))
-
-            if isinstance(measurement_arrays[0], tuple):
-                measurement_arrays = list(map(da.stack, map(list, zip(*measurement_arrays))))
-            else:
-                measurement_arrays = [da.stack(measurement_arrays)]
-
-            measurements = []
-            for detector, measurement_array in zip(detectors, measurement_arrays):
-                if detector.ensemble_mean:
-                    measurement_array = measurement_array.mean(0)
-                    axes_metadata = []
-                else:
-                    axes_metadata = [{'label': 'frozen_phonons', 'type': 'ensemble'}]
-
-                measurements.append(detector.measurement_from_array(measurement_array, scan=positions, waves=self,
-                                                                    axes_metadata=axes_metadata))
+        if isinstance(measurement_arrays[0], tuple):
+            measurement_arrays = list(map(da.stack, map(list, zip(*measurement_arrays))))
         else:
-            raise RuntimeError()
+            measurement_arrays = [da.stack(measurement_arrays)]
+
+        measurements = []
+        for detector, measurement_array in zip(detectors, measurement_arrays):
+            if detector.ensemble_mean:
+                measurement_array = measurement_array.mean(0)
+                axes_metadata = []
+            else:
+                axes_metadata = frozen_phonons_axes_metadata
+
+            measurements.append(detector.measurement_from_array(measurement_array, scan=positions, waves=self,
+                                                                axes_metadata=axes_metadata))
 
         if len(measurements) == 1:
             output = measurements[0]
@@ -720,7 +760,7 @@ class Probe(AbstractScannedWaves, BuildsDaskArray):
 
         return output
 
-    def profile(self, angle=0.):
+    def profile(self, angle: float = 0.):
         self.grid.check_is_defined()
 
         def _line_intersect_rectangle(point0, point1, lower_corner, upper_corner):

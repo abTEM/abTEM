@@ -1,38 +1,32 @@
 import numpy as np
-from ase import Atoms
-from abtem.waves.waves import Probe
+
+from abtem import Waves
+from abtem.core.antialias import AntialiasAperture
 
 
-# def test_crop():
-#     f = AntialiasFilter()
-#
-#     assert np.all(f.crop(f.get_mask((128, 128), (.1, .1), np), (.1, .1), 'valid'))
-#     assert np.all(f.crop(f.get_mask((128, 128), (.1, .1), np), (.1, .1), 'valid'))
-#
-#     f = AntialiasFilter(rolloff=0.)
-#     mask_sum = f.get_mask((128, 128), (.1, .1), np).sum()
-#     assert f.crop(f.get_mask((128, 128), (.1, .1), np), (.1, .1), 'limit').sum() == mask_sum
-#     assert f.crop(f.get_mask((128, 128), (.1, .1), np), (.1, .1), 'limit').sum() == mask_sum
+def test_build_antialias_aperture():
+    antialias_aperture = AntialiasAperture(gpts=32, sampling=.1)
+    assert np.isclose(antialias_aperture.build().sum(), 347.6798)
+
+    antialias_aperture = AntialiasAperture(gpts=32, sampling=.2)
+    assert np.isclose(antialias_aperture.build().sum(), 347.6798)
+
+    antialias_aperture = AntialiasAperture(gpts=(32, 64), sampling=.1)
+    assert np.isclose(antialias_aperture.build().sum(), 695.34924)
+
+    antialias_aperture = AntialiasAperture(gpts=(32, 64), sampling=(.2, .1))
+    assert np.isclose(antialias_aperture.build().sum(), 347.6798)
 
 
 def test_bandlimit():
-    atoms = Atoms(cell=(10, 10, 2))
+    array = np.zeros((2, 64, 64))
+    array[0, 0, 0] = 1
 
-    probe = Probe(energy=300e3, semiangle_cutoff=30, rolloff=0.0, gpts=100)
+    waves = Waves(array, sampling=.1, energy=80e3, axes_metadata=[{}])
 
-    waves = probe.multislice((0, 0), atoms, pbar=False)
-    diffraction_pattern = waves.diffraction_pattern(max_angle=30)
+    antialias_aperture = AntialiasAperture()
+    antialias_aperture.match_grid(waves)
+    waves = antialias_aperture.apply(waves)
 
-    assert diffraction_pattern.shape == (1, 33, 33)
-
-    probe = Probe(energy=300e3, semiangle_cutoff=1e3, rolloff=0.0, gpts=100)
-    waves = probe.multislice((0, 0), atoms, pbar=False)
-
-    diffraction_pattern = waves.diffraction_pattern('limit')
-    assert not np.allclose(diffraction_pattern.array / diffraction_pattern.array.max(), 1.)
-    assert diffraction_pattern.shape == (1, 67, 67)
-
-    diffraction_pattern = waves.diffraction_pattern('valid')
-
-    assert diffraction_pattern.shape == (1, 45, 45)
-    assert np.allclose(diffraction_pattern.array / diffraction_pattern.array.max(), 1.)
+    diffraction_patterns = waves.diffraction_patterns(max_angle=None, fftshift=False)
+    np.all(np.abs(diffraction_patterns.array[0] - antialias_aperture.array) < .5)

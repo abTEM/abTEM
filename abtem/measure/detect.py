@@ -1,7 +1,7 @@
 """Module for describing the detection of transmitted waves and different detector types."""
 from abc import ABCMeta, abstractmethod
 from copy import copy
-from typing import Tuple, Any, Union
+from typing import Tuple, Any, Union, List, Dict
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -37,7 +37,7 @@ class AbstractDetector(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def measurement_from_array(self, array, scan=None, waves=None):
+    def measurement_from_array(self, array, scan=None, waves=None, extra_axes_metadata: List[Dict] = None):
         pass
 
     @property
@@ -119,22 +119,18 @@ class AnnularDetector(AbstractDetector):
     def detected_dtype(self) -> type:
         return np.float32
 
-    def measurement_from_array(self, array, scan=None, waves=None, axes_metadata=None) -> Union[LineProfiles, Images]:
+    def measurement_from_array(self, array, scan=None, waves=None, extra_axes_metadata=None) \
+            -> Union[LineProfiles, Images]:
 
-        if axes_metadata is None:
-            axes_metadata = []
-
-        if hasattr(waves, 'ensemble_axes'):
-            axes_metadata += waves.ensemble_axes
-        else:
-            axes_metadata += []
+        if extra_axes_metadata is None:
+            extra_axes_metadata = []
 
         if len(scan.shape) == 1:
             sampling = scan.axes_metadata[0]['sampling']
-            measurement = LineProfiles(array, sampling=sampling, axes_metadata=axes_metadata)
+            measurement = LineProfiles(array, sampling=sampling, axes_metadata=extra_axes_metadata)
         elif len(scan.shape) == 2:
             sampling = (scan.axes_metadata[0]['sampling'], scan.axes_metadata[1]['sampling'])
-            measurement = Images(array, sampling=sampling, axes_metadata=axes_metadata)
+            measurement = Images(array, sampling=sampling, axes_metadata=extra_axes_metadata)
         else:
             raise NotImplementedError
 
@@ -193,9 +189,9 @@ class FlexibleAnnularDetector(AbstractDetector):
         The path to the file used for saving the detector output.
     """
 
-    def __init__(self, step_size: float = 1., ensemble_mean: bool = True, to_cpu=True):
+    def __init__(self, step_size: float = 1., ensemble_mean: bool = True, to_cpu: bool = True, url: str = None):
         self.step_size = step_size
-        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu)
+        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url)
 
     @property
     def step_size(self) -> float:
@@ -208,11 +204,11 @@ class FlexibleAnnularDetector(AbstractDetector):
     def step_size(self, value: float):
         self._radial_steps = value
 
-    def nbins_radial(self, waves):
+    def nbins_radial(self, waves) -> int:
         return int(np.floor(min(waves.cutoff_angles)) / (self._radial_steps))
 
-    def detected_shape(self, waves):
-        return (self.nbins_radial(waves), 1)
+    def detected_shape(self, waves) -> Tuple[int, int]:
+        return self.nbins_radial(waves), 1
 
     @property
     def detected_dtype(self):
@@ -311,13 +307,13 @@ class SegmentedDetector(AbstractDetector):
     """
 
     def __init__(self, inner: float, outer: float, nbins_radial: int, nbins_azimuthal: int, rotation: float = 0.,
-                 ensemble_mean: bool = True, to_cpu=False):
+                 ensemble_mean: bool = True, to_cpu: bool = False, url: str = None):
         self._inner = inner
         self._outer = outer
         self._nbins_radial = nbins_radial
         self._nbins_azimuthal = nbins_azimuthal
         self._rotation = rotation
-        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu)
+        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url)
 
     @property
     def inner(self) -> float:
@@ -445,11 +441,14 @@ class PixelatedDetector(AbstractDetector):
 
     def __init__(self,
                  max_angle: Union[str, float] = 'valid',
+                 resample: bool = False,
                  ensemble_mean: bool = True,
-                 to_cpu=True):
+                 to_cpu: bool = True,
+                 url: str = None):
 
+        self._resample = resample
         self._max_angle = max_angle
-        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu)
+        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url)
 
     @property
     def max_angle(self):
@@ -585,10 +584,45 @@ class PixelatedDetector(AbstractDetector):
         #     array = self._interpolate(array, waves.angular_sampling)
         # return array
 
-    def __copy__(self) -> 'SegmentedDetector':
-        return self.__class__(inner=self.inner, outer=self.outer, nbins_radial=self.nbins_radial,
-                              nbins_azimuthal=self.nbins_azimuthal, url=self.url, ensemble_mean=self.ensemble_mean)
+    def __copy__(self) -> 'PixelatedDetector':
+        return self.__class__(max_angle=self.max_angle,
+                              resample=self.resample,
+                              ensemble_mean=self.ensemble_mean,
+                              to_cpu=self.to_cpu,
+                              url=self.url)
 
-    def copy(self) -> 'SegmentedDetector':
-        """Make a copy."""
-        return copy(self)
+
+class WavesDetector(AbstractDetector):
+
+    def __init__(self, ensemble_mean: bool = True, to_cpu: bool = True, url: str = None):
+        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url)
+
+    def detect(self, waves):
+        return waves.intensity()
+
+    def detected_shape(self, waves) -> Tuple:
+        return waves.gpts
+
+    def measurement_from_array(self, array, scan=None, waves=None, extra_axes_metadata: List[Dict] = None):
+
+        if extra_axes_metadata is None:
+            extra_axes_metadata = []
+
+        if hasattr(scan, 'axes_metadata'):
+            extra_axes_metadata += scan.axes_metadata
+        elif scan is not None:
+            extra_axes_metadata += [{'type': 'positions'} for _ in range(len(scan.shape) - 1)]
+
+        measurement = Images(array, sampling=waves.sampling, axes_metadata=extra_axes_metadata)
+
+        if self._url is not None:
+            return measurement.to_zarr(self.url, overwrite=True, compute=False)
+        else:
+            return measurement
+
+    @property
+    def detected_dtype(self):
+        return np.float32
+
+    def __copy__(self):
+        pass

@@ -1,6 +1,6 @@
 import pytest
 
-from abtem.basic.grid import Grid
+from abtem.core.grid import Grid
 
 
 def test_create_grid():

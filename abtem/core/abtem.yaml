@@ -1,6 +1,6 @@
 device: cpu
 fft: fftw
-lazy: true
+lazy: false
 fftw:
   threads: 2
   planning_effort: FFTW_MEASURE

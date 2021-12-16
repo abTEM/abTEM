@@ -1,7 +1,7 @@
 """Module to calculate potentials using the independent atom model."""
 from abc import ABCMeta, abstractmethod
 from copy import copy
-from typing import Union, Sequence, Tuple, List, Dict
+from typing import Union, Sequence, Tuple, List, Dict, Generator
 
 import dask
 import dask.array as da
@@ -17,10 +17,9 @@ from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.utils import generate_chunks
 from abtem.measure.measure import Images
 from abtem.potentials.atom import AtomicPotential
-from abtem.potentials.infinite import calculate_scattering_factors
-from abtem.potentials.project import InfiniteProjectePotential, FiniteProjectedPotential
+from abtem.potentials.infinite import calculate_scattering_factors, infinite_potential_projections
 from abtem.potentials.temperature import AbstractFrozenPhonons, FrozenPhonons
-from abtem.structures.slicing import _validate_slice_thickness
+from abtem.structures.slicing import _validate_slice_thickness, SliceIndexedAtoms, SlicedAtoms
 from abtem.structures.structures import is_cell_orthogonal, orthogonalize_cell
 
 
@@ -69,6 +68,14 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 
     def project(self) -> 'Images':
         return self.build().project()
+
+    @abstractmethod
+    def get_potential_configurations(self, lazy: bool = False):
+        pass
+
+    @abstractmethod
+    def generate_chunks(self):
+        pass
 
     def show(self, **kwargs):
         """
@@ -168,6 +175,13 @@ class AbstractPotentialFromAtoms(AbstractPotential):
         return len(self._frozen_phonons)
 
 
+def _validate_potential(potential: Union[Atoms, AbstractPotential]) -> AbstractPotential:
+    if isinstance(potential, Atoms):
+        potential = Potential(potential)
+
+    return potential
+
+
 class Potential(AbstractPotentialFromAtoms):
     """
     Potential object.
@@ -214,6 +228,7 @@ class Potential(AbstractPotentialFromAtoms):
                  plane: str = 'xy',
                  box: Tuple[float, float, float] = None,
                  origin: Tuple[float, float, float] = (0., 0., 0.),
+                 reverse: bool = False,
                  cutoff_tolerance: float = 1e-3):
 
         self._cutoff_tolerance = cutoff_tolerance
@@ -240,7 +255,19 @@ class Potential(AbstractPotentialFromAtoms):
             else:
                 chunks = 1
 
+        self._reverse = reverse
         self._chunks = chunks
+        self._sliced_atoms = None
+        self._scattering_factors = None
+        self._atomic_potentials = None
+
+    @property
+    def reverse(self) -> bool:
+        return self._reverse
+
+    @reverse.setter
+    def reverse(self, value):
+        self._reverse = value
 
     @property
     def parametrization(self) -> str:
@@ -253,7 +280,12 @@ class Potential(AbstractPotentialFromAtoms):
         return self._projection
 
     @property
-    def device(self):
+    def chunks(self) -> int:
+        """The projection method."""
+        return self._chunks
+
+    @property
+    def device(self) -> str:
         return self._device
 
     @property
@@ -261,30 +293,30 @@ class Potential(AbstractPotentialFromAtoms):
         """The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]."""
         return self._cutoff_tolerance
 
-    def build(self) -> 'PotentialArray':
+    def build(self, lazy: bool = False) -> 'PotentialArray':
         self.grid.check_is_defined()
-
-        if self.projection == 'finite':
-            slice_iterator = self._get_projected_potentials_finite(lazy=True)[0]
-        elif self.projection == 'infinite':
-            slice_iterator = self._get_projected_potentials_infinite(lazy=True)[0]
-        else:
-            raise RuntimeError(f'projection must be "finite" or "infinite"')
 
         xp = get_array_module(self._device)
 
-        def get_chunk(slice_iterator, first_slice, last_slice):
-            return slice_iterator.get_chunk(first_slice, last_slice)
+        def get_chunk(potential, first_slice, last_slice):
+            return potential.get_chunk(first_slice, last_slice).array
 
         array = []
         for first_slice, last_slice in generate_chunks(len(self), chunks=self._chunks):
             shape = (last_slice - first_slice,) + self.gpts
 
-            new_chunk = da.from_delayed(dask.delayed(get_chunk)(slice_iterator, first_slice, last_slice), shape=shape,
-                                        meta=xp.array((), dtype=np.float32))
+            if lazy:
+                new_chunk = dask.delayed(get_chunk)(self, first_slice, last_slice)
+                new_chunk = da.from_delayed(new_chunk, shape=shape, meta=xp.array((), dtype=np.float32))
+            else:
+                new_chunk = get_chunk(self, first_slice, last_slice)
+
             array.append(new_chunk)
 
-        array = da.concatenate(array)
+        if lazy:
+            array = da.concatenate(array)
+        else:
+            array = np.concatenate(array)
 
         return PotentialArray(array, self.slice_thickness, extent=self.extent)
 
@@ -298,62 +330,64 @@ class Potential(AbstractPotentialFromAtoms):
 
         return atomic_potentials
 
-    def _get_projected_potentials_finite(self, lazy: bool = True):
+    def _get_sliced_atoms(self) -> SliceIndexedAtoms:
+        return SliceIndexedAtoms(atoms=self.atoms, num_slices=len(self._slice_thickness), reverse=self._reverse)
 
-        if lazy:
-            atomic_potentials = dask.delayed(self._calculate_atomic_potentials)()
-        else:
-            atomic_potentials = self._calculate_atomic_potentials()
-
-        def _potential_iterator(atoms, atomic_potentials):
-            if hasattr(atoms, 'jiggle_atoms'):
-                atoms = atoms.jiggle_atoms()
-
-            return FiniteProjectedPotential(atoms,
-                                            atomic_potentials=atomic_potentials,
-                                            gpts=self.gpts,
-                                            slice_thickness=self.slice_thickness,
-                                            plane=self.plane,
-                                            box=self.box,
-                                            xp=get_array_module(self._device))
-
-        potentials = []
-        for configuration in self.frozen_phonons.get_configurations(lazy=lazy):
-
-            if lazy:
-                potentials.append(dask.delayed(_potential_iterator)(configuration, atomic_potentials))
-            else:
-                potentials.append(_potential_iterator(configuration, atomic_potentials))
-
-        return potentials
-
-    def _calculate_scattering_factors(self):
+    def _calculate_scattering_factors(self) -> np.ndarray:
         xp = get_array_module(self._device)
         return calculate_scattering_factors(self.gpts, self.sampling, np.unique(self.atoms.numbers), xp_to_str(xp))
 
-    def _get_projected_potentials_infinite(self, lazy: bool = True):
+    def _get_chunk_infinite(self, first_slice: int, last_slice: int) -> 'PotentialArray':
+        if self._scattering_factors is None:
+            self._scattering_factors = self._calculate_scattering_factors()
 
-        def _potential_iterator(atoms):
-            if hasattr(atoms, 'jiggle_atoms'):
-                atoms = atoms.jiggle_atoms()
+        if self._sliced_atoms is None:
+            self._sliced_atoms = self._get_sliced_atoms()
 
-            scattering_factors = self._calculate_scattering_factors()
+        positions, numbers, slice_idx = self._sliced_atoms.get_atoms_in_slices(first_slice, last_slice)
+        shape = (last_slice - first_slice,) + self.gpts
 
-            return InfiniteProjectePotential(atoms,
-                                             scattering_factors=scattering_factors,
-                                             sampling=self.sampling,
-                                             slice_thickness=self.slice_thickness)
+        array = infinite_potential_projections(positions, numbers, slice_idx, shape, self.sampling,
+                                               self._scattering_factors)
 
-        potentials = []
-        for atoms in self.frozen_phonons.get_configurations(lazy=lazy):
-            if lazy:
-                potentials.append(dask.delayed(_potential_iterator)(atoms))
-            else:
-                potentials.append(_potential_iterator(atoms))
+        return PotentialArray(array, slice_thickness=self.slice_thickness[first_slice:last_slice], extent=self.extent)
 
-        return potentials
+    def _get_chunk_finite(self, first_slice: int, last_slice: int):
+        xp = get_array_module(self._device)
 
-    def get_projected_potentials(self, lazy=True):
+        if self._atomic_potentials is None:
+            self._atomic_potentials = self._calculate_atomic_potentials()
+
+        extent = np.diag(self.atoms.cell)[:2]
+
+        sampling = (extent[0] / self.gpts[0], extent[1] / self.gpts[1])
+
+        array = xp.zeros((last_slice - first_slice,) + self.gpts, dtype=np.float32)
+
+        cutoffs = {Z: atomic_potential.cutoff for Z, atomic_potential in self._atomic_potentials.items()}
+        sliced_atoms = SlicedAtoms(self.atoms, self._slice_thickness, plane=self._plane, box=self._box,
+                                   padding=cutoffs)
+
+        for i, slice_idx in enumerate(range(first_slice, last_slice)):
+            for Z, atomic_potential in self._atomic_potentials.items():
+                atoms = sliced_atoms.get_atoms_in_slices(slice_idx, atomic_number=Z)
+                a = sliced_atoms.slice_limits[slice_idx][0] - atoms.positions[:, 2]
+                b = sliced_atoms.slice_limits[slice_idx][1] - atoms.positions[:, 2]
+                atomic_potential.project_on_grid(array[i], sampling, atoms.positions, a, b)
+
+        return PotentialArray(array, slice_thickness=self.slice_thickness[first_slice:last_slice], extent=self.extent)
+
+    def get_chunk(self, first_slice: int, last_slice: int) -> 'PotentialArray':
+        if self.projection == 'infinite':
+            return self._get_chunk_infinite(first_slice, last_slice)
+        else:
+            return self._get_chunk_finite(first_slice, last_slice)
+
+    def generate_chunks(self) -> Generator:
+        for start, end in generate_chunks(len(self.slice_thickness), chunks=self.chunks):
+            yield self.get_chunk(first_slice=start, last_slice=end)
+
+    def get_potential_configurations(self, lazy: bool = True):
         """
         Function to generate scattering potentials for a set of frozen phonon configurations.
 
@@ -363,18 +397,45 @@ class Potential(AbstractPotentialFromAtoms):
             Generator of potentials.
         """
 
-        if self._projection == 'finite':
-            return self._get_projected_potentials_finite(lazy=lazy)
-        else:
-            return self._get_projected_potentials_infinite(lazy=lazy)
+        def potential_configuration(atoms):
 
-    def __copy__(self):
+            return self.__class__(atoms=atoms, gpts=self.gpts,
+                                  sampling=self.sampling,
+                                  slice_thickness=self.slice_thickness,
+                                  parametrization=self.parametrization,
+                                  projection=self.projection,
+                                  chunks=self.chunks,
+                                  precalculate=self.precalculate,
+                                  device=self._device,
+                                  plane=self.plane,
+                                  box=self.box,
+                                  origin=self.origin,
+                                  cutoff_tolerance=self.cutoff_tolerance)
+
+        potentials = []
+        for atoms in self.frozen_phonons.get_configurations(lazy=lazy):
+            if lazy:
+                potentials.append(dask.delayed(potential_configuration)(atoms))
+            else:
+                potentials.append(potential_configuration(atoms))
+
+        return potentials
+
+    def __copy__(self) -> 'Potential':
         return self.__class__(atoms=self.frozen_phonons.copy(),
                               gpts=self.gpts,
+                              sampling=self.gpts,
                               slice_thickness=self.slice_thickness,
                               parametrization=self.parametrization,
-                              cutoff_tolerance=self.cutoff_tolerance,
-                              device=self.device)
+                              projection=self.projection,
+                              chunks=self.chunks,
+                              precalculate=self.precalculate,
+                              device=self.device,
+                              plane=self.plane,
+                              box=self.box,
+                              origin=self.origin,
+                              reverse=self.reverse,
+                              cutoff_tolerance=self.cutoff_tolerance)
 
 
 class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
@@ -404,23 +465,20 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
                  sampling: Union[float, Tuple[float, float]] = None):
 
         if len(array.shape) != 3:
-            raise RuntimeError(f'PotentialArray must be 3d, not {len(array.shape)}d')
+            raise RuntimeError(f'PotentialArray must be 2d or 3d, not {len(array.shape)}d')
 
         self._array = array
         self._grid = Grid(extent=extent, gpts=self.array.shape[-2:], sampling=sampling, lock_gpts=True)
-        slice_thickness = _validate_slice_thickness(slice_thickness, num_slices=array.shape[0])
-
+        slice_thickness = _validate_slice_thickness(slice_thickness, num_slices=len(array))
         super().__init__(slice_thickness=slice_thickness)
 
     def build(self):
         return self
 
-    def split_chunks(self):
-        return [self[a:a + b] for a, b in zip(np.cumsum((0,) + self.array.chunks[0]), self.array.chunks[0])]
-
     def __getitem__(self, items):
         if isinstance(items, (int, slice)):
             potential_array = self.array[items]
+
             if len(potential_array.shape) == 2:
                 potential_array = potential_array[None]
 
@@ -450,7 +508,6 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
 
         if self.is_lazy:
             array = self._array.map_blocks(_transmission_function, energy=energy, meta=xp.array((), dtype=xp.complex64))
-
         else:
             array = _transmission_function(self._array, energy=energy)
 
@@ -461,10 +518,14 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
     def num_frozen_phonons(self):
         return 1
 
-    def frozen_phonon_potentials(self):
+    def get_potential_configurations(self, *args, **kwargs):
         return [self]
 
-    def tile(self, multiples):
+    def generate_chunks(self):
+        for potential_slice in self:
+            yield potential_slice
+
+    def tile(self, multiples: Union[Tuple[int, int], Tuple[int, int, int]]):
         """
         Tile the potential.
 
@@ -498,6 +559,7 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
         ----------
         url: str
             url to which the data is saved.
+            See https://docs.dask.org/en/latest/generated/dask.array.to_zarr.html
         """
 
         self.array.to_zarr(url, component='array', overwrite=overwrite)
@@ -507,7 +569,7 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
             f.create_dataset('extent', data=self.extent, overwrite=overwrite)
 
     @classmethod
-    def from_zarr(cls, url, chunks=1):
+    def from_zarr(cls, url: str, chunks: bool = 1):
         """
         Read potential from zarr file.
 
@@ -535,7 +597,7 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
         Parameters
         ----------
         waves: Waves object
-            Wavefunction to transmit.
+            Waves object to transmit.
 
         Returns
         -------
@@ -565,8 +627,8 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
     def __init__(self,
                  array: np.ndarray,
                  slice_thickness: Union[float, Sequence[float]],
-                 extent: Union[float, Sequence[float]] = None,
-                 sampling: Union[float, Sequence[float]] = None,
+                 extent: Union[float, Tuple[float, float]] = None,
+                 sampling: Union[float, Tuple[float, float]] = None,
                  energy: float = None):
 
         self._accelerator = Accelerator(energy=energy)
@@ -588,11 +650,17 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         return self
 
     def transmit(self, waves):
-        self.accelerator.check_match(waves)
-        # try:
-        # print(type(waves._array), type(self.array)
-        waves._array *= self.array
-        # except AttributeError:
-        #    waves = self.transmit(waves.build())
+        if hasattr(waves, 'array'):
+            self.accelerator.check_match(waves)
+            self.grid.check_match(waves)
+            waves._array *= self.array
+        else:
+            waves *= self.array
 
         return waves
+
+    def __copy__(self):
+        return self.__class__(array=self.array.copy(),
+                              slice_thickness=self.slice_thickness.copy(),
+                              extent=self.extent,
+                              energy=self.energy)

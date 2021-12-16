@@ -82,7 +82,7 @@ class Grid:
         return self.dimensions
 
     @property
-    def endpoint(self) -> tuple:
+    def endpoint(self) -> Tuple[bool, ...]:
         """Include the grid endpoint."""
         return self._endpoint
 
@@ -92,7 +92,7 @@ class Grid:
         return self._dimensions
 
     @property
-    def extent(self) -> tuple:
+    def extent(self) -> Tuple[float, ...]:
         """Grid extent in each dimension [Å]."""
         return self._extent
 
@@ -112,7 +112,7 @@ class Grid:
         self._extent = extent
 
     @property
-    def gpts(self) -> tuple:
+    def gpts(self) -> Tuple[int, ...]:
         """Number of grid points in each dimension."""
         return self._gpts
 
@@ -133,7 +133,7 @@ class Grid:
         self._gpts = gpts
 
     @property
-    def sampling(self) -> tuple:
+    def sampling(self) -> Tuple[float, ...]:
         """Grid sampling in each dimension [1 / Å]."""
         return self._sampling
 
@@ -292,7 +292,7 @@ class HasGridMixin:
         self.grid.match(other, check_match=check_match)
 
 
-def _spatial_frequencies(gpts: Tuple[int, int],
+def spatial_frequencies(gpts: Tuple[int, int],
                          sampling: Tuple[float, float],
                          return_grid: bool = False,
                          xp=np):
@@ -322,40 +322,37 @@ def _spatial_frequencies(gpts: Tuple[int, int],
     else:
         return out
 
+#
+# def spatial_frequencies(gpts: Tuple[int, int],
+#                         sampling: Tuple[float, float],
+#                         return_grid: bool = False,
+#                         xp=np):
+#     if not delayed:
+#         return _spatial_frequencies(gpts, sampling, return_grid, xp)
+#
+#     out = ()
+#     for i, ki in enumerate(
+#             dask.delayed(_spatial_frequencies, nout=len(gpts), pure=True)(gpts, sampling, return_grid, xp_to_str(xp))):
+#         if not return_grid:
+#             out += (da.from_delayed(ki, shape=(gpts[i],), dtype=np.float32),)
+#         else:
+#             out += (da.from_delayed(ki, shape=gpts, dtype=np.float32),)
+#
+#     return out
 
-def spatial_frequencies(gpts: Tuple[int, int],
-                        sampling: Tuple[float, float],
-                        return_grid: bool = False,
-                        delayed: bool = True,
-                        xp=np):
-    if not delayed:
-        return _spatial_frequencies(gpts, sampling, return_grid, xp)
 
-    out = ()
-    for i, ki in enumerate(
-            dask.delayed(_spatial_frequencies, nout=len(gpts), pure=True)(gpts, sampling, return_grid, xp_to_str(xp))):
-        if not return_grid:
-            out += (da.from_delayed(ki, shape=(gpts[i],), dtype=np.float32),)
-        else:
-            out += (da.from_delayed(ki, shape=gpts, dtype=np.float32),)
-
-    return out
-
-
-def _polar_spatial_frequencies(gpts, sampling, xp):
+def polar_spatial_frequencies(gpts, sampling, xp):
     xp = get_array_module(xp)
-    kx, ky = _spatial_frequencies(gpts, sampling, False, xp_to_str(xp))
+    kx, ky = spatial_frequencies(gpts, sampling, False, xp_to_str(xp))
     k = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
     phi = xp.arctan2(kx[:, None], ky[None])
     return k, phi
 
 
-def polar_spatial_frequencies(gpts, sampling, delayed=True, xp=np):
-    if not delayed:
-        return _polar_spatial_frequencies(gpts, sampling, xp=xp)
-
-    out = dask.delayed(_polar_spatial_frequencies, nout=2, pure=True)(gpts, sampling, xp_to_str(xp))
-    return tuple(da.from_delayed(val, shape=gpts, dtype=np.float32) for val in out)
+# def polar_spatial_frequencies(gpts, sampling, xp=np):
+#
+#     out = dask.delayed(_polar_spatial_frequencies, nout=2, pure=True)(gpts, sampling, xp_to_str(xp))
+#     return tuple(da.from_delayed(val, shape=gpts, dtype=np.float32) for val in out)
 
 
 def disc_meshgrid(r):

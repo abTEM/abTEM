@@ -10,19 +10,14 @@ from scipy import integrate
 from scipy.interpolate import interp1d
 from scipy.special import spherical_jn, sph_harm
 
-from abtem.core.backend import get_array_module
 from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2wavelength, relativistic_mass_correction
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import HasGridMixin, Grid, polar_spatial_frequencies
 from abtem.ionization.electron_configurations import electron_configurations
 from abtem.ionization.utils import check_valid_quantum_number, config_str_to_config_tuples, \
     remove_electron_from_config_str
-from abtem.structures.slicing import SlicedAtoms
 from abtem.measure.measure import Images
-
-
-# spatial_frequencies, polar_coordinates, \
-# relativistic_mass_correction,
+from abtem.structures.slicing import SlicedAtoms
 
 
 class AbstractTransitionCollection(metaclass=ABCMeta):
@@ -483,6 +478,14 @@ class TransitionPotential(HasAcceleratorMixin, HasGridMixin):
             self._sliced_atoms = SlicedAtoms(atoms, slice_thickness=self._slice_thickness)
         else:
             self._sliced_atoms = None
+
+    @property
+    def slice_thickness(self):
+        return self._sliced_atoms.slice_thickness
+
+    @slice_thickness.setter
+    def slice_thickness(self, value):
+        self._sliced_atoms.slice_thickness = value
 
     @property
     def num_edges(self):

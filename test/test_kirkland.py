@@ -14,10 +14,10 @@ def test_fig_5_12():
 
     waves = PlaneWave(energy=200e3)
 
-    waves = waves.multislice(potential, pbar=False)
+    waves = waves.multislice(potential)
     waves = waves.apply_ctf(defocus=700, Cs=1.3e7, semiangle_cutoff=10.37, rolloff=0.)
 
-    intensity = np.abs(waves.array) ** 2
+    intensity = waves.intensity().compute().array
 
     assert np.round(intensity.min(), 2) == np.float32(.72)
     assert np.round(intensity.max(), 2) == np.float32(1.03)
@@ -31,7 +31,7 @@ def test_fig_5_22():
     probe.grid.match(potential)
     scan = LineScan(start=[5, 25], end=[45, 25], gpts=5)
     detector = AnnularDetector(inner=40, outer=200)
-    measurement = probe.scan(scan, detector, potential, pbar=False)
+    measurement = probe.scan(scan, detector, potential)
 
     correct_values = np.array([0.0001168, 0.00059303, 0.00214667, 0.00977803, 0.01167613])
     assert np.allclose(measurement.array, correct_values, atol=1e-5)

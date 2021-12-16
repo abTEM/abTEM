@@ -3,7 +3,7 @@ from abc import abstractmethod, ABCMeta
 from collections import Iterable
 from copy import copy
 from numbers import Number
-from typing import Mapping, Union, Sequence
+from typing import Mapping, Union, Sequence, List
 
 import dask
 import numpy as np
@@ -42,48 +42,6 @@ class AbstractFrozenPhonons(metaclass=ABCMeta):
         return copy(self)
 
 
-class FrozenPhononConfiguration:
-
-    def __init__(self, atoms, sigmas, directions):
-        self._atoms = atoms
-        self._sigmas = sigmas
-        self._directions = directions
-
-    @property
-    def positions(self):
-        return self._atoms.positions
-
-    @property
-    def numbers(self):
-        return self._atoms._numbers
-
-    @property
-    def cell(self):
-        return self._atoms.cell
-
-    def jiggle_atoms(self):
-        def _jiggle_atoms(atoms, sigmas, directions):
-
-            if isinstance(sigmas, dict):
-                temp = np.zeros(len(atoms.numbers), dtype=np.float32)
-                for unique in np.unique(atoms.numbers):
-                    temp[atoms.numbers == unique] = np.float32(sigmas[chemical_symbols[unique]])
-                sigmas = temp
-            elif not isinstance(sigmas, np.ndarray):
-                raise RuntimeError()
-
-            atoms = atoms.copy()
-
-            for direction in directions:
-                atoms.positions[:, direction] += sigmas * np.random.randn(len(atoms))
-
-            atoms.wrap()
-
-            return atoms
-
-        return _jiggle_atoms(self._atoms, self._sigmas, self._directions)
-
-
 class FrozenPhonons(AbstractFrozenPhonons):
     """
     Frozen phonons object.
@@ -114,7 +72,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
                  num_configs: int,
                  sigmas: Union[float, Mapping[Union[str, int], float], Sequence[float]],
                  directions: str = 'xyz',
-                 seed=None):
+                 seed: int = None):
 
         self._unique_numbers = np.unique(atoms.numbers)
         unique_symbols = [chemical_symbols[number] for number in self._unique_numbers]
@@ -138,65 +96,91 @@ class FrozenPhonons(AbstractFrozenPhonons):
             raise ValueError()
 
         self._sigmas = sigmas
-
-        new_directions = []
-        for direction in list(set(directions.lower())):
-            if direction == 'x':
-                new_directions += [0]
-            elif direction == 'y':
-                new_directions += [1]
-            elif direction == 'z':
-                new_directions += [2]
-            else:
-                raise RuntimeError('Directions must be "x", "y" or "z" not {}.')
-
-        self._directions = new_directions
+        self._directions = directions
         self._atoms = atoms
         self._num_configs = num_configs
         self._seed = seed
 
     @property
-    def cell(self):
+    def num_configs(self) -> int:
+        return self._num_configs
+
+    @property
+    def seed(self) -> int:
+        return self._seed
+
+    @property
+    def sigmas(self) -> Union[Mapping[Union[str, int], float], np.ndarray]:
+        return self._sigmas
+
+    @property
+    def cell(self) -> np.ndarray:
         return self._atoms.cell
 
     @property
     def atoms(self) -> Atoms:
         return self._atoms
 
-    def __len__(self):
+    @property
+    def directions(self) -> str:
+        return self._directions
+
+    def __len__(self) -> int:
         return self._num_configs
 
-    def get_configurations(self, lazy: bool = False):
-        if self._seed:
-            np.random.seed(self._seed)
+    @property
+    def axes(self) -> List[int]:
+        axes = []
+        for direction in list(set(self._directions.lower())):
+            if direction == 'x':
+                axes += [0]
+            elif direction == 'y':
+                axes += [1]
+            elif direction == 'z':
+                axes += [2]
+            else:
+                raise RuntimeError('Directions must be "x", "y" or "z" not {}.')
+        return axes
+
+    def get_configurations(self, lazy: bool = False) -> List[Atoms]:
+        if self.seed:
+            np.random.seed(self.seed)
 
         def load_atoms():
-            return self._atoms
+            return self.atoms
 
-        def apply_frozen_phonons(atoms):
-            return FrozenPhononConfiguration(atoms,
-                                             sigmas=self._sigmas,
-                                             directions=self._directions)
+        def jiggle_atoms(atoms, sigmas, directions):
 
+            if isinstance(sigmas, Mapping):
+                temp = np.zeros(len(atoms.numbers), dtype=np.float32)
+                for unique in np.unique(atoms.numbers):
+                    temp[atoms.numbers == unique] = np.float32(sigmas[chemical_symbols[unique]])
+                sigmas = temp
+            elif not isinstance(sigmas, np.ndarray):
+                raise RuntimeError()
 
+            atoms = atoms.copy()
+
+            for direction in directions:
+                atoms.positions[:, direction] += sigmas * np.random.randn(len(atoms))
+
+            atoms.wrap()
+
+            return atoms
 
         configurations = []
-        for i in range(self._num_configs):
+        for i in range(self.num_configs):
             if lazy:
                 atoms = dask.delayed(load_atoms)()
+                configurations.append(dask.delayed(jiggle_atoms)(atoms, self.sigmas, self.axes))
             else:
-                atoms = self._atoms
-
-            if lazy:
-                configurations.append(dask.delayed(apply_frozen_phonons)(atoms))
-            else:
-                configurations.append(apply_frozen_phonons(self._atoms))
+                configurations.append(jiggle_atoms(self.atoms, self.sigmas, self.axes))
 
         return configurations
 
-    def __copy__(self):
-        return self.__class__(atoms=self.atoms.copy(), num_configs=len(self), sigmas=self._sigmas.copy(),
-                              seed=self._seed)
+    def __copy__(self) -> 'FrozenPhonons':
+        return self.__class__(atoms=self.atoms.copy(), num_configs=len(self), sigmas=copy(self.sigmas),
+                              seed=self.seed, directions=self.directions)
 
 
 class MDFrozenPhonons(AbstractFrozenPhonons):
@@ -212,25 +196,21 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
     def __init__(self, trajectory: Sequence[Atoms]):
         self._trajectory = trajectory
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._trajectory)
 
     @property
-    def atoms(self):
+    def atoms(self) -> Atoms:
         return self[0]
 
     @property
-    def numbers(self):
-        return np.unique(self[0].numbers)
-
-    @property
-    def cell(self):
+    def cell(self) -> np.ndarray:
         return self[0].cell
 
-    def __getitem__(self, item):
+    def __getitem__(self, item) -> Atoms:
         return self._trajectory[0]
 
-    def standard_deviations(self):
+    def standard_deviations(self) -> np.ndarray:
         mean_positions = np.mean([atoms.positions for atoms in self], axis=0)
         squared_deviations = [(atoms.positions - mean_positions) ** 2 for atoms in self]
         return np.sqrt(np.sum(squared_deviations, axis=0) / (len(self) - 1))
@@ -238,7 +218,7 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
     def get_configurations(self, lazy: bool = True):
         return self._trajectory
 
-    #def generate_atoms(self):
+    # def generate_atoms(self):
     #    for i in range(len(self)):
     #        yield self._trajectory[i]
 

@@ -1,6 +1,7 @@
 """Main abTEM module."""
 from abtem._version import __version__
-from abtem.measure.detect import AnnularDetector, SegmentedDetector, FlexibleAnnularDetector, PixelatedDetector
+from abtem.measure.detect import AnnularDetector, SegmentedDetector, FlexibleAnnularDetector, PixelatedDetector, \
+    WavesDetector
 from abtem.measure.measure import Images, LineProfiles, DiffractionPatterns, PolarMeasurements
 from abtem.potentials.potentials import Potential, PotentialArray
 from abtem.potentials.temperature import FrozenPhonons

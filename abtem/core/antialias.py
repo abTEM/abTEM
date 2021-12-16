@@ -1,71 +1,69 @@
-import dask
-import dask.array as da
+from typing import Union, Tuple
+
 import numpy as np
 
 from abtem.core.backend import get_array_module, xp_to_str
-from abtem.core.fft import fft2_convolve
+from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.grid import polar_spatial_frequencies
+from abtem.core.fft import fft2_convolve
 
 TAPER = 0.01
 CUTOFF = 2 / 3.
 
 
-def antialias_kernel(gpts, sampling, xp, delay=True):
-    def _antialias_kernel(gpts, sampling, cutoff, taper, xp):
-        xp = get_array_module(xp)
+def antialias_aperture(cutoff, taper, gpts, sampling, xp):
+    cutoff = cutoff / max(sampling) / 2
+    taper = taper / max(sampling)
 
-        r, _ = polar_spatial_frequencies(gpts, sampling, delayed=False, xp=xp)
-        if taper > 0.:
-            array = .5 * (1 + xp.cos(np.pi * (r - cutoff + taper) / taper))
-            array[r > cutoff] = 0.
-            array = xp.where(r > cutoff - taper, array, xp.ones_like(r, dtype=np.float32))
-        else:
-            array = xp.array(r < cutoff).astype(np.float32)
-        return array
+    r, _ = polar_spatial_frequencies(gpts, sampling, xp=xp)
 
-    cutoff = CUTOFF / max(sampling) / 2
-    taper = TAPER / max(sampling)
-
-    if delay:
-        kernel = dask.delayed(_antialias_kernel)(gpts, sampling, cutoff, taper, xp_to_str(xp))
-        return da.from_delayed(kernel, shape=gpts, meta=xp.array((), dtype=xp.float32))
+    if taper > 0.:
+        array = .5 * (1 + xp.cos(np.pi * (r - cutoff + taper) / taper))
+        array[r > cutoff] = 0.
+        array = xp.where(r > cutoff - taper, array, xp.ones_like(r, dtype=np.float32))
     else:
-        return _antialias_kernel(gpts, sampling, cutoff, taper, xp_to_str(xp))
+        array = xp.array(r < cutoff).astype(np.float32)
+
+    return array
 
 
-class AntialiasFilter:
-    """
-    Antialias filter object.
-    """
+class AntialiasAperture(HasGridMixin):
 
-    _taper = 0.01
-    _cutoff = 2 / 3.
+    def __init__(self,
+                 extent: Union[float, Tuple[float, float]] = None,
+                 gpts: Union[int, Tuple[int, int]] = None,
+                 sampling: Union[float, Tuple[float, float]] = None,
+                 cutoff: float = CUTOFF, taper: float = TAPER,
+                 device: str = 'cpu'):
+        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
 
-    @property
-    def cutoff(self):
-        return self._cutoff
-
-    @property
-    def taper(self):
-        return self._taper
-
-    def _build_antialias_filter(self, gpts, sampling, xp):
-        return
-
-    def build(self, gpts, sampling, xp=np):
-        return self._build_antialias_filter(gpts, sampling, xp)
-
-    def __call__(self, array, sampling, overwrite_x=True):
-        xp = get_array_module(array)
-        kernel = self.build(array.shape[-2:], sampling, xp)
-        array = fft2_convolve(array, kernel, overwrite_x=False)
-        return array
-
-
-class AntialiasAperture:
-
-    def __init__(self, cutoff=2 / 3.):
         self._cutoff = cutoff
+        self._taper = taper
+        self._device = device
+        self._array = None
+
+    @property
+    def array(self):
+        return self._array
+
+    def build(self):
+        return antialias_aperture(self.cutoff,
+                                  self.taper,
+                                  self.gpts,
+                                  self.sampling,
+                                  get_array_module(self._device))
+
+    def apply(self, x):
+        if self._array is None:
+            self._array = self.build()
+
+        x._array = fft2_convolve(x.array, self._array)
+
+        return x
+
+    @property
+    def taper(self) -> float:
+        return self._taper
 
     @property
     def cutoff(self) -> float:
@@ -79,7 +77,6 @@ class AntialiasAperture:
 
 class HasAntialiasApertureMixin:
     _antialias_aperture: AntialiasAperture
-    _antialias_taper = AntialiasFilter._taper
 
     def _valid_rectangle(self, gpts, sampling):
         if self.antialias_aperture is None:
@@ -97,7 +94,7 @@ class HasAntialiasApertureMixin:
 
     @property
     def antialias_taper(self):
-        return self._antialias_taper
+        return self._antialias_aperture._taper
 
     @property
     def antialias_aperture(self) -> float:

@@ -172,7 +172,7 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
 
         return new_copy
 
-    def _get_measurements(self, items, **kwargs):
+    def _get_measurements(self, items):
         if isinstance(items, Number):
             items = (items,)
 
@@ -185,16 +185,16 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
             if isinstance(item, Number):
                 removed_axes.append(i)
 
-        new_copy._axes_metadata = self._remove_axes_metadata(removed_axes)
-
         if self._check_is_base_axes(removed_axes):
             raise RuntimeError('base axes cannot be indexed')
 
+        new_copy._axes_metadata = self._remove_axes_metadata(removed_axes)
+
         return new_copy
 
-        # return self.__class__(array=array, axes_metadata=axes_metadata, metadata=self.metadata, **kwargs)
+    def __getitem__(self, items):
+        return self._get_measurements(items)
 
-    # def __getitem__(self, items):
     #     if isinstance(items, Number):
     #         items = (items,)
     #
@@ -272,7 +272,7 @@ class Images(AbstractMeasurement):
         base_axes = [
             {'scale': self.sampling[1], 'units': 'Å', 'name': 'y', 'offset': 0., 'size': self.array.shape[1]},
             {'scale': self.sampling[0], 'units': 'Å', 'name': 'x', 'offset': 0., 'size': self.array.shape[0]}
-            ]
+        ]
 
         extra_axes = [{'size': n} for n in self.array.shape[:-2]]
 
@@ -452,11 +452,14 @@ class Images(AbstractMeasurement):
 
         return self.__class__(array, sampling=self.sampling, axes_metadata=self.axes_metadata, metadata=self.metadata)
 
-    def show(self, ax=None, cbar=False, power=1., **kwargs):
+    def _show_bqplot(self):
+        pass
+
+    def show(self, ax=None, cbar=False, power=1., figsize=None, **kwargs):
         self.compute(pbar=False)
 
         if ax is None:
-            ax = plt.subplot()
+            fig, ax = plt.subplots(figsize=figsize)
 
         slic = (0,) * self.collection_dimensions
 

@@ -10,7 +10,7 @@ from abtem.potentials.parametrizations import names as parametrization_names
 
 
 def _sinc(gpts: Tuple[int, int], sampling: Tuple[float, float], xp):
-    kx, ky = spatial_frequencies(gpts, sampling, return_grid=False, xp=xp, delayed=False)
+    kx, ky = spatial_frequencies(gpts, sampling, return_grid=False, xp=xp)
     sinc = np.sinc(np.sqrt((kx[:, None] * sampling[0]) ** 2 + (ky[None] * sampling[1]) ** 2))
     return sinc * sampling[0] * sampling[1]
 
@@ -24,7 +24,7 @@ def calculate_scattering_factors(gpts: Tuple[int, int],
     parametrization = parametrization_names[parametrization]
     parameters = parametrization.load_parameters()
 
-    k, _ = polar_spatial_frequencies(gpts, sampling, delayed=False, xp=xp)
+    k, _ = polar_spatial_frequencies(gpts, sampling, xp=xp)
     scattering_factors = xp.zeros((len(atomic_numbers),) + gpts, dtype=np.float32)
 
     for i, number in enumerate(atomic_numbers):

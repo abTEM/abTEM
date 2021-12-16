@@ -7,7 +7,7 @@ RUN /opt/conda/bin/pip install batchspawner dask-labextension
 
 RUN mkdir /src
 WORKDIR /src
-COPY . /src
+COPY ../.. /src
 
 RUN /opt/conda/bin/pip install --upgrade setuptools
 RUN /opt/conda/bin/pip install -r requirements.txt

@@ -9,13 +9,18 @@ from abtem.structures.structures import cut_box
 
 class SliceIndexedAtoms:
 
-    def __init__(self, atoms, num_slices):
+    def __init__(self, atoms, num_slices, reverse=False):
         order = np.argsort(atoms.positions[:, 2])
         self._num_slices = num_slices
 
         self._positions = atoms.positions[order][:, :2]
         self._numbers = atoms.numbers[order]
-        self._slice_idx = np.floor(atoms.positions[order][:, 2] / atoms.cell[2, 2] * num_slices).astype(np.int)
+        slice_idx = np.floor(atoms.positions[order][:, 2] / atoms.cell[2, 2] * num_slices).astype(np.int)
+
+        if reverse:
+            slice_idx = num_slices - slice_idx - 1
+
+        self._slice_idx = slice_idx
 
     def __len__(self):
         return self._num_slices
@@ -119,6 +124,11 @@ class SlicedAtoms:
     @property
     def slice_thickness(self):
         return self._slice_thickness
+
+    @slice_thickness.setter
+    def slice_thickness(self, value):
+        self._slice_thickness = value
+        self._slice_limits = _slice_limits(self._slice_thickness)
 
     @property
     def slice_limits(self) -> List[Tuple[float, float]]:

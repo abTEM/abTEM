@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from abtem.basic.energy import energy2wavelength
+from abtem.core.energy import energy2wavelength
 from abtem.waves.transfer import CTF, polar_aliases, scherzer_defocus, polar_symbols
 
 
