@@ -94,7 +94,7 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12):
         raise RuntimeError('Invalid cell: no vertical lattice vector')
 
     cell[[vertical_vector[0], 2]] = cell[[2, vertical_vector[0]]]
-    r = np.arctan2(atoms.cell[0, 1], atoms.cell[0, 0]) / np.pi * 180
+    r = np.arctan2(cell[0, 1], cell[0, 0]) / np.pi * 180
 
     atoms.set_cell(cell)
 
@@ -104,7 +104,7 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12):
     if not is_cell_valid(atoms, tol):
         raise RuntimeError('This cell cannot be made orthogonal using currently implemented methods.')
 
-    #atoms.set_cell(np.abs(atoms.get_cell()))
+    atoms.set_cell(np.abs(atoms.get_cell()))
 
     atoms.wrap()
     return atoms
@@ -304,11 +304,13 @@ def rotate_atoms_to_plane(atoms, plane='xy'):
 
     positions = atoms.positions[:, axes]
     cell = atoms.cell[:, axes]
+    cell = cell[list(axes)]
 
-    atoms = atoms.copy()
-    atoms.positions[:] = positions
-    atoms.cell[:] = cell
-    return standardize_cell(atoms)
+    new_atoms = atoms.copy()
+    new_atoms.positions[:] = positions
+    new_atoms.cell[:] = cell
+    new_atoms = standardize_cell(new_atoms)
+    return new_atoms #standardize_cell(atoms)
 
 
 def flip_atoms(atoms):

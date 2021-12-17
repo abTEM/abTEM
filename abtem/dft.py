@@ -270,8 +270,8 @@ class GPAWPotential(AbstractPotentialBuilder):
         new_gpts = self.gpts + (sum(self._slice_vertical_voxels),)
 
         axes = plane_to_axes(self._plane)
-        array = np.moveaxis(valence, axes[0], 0)
-        array = np.moveaxis(array, axes[1], 1)
+        if self._plane != 'xy':
+            array = np.moveaxis(valence, axes[:2], (0, 1))
 
         from scipy.interpolate import RegularGridInterpolator
 
