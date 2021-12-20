@@ -47,7 +47,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
     focal_spread: float
         The 1/e width of the focal spread due to chromatic aberration and lens current instability [Å].
     angular_spread: float
-        The 1/e width of the angular deviations due to source size [Å].
+        The 1/e width of the angular deviations due to source size [mrad].
     gaussian_spread:
         The 1/e width image deflections due to vibrations and thermal magnetic noise [Å].
     energy: float
