@@ -3,11 +3,16 @@ Installation
 
 Install with pip
 ----------------
+
 To install ``abtem`` with pip run::
 
     pip install abtem
 
 This installs ``abtem`` with its strict dependencies (see below); some functionality requires additional packages.
+
+To installl ``abtem`` using conda run::
+
+    conda install -c conda-forge abtem
 
 For a development installation::
 
