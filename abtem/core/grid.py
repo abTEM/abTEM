@@ -152,6 +152,9 @@ class Grid:
 
         self._adjust_sampling(self.extent, self.gpts)
 
+        if self._sampling is None:
+            self._sampling = sampling
+
     def _adjust_extent(self, gpts: tuple, sampling: tuple):
         if (gpts is not None) & (sampling is not None):
             self._extent = tuple((n - 1) * d if e else n * d for n, d, e in zip(gpts, sampling, self._endpoint))
@@ -292,8 +295,8 @@ class HasGridMixin:
         self.grid.match(other, check_match=check_match)
 
 
-def spatial_frequencies(gpts: Tuple[int, int],
-                         sampling: Tuple[float, float],
+def spatial_frequencies(gpts: Tuple[int, ...],
+                         sampling: Tuple[float, ...],
                          return_grid: bool = False,
                          xp=np):
     """
@@ -341,7 +344,7 @@ def spatial_frequencies(gpts: Tuple[int, int],
 #     return out
 
 
-def polar_spatial_frequencies(gpts, sampling, xp):
+def polar_spatial_frequencies(gpts, sampling, xp=np):
     xp = get_array_module(xp)
     kx, ky = spatial_frequencies(gpts, sampling, False, xp_to_str(xp))
     k = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)

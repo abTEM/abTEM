@@ -2,5 +2,5 @@ device: cpu
 fft: fftw
 lazy: false
 fftw:
-  threads: 2
-  planning_effort: FFTW_MEASURE
+  threads: 1
+  planning_effort: FFTW_PATIENT

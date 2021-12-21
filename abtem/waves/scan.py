@@ -19,7 +19,7 @@ class AbstractScan(metaclass=ABCMeta):
     """Abstract class to describe scans."""
 
     def __init__(self):
-        self._batches = None
+        pass
 
     def __len__(self):
         return self.num_positions
@@ -44,6 +44,11 @@ class AbstractScan(metaclass=ABCMeta):
         """Get the scan positions as numpy array."""
         pass
 
+    @property
+    @abstractmethod
+    def limits(self):
+        pass
+
     @abstractmethod
     def __copy__(self):
         pass
@@ -53,9 +58,42 @@ class AbstractScan(metaclass=ABCMeta):
         return copy(self)
 
 
-# class CustomScan:
-#
-#     def __init__(self):
+class CustomScan(AbstractScan):
+
+    def __init__(self, positions):
+        positions = np.array(positions)
+
+        if len(positions.shape) == 1:
+            positions = positions[None]
+
+        self._positions = positions
+        super().__init__()
+
+    @property
+    def shape(self):
+        return self._positions.shape[:-1]
+
+    @property
+    def positions(self):
+        return self._positions
+
+    @property
+    def limits(self):
+        return [(np.min(self.positions[:, 0]), np.min(self.positions[:, 1])),
+                (np.max(self.positions[:, 0]), np.max(self.positions[:, 1]))]
+
+    def divide(self, num_chunks):
+        return [CustomScan(self._positions)]
+
+    def get_positions(self, chunks: Union[int, Tuple[int, int]] = None, lazy: bool = False) -> np.ndarray:
+        return [self._positions]
+
+    @property
+    def axes_metadata(self):
+        return [{}]
+
+    def __copy__(self):
+        pass
 
 
 class LineScan(AbstractScan, HasGridMixin):
@@ -226,6 +264,10 @@ class LineScan(AbstractScan, HasGridMixin):
         return self.__class__(start=self.start, end=self.end, gpts=self.gpts, endpoint=self.grid.endpoint[0])
 
 
+def split_array_2d(array, chunks):
+    return [np.split(p, np.cumsum(chunks[1][:-1]), axis=1) for p in np.split(array, np.cumsum(chunks[0][:-1]), axis=0)]
+
+
 class GridScan(HasGridMixin, AbstractScan):
     """
     Grid scan object.
@@ -244,20 +286,14 @@ class GridScan(HasGridMixin, AbstractScan):
         Sampling rate of scan positions [1 / Å].
     endpoint : bool
         If True, end is the last position. Otherwise, it is not included. Default is False.
-    batch_partition : 'squares' or 'lines'
-        Specify how to split the scan into batches. If 'squares', the scan position batches are divided into the best
-        matching squares for the batch size. If 'lines', the batches are divided into lines of scan positions.
-    measurement_shift : two int
-        The insertion indices of new measurements will be shifted by this amount in x and y. This is used for
-        correctly inserting measurements collected from a partitioned scan.
     """
 
     def __init__(self,
-                 start: Sequence[float] = None,
-                 end: Sequence[float] = None,
-                 gpts: Union[int, Sequence[int]] = None,
+                 start: Tuple[float, float] = None,
+                 end: Tuple[float, float] = None,
+                 gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
-                 endpoint: bool = False):
+                 endpoint: Union[bool, Tuple[bool, bool]] = False):
 
         super().__init__()
 
@@ -270,18 +306,23 @@ class GridScan(HasGridMixin, AbstractScan):
                 self._start = np.array(start)[:2]
                 end = np.array(end)[:2]
                 assert (self._start.shape == (2,)) & (end.shape == (2,))
-            except:
+            except AssertionError:
                 raise ValueError('Scan start/end has incorrect shape')
-
-            #if (gpts is None) & (sampling is None):
-            #    raise RuntimeError('Grid gpts or sampling must be set')
 
             extent = end - start
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint)
 
     @property
-    def shape(self):
+    def limits(self):
+        return [self.start, self.end]
+
+    @property
+    def endpoint(self) -> Tuple[int, int]:
+        return self.grid.endpoint
+
+    @property
+    def shape(self) -> Tuple[int, int]:
         return self.gpts
 
     @property
@@ -328,7 +369,7 @@ class GridScan(HasGridMixin, AbstractScan):
                 {'label': 'y', 'type': 'gridscan', 'sampling': float(self.sampling[1]), 'offset': float(self.start[1]),
                  'units': 'Å'}]
 
-    def get_positions(self, chunks=None, lazy=False) -> np.ndarray:
+    def get_positions(self, chunks: Union[int, Tuple[int, int]] = None, lazy: bool = False) -> np.ndarray:
         def gridscan_positions(start, end, gpts, endpoint):
             x = np.linspace(start[0], end[0], gpts[0], endpoint=endpoint[0], dtype=np.float32)
             y = np.linspace(start[1], end[1], gpts[1], endpoint=endpoint[1], dtype=np.float32)
@@ -338,7 +379,7 @@ class GridScan(HasGridMixin, AbstractScan):
         if chunks is None:
             if lazy:
                 positions = dask.delayed(gridscan_positions)(self.start, self.end, self.gpts, self.grid.endpoint)
-                positions = da.from_delayed(positions, shape=self.gpts +(2,), dtype=np.float32)
+                positions = da.from_delayed(positions, shape=self.gpts + (2,), dtype=np.float32)
                 return positions
             else:
                 return gridscan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
@@ -355,18 +396,17 @@ class GridScan(HasGridMixin, AbstractScan):
             positions = positions.rechunk(chunks)
         else:
             positions = gridscan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
-            positions = [np.split(p, np.cumsum(chunks[1][:-1]), axis=1)
-                         for p in np.split(positions, np.cumsum(chunks[0][:-1]), axis=0)]
+            positions = split_array_2d(positions, chunks)
 
         return positions
 
-    def divide(self, partitions: Sequence[int]):
+    def divide(self, divisions: Union[int, Tuple[int, int]]):
         """
         Partition the scan into smaller grid scans
 
         Parameters
         ----------
-        partitions : two int
+        divisions : two int
             The number of partitions to create in x and y.
 
         Returns
@@ -374,8 +414,11 @@ class GridScan(HasGridMixin, AbstractScan):
         List of GridScan objects
         """
 
-        Nx = subdivide_into_chunks(self.gpts[0], partitions[0])
-        Ny = subdivide_into_chunks(self.gpts[1], partitions[1])
+        if isinstance(divisions, Number):
+            divisions = (int(np.round(np.sqrt(divisions))),) * 2
+
+        Nx = subdivide_into_chunks(self.gpts[0], divisions[0])
+        Ny = subdivide_into_chunks(self.gpts[1], divisions[1])
         Sx = np.concatenate(([0], np.cumsum(Nx)))
         Sy = np.concatenate(([0], np.cumsum(Ny)))
 
@@ -387,20 +430,17 @@ class GridScan(HasGridMixin, AbstractScan):
                 end = [start[0] + nx * self.sampling[0], start[1] + ny * self.sampling[1]]
                 endpoint = False
 
-                if i + 1 == partitions[0]:
+                if i + 1 == divisions[0]:
                     endpoint = self.grid.endpoint[0]
                     if endpoint:
                         end[0] -= self.sampling[0]
 
-                if j + 1 == partitions[1]:
+                if j + 1 == divisions[1]:
                     endpoint = self.grid.endpoint[1]
                     if endpoint:
                         end[1] -= self.sampling[1]
 
-                scan = self.__class__(start,
-                                      end,
-                                      gpts=(nx, ny),
-                                      endpoint=endpoint)
+                scan = self.__class__(start, end, gpts=(nx, ny), endpoint=endpoint)
 
                 inner_scans.append(scan)
             scans.append(inner_scans)
@@ -432,18 +472,3 @@ class GridScan(HasGridMixin, AbstractScan):
                               end=self.end,
                               gpts=self.gpts,
                               endpoint=self.grid.endpoint)
-
-
-class HasScanMixin:
-    _scan: Union[AbstractScan, None]
-
-    @property
-    def scan(self):
-        return self._scan
-
-    @property
-    def scan_sampling(self):
-        if self._scan is None:
-            return None
-        else:
-            return self.scan.sampling

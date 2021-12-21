@@ -57,7 +57,7 @@ class AntialiasAperture(HasGridMixin):
         if self._array is None:
             self._array = self.build()
 
-        x._array = fft2_convolve(x.array, self._array)
+        x._array = fft2_convolve(x.array, self._array, overwrite_x=False)
 
         return x
 

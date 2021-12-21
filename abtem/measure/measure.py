@@ -617,7 +617,7 @@ class DiffractionPatterns(AbstractMeasurement):
                               fftshift=self.fftshift)
 
     def __getitem__(self, items):
-        return self._get_measurements(items, fftshift=self.fftshift)
+        return self._get_measurements(items)
 
     @property
     def fftshift(self):
@@ -895,11 +895,11 @@ class DiffractionPatterns(AbstractMeasurement):
         return self.__class__(array, angular_sampling=self.angular_sampling, axes_metadata=self._axes_metadata,
                               metadata=self.metadata, fftshift=self.fftshift)
 
-    def show(self, ax=None, cbar=False, power=1., **kwargs):
+    def show(self, ax=None, cbar=False, power=1., figsize=None, **kwargs):
         self.compute()
 
         if ax is None:
-            ax = plt.subplot()
+            fig, ax = plt.subplots(figsize=figsize)
 
         slic = (0,) * self.collection_dimensions
         extent = self.fourier_space_extent[0] + self.fourier_space_extent[1]

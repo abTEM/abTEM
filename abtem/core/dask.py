@@ -6,7 +6,7 @@ from abtem.core import config
 
 class ComputableList(list):
 
-    def compute(self, **kwargs):
+    def _get_computables(self):
         computables = []
 
         for computable in self:
@@ -15,13 +15,20 @@ class ComputableList(list):
             else:
                 computables.append(computable)
 
+        return computables
+
+    def compute(self, **kwargs):
+
         with ProgressBar():
-            arrays = dask.compute(computables, **kwargs)[0]
+            arrays = dask.compute(self._get_computables(), **kwargs)[0]
 
         for array, wrapper in zip(arrays, self):
             wrapper._array = array
 
         return
+
+    def visualize_graph(self, **kwargs):
+        return dask.visualize(self._get_computables(), **kwargs)
 
 
 def _compute(dask_array_wrappers, **kwargs):

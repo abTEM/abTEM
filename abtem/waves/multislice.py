@@ -99,7 +99,6 @@ def _multislice(waves: np.ndarray,
             if transpose:
                 waves = propagator.propagate(waves, transmission_function.slice_thickness[0])
                 waves *= transmission_function.array[0]
-
             else:
                 waves *= transmission_function.array[0]
                 waves = propagator.propagate(waves, transmission_function.slice_thickness[0])

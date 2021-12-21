@@ -55,7 +55,7 @@ def polar_detector_bins(gpts: Tuple[int, int],
         Array of integer labels representing the detector regions.
     """
 
-    alpha, phi = polar_spatial_frequencies(gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]), delayed=False)
+    alpha, phi = polar_spatial_frequencies(gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]))
     phi = (phi + rotation) % (2 * np.pi)
 
     radial_bins = -np.ones(gpts, dtype=int)
@@ -65,7 +65,7 @@ def polar_detector_bins(gpts: Tuple[int, int],
     assert radial_bins.max() == nbins_radial - 1
 
     angular_bins = np.floor(nbins_azimuthal * (phi / (2 * np.pi)))
-    angular_bins = np.clip(angular_bins, 0, nbins_azimuthal - 1).astype(np.int)
+    angular_bins = np.clip(angular_bins, 0, nbins_azimuthal - 1).astype(int)
 
     bins = -np.ones(gpts, dtype=int)
     bins[valid] = angular_bins[valid] + radial_bins[valid] * nbins_azimuthal

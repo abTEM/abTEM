@@ -22,6 +22,47 @@ except ModuleNotFoundError:
     cp = None
 
 
+def build_fftw_obj(x, allow_new_plan=True, overwrite_x=True, backward=False):
+    flags = (config.get('fftw.planning_effort'),)
+    #if overwrite_x:
+    #    flags += ('FFTW_DESTROY_INPUT',)
+    if not allow_new_plan:
+        flags += ('FFTW_WISDOM_ONLY',)
+    try:
+        out = pyfftw.byte_align(np.zeros_like(x))
+        fftw_obj = pyfftw.FFTW(x, out, axes=(-1, -2),
+                               direction='FFTW_BACKWARD' if backward else 'FFTW_FORWARD',
+                               threads=config.get('fftw.threads'),
+                               flags=flags)
+        fftw_obj()
+        return out
+
+    except RuntimeError:
+        return build_fftw_obj(x, allow_new_plan=False, overwrite_x=overwrite_x, backward=backward)
+        # if not allow_new_plan:
+        #     if backward:
+        #         return pyfftw.builders.ifft2(x,
+        #                                      overwrite_input=overwrite_x,
+        #                                      planner_effort=config.get('fftw.planning_effort'),
+        #                                      threads=config.get('fftw.threads'))
+        #     else:
+        #         return pyfftw.builders.fft2(x,
+        #                                     overwrite_input=overwrite_x,
+        #                                     planner_effort=config.get('fftw.planning_effort'),
+        #                                     threads=config.get('fftw.threads'))
+
+        # dummy = pyfftw.byte_align(np.zeros_like(x))
+        #
+        # pyfftw.FFTW(dummy, dummy,
+        #             axes=(-1, -2),
+        #             direction='FFTW_BACKWARD' if backward else 'FFTW_FORWARD',
+        #             threads=config.get('fftw.threads'),
+        #             flags=flags,
+        #             planning_timelimit=120)
+        #
+        # return build_fftw_obj(x, allow_new_plan=False, overwrite_x=overwrite_x)
+
+
 def fft2(x, overwrite_x=False):
     xp = get_array_module(x)
 
@@ -29,11 +70,11 @@ def fft2(x, overwrite_x=False):
         if config.get('fft') == 'mkl':
             return mkl_fft.fft2(x, overwrite_x=overwrite_x)
         elif config.get('fft') == 'fftw':
-            fftw_obj = pyfftw.builders.fft2(x,
-                                            overwrite_input=overwrite_x,
-                                            planner_effort=config.get('fftw.planning_effort'),
-                                            threads=config.get('fftw.threads'))
-            return fftw_obj()
+            # if not overwrite_x:
+            #    x = x.copy()
+
+            x = build_fftw_obj(x, overwrite_x=overwrite_x, backward=False)
+            return x
         else:
             raise RuntimeError()
 
@@ -53,11 +94,9 @@ def ifft2(x, overwrite_x=False):
         if config.get('fft') == 'mkl':
             return mkl_fft.ifft2(x, overwrite_x=overwrite_x)
         elif config.get('fft') == 'fftw':
-            fftw_obj = pyfftw.builders.ifft2(x,
-                                             overwrite_input=overwrite_x,
-                                             planner_effort=config.get('fftw.planning_effort'),
-                                             threads=config.get('fftw.threads'))
-            return fftw_obj()
+
+            x = build_fftw_obj(x, overwrite_x=overwrite_x, backward=True)
+            return x
         else:
             raise RuntimeError()
 
@@ -111,7 +150,7 @@ def fft_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
     assert positions.shape[-1] == len(shape)
     dims = positions.shape[-1]
     n = len(positions.shape) - 1
-    k = list(spatial_frequencies(shape, (1.,) * dims, delayed=False, xp=xp))
+    k = list(spatial_frequencies(shape, (1.,) * dims, xp=xp))
 
     positions = [np.expand_dims(positions[..., i], tuple(range(n, n + dims))) for i in range(dims)]
 
@@ -133,6 +172,15 @@ def _fft_interpolation_masks_1d(n1, n2):
 
     if n2 > n1:
         mask1[:] = True
+
+        if n1 == 1:
+            mask2[0] = True
+        elif n1 % 2 == 0:
+            mask2[:n1 // 2] = True
+            mask2[-n1 // 2:] = True
+        else:
+            mask2[:n1 // 2 + 1] = True
+            mask2[-n1 // 2 + 1:] = True
     else:
         if n2 == 1:
             mask1[0] = True
@@ -143,17 +191,7 @@ def _fft_interpolation_masks_1d(n1, n2):
             mask1[:n2 // 2 + 1] = True
             mask1[-n2 // 2 + 1:] = True
 
-    if n1 > n2:
         mask2[:] = True
-    else:
-        if n1 == 1:
-            mask2[0] = True
-        elif n1 % 2 == 0:
-            mask2[:n1 // 2] = True
-            mask2[-n1 // 2:] = True
-        else:
-            mask2[:n1 // 2 + 1] = True
-            mask2[-n1 // 2 + 1:] = True
 
     return mask1, mask2
 

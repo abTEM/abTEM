@@ -435,7 +435,7 @@ class PixelatedDetector(AbstractDetector):
     resample : 'uniform' or False
         If 'uniform', the diffraction patterns from rectangular cells will be downsampled to a uniform angular sampling.
     mode : 'intensity' or 'complex'
-    save_file : str
+    url : str
         The path to the file used for saving the detector output.
     """
 
@@ -528,16 +528,14 @@ class PixelatedDetector(AbstractDetector):
 
         # return interpolate_bilinear(array, v, u, vw, uw)
 
-    def measurement_from_array(self, array, scan=None, waves=None, **kwargs):
+    def measurement_from_array(self, array, scan=None, waves=None, extra_axes_metadata=None, **kwargs):
 
-        if hasattr(waves, 'ensemble_axes'):
-            axes_metadata = waves.ensemble_axes
-        else:
-            axes_metadata = []
+        if extra_axes_metadata is None:
+            extra_axes_metadata = []
 
-        axes_metadata = axes_metadata + scan.axes_metadata
+        extra_axes_metadata = extra_axes_metadata + scan.axes_metadata
 
-        return DiffractionPatterns(array, angular_sampling=waves.angular_sampling, axes_metadata=axes_metadata,
+        return DiffractionPatterns(array, angular_sampling=waves.angular_sampling, axes_metadata=extra_axes_metadata,
                                    fftshift=True)
 
     def detect(self, waves) -> np.ndarray:
