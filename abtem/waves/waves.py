@@ -115,16 +115,17 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxesMetadata):
         """
         return Images(abs2(self.array), sampling=self.sampling, axes_metadata=self.extra_axes_metadata)
 
-    def downsample(self, max_angle: str = 'valid') -> 'Waves':
+    def downsample(self, max_angle: str = 'valid', normalization: str = 'values') -> 'Waves':
         xp = get_array_module(self.array)
         gpts = self._gpts_within_angle(max_angle)
 
         if self.is_lazy:
             array = self.array.map_blocks(fft2_interpolate, new_shape=gpts,
+                                          normalization=normalization,
                                           chunks=self.array.chunks[:-2] + gpts,
                                           meta=xp.array((), dtype=xp.complex64))
         else:
-            array = fft2_interpolate(self.array, new_shape=gpts)
+            array = fft2_interpolate(self.array, new_shape=gpts, normalization=normalization)
 
         antialias_aperture = self.antialias_aperture * min(self.gpts[0] / gpts[0], self.gpts[1] / gpts[1])
 

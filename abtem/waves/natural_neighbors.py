@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.spatial import cKDTree, ConvexHull
+from scipy.spatial import cKDTree, ConvexHull, Delaunay
 
 
 def triangle_area(pt1, pt2, pt3):
@@ -163,3 +163,13 @@ def natural_neighbor_weights(points, query_point, tri, neighbors, circumcenters)
         p2 = p3
 
     return weights / weights.sum()
+
+
+def pairwise_weights(points, query_points):
+    triangulation = Delaunay(points)
+    members, circumcenters = find_natural_neighbors(triangulation, query_points)
+    weights = np.zeros((len(points), len(query_points)))
+    for i, query_point in enumerate(query_points):
+        weights[:, i] = natural_neighbor_weights(points, query_point, triangulation, members[i], circumcenters)
+
+    return weights
