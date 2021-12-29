@@ -12,7 +12,9 @@ from ase import Atom
 
 from abtem.core.axes import HasAxesMetadata
 from abtem.core.backend import cp, asnumpy, get_array_module, get_ndimage_module
-from abtem.core.dask import HasDaskArray, requires_dask_array
+from abtem.core.dask import HasDaskArray
+from abtem.core.energy import energy2wavelength
+from abtem.core.fft import fft2
 from abtem.core.fft import fft2_interpolate
 from abtem.core.interpolate import interpolate_bilinear
 from abtem.measure.utils import polar_detector_bins, sum_run_length_encoded
@@ -62,16 +64,16 @@ def from_zarr(url):
 
 class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
 
-    def __init__(self, array, axes_metadata, metadata, base_axes):
+    def __init__(self, array, extra_axes_metadata, metadata, base_axes):
         self._array = array
 
-        if axes_metadata is None:
-            axes_metadata = []
+        if extra_axes_metadata is None:
+            extra_axes_metadata = []
 
         if metadata is None:
             metadata = {}
 
-        self._axes_metadata = axes_metadata
+        self._extra_axes_metadata = extra_axes_metadata
         self._metadata = metadata
         self._base_axes = base_axes
         super().__init__(array)
@@ -99,11 +101,11 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
 
     @property
     def axes_metadata(self) -> List[Dict]:
-        return self._axes_metadata + self.base_axes_metadata
+        return self._extra_axes_metadata + self.base_axes_metadata
 
     @property
     def extra_axes_metadata(self) -> List[Dict]:
-        return self._axes_metadata
+        return self._extra_axes_metadata
 
     @property
     def base_shape(self) -> Tuple[float, ...]:
@@ -148,37 +150,45 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
         if len(self.axes_metadata) != len(self.array.shape):
             raise RuntimeError()
 
-    def mean(self, axes=None, split_every=2):
-        return self._reduction(da.mean, axes=axes, split_every=split_every)
+    @abstractmethod
+    def check_is_compatible(self, other):
+        pass
 
-    def sum(self, axes=None, split_every=2):
-        return self._reduction(da.sum, axes=axes, split_every=split_every)
+    def add(self, other) -> 'T':
+        self.check_is_compatible(other)
+        self.array[:] += other.array
+        return self
 
-    def std(self, axes=None, split_every=2):
-        return self._reduction(da.std, axes=axes, split_every=split_every)
+    def subtract(self, other) -> 'T':
+        self.check_is_compatible(other)
+        self.array[:] -= other.array
+        return self
 
-    def _reduction(self, reduction_func, axes=None, split_every=2):
-        if axes is None:
-            axes = self.collection_axes
+    def mean(self, axes, **kwargs):
+        return self._reduction(np.mean, axes=axes, **kwargs)
+
+    def sum(self, axes, **kwargs):
+        return self._reduction(np.sum, axes=axes, **kwargs)
+
+    def std(self, axes, **kwargs):
+        return self._reduction(np.std, axes=axes, **kwargs)
+
+    def _reduction(self, reduction_func, axes, split_every=2):
 
         if self._check_is_base_axes(axes):
             raise RuntimeError('base axes cannot be reduced')
 
-        axes_metadata = self._remove_axes_metadata(axes)[:-len(self.base_shape)]
+        extra_axes_metadata = self._extra_axes_metadata
+        del extra_axes_metadata[axes]
 
-        new_copy = self.copy(copy_array=False)
-        new_copy._array = reduction_func(new_copy._array, axes, split_every=split_every)
-        new_copy._axes_metadata = axes_metadata
-
-        return new_copy
+        d = self._copy_as_dict(copy_array=False)
+        d['array'] = reduction_func(self.array, axes)
+        d['extra_axes_metadata'] = extra_axes_metadata
+        return self.__class__(**d)
 
     def _get_measurements(self, items):
         if isinstance(items, Number):
             items = (items,)
-
-        new_copy = self.copy(copy_array=False)
-
-        new_copy._array = self._array[items]
 
         removed_axes = []
         for i, item in enumerate(items):
@@ -188,59 +198,44 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
         if self._check_is_base_axes(removed_axes):
             raise RuntimeError('base axes cannot be indexed')
 
-        new_copy._axes_metadata = self._remove_axes_metadata(removed_axes)
-
-        return new_copy
+        d = self._copy_as_dict(copy_array=False)
+        d['array'] = self._array[items]
+        d['extra_axes_metadata'] = self._remove_axes_metadata(removed_axes)
+        return self.__class__(**d)
 
     def __getitem__(self, items):
         return self._get_measurements(items)
 
-    #     if isinstance(items, Number):
-    #         items = (items,)
-    #
-    #     array = self._array[items]
-    #
-    #     removed_axes = []
-    #     for i, item in enumerate(items):
-    #         if isinstance(item, Number):
-    #             removed_axes.append(i)
-    #
-    #     axes_metadata = self._remove_axes_metadata(removed_axes)
-    #
-    #     if self._check_is_base_axes(removed_axes):
-    #         raise RuntimeError('base axes cannot be indexed')
-    #
-    #     return self.__class__
-
-    def _to_zarr(self, url, compute=True, overwrite=False, **kwargs):
+    def to_zarr(self, url, compute=True, overwrite=False):
         with zarr.open(url, mode='w') as root:
             array = self.array.to_zarr(url, compute=compute, component='array', overwrite=overwrite)
-            root.attrs['axes_metadata'] = self._axes_metadata
-            root.attrs['metadata'] = self.metadata
-            root.attrs['kwargs'] = kwargs
+            d = self._copy_as_dict(copy_array=False)
+            for key, value in d.items():
+                root.attrs[key] = value
+                root.attrs[key] = value
+
             root.attrs['cls'] = self.__class__.__name__
         return array
 
     @staticmethod
-    def from_zarr(url):
+    def from_zarr(url) -> 'T':
         return from_zarr(url)
 
     @abstractmethod
     def to_hyperspy(self):
         pass
 
-    @abstractmethod
-    def to_zarr(self, url: str, compute: bool = True, overwrite: bool = False):
-        pass
-
-    def to_cpu(self):
-        new_copy = self.copy(copy_array=False)
+    def to_cpu(self) -> 'T':
+        new_copy = self.__class__(**self._copy_as_dict(copy_array=False))
         new_copy._array = asnumpy(self._array)
         return new_copy
 
     @abstractmethod
-    def copy(self, copy_array=True) -> T:
+    def _copy_as_dict(self, copy_array: bool = True) -> dict:
         pass
+
+    def copy(self) -> 'T':
+        return self.__class__(**self._copy_as_dict())
 
 
 class Images(AbstractMeasurement):
@@ -248,49 +243,47 @@ class Images(AbstractMeasurement):
     def __init__(self,
                  array: Union[da.core.Array, np.array],
                  sampling: Union[float, Tuple[float, float]],
-                 axes_metadata: List[Dict] = None,
+                 extra_axes_metadata: List[Dict] = None,
                  metadata: Dict = None):
 
         if isinstance(sampling, Number):
             sampling = (sampling,) * 2
 
         self._sampling = sampling
-        super().__init__(array=array, axes_metadata=axes_metadata, metadata=metadata, base_axes=(-2, -1))
+        super().__init__(array=array, extra_axes_metadata=extra_axes_metadata, metadata=metadata, base_axes=(-2, -1))
 
     @property
     def base_axes_metadata(self) -> List[Dict]:
         return [{'label': 'x', 'type': 'real-space', 'sampling': self.sampling[0]},
                 {'label': 'y', 'type': 'real-space', 'sampling': self.sampling[1]}]
 
-    @requires_dask_array
-    def to_zarr(self, url: str, compute: bool = True, overwrite: bool = False, **kwargs):
-        return self._to_zarr(url=url, overwrite=overwrite, sampling=self.sampling, compute=compute, **kwargs)
-
     def to_hyperspy(self):
         from hyperspy._signals.signal2d import Signal2D
 
-        base_axes = [
+        axes = [
             {'scale': self.sampling[1], 'units': 'Å', 'name': 'y', 'offset': 0., 'size': self.array.shape[1]},
             {'scale': self.sampling[0], 'units': 'Å', 'name': 'x', 'offset': 0., 'size': self.array.shape[0]}
         ]
 
-        extra_axes = [{'size': n} for n in self.array.shape[:-2]]
+        axes += [{'size': n} for n in self.array.shape[:-2]]
 
-        return Signal2D(self.array.T, axes=extra_axes + base_axes)
+        return Signal2D(self.array.T, axes=axes)
 
-    def copy(self, copy_array=True) -> 'Images':
+    def _copy_as_dict(self, copy_array: bool = True):
+        d = {'sampling': self.sampling,
+             'extra_axes_metadata': copy.deepcopy(self.extra_axes_metadata),
+             'metadata': copy.deepcopy(self.metadata)}
+
         if copy_array:
-            array = self._array.copy()
-        else:
-            array = self._array
-        return self.__class__(array, sampling=self.sampling, axes_metadata=copy.deepcopy(self._axes_metadata))
+            d['array'] = self.array.copy()
+        return d
 
     @property
     def sampling(self) -> Tuple[float, float]:
         return self._sampling
 
     @property
-    def coordinates(self):
+    def coordinates(self) -> Tuple[np.ndarray, np.ndarray]:
         x = np.linspace(0., self.shape[-2] * self.sampling[0], self.shape[-2])
         y = np.linspace(0., self.shape[-1] * self.sampling[1], self.shape[-1])
         return x, y
@@ -331,7 +324,10 @@ class Images(AbstractMeasurement):
         else:
             array = fft2_interpolate(self.array, gpts)
 
-        return self.__class__(array, sampling=sampling, axes_metadata=self.axes_metadata[:-2], metadata=self.metadata)
+        d = self._copy_as_dict(copy_array=False)
+        d['sampling'] = sampling
+        d['array'] = array
+        return self.__class__(**d)
 
     def interpolate_line(self,
                          start: Union[Tuple[float, float], Atom],
@@ -406,32 +402,27 @@ class Images(AbstractMeasurement):
                                       new_axis=(self.num_ensemble_axes,),
                                       meta=np.array((), dtype=np.float32))
 
-        return LineProfiles(array=array, start=scan.start, end=scan.end, axes_metadata=self._axes_metadata)
+        return LineProfiles(array=array, start=scan.start, end=scan.end, extra_axes_metadata=self.extra_axes_metadata)
 
-    def is_compatible(self, other) -> bool:
+    def check_is_compatible(self, other):
+        if not isinstance(other, self.__class__):
+            raise RuntimeError()
 
         if self.shape != other.shape:
-            return False
+            raise RuntimeError()
 
         if self.sampling != self.sampling:
-            return False
+            raise RuntimeError()
 
         if self.axes_metadata != other.axes_metadata:
-            return False
+            raise RuntimeError()
 
-        return True
-
-    def subtract(self, other) -> 'Images':
-        self.is_compatible(other)
-        return self.__class__(self.array - other.array,
-                              sampling=self.sampling,
-                              axes_metadata=copy.copy(self._axes_metadata),
-                              metadata=copy.copy(self.metadata))
-
-    def tile(self, reps) -> 'Images':
-        new_array = np.tile(self.array, reps)
-        return self.__class__(new_array, sampling=self.sampling, axes_metadata=copy.copy(self._axes_metadata),
-                              metadata=copy.copy(self.metadata))
+    def tile(self, reps: Tuple[int, int]) -> 'Images':
+        if len(reps) != 2:
+            raise RuntimeError()
+        d = self._copy_as_dict(copy_array=False)
+        d['array'] = np.tile(self.array, (1,) * (len(self.array.shape) - 2) + reps)
+        return self.__class__(**d)
 
     def gaussian_filter(self, sigma: Union[float, Tuple[float, float]], boundary: str = 'periodic'):
         xp = get_array_module(self.array)
@@ -450,16 +441,26 @@ class Images(AbstractMeasurement):
                                        depth=(0,) * (len(self.shape) - 2) + (int(np.ceil(4.0 * max(sigma))),) * 2,
                                        meta=xp.array((), dtype=xp.float32))
 
-        return self.__class__(array, sampling=self.sampling, axes_metadata=self.axes_metadata, metadata=self.metadata)
+        d = self._copy_as_dict(copy_array=False)
+        d['array'] = array
+        return self.__class__(**d)
 
-    def _show_bqplot(self):
-        pass
+    def diffractograms(self) -> 'DiffractionPatterns':
+        array = fft2(self.array)
+        array = np.fft.fftshift(np.abs(array), axes=(-2, -1))
+        wavelength = energy2wavelength(self.metadata['energy'])
+        angular_sampling = 1 / self.extent[0] * wavelength * 1e3, 1 / self.extent[1] * wavelength * 1e3
+        return DiffractionPatterns(array=array, angular_sampling=angular_sampling,
+                                   extra_axes_metadata=self.extra_axes_metadata, metadata=self.metadata)
 
-    def show(self, ax=None, cbar=False, power=1., figsize=None, **kwargs):
+    def show(self, ax=None, cbar: bool = False, power: float = 1., figsize: Tuple[int, int] = None, title: str = None,
+             **kwargs):
         self.compute(pbar=False)
 
         if ax is None:
             fig, ax = plt.subplots(figsize=figsize)
+
+        ax.set_title(title)
 
         slic = (0,) * self.collection_dimensions
 
@@ -491,7 +492,7 @@ class LineProfiles(AbstractMeasurement):
                  start: Tuple[float, float] = None,
                  end: Tuple[float, float] = None,
                  sampling: float = None,
-                 axes_metadata=None,
+                 extra_axes_metadata=None,
                  metadata=None):
         from abtem.waves.scan import LineScan
 
@@ -502,7 +503,7 @@ class LineProfiles(AbstractMeasurement):
             end = (start[0] + len(array) * sampling, start[1])
 
         self._linescan = LineScan(start=start, end=end, sampling=sampling, gpts=array.shape[-1])
-        super().__init__(array=array, axes_metadata=axes_metadata, metadata=metadata, base_axes=(-1,))
+        super().__init__(array=array, extra_axes_metadata=extra_axes_metadata, metadata=metadata, base_axes=(-1,))
 
     @property
     def start(self) -> Tuple[float, float]:
@@ -524,17 +525,28 @@ class LineProfiles(AbstractMeasurement):
     def base_axes_metadata(self) -> list:
         return [{'sampling': self.sampling}]
 
-    def tile(self):
-        new_copy = self.copy(copy_array=False)
+    def tile(self, reps):
+        d = self._copy_as_dict(copy_array=False)
+        d['end'] = np.array(self.start) + (np.array(self.end) - np.array(self.start)) * reps
+        d['array'] = np.tile(self.array, reps)
+        return self.__class__(**d)
         # new_copy._array
 
     def to_hyperspy(self):
         from hyperspy._signals.signal1d import Signal1D
         return Signal1D(self.array, axes=_to_hyperspy_axes_metadata(self.axes_metadata, self.shape)).as_lazy()
 
-    @requires_dask_array
-    def to_zarr(self, url: str, compute: bool = True, overwrite: bool = False):
-        self._to_zarr(url=url, compute=compute, overwrite=overwrite, sampling=self.sampling)
+    def copy_as_dict(self, copy_array=True) -> dict:
+        d = {'start': self.start,
+             'end': self.end,
+             'sampling': self.sampling,
+             'extra_axes_metadata': self.extra_axes_metadata,
+             'metadata': self.metadata}
+
+        if copy_array:
+            d['array'] = self.array.copy()
+
+        return d
 
     def show(self, ax=None, title='', label=None):
         if ax is None:
@@ -545,20 +557,12 @@ class LineProfiles(AbstractMeasurement):
 
         return ax
 
-    def copy(self, copy_array=True) -> 'LineProfiles':
-        if copy_array:
-            array = self._array.copy()
-        else:
-            array = self._array
-        return self.__class__(array, start=self.start, end=self.end,
-                              axes_metadata=copy.deepcopy(self.extra_axes_metadata))
-
 
 class RadialFourierSpaceLineProfiles(LineProfiles):
 
-    def __init__(self, array, sampling, axes_metadata=None, metadata=None):
+    def __init__(self, array, sampling, extra_axes_metadata=None, metadata=None):
         super().__init__(array=array, start=(0., 0.), end=(0., array.shape[-1] * sampling), sampling=sampling,
-                         axes_metadata=axes_metadata, metadata=metadata)
+                         extra_axes_metadata=extra_axes_metadata, metadata=metadata)
 
     def show(self, ax=None, title='', **kwargs):
         if ax is None:
@@ -578,12 +582,12 @@ class DiffractionPatterns(AbstractMeasurement):
                  array,
                  angular_sampling: Tuple[float, float],
                  fftshift: bool = False,
-                 axes_metadata=None,
+                 extra_axes_metadata=None,
                  metadata=None):
 
         self._fftshift = fftshift
         self._angular_sampling = (float(angular_sampling[0]), float(angular_sampling[1]))
-        super().__init__(array=array, axes_metadata=axes_metadata, metadata=metadata, base_axes=(-2, -1))
+        super().__init__(array=array, extra_axes_metadata=extra_axes_metadata, metadata=metadata, base_axes=(-2, -1))
 
     @property
     def base_axes_metadata(self):
@@ -592,29 +596,18 @@ class DiffractionPatterns(AbstractMeasurement):
                 {'label': 'scattering_angle_y', 'type': 'fourier_space', 'sampling': self.angular_sampling[1],
                  'offset': self.fourier_space_extent[1][0], 'units': 'mrad'}]
 
-    @requires_dask_array
-    def to_zarr(self, url: str, compute: bool = True, overwrite: bool = False, **kwargs):
-        return self._to_zarr(url=url,
-                             compute=compute,
-                             overwrite=overwrite,
-                             angular_sampling=self.angular_sampling,
-                             fftshift=self.fftshift,
-                             **kwargs)
-
     def to_hyperspy(self):
         from hyperspy._signals.signal2d import Signal2D
         return Signal2D(self.array, axes=_to_hyperspy_axes_metadata(self.axes_metadata, self.shape)).as_lazy()
 
-    def copy(self, copy_array=True):
+    def _copy_as_dict(self, copy_array: bool = True) -> dict:
+        d = {'angular_sampling': self.angular_sampling,
+             'extra_axes_metadata': copy.deepcopy(self.extra_axes_metadata),
+             'metadata': copy.deepcopy(self.metadata),
+             'fftshift': self.fftshift}
         if copy_array:
-            array = self._array.copy()
-        else:
-            array = self._array
-        return self.__class__(array,
-                              angular_sampling=self.angular_sampling,
-                              axes_metadata=copy.deepcopy(self.extra_axes_metadata),
-                              metadata=copy.deepcopy(self.metadata),
-                              fftshift=self.fftshift)
+            d['array'] = self.array.copy()
+        return d
 
     def __getitem__(self, items):
         return self._get_measurements(items)
@@ -726,7 +719,8 @@ class DiffractionPatterns(AbstractMeasurement):
                                              (0,) * 2,
                                        meta=xp.array((), dtype=xp.float32))
 
-        return self.__class__(array, angular_sampling=self.angular_sampling, axes_metadata=self.axes_metadata,
+        return self.__class__(array, angular_sampling=self.angular_sampling,
+                              extra_axes_metadata=self.extra_axes_metadata,
                               metadata=self.metadata, fftshift=self.fftshift)
 
     def polar_binning(self, nbins_radial, nbins_azimuthal, inner, outer, rotation=0.):
@@ -827,9 +821,10 @@ class DiffractionPatterns(AbstractMeasurement):
             sampling = (1., 1.)
 
         if len(self.real_space_axes) == 1:
-            return LineProfiles(integrated_intensity, sampling=sampling[0], axes_metadata=self.axes_metadata[:-3])
+            return LineProfiles(integrated_intensity, sampling=sampling[0],
+                                extra_axes_metadata=self.extra_axes_metadata[:-3])
         else:
-            return Images(integrated_intensity, sampling=sampling, axes_metadata=self.axes_metadata[:-4])
+            return Images(integrated_intensity, sampling=sampling, extra_axes_metadata=self.extra_axes_metadata[:-2])
 
     def integrated_center_of_mass(self) -> Images:
         def intgrad2d(gradient, sampling):
@@ -842,7 +837,7 @@ class DiffractionPatterns(AbstractMeasurement):
             k[k == 0] = 1e-12
             That = (np.fft.fft2(gx) * grid_ikx + np.fft.fft2(gy) * grid_iky) / (2j * np.pi * k)
             T = np.real(np.fft.ifft2(That))
-            T -= T.min()
+            T -= np.min(T)
             return T
 
         com = self.center_of_mass()
@@ -852,7 +847,8 @@ class DiffractionPatterns(AbstractMeasurement):
 
         icom = intgrad2d((com.array.real, com.array.imag), sampling)
 
-        return Images(array=icom, sampling=sampling, axes_metadata=self._axes_metadata[:-2], metadata=self.metadata)
+        return Images(array=icom, sampling=sampling, extra_axes_metadata=self.extra_axes_metadata[:-2],
+                      metadata=self.metadata)
 
     def center_of_mass(self) -> Images:
         x, y = self.angular_coordinates()
@@ -865,7 +861,8 @@ class DiffractionPatterns(AbstractMeasurement):
 
         com = com_x + 1.j * com_y
 
-        return Images(array=com, sampling=sampling, axes_metadata=self._axes_metadata[:-2], metadata=self.metadata)
+        return Images(array=com, sampling=sampling, extra_axes_metadata=self.extra_axes_metadata[:-2],
+                      metadata=self.metadata)
 
     def angular_coordinates(self) -> Tuple[np.ndarray, np.ndarray]:
         xp = get_array_module(self.array)
@@ -892,12 +889,11 @@ class DiffractionPatterns(AbstractMeasurement):
         else:
             array = block_direct(self.array)
 
-        return self.__class__(array, angular_sampling=self.angular_sampling, axes_metadata=self._axes_metadata,
-                              metadata=self.metadata, fftshift=self.fftshift)
+        d = self._copy_as_dict(copy_array=False)
+        d['array'] = array
+        return self.__class__(**d)
 
     def show(self, ax=None, cbar=False, power=1., figsize=None, **kwargs):
-        self.compute()
-
         if ax is None:
             fig, ax = plt.subplots(figsize=figsize)
 
@@ -935,17 +931,7 @@ class PolarMeasurements(AbstractMeasurement):
                  'offset': self.azimuthal_offset, 'units': 'rad'}]
 
     def to_hyperspy(self):
-        pass
-
-    @requires_dask_array
-    def to_zarr(self, url: str, compute: bool = True, overwrite: bool = False):
-        return self._to_zarr(url=url,
-                             compute=compute,
-                             overwrite=overwrite,
-                             radial_sampling=self.radial_sampling,
-                             azimuthal_sampling=self.azimuthal_sampling,
-                             radial_offset=self.radial_offset,
-                             azimuthal_offset=self.azimuthal_offset)
+        raise NotImplementedError
 
     @property
     def radial_offset(self) -> float:
@@ -984,7 +970,8 @@ class PolarMeasurements(AbstractMeasurement):
 
         if detector_regions is not None:
             array = self.array.reshape(self.shape[:-2] + (-1,))[..., list(detector_regions)].sum(axis=-1)
-            return Images(array=array, sampling=sampling, axes_metadata=self.axes_metadata[:-4], metadata=self.metadata)
+            return Images(array=array, sampling=sampling, extra_axes_metadata=self.extra_axes_metadata[:-2],
+                          metadata=self.metadata)
 
         if radial_limits is None:
             radial_slice = slice(None)
@@ -1002,35 +989,22 @@ class PolarMeasurements(AbstractMeasurement):
 
         array = self.array[..., radial_slice, azimuthal_slice].sum(axis=(-2, -1))
 
-        return Images(array=array, sampling=sampling, axes_metadata=self.axes_metadata[:-4], metadata=self.metadata)
+        return Images(array=array, sampling=sampling, extra_axes_metadata=self.extra_axes_metadata[:-2],
+                      metadata=self.metadata)
 
-    def copy(self, copy_array=True):
+    def _copy_as_dict(self, copy_array: bool = True) -> dict:
+        d = {'radial_offset': self.radial_offset,
+             'radial_sampling': self.radial_sampling,
+             'azimuthal_offset': self.azimuthal_offset,
+             'azimuthal_sampling': self.azimuthal_sampling,
+             'extra_axes_metadata': copy.deepcopy(self.extra_axes_metadata),
+             'metadata': copy.deepcopy(self.metadata)}
         if copy_array:
-            array = self._array.copy()
-        else:
-            array = self._array
-        return self.__class__(array,
-                              radial_offset=self.radial_offset,
-                              radial_sampling=self.radial_sampling,
-                              azimuthal_offset=self.azimuthal_offset,
-                              azimuthal_sampling=self.azimuthal_sampling,
-                              axes_metadata=copy.deepcopy(self._axes_metadata),
-                              metadata=copy.deepcopy(self._axes_metadata))
+            d['array'] = self.array.copy()
 
-    def compute(self, **kwargs):
-        array = self._array.compute(**kwargs)
-        return self.__class__(array,
-                              radial_sampling=self.radial_sampling,
-                              azimuthal_sampling=self.azimuthal_sampling,
-                              radial_offset=self._radial_offset,
-                              azimuthal_offset=self._azimuthal_offset,
-                              axes_metadata=self._axes_metadata,
-                              metadata=self.metadata)
+        return d
 
     def show(self, ax=None, min_azimuthal_division=np.pi / 20, **kwargs):
-        import matplotlib.pyplot as plt
-        import numpy as np
-
         array = self.array[(0,) * (len(self.shape) - 2)]
 
         repeat = int(self.azimuthal_sampling / min_azimuthal_division)

@@ -5,50 +5,8 @@ import numpy as np
 from ase.data import atomic_numbers
 
 from abtem.structures.structures import cut_box
-
-
-class SliceIndexedAtoms:
-
-    def __init__(self, atoms, num_slices, reverse=False):
-        order = np.argsort(atoms.positions[:, 2])
-        self._num_slices = num_slices
-
-        self._positions = atoms.positions[order][:, :2]
-        self._numbers = atoms.numbers[order]
-        slice_idx = np.floor(atoms.positions[order][:, 2] / atoms.cell[2, 2] * num_slices).astype(np.int)
-
-        if reverse:
-            slice_idx = num_slices - slice_idx - 1
-
-        self._slice_idx = slice_idx
-
-    def __len__(self):
-        return self._num_slices
-
-    def get_atoms_in_slices(self, first_slice, last_slice):
-        # return np.zeros((0, 2), dtype=np.float32), np.zeros((0,)), np.zeros((0,))
-
-        def _get_atoms_in_slice(slice_idx, first_slice, last_slice, positions, numbers):
-            start_idx = np.searchsorted(slice_idx, first_slice)
-            end_idx = np.searchsorted(slice_idx, last_slice)
-
-            # if start_idx == end_idx:
-            # return np.zeros((0, 2), dtype=np.float32), np.zeros((0,)), np.zeros((0,))
-
-            chunk_positions = positions[start_idx:end_idx]
-            chunk_numbers = numbers[start_idx:end_idx]
-            chunk_slice_idx = slice_idx[start_idx:end_idx] - first_slice
-            return chunk_positions, chunk_numbers, chunk_slice_idx
-
-        return _get_atoms_in_slice(self._slice_idx, first_slice, last_slice, self._positions, self._numbers)
-
-        # positions, numbers, slice_idx = dask.delayed(_get_atoms_in_slice, nout=3)(self._slice_idx,
-        #                                                                           first_slice,
-        #                                                                           last_slice,
-        #                                                                           self._atoms.positions,
-        #                                                                           self._atoms.numbers)
-        #
-        # return positions, numbers, slice_idx
+from ase import Atoms
+from abc import abstractmethod
 
 
 def _validate_slice_thickness(slice_thickness: Union[float, np.ndarray, Sequence[float]],
@@ -79,6 +37,111 @@ def _validate_slice_thickness(slice_thickness: Union[float, np.ndarray, Sequence
 def _slice_limits(slice_thickness):
     cumulative_thickness = np.cumsum(np.concatenate(((0,), slice_thickness)))
     return [(cumulative_thickness[i], cumulative_thickness[i + 1]) for i in range(len(cumulative_thickness) - 1)]
+
+
+def unpack_item(item, num_items):
+    if isinstance(item, int):
+        first_index = item
+        last_index = first_index + 1
+    elif isinstance(item, slice):
+        first_index = item.start
+        last_index = item.stop
+    else:
+        raise RuntimeError()
+
+    if last_index is None:
+        last_index = num_items
+    else:
+        last_index = min(last_index, num_items)
+
+    if first_index >= last_index:
+        raise IndexError
+
+    return first_index, last_index
+
+
+class AbstractSlicedAtoms:
+
+    def __init__(self, atoms: Atoms, slice_thickness: Union[float, np.ndarray, str], reverse: bool = False):
+        self._atoms = atoms
+
+        if isinstance(slice_thickness, str):
+            raise NotImplementedError
+
+        self._slice_thickness = _validate_slice_thickness(slice_thickness, thickness=atoms.cell[2, 2])
+        self._reverse = reverse
+
+    def __len__(self):
+        return self.num_slices
+
+    @property
+    def num_slices(self):
+        return len(self._slice_thickness)
+
+    @property
+    def reverse(self):
+        return self._reverse
+
+    @property
+    def slice_thickness(self):
+        return self._slice_thickness
+
+    @property
+    def slice_limits(self):
+        return _slice_limits(self.slice_thickness)
+
+    @abstractmethod
+    def _get_atoms_in_slices(self, first_slice, last_slice):
+        pass
+
+    def __getitem__(self, item):
+        return self._get_atoms_in_slices(*unpack_item(item, len(self)))
+
+
+class SliceIndexedAtoms(AbstractSlicedAtoms):
+
+    def __init__(self,
+                 atoms: Atoms,
+                 slice_thickness: Union[float, np.ndarray, str],
+                 slice_index=None,
+                 reverse: bool = False):
+
+        self._slice_index = slice_index
+
+        super().__init__(atoms, slice_thickness, reverse)
+
+    @property
+    def atoms(self):
+        return self._atoms
+
+    @property
+    def slice_index(self):
+        if self._slice_index is None:
+            self._slice_index = self._calculate_slice_index()
+
+        return self._slice_index
+
+    def _calculate_slice_index(self):
+        return np.digitize(self.atoms.positions[:, 2], np.cumsum(self.slice_thickness))
+
+    def _get_atoms_in_slices(self, first_slice: int, last_slice: int):
+        if last_slice - first_slice == 1:
+            is_in_slices = self.slice_index == first_slice
+        else:
+            is_in_slices = (self.slice_index >= first_slice) * (self.slice_index < last_slice)
+
+        atoms = self.atoms[is_in_slices]
+        slice_thickness = self.slice_thickness[first_slice:last_slice]
+        atoms.cell[2, 2] = np.sum(slice_thickness)
+
+        atoms.positions[:, 2] -= np.sum(self.slice_thickness[:first_slice])
+
+        if last_slice - first_slice > 1:
+            slice_index = self.slice_index[is_in_slices]
+            raise NotImplementedError
+            return self.__class__
+        else:
+            return atoms
 
 
 class SlicedAtoms:

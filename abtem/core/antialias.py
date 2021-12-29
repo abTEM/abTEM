@@ -6,6 +6,7 @@ from abtem.core.backend import get_array_module, xp_to_str
 from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.grid import polar_spatial_frequencies
 from abtem.core.fft import fft2_convolve
+from abtem.core.events import HasEventsMixin, Events
 
 TAPER = 0.01
 CUTOFF = 2 / 3.
@@ -30,35 +31,44 @@ def antialias_aperture(cutoff, taper, gpts, sampling, xp):
 class AntialiasAperture(HasGridMixin):
 
     def __init__(self,
+                 cutoff: float = CUTOFF,
+                 taper: float = TAPER,
                  extent: Union[float, Tuple[float, float]] = None,
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
-                 cutoff: float = CUTOFF, taper: float = TAPER,
                  device: str = 'cpu'):
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
-
         self._cutoff = cutoff
         self._taper = taper
         self._device = device
         self._array = None
 
+        def clear_data(*args):
+            self._array = None
+
+        self.grid.events.observe(clear_data, ('sampling', 'gpts', 'extent'))
+
     @property
     def array(self):
+        if self._array is None:
+            self._array = self._calculate_array()
+
         return self._array
 
-    def build(self):
-        return antialias_aperture(self.cutoff,
-                                  self.taper,
-                                  self.gpts,
-                                  self.sampling,
-                                  get_array_module(self._device))
+    def _calculate_array(self):
+        self.grid.check_is_defined()
+        array = antialias_aperture(self.cutoff,
+                                   self.taper,
+                                   self.gpts,
+                                   self.sampling,
+                                   get_array_module(self._device))
+        return array
 
-    def apply(self, x):
-        if self._array is None:
-            self._array = self.build()
+    def bandlimit(self, x):
+        x._array = fft2_convolve(x.array, self.array, overwrite_x=False)
 
-        x._array = fft2_convolve(x.array, self._array, overwrite_x=False)
-
+        if hasattr(x, 'antialias_aperture'):
+            x.antialias_aperture = 2 / 3.
         return x
 
     @property
@@ -71,7 +81,7 @@ class AntialiasAperture(HasGridMixin):
         return self._cutoff
 
     @cutoff.setter
-    def cutoff(self, value: float):
+    def cutoff(self, value):
         self._cutoff = value
 
 
@@ -94,12 +104,12 @@ class HasAntialiasApertureMixin:
 
     @property
     def antialias_taper(self):
-        return self._antialias_aperture._taper
+        return self._antialias_aperture.taper
 
     @property
     def antialias_aperture(self) -> float:
         return self._antialias_aperture.cutoff
 
     @antialias_aperture.setter
-    def antialias_aperture(self, value: float):
+    def antialias_aperture(self, value):
         self._antialias_aperture.cutoff = value

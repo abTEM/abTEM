@@ -19,7 +19,7 @@ from abtem.measure.measure import Images
 from abtem.potentials.atom import AtomicPotential
 from abtem.potentials.infinite import calculate_scattering_factors, infinite_potential_projections
 from abtem.potentials.temperature import AbstractFrozenPhonons, FrozenPhonons
-from abtem.structures.slicing import _validate_slice_thickness, SliceIndexedAtoms, SlicedAtoms
+from abtem.structures.slicing import _validate_slice_thickness, SliceIndexedAtoms, SlicedAtoms, unpack_item
 from abtem.structures.structures import is_cell_orthogonal, orthogonalize_cell
 
 
@@ -63,8 +63,12 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         if i >= self.num_slices:
             raise RuntimeError('Slice index {} too large for potential with {} slices'.format(i, self.num_slices))
 
-    def __getitem__(self, items) -> 'PotentialArray':
-        return self.build()[items]
+    @abstractmethod
+    def get_chunk(self, first_slice, last_slice):
+        pass
+
+    def __getitem__(self, item) -> 'PotentialArray':
+        return self.get_chunk(*unpack_item(item, len(self)))
 
     def project(self) -> 'Images':
         return self.build().project()
@@ -111,8 +115,6 @@ class AbstractPotentialFromAtoms(AbstractPotential):
 
         if np.abs(atoms.cell[2, 2]) < 1e-12:
             raise RuntimeError('cell has no thickness')
-
-        self._frozen_phonons = atoms
 
         if hasattr(atoms, 'get_configurations'):
             self._frozen_phonons = atoms
@@ -175,9 +177,12 @@ class AbstractPotentialFromAtoms(AbstractPotential):
         return len(self._frozen_phonons)
 
 
-def _validate_potential(potential: Union[Atoms, AbstractPotential]) -> AbstractPotential:
+def validate_potential(potential: Union[Atoms, AbstractPotential], waves=None) -> AbstractPotential:
     if isinstance(potential, Atoms):
         potential = Potential(potential)
+
+    if waves is not None:
+        potential.grid.match(waves)
 
     return potential
 
@@ -257,9 +262,16 @@ class Potential(AbstractPotentialFromAtoms):
 
         self._reverse = reverse
         self._chunks = chunks
+
         self._sliced_atoms = None
         self._scattering_factors = None
         self._atomic_potentials = None
+
+        def clear_data(*args):
+            self._scattering_factors = None
+            self._atomic_potentials = None
+
+        self.grid.events.observe(clear_data, ('sampling', 'gpts', 'extent'))
 
     @property
     def reverse(self) -> bool:
@@ -330,29 +342,44 @@ class Potential(AbstractPotentialFromAtoms):
 
         return atomic_potentials
 
-    def _get_sliced_atoms(self) -> SliceIndexedAtoms:
-        return SliceIndexedAtoms(atoms=self.atoms, num_slices=len(self._slice_thickness), reverse=self._reverse)
-
-    def _calculate_scattering_factors(self) -> np.ndarray:
-        xp = get_array_module(self._device)
-        return calculate_scattering_factors(self.gpts, self.sampling, np.unique(self.atoms.numbers), xp_to_str(xp))
-
-    def _get_chunk_infinite(self, first_slice: int, last_slice: int) -> 'PotentialArray':
-        if self._scattering_factors is None:
-            self._scattering_factors = self._calculate_scattering_factors()
+    def get_sliced_atoms(self) -> SliceIndexedAtoms:
 
         if self._sliced_atoms is None:
-            self._sliced_atoms = self._get_sliced_atoms()
+            if self.projection == 'infinite':
+                self._sliced_atoms = SliceIndexedAtoms(atoms=self.atoms, slice_thickness=self.slice_thickness,
+                                                       reverse=self._reverse)
+            else:
+                raise NotImplementedError
 
-        positions, numbers, slice_idx = self._sliced_atoms.get_atoms_in_slices(first_slice, last_slice)
+        return self._sliced_atoms
+
+    def _get_scattering_factors(self) -> np.ndarray:
+        xp = get_array_module(self._device)
+
+        if self._scattering_factors is None:
+            self._scattering_factors = calculate_scattering_factors(self.gpts, self.sampling,
+                                                                    np.unique(self.atoms.numbers), xp_to_str(xp))
+
+        return self._scattering_factors
+
+    def _get_chunk_infinite(self, first_slice: int, last_slice: int, return_atoms: bool = False) \
+            -> Union['PotentialArray', Tuple['PotentialArray', Atoms]]:
+
+        scattering_factors = self._get_scattering_factors()
+        sliced_atoms = self.get_sliced_atoms()
+
+        atoms = sliced_atoms[first_slice: last_slice]
         shape = (last_slice - first_slice,) + self.gpts
 
-        array = infinite_potential_projections(positions, numbers, slice_idx, shape, self.sampling,
-                                               self._scattering_factors)
+        array = infinite_potential_projections(atoms, shape, self.sampling, scattering_factors)
+        potential = PotentialArray(array, slice_thickness=self.slice_thickness[first_slice:last_slice],
+                                   extent=self.extent)
+        if return_atoms:
+            return potential, atoms
+        else:
+            return potential
 
-        return PotentialArray(array, slice_thickness=self.slice_thickness[first_slice:last_slice], extent=self.extent)
-
-    def _get_chunk_finite(self, first_slice: int, last_slice: int):
+    def _get_chunk_finite(self, first_slice: int, last_slice: int, return_atoms: bool = False):
         xp = get_array_module(self._device)
 
         if self._atomic_potentials is None:
@@ -377,15 +404,18 @@ class Potential(AbstractPotentialFromAtoms):
 
         return PotentialArray(array, slice_thickness=self.slice_thickness[first_slice:last_slice], extent=self.extent)
 
-    def get_chunk(self, first_slice: int, last_slice: int) -> 'PotentialArray':
+    def get_chunk(self, first_slice: int, last_slice: int, return_atoms: bool = False) -> 'PotentialArray':
         if self.projection == 'infinite':
-            return self._get_chunk_infinite(first_slice, last_slice)
+            return self._get_chunk_infinite(first_slice, last_slice, return_atoms=return_atoms)
         else:
-            return self._get_chunk_finite(first_slice, last_slice)
+            return self._get_chunk_finite(first_slice, last_slice, return_atoms=return_atoms)
 
-    def generate_chunks(self) -> Generator:
-        for start, end in generate_chunks(len(self.slice_thickness), chunks=self.chunks):
-            yield self.get_chunk(first_slice=start, last_slice=end)
+    def generate_chunks(self, chunks: int = None, return_atoms: bool = False) -> Generator:
+        if chunks is None:
+            chunks = self.chunks
+
+        for start, end in generate_chunks(len(self), chunks=chunks):
+            yield self.get_chunk(first_slice=start, last_slice=end, return_atoms=return_atoms)
 
     def get_potential_configurations(self, lazy: bool = True):
         """
@@ -475,16 +505,12 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
     def build(self):
         return self
 
-    def __getitem__(self, items):
-        if isinstance(items, (int, slice)):
-            potential_array = self.array[items]
+    def get_chunk(self, first_slice, last_slice):
+        array = self.array[first_slice:last_slice]
+        if len(array.shape) == 2:
+            array = array[None]
 
-            if len(potential_array.shape) == 2:
-                potential_array = potential_array[None]
-
-            return self.__class__(potential_array, self.slice_thickness[items], extent=self.extent)
-        else:
-            raise TypeError('Potential must be indexed with integers or slices, not {}'.format(type(items)))
+        return self.__class__(array, self.slice_thickness[first_slice:last_slice], extent=self.extent)
 
     def transmission_function(self, energy: float):
         """
@@ -634,15 +660,11 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         self._accelerator = Accelerator(energy=energy)
         super().__init__(array, slice_thickness, extent, sampling)
 
-    def __getitem__(self, items):
-        if isinstance(items, (int, slice)):
-            array = self.array[items]
-            if len(array.shape) == 2:
-                array = array[None]
-
-            return self.__class__(array, self.slice_thickness[items], extent=self.extent, energy=self.energy)
-        else:
-            raise TypeError('Potential must indexed with integers or slices, not {}'.format(type(items)))
+    def get_chunk(self, first_slice, last_slice):
+        array = self.array[first_slice]
+        if len(array.shape) == 2:
+            array = array[None]
+        return self.__class__(array, self.slice_thickness[last_slice], extent=self.extent, energy=self.energy)
 
     def transmission_function(self, energy):
         if energy != self.energy:
@@ -650,12 +672,12 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         return self
 
     def transmit(self, waves):
-        if hasattr(waves, 'array'):
-            self.accelerator.check_match(waves)
-            self.grid.check_match(waves)
-            waves._array *= self.array
-        else:
-            waves *= self.array
+        #if hasattr(waves, 'array'):
+        self.accelerator.check_match(waves)
+        self.grid.check_match(waves)
+        waves._array *= self.array[0]
+        #else:
+        #    waves *= self.array
 
         return waves
 

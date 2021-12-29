@@ -22,23 +22,31 @@ except ModuleNotFoundError:
     cp = None
 
 
-def build_fftw_obj(x, allow_new_plan=True, overwrite_x=True, backward=False):
-    flags = (config.get('fftw.planning_effort'),)
-    #if overwrite_x:
+def build_fftw_obj(x, allow_new_plan=False, overwrite_x=True, backward=False):
+    # flags = (,)
+    # if overwrite_x:
     #    flags += ('FFTW_DESTROY_INPUT',)
-    if not allow_new_plan:
-        flags += ('FFTW_WISDOM_ONLY',)
+    # if not allow_new_plan:
+    #    flags +=
+
     try:
         out = pyfftw.byte_align(np.zeros_like(x))
         fftw_obj = pyfftw.FFTW(x, out, axes=(-1, -2),
                                direction='FFTW_BACKWARD' if backward else 'FFTW_FORWARD',
                                threads=config.get('fftw.threads'),
-                               flags=flags)
+                               flags=(config.get('fftw.planning_effort'), 'FFTW_WISDOM_ONLY',))
         fftw_obj()
         return out
 
     except RuntimeError:
-        return build_fftw_obj(x, allow_new_plan=False, overwrite_x=overwrite_x, backward=backward)
+        out = pyfftw.byte_align(np.zeros_like(x))
+        fftw_obj = pyfftw.FFTW(x.copy(), out, axes=(-1, -2),
+                               direction='FFTW_BACKWARD' if backward else 'FFTW_FORWARD',
+                               threads=config.get('fftw.threads'),
+                               flags=(config.get('fftw.planning_effort'),))
+
+        return build_fftw_obj(x, allow_new_plan=True, overwrite_x=overwrite_x, backward=backward)
+
         # if not allow_new_plan:
         #     if backward:
         #         return pyfftw.builders.ifft2(x,
@@ -255,10 +263,14 @@ def fft2_interpolate(array, new_shape, normalization='values', overwrite_x=False
         array = array.real
 
     if normalization == 'values':
-        array *= array.shape[-1] * array.shape[-2] / old_size
-    elif normalization == 'norm':
-        array *= array.shape[-1] * array.shape[-2] / old_size
-    elif (normalization != False) and (normalization != None):
+        #array *= old_size / np.prod(array.shape[-2:])
+        #array *= array.shape[-1] * array.shape[-2] / old_size
+        array *= np.prod(array.shape[-2:]) / old_size
+
+    elif normalization == 'intensity':
+        #array *= np.sqrt(np.prod(array.shape[-2:]) / old_size)
+        array *= np.sqrt(old_size / np.prod(array.shape[-2:]))
+    elif normalization != 'amplitude':
         raise RuntimeError()
 
     return array

@@ -50,30 +50,33 @@ def superpose_deltas(positions: np.ndarray, slice_idx: np.ndarray, array: np.nda
     return array
 
 
-def infinite_potential_projections(positions, numbers, slice_idx, shape, sampling, scattering_factors):
+def infinite_potential_projections(atoms, shape, sampling, scattering_factors, slice_index=None):
     xp = get_array_module(scattering_factors)
 
-    if len(positions) == 0:
+    if len(atoms) == 0:
         return xp.zeros(shape, dtype=xp.float32)
 
+    if slice_index is None:
+        slice_index = np.zeros(len(atoms), dtype=int)
+
     array = xp.zeros(shape, dtype=xp.complex64)
-    positions = xp.asarray(positions / sampling)
+    positions = xp.asarray(atoms.positions[:, :2] / sampling)
     temp = xp.zeros_like(array, dtype=np.complex64)
 
-    unique = np.unique(numbers)
+    unique = np.unique(atoms.numbers)
     for i, number in enumerate(unique):
         if len(unique) > 1:
             if i > 0:
                 temp[:] = 0.
 
-            mask = numbers == number
+            mask = atoms.numbers == number
 
             if not np.any(mask):
                 continue
 
-            temp = superpose_deltas(positions[mask], slice_idx[mask], temp)
+            temp = superpose_deltas(positions[mask], slice_index[mask], temp)
         else:
-            temp = superpose_deltas(positions, slice_idx, temp)
+            temp = superpose_deltas(positions, slice_index, temp)
 
         array += fft2(temp, overwrite_x=False) * scattering_factors[i]
 

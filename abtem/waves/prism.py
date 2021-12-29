@@ -17,7 +17,7 @@ from abtem.core.grid import Grid
 from abtem.core.utils import generate_chunks
 from abtem.measure.detect import AbstractDetector
 from abtem.measure.measure import AbstractMeasurement
-from abtem.potentials.potentials import AbstractPotential, _validate_potential
+from abtem.potentials.potentials import AbstractPotential, validate_potential
 from abtem.waves.base import AbstractScannedWaves
 from abtem.waves.prism_utils import prism_wave_vectors, partitioned_prism_wave_vectors, plane_waves, remove_tilt, \
     interpolate_full, beamlet_basis, reduce_beamlets_nearest_no_interpolation
@@ -762,7 +762,7 @@ class SMatrix(AbstractScannedWaves):
                  tilt: Tuple[float, float] = None,
                  device: str = None):
 
-        self._potential = _validate_potential(potential)
+        self._potential = validate_potential(potential)
 
         if potential is None:
             self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)

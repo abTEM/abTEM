@@ -1,7 +1,11 @@
+from abc import abstractmethod
+
 import dask.array as da
 from dask.diagnostics import ProgressBar
 import dask
 from abtem.core import config
+from typing import Union
+import numpy as np
 
 
 class ComputableList(list):
@@ -86,43 +90,55 @@ def _validate_lazy(lazy):
 
 class HasDaskArray:
 
-    def __init__(self, array):
+    def __init__(self, array, **kwargs):
         self._array = array
 
     @property
     def array(self):
         return self._array
 
-    def as_delayed(self):
-        def _as_delayed(array):
-            self._array = array
-            return self
-
-        return dask.delayed(_as_delayed)(self.array)
-
-    def __len__(self):
-        return len(self.array)
-
     @property
     def shape(self):
         return self.array.shape
 
-    def build(self, compute=True):
-        pass
-
     @property
     def is_lazy(self):
         return isinstance(self.array, da.core.Array)
+
+    @abstractmethod
+    def _copy_as_dict(self, copy_array: bool = True) -> dict:
+        pass
+
+    # def _map_blocks(self, func, new_cls=None, new_cls_kwargs: dict = None, **kwargs):
+    #
+    #     def wrapped_func(array, cls, cls_kwargs, **kwargs):
+    #         has_dask_array = cls(array=array, **cls_kwargs)
+    #         has_dask_array = func(has_dask_array, **kwargs)
+    #         return has_dask_array.array
+    #
+    #     cls_kwargs = self._copy_as_dict(copy_array=False)
+    #
+    #     array = self.array.map_blocks(wrapped_func,
+    #                                   cls=self.__class__,
+    #                                   cls_kwargs=cls_kwargs,
+    #                                   **kwargs)
+    #
+    #     if new_cls is None:
+    #         new_cls = self.__class__
+    #
+    #     if new_cls_kwargs is None:
+    #         new_cls_kwargs = cls_kwargs
+    #
+    #     return new_cls(array=array, **new_cls_kwargs)
 
     def delay(self, chunks=None):
         if self.is_lazy:
             return self
 
         self._array = da.from_array(self._array, chunks=-1)
-
         return self
 
-    def compute(self, pbar=True, **kwargs):
+    def compute(self, pbar: bool = True, **kwargs):
         if not self.is_lazy:
             return self
 

@@ -13,7 +13,7 @@ from abtem.core.energy import HasAcceleratorMixin
 from abtem.core.grid import HasGridMixin
 from abtem.potentials.potentials import Potential, AbstractPotential
 from abtem.waves.scan import AbstractScan
-from abtem.waves.multislice import FresnelPropagator
+from abtem.waves.fresnel import FresnelPropagator
 from abtem.waves.tilt import HasBeamTiltMixin
 from abtem.measure.detect import AbstractDetector, WavesDetector
 

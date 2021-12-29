@@ -1,14 +1,13 @@
 from copy import copy
 from typing import Union, Sequence, Tuple
 
-import dask
-import dask.array as da
 import numpy as np
 
 from abtem.core.backend import get_array_module, xp_to_str
+from abtem.core.events import Events, HasEventsMixin, watch
 
 
-class Grid:
+class Grid(HasEventsMixin):
     """
     Grid object.
 
@@ -45,7 +44,7 @@ class Grid:
 
         self._endpoint = tuple(endpoint)
 
-        #if sum([lock_extent, lock_gpts, lock_sampling]) > 1:
+        # if sum([lock_extent, lock_gpts, lock_sampling]) > 1:
         #    raise RuntimeError('At most one of extent, gpts, and sampling may be locked')
 
         self._lock_extent = lock_extent
@@ -63,6 +62,8 @@ class Grid:
             self._adjust_gpts(self.extent, self.sampling)
 
         self._adjust_sampling(self.extent, self.gpts)
+
+        self._events = Events()
 
     def _validate(self, value, dtype):
         if isinstance(value, (np.ndarray, list, tuple)):
@@ -97,6 +98,7 @@ class Grid:
         return self._extent
 
     @extent.setter
+    @watch
     def extent(self, extent: Union[float, Sequence[float]]):
         if self._lock_extent:
             raise RuntimeError('Extent cannot be modified')
@@ -117,6 +119,7 @@ class Grid:
         return self._gpts
 
     @gpts.setter
+    @watch
     def gpts(self, gpts: Union[int, Sequence[int]]):
         if self._lock_gpts:
             raise RuntimeError('Grid gpts cannot be modified')
@@ -138,6 +141,7 @@ class Grid:
         return self._sampling
 
     @sampling.setter
+    @watch
     def sampling(self, sampling):
         if self._lock_sampling:
             raise RuntimeError('Sampling cannot be modified')
@@ -181,6 +185,9 @@ class Grid:
         elif self.gpts is None:
             raise RuntimeError('Grid gpts are not defined')
 
+        elif self.gpts is None:
+            raise RuntimeError('Grid sampling is not defined')
+
     def match(self, other: Union['Grid', 'HasGridMixin'], check_match: bool = False):
         """
         Set the parameters of this grid to match another grid.
@@ -196,21 +203,26 @@ class Grid:
         if check_match:
             self.check_match(other)
 
-        if (self.extent is None) & (other.extent is None):
-            raise RuntimeError('Grid extent cannot be inferred')
-        elif other.extent is None:
+        # if (self.extent is None) & (other.extent is None):
+        #    raise RuntimeError('Grid extent cannot be inferred')
+
+        if other.extent is None:
             other.extent = self.extent
         elif np.any(np.array(self.extent, np.float32) != np.array(other.extent, np.float32)):
             self.extent = other.extent
 
-        if (self.gpts is None) & (other.gpts is None):
-            raise RuntimeError('Grid gpts cannot be inferred')
-        elif other.gpts is None:
+        # if (self.gpts is None) & (other.gpts is None):
+        #    raise RuntimeError('Grid gpts cannot be inferred')
+
+        if other.gpts is None:
             other.gpts = self.gpts
-
         elif np.any(self.gpts != other.gpts):
-
             self.gpts = other.gpts
+
+        if other.sampling is None:
+            other.sampling = self.sampling
+        elif np.any(np.array(self.sampling, np.float32) != np.array(other.sampling, np.float32)):
+            self.sampling = other.sampling
 
     def check_match(self, other):
         """
@@ -293,12 +305,13 @@ class HasGridMixin:
 
     def match_grid(self, other, check_match=False):
         self.grid.match(other, check_match=check_match)
+        return self
 
 
 def spatial_frequencies(gpts: Tuple[int, ...],
-                         sampling: Tuple[float, ...],
-                         return_grid: bool = False,
-                         xp=np):
+                        sampling: Tuple[float, ...],
+                        return_grid: bool = False,
+                        xp=np):
     """
     Calculate spatial frequencies of a grid.
 
@@ -324,6 +337,7 @@ def spatial_frequencies(gpts: Tuple[int, ...],
         return xp.meshgrid(*out, indexing='ij')
     else:
         return out
+
 
 #
 # def spatial_frequencies(gpts: Tuple[int, int],

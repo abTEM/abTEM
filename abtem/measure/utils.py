@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Union
 
 import numpy as np
 from numba import prange, jit
@@ -30,7 +30,7 @@ def polar_detector_bins(gpts: Tuple[int, int],
                         offset: Tuple[float, float] = (0., 0.),
                         fftshift=False,
                         return_indices=False,
-                        ):
+                        ) -> np.ndarray:
     """
     Create an array of labels for the regions of a given detector geometry.
 

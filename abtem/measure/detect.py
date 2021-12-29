@@ -16,6 +16,13 @@ def check_cutoff_angle(waves, angle):
             raise RuntimeError('Detector max angle exceeds the cutoff scattering angle.')
 
 
+def validate_multiple_detector(detectors):
+    if isinstance(detectors, AbstractDetector):
+        detectors = [detectors]
+
+    return detectors
+
+
 class AbstractDetector(metaclass=ABCMeta):
     """Abstract base class for all detectors."""
 
@@ -37,7 +44,7 @@ class AbstractDetector(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def measurement_from_array(self, array, scan=None, waves=None, extra_axes_metadata: List[Dict] = None):
+    def create_measurement(self, array=None, scan=None, waves=None, extra_axes_metadata: List[Dict] = None):
         pass
 
     @property
@@ -119,18 +126,21 @@ class AnnularDetector(AbstractDetector):
     def detected_dtype(self) -> type:
         return np.float32
 
-    def measurement_from_array(self, array, scan=None, waves=None, extra_axes_metadata=None) \
+    def create_measurement(self, array=None, scan=None, waves=None, extra_axes_metadata=None) \
             -> Union[LineProfiles, Images]:
 
         if extra_axes_metadata is None:
             extra_axes_metadata = []
+
+        if array is None:
+            array = np.zeros(scan.shape + self.detected_shape(waves), dtype=np.float32)
 
         if len(scan.shape) == 1:
             sampling = scan.axes_metadata[0]['sampling']
             measurement = LineProfiles(array, sampling=sampling, axes_metadata=extra_axes_metadata)
         elif len(scan.shape) == 2:
             sampling = (scan.axes_metadata[0]['sampling'], scan.axes_metadata[1]['sampling'])
-            measurement = Images(array, sampling=sampling, axes_metadata=extra_axes_metadata)
+            measurement = Images(array, sampling=sampling, extra_axes_metadata=extra_axes_metadata)
         else:
             raise NotImplementedError
 
@@ -601,17 +611,20 @@ class WavesDetector(AbstractDetector):
     def detected_shape(self, waves) -> Tuple:
         return waves.gpts
 
-    def measurement_from_array(self, array, scan=None, waves=None, extra_axes_metadata: List[Dict] = None):
+    def create_measurement(self, array=None, scan=None, waves=None, extra_axes_metadata: List[Dict] = None):
 
         if extra_axes_metadata is None:
             extra_axes_metadata = []
+
+        if array is None:
+            array = np.zeros(self.detected_shape(waves.shape), dtype=np.float32)
 
         if hasattr(scan, 'axes_metadata'):
             extra_axes_metadata += scan.axes_metadata
         elif scan is not None:
             extra_axes_metadata += [{'type': 'positions'} for _ in range(len(scan.shape) - 1)]
 
-        measurement = Images(array, sampling=waves.sampling, axes_metadata=extra_axes_metadata)
+        measurement = Images(array, sampling=waves.sampling, extra_axes_metadata=extra_axes_metadata)
 
         if self._url is not None:
             return measurement.to_zarr(self.url, overwrite=True, compute=False)
