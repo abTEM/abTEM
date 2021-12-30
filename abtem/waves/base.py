@@ -8,7 +8,7 @@ import numpy as np
 from ase import Atoms
 
 from abtem.core.antialias import HasAntialiasApertureMixin
-from abtem.core.dask import _validate_lazy
+from abtem.core.dask import validate_lazy
 from abtem.core.energy import HasAcceleratorMixin
 from abtem.core.grid import HasGridMixin
 from abtem.potentials.potentials import Potential, AbstractPotential

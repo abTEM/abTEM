@@ -1,9 +1,10 @@
+import numpy as np
 from ase import Atoms
 
 from abtem.core.antialias import AntialiasAperture
 from abtem.potentials.potentials import validate_potential
 from abtem.structures.slicing import SliceIndexedAtoms
-from abtem.waves.fresnel import FresnelPropagator
+from abtem.waves.multislice import FresnelPropagator, multislice
 
 
 def validate_sites(sites, potential):
@@ -25,9 +26,14 @@ def validate_sites(sites, potential):
     return sites
 
 
-def _transition_potential_multislice(waves, potential, transition_potentials, sites, detectors, ctf=None):
+def transition_potential_multislice(waves, potential, detectors, transition_potentials, sites=None, ctf=None):
     potential = validate_potential(potential)
+
+    sites = potential.atoms
     sites = validate_sites(sites, potential)
+
+    transition_potentials.grid.match(waves)
+    transition_potentials.accelerator.match(waves)
 
     antialias_aperture = AntialiasAperture().match_grid(waves)
     propagator = FresnelPropagator().match_waves(waves)
@@ -38,15 +44,19 @@ def _transition_potential_multislice(waves, potential, transition_potentials, si
 
     measurements = []
     for i, (transmission_function_slice, sites_slice) in enumerate(zip(transmission_function, sites)):
+        sites_slice = transition_potentials.validate_sites(sites_slice)
+
+        if len(sites_slice) == 0:
+            continue
+
         scattered_waves = transition_potentials.scatter(waves, sites_slice)
-        scattered_waves = scattered_waves.multislice(potential[i:])
+        scattered_waves = multislice(scattered_waves,
+                                     potential[i:],
+                                     propagator=propagator,
+                                     antialias_aperture=antialias_aperture)
 
         if ctf is not None:
             scattered_waves = scattered_waves.apply_ctf(ctf)
-
-        propagator.thickness = transmission_function_slice.thickness
-        waves = transmission_function_slice.transmit(waves)
-        waves = propagator.propagate(waves)
 
         for i, detector in enumerate(detectors):
             try:
@@ -54,11 +64,8 @@ def _transition_potential_multislice(waves, potential, transition_potentials, si
             except IndexError:
                 measurements.append(detector.detect(scattered_waves).sum(0))
 
+        propagator.thickness = transmission_function_slice.thickness
+        waves = transmission_function_slice.transmit(waves)
+        waves = propagator.propagate(waves)
+
     return measurements
-
-
-def transition_potential_multislice(waves, potential, transition_potentials, sites, detectors, ctf):
-    if not waves.is_lazy:
-        return _transition_potential_multislice(waves, potential, transition_potentials, sites, detectors, ctf)
-
-    waves.array.map_blocks()

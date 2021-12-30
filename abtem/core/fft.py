@@ -23,6 +23,18 @@ except ModuleNotFoundError:
 
 
 def build_fftw_obj(x, allow_new_plan=False, overwrite_x=True, backward=False):
+    # if backward:
+    #     obj = pyfftw.builders.ifft2(x,
+    #                                  overwrite_input=overwrite_x,
+    #                                  planner_effort=config.get('fftw.planning_effort'),
+    #                                  threads=config.get('fftw.threads'))
+    # else:
+    #     obj = pyfftw.builders.fft2(x,
+    #                                 overwrite_input=overwrite_x,
+    #                                 planner_effort=config.get('fftw.planning_effort'),
+    #                                 threads=config.get('fftw.threads'))
+    # return obj()
+
     # flags = (,)
     # if overwrite_x:
     #    flags += ('FFTW_DESTROY_INPUT',)

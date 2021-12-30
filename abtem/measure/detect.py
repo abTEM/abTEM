@@ -16,13 +16,6 @@ def check_cutoff_angle(waves, angle):
             raise RuntimeError('Detector max angle exceeds the cutoff scattering angle.')
 
 
-def validate_multiple_detector(detectors):
-    if isinstance(detectors, AbstractDetector):
-        detectors = [detectors]
-
-    return detectors
-
-
 class AbstractDetector(metaclass=ABCMeta):
     """Abstract base class for all detectors."""
 
@@ -39,17 +32,21 @@ class AbstractDetector(metaclass=ABCMeta):
     def to_cpu(self):
         return self._to_cpu
 
-    @abstractmethod
-    def detected_shape(self, waves) -> Tuple:
-        pass
-
-    @abstractmethod
-    def create_measurement(self, array=None, scan=None, waves=None, extra_axes_metadata: List[Dict] = None):
-        pass
-
     @property
     @abstractmethod
-    def detected_dtype(self):
+    def measurement_dtype(self):
+        pass
+
+    @abstractmethod
+    def measurement_shape(self, waves) -> Tuple:
+        pass
+
+    @abstractmethod
+    def measurement_type(self, waves):
+        pass
+
+    @abstractmethod
+    def measurement_kwargs(self, waves):
         pass
 
     @abstractmethod
@@ -475,6 +472,13 @@ class PixelatedDetector(AbstractDetector):
     def detected_dtype(self):
         return np.float32
 
+    def detected_measurement(self, waves, scan):
+        kwargs = {'angular_sampling': waves.angular_sampling,
+                  'extra_axes_metadata': waves.extra_axes_metadata,
+                  'metadata': waves.metadata}
+
+        return DiffractionPatterns, kwargs
+
     def _bilinear_nodes_and_weight(self, old_shape, new_shape, old_angular_sampling, new_angular_sampling, xp):
         nodes = []
         weights = []
@@ -608,32 +612,40 @@ class WavesDetector(AbstractDetector):
     def detect(self, waves):
         return waves.intensity()
 
-    def detected_shape(self, waves) -> Tuple:
+    @property
+    def measurement_dtype(self):
+        return np.float32
+
+    def measurement_shape(self, waves) -> Tuple:
         return waves.gpts
 
-    def create_measurement(self, array=None, scan=None, waves=None, extra_axes_metadata: List[Dict] = None):
+    def measurement_type(self, waves):
+        return Images
 
-        if extra_axes_metadata is None:
-            extra_axes_metadata = []
+    def measurement_kwargs(self, waves):
+        return {'sampling': waves.sampling,
+                'extra_axes_metadata': waves.extra_axes_metadata,
+                'metadata': waves.metadata}
 
-        if array is None:
-            array = np.zeros(self.detected_shape(waves.shape), dtype=np.float32)
-
-        if hasattr(scan, 'axes_metadata'):
-            extra_axes_metadata += scan.axes_metadata
-        elif scan is not None:
-            extra_axes_metadata += [{'type': 'positions'} for _ in range(len(scan.shape) - 1)]
-
-        measurement = Images(array, sampling=waves.sampling, extra_axes_metadata=extra_axes_metadata)
-
-        if self._url is not None:
-            return measurement.to_zarr(self.url, overwrite=True, compute=False)
-        else:
-            return measurement
-
-    @property
-    def detected_dtype(self):
-        return np.float32
+    # def create_measurement(self, array=None, scan=None, waves=None, extra_axes_metadata: List[Dict] = None):
+    #
+    #     if extra_axes_metadata is None:
+    #         extra_axes_metadata = []
+    #
+    #     if array is None:
+    #         array = np.zeros(self.detected_shape(waves.shape), dtype=np.float32)
+    #
+    #     if hasattr(scan, 'axes_metadata'):
+    #         extra_axes_metadata += scan.axes_metadata
+    #     elif scan is not None:
+    #         extra_axes_metadata += [{'type': 'positions'} for _ in range(len(scan.shape) - 1)]
+    #
+    #     measurement = Images(array, sampling=waves.sampling, extra_axes_metadata=extra_axes_metadata)
+    #
+    #     if self._url is not None:
+    #         return measurement.to_zarr(self.url, overwrite=True, compute=False)
+    #     else:
+    #         return measurement
 
     def __copy__(self):
         pass

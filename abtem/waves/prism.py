@@ -11,7 +11,7 @@ from abtem.core.antialias import AntialiasAperture
 from abtem.core.axes import frozen_phonons_axes_metadata, HasAxesMetadata
 from abtem.core.backend import get_array_module, cp, copy_to_device, _validate_device
 from abtem.core.complex import complex_exponential
-from abtem.core.dask import HasDaskArray, ComputableList, _validate_lazy
+from abtem.core.dask import HasDaskArray, ComputableList, validate_lazy
 from abtem.core.energy import Accelerator
 from abtem.core.grid import Grid
 from abtem.core.utils import generate_chunks
@@ -826,7 +826,7 @@ class SMatrix(AbstractScannedWaves):
         return self._partitions
 
     def _get_s_matrices(self, lazy: bool = None) -> List['SMatrix']:
-        lazy = _validate_lazy(lazy)
+        lazy = validate_lazy(lazy)
 
         s_matrices = []
 
@@ -887,7 +887,7 @@ class SMatrix(AbstractScannedWaves):
         self.grid.check_is_defined()
 
         xp = get_array_module(self._device)
-        lazy = _validate_lazy(lazy)
+        lazy = validate_lazy(lazy)
 
         def _build_chunk(s_matrix, start, end):
             return s_matrix._build_chunk(start, end)
@@ -961,7 +961,7 @@ class SMatrix(AbstractScannedWaves):
             Maximum number of scattering matrices in memory at any point.
         """
 
-        lazy = _validate_lazy(lazy)
+        lazy = validate_lazy(lazy)
 
         s = self.build(lazy=lazy)
 

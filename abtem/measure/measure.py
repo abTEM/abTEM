@@ -62,6 +62,15 @@ def from_zarr(url):
     return cls(array, axes_metadata=axes_metadata, metadata=metadata, **kwargs)
 
 
+def stack_measurements(measurements, axes_metadata):
+    array = da.stack([measurement.array for measurement in measurements])
+    cls = measurements[0].__class__
+    d = measurements[0]._copy_as_dict(copy_array=False)
+    d['array'] = array
+    d['extra_axes_metadata'] = [axes_metadata] + d['extra_axes_metadata']
+    return cls(**d)
+
+
 class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
 
     def __init__(self, array, extra_axes_metadata, metadata, base_axes):
@@ -150,9 +159,17 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
         if len(self.axes_metadata) != len(self.array.shape):
             raise RuntimeError()
 
-    @abstractmethod
     def check_is_compatible(self, other):
-        pass
+        if not isinstance(other, self.__class__):
+            raise RuntimeError()
+
+        if self.shape != other.shape:
+            raise RuntimeError()
+
+        for (key, value), (other_key, other_value) in zip(self._copy_as_dict(copy_array=False).items(),
+                                                          other._copy_as_dict(copy_array=False).items()):
+            if value != other_value:
+                raise RuntimeError()
 
     def add(self, other) -> 'T':
         self.check_is_compatible(other)
@@ -178,7 +195,7 @@ class AbstractMeasurement(HasDaskArray, HasAxesMetadata, metaclass=ABCMeta):
         if self._check_is_base_axes(axes):
             raise RuntimeError('base axes cannot be reduced')
 
-        extra_axes_metadata = self._extra_axes_metadata
+        extra_axes_metadata = copy.deepcopy(self._extra_axes_metadata)
         del extra_axes_metadata[axes]
 
         d = self._copy_as_dict(copy_array=False)
@@ -375,10 +392,6 @@ class Images(AbstractMeasurement):
             sampling = min(self.sampling)
 
         scan = LineScan(start=start, end=end, angle=angle, gpts=gpts, sampling=sampling, margin=margin)
-
-        start = scan.margin_start
-        end = scan.margin_end
-
         positions = scan.get_positions() / self.sampling
 
         from scipy.ndimage import map_coordinates
@@ -392,7 +405,6 @@ class Images(AbstractMeasurement):
                 map_coordinates(array[i], positions.T, output=output[i])
 
             output = output.reshape(old_shape[:-2] + (output.shape[-1],))
-
             return output
 
         array = self.array.map_blocks(interpolate_1d_from_2d,
@@ -403,19 +415,6 @@ class Images(AbstractMeasurement):
                                       meta=np.array((), dtype=np.float32))
 
         return LineProfiles(array=array, start=scan.start, end=scan.end, extra_axes_metadata=self.extra_axes_metadata)
-
-    def check_is_compatible(self, other):
-        if not isinstance(other, self.__class__):
-            raise RuntimeError()
-
-        if self.shape != other.shape:
-            raise RuntimeError()
-
-        if self.sampling != self.sampling:
-            raise RuntimeError()
-
-        if self.axes_metadata != other.axes_metadata:
-            raise RuntimeError()
 
     def tile(self, reps: Tuple[int, int]) -> 'Images':
         if len(reps) != 2:
@@ -536,7 +535,7 @@ class LineProfiles(AbstractMeasurement):
         from hyperspy._signals.signal1d import Signal1D
         return Signal1D(self.array, axes=_to_hyperspy_axes_metadata(self.axes_metadata, self.shape)).as_lazy()
 
-    def copy_as_dict(self, copy_array=True) -> dict:
+    def _copy_as_dict(self, copy_array=True) -> dict:
         d = {'start': self.start,
              'end': self.end,
              'sampling': self.sampling,
@@ -574,6 +573,46 @@ class RadialFourierSpaceLineProfiles(LineProfiles):
         ax.set_xlabel('Scattering angle [mrad]')
         ax.set_title(title)
         return ax, p
+
+
+def bilinear_nodes_and_weight(old_shape, new_shape, old_angular_sampling, new_angular_sampling, xp):
+    nodes = []
+    weights = []
+
+    old_sampling = (1 / old_angular_sampling[0] / old_shape[0],
+                    1 / old_angular_sampling[1] / old_shape[1])
+
+    new_sampling = (1 / new_angular_sampling[0] / new_shape[0],
+                    1 / new_angular_sampling[1] / new_shape[1])
+
+    for n, m, r, d in zip(old_shape, new_shape, old_sampling, new_sampling):
+        k = xp.fft.fftshift(xp.fft.fftfreq(n, r).astype(xp.float32))
+        k_new = xp.fft.fftshift(xp.fft.fftfreq(m, d).astype(xp.float32))
+        distances = k_new[None] - k[:, None]
+        distances[distances < 0.] = np.inf
+        w = distances.min(0) / (k[1] - k[0])
+        w[w == np.inf] = 0.
+        nodes.append(distances.argmin(0))
+        weights.append(w)
+
+    v, u = nodes
+    vw, uw = weights
+    v, u, vw, uw = xp.broadcast_arrays(v[:, None], u[None, :], vw[:, None], uw[None, :])
+    return v, u, vw, uw
+
+
+def intgrad2d(gradient, sampling):
+    gx, gy = gradient
+    (nx, ny) = gx.shape
+    ikx = np.fft.fftfreq(nx, d=sampling[0])
+    iky = np.fft.fftfreq(ny, d=sampling[1])
+    grid_ikx, grid_iky = np.meshgrid(ikx, iky, indexing='ij')
+    k = grid_ikx ** 2 + grid_iky ** 2
+    k[k == 0] = 1e-12
+    That = (np.fft.fft2(gx) * grid_ikx + np.fft.fft2(gy) * grid_iky) / (2j * np.pi * k)
+    T = np.real(np.fft.ifft2(That))
+    T -= np.min(T)
+    return T
 
 
 class DiffractionPatterns(AbstractMeasurement):
@@ -622,7 +661,7 @@ class DiffractionPatterns(AbstractMeasurement):
 
     @property
     def max_angles(self):
-        return (self.shape[-2] // 2 * self.angular_sampling[0], self.shape[-1] // 2 * self.angular_sampling[1])
+        return self.shape[-2] // 2 * self.angular_sampling[0], self.shape[-1] // 2 * self.angular_sampling[1]
 
     @property
     def fourier_space_extent(self):
@@ -637,54 +676,23 @@ class DiffractionPatterns(AbstractMeasurement):
         return limits
 
     def interpolate(self, new_sampling):
-
-        def bilinear_nodes_and_weight(old_shape, new_shape, old_angular_sampling, new_angular_sampling, xp):
-            nodes = []
-            weights = []
-
-            old_sampling = (1 / old_angular_sampling[0] / old_shape[0],
-                            1 / old_angular_sampling[1] / old_shape[1])
-
-            new_sampling = (1 / new_angular_sampling[0] / new_shape[0],
-                            1 / new_angular_sampling[1] / new_shape[1])
-
-            for n, m, r, d in zip(old_shape, new_shape, old_sampling, new_sampling):
-                k = xp.fft.fftshift(xp.fft.fftfreq(n, r).astype(xp.float32))
-                k_new = xp.fft.fftshift(xp.fft.fftfreq(m, d).astype(xp.float32))
-                distances = k_new[None] - k[:, None]
-                distances[distances < 0.] = np.inf
-                w = distances.min(0) / (k[1] - k[0])
-                w[w == np.inf] = 0.
-                nodes.append(distances.argmin(0))
-                weights.append(w)
-
-            v, u = nodes
-            vw, uw = weights
-            v, u, vw, uw = xp.broadcast_arrays(v[:, None], u[None, :], vw[:, None], uw[None, :])
-            return v, u, vw, uw
-
-        def resampled_gpts(new_sampling, gpts, angular_sampling):
-            if new_sampling == 'uniform':
-                scale_factor = (angular_sampling[0] / max(angular_sampling),
-                                angular_sampling[1] / max(angular_sampling))
-
-                new_gpts = (int(np.ceil(gpts[0] * scale_factor[0])),
-                            int(np.ceil(gpts[1] * scale_factor[1])))
-
-                if np.abs(new_gpts[0] - new_gpts[1]) <= 2:
-                    new_gpts = (min(new_gpts),) * 2
-
-                new_angular_sampling = (angular_sampling[0] / scale_factor[0],
-                                        angular_sampling[1] / scale_factor[1])
-
-            else:
-                raise RuntimeError('')
-
-            return new_gpts, new_angular_sampling
-
         xp = get_array_module(self.array)
 
-        new_gpts, new_angular_sampling = resampled_gpts(new_sampling, self.array.shape[-2:], self.angular_sampling)
+        if new_sampling == 'uniform':
+            scale_factor = (self.angular_sampling[0] / max(self.angular_sampling),
+                            self.angular_sampling[1] / max(self.angular_sampling))
+
+            new_gpts = (int(np.ceil(self.base_shape[0] * scale_factor[0])),
+                        int(np.ceil(self.base_shape[1] * scale_factor[1])))
+
+            if np.abs(new_gpts[0] - new_gpts[1]) <= 2:
+                new_gpts = (min(new_gpts),) * 2
+
+            new_angular_sampling = (self.angular_sampling[0] / scale_factor[0],
+                                    self.angular_sampling[1] / scale_factor[1])
+
+        else:
+            raise RuntimeError('')
 
         v, u, vw, uw = bilinear_nodes_and_weight(self.array.shape[-2:],
                                                  new_gpts,
@@ -827,18 +835,6 @@ class DiffractionPatterns(AbstractMeasurement):
             return Images(integrated_intensity, sampling=sampling, extra_axes_metadata=self.extra_axes_metadata[:-2])
 
     def integrated_center_of_mass(self) -> Images:
-        def intgrad2d(gradient, sampling):
-            gx, gy = gradient
-            (nx, ny) = gx.shape
-            ikx = np.fft.fftfreq(nx, d=sampling[0])
-            iky = np.fft.fftfreq(ny, d=sampling[1])
-            grid_ikx, grid_iky = np.meshgrid(ikx, iky, indexing='ij')
-            k = grid_ikx ** 2 + grid_iky ** 2
-            k[k == 0] = 1e-12
-            That = (np.fft.fft2(gx) * grid_ikx + np.fft.fft2(gy) * grid_iky) / (2j * np.pi * k)
-            T = np.real(np.fft.ifft2(That))
-            T -= np.min(T)
-            return T
 
         com = self.center_of_mass()
 

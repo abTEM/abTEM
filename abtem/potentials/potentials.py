@@ -661,10 +661,10 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         super().__init__(array, slice_thickness, extent, sampling)
 
     def get_chunk(self, first_slice, last_slice):
-        array = self.array[first_slice]
+        array = self.array[first_slice:last_slice]
         if len(array.shape) == 2:
             array = array[None]
-        return self.__class__(array, self.slice_thickness[last_slice], extent=self.extent, energy=self.energy)
+        return self.__class__(array, self.slice_thickness[first_slice:last_slice], extent=self.extent, energy=self.energy)
 
     def transmission_function(self, energy):
         if energy != self.energy:

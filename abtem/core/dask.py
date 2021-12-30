@@ -4,8 +4,12 @@ import dask.array as da
 from dask.diagnostics import ProgressBar
 import dask
 from abtem.core import config
-from typing import Union
+from typing import Union, TYPE_CHECKING, List
 import numpy as np
+
+if TYPE_CHECKING:
+    from abtem.waves.waves import Waves
+    from abtem.measure.detect import AbstractDetector
 
 
 class ComputableList(list):
@@ -81,9 +85,9 @@ class BuildsDaskArray:
         self.build(compute=False).visualize_graph(**kwargs)
 
 
-def _validate_lazy(lazy):
+def validate_lazy(lazy):
     if lazy is None:
-        return config.get('lazy')
+        return config.get('dask.lazy')
 
     return lazy
 
@@ -109,27 +113,86 @@ class HasDaskArray:
     def _copy_as_dict(self, copy_array: bool = True) -> dict:
         pass
 
-    # def _map_blocks(self, func, new_cls=None, new_cls_kwargs: dict = None, **kwargs):
-    #
-    #     def wrapped_func(array, cls, cls_kwargs, **kwargs):
-    #         has_dask_array = cls(array=array, **cls_kwargs)
-    #         has_dask_array = func(has_dask_array, **kwargs)
-    #         return has_dask_array.array
-    #
-    #     cls_kwargs = self._copy_as_dict(copy_array=False)
-    #
-    #     array = self.array.map_blocks(wrapped_func,
-    #                                   cls=self.__class__,
-    #                                   cls_kwargs=cls_kwargs,
-    #                                   **kwargs)
-    #
-    #     if new_cls is None:
-    #         new_cls = self.__class__
-    #
-    #     if new_cls_kwargs is None:
-    #         new_cls_kwargs = cls_kwargs
-    #
-    #     return new_cls(array=array, **new_cls_kwargs)
+    def apply_gufunc(self,
+                     func,
+                     signature,
+                     new_cls=None,
+                     new_cls_kwargs=None,
+                     output_sizes=None,
+                     meta=None,
+                     **kwargs):
+
+        if not self.is_lazy:
+            return func(self, **kwargs)
+
+        def wrapped_func(array, cls=None, cls_kwargs=None, **kwargs):
+            has_dask_array = cls(array=array, **cls_kwargs)
+            outputs = func(has_dask_array, **kwargs)
+            if len(outputs) == 1:
+               return outputs[0].array
+            return [output.array for output in outputs]
+
+        cls_kwargs = self._copy_as_dict(copy_array=False)
+
+        arrays = da.apply_gufunc(
+            wrapped_func,
+            signature,
+            self.array,
+            output_sizes=output_sizes,
+            meta=meta,
+            cls=self.__class__,
+            cls_kwargs=cls_kwargs,
+            **kwargs,
+        )
+        if len(new_cls) > 1:
+            new_cls_kwargs = [{**kwargs, 'array': array} for kwargs, array in zip(new_cls_kwargs, arrays)]
+        else:
+            new_cls_kwargs = [{**new_cls_kwargs[0], 'array': arrays}]
+
+        return tuple(cls(**kwargs) for cls, kwargs in zip(new_cls, new_cls_kwargs))
+
+    def map_blocks(self,
+                   func,
+                   new_cls=None,
+                   new_cls_kwargs: dict = None,
+                   dtype=None,
+                   name=None,
+                   token=None,
+                   chunks=None,
+                   drop_axis=None,
+                   new_axis=None,
+                   meta=None,
+                   **kwargs):
+
+        if not self.is_lazy:
+            return func(self, **kwargs)
+
+        def wrapped_func(array, cls, cls_kwargs, **kwargs):
+            has_dask_array = cls(array=array, **cls_kwargs)
+            has_dask_array = func(has_dask_array, **kwargs)
+            return has_dask_array.array
+
+        cls_kwargs = self._copy_as_dict(copy_array=False)
+
+        array = self.array.map_blocks(wrapped_func,
+                                      cls=self.__class__,
+                                      cls_kwargs=cls_kwargs,
+                                      name=name,
+                                      token=token,
+                                      dtype=dtype,
+                                      chunks=chunks,
+                                      drop_axis=drop_axis,
+                                      new_axis=new_axis,
+                                      meta=meta,
+                                      **kwargs)
+
+        if new_cls is None:
+            new_cls = self.__class__
+
+        if new_cls_kwargs is None:
+            new_cls_kwargs = cls_kwargs
+
+        return new_cls(array=array, **new_cls_kwargs)
 
     def delay(self, chunks=None):
         if self.is_lazy:

@@ -4,7 +4,7 @@ from abc import ABCMeta, abstractmethod
 from typing import Union, Sequence, Tuple, List
 
 import numpy as np
-from ase import Atoms
+from ase import Atoms, Atom
 from ase import units
 from ase.data import chemical_symbols
 from scipy import integrate
@@ -284,9 +284,14 @@ class SubshellTransitionPotentials(AbstractTransitionPotential):
         kn = 1 / energy2wavelength(self.energy + self.energy_loss)
         return k0 - kn
 
-    def _validate_sites(self, sites):
+    def validate_sites(self, sites):
         if isinstance(sites, Atoms):
             sites = sites[sites.numbers == self.Z].positions[:, :2]
+        elif isinstance(sites, Atom):
+            if sites.number == self.Z:
+                sites = sites.position[:2][None]
+            else:
+                sites = np.zeros((0, 2), dtype=np.float32)
 
         sites = np.array(sites, dtype=np.float32)
         return sites
@@ -297,7 +302,7 @@ class SubshellTransitionPotentials(AbstractTransitionPotential):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
-        positions = self._validate_sites(sites)
+        positions = self.validate_sites(sites)
 
         # if positions is None:
         #     positions = np.zeros((1, 2), dtype=np.float32)
@@ -310,10 +315,10 @@ class SubshellTransitionPotentials(AbstractTransitionPotential):
         array = self.array[None]
 
         positions /= self.sampling
-        array = ifft2(array * fft_shift_kernel(positions, self.gpts)[:, None])
 
+        array = ifft2(array * fft_shift_kernel(positions, self.gpts)[:, None])
         array = array.reshape((-1,) + array.shape[-2:])
-        # sss
+
         d = waves._copy_as_dict(copy_array=False)
         d['array'] = array * waves.array
         d['extra_axes_metadata'] = [{'type': 'ensemble', 'label': 'core ionization'}]
