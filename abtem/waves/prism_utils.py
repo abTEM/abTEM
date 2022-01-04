@@ -12,6 +12,65 @@ from abtem.waves.natural_neighbors import pairwise_weights
 from abtem.waves.transfer import CTF
 
 
+def wrapped_slices(start: int, stop: int, n: int) -> Tuple[slice, slice]:
+    # if stop - start > n:
+    # raise RuntimeError(f'{start} {stop} {n} {stop - start}')
+
+    if start < 0:
+        if stop > n:
+            raise RuntimeError(f'start = {start} stop = {stop}, n = {n}')
+
+        a = slice(start % n, None)
+        b = slice(0, stop)
+
+    elif stop > n:
+        if start < 0:
+            raise RuntimeError(f'start = {start} stop = {stop}, n = {n}')
+
+        a = slice(start, None)
+        b = slice(0, stop - n)
+
+    else:
+        a = slice(start, stop)
+        b = slice(0, 0)
+    return a, b
+
+
+def wrapped_crop_2d(array: np.ndarray, corner: Tuple[int, int], size: Tuple[int, int]) -> np.ndarray:
+    upper_corner = (corner[0] + size[0], corner[1] + size[1])
+
+    xp = get_array_module(array)
+
+    a, c = wrapped_slices(corner[0], upper_corner[0], array.shape[-2])
+    b, d = wrapped_slices(corner[1], upper_corner[1], array.shape[-1])
+
+    A = array[..., a, b]
+    B = array[..., c, b]
+    D = array[..., c, d]
+    C = array[..., a, d]
+
+    if A.size == 0:
+        AB = B
+    elif B.size == 0:
+        AB = A
+    else:
+        AB = xp.concatenate([A, B], axis=-2)
+
+    if C.size == 0:
+        CD = D
+    elif D.size == 0:
+        CD = C
+    else:
+        CD = xp.concatenate([C, D], axis=-2)
+
+    if CD.size == 0:
+        return AB
+
+    if AB.size == 0:
+        return CD
+
+    return xp.concatenate([AB, CD], axis=-1)
+
 def prism_wave_vectors(cutoff: float, extent: Tuple[float, float],
                        energy: float, interpolation: Tuple[int, int]) -> np.ndarray:
     wavelength = energy2wavelength(energy)
@@ -98,6 +157,7 @@ def beamlet_basis(ctf, parent_wave_vectors, wave_vectors, gpts, sampling):
     basis = ctf.evaluate_on_grid(gpts=gpts, sampling=sampling)
     basis = beamlet_weights(parent_wave_vectors, wave_vectors, gpts, sampling) * basis / np.sqrt(len(wave_vectors))
     basis = ifft2(basis)
+    basis = np.fft.fftshift(basis, axes=(1, 2))
     return basis
 
 
@@ -145,18 +205,22 @@ def interpolate_full(array, parent_wave_vectors, wave_vectors, extent, gpts, ene
     return interpolated_array
 
 
-@nb.jit(nopython=True, nogil=True, parallel=True, fastmath=True)
+@nb.jit(nopython=True, nogil=True, parallel=True, fastmath=True, warn=False)
 def reduce_beamlets_nearest_no_interpolation(waves, basis, parent_s_matrix, shifts):
     assert waves.shape[0] == shifts.shape[0]
     assert len(shifts.shape) == 2
-    #assert basis.shape == parent_s_matrix.shape
-    #assert waves.shape[1:] == parent_s_matrix.shape[:-1]
+    # assert basis.shape == parent_s_matrix.shape
+    # assert waves.shape[1:] == parent_s_matrix.shape[:-1]
 
     for i in nb.prange(waves.shape[0]):
         for j in range(waves.shape[1]):
             for k in range(waves.shape[2]):
-                waves[i, j, k] = np.dot(basis[j, k, :],
-                                        parent_s_matrix[
-                                        (j + shifts[i, 0]) % parent_s_matrix.shape[0],
-                                        (k + shifts[i, 1]) % parent_s_matrix.shape[1], :])
+                # waves[i, j, k] = np.dot(basis[j, k, :],
+                #                         parent_s_matrix[
+                #                         (j + shifts[i, 0]) % parent_s_matrix.shape[0],
+                #                         (k + shifts[i, 1]) % parent_s_matrix.shape[1], :])
+                waves[i, j, k] = np.dot(basis[:, j, k],
+                                        parent_s_matrix[:,
+                                        (j + shifts[i, 0]) % parent_s_matrix.shape[1],
+                                        (k + shifts[i, 1]) % parent_s_matrix.shape[2]])
     return waves

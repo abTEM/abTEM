@@ -1,7 +1,7 @@
 """Module to calculate potentials using the independent atom model."""
 from abc import ABCMeta, abstractmethod
 from copy import copy
-from typing import Union, Sequence, Tuple, List, Dict, Generator
+from typing import Union, Sequence, Tuple, List, Dict, Generator, TYPE_CHECKING
 
 import dask
 import dask.array as da
@@ -17,10 +17,13 @@ from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.utils import generate_chunks
 from abtem.measure.measure import Images
 from abtem.potentials.atom import AtomicPotential
-from abtem.potentials.infinite import calculate_scattering_factors, infinite_potential_projections
+from abtem.potentials.infinite import calculate_scattering_factor, infinite_potential_projections
 from abtem.potentials.temperature import AbstractFrozenPhonons, FrozenPhonons
 from abtem.structures.slicing import _validate_slice_thickness, SliceIndexedAtoms, SlicedAtoms, unpack_item
 from abtem.structures.structures import is_cell_orthogonal, orthogonalize_cell
+
+if TYPE_CHECKING:
+    import Waves
 
 
 class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
@@ -58,14 +61,32 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
     def thickness(self) -> float:
         return sum(self._slice_thickness)
 
-    def check_slice_idx(self, i):
-        """Raises an error if i is greater than the number of slices."""
-        if i >= self.num_slices:
-            raise RuntimeError('Slice index {} too large for potential with {} slices'.format(i, self.num_slices))
 
     @abstractmethod
     def get_chunk(self, first_slice, last_slice):
         pass
+
+    def generate_slices(self, start: int = 0, stop: int = None, chunks: int = 1) -> Generator:
+
+        if stop is None:
+            stop = len(self)
+
+        if start > stop:
+            reverse = True
+            start, stop = stop, start
+        else:
+            reverse = False
+
+        start_slices = np.arange(start, stop)
+        end_slices = np.arange(start + 1, stop + 1)
+
+        if reverse:
+            start_slices = start_slices[::-1]
+            end_slices = end_slices[::-1]
+
+        for start, stop in zip(start_slices, end_slices):
+
+            yield self.get_chunk(first_slice=start, last_slice=stop)
 
     def __getitem__(self, item) -> 'PotentialArray':
         return self.get_chunk(*unpack_item(item, len(self)))
@@ -73,12 +94,13 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
     def project(self) -> 'Images':
         return self.build().project()
 
+    @property
     @abstractmethod
-    def get_potential_configurations(self, lazy: bool = False):
+    def num_configurations(self) -> int:
         pass
 
     @abstractmethod
-    def generate_chunks(self):
+    def get_potential_configurations(self, lazy: bool = False):
         pass
 
     def show(self, **kwargs):
@@ -176,6 +198,10 @@ class AbstractPotentialFromAtoms(AbstractPotential):
     def num_frozen_phonons(self) -> int:
         return len(self._frozen_phonons)
 
+    @property
+    def num_configurations(self) -> int:
+        return self.num_frozen_phonons
+
 
 def validate_potential(potential: Union[Atoms, AbstractPotential], waves=None) -> AbstractPotential:
     if isinstance(potential, Atoms):
@@ -233,7 +259,6 @@ class Potential(AbstractPotentialFromAtoms):
                  plane: str = 'xy',
                  box: Tuple[float, float, float] = None,
                  origin: Tuple[float, float, float] = (0., 0., 0.),
-                 reverse: bool = False,
                  cutoff_tolerance: float = 1e-3):
 
         self._cutoff_tolerance = cutoff_tolerance
@@ -260,7 +285,6 @@ class Potential(AbstractPotentialFromAtoms):
             else:
                 chunks = 1
 
-        self._reverse = reverse
         self._chunks = chunks
 
         self._sliced_atoms = None
@@ -272,14 +296,6 @@ class Potential(AbstractPotentialFromAtoms):
             self._atomic_potentials = None
 
         self.grid.events.observe(clear_data, ('sampling', 'gpts', 'extent'))
-
-    @property
-    def reverse(self) -> bool:
-        return self._reverse
-
-    @reverse.setter
-    def reverse(self, value):
-        self._reverse = value
 
     @property
     def parametrization(self) -> str:
@@ -346,8 +362,7 @@ class Potential(AbstractPotentialFromAtoms):
 
         if self._sliced_atoms is None:
             if self.projection == 'infinite':
-                self._sliced_atoms = SliceIndexedAtoms(atoms=self.atoms, slice_thickness=self.slice_thickness,
-                                                       reverse=self._reverse)
+                self._sliced_atoms = SliceIndexedAtoms(atoms=self.atoms, slice_thickness=self.slice_thickness)
             else:
                 raise NotImplementedError
 
@@ -357,13 +372,16 @@ class Potential(AbstractPotentialFromAtoms):
         xp = get_array_module(self._device)
 
         if self._scattering_factors is None:
-            self._scattering_factors = calculate_scattering_factors(self.gpts, self.sampling,
-                                                                    np.unique(self.atoms.numbers), xp_to_str(xp))
+            scattering_factors = {}
+            for number in np.unique(self.atoms.numbers):
+                f = calculate_scattering_factor(self.gpts, self.sampling, number, xp_to_str(xp))
+                scattering_factors[number] = f
+
+            self._scattering_factors = scattering_factors
 
         return self._scattering_factors
 
-    def _get_chunk_infinite(self, first_slice: int, last_slice: int, return_atoms: bool = False) \
-            -> Union['PotentialArray', Tuple['PotentialArray', Atoms]]:
+    def _get_chunk_infinite(self, first_slice: int, last_slice: int) -> Union['PotentialArray']:
 
         scattering_factors = self._get_scattering_factors()
         sliced_atoms = self.get_sliced_atoms()
@@ -371,13 +389,15 @@ class Potential(AbstractPotentialFromAtoms):
         atoms = sliced_atoms[first_slice: last_slice]
         shape = (last_slice - first_slice,) + self.gpts
 
-        array = infinite_potential_projections(atoms, shape, self.sampling, scattering_factors)
+        xp = get_array_module(self._device)
+
+        if len(atoms) == 0:
+            array = xp.zeros(shape, dtype=xp.float32)
+        else:
+            array = infinite_potential_projections(atoms, shape, self.sampling, scattering_factors)
         potential = PotentialArray(array, slice_thickness=self.slice_thickness[first_slice:last_slice],
                                    extent=self.extent)
-        if return_atoms:
-            return potential, atoms
-        else:
-            return potential
+        return potential
 
     def _get_chunk_finite(self, first_slice: int, last_slice: int, return_atoms: bool = False):
         xp = get_array_module(self._device)
@@ -404,18 +424,11 @@ class Potential(AbstractPotentialFromAtoms):
 
         return PotentialArray(array, slice_thickness=self.slice_thickness[first_slice:last_slice], extent=self.extent)
 
-    def get_chunk(self, first_slice: int, last_slice: int, return_atoms: bool = False) -> 'PotentialArray':
+    def get_chunk(self, first_slice: int, last_slice: int) -> 'PotentialArray':
         if self.projection == 'infinite':
-            return self._get_chunk_infinite(first_slice, last_slice, return_atoms=return_atoms)
+            return self._get_chunk_infinite(first_slice, last_slice)
         else:
-            return self._get_chunk_finite(first_slice, last_slice, return_atoms=return_atoms)
-
-    def generate_chunks(self, chunks: int = None, return_atoms: bool = False) -> Generator:
-        if chunks is None:
-            chunks = self.chunks
-
-        for start, end in generate_chunks(len(self), chunks=chunks):
-            yield self.get_chunk(first_slice=start, last_slice=end, return_atoms=return_atoms)
+            return self._get_chunk_finite(first_slice, last_slice)
 
     def get_potential_configurations(self, lazy: bool = True):
         """
@@ -464,7 +477,6 @@ class Potential(AbstractPotentialFromAtoms):
                               plane=self.plane,
                               box=self.box,
                               origin=self.origin,
-                              reverse=self.reverse,
                               cutoff_tolerance=self.cutoff_tolerance)
 
 
@@ -541,15 +553,11 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
         return t
 
     @property
-    def num_frozen_phonons(self):
+    def num_configurations(self) -> int:
         return 1
 
     def get_potential_configurations(self, *args, **kwargs):
         return [self]
-
-    def generate_chunks(self):
-        for potential_slice in self:
-            yield potential_slice
 
     def tile(self, multiples: Union[Tuple[int, int], Tuple[int, int, int]]):
         """
@@ -616,7 +624,7 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
         array = da.from_zarr(url, component='array', chunks=(chunks, -1, -1))
         return cls(array=array, slice_thickness=slice_thickness, extent=extent)
 
-    def transmit(self, waves):
+    def transmit(self, waves: 'Waves') -> 'Waves':
         """
         Transmit a wavefunction.
 
@@ -664,19 +672,20 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         array = self.array[first_slice:last_slice]
         if len(array.shape) == 2:
             array = array[None]
-        return self.__class__(array, self.slice_thickness[first_slice:last_slice], extent=self.extent, energy=self.energy)
+        return self.__class__(array, self.slice_thickness[first_slice:last_slice], extent=self.extent,
+                              energy=self.energy)
 
     def transmission_function(self, energy):
         if energy != self.energy:
             raise RuntimeError()
         return self
 
-    def transmit(self, waves):
-        #if hasattr(waves, 'array'):
+    def transmit(self, waves: 'Waves') -> 'Waves':
+        # if hasattr(waves, 'array'):
         self.accelerator.check_match(waves)
         self.grid.check_match(waves)
         waves._array *= self.array[0]
-        #else:
+        # else:
         #    waves *= self.array
 
         return waves

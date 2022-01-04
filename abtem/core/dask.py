@@ -76,15 +76,6 @@ def requires_dask_array(func):
     return wrapper
 
 
-class BuildsDaskArray:
-
-    def build(self, *args, **kwargs):
-        raise NotImplementedError
-
-    def visualize_graph(self, **kwargs):
-        self.build(compute=False).visualize_graph(**kwargs)
-
-
 def validate_lazy(lazy):
     if lazy is None:
         return config.get('dask.lazy')
@@ -96,6 +87,9 @@ class HasDaskArray:
 
     def __init__(self, array, **kwargs):
         self._array = array
+
+    def __len__(self) -> int:
+        return len(self.array)
 
     @property
     def array(self):
@@ -118,7 +112,9 @@ class HasDaskArray:
                      signature,
                      new_cls=None,
                      new_cls_kwargs=None,
+                     axes=None,
                      output_sizes=None,
+                     allow_rechunk=False,
                      meta=None,
                      **kwargs):
 
@@ -129,7 +125,7 @@ class HasDaskArray:
             has_dask_array = cls(array=array, **cls_kwargs)
             outputs = func(has_dask_array, **kwargs)
             if len(outputs) == 1:
-               return outputs[0].array
+                return outputs[0].array
             return [output.array for output in outputs]
 
         cls_kwargs = self._copy_as_dict(copy_array=False)
@@ -140,10 +136,13 @@ class HasDaskArray:
             self.array,
             output_sizes=output_sizes,
             meta=meta,
+            axes=axes,
+            allow_rechunk=allow_rechunk,
             cls=self.__class__,
             cls_kwargs=cls_kwargs,
             **kwargs,
         )
+
         if len(new_cls) > 1:
             new_cls_kwargs = [{**kwargs, 'array': array} for kwargs, array in zip(new_cls_kwargs, arrays)]
         else:

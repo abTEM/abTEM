@@ -20,6 +20,7 @@ from abtem.ionization.electron_configurations import electron_configurations
 from abtem.ionization.utils import check_valid_quantum_number, config_str_to_config_tuples, \
     remove_electron_from_config_str
 from abtem.measure.measure import Images
+from abtem.core.utils import generate_chunks
 
 
 class AbstractTransitionCollection(metaclass=ABCMeta):
@@ -296,36 +297,33 @@ class SubshellTransitionPotentials(AbstractTransitionPotential):
         sites = np.array(sites, dtype=np.float32)
         return sites
 
-    def scatter(self, waves, sites):
+    def scatter(self, waves, sites, transition_index=None):
         self.grid.match(waves)
         self.accelerator.match(waves)
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
         positions = self.validate_sites(sites)
-
-        # if positions is None:
-        #     positions = np.zeros((1, 2), dtype=np.float32)
-        # else:
-        #     positions = np.array(positions, dtype=np.float32)
-        #
-        # if len(positions.shape) == 1:
-        #     positions = np.expand_dims(positions, axis=0)
-
-        array = self.array[None]
-
         positions /= self.sampling
 
-        array = ifft2(array * fft_shift_kernel(positions, self.gpts)[:, None])
-        array = array.reshape((-1,) + array.shape[-2:])
+        array = ifft2(self.array[None] * fft_shift_kernel(positions, self.gpts)[:, None])
+
+        array = array.reshape((-1,) + (1,) * (len(waves.shape) - 2) + array.shape[-2:])
 
         d = waves._copy_as_dict(copy_array=False)
-        d['array'] = array * waves.array
-        d['extra_axes_metadata'] = [{'type': 'ensemble', 'label': 'core ionization'}]
+        d['array'] = array * waves.array[None]
+        d['extra_axes_metadata'] = [{'type': 'ensemble', 'label': 'core ionization'}] + d['extra_axes_metadata']
         return waves.__class__(**d)
 
-    def generate_scatter(self, waves, sites, chunks):
-        pass
+    def generate_scattered_waves(self, waves, sites, chunks=1):
+        sites = self.validate_sites(sites)
+
+        for start, end in generate_chunks(len(sites), chunks=chunks):
+            if end - start == 0:
+                break
+
+            scattered_waves = self.scatter(waves, sites[start:end])
+            yield sites[start:end], scattered_waves
 
     def _calculate_overlap_integral(self, lprime, lprimeprime, k):
         radial_grid = np.arange(0, np.max(k) * 1.05, 1 / max(self.extent))

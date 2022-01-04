@@ -1,8 +1,9 @@
 device: cpu
 fft: fftw
 dask:
-  lazy: false
+  lazy: true
   scheduler: threads
+  chunk-size: 128
 fftw:
   threads: 1
   planning_effort: FFTW_MEASURE

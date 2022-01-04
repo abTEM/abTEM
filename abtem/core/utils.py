@@ -25,6 +25,9 @@ def subdivide_into_chunks(num_items: int, num_chunks: int = None, chunks: int = 
     -------
     list of int
     """
+    if num_items == 0:
+        return 0, 0
+
     if (num_chunks is not None) & (chunks is not None):
         raise RuntimeError()
 

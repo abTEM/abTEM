@@ -11,8 +11,9 @@ import numpy as np
 from ase import Atom
 from matplotlib.patches import Rectangle
 
+from abtem.core.axes import ScanAxis
 from abtem.core.grid import Grid, HasGridMixin
-from abtem.core.utils import subdivide_into_chunks
+from abtem.core.utils import subdivide_into_chunks, generate_chunks
 
 
 class AbstractScan(metaclass=ABCMeta):
@@ -88,6 +89,15 @@ class CustomScan(AbstractScan):
     def get_positions(self, chunks: Union[int, Tuple[int, int]] = None, lazy: bool = False) -> np.ndarray:
         return [self._positions]
 
+    def generate_positions(self, chunks):
+        #if isinstance(chunks, Number):
+        #    chunks = (int(np.floor(np.sqrt(chunks))),) * 2
+
+        #positions = self.get_positions(lazy=False)
+
+        yield (slice(0,1),), self._positions
+
+
     @property
     def axes_metadata(self):
         return [{}]
@@ -119,7 +129,7 @@ class LineScan(AbstractScan, HasGridMixin):
     def __init__(self,
                  start: Union[Tuple[float, float], Atom],
                  end: Union[Tuple[float, float], Atom] = None,
-                 angle: float = 0.,
+                 angle: float = None,
                  gpts: int = None,
                  sampling: float = None,
                  margin: float = 0.,
@@ -133,11 +143,11 @@ class LineScan(AbstractScan, HasGridMixin):
         if isinstance(end, Atom):
             end = (end.x, end.y)
 
-        # if (end is not None) & (angle is not None):
-        #    raise ValueError('only one of "end" and "angle" may be specified')
+        if (end is not None) & (angle is not None):
+            raise ValueError('only one of "end" and "angle" may be specified')
 
-        if (gpts is None) & (sampling is None):
-            raise RuntimeError('grid gpts or sampling must be set')
+        # if (gpts is None) & (sampling is None):
+        #    raise RuntimeError('grid gpts or sampling must be set')
 
         self._grid = Grid(gpts=gpts, sampling=sampling, endpoint=endpoint, dimensions=1)
 
@@ -158,6 +168,14 @@ class LineScan(AbstractScan, HasGridMixin):
         if extent == 0.:
             raise RuntimeError('scan has no extent')
         self.extent = extent
+
+    def match_probe(self, probe):
+        if self.sampling is None:
+            self.sampling = probe.ctf.nyquist_sampling
+
+    @property
+    def limits(self):
+        return [self.margin_start, self.margin_end]
 
     @property
     def shape(self) -> Tuple[int]:
@@ -268,6 +286,13 @@ def split_array_2d(array, chunks):
     return [np.split(p, np.cumsum(chunks[1][:-1]), axis=1) for p in np.split(array, np.cumsum(chunks[0][:-1]), axis=0)]
 
 
+def gridscan_positions(start, end, gpts, endpoint):
+    x = np.linspace(start[0], end[0], gpts[0], endpoint=endpoint[0], dtype=np.float32)
+    y = np.linspace(start[1], end[1], gpts[1], endpoint=endpoint[1], dtype=np.float32)
+    x, y = np.meshgrid(x, y, indexing='ij')
+    return np.stack((x, y), axis=-1)
+
+
 class GridScan(HasGridMixin, AbstractScan):
     """
     Grid scan object.
@@ -336,7 +361,7 @@ class GridScan(HasGridMixin, AbstractScan):
         if self.end is not None:
             self.extent = self.end - self._start
 
-    def match(self, probe):
+    def match_probe(self, probe):
         if self.extent is None:
             self.start = (0., 0.)
             self.end = probe.extent
@@ -364,17 +389,22 @@ class GridScan(HasGridMixin, AbstractScan):
 
     @property
     def axes_metadata(self):
-        return [{'label': 'x', 'type': 'gridscan', 'sampling': float(self.sampling[0]), 'offset': float(self.start[0]),
-                 'units': 'Å'},
-                {'label': 'y', 'type': 'gridscan', 'sampling': float(self.sampling[1]), 'offset': float(self.start[1]),
-                 'units': 'Å'}]
+        return [ScanAxis(label='x', sampling=self.sampling[0], offset=self.start[0], units='Å'),
+                ScanAxis(label='y', sampling=self.sampling[0], offset=self.start[0], units='Å')]
+
+    def generate_positions(self, chunks):
+        if isinstance(chunks, Number):
+            chunks = (int(np.floor(np.sqrt(chunks))),) * 2
+
+        positions = self.get_positions(lazy=False)
+
+        for start_x, end_x in generate_chunks(positions.shape[0], chunks=chunks[0]):
+            for start_y, end_y in generate_chunks(positions.shape[1], chunks=chunks[1]):
+                slice_x = slice(start_x, end_x)
+                slice_y = slice(start_y, end_y)
+                yield (slice_x, slice_y), positions[slice_x, slice_y]
 
     def get_positions(self, chunks: Union[int, Tuple[int, int]] = None, lazy: bool = False) -> np.ndarray:
-        def gridscan_positions(start, end, gpts, endpoint):
-            x = np.linspace(start[0], end[0], gpts[0], endpoint=endpoint[0], dtype=np.float32)
-            y = np.linspace(start[1], end[1], gpts[1], endpoint=endpoint[1], dtype=np.float32)
-            x, y = np.meshgrid(x, y, indexing='ij')
-            return np.stack((x, y), axis=-1)
 
         if chunks is None:
             if lazy:
@@ -382,7 +412,8 @@ class GridScan(HasGridMixin, AbstractScan):
                 positions = da.from_delayed(positions, shape=self.gpts + (2,), dtype=np.float32)
                 return positions
             else:
-                return gridscan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
+                positions = gridscan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
+                return positions
 
         if isinstance(chunks, Number):
             chunks = (int(np.floor(np.sqrt(chunks))),) * 2

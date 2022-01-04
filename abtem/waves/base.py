@@ -1,36 +1,31 @@
 """Module to describe electron waves and their propagation."""
-from copy import copy
-from typing import Union, Sequence, Tuple, List, Dict
+from typing import Union, Tuple, List
 
-import dask
-import dask.array as da
 import numpy as np
 from ase import Atoms
 
 from abtem.core.antialias import HasAntialiasApertureMixin
-from abtem.core.dask import validate_lazy
+from abtem.core.axes import RealSpaceAxis, FourierSpaceAxis, AxisMetadata
 from abtem.core.energy import HasAcceleratorMixin
 from abtem.core.grid import HasGridMixin
 from abtem.potentials.potentials import Potential, AbstractPotential
-from abtem.waves.scan import AbstractScan
-from abtem.waves.fresnel import FresnelPropagator
 from abtem.waves.tilt import HasBeamTiltMixin
-from abtem.measure.detect import AbstractDetector, WavesDetector
 
 
 class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAntialiasApertureMixin):
 
     @property
-    def num_base_axes(self) -> int:
-        return 2
+    def base_axes_metadata(self) -> List[AxisMetadata]:
+        self.grid.check_is_defined()
+        return [RealSpaceAxis(label='x', sampling=self.sampling[0], units='Å', endpoint=False),
+                RealSpaceAxis(label='y', sampling=self.sampling[0], units='Å', endpoint=False)]
 
     @property
-    def _base_axes_metadata(self) -> List[Dict]:
+    def fourier_space_axes_metadata(self) -> List[AxisMetadata]:
         self.grid.check_is_defined()
-        return [{'label': 'x', 'type': 'real_space', 'sampling': self.sampling[0]},
-                {'label': 'y', 'type': 'real_space', 'sampling': self.sampling[1]}]
-
-
+        self.accelerator.check_is_defined()
+        return [FourierSpaceAxis(label='scattering angle x', sampling=self.angular_sampling[0], units='mrad'),
+                FourierSpaceAxis(label='scattering angle y', sampling=self.angular_sampling[0], units='mrad')]
 
     @property
     def antialias_valid_gpts(self) -> Tuple[int, int]:
@@ -39,11 +34,6 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAnt
     @property
     def antialias_cutoff_gpts(self) -> Tuple[int, int]:
         return self._cutoff_rectangle(self.gpts, self.sampling)
-
-    @property
-    def _fourier_space_axes_metadata(self) -> List[Dict]:
-        return [{'label': 'alpha_x', 'type': 'fourier_space', 'sampling': self.angular_sampling[0]},
-                {'label': 'alpha_y', 'type': 'fourier_space', 'sampling': self.angular_sampling[1]}]
 
     def _gpts_within_angle(self, angle: Union[None, float, str]) -> Tuple[int, int]:
 
@@ -85,31 +75,5 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAnt
         self.grid.match(potential)
         return potential
 
-
-class AbstractScannedWaves(WavesLikeMixin):
-
-    def _compute_chunks(self, dims: int) -> Tuple[int, ...]:
-        chunk_size = dask.utils.parse_bytes(dask.config.get('array.chunk-size'))
-        chunks = int(np.floor(chunk_size / (2 * 4 * np.prod(self.gpts))))
-        chunks = int(np.floor(chunks ** (1 / dims)))
-        return (chunks,) * dims + (2,)
-
-    def _validate_detectors(self, detectors) -> List[AbstractDetector]:
-        if hasattr(detectors, 'detect'):
-            detectors = [detectors]
-
-        if detectors is None:
-            detectors = [WavesDetector()]
-
-        return detectors
-
     def _bytes_per_wave(self) -> int:
         return 2 * 4 * np.prod(self.gpts)
-
-    def _validate_chunks(self, chunks: int) -> int:
-        if chunks == 'auto':
-            chunk_size = dask.utils.parse_bytes(dask.config.get('array.chunk-size'))
-            return int(chunk_size / self._bytes_per_wave())
-
-        return chunks
-

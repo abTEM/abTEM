@@ -90,6 +90,11 @@ class AbstractSlicedAtoms:
     def slice_limits(self):
         return _slice_limits(self.slice_thickness)
 
+    def check_slice_idx(self, i):
+        """Raises an error if i is greater than the number of slices."""
+        if i >= self.num_slices:
+            raise RuntimeError('Slice index {} too large for sliced atoms with {} slices'.format(i, self.num_slices))
+
     @abstractmethod
     def _get_atoms_in_slices(self, first_slice, last_slice):
         pass
@@ -106,9 +111,10 @@ class SliceIndexedAtoms(AbstractSlicedAtoms):
                  slice_index=None,
                  reverse: bool = False):
 
-        self._slice_index = slice_index
 
         super().__init__(atoms, slice_thickness, reverse)
+
+        self._slice_index = np.digitize(self.atoms.positions[:, 2], np.cumsum(self.slice_thickness))
 
     @property
     def atoms(self):
@@ -116,13 +122,7 @@ class SliceIndexedAtoms(AbstractSlicedAtoms):
 
     @property
     def slice_index(self):
-        if self._slice_index is None:
-            self._slice_index = self._calculate_slice_index()
-
         return self._slice_index
-
-    def _calculate_slice_index(self):
-        return np.digitize(self.atoms.positions[:, 2], np.cumsum(self.slice_thickness))
 
     def _get_atoms_in_slices(self, first_slice: int, last_slice: int):
         if last_slice - first_slice == 1:

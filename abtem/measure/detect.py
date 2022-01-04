@@ -6,14 +6,59 @@ from typing import Tuple, Any, Union, List, Dict
 import matplotlib.pyplot as plt
 import numpy as np
 
+from abtem.core.axes import ScanAxis
 from abtem.core.backend import get_array_module
 from abtem.measure.measure import DiffractionPatterns, PolarMeasurements, Images, LineProfiles
+from typing import Iterable
 
 
 def check_cutoff_angle(waves, angle):
     if (angle is not None) and (not isinstance(angle, str)):
         if (angle > waves.cutoff_angles[0]) or (angle > waves.cutoff_angles[1]):
             raise RuntimeError('Detector max angle exceeds the cutoff scattering angle.')
+
+
+def validate_detectors(detectors):
+    if isinstance(detectors, AbstractDetector):
+        detectors = [detectors]
+    elif detectors is None:
+        detectors = [WavesDetector()]
+    elif isinstance(detectors, (list, tuple)):
+        pass
+    else:
+        raise RuntimeError()
+    return detectors
+
+
+def apply_detector_func(self, func, detectors, scan=None, **kwargs):
+    detectors = validate_detectors(detectors)
+
+    new_cls = [detector.measurement_type(self, scan) for detector in detectors]
+    new_cls_kwargs = [detector.measurement_kwargs(self, scan) for detector in detectors]
+
+    signatures = []
+    output_sizes = {}
+    meta = []
+    i = 2
+    for detector in detectors:
+        shape = detector.measurement_shape(self)
+        signatures.append(f'({",".join([str(i) for i in range(i, i + len(shape))])})')
+        output_sizes.update({str(index): n for index, n in zip(range(i, i + len(shape)), shape)})
+        meta.append(np.array((), dtype=detector.measurement_dtype))
+        i += len(shape)
+
+    signature = '(0,1)->' + ','.join(signatures)
+
+    measurements = self.apply_gufunc(func,
+                                     detectors=detectors,
+                                     new_cls=new_cls,
+                                     new_cls_kwargs=new_cls_kwargs,
+                                     signature=signature,
+                                     output_sizes=output_sizes,
+                                     meta=meta,
+                                     **kwargs)
+
+    return measurements
 
 
 class AbstractDetector(metaclass=ABCMeta):
@@ -32,21 +77,26 @@ class AbstractDetector(metaclass=ABCMeta):
     def to_cpu(self):
         return self._to_cpu
 
+    def allocate_measurement(self, waves, scan=None):
+        d = self.measurement_kwargs(waves, scan)
+        d['array'] = np.zeros(self.measurement_shape(waves, scan), dtype=self.measurement_dtype)
+        return self.measurement_type(waves, scan)(**d)
+
     @property
     @abstractmethod
     def measurement_dtype(self):
         pass
 
     @abstractmethod
-    def measurement_shape(self, waves) -> Tuple:
+    def measurement_shape(self, waves, scan) -> Tuple:
         pass
 
     @abstractmethod
-    def measurement_type(self, waves):
+    def measurement_type(self, waves, scan):
         pass
 
     @abstractmethod
-    def measurement_kwargs(self, waves):
+    def measurement_kwargs(self, waves, scan):
         pass
 
     @abstractmethod
@@ -116,12 +166,49 @@ class AnnularDetector(AbstractDetector):
     def outer(self, value: float):
         self._outer = value
 
-    def detected_shape(self, waves) -> Tuple:
-        return ()
+    def measurement_shape(self, waves, scan=None) -> Tuple:
+        shape = waves.extra_axes_shape
+        if scan is not None:
+            shape = scan.gpts + shape
+        return shape
 
     @property
-    def detected_dtype(self) -> type:
+    def measurement_dtype(self) -> type:
         return np.float32
+
+    def measurement_type(self, waves, scan=None):
+        num_scan_axes = waves.num_scan_axes
+        if scan is not None:
+            num_scan_axes += len(scan.shape)
+
+        if num_scan_axes == 1:
+            return LineProfiles
+        elif num_scan_axes == 2:
+            return Images
+        else:
+            raise RuntimeError(f'no measurement type for AnnularDetector and Waves with {num_scan_axes} scan axes')
+
+    def measurement_kwargs(self, waves, scan=None):
+        extra_axes_metadata = copy(waves.extra_axes_metadata)
+        if scan is not None:
+            extra_axes_metadata = scan.axes_metadata + extra_axes_metadata
+
+        sampling = ()
+        n = len(extra_axes_metadata) - 1
+        for i, axes_metadata in enumerate(extra_axes_metadata[::-1]):
+            if not isinstance(axes_metadata, ScanAxis):
+                continue
+            del extra_axes_metadata[n - i]
+            sampling += (axes_metadata.sampling,)
+            if len(sampling) == 2:
+                break
+
+        if len(sampling) == 1:
+            sampling = sampling[0]
+
+        return {'sampling': sampling,
+                'extra_axes_metadata': extra_axes_metadata,
+                'metadata': waves.metadata}
 
     def create_measurement(self, array=None, scan=None, waves=None, extra_axes_metadata=None) \
             -> Union[LineProfiles, Images]:
@@ -152,8 +239,8 @@ class AnnularDetector(AbstractDetector):
         if self._to_cpu:
             measurement = measurement.to_cpu()
 
-        if probes.num_ensemble_axes > 0 and self.ensemble_mean:
-            measurement = measurement.mean(probes.ensemble_axes)
+        # if probes.num_ensemble_axes > 0 and self.ensemble_mean:
+        #    measurement = measurement.mean(probes.ensemble_axes)
 
         return measurement
 
@@ -450,6 +537,7 @@ class PixelatedDetector(AbstractDetector):
                  max_angle: Union[str, float] = 'valid',
                  resample: bool = False,
                  ensemble_mean: bool = True,
+                 fourier_space: bool = True,
                  to_cpu: bool = True,
                  url: str = None):
 
@@ -616,36 +704,24 @@ class WavesDetector(AbstractDetector):
     def measurement_dtype(self):
         return np.float32
 
-    def measurement_shape(self, waves) -> Tuple:
-        return waves.gpts
+    def measurement_shape(self, waves, scan=None) -> Tuple:
+        shape = waves.extra_axes_shape + waves.gpts
+        if scan is not None:
+            shape = scan.shape + shape
+        return shape
 
-    def measurement_type(self, waves):
+    def measurement_type(self, waves, scan=None):
         return Images
 
-    def measurement_kwargs(self, waves):
-        return {'sampling': waves.sampling,
-                'extra_axes_metadata': waves.extra_axes_metadata,
-                'metadata': waves.metadata}
+    def measurement_kwargs(self, waves, scan=None):
 
-    # def create_measurement(self, array=None, scan=None, waves=None, extra_axes_metadata: List[Dict] = None):
-    #
-    #     if extra_axes_metadata is None:
-    #         extra_axes_metadata = []
-    #
-    #     if array is None:
-    #         array = np.zeros(self.detected_shape(waves.shape), dtype=np.float32)
-    #
-    #     if hasattr(scan, 'axes_metadata'):
-    #         extra_axes_metadata += scan.axes_metadata
-    #     elif scan is not None:
-    #         extra_axes_metadata += [{'type': 'positions'} for _ in range(len(scan.shape) - 1)]
-    #
-    #     measurement = Images(array, sampling=waves.sampling, extra_axes_metadata=extra_axes_metadata)
-    #
-    #     if self._url is not None:
-    #         return measurement.to_zarr(self.url, overwrite=True, compute=False)
-    #     else:
-    #         return measurement
+        extra_axes_metadata = waves.extra_axes_metadata
+        if scan is not None:
+            extra_axes_metadata = extra_axes_metadata + scan.axes_metadata
+
+        return {'sampling': waves.sampling,
+                'extra_axes_metadata': extra_axes_metadata,
+                'metadata': waves.metadata}
 
     def __copy__(self):
         pass

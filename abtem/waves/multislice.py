@@ -9,7 +9,7 @@ from abtem.core.energy import energy2wavelength, HasAcceleratorMixin, Accelerato
 from abtem.core.events import Events, watch, HasEventsMixin
 from abtem.core.fft import fft2_convolve
 from abtem.core.grid import spatial_frequencies, HasGridMixin, Grid
-from abtem.potentials.potentials import AbstractPotential
+from abtem.potentials.potentials import AbstractPotential, TransmissionFunction
 from abtem.waves.fresnel import FresnelPropagator
 from abtem.waves.tilt import HasBeamTiltMixin, BeamTilt
 
@@ -94,11 +94,20 @@ class FresnelPropagator(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, Has
         return waves
 
 
-def multislice(waves,
+def multislice(waves: 'Waves',
                potential: AbstractPotential,
                propagator: FresnelPropagator = None,
                antialias_aperture: AntialiasAperture = None,
+               start: int = 0,
+               stop: int = None,
                transpose: bool = False):
+
+    if stop is None:
+        stop = len(potential)
+
+    if potential.num_configurations > 1:
+        raise RuntimeError()
+
     if antialias_aperture is None:
         antialias_aperture = AntialiasAperture()
 
@@ -109,17 +118,23 @@ def multislice(waves,
 
     propagator.match_waves(waves)
 
-    for potential_slices in potential.generate_chunks():
-        transmission_functions = potential_slices.transmission_function(energy=waves.energy)
-        transmission_functions = antialias_aperture.bandlimit(transmission_functions)
+    for potential_slices in potential.generate_slices(start=start, stop=stop):
+        if not isinstance(potential_slices, TransmissionFunction):
+            transmission_functions = potential_slices.transmission_function(energy=waves.energy)
+            transmission_functions = antialias_aperture.bandlimit(transmission_functions)
+        else:
+            transmission_functions = potential_slices
 
         for transmission_function in transmission_functions:
-            propagator.thickness = transmission_function.slice_thickness[0]
 
-            if transpose:
+
+            if start > stop:
+                #print(start, stop)
+                propagator.thickness = transmission_function.slice_thickness[0]
                 waves = propagator.propagate(waves)
                 waves = transmission_function.transmit(waves)
             else:
+                propagator.thickness = transmission_function.slice_thickness[0]
                 waves = transmission_function.transmit(waves)
                 waves = propagator.propagate(waves)
 

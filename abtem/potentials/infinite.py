@@ -15,23 +15,23 @@ def _sinc(gpts: Tuple[int, int], sampling: Tuple[float, float], xp):
     return sinc * sampling[0] * sampling[1]
 
 
-def calculate_scattering_factors(gpts: Tuple[int, int],
-                                 sampling: Tuple[float, float],
-                                 atomic_numbers: Sequence[int],
-                                 xp: str = 'numpy',
-                                 parametrization: str = 'kirkland') -> np.ndarray:
+def calculate_scattering_factor(gpts: Tuple[int, int],
+                                sampling: Tuple[float, float],
+                                number: int,
+                                xp: str = 'numpy',
+                                parametrization: str = 'kirkland') -> np.ndarray:
     xp = get_array_module(xp)
     parametrization = parametrization_names[parametrization]
     parameters = parametrization.load_parameters()
 
     k, _ = polar_spatial_frequencies(gpts, sampling, xp=xp)
-    scattering_factors = xp.zeros((len(atomic_numbers),) + gpts, dtype=np.float32)
+    #scattering_factors = xp.zeros(gpts, dtype=np.float32)
 
-    for i, number in enumerate(atomic_numbers):
-        f = parametrization.projected_scattering_factor(k, parameters[chemical_symbols[number]])
-        scattering_factors[i] = f
+    #for i, number in enumerate(atomic_numbers):
+    f = parametrization.projected_scattering_factor(k, parameters[chemical_symbols[number]])
+    #scattering_factors[i] = f
 
-    return scattering_factors / _sinc(gpts, sampling, xp)
+    return f / _sinc(gpts, sampling, xp)
 
 
 def superpose_deltas(positions: np.ndarray, slice_idx: np.ndarray, array: np.ndarray) -> np.ndarray:
@@ -51,7 +51,7 @@ def superpose_deltas(positions: np.ndarray, slice_idx: np.ndarray, array: np.nda
 
 
 def infinite_potential_projections(atoms, shape, sampling, scattering_factors, slice_index=None):
-    xp = get_array_module(scattering_factors)
+    xp = get_array_module(list(scattering_factors.values())[0])
 
     if len(atoms) == 0:
         return xp.zeros(shape, dtype=xp.float32)
@@ -78,7 +78,7 @@ def infinite_potential_projections(atoms, shape, sampling, scattering_factors, s
         else:
             temp = superpose_deltas(positions, slice_index, temp)
 
-        array += fft2(temp, overwrite_x=False) * scattering_factors[i]
+        array += fft2(temp, overwrite_x=False) * scattering_factors[number]
 
     array = ifft2(array, overwrite_x=False).real
     return array
