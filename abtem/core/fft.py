@@ -1,3 +1,8 @@
+try:
+    import pyfftw
+except ModuleNotFoundError:
+    pyfftw = None
+
 import dask.array as da
 import numpy as np
 
@@ -11,10 +16,7 @@ try:
 except ModuleNotFoundError:
     mkl_fft = None
 
-try:
-    import pyfftw
-except ModuleNotFoundError:
-    pyfftw = None
+
 
 try:
     import cupy as cp
@@ -23,6 +25,7 @@ except ModuleNotFoundError:
 
 
 def build_fftw_obj(x, allow_new_plan=False, overwrite_x=True, backward=False):
+
     # if backward:
     #     obj = pyfftw.builders.ifft2(x,
     #                                  overwrite_input=overwrite_x,

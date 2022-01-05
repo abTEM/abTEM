@@ -109,12 +109,12 @@ def multislice(waves: 'Waves',
         raise RuntimeError()
 
     if antialias_aperture is None:
-        antialias_aperture = AntialiasAperture()
+        antialias_aperture = AntialiasAperture(device=get_array_module(waves.array))
 
     antialias_aperture.match_grid(waves)
 
     if propagator is None:
-        propagator = FresnelPropagator()
+        propagator = FresnelPropagator(device=get_array_module(waves.array))
 
     propagator.match_waves(waves)
 

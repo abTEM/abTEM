@@ -691,6 +691,8 @@ class Probe(WavesLikeMixin):
         potential = validate_potential(potential)
         lazy = validate_lazy(lazy)
 
+        self.grid.match(potential)
+
         exit_waves = []
         for potential_configuration in potential.get_potential_configurations(lazy=lazy):
             waves = self.build(positions, chunks=chunks, lazy=lazy)

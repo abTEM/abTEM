@@ -62,7 +62,7 @@ def transition_potential_multislice(waves,
     for i, (transmission_function_slice, sites_slice) in enumerate(zip(transmission_function, sites)):
         sites_slice = transition_potentials.validate_sites(sites_slice)
 
-        for scattered_waves in transition_potentials.generate_scattered_waves(waves, sites_slice):
+        for _, scattered_waves in transition_potentials.generate_scattered_waves(waves, sites_slice):
             scattered_waves = multislice(scattered_waves,
                                          transmission_function,
                                          start=i,

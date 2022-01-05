@@ -1,5 +1,5 @@
 device: cpu
-fft: fftw
+fft: mkl
 dask:
   lazy: true
   scheduler: threads

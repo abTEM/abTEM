@@ -199,7 +199,7 @@ class Grid(HasEventsMixin):
         check_match : bool
             If true check whether grids can match without overriding already defined grid parameters.
         """
-
+        
         if check_match:
             self.check_match(other)
 

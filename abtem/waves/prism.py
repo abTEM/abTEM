@@ -245,7 +245,7 @@ class AbstractSMatrix(WavesLikeMixin):
             if positions.end is None:
                 positions.end = self.extent
             if positions.sampling is None and ctf is not None:
-                positions.sampling = ctf.nyquist_sampling
+                positions.sampling = 0.9 * ctf.nyquist_sampling
             return positions
 
         elif isinstance(positions, LineScan):
@@ -605,13 +605,13 @@ class SMatrixArray(HasDaskArray, HasAxes, AbstractSMatrix):
         meta = []
         i = 3
         for detector in detectors:
-            shape = detector.measurement_shape(self, scan)[self.num_extra_axes:]
+            shape = detector.measurement_shape(self, scan=scan)[self.num_extra_axes:]
             signatures.append(f'({",".join([str(i) for i in range(i, i + len(shape))])})')
             output_sizes.update({str(index): n for index, n in zip(range(i, i + len(shape)), shape)})
             meta.append(np.array((), dtype=detector.measurement_dtype))
             i += len(shape)
-
-        signature = '(0,1,3)->' + ','.join(signatures)
+        
+        signature = '(0,1,2)->' + ','.join(signatures)
 
         measurements = self.apply_gufunc(func,
                                          detectors=detectors,
@@ -619,6 +619,7 @@ class SMatrixArray(HasDaskArray, HasAxes, AbstractSMatrix):
                                          new_cls=new_cls,
                                          new_cls_kwargs=new_cls_kwargs,
                                          signature=signature,
+                                         #axes=[(-3, -2, -1), ()],
                                          output_sizes=output_sizes,
                                          allow_rechunk=True,
                                          meta=meta,
