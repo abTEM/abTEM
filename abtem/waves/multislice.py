@@ -119,6 +119,7 @@ def multislice(waves: 'Waves',
     propagator.match_waves(waves)
 
     for potential_slices in potential.generate_slices(start=start, stop=stop):
+
         if not isinstance(potential_slices, TransmissionFunction):
             transmission_functions = potential_slices.transmission_function(energy=waves.energy)
             transmission_functions = antialias_aperture.bandlimit(transmission_functions)
@@ -126,10 +127,7 @@ def multislice(waves: 'Waves',
             transmission_functions = potential_slices
 
         for transmission_function in transmission_functions:
-
-
             if start > stop:
-                #print(start, stop)
                 propagator.thickness = transmission_function.slice_thickness[0]
                 waves = propagator.propagate(waves)
                 waves = transmission_function.transmit(waves)

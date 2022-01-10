@@ -5,6 +5,7 @@ import numpy as np
 from abtem.core.backend import get_array_module
 import dask.array as da
 
+
 def array_row_intersection(a, b):
     tmp = np.prod(np.swapaxes(a[:, :, None], 1, 2) == b, axis=2)
     return np.sum(np.cumsum(tmp, axis=0) * tmp == 1, axis=1).astype(bool)
@@ -78,6 +79,22 @@ def generate_array_chunks(array, chunks):
                 yield chunk
 
     return _recursive_generate_array_chunks(array, chunks)
+
+
+def label_to_index(labels, max_label=None):
+    if max_label is None:
+        max_label = np.max(labels)
+
+    xp = get_array_module(labels)
+    labels = labels.flatten()
+    labels_order = labels.argsort()
+    sorted_labels = labels[labels_order]
+    indices = xp.arange(0, len(labels) + 1)[labels_order]
+    index = xp.arange(0, max_label + 1)
+    lo = xp.searchsorted(sorted_labels, index, side='left')
+    hi = xp.searchsorted(sorted_labels, index, side='right')
+    for i, (l, h) in enumerate(zip(lo, hi)):
+        yield indices[l:h]
 
 
 def reassemble_chunks_along(blocks, shape, axis, concatenate=True, delayed=False):

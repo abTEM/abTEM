@@ -1,13 +1,13 @@
 from typing import Tuple
 
-import numpy as np
 import numba as nb
+import numpy as np
 
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import energy2wavelength
-from abtem.core.grid import spatial_frequencies
 from abtem.core.fft import ifft2
+from abtem.core.grid import spatial_frequencies
 from abtem.waves.natural_neighbors import pairwise_weights
 from abtem.waves.transfer import CTF
 
@@ -71,8 +71,9 @@ def wrapped_crop_2d(array: np.ndarray, corner: Tuple[int, int], size: Tuple[int,
 
     return xp.concatenate([AB, CD], axis=-1)
 
-def prism_wave_vectors(cutoff: float, extent: Tuple[float, float],
-                       energy: float, interpolation: Tuple[int, int]) -> np.ndarray:
+
+def prism_wave_vectors(cutoff: float, extent: Tuple[float, float], energy: float,
+                       interpolation: Tuple[int, int], xp=np) -> np.ndarray:
     wavelength = energy2wavelength(energy)
 
     n_max = int(np.ceil(cutoff / 1.e3 / (wavelength / extent[0] * interpolation[0])))
@@ -90,25 +91,25 @@ def prism_wave_vectors(cutoff: float, extent: Tuple[float, float],
     kx, ky = np.meshgrid(kx, ky, indexing='ij')
     kx = kx[mask]
     ky = ky[mask]
-    return np.asarray((kx, ky)).T
+    return xp.asarray((kx, ky)).T
 
 
-def partitioned_prism_wave_vectors(cutoff, extent, energy, num_rings, num_points_per_ring=6):
+def partitioned_prism_wave_vectors(cutoff, extent, energy, num_rings, num_points_per_ring=6, xp=np):
     wavelength = energy2wavelength(energy)
 
-    rings = [np.array((0., 0.))]
+    rings = [xp.array((0., 0.))]
     if num_rings == 1:
         raise NotImplementedError()
 
     n = num_points_per_ring
     for r in np.linspace(cutoff / (num_rings - 1), cutoff, num_rings - 1):
-        angles = np.arange(n, dtype=np.int32) * 2 * np.pi / n + np.pi / 2
-        kx = np.round(r * np.sin(angles) / 1000. / wavelength * extent[0]) / extent[0]
-        ky = np.round(r * np.cos(-angles) / 1000. / wavelength * extent[1]) / extent[1]
+        angles = xp.arange(n, dtype=np.int32) * 2 * np.pi / n + np.pi / 2
+        kx = xp.round(r * xp.sin(angles) / 1000. / wavelength * extent[0]) / extent[0]
+        ky = xp.round(r * xp.cos(-angles) / 1000. / wavelength * extent[1]) / extent[1]
         n += num_points_per_ring
-        rings.append(np.array([kx, ky]).T)
+        rings.append(xp.array([kx, ky]).T)
 
-    return np.vstack(rings).astype(np.float32)
+    return xp.vstack(rings).astype(xp.float32)
 
 
 def plane_waves(wave_vectors: np.ndarray, extent: Tuple[float, float], gpts: Tuple[int, int],
@@ -205,7 +206,7 @@ def interpolate_full(array, parent_wave_vectors, wave_vectors, extent, gpts, ene
     return interpolated_array
 
 
-@nb.jit(nopython=True, nogil=True, parallel=True, fastmath=True, warn=False)
+@nb.jit(nopython=True, nogil=True, parallel=True, fastmath=True)
 def reduce_beamlets_nearest_no_interpolation(waves, basis, parent_s_matrix, shifts):
     assert waves.shape[0] == shifts.shape[0]
     assert len(shifts.shape) == 2

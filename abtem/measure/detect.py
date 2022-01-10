@@ -206,9 +206,28 @@ class AnnularDetector(AbstractDetector):
         if len(sampling) == 1:
             sampling = sampling[0]
 
-        return {'sampling': sampling,
-                'extra_axes_metadata': extra_axes_metadata,
-                'metadata': waves.metadata}
+        measurement_type = self.measurement_type(waves, scan)
+        if measurement_type is LineProfiles:
+
+            if scan is not None:
+                start = scan.start
+                end = scan.end
+            else:
+                start = waves.scan_axes_metadata[0].start
+                end = waves.scan_axes_metadata[0].end
+
+            return {'sampling': sampling,
+                    'start': start,
+                    'end': end,
+                    'extra_axes_metadata': extra_axes_metadata,
+                    'metadata': waves.metadata}
+        elif measurement_type is Images:
+
+            return {'sampling': sampling,
+                    'extra_axes_metadata': extra_axes_metadata,
+                    'metadata': waves.metadata}
+        else:
+            raise RuntimeError()
 
     def create_measurement(self, array=None, scan=None, waves=None, extra_axes_metadata=None) \
             -> Union[LineProfiles, Images]:
@@ -543,6 +562,7 @@ class PixelatedDetector(AbstractDetector):
 
         self._resample = resample
         self._max_angle = max_angle
+        self._fourier_space = fourier_space
         super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url)
 
     @property
@@ -550,22 +570,46 @@ class PixelatedDetector(AbstractDetector):
         return self._max_angle
 
     @property
+    def fourier_space(self):
+        return self._fourier_space
+
+    @property
     def resample(self):
         return self._resample
 
-    def detected_shape(self, waves):
-        return waves._gpts_within_angle(self.max_angle)
+    def measurement_shape(self, waves, scan=None):
+        if self.fourier_space:
+            shape = waves._gpts_within_angle(self.max_angle)
+        else:
+            shape = waves.gpts
+
+        shape = waves.extra_axes_shape + shape
+        if scan is not None:
+            shape = scan.shape + shape
+        return shape
 
     @property
-    def detected_dtype(self):
+    def measurement_dtype(self):
         return np.float32
 
-    def detected_measurement(self, waves, scan):
-        kwargs = {'angular_sampling': waves.angular_sampling,
-                  'extra_axes_metadata': waves.extra_axes_metadata,
-                  'metadata': waves.metadata}
+    def measurement_kwargs(self, waves, scan=None):
+        extra_axes_metadata = waves.extra_axes_metadata
+        if scan is not None:
+            extra_axes_metadata = scan.axes_metadata + extra_axes_metadata
+        if self.fourier_space:
+            return {'angular_sampling': waves.angular_sampling,
+                    'extra_axes_metadata': extra_axes_metadata,
+                    'metadata': waves.metadata}
+        else:
+            return {'sampling': waves.sampling,
+                    'extra_axes_metadata': extra_axes_metadata,
+                    'metadata': waves.metadata}
 
-        return DiffractionPatterns, kwargs
+    def measurement_type(self, waves, scan=None):
+        if self.fourier_space:
+            return DiffractionPatterns
+        else:
+            return Images
 
     def _bilinear_nodes_and_weight(self, old_shape, new_shape, old_angular_sampling, new_angular_sampling, xp):
         nodes = []
@@ -641,10 +685,14 @@ class PixelatedDetector(AbstractDetector):
                                    fftshift=True)
 
     def detect(self, waves) -> np.ndarray:
-        measurements = waves.diffraction_patterns()
 
-        if (waves.num_ensemble_axes > 0) & self.ensemble_mean:
-            measurements = measurements.mean(waves.ensemble_axes)
+        if self.fourier_space:
+            measurements = waves.diffraction_patterns(max_angle=self.max_angle)
+        else:
+            measurements = waves.intensity()
+
+        # if (waves.num_ensemble_axes > 0) & self.ensemble_mean:
+        #    measurements = measurements.mean(waves.ensemble_axes)
 
         if self.to_cpu:
             measurements = measurements.to_cpu()
@@ -698,7 +746,12 @@ class WavesDetector(AbstractDetector):
         super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url)
 
     def detect(self, waves):
-        return waves.intensity()
+        images = waves.intensity()
+
+        if self.to_cpu:
+            images = images.to_cpu()
+
+        return images
 
     @property
     def measurement_dtype(self):
@@ -717,7 +770,7 @@ class WavesDetector(AbstractDetector):
 
         extra_axes_metadata = waves.extra_axes_metadata
         if scan is not None:
-            extra_axes_metadata = extra_axes_metadata + scan.axes_metadata
+            extra_axes_metadata = scan.axes_metadata + extra_axes_metadata
 
         return {'sampling': waves.sampling,
                 'extra_axes_metadata': extra_axes_metadata,

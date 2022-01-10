@@ -11,7 +11,7 @@ import numpy as np
 from ase import Atom
 from matplotlib.patches import Rectangle
 
-from abtem.core.axes import ScanAxis
+from abtem.core.axes import ScanAxis, PositionsAxis
 from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.utils import subdivide_into_chunks, generate_chunks
 
@@ -100,7 +100,7 @@ class CustomScan(AbstractScan):
 
     @property
     def axes_metadata(self):
-        return [{}]
+        return [PositionsAxis()]
 
     def __copy__(self):
         pass
@@ -183,8 +183,7 @@ class LineScan(AbstractScan, HasGridMixin):
 
     @property
     def axes_metadata(self):
-        return [{'label': 'x', 'type': 'linescan', 'sampling': self.sampling[0], 'start_x': self.start[0],
-                 'start_y': self.start[1], 'end_x': self.end[0], 'end_y': self.end[1]}]
+        return [ScanAxis(label='x', sampling=self.sampling[0], units='Å', start=self.start, end=self.end)]
 
     @property
     def start(self) -> Tuple[float, float]:

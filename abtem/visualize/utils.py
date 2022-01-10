@@ -19,26 +19,27 @@ def format_label(calibration):
     return label
 
 
-def add_domain_coloring_cbar(ax, abs_range, aspect=4):
+def add_domain_coloring_cbar(ax, vmin, vmax, aspect=2):
     divider = make_axes_locatable(ax)
-    cax = divider.append_axes("right", size="30%", pad=0.3, aspect=aspect)
+    cax = divider.append_axes("right", size="50%", pad=0.3, aspect=aspect)
     cax.yaxis.tick_right()
     cax.yaxis.set_label_position('right')
 
-    cbar_array = np.linspace(0, 1, 100)
-    cbar_array = cbar_array[None] * np.exp(1.j * np.linspace(-np.pi, np.pi, 100))[:, None]
+    cbar_array = np.linspace(vmin, vmax, 100)
+    cbar_array = cbar_array[:, None] * np.exp(1.j * np.linspace(-np.pi, np.pi, 100))[None]
 
-    cax.set_xticks([0, 99])
-    cax.set_xticklabels([f'{n:.1e}' for n in abs_range])
     cax.set_yticks(np.linspace(0, 99, 5))
-    cax.set_yticklabels(["-π", "-π/2", "0", "π/2", "π"])
-    cax.set_xlabel('abs')
-    cax.set_ylabel('arg')
+    # cax.set_yticklabels([f'{vmin:.1e}', f'{vmax:.1e}'])
+    cax.set_yticklabels([f'{v:.2e}' for v in np.linspace(vmin, vmax, 5)])
+    cax.set_xticks(np.linspace(0, 99, 3))
+    # cax.set_yticklabels(["-π", "-π/2", "0", "π/2", "π"])
+    cax.set_xticklabels(["-π", "0", "π"])
+    cax.set_xlabel('arg')
+    cax.set_ylabel('abs')
+    cax.imshow(domain_coloring(cbar_array, vmin=vmin, vmax=vmax), aspect=aspect, origin='lower')
 
-    cax.imshow(domain_coloring(cbar_array), aspect=aspect, origin='lower')
 
-
-def domain_coloring(z):
+def domain_coloring(z, vmin=None, vmax=None):
     """
     Domain coloring function.
 
@@ -60,9 +61,16 @@ def domain_coloring(z):
     colors = cmap(phase)[..., :3]
 
     abs_z = np.abs(z)
-    abs_z = (abs_z - abs_z.min()) / abs_z.ptp()
-    colors = colors * abs_z[..., None]
 
+    if vmin is None:
+        vmin = abs_z.min()
+
+    if vmax is None:
+        vmax = abs_z.max()
+
+    abs_z = (abs_z - vmin) / (vmax - vmin)
+    abs_z = np.clip(abs_z, a_min=0, a_max=1.)
+    colors = colors * abs_z[..., None]
     return colors
 
 

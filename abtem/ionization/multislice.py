@@ -1,14 +1,15 @@
-import numpy as np
-from ase import Atoms
 from typing import TYPE_CHECKING
 
+import numpy as np
+from ase import Atoms
+
 from abtem.core.antialias import AntialiasAperture
+from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
+from abtem.measure.measure import Images
 from abtem.potentials.potentials import validate_potential
 from abtem.structures.slicing import SliceIndexedAtoms
 from abtem.waves.multislice import FresnelPropagator, multislice
-from abtem.measure.measure import Images
-from abtem.waves.prism_utils import wrapped_crop_2d
 
 if TYPE_CHECKING:
     from abtem.waves.prism import SMatrix
@@ -52,8 +53,8 @@ def transition_potential_multislice(waves,
     transition_potentials.grid.match(waves)
     transition_potentials.accelerator.match(waves)
 
-    antialias_aperture = AntialiasAperture().match_grid(waves)
-    propagator = FresnelPropagator().match_waves(waves)
+    antialias_aperture = AntialiasAperture(device=get_array_module(waves.array)).match_grid(waves)
+    propagator = FresnelPropagator(device=get_array_module(waves.array)).match_waves(waves)
 
     transmission_function = potential.build().transmission_function(energy=waves.energy)
     transmission_function = antialias_aperture.bandlimit(transmission_function)
@@ -88,52 +89,73 @@ def transition_potential_multislice(waves,
 
 
 def linear_scaling_transition_multislice(S1: 'SMatrix', S2: 'SMatrix', scan, transition_potentials):
+    xp = get_array_module(S1._device)
+    from tqdm.auto import tqdm
+
     positions = scan.get_positions(lazy=False).reshape((-1, 2))
 
     prism_region = (S1.extent[0] / S1.interpolation[0] / 2, S1.extent[1] / S1.interpolation[1] / 2)
 
-    coefficients = complex_exponential(-2. * np.pi * positions[:, 0, None] * S1.wave_vectors[None, :, 0])
-    coefficients *= complex_exponential(-2. * np.pi * positions[:, 1, None] * S1.wave_vectors[None, :, 1])
-    coefficients = coefficients / np.sqrt(coefficients.shape[1])
+    positions = xp.asarray(positions, dtype=np.float32)
+    coefficients = complex_exponential(-2. * np.float32(np.pi) * positions[:, 0, None] * S1.wave_vectors[None, :, 0])
+    coefficients *= complex_exponential(-2. * np.float32(np.pi) * positions[:, 1, None] * S1.wave_vectors[None, :, 1])
+    coefficients = coefficients / xp.sqrt(coefficients.shape[1]).astype(np.float32)
 
     potential = S1.potential
 
     sites = validate_sites(potential, sites=None)
+    chunks = S1.chunks
+    stream = S1._device == 'gpu' and S1._store_on_host
 
-    S1 = S1.build(lazy=False, stop=0)
+    S1 = S1.build(lazy=False, stop=0, normalization='planewaves')
+    S2 = S2.build(lazy=False, start=len(potential), stop=0, normalization='planewaves')
 
-    images = np.zeros(len(positions), dtype=np.float32)
-    for i in range(len(potential)):
-        S1 = S1.multislice(potential, start=max(i - 1, 0), stop=i)
-        S2_multislice = S2.build(lazy=False, start=len(potential), stop=i)
+    images = xp.zeros(len(positions), dtype=np.float32)
+    for i in tqdm(range(len(potential))):
+
+        if stream:
+            S1 = S1.streaming_multislice(potential, chunks=chunks, start=max(i - 1, 0), stop=i)
+            S2 = S2.streaming_multislice(potential, chunks=chunks, start=max(i - 1, 0), stop=i)
+        else:
+            S1 = S1.multislice(potential, start=max(i - 1, 0), stop=i)
+            S2 = S2.multislice(potential, start=max(i - 1, 0), stop=i)
 
         sites_slice = transition_potentials.validate_sites(sites[i])
 
-        for site, scattered_S1 in transition_potentials.generate_scattered_waves(S1, sites_slice, chunks=1):
+        for site in sites_slice:
+            S2_crop = S2.crop_to_positions(site)
+            scattered_S1 = S1.crop_to_positions(site)
+
+            if stream:
+                S2_crop = S2_crop.copy('gpu')
+                scattered_S1 = scattered_S1.copy('gpu')
+
+            shifted_site = site - np.array(scattered_S1.crop_offset) * np.array(scattered_S1.sampling)
+            scattered_S1 = transition_potentials.scatter(scattered_S1, shifted_site)
 
             if S1.interpolation == (1, 1):
                 cropped_coefficients = coefficients
                 mask = None
             else:
-                mask = np.ones(len(coefficients), dtype=bool)
+                mask = xp.ones(len(coefficients), dtype=bool)
                 if S1.interpolation[0] > 1:
-                    mask *= (np.abs(positions[:, 0] - site[0, 0]) % (S1.extent[0] - prism_region[0])) <= prism_region[0]
+                    mask *= (xp.abs(positions[:, 0] - site[0]) % (S1.extent[0] - prism_region[0])) <= prism_region[0]
                 if S1.interpolation[1] > 1:
-                    mask *= (np.abs(positions[:, 1] - site[0, 1]) % (S1.extent[1] - prism_region[1])) <= prism_region[1]
+                    mask *= (xp.abs(positions[:, 1] - site[1]) % (S1.extent[1] - prism_region[1])) <= prism_region[1]
 
                 cropped_coefficients = coefficients[mask]
 
-            S2_multislice = S2_multislice.crop_to_positions(site)
-            scattered_S1 = scattered_S1.crop_to_positions(site)
+            SHn0 = xp.dot(S2_crop.array.reshape((1, len(S2), -1)),
+                          xp.swapaxes(scattered_S1.array.reshape((len(scattered_S1.array), len(S1), -1)), 1, 2))
 
-            for j in range(scattered_S1.shape[0]):
-                SHn0 = np.tensordot(S2_multislice.array.reshape((len(S2), -1)),
-                                    scattered_S1.array[j].reshape((len(S1), -1)).T, axes=1)
+            SHn0 = xp.swapaxes(SHn0[0], 0, 1)
 
-                if mask is not None:
-                    images[mask] += (np.abs(np.dot(SHn0, cropped_coefficients.T)) ** 2).sum(0)  # .reshape(scan.gpts)
-                else:
-                    images += (np.abs(np.dot(SHn0, cropped_coefficients.T)) ** 2).sum(0)
+            if mask is not None:
+                images[mask] += (xp.abs(xp.dot(SHn0, cropped_coefficients.T[None])) ** 2).sum((0, 1, 2))
+            else:
+                images += (xp.abs(xp.dot(SHn0, cropped_coefficients.T[None])) ** 2).sum((0, 1, 2))
+
+    images *= np.prod(S1.interpolation).astype(np.float32) ** 2
 
     images = Images(images.reshape(scan.gpts), sampling=scan.sampling)
     return images

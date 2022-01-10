@@ -12,7 +12,7 @@ import zarr
 from ase import Atom
 from scipy.interpolate import interp1d
 
-from abtem.core.axes import HasAxes, ScanAxis, RealSpaceAxis, AxisMetadata, FourierSpaceAxis
+from abtem.core.axes import HasAxes, ScanAxis, RealSpaceAxis, AxisMetadata, FourierSpaceAxis, LinearAxis
 from abtem.core.backend import cp, asnumpy, get_array_module, get_ndimage_module
 from abtem.core.dask import HasDaskArray
 from abtem.core.energy import energy2wavelength
@@ -118,17 +118,35 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
         axes = self._validate_axes(axes)
         return len(set(axes).intersection(self.base_axes)) > 0
 
+    def __eq__(self, other):
+        if not isinstance(other, self.__class__):
+            return False
+
+        if not self.shape == other.shape:
+            return False
+
+        for (key, value), (other_key, other_value) in zip(self._copy_as_dict(copy_array=False).items(),
+                                                          other._copy_as_dict(copy_array=False).items()):
+            if np.any(value != other_value):
+                print(value, other_value)
+                return False
+
+        if not np.allclose(self.array, other.array):
+            return False
+
+        return True
+
     def check_is_compatible(self, other):
         if not isinstance(other, self.__class__):
-            raise RuntimeError()
+            raise RuntimeError(f'Incompatible measurement types ({self.__class__} is not {other.__class__})')
 
         if self.shape != other.shape:
             raise RuntimeError()
 
         for (key, value), (other_key, other_value) in zip(self._copy_as_dict(copy_array=False).items(),
                                                           other._copy_as_dict(copy_array=False).items()):
-            if value != other_value:
-                raise RuntimeError()
+            if np.any(value != other_value):
+                raise RuntimeError(f'{key}, {other_key} {value} {other_value}')
 
     def add(self, other) -> 'T':
         self.check_is_compatible(other)
@@ -221,7 +239,7 @@ class Images(AbstractMeasurement):
     def __init__(self,
                  array: Union[da.core.Array, np.array],
                  sampling: Union[float, Tuple[float, float]],
-                 extra_axes_metadata: List[Dict] = None,
+                 extra_axes_metadata: List[AxisMetadata] = None,
                  metadata: Dict = None):
 
         if isinstance(sampling, Number):
@@ -415,7 +433,8 @@ class Images(AbstractMeasurement):
                                    extra_axes_metadata=self.extra_axes_metadata, metadata=self.metadata)
 
     def show(self, ax=None, cbar: bool = False, power: float = 1., figsize: Tuple[int, int] = None, title: str = None,
-             **kwargs):
+             vmin=None, vmax=None, **kwargs):
+
         self.compute(pbar=False)
 
         if ax is None:
@@ -425,18 +444,20 @@ class Images(AbstractMeasurement):
         array = asnumpy(self._array)[(0,) * self.num_extra_axes].T ** power
 
         if np.iscomplexobj(array):
-            colored_array = domain_coloring(array)
+            colored_array = domain_coloring(array, vmin=vmin, vmax=vmax)
         else:
             colored_array = array
 
-        im = ax.imshow(colored_array, extent=[0, self.extent[0], 0, self.extent[1]], origin='lower', **kwargs)
+        im = ax.imshow(colored_array, extent=[0, self.extent[0], 0, self.extent[1]], origin='lower', vmin=vmin,
+                       vmax=vmax, **kwargs)
         ax.set_xlabel('x [Å]')
         ax.set_ylabel('y [Å]')
 
         if cbar:
             if np.iscomplexobj(array):
-                abs_array = np.abs(array)
-                add_domain_coloring_cbar(ax, (abs_array.min(), abs_array.max()))
+                vmin = np.abs(array).min() if vmin is None else vmin
+                vmax = np.abs(array).max() if vmax is None else vmax
+                add_domain_coloring_cbar(ax, vmin, vmax)
             else:
                 plt.colorbar(im, ax=ax)
 
@@ -446,12 +467,12 @@ class Images(AbstractMeasurement):
 class LineProfiles(AbstractMeasurement):
 
     def __init__(self,
-                 array,
+                 array: np.ndarray,
                  start: Tuple[float, float] = None,
                  end: Tuple[float, float] = None,
                  sampling: float = None,
-                 extra_axes_metadata=None,
-                 metadata=None):
+                 extra_axes_metadata: List[AxisMetadata] = None,
+                 metadata: dict = None):
         from abtem.waves.scan import LineScan
 
         if start is None:
@@ -461,7 +482,7 @@ class LineProfiles(AbstractMeasurement):
             end = (start[0] + len(array) * sampling, start[1])
 
         self._linescan = LineScan(start=start, end=end, sampling=sampling, gpts=array.shape[-1])
-        super().__init__(array=array, extra_axes_metadata=extra_axes_metadata, metadata=metadata, base_axes=(-1,))
+        super().__init__(array=array, extra_axes_metadata=extra_axes_metadata, metadata=metadata)
 
     @property
     def start(self) -> Tuple[float, float]:
@@ -605,7 +626,7 @@ def bilinear_nodes_and_weight(old_shape, new_shape, old_angular_sampling, new_an
     return v, u, vw, uw
 
 
-def intgrad2d(gradient, sampling):
+def integrate_gradient_2d(gradient, sampling):
     gx, gy = gradient
     (nx, ny) = gx.shape
     ikx = np.fft.fftfreq(nx, d=sampling[0])
@@ -625,8 +646,8 @@ class DiffractionPatterns(AbstractMeasurement):
                  array,
                  angular_sampling: Tuple[float, float],
                  fftshift: bool = False,
-                 extra_axes_metadata=None,
-                 metadata=None):
+                 extra_axes_metadata: List[AxisMetadata] = None,
+                 metadata: dict = None):
 
         self._fftshift = fftshift
         self._angular_sampling = (float(angular_sampling[0]), float(angular_sampling[1]))
@@ -803,7 +824,10 @@ class DiffractionPatterns(AbstractMeasurement):
         extra_axes_metadata = [element for i, element in enumerate(self.extra_axes_metadata) if not i in self.scan_axes]
 
         if len(self.scan_axes) == 1:
-            return LineProfiles(array, sampling=self.axes_metadata[self.scan_axes[0]].sampling,
+            start = self.scan_axes_metadata[0].start
+            end = self.scan_axes_metadata[0].end
+
+            return LineProfiles(array, sampling=self.axes_metadata[self.scan_axes[0]].sampling, start=start, end=end,
                                 extra_axes_metadata=extra_axes_metadata, metadata=self.metadata)
         else:
             sampling = self.axes_metadata[self.scan_axes[0]].sampling, self.axes_metadata[self.scan_axes[1]].sampling
@@ -846,7 +870,7 @@ class DiffractionPatterns(AbstractMeasurement):
         sampling = (self.axes_metadata[self.scan_axes[0]]['sampling'],
                     self.axes_metadata[self.scan_axes[1]]['sampling'])
 
-        icom = intgrad2d((com.array.real, com.array.imag), sampling)
+        icom = integrate_gradient_2d((com.array.real, com.array.imag), sampling)
 
         return Images(array=icom, sampling=sampling, extra_axes_metadata=self.extra_axes_metadata[:-2],
                       metadata=self.metadata)
@@ -893,7 +917,7 @@ class DiffractionPatterns(AbstractMeasurement):
         if ax is None:
             fig, ax = plt.subplots(figsize=figsize)
 
-        slic = (0,) * self.collection_dimensions
+        slic = (0,) * self.num_extra_axes
         extent = self.fourier_space_extent[0] + self.fourier_space_extent[1]
 
         array = asnumpy(self._array)[slic].T ** power
@@ -910,21 +934,25 @@ class DiffractionPatterns(AbstractMeasurement):
 
 class PolarMeasurements(AbstractMeasurement):
 
-    def __init__(self, array, radial_sampling, azimuthal_sampling, radial_offset=0., azimuthal_offset=0.,
-                 axes_metadata=None, metadata=None):
+    def __init__(self,
+                 array: np.ndarray,
+                 radial_sampling: float,
+                 azimuthal_sampling: float,
+                 radial_offset: float = 0.,
+                 azimuthal_offset: float = 0.,
+                 extra_axes_metadata=List[AxisMetadata],
+                 metadata: dict = None):
 
         self._radial_sampling = radial_sampling
         self._azimuthal_sampling = azimuthal_sampling
         self._radial_offset = radial_offset
         self._azimuthal_offset = azimuthal_offset
-        super().__init__(array, axes_metadata, metadata, base_axes=(-2, -1))
+        super().__init__(array=array, extra_axes_metadata=extra_axes_metadata, metadata=metadata)
 
     @property
-    def base_axes_metadata(self) -> list:
-        return [{'label': 'scattering_angle_x', 'type': 'fourier_space', 'sampling': self.radial_sampling,
-                 'offset': self.radial_offset, 'units': 'mrad'},
-                {'label': 'scattering_angle_y', 'type': 'fourier_space', 'sampling': self.azimuthal_sampling,
-                 'offset': self.azimuthal_offset, 'units': 'rad'}]
+    def base_axes_metadata(self) -> List[AxisMetadata]:
+        return [LinearAxis(label='Radial scattering angle', sampling=self.radial_sampling, units='mrad'),
+                LinearAxis(label='Azimuthal scattering angle', sampling=self.azimuthal_sampling, units='rad')]
 
     def to_hyperspy(self):
         raise NotImplementedError

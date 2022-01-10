@@ -11,6 +11,8 @@ from scipy import integrate
 from scipy.interpolate import interp1d
 from scipy.special import spherical_jn, sph_harm
 
+from abtem.core.axes import OrdinalAxis
+from abtem.core.backend import copy_to_device
 from abtem.core.complex import abs2
 from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2wavelength, relativistic_mass_correction
 from abtem.core.fft import fft_shift_kernel
@@ -188,13 +190,15 @@ class SubshellTransitions(AbstractTransitionCollection):
                                   extent: Union[float, Sequence[float]] = None,
                                   gpts: Union[float, Sequence[float]] = None,
                                   sampling: Union[float, Sequence[float]] = None,
-                                  energy: float = None):
+                                  energy: float = None,
+                                  quantum_numbers=None):
 
         _, bound_wave = self._calculate_bound()
         _, continuum_waves = self._calculate_continuum()
         energy_loss = self.energy_loss
 
-        quantum_numbers = self.get_transition_quantum_numbers()
+        if quantum_numbers is None:
+            quantum_numbers = self.get_transition_quantum_numbers()
 
         transition_potential = SubshellTransitionPotentials(Z=self.Z,
                                                             bound_wave=bound_wave,
@@ -275,6 +279,23 @@ class SubshellTransitionPotentials(AbstractTransitionPotential):
 
         return self._array
 
+    def filter_low_intensity_potentials(self, min_total_intensity):
+        intensities = (np.abs(self.array) ** 2).sum((1, 2))
+        fractions = intensities / intensities.sum()
+        order = np.argsort(fractions)[::-1]
+
+        running_total = fractions[0]
+        included = [order[0]]
+        for i, j in enumerate(order[1:]):
+
+            if running_total + fractions[j] > min_total_intensity:
+                if not np.isclose(fractions[order[i]], fractions[j]):
+                    print(fractions[order[i]], fractions[j])
+                    break
+
+            included.append(j)
+            running_total += fractions[j]
+
     @property
     def total_intensity(self):
         return (np.abs(self.array) ** 2).sum()
@@ -290,14 +311,17 @@ class SubshellTransitionPotentials(AbstractTransitionPotential):
             sites = sites[sites.numbers == self.Z].positions[:, :2]
         elif isinstance(sites, Atom):
             if sites.number == self.Z:
-                sites = sites.position[:2][None]
+                sites = sites.position[:2]
             else:
                 sites = np.zeros((0, 2), dtype=np.float32)
+
+        if len(sites.shape) == 1:
+            sites = sites[None]
 
         sites = np.array(sites, dtype=np.float32)
         return sites
 
-    def scatter(self, waves, sites, transition_index=None):
+    def scatter(self, waves, sites):
         self.grid.match(waves)
         self.accelerator.match(waves)
         self.grid.check_is_defined()
@@ -306,8 +330,13 @@ class SubshellTransitionPotentials(AbstractTransitionPotential):
         positions = self.validate_sites(sites)
         positions /= self.sampling
 
+        self._array = copy_to_device(self.array, waves.array)
+        positions = copy_to_device(positions, waves.array)
+
         array = ifft2(self.array[None] * fft_shift_kernel(positions, self.gpts)[:, None])
 
+        #print(array.shape)
+        #sss
         array = array.reshape((-1,) + (1,) * (len(waves.shape) - 2) + array.shape[-2:])
 
         d = waves._copy_as_dict(copy_array=False)
@@ -399,10 +428,10 @@ class SubshellTransitionPotentials(AbstractTransitionPotential):
 
         return array
 
-    def image(self):
+    def to_images(self):
         array = np.fft.fftshift(ifft2(self.array))
-        array = abs2(array)
-        return Images(array, sampling=self.sampling)
+        extra_axes_metadata = [OrdinalAxis()]
+        return Images(array, sampling=self.sampling, extra_axes_metadata=extra_axes_metadata)
 
     def show(self, **kwargs):
-        self.image().show(**kwargs)
+        self.to_images().show(**kwargs)

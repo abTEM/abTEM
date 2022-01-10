@@ -1,6 +1,7 @@
-from numbers import Number
+import dataclasses
 from dataclasses import dataclass
-from typing import List
+from typing import List, Tuple
+
 import numpy as np
 
 
@@ -10,7 +11,14 @@ class AxisMetadata:
 
 
 @dataclass
-class RealSpaceAxis(AxisMetadata):
+class LinearAxis(AxisMetadata):
+    sampling: float = 1.
+    label: str = 'unknown'
+    units: str = 'pixels'
+
+
+@dataclass
+class RealSpaceAxis(LinearAxis):
     sampling: float = 1.
     label: str = 'unknown'
     units: str = 'pixels'
@@ -19,7 +27,7 @@ class RealSpaceAxis(AxisMetadata):
 
 
 @dataclass
-class FourierSpaceAxis(AxisMetadata):
+class FourierSpaceAxis(LinearAxis):
     sampling: float = 1.
     label: str = 'unknown'
     units: str = 'pixels'
@@ -27,19 +35,39 @@ class FourierSpaceAxis(AxisMetadata):
 
 @dataclass
 class ScanAxis(RealSpaceAxis):
-    pass
+    start: Tuple[float, float] = None
+    end: Tuple[float, float] = None
 
 
+@dataclass
 class OrdinalAxis(AxisMetadata):
     pass
 
 
+@dataclass
+class PositionsAxis(OrdinalAxis):
+    pass
+
+
+@dataclass
 class FrozenPhononsAxis(OrdinalAxis):
     pass
 
 
+@dataclass
 class PrismPlaneWavesAxis(OrdinalAxis):
     pass
+
+
+def axis_to_dict(axis: AxisMetadata):
+    d = dataclasses.asdict(axis)
+    d['type'] = axis.__class__.__name__
+    return d
+
+
+def axis_from_dict(d):
+    cls = globals()[d['type']]
+    return cls(**{key: value for key, value in d.items() if key != 'type'})
 
 
 class HasAxes:

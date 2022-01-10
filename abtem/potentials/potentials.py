@@ -61,7 +61,6 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
     def thickness(self) -> float:
         return sum(self._slice_thickness)
 
-
     @abstractmethod
     def get_chunk(self, first_slice, last_slice):
         pass
@@ -85,7 +84,6 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
             end_slices = end_slices[::-1]
 
         for start, stop in zip(start_slices, end_slices):
-
             yield self.get_chunk(first_slice=start, last_slice=stop)
 
     def __getitem__(self, item) -> 'PotentialArray':
@@ -382,6 +380,7 @@ class Potential(AbstractPotentialFromAtoms):
         return self._scattering_factors
 
     def _get_chunk_infinite(self, first_slice: int, last_slice: int) -> Union['PotentialArray']:
+        xp = get_array_module(self._device)
 
         scattering_factors = self._get_scattering_factors()
         sliced_atoms = self.get_sliced_atoms()
@@ -389,12 +388,12 @@ class Potential(AbstractPotentialFromAtoms):
         atoms = sliced_atoms[first_slice: last_slice]
         shape = (last_slice - first_slice,) + self.gpts
 
-        xp = get_array_module(self._device)
-
         if len(atoms) == 0:
             array = xp.zeros(shape, dtype=xp.float32)
         else:
             array = infinite_potential_projections(atoms, shape, self.sampling, scattering_factors)
+
+        #array = xp.zeros(shape, dtype=xp.float32)
         potential = PotentialArray(array, slice_thickness=self.slice_thickness[first_slice:last_slice],
                                    extent=self.extent)
         return potential

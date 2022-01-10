@@ -1,12 +1,13 @@
+from abc import abstractmethod
 from numbers import Number
 from typing import List, Tuple, Union, Sequence
 
 import numpy as np
+from ase import Atoms
 from ase.data import atomic_numbers
 
+from abtem.core.utils import label_to_index
 from abtem.structures.structures import cut_box
-from ase import Atoms
-from abc import abstractmethod
 
 
 def _validate_slice_thickness(slice_thickness: Union[float, np.ndarray, Sequence[float]],
@@ -111,10 +112,10 @@ class SliceIndexedAtoms(AbstractSlicedAtoms):
                  slice_index=None,
                  reverse: bool = False):
 
-
         super().__init__(atoms, slice_thickness, reverse)
 
-        self._slice_index = np.digitize(self.atoms.positions[:, 2], np.cumsum(self.slice_thickness))
+        labels = np.digitize(self.atoms.positions[:, 2], np.cumsum(self.slice_thickness))
+        self._slice_index = [indices for indices in label_to_index(labels, max_label=len(self) - 1)]
 
     @property
     def atoms(self):
@@ -125,10 +126,11 @@ class SliceIndexedAtoms(AbstractSlicedAtoms):
         return self._slice_index
 
     def _get_atoms_in_slices(self, first_slice: int, last_slice: int):
+
         if last_slice - first_slice == 1:
-            is_in_slices = self.slice_index == first_slice
-        else:
-            is_in_slices = (self.slice_index >= first_slice) * (self.slice_index < last_slice)
+            is_in_slices = self.slice_index[first_slice]
+        # else:
+        #     is_in_slices = (self.slice_index >= first_slice) * (self.slice_index < last_slice)
 
         atoms = self.atoms[is_in_slices]
         slice_thickness = self.slice_thickness[first_slice:last_slice]
