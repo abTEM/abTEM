@@ -255,7 +255,11 @@ class GPAWPotential(AbstractPotentialBuilder):
         if last_slice is None:
             last_slice = len(self)
 
-        atoms = rotate_atoms_to_plane(self._calculator.atoms.copy(), self._plane)
+        if self._plane != 'xy':
+            atoms = rotate_atoms_to_plane(self._calculator.atoms.copy(), self._plane)
+        else:
+            atoms = self._calculator.atoms.copy()
+
         old_cell = atoms.cell
 
         atoms.set_tags(range(len(atoms)))
@@ -272,6 +276,8 @@ class GPAWPotential(AbstractPotentialBuilder):
         axes = plane_to_axes(self._plane)
         if self._plane != 'xy':
             array = np.moveaxis(valence, axes[:2], (0, 1))
+        else:
+            array = valence
 
         from scipy.interpolate import RegularGridInterpolator
 
