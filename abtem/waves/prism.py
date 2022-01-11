@@ -1003,6 +1003,7 @@ class SMatrix(AbstractSMatrix):
                     array = da.from_delayed(array, shape=(chunk_stop - chunk_start,) + gpts,
                                             meta=xp.array((), dtype=xp.complex64))
                 else:
+
                     array = _build_chunk(s_matrix, chunk_start, chunk_stop, start, stop, normalization, downsample)
 
                 if self._store_on_host:
@@ -1014,11 +1015,19 @@ class SMatrix(AbstractSMatrix):
 
                 s_matrix_array.append(array)
 
-            s_matrix_array = da.concatenate(s_matrix_array)
+            if lazy:
+                s_matrix_array = da.concatenate(s_matrix_array)
+            else:
+                s_matrix_array = xp.concatenate(s_matrix_array)
+
             s_matrix_arrays.append(s_matrix_array)
 
         if len(s_matrix_arrays) > 1:
-            s_matrix_arrays = da.stack(s_matrix_arrays, axis=0)
+            if lazy:
+                s_matrix_arrays = da.stack(s_matrix_arrays, axis=0)
+            else:
+                s_matrix_arrays = xp.stack(s_matrix_arrays, axis=0)
+
             extra_axes_metadata = [FrozenPhononsAxis()]
         else:
             s_matrix_arrays = s_matrix_arrays[0]
