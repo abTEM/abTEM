@@ -145,8 +145,10 @@ def linear_scaling_transition_multislice(S1: 'SMatrix', S2: 'SMatrix', scan, tra
 
                 cropped_coefficients = coefficients[mask]
 
-            SHn0 = xp.dot(S2_crop.array.reshape((1, len(S2), -1)),
-                          xp.swapaxes(scattered_S1.array.reshape((len(scattered_S1.array), len(S1), -1)), 1, 2))
+            a = S2_crop.array.reshape((1, len(S2), -1))
+            b = xp.swapaxes(scattered_S1.array.reshape((len(scattered_S1.array), len(S1), -1)), 1, 2)
+
+            SHn0 = xp.dot(a, b)
 
             SHn0 = xp.swapaxes(SHn0[0], 0, 1)
 
