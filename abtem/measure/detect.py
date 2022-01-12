@@ -1,7 +1,7 @@
 """Module for describing the detection of transmitted waves and different detector types."""
 from abc import ABCMeta, abstractmethod
 from copy import copy
-from typing import Tuple, Any, Union, List, Dict
+from typing import Tuple, Any, Union, TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,7 +9,9 @@ import numpy as np
 from abtem.core.axes import ScanAxis
 from abtem.core.backend import get_array_module
 from abtem.measure.measure import DiffractionPatterns, PolarMeasurements, Images, LineProfiles
-from typing import Iterable
+
+if TYPE_CHECKING:
+    from abtem.waves.scan import AbstractScan
 
 
 def check_cutoff_angle(waves, angle):
@@ -41,7 +43,7 @@ def apply_detector_func(self, func, detectors, scan=None, **kwargs):
     meta = []
     i = 2
     for detector in detectors:
-        shape = detector.measurement_shape(self)
+        shape = detector.measurement_shape(self, scan=scan)
         signatures.append(f'({",".join([str(i) for i in range(i, i + len(shape))])})')
         output_sizes.update({str(index): n for index, n in zip(range(i, i + len(shape)), shape)})
         meta.append(np.array((), dtype=detector.measurement_dtype))
@@ -142,7 +144,6 @@ class AnnularDetector(AbstractDetector):
                  ensemble_mean: bool = True,
                  to_cpu: bool = True,
                  url: str = None):
-
         self._inner = inner
         self._outer = outer
         self._offset = offset
@@ -229,31 +230,14 @@ class AnnularDetector(AbstractDetector):
         else:
             raise RuntimeError()
 
-    def create_measurement(self, array=None, scan=None, waves=None, extra_axes_metadata=None) \
-            -> Union[LineProfiles, Images]:
+    def detect(self, waves) -> Images:
 
-        if extra_axes_metadata is None:
-            extra_axes_metadata = []
-
-        if array is None:
-            array = np.zeros(scan.shape + self.detected_shape(waves), dtype=np.float32)
-
-        if len(scan.shape) == 1:
-            sampling = scan.axes_metadata[0]['sampling']
-            measurement = LineProfiles(array, sampling=sampling, axes_metadata=extra_axes_metadata)
-        elif len(scan.shape) == 2:
-            sampling = (scan.axes_metadata[0]['sampling'], scan.axes_metadata[1]['sampling'])
-            measurement = Images(array, sampling=sampling, extra_axes_metadata=extra_axes_metadata)
+        if self.outer is None:
+            outer = np.floor(min(waves.cutoff_angles))
         else:
-            raise NotImplementedError
+            outer = self.outer
 
-        if self._url is not None:
-            return measurement.to_zarr(self.url, overwrite=True, compute=False)
-        else:
-            return measurement
-
-    def detect(self, probes) -> Images:
-        measurement = probes.diffraction_patterns().integrate_radial(inner=self.inner, outer=self.outer)
+        measurement = waves.diffraction_patterns().integrate_radial(inner=self.inner, outer=outer)
 
         if self._to_cpu:
             measurement = measurement.to_cpu()
@@ -287,7 +271,142 @@ class AnnularDetector(AbstractDetector):
         return self.__class__(self.inner, self.outer)
 
 
-class FlexibleAnnularDetector(AbstractDetector):
+class AbstractRadialDetector(AbstractDetector):
+
+    def __init__(self, inner, outer, rotation, ensemble_mean: bool = True, to_cpu: bool = True, url: str = None):
+        self._inner = inner
+        self._outer = outer
+        self._rotation = rotation
+        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url)
+
+    @property
+    def inner(self) -> float:
+        """Inner integration limit [mrad]."""
+        return self._inner
+
+    @inner.setter
+    def inner(self, value: float):
+        self._inner = value
+
+    @property
+    def outer(self) -> float:
+        """Outer integration limit [mrad]."""
+        return self._outer
+
+    @outer.setter
+    def outer(self, value: float):
+        self._outer = value
+
+    @property
+    @abstractmethod
+    def radial_sampling(self):
+        pass
+
+    @property
+    @abstractmethod
+    def azimuthal_sampling(self):
+        pass
+
+    @abstractmethod
+    def _calculate_nbins_radial(self, waves):
+        pass
+
+    @abstractmethod
+    def _calculate_nbins_azimuthal(self, waves):
+        pass
+
+    @property
+    def measurement_dtype(self):
+        return np.float32
+
+    def measurement_shape(self, waves, scan=None):
+
+        shape = self._calculate_nbins_radial(waves), self._calculate_nbins_azimuthal(waves)
+
+        shape = waves.shape[:-2] + shape
+
+        if scan is not None:
+            shape = scan.shape + shape
+
+        return shape
+
+    def measurement_kwargs(self, waves, scan=None):
+        extra_axes_metadata = waves.extra_axes_metadata
+
+        if scan is not None:
+            extra_axes_metadata = scan.axes_metadata + extra_axes_metadata
+
+        d = {'radial_sampling': self.radial_sampling,
+             'azimuthal_sampling': self.azimuthal_sampling,
+             'radial_offset': self.inner,
+             'azimuthal_offset': self._rotation,
+             'extra_axes_metadata': extra_axes_metadata,
+             }
+        return d
+
+    def detect(self, waves):
+        if self.outer is None:
+            outer = np.floor(min(waves.cutoff_angles))
+        else:
+            outer = self.outer
+
+        measurement = waves.diffraction_patterns(max_angle='cutoff')
+
+        measurement = measurement.polar_binning(nbins_radial=self._calculate_nbins_radial(waves),
+                                                nbins_azimuthal=self._calculate_nbins_azimuthal(waves),
+                                                inner=self.inner,
+                                                outer=outer,
+                                                rotation=self._rotation)
+
+        # if probes.num_ensemble_axes > 0:
+        #     measurement = measurement.mean(probes.ensemble_axes)
+
+        return measurement
+
+    def show(self, waves=None, ax=None, cmap='prism'):
+        bins = np.arange(0, self._calculate_nbins_radial(waves) * self._calculate_nbins_azimuthal(waves))
+        bins = bins.reshape((self._calculate_nbins_radial(waves), self._calculate_nbins_azimuthal(waves)))
+
+        vmin = -.5
+        vmax = np.max(bins) + .5
+        cmap = plt.get_cmap(cmap, np.nanmax(bins) + 1)
+        cmap.set_under(color='white')
+        polar_measurements = PolarMeasurements(bins,
+                                               radial_sampling=self.radial_sampling,
+                                               azimuthal_sampling=self.azimuthal_sampling,
+                                               radial_offset=self.inner,
+                                               azimuthal_offset=self._rotation)
+
+        ax, im = polar_measurements.show(ax=ax, cmap=cmap, vmin=vmin, vmax=vmax)
+
+        plt.colorbar(im, extend='min', label='Detector region')
+        # ax.set_rlim([-0, min(waves.cutoff_angles) * 1.1])
+        return ax, im
+
+    # def show(self, waves, ax=None):
+    #     bins = np.arange(0., self.nbins_radial(waves))[:, None]
+    #
+    #     cmap = plt.get_cmap('prism', np.nanmax(bins) + 1)
+    #     cmap.set_under(color='white')
+    #
+    #     polar_measurements = PolarMeasurements(bins,
+    #                                            radial_sampling=self._radial_steps,
+    #                                            azimuthal_sampling=2 * np.pi,
+    #                                            radial_offset=0,
+    #                                            azimuthal_offset=0.)
+    #
+    #     ax, im = polar_measurements.show(ax=ax, cmap=cmap, vmin=-.5, vmax=np.max(bins) + .5)
+    #
+    #     plt.colorbar(im, extend='min', label='Detector region')
+    #
+    #
+    #     return ax, im
+
+    def measurement_type(self, waves, scan):
+        return PolarMeasurements
+
+
+class FlexibleAnnularDetector(AbstractRadialDetector):
     """
     Flexible annular detector object.
 
@@ -302,91 +421,40 @@ class FlexibleAnnularDetector(AbstractDetector):
         The path to the file used for saving the detector output.
     """
 
-    def __init__(self, step_size: float = 1., ensemble_mean: bool = True, to_cpu: bool = True, url: str = None):
-        self.step_size = step_size
-        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url)
+    def __init__(self,
+                 step_size: float = 1.,
+                 inner: float = 0.,
+                 outer: float = None,
+                 ensemble_mean: bool = True,
+                 to_cpu: bool = True,
+                 url: str = None):
+        self._step_size = step_size
+        super().__init__(inner=inner, outer=outer, rotation=0., ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url)
 
     @property
     def step_size(self) -> float:
         """
         Step size [mrad].
         """
-        return self._radial_steps
+        return self._step_size
 
     @step_size.setter
     def step_size(self, value: float):
-        self._radial_steps = value
-
-    def nbins_radial(self, waves) -> int:
-        return int(np.floor(min(waves.cutoff_angles)) / (self._radial_steps))
-
-    def detected_shape(self, waves) -> Tuple[int, int]:
-        return self.nbins_radial(waves), 1
+        self._step_size = value
 
     @property
-    def detected_dtype(self):
-        return np.float32
+    def radial_sampling(self):
+        return self.step_size
 
-    def measurement_from_array(self, array, scan=None, waves=None, axes_metadata=None):
+    @property
+    def azimuthal_sampling(self):
+        return 2 * np.pi
 
-        if axes_metadata is None:
-            axes_metadata = []
+    def _calculate_nbins_radial(self, waves) -> int:
+        return int(np.floor(min(waves.cutoff_angles)) / (self.step_size))
 
-        if hasattr(waves, 'ensemble_axes'):
-            axes_metadata += waves.ensemble_axes
-
-        axes_metadata += scan.axes_metadata
-
-        return PolarMeasurements(array,
-                                 radial_sampling=self.step_size,
-                                 azimuthal_sampling=2 * np.pi,
-                                 radial_offset=0.,
-                                 azimuthal_offset=0.,
-                                 axes_metadata=axes_metadata)
-
-    def detect(self, waves) -> np.ndarray:
-        """
-        Integrate the intensity of a the wave functions over the detector range.
-
-        Parameters
-        ----------
-        waves: Waves object
-            The batch of wave functions to detect.
-
-        Returns
-        -------
-        2d array
-            Detected values. The array has shape of (batch size, number of bins).
-        """
-
-        diffraction_patterns = waves.diffraction_patterns(max_angle='cutoff')
-
-        measurements = diffraction_patterns.polar_binning(inner=0., outer=np.floor(min(waves.cutoff_angles)),
-                                                          nbins_radial=self.nbins_radial(waves), nbins_azimuthal=1)
-
-        if (waves.num_ensemble_axes > 0) and self.ensemble_mean:
-            measurements = measurements.mean(measurements.ensemble_axes)
-
-        return measurements
-
-    def show(self, waves, ax=None):
-        bins = np.arange(0., self.nbins_radial(waves))[:, None]
-
-        cmap = plt.get_cmap('prism', np.nanmax(bins) + 1)
-        cmap.set_under(color='white')
-
-        polar_measurements = PolarMeasurements(bins,
-                                               radial_sampling=self._radial_steps,
-                                               azimuthal_sampling=2 * np.pi,
-                                               radial_offset=0,
-                                               azimuthal_offset=0.)
-
-        ax, im = polar_measurements.show(ax=ax, cmap=cmap, vmin=-.5, vmax=np.max(bins) + .5)
-
-        plt.colorbar(im, extend='min', label='Detector region')
-        ax.set_rlim([-0, min(waves.cutoff_angles) * 1.1])
-
-        return ax, im
+    def _calculate_nbins_azimuthal(self, waves):
+        return 1
 
     def __copy__(self) -> 'FlexibleAnnularDetector':
         return self.__class__(self.step_size, ensemble_mean=self.ensemble_mean)
@@ -398,7 +466,7 @@ class FlexibleAnnularDetector(AbstractDetector):
         return copy(self)
 
 
-class SegmentedDetector(AbstractDetector):
+class SegmentedDetector(AbstractRadialDetector):
     """
     Segmented detector object.
 
@@ -419,23 +487,23 @@ class SegmentedDetector(AbstractDetector):
         The path to the file used for saving the detector output.
     """
 
-    def __init__(self, inner: float, outer: float, nbins_radial: int, nbins_azimuthal: int, rotation: float = 0.,
-                 ensemble_mean: bool = True, to_cpu: bool = False, url: str = None):
-        self._inner = inner
-        self._outer = outer
+    def __init__(self,
+                 inner: float,
+                 outer: float,
+                 nbins_radial: int,
+                 nbins_azimuthal: int,
+                 rotation: float = 0.,
+                 ensemble_mean: bool = True,
+                 to_cpu: bool = False,
+                 url: str = None):
         self._nbins_radial = nbins_radial
         self._nbins_azimuthal = nbins_azimuthal
-        self._rotation = rotation
-        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url)
+        super().__init__(inner=inner, outer=outer, rotation=rotation, ensemble_mean=ensemble_mean, to_cpu=to_cpu,
+                         url=url)
 
     @property
-    def inner(self) -> float:
-        """Inner integration limit [mrad]."""
-        return self._inner
-
-    @inner.setter
-    def inner(self, value: float):
-        self._inner = value
+    def rotation(self):
+        return self._rotation
 
     @property
     def radial_sampling(self):
@@ -444,15 +512,6 @@ class SegmentedDetector(AbstractDetector):
     @property
     def azimuthal_sampling(self):
         return 2 * np.pi / self.nbins_azimuthal
-
-    @property
-    def outer(self) -> float:
-        """Outer integration limit [mrad]."""
-        return self._outer
-
-    @outer.setter
-    def outer(self, value: float):
-        self._outer = value
 
     @property
     def nbins_radial(self) -> int:
@@ -472,58 +531,11 @@ class SegmentedDetector(AbstractDetector):
     def nbins_azimuthal(self, value: float):
         self._nbins_azimuthal = value
 
-    def detected_shape(self, waves):
-        return (self.nbins_radial, self.nbins_azimuthal)
+    def _calculate_nbins_radial(self, waves=None):
+        return self.nbins_radial
 
-    @property
-    def detected_dtype(self):
-        return np.float32
-
-    def measurement_from_array(self, array, scan=None, waves=None, axes_metadata=None):
-
-        if axes_metadata is None:
-            axes_metadata = []
-
-        if hasattr(waves, 'ensemble_axes'):
-            axes_metadata += waves.ensemble_axes
-
-        axes_metadata += scan.axes_metadata
-
-        return PolarMeasurements(array,
-                                 radial_sampling=self.radial_sampling,
-                                 azimuthal_sampling=self.azimuthal_sampling,
-                                 radial_offset=self.inner,
-                                 azimuthal_offset=self.outer,
-                                 axes_metadata=axes_metadata)
-
-    def detect(self, probes):
-        measurement = probes.diffraction_patterns().polar_binning(nbins_radial=self.nbins_radial,
-                                                                  nbins_azimuthal=self.nbins_azimuthal,
-                                                                  inner=self.inner, outer=self.outer,
-                                                                  rotation=self._rotation)
-
-        if probes.num_ensemble_axes > 0:
-            measurement = measurement.mean(probes.ensemble_axes)
-
-        return measurement
-
-    def show(self, ax=None):
-        bins = np.arange(0, self.nbins_radial * self.nbins_azimuthal).reshape((self.nbins_radial, self.nbins_azimuthal))
-
-        vmin = -.5
-        vmax = np.max(bins) + .5
-        cmap = plt.get_cmap('tab20', np.nanmax(bins) + 1)
-        cmap.set_under(color='white')
-        polar_measurements = PolarMeasurements(bins,
-                                               radial_sampling=self.radial_sampling,
-                                               azimuthal_sampling=self.azimuthal_sampling,
-                                               radial_offset=self.inner,
-                                               azimuthal_offset=self._rotation)
-
-        ax, im = polar_measurements.show(ax=ax, cmap=cmap, vmin=vmin, vmax=vmax)
-
-        plt.colorbar(im, extend='min', label='Detector region')
-        return ax, im
+    def _calculate_nbins_azimuthal(self, waves=None):
+        return self.nbins_azimuthal
 
     def __copy__(self) -> 'SegmentedDetector':
         return self.__class__(inner=self.inner, outer=self.outer, nbins_radial=self.nbins_radial,

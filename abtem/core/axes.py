@@ -143,7 +143,7 @@ class HasAxes:
 
     @property
     def scan_sampling(self):
-        return tuple(self.array.shape[i] for i in self.scan_axes)
+        return tuple(self.axes_metadata[i].sampling for i in self.scan_axes)
 
     @property
     def base_axes_shape(self):

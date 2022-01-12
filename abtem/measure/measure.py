@@ -12,7 +12,8 @@ import zarr
 from ase import Atom
 from scipy.interpolate import interp1d
 
-from abtem.core.axes import HasAxes, ScanAxis, RealSpaceAxis, AxisMetadata, FourierSpaceAxis, LinearAxis
+from abtem.core.axes import HasAxes, ScanAxis, RealSpaceAxis, AxisMetadata, FourierSpaceAxis, LinearAxis, axis_to_dict, \
+    axis_from_dict
 from abtem.core.backend import cp, asnumpy, get_array_module, get_ndimage_module
 from abtem.core.dask import HasDaskArray
 from abtem.core.energy import energy2wavelength
@@ -56,13 +57,18 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
 
 def from_zarr(url):
     with zarr.open(url, mode='r') as f:
-        axes_metadata = f.attrs['axes_metadata']
-        metadata = f.attrs['metadata']
-        kwargs = f.attrs['kwargs']
-        cls = globals()[f.attrs['cls']]
+        d = {}
+
+        for key, value in f.attrs.items():
+            if key == 'extra_axes_metadata':
+                extra_axes_metadata = [axis_from_dict(d) for d in value]
+            elif key == 'type':
+                cls = globals()[value]
+            else:
+                d[key] = value
 
     array = da.from_zarr(url, component='array')
-    return cls(array, axes_metadata=axes_metadata, metadata=metadata, **kwargs)
+    return cls(array, extra_axes_metadata=extra_axes_metadata, **d)
 
 
 def stack_measurements(measurements, axes_metadata):
@@ -204,13 +210,19 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
 
     def to_zarr(self, url, compute=True, overwrite=False):
         with zarr.open(url, mode='w') as root:
-            array = self.array.to_zarr(url, compute=compute, component='array', overwrite=overwrite)
+            if self.is_lazy:
+                array = self.array.to_zarr(url, compute=compute, component='array', overwrite=overwrite)
+            else:
+                array = zarr.save(url, array=self.array)
+
             d = self._copy_as_dict(copy_array=False)
             for key, value in d.items():
-                root.attrs[key] = value
-                root.attrs[key] = value
+                if key == 'extra_axes_metadata':
+                    root.attrs[key] = [axis_to_dict(axis) for axis in value]
+                else:
+                    root.attrs[key] = value
 
-            root.attrs['cls'] = self.__class__.__name__
+            root.attrs['type'] = self.__class__.__name__
         return array
 
     @staticmethod
@@ -800,14 +812,12 @@ class DiffractionPatterns(AbstractMeasurement):
         radial_sampling = (outer - inner) / nbins_radial
         azimuthal_sampling = 2 * np.pi / nbins_azimuthal
 
-        axes_metadata = self.axes_metadata[:-2]
-
         return PolarMeasurements(array,
                                  radial_sampling=radial_sampling,
                                  azimuthal_sampling=azimuthal_sampling,
                                  radial_offset=inner,
                                  azimuthal_offset=rotation,
-                                 axes_metadata=axes_metadata,
+                                 extra_axes_metadata=self.extra_axes_metadata,
                                  metadata=self.metadata)
 
     def radial_binning(self, step_size=1., inner=0., outer=None):
@@ -867,8 +877,7 @@ class DiffractionPatterns(AbstractMeasurement):
 
         com = self.center_of_mass()
 
-        sampling = (self.axes_metadata[self.scan_axes[0]]['sampling'],
-                    self.axes_metadata[self.scan_axes[1]]['sampling'])
+        sampling = (self.axes_metadata[self.scan_axes[0]].sampling, self.axes_metadata[self.scan_axes[1]].sampling)
 
         icom = integrate_gradient_2d((com.array.real, com.array.imag), sampling)
 
@@ -940,13 +949,14 @@ class PolarMeasurements(AbstractMeasurement):
                  azimuthal_sampling: float,
                  radial_offset: float = 0.,
                  azimuthal_offset: float = 0.,
-                 extra_axes_metadata=List[AxisMetadata],
+                 extra_axes_metadata: List[AxisMetadata] = None,
                  metadata: dict = None):
 
         self._radial_sampling = radial_sampling
         self._azimuthal_sampling = azimuthal_sampling
         self._radial_offset = radial_offset
         self._azimuthal_offset = azimuthal_offset
+
         super().__init__(array=array, extra_axes_metadata=extra_axes_metadata, metadata=metadata)
 
     @property
@@ -989,8 +999,7 @@ class PolarMeasurements(AbstractMeasurement):
                   azimutal_limits: Tuple[float, float] = None,
                   detector_regions: Sequence[int] = None) -> Union[Images, LineProfiles]:
 
-        sampling = (self.axes_metadata[self.scan_axes[0]]['sampling'],
-                    self.axes_metadata[self.scan_axes[1]]['sampling'])
+        sampling = self.scan_sampling
 
         if detector_regions is not None:
             array = self.array.reshape(self.shape[:-2] + (-1,))[..., list(detector_regions)].sum(axis=-1)

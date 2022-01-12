@@ -181,7 +181,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
         meta = []
         i = 2
         for detector in detectors:
-            shape = detector.measurement_shape(self)[self.num_extra_axes:]
+            shape = detector.measurement_shape(self, scan=scan)[self.num_extra_axes:]
             signatures.append(f'({",".join([str(i) for i in range(i, i + len(shape))])})')
             output_sizes.update({str(index): n for index, n in zip(range(i, i + len(shape)), shape)})
             meta.append(np.array((), dtype=detector.measurement_dtype))
