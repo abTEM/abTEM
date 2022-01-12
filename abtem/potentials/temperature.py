@@ -29,7 +29,7 @@ class AbstractFrozenPhonons(metaclass=ABCMeta):
 
     def __getitem__(self, item):
         configurations = self.get_configurations(lazy=False)
-        return configurations[item].jiggle_atoms()
+        return configurations[item]
 
     @abstractmethod
     def __copy__(self):
