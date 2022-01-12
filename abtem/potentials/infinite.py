@@ -92,7 +92,7 @@ def infinite_potential_projections(atoms, shape, sampling, scattering_factors, s
                 masked_slice_index = None
 
             temp = superpose_deltas(positions[mask], temp, masked_slice_index)
-            array += fft2(temp, overwrite_x=True) * scattering_factors[unique[0]]
+            array += fft2(temp, overwrite_x=True) * scattering_factors[number]
 
         array = ifft2(array, overwrite_x=True).real
     else:

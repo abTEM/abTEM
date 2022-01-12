@@ -97,8 +97,10 @@ def linear_scaling_transition_multislice(S1: 'SMatrix', S2: 'SMatrix', scan, tra
     prism_region = (S1.extent[0] / S1.interpolation[0] / 2, S1.extent[1] / S1.interpolation[1] / 2)
 
     positions = xp.asarray(positions, dtype=np.float32)
-    coefficients = complex_exponential(-2. * np.float32(np.pi) * positions[:, 0, None] * S1.wave_vectors[None, :, 0])
-    coefficients *= complex_exponential(-2. * np.float32(np.pi) * positions[:, 1, None] * S1.wave_vectors[None, :, 1])
+
+    wave_vectors = xp.asarray(S1.wave_vectors)
+    coefficients = complex_exponential(-2. * xp.float32(xp.pi) * positions[:, 0, None] * wave_vectors[None, :, 0])
+    coefficients *= complex_exponential(-2. * xp.float32(np.pi) * positions[:, 1, None] * wave_vectors[None, :, 1])
     coefficients = coefficients / xp.sqrt(coefficients.shape[1]).astype(np.float32)
 
     potential = S1.potential

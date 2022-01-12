@@ -1018,7 +1018,7 @@ class SMatrix(AbstractSMatrix):
             if lazy:
                 s_matrix_array = da.concatenate(s_matrix_array)
             else:
-                s_matrix_array = xp.concatenate(s_matrix_array)
+                s_matrix_array = get_array_module(s_matrix_array[0]).concatenate(s_matrix_array)
 
             s_matrix_arrays.append(s_matrix_array)
 
