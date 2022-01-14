@@ -28,5 +28,6 @@ environment for simulating images from first principles.
 
    install
    walkthrough/introduction
+   tutorials/tutorial
    modules/api
    about
