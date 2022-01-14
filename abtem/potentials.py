@@ -16,7 +16,7 @@ from abtem.device import get_device_function, get_array_module, get_array_module
 from abtem.measure import calibrations_from_grid, Measurement
 from abtem.parametrizations import kirkland, dvdr_kirkland, load_kirkland_parameters, kirkland_projected_fourier
 from abtem.parametrizations import lobato, dvdr_lobato, load_lobato_parameters
-from abtem.structures import is_cell_orthogonal, SlicedAtoms, pad_atoms, rotate_atoms_to_plane
+from abtem.structures import is_cell_orthogonal, SlicedAtoms, pad_atoms, rotate_atoms_to_plane, orthogonalize_cell
 from abtem.tanh_sinh import integrate, tanh_sinh_nodes_and_weights
 from abtem.temperature import AbstractFrozenPhonons, DummyFrozenPhonons
 from abtem.utils import energy2sigma, ProgressBar, generate_batches, _disc_meshgrid
@@ -643,11 +643,16 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
 
         atoms = next(iter(self._frozen_phonons))
 
+        if not is_cell_orthogonal(atoms):
+            atoms, transformations = orthogonalize_cell(atoms, max_repetitions=2, return_transform=True)
+            for transformation in transformations:
+                if not np.allclose(transformation, 0.):
+                    raise RuntimeError('The unit cell of the atoms is not orthogonal '
+                                       'and could not be made orthogonal without ambiguity. '
+                                       'Use the function abtem.structure.orthogonalize_cell.')
+
         if np.abs(atoms.cell[2, 2]) < 1e-12:
             raise RuntimeError('Atoms cell has no thickness')
-
-        if not is_cell_orthogonal(atoms):
-            raise RuntimeError('Atoms are not orthogonal')
 
         self._atoms = atoms
         self._plane = plane

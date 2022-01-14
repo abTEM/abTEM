@@ -1,11 +1,11 @@
 """Module for modifying ASE atoms objects for use in abTEM."""
-from fractions import Fraction
 from numbers import Number
 from typing import Union, Sequence
 
 import numpy as np
 from ase import Atoms
-from scipy.linalg import polar
+from ase.build import cut
+from ase.cell import Cell
 
 
 def is_cell_hexagonal(atoms: Atoms):
@@ -69,6 +69,150 @@ def is_cell_valid(atoms: Atoms, tol: float = 1e-12) -> bool:
     return True
 
 
+_axes2tuple = {
+    'sxyz': (0, 0, 0, 0), 'sxyx': (0, 0, 1, 0), 'sxzy': (0, 1, 0, 0),
+    'sxzx': (0, 1, 1, 0), 'syzx': (1, 0, 0, 0), 'syzy': (1, 0, 1, 0),
+    'syxz': (1, 1, 0, 0), 'syxy': (1, 1, 1, 0), 'szxy': (2, 0, 0, 0),
+    'szxz': (2, 0, 1, 0), 'szyx': (2, 1, 0, 0), 'szyz': (2, 1, 1, 0),
+    'rzyx': (0, 0, 0, 1), 'rxyx': (0, 0, 1, 1), 'ryzx': (0, 1, 0, 1),
+    'rxzx': (0, 1, 1, 1), 'rxzy': (1, 0, 0, 1), 'ryzy': (1, 0, 1, 1),
+    'rzxy': (1, 1, 0, 1), 'ryxy': (1, 1, 1, 1), 'ryxz': (2, 0, 0, 1),
+    'rzxz': (2, 0, 1, 1), 'rxyz': (2, 1, 0, 1), 'rzyz': (2, 1, 1, 1)}
+
+
+def rotation_matrix_to_euler(R, axes='sxyz', eps=1e-6):
+    firstaxis, parity, repetition, frame = _axes2tuple[axes.lower()]
+
+    i = firstaxis
+    j = [1, 2, 0, 1][i + parity]
+    k = [1, 2, 0, 1][i - parity + 1]
+
+    R = np.array(R, dtype=float)
+    if repetition:
+        sy = np.sqrt(R[i, j] * R[i, j] + R[i, k] * R[i, k])
+        if sy > eps:
+            ax = np.arctan2(R[i, j], R[i, k])
+            ay = np.arctan2(sy, R[i, i])
+            az = np.arctan2(R[j, i], -R[k, i])
+        else:
+            ax = np.arctan2(-R[j, k], R[j, j])
+            ay = np.arctan2(sy, R[i, i])
+            az = 0.0
+    else:
+        cy = np.sqrt(R[i, i] * R[i, i] + R[j, i] * R[j, i])
+        if cy > eps:
+            ax = np.arctan2(R[k, j], R[k, k])
+            ay = np.arctan2(-R[k, i], cy)
+            az = np.arctan2(R[j, i], R[i, i])
+        else:
+            ax = np.arctan2(-R[j, k], R[j, j])
+            ay = np.arctan2(-R[k, i], cy)
+            az = 0.0
+
+    if parity:
+        ax, ay, az = -ax, -ay, -az
+    if frame:
+        ax, az = az, ax
+    return ax, ay, az
+
+
+def decompose_affine_transform(A):
+    ZS = np.linalg.cholesky(np.dot(A.T, A)).T
+
+    zoom = np.diag(ZS)
+
+    shear = ZS / zoom[:, None]
+    shear = shear[np.triu_indices(3, 1)]
+
+    rotation = np.dot(A, np.linalg.inv(ZS))
+
+    if np.linalg.det(rotation) < 0:
+        zoom[0] *= -1
+        ZS[0] *= -1
+        rotation = np.dot(A, np.linalg.inv(ZS))
+
+    return rotation, zoom, shear
+
+
+def orthogonalize_cell(atoms: Atoms,
+                       max_repetitions: int = 5,
+                       return_transform: bool = False,
+                       transform: Union[bool, str] = True):
+    """
+    Make the cell of an ASE atoms object orthogonal. This is accomplished by repeating the cell until lattice vectors
+    are close to the three principal Cartesian directions. If the structure is not exactly orthogonal after the
+    structure is repeated by a given maximum the remaining difference will be made up by applying strain.
+
+    Parameters
+    ----------
+    atoms : ASE atoms object
+        The non-orthogonal atoms object.
+    max_repetitions : int
+        The maximum number of repetions allowed. Increase this to allow more repetitions and hence less strain.
+    return_transform : bool
+        If true, return the transformations that were applied to make the atoms orthogonal.
+    transform : bool
+        If false no transformation is applied to make the cell orthogonal, hence a non-orthogonal cell may be returned.
+
+
+    Returns
+    -------
+    atoms : ASE atoms object
+        The orthogonal atoms.
+    transform : tuple of arrays
+        The applied transform in the form the euler angles
+    """
+    eps = 1e-8
+
+    k = np.arange(-max_repetitions, max_repetitions + 1)
+    l = np.arange(-max_repetitions, max_repetitions + 1)
+    m = np.arange(-max_repetitions, max_repetitions + 1)
+
+    a, b, c = atoms.cell
+
+    vectors = np.abs(((k[:, None] * a[None])[:, None, None] +
+                      (l[:, None] * b[None])[None, :, None] +
+                      (m[:, None] * c[None])[None, None, :]))
+
+    norm = np.linalg.norm(vectors, axis=-1)
+    nonzero = norm > eps
+    norm[nonzero == 0] = eps
+
+    new_vectors = []
+    for i in range(3):
+        angles = vectors[..., i] / norm
+
+        optimal = np.abs(angles.max() - angles < eps)
+
+        optimal = np.where(optimal * nonzero)
+        n = np.linalg.norm(vectors[optimal], axis=1)
+
+        j = np.argmin(n)
+        new_vector = np.array([k[optimal[0][j]], l[optimal[1][j]], m[optimal[2][j]]])
+
+        new_vector = np.sign(np.dot(new_vector, atoms.cell)[i]) * new_vector
+        new_vectors.append(new_vector)
+
+    atoms = cut(atoms, *new_vectors)
+
+    cell = Cell.new(np.linalg.norm(atoms.cell, axis=0))
+    A = np.linalg.solve(atoms.cell.complete(), cell.complete())
+
+    if transform is True:
+        atoms.positions[:] = np.dot(atoms.positions, A)
+        atoms.cell[:] = cell
+
+    elif transform == 'raise':
+        if not is_cell_orthogonal(atoms):
+            raise RuntimeError()
+
+    if return_transform and transform:
+        rotation, zoom, shear = decompose_affine_transform(A)
+        return atoms, (np.array(rotation_matrix_to_euler(rotation)), zoom, shear)
+    else:
+        return atoms
+
+
 def standardize_cell(atoms: Atoms, tol: float = 1e-12):
     """
     Standardize the cell of an ASE atoms object. The atoms are rotated so one of the lattice vectors in the xy-plane
@@ -90,8 +234,8 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12):
 
     vertical_vector = np.where(np.all(np.abs(cell[:, :2]) < tol, axis=1))[0]
 
-    if len(vertical_vector) != 1:
-        raise RuntimeError('Invalid cell: no vertical lattice vector')
+    # if len(vertical_vector) != 1:
+    #    raise RuntimeError('Invalid cell: no vertical lattice vector')
 
     cell[[vertical_vector[0], 2]] = cell[[2, vertical_vector[0]]]
     r = np.arctan2(cell[0, 1], cell[0, 0]) / np.pi * 180
@@ -101,8 +245,8 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12):
     if r != 0.:
         atoms.rotate(-r, 'z', rotate_cell=True)
 
-    if not is_cell_valid(atoms, tol):
-        raise RuntimeError('This cell cannot be made orthogonal using currently implemented methods.')
+    # if not is_cell_valid(atoms, tol):
+    #    raise RuntimeError('This cell cannot be made orthogonal using currently implemented methods.')
 
     atoms.set_cell(np.abs(atoms.get_cell()))
 
@@ -110,64 +254,65 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12):
     return atoms
 
 
-def orthogonalize_cell(atoms: Atoms, limit_denominator: int = 10, preserve_periodicity: bool = True,
-                       return_strain: bool = False):
-    """
-    Make the cell of an ASE atoms object orthogonal. This is accomplished by repeating the cell until the x-component
-    of the lattice vectors in the xy-plane closely matches. If the ratio between the x-components is irrational this
-    may not be possible without introducing some strain. However, the amount of strain can be made arbitrarily small
-    by using many repetitions.
-
-    Parameters
-    ----------
-    atoms : ASE atoms object
-        The non-orthogonal atoms object.
-    limit_denominator : int
-        The maximum denominator in the rational approximation. Increase this to allow more repetitions and hence less
-        strain.
-    preserve_periodicity : bool, optional
-        This function will make a structure periodic while preserving periodicity exactly, this will generally result in
-        repeating the structure. If preserving periodicity is not desired, this may be set to False. Default is True.
-    return_strain : bool
-        If true, return the strain tensor that were applied to make the atoms orthogonal.
-
-    Returns
-    -------
-    atoms : ASE atoms object
-        The orthogonal atoms.
-    strain_tensor : 2x2 array
-        The applied strain tensor. Only provided if return_strain is true.
-    """
-    if is_cell_orthogonal(atoms):
-        return atoms
-
-    atoms = atoms.copy()
-    atoms = standardize_cell(atoms)
-
-    if not preserve_periodicity:
-        return cut_rectangle(atoms, origin=(0, 0), extent=np.diag(atoms.cell)[:2])
-
-    fraction = Fraction(atoms.cell[0,0] / atoms.cell[1,0]).limit_denominator(limit_denominator)
-
-    new_cell = atoms.cell.copy()
-    new_cell[1,0] = atoms.cell[0,0] / fraction
-
-    a = np.linalg.solve(atoms.cell[:2, :2], new_cell[:2, :2])
-    _, strain_tensor = polar(a, side='left')
-    strain_tensor[0, 0] -= 1
-    strain_tensor[1, 1] -= 1
-
-    atoms.set_cell(new_cell, scale_atoms=True)
-
-    atoms *= (abs(fraction.denominator), abs(fraction.numerator), 1)
-
-    atoms.set_cell(np.diag(atoms.cell))
-    atoms.wrap()
-
-    if return_strain:
-        return atoms, strain_tensor
-    else:
-        return atoms
+# def orthogonalize_cell(atoms: Atoms,
+#                        limit_denominator: int = 10,
+#                        preserve_periodicity: bool = True,
+#                        return_strain: bool = False):
+#     """
+#     Make the cell of an ASE atoms object orthogonal. This is accomplished by repeating the cell until lattice vectors
+#     are close to the three principal Cartesian directions. If the structure is not exactly orthogonal after the
+#     structure is repeated by a given maximum the remaining difference will be made up by applying strain.
+#
+#     Parameters
+#     ----------
+#     atoms : ASE atoms object
+#         The non-orthogonal atoms object.
+#     limit_denominator : int
+#         The maximum denominator in the rational approximation. Increase this to allow more repetitions and hence less
+#         strain.
+#     preserve_periodicity : bool, optional
+#         This function will make a structure periodic while preserving periodicity exactly, this will generally result in
+#         repeating the structure. If preserving periodicity is not desired, this may be set to False. Default is True.
+#     return_strain : bool
+#         If true, return the strain tensor that were applied to make the atoms orthogonal.
+#
+#     Returns
+#     -------
+#     atoms : ASE atoms object
+#         The orthogonal atoms.
+#     strain_tensor : 2x2 array
+#         The applied strain tensor. Only provided if return_strain is true.
+#     """
+#     if is_cell_orthogonal(atoms):
+#         return atoms
+#
+#     atoms = atoms.copy()
+#     atoms = standardize_cell(atoms)
+#
+#     if not preserve_periodicity:
+#         return cut_rectangle(atoms, origin=(0, 0), extent=np.diag(atoms.cell)[:2])
+#
+#     fraction = Fraction(atoms.cell[0, 0] / atoms.cell[1, 0]).limit_denominator(limit_denominator)
+#
+#     new_cell = atoms.cell.copy()
+#     new_cell[1, 0] = atoms.cell[0, 0] / fraction
+#
+#     a = np.linalg.solve(atoms.cell[:2, :2], new_cell[:2, :2])
+#     _, strain_tensor = polar(a, side='left')
+#     strain_tensor[0, 0] -= 1
+#     strain_tensor[1, 1] -= 1
+#
+#     atoms.set_cell(new_cell, scale_atoms=True)
+#
+#     atoms *= (abs(fraction.denominator), abs(fraction.numerator), 1)
+#
+#     atoms.set_cell(np.diag(atoms.cell))
+#     atoms.wrap()
+#
+#     if return_strain:
+#         return atoms, strain_tensor
+#     else:
+#         return atoms
 
 
 def cut_rectangle(atoms: Atoms, origin: Sequence[float], extent: Sequence[float], margin: float = 0.):
@@ -310,7 +455,7 @@ def rotate_atoms_to_plane(atoms, plane='xy'):
     new_atoms.positions[:] = positions
     new_atoms.cell[:] = cell
     new_atoms = standardize_cell(new_atoms)
-    return new_atoms #standardize_cell(atoms)
+    return new_atoms  # standardize_cell(atoms)
 
 
 def flip_atoms(atoms):
