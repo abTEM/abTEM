@@ -21,29 +21,29 @@ class DummyCarbonTransitions:
         return 1
 
 
-def test_dummy_transition():
-    atoms = Atoms('C', positions=[(2.5, 2.5, 1)], cell=(5, 5, 2))
-
-    transitions = [DummyCarbonTransitions()]
-
-    potential = Potential(atoms[[False]], slice_thickness=1, projection='infinite', parametrization='kirkland')
-
-    S = SMatrix(energy=100e3, sampling=0.02, semiangle_cutoff=20, rolloff=0.0)
-
-    S.match_grid(potential)
-
-    detector_eels = EELSDetector(collection_angle=20, interpolation=1)
-
-    transition_potential = TransitionPotential(transitions, atoms=atoms)
-
-    scan = GridScan((0, 0), potential.extent, sampling=0.9 * S.ctf.nyquist_sampling)
-
-    measurement_eels = S.coreloss_scan(scan,
-                                       detector_eels,
-                                       potential,
-                                       transition_potential, pbar=False)
-
-    assert np.allclose(measurement_eels.array, 1)
+# def test_dummy_transition():
+#     atoms = Atoms('C', positions=[(2.5, 2.5, 1)], cell=(5, 5, 2))
+#
+#     transitions = [DummyCarbonTransitions()]
+#
+#     potential = Potential(atoms[[False]], slice_thickness=1, projection='infinite', parametrization='kirkland')
+#
+#     S = SMatrix(energy=100e3, sampling=0.02, semiangle_cutoff=20, rolloff=0.0)
+#
+#     S.match_grid(potential)
+#
+#     detector_eels = EELSDetector(collection_angle=20, interpolation=1)
+#
+#     transition_potential = TransitionPotential(transitions, atoms=atoms)
+#
+#     scan = GridScan((0, 0), potential.extent, sampling=0.9 * S.ctf.nyquist_sampling)
+#
+#     measurement_eels = S.coreloss_scan(scan,
+#                                        detector_eels,
+#                                        potential,
+#                                        transition_potential, pbar=False)
+#
+#     assert np.allclose(measurement_eels.array, 1)
 
 
 def test_tranpose():
