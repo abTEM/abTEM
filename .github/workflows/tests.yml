@@ -43,7 +43,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          mamba install ${{ env.DEPENDENCIES }} ${{ env.OPTIONAL_DEPS }} ${{ env.TEST_DEPS }}
+          conda install ${{ env.DEPENDENCIES }} ${{ env.OPTIONAL_DEPS }} ${{ env.TEST_DEPS }}
 
       - name: Install abTEM
         run: |
