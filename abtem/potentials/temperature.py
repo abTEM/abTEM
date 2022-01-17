@@ -164,8 +164,6 @@ class FrozenPhonons(AbstractFrozenPhonons):
             for direction in directions:
                 atoms.positions[:, direction] += sigmas * np.random.randn(len(atoms))
 
-            atoms.wrap()
-
             return atoms
 
         configurations = []

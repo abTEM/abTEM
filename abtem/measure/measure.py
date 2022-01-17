@@ -1,6 +1,5 @@
 import copy
 from abc import ABCMeta, abstractmethod
-from collections import Iterable
 from numbers import Number
 from typing import Union, Tuple, TypeVar, Dict, List, Sequence
 
@@ -12,7 +11,7 @@ import zarr
 from ase import Atom
 from scipy.interpolate import interp1d
 
-from abtem.core.axes import HasAxes, ScanAxis, RealSpaceAxis, AxisMetadata, FourierSpaceAxis, LinearAxis, axis_to_dict, \
+from abtem.core.axes import HasAxes, RealSpaceAxis, AxisMetadata, FourierSpaceAxis, LinearAxis, axis_to_dict, \
     axis_from_dict
 from abtem.core.backend import cp, asnumpy, get_array_module, get_ndimage_module
 from abtem.core.dask import HasDaskArray

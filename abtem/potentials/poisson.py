@@ -80,6 +80,7 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
                  box: Tuple[float, float, float] = None,
                  origin: Tuple[float, float, float] = (0., 0., 0.),
                  chunks: int = 1,
+                 device: str = None,
                  fft_singularities: bool = False):
 
         self._charge_density = charge_density
@@ -96,13 +97,15 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
                          slice_thickness=slice_thickness,
                          plane=plane,
                          box=box,
-                         origin=origin)
+                         origin=origin,
+                         chunks=chunks,
+                         device=device)
 
     @property
     def frozen_phonon_potentials(self):
         return [self]
 
-    def _build(self):
+    def _get_chunk_real_space(self, first_slice, last_slice):
         def create_potential_interpolator(atoms, charge_density):
             # atoms = atoms[atoms.numbers == 0]
 
@@ -159,29 +162,39 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
                                     gpts=self.gpts,
                                     parametrization='ewald',
                                     slice_thickness=self.slice_thickness,
+                                    projection='finite',
                                     plane=self.plane,
                                     box=self.box,
                                     origin=self.origin)
 
         array = []
         for first_slice, last_slice in generate_chunks(len(self), chunks=self._chunks):
-            chunk = dask.delayed(interpolate_chunk)(first_slice,
-                                                    last_slice,
-                                                    self.slice_limits,
-                                                    h,
-                                                    self.gpts,
-                                                    old_cell,
-                                                    new_cell,
-                                                    interpolator)
+            # chunk = dask.delayed(interpolate_chunk)(first_slice,
+            #                                         last_slice,
+            #                                         self.slice_limits,
+            #                                         h,
+            #                                         self.gpts,
+            #                                         old_cell,
+            #                                         new_cell,
+            #                                         interpolator)
+            # array.append(da.from_delayed(chunk, shape=(last_slice - first_slice,) + self.gpts,
+            #                              meta=np.array((), dtype=np.float32)))
+            chunk = interpolate_chunk(first_slice,
+                                      last_slice,
+                                      self.slice_limits,
+                                      h,
+                                      self.gpts,
+                                      old_cell,
+                                      new_cell,
+                                      interpolator)
 
-            array.append(da.from_delayed(chunk, shape=(last_slice - first_slice,) + self.gpts,
-                                         meta=np.array((), dtype=np.float32)))
+            array.append(chunk)
 
         potential = ewald_potential.build()
-        potential._array = potential._array + da.concatenate(array)
+        potential._array = potential._array + np.concatenate(array)
         return potential
 
-    def _fft_build(self):
+    def _get_chunk_fft(self, first_slice, last_slice):
         fourier_density = -np.fft.fftn(self._charge_density)
         C = np.prod(self.gpts + (self.num_slices,)) / np.prod(fourier_density.shape)
         fourier_density = fft_crop(fourier_density, self.gpts + (self.num_slices,)) * C
@@ -190,10 +203,14 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
         potential = potential * self.atoms.cell[2, 2] / potential.shape[0]
         return potential
 
-    @computable
-    def build(self):
-
+    def get_chunk(self, first_slice, last_slice):
         if self._fft_singularities:
-            return self._fft_build()
+            return self._get_chunk_fft(first_slice, last_slice)
         else:
-            return self._build()
+            return self._get_chunk_real_space(first_slice, last_slice)
+
+    def get_potential_configurations(self, lazy: bool = False):
+        pass
+
+    def __copy__(self):
+        raise NotImplementedError

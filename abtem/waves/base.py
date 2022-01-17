@@ -29,10 +29,12 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAnt
 
     @property
     def antialias_valid_gpts(self) -> Tuple[int, int]:
+        self.grid.check_is_defined()
         return self._valid_rectangle(self.gpts, self.sampling)
 
     @property
     def antialias_cutoff_gpts(self) -> Tuple[int, int]:
+        self.grid.check_is_defined()
         return self._cutoff_rectangle(self.gpts, self.sampling)
 
     def _gpts_within_angle(self, angle: Union[None, float, str]) -> Tuple[int, int]:
@@ -54,6 +56,7 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAnt
 
     @property
     def cutoff_angles(self) -> Tuple[float, float]:
+        print(self.antialias_cutoff_gpts)
         return (self.antialias_cutoff_gpts[0] // 2 * self.angular_sampling[0],
                 self.antialias_cutoff_gpts[1] // 2 * self.angular_sampling[1])
 
@@ -66,6 +69,7 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAnt
     def angular_sampling(self) -> Tuple[float, float]:
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
+        print(self.extent, self.wavelength)
         return 1 / self.extent[0] * self.wavelength * 1e3, 1 / self.extent[1] * self.wavelength * 1e3
 
     def _validate_potential(self, potential: Union[Atoms, AbstractPotential]) -> AbstractPotential:

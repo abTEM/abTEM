@@ -75,12 +75,19 @@ def _interpolate_radial_functions(array,
                 cuda.atomic.add(array, (k, m), radial_functions[i, idx] + (r_interp - radial_gpts[idx]) * slope)
 
 
-def interpolate_radial_functions(array, positions, disk_indices, sampling, radial_gpts, radial_functions,
+def interpolate_radial_functions(array,
+                                 positions,
+                                 disk_indices,
+                                 sampling,
+                                 radial_gpts,
+                                 radial_functions,
                                  radial_derivative):
     threadsperblock = (1, 256)
     blockspergrid_x = int(math.ceil(positions.shape[0] / threadsperblock[0]))
     blockspergrid_y = int(math.ceil(disk_indices.shape[0] / threadsperblock[1]))
     blockspergrid = (blockspergrid_x, blockspergrid_y)
+
+    print(blockspergrid)
 
     dt = (cp.log(radial_gpts[-1] / radial_gpts[0]) / (radial_gpts.shape[0] - 1)).item()
 

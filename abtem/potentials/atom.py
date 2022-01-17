@@ -53,8 +53,12 @@ def interpolate_radial_functions(array: np.ndarray,
 
 class AtomicPotential:
 
-    def __init__(self, symbol: Union[int, str], parametrization: str = 'lobato', core_size: float = .01,
-                 cutoff_tolerance: float = 1e-3):
+    def __init__(self,
+                 symbol: Union[int, str],
+                 parametrization: str = 'lobato',
+                 core_size: float = .01,
+                 cutoff_tolerance: float = 1e-3,
+                 num_integration_limits: int = 10):
 
         if not isinstance(symbol, str):
             symbol = chemical_symbols[symbol]
@@ -69,6 +73,7 @@ class AtomicPotential:
         self._core_size = core_size
         self._integral_table = None
         self._cutoff = None
+        self._num_integration_limits = num_integration_limits
 
     @property
     def parameters(self) -> np.ndarray:
@@ -77,6 +82,10 @@ class AtomicPotential:
     @property
     def cutoff_tolerance(self) -> float:
         return self._cutoff_tolerance
+
+    @property
+    def num_integration_limits(self) -> int:
+        return self._num_integration_limits
 
     @property
     def radial_gpts(self) -> np.ndarray:
@@ -94,7 +103,7 @@ class AtomicPotential:
         return self._potential(r, self._parameters)
 
     def build_integral_table(self, taper: float = .85) -> Tuple[np.ndarray, np.ndarray]:
-        limits = np.linspace(-self.cutoff, 0, 50)
+        limits = np.linspace(-self.cutoff, 0, self._num_integration_limits // 2)
         limits = np.concatenate((limits, -limits[::-1][1:]))
         table = np.zeros((len(limits) - 1, len(self.radial_gpts)))
 
@@ -115,7 +124,7 @@ class AtomicPotential:
         self._integral_table = limits[1:], table
         return self._integral_table
 
-    def project(self, a: float, b: float) -> np.ndarray:
+    def project(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
         if self._integral_table is None:
             self.build_integral_table()
 
@@ -126,20 +135,25 @@ class AtomicPotential:
                         array: np.ndarray,
                         sampling: Tuple[float, float],
                         positions: np.ndarray,
-                        a: float,
-                        b: float) -> np.ndarray:
+                        a: np.ndarray,
+                        b: np.ndarray) -> np.ndarray:
+
         if len(positions) == 0:
             return array
+
+        assert len(a) == len(b) == len(positions)
+        assert len(array.shape) == 2
+        assert len(a.shape) == 1
+        assert len(b.shape) == 1
 
         xp = get_array_module(array)
 
         disk_indices = xp.asarray(disc_meshgrid(int(np.ceil(self.cutoff / np.min(sampling)))))
         radial_potential = xp.asarray(self.project(a, b))
 
+        positions = xp.asarray(positions)
         radial_potential_derivative = xp.zeros_like(radial_potential)
         radial_potential_derivative[:, :-1] = xp.diff(radial_potential, axis=1) / xp.diff(self.radial_gpts)[None]
-
-        positions = xp.asarray(positions)
 
         if xp is cp:
             interpolate_radial_functions_cuda(array=array,

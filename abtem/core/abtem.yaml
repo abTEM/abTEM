@@ -1,5 +1,6 @@
 device: cpu
 fft: mkl
+progress_bar: false
 dask:
   lazy: true
   scheduler: threads
