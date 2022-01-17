@@ -67,6 +67,9 @@ def energy2sigma(energy: float) -> float:
             units._hplanck * units.s * units.J) ** 2)
 
 
+class EnergyUndefinedError(Exception):
+    pass
+
 class Accelerator(HasEventsMixin):
     """
     Accelerator object describes the energy of wave functions and transfer functions.
@@ -119,7 +122,7 @@ class Accelerator(HasEventsMixin):
         Raise error if the energy is not defined.
         """
         if self.energy is None:
-            raise RuntimeError('Energy is not defined')
+            raise EnergyUndefinedError('Energy is not defined')
 
     def check_match(self, other: 'Accelerator'):
         """

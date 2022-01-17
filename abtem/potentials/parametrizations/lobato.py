@@ -29,7 +29,8 @@ def load_parameters(scale_parameters=True):
 
 
 @jit(nopython=True, nogil=True)
-def scattering_factor(k2, p):
+def scattering_factor(k, p):
+    k2 = k ** 2
     return ((p[0, 0] * (2. + p[1, 0] * k2) / (1. + p[1, 0] * k2) ** 2) +
             (p[0, 1] * (2. + p[1, 1] * k2) / (1. + p[1, 1] * k2) ** 2) +
             (p[0, 2] * (2. + p[1, 2] * k2) / (1. + p[1, 2] * k2) ** 2) +
@@ -53,24 +54,7 @@ def potential_derivative(r, p):
               p[0, 2] * (2. / (p[1, 2] * r ** 2) + 2. / r + p[1, 2]) * np.exp(-p[1, 2] * r) +
               p[0, 3] * (2. / (p[1, 3] * r ** 2) + 2. / r + p[1, 3]) * np.exp(-p[1, 3] * r) +
               p[0, 4] * (2. / (p[1, 4] * r ** 2) + 2. / r + p[1, 4]) * np.exp(-p[1, 4] * r)) / kappa
-
     return dvdr
-
-
-@jit(nopython=True, nogil=True)
-def potential_second_derivative(r, p):
-    d2vdr2 = (p[0, 0] * (2 * (p[1, 0] * r + 2) / (p[1, 0] * r ** 3) +
-                         2 * (p[1, 0] * r + 1) / r ** 2 + p[1, 0] ** 2) * np.exp(-p[1, 0] * r) +
-              p[0, 1] * (2 * (p[1, 1] * r + 2) / (p[1, 1] * r ** 3) +
-                         2 * (p[1, 1] * r + 1) / r ** 2 + p[1, 1] ** 2) * np.exp(-p[1, 1] * r) +
-              p[0, 2] * (2 * (p[1, 2] * r + 2) / (p[1, 2] * r ** 3) +
-                         2 * (p[1, 2] * r + 1) / r ** 2 + p[1, 2] ** 2) * np.exp(-p[1, 2] * r) +
-              p[0, 3] * (2 * (p[1, 3] * r + 2) / (p[1, 3] * r ** 3) +
-                         2 * (p[1, 3] * r + 1) / r ** 2 + p[1, 3] ** 2) * np.exp(-p[1, 3] * r) +
-              p[0, 4] * (2 * (p[1, 4] * r + 2) / (p[1, 4] * r ** 3) +
-                         2 * (p[1, 4] * r + 1) / r ** 2 + p[1, 4] ** 2) * np.exp(-p[1, 4] * r))
-
-    return d2vdr2 / kappa
 
 
 def projected_potential(r, p):

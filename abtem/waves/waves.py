@@ -525,16 +525,21 @@ class PlaneWave(WavesLikeMixin):
             waves = self.build(lazy=lazy)
             waves = waves.map_blocks(multislice, potential=potential_config, dtype=np.complex64)
             exit_waves.append(waves)
-        return stack_waves(exit_waves, FrozenPhononsAxis())
+
+        if len(exit_waves) > 1:
+            return stack_waves(exit_waves, FrozenPhononsAxis())
+        else:
+            return exit_waves[0]
 
     def build(self, lazy: bool = None) -> Waves:
         """Build the plane wave function as a Waves object."""
         xp = get_array_module(self._device)
         self.grid.check_is_defined()
+        self.accelerator.check_is_defined()
 
         def plane_wave(gpts, normalize, xp):
             if normalize:
-                wave = xp.full(gpts, (1 / xp.sqrt(np.prod(gpts))).astype(xp.complex64), dtype=xp.complex64)
+                wave = xp.full(gpts, (1 / np.prod(gpts)).astype(xp.complex64), dtype=xp.complex64)
             else:
                 wave = xp.ones(gpts, dtype=xp.complex64)
             return wave
@@ -546,10 +551,6 @@ class PlaneWave(WavesLikeMixin):
             array = plane_wave(self.gpts, self._normalize, xp)
 
         return Waves(array, extent=self.extent, energy=self.energy)
-
-    def __copy__(self) -> 'PlaneWave':
-        return self.__class__(extent=self.extent, gpts=self.gpts, sampling=self.sampling, energy=self.energy,
-                              normalize=self._normalize, device=self._device)
 
 
 class Probe(WavesLikeMixin):
@@ -587,6 +588,7 @@ class Probe(WavesLikeMixin):
                  energy: float = None,
                  ctf: CTF = None,
                  tilt: Tuple[float, float] = None,
+                 normalize: bool = False,
                  device: str = None,
                  **kwargs):
 
@@ -607,6 +609,7 @@ class Probe(WavesLikeMixin):
         self._antialias_aperture = AntialiasAperture()
         self._beam_tilt = BeamTilt(tilt=tilt)
         self._device = _validate_device(device)
+        self._normalize = normalize
 
     @property
     def ctf(self) -> CTF:
@@ -640,7 +643,7 @@ class Probe(WavesLikeMixin):
             positions = np.array(positions, dtype=np.float32)
 
         if len(positions.shape) == 1:
-            positions = positions[None]
+            positions = positions
 
         if isinstance(positions, np.ndarray) and lazy:
             positions = da.from_array(positions)
@@ -673,7 +676,7 @@ class Probe(WavesLikeMixin):
         self.accelerator.check_is_defined()
 
         validated_positions = self._validate_positions(positions, lazy=lazy, chunks=chunks)
-
+        print(validated_positions)
         xp = get_array_module(self._device)
 
         def calculate_probes(positions, xp):
@@ -682,7 +685,8 @@ class Probe(WavesLikeMixin):
             positions = positions / xp.array(self.sampling).astype(np.float32)
             array = fft_shift_kernel(positions, shape=self.gpts)
             array *= self.ctf.evaluate_on_grid(gpts=self.gpts, sampling=self.sampling, xp=xp)
-            array /= xp.sqrt(abs2(array).sum((-2, -1), keepdims=True))
+            if self._normalize:
+                array /= xp.sqrt(abs2(array).sum((-2, -1), keepdims=True))
             return ifft2(array)
 
         if isinstance(validated_positions, da.core.Array):
@@ -701,15 +705,16 @@ class Probe(WavesLikeMixin):
         if hasattr(positions, 'axes_metadata'):
             extra_axes_metadata = positions.axes_metadata
         else:
-            extra_axes_metadata = [PositionsAxis()] * (len(validated_positions.shape) - 1)
+            extra_axes_metadata = [PositionsAxis()] * (len(array.shape) - 2)
 
         return Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt,
                      extra_axes_metadata=extra_axes_metadata)
 
     def multislice(self,
                    potential: Union[AbstractPotential, Atoms],
-                   positions: Union[AbstractScan, Sequence],
-                   chunks: int = None, lazy: bool = None):
+                   positions: Union[AbstractScan, Sequence] = None,
+                   chunks: int = None,
+                   lazy: bool = None):
         """
         Build probe wave functions at the provided positions and propagate them through the potential.
 
@@ -726,10 +731,8 @@ class Probe(WavesLikeMixin):
             Probe exit wave functions as a Waves object.
         """
 
-        potential = validate_potential(potential)
+        potential = validate_potential(potential, self)
         lazy = validate_lazy(lazy)
-
-        self.grid.match(potential)
 
         exit_waves = []
         for potential_configuration in potential.get_potential_configurations(lazy=lazy):
@@ -737,7 +740,10 @@ class Probe(WavesLikeMixin):
             waves = waves.map_blocks(multislice, potential=potential_configuration, dtype=np.complex64)
             exit_waves.append(waves)
 
-        return stack_waves(exit_waves, FrozenPhononsAxis())
+        if len(exit_waves) > 1:
+            return stack_waves(exit_waves, FrozenPhononsAxis())
+        else:
+            return exit_waves[0]
 
     def scan(self,
              scan: Union[AbstractScan, np.ndarray, Sequence],

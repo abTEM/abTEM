@@ -28,6 +28,7 @@ from abtem.waves.transfer import CTF
 from abtem.waves.waves import Waves
 from numba.core.errors import NumbaPerformanceWarning
 
+
 def batch_crop_2d(array: np.ndarray, corners: Tuple[int, int], new_shape: Tuple[int, int]):
     xp = get_array_module(array)
     if xp is cp:
@@ -485,7 +486,7 @@ class SMatrixArray(HasDaskArray, HasAxes, AbstractSMatrix):
         d['antialias_aperture'] = waves.antialias_aperture
         return self.__class__(**d)
 
-    def streaming_multislice(self, potential, chunks, **kwargs):
+    def streaming_multislice(self, potential, chunks=None, **kwargs):
 
         for chunk_start, chunk_stop in generate_chunks(len(self), chunks=chunks):
             extra_axes_metadata = self.extra_axes_metadata + [PrismPlaneWavesAxis()]
@@ -496,7 +497,7 @@ class SMatrixArray(HasDaskArray, HasAxes, AbstractSMatrix):
 
         return self
 
-    def multislice(self, potential: AbstractPotential, **kwargs) -> 'SMatrixArray':
+    def multislice(self, potential: AbstractPotential, chunks=None, **kwargs) -> 'SMatrixArray':
         """
         Propagate the scattering matrix through the provided potential.
 
@@ -510,6 +511,12 @@ class SMatrixArray(HasDaskArray, HasAxes, AbstractSMatrix):
         Waves object.
             Probe exit wave functions for the provided positions.
         """
+
+        if chunks is None:
+            chunks = len(self)
+
+        if self._is_streaming:
+            return self.streaming_multislice(potential, chunks)
 
         extra_axes_metadata = self.extra_axes_metadata + [PrismPlaneWavesAxis()]
         waves = Waves(self.array, energy=self.energy, sampling=self.sampling,
@@ -1059,7 +1066,8 @@ class SMatrix(AbstractSMatrix):
 
         return s_matrix_array
 
-    def linear_scaling_transition_scan(self, scan, collection_angle, transitions, ctf: CTF = None, lazy=False):
+    def linear_scaling_transition_scan(self, scan, collection_angle, transitions, ctf: CTF = None,
+                                       reverse_multislice=False, lazy=False):
         d = self._copy_as_dict(copy_potential=False)
         d['potential'] = self.potential
         d['planewave_cutoff'] = collection_angle
@@ -1074,7 +1082,7 @@ class SMatrix(AbstractSMatrix):
             else:
                 transitions = transitions.get_transition_potentials()
 
-        return linear_scaling_transition_multislice(self, S2, scan, transitions)
+        return linear_scaling_transition_multislice(self, S2, scan, transitions, reverse_multislice=reverse_multislice)
 
     def scan(self,
              detectors: Union[AbstractDetector, List[AbstractDetector]] = None,

@@ -6,6 +6,7 @@ import dask
 from abtem.core import config
 from typing import Union, TYPE_CHECKING, List
 import numpy as np
+from contextlib import nullcontext
 
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves
@@ -26,8 +27,12 @@ class ComputableList(list):
         return computables
 
     def compute(self, **kwargs):
+        if config.get('progress_bar'):
+            progress_bar = ProgressBar()
+        else:
+            progress_bar = nullcontext()
 
-        with ProgressBar():
+        with progress_bar:
             arrays = dask.compute(self._get_computables(), **kwargs)[0]
 
         for array, wrapper in zip(arrays, self):
@@ -39,8 +44,16 @@ class ComputableList(list):
         return dask.visualize(self._get_computables(), **kwargs)
 
 
-def _compute(dask_array_wrappers, **kwargs):
-    with ProgressBar():
+def _compute(dask_array_wrappers, progress_bar=None, **kwargs):
+    if progress_bar is None:
+        progress_bar = config.get('progress_bar')
+
+    if progress_bar:
+        progress_bar = ProgressBar()
+    else:
+        progress_bar = nullcontext()
+
+    with progress_bar:
         arrays = dask.compute([wrapper.array for wrapper in dask_array_wrappers], **kwargs)[0]
 
     for array, wrapper in zip(arrays, dask_array_wrappers):
@@ -200,17 +213,11 @@ class HasDaskArray:
         self._array = da.from_array(self._array, chunks=-1)
         return self
 
-    def compute(self, pbar: bool = True, **kwargs):
+    def compute(self, progress_bar: bool = None, **kwargs):
         if not self.is_lazy:
             return self
 
-        if pbar:
-            with ProgressBar():
-                self._array = self.array.compute(**kwargs)
-        else:
-            self._array = self.array.compute(**kwargs)
-
-        return self
+        return _compute([self])[0]
 
     def visualize_graph(self, **kwargs):
         return self.array.visualize(**kwargs)

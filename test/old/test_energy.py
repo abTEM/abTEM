@@ -43,8 +43,8 @@ def test_energy_raises():
     accelerator1.check_match(accelerator2)
 
 
-def test_accelerator_event():
-    accelerator = Accelerator(300e3)
-
-    accelerator.energy = 200e3
-    assert accelerator.event._notify_count == 1
+# def test_accelerator_event():
+#     accelerator = Accelerator(300e3)
+#
+#     accelerator.energy = 200e3
+#     assert accelerator.event._notify_count == 1

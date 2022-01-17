@@ -7,6 +7,10 @@ from abtem.core.backend import get_array_module, xp_to_str
 from abtem.core.events import Events, HasEventsMixin, watch
 
 
+class GridUndefinedError(Exception):
+    pass
+
+
 class Grid(HasEventsMixin):
     """
     Grid object.
@@ -154,10 +158,10 @@ class Grid(HasEventsMixin):
         else:
             self._adjust_extent(self.gpts, sampling)
 
-        self._adjust_sampling(self.extent, self.gpts)
-
-        if self._sampling is None:
+        if self.extent is None or self.gpts is None:
             self._sampling = sampling
+        else:
+            self._adjust_sampling(self.extent, self.gpts)
 
     def _adjust_extent(self, gpts: tuple, sampling: tuple):
         if (gpts is not None) & (sampling is not None):
@@ -180,13 +184,13 @@ class Grid(HasEventsMixin):
         """
 
         if self.extent is None:
-            raise RuntimeError('Grid extent is not defined')
+            raise GridUndefinedError('grid extent is not defined')
 
         elif self.gpts is None:
-            raise RuntimeError('Grid gpts are not defined')
+            raise GridUndefinedError('grid gpts are not defined')
 
         elif self.gpts is None:
-            raise RuntimeError('Grid sampling is not defined')
+            raise GridUndefinedError('grid sampling is not defined')
 
     def match(self, other: Union['Grid', 'HasGridMixin'], check_match: bool = False):
         """
@@ -199,7 +203,7 @@ class Grid(HasEventsMixin):
         check_match : bool
             If true check whether grids can match without overriding already defined grid parameters.
         """
-        
+
         if check_match:
             self.check_match(other)
 
@@ -242,6 +246,9 @@ class Grid(HasEventsMixin):
             if not np.all(self.gpts == other.gpts):
                 raise RuntimeError('Inconsistent grid gpts ({} != {})'.format(self.gpts, other.gpts))
 
+    def __eq__(self, other):
+        self.check_match(other)
+
     def round_to_power(self, power: int = 2):
         """
         Round the grid gpts up to the nearest value that is a power of n. Fourier transforms are faster for arrays of
@@ -254,22 +261,6 @@ class Grid(HasEventsMixin):
         """
 
         self.gpts = tuple(power ** np.ceil(np.log(n) / np.log(power)) for n in self.gpts)
-
-    def __copy__(self):
-        return self.__class__(extent=self.extent,
-                              gpts=self.gpts,
-                              sampling=self.sampling,
-                              dimensions=self.dimensions,
-                              endpoint=self.endpoint,
-                              lock_extent=self._lock_extent,
-                              lock_gpts=self._lock_gpts,
-                              lock_sampling=self._lock_sampling)
-
-    def copy(self):
-        """
-        Make a copy.
-        """
-        return copy(self)
 
 
 class HasGridMixin:
@@ -338,38 +329,12 @@ def spatial_frequencies(gpts: Tuple[int, ...],
     else:
         return out
 
-
-#
-# def spatial_frequencies(gpts: Tuple[int, int],
-#                         sampling: Tuple[float, float],
-#                         return_grid: bool = False,
-#                         xp=np):
-#     if not delayed:
-#         return _spatial_frequencies(gpts, sampling, return_grid, xp)
-#
-#     out = ()
-#     for i, ki in enumerate(
-#             dask.delayed(_spatial_frequencies, nout=len(gpts), pure=True)(gpts, sampling, return_grid, xp_to_str(xp))):
-#         if not return_grid:
-#             out += (da.from_delayed(ki, shape=(gpts[i],), dtype=np.float32),)
-#         else:
-#             out += (da.from_delayed(ki, shape=gpts, dtype=np.float32),)
-#
-#     return out
-
-
 def polar_spatial_frequencies(gpts, sampling, xp=np):
     xp = get_array_module(xp)
     kx, ky = spatial_frequencies(gpts, sampling, False, xp_to_str(xp))
     k = xp.sqrt(kx[:, None] ** 2 + ky[None] ** 2)
     phi = xp.arctan2(kx[:, None], ky[None])
     return k, phi
-
-
-# def polar_spatial_frequencies(gpts, sampling, xp=np):
-#
-#     out = dask.delayed(_polar_spatial_frequencies, nout=2, pure=True)(gpts, sampling, xp_to_str(xp))
-#     return tuple(da.from_delayed(val, shape=gpts, dtype=np.float32) for val in out)
 
 
 def disc_meshgrid(r):

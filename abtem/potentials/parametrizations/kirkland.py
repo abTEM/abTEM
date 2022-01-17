@@ -7,7 +7,7 @@ from scipy.special import kn
 from abtem.potentials.utils import kappa
 
 
-def load_parameters(convert=True):
+def load_parameters(scale_parameters=True):
     """Function to load the Kirkland parameters (doi:10.1007/978-1-4419-6533-2)."""
     with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'kirkland_parameters.json'), 'r') as f:
         parameters = json.load(f)
@@ -15,7 +15,7 @@ def load_parameters(convert=True):
     for key, value in parameters.items():
         value = np.array(value)
 
-        if convert:
+        if scale_parameters:
             a = value[0]
             b = value[1]
             c = value[2]

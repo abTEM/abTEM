@@ -130,7 +130,7 @@ def test_downsample_max_angle():
 
 
 def test_downsample_detect():
-    atoms = read('data/srtio3_100.cif')
+    atoms = read('../data/srtio3_100.cif')
     atoms *= (4, 4, 1)
 
     potential = Potential(atoms, gpts=256, projection='infinite', slice_thickness=.5,
@@ -192,7 +192,7 @@ def test_prism_storage():
 
 @pytest.mark.gpu
 def test_cropped_scan():
-    atoms = read(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data/amorphous_carbon.cif'))
+    atoms = read(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../data/amorphous_carbon.cif'))
     potential = Potential(atoms, gpts=512, slice_thickness=1, device='gpu', projection='infinite',
                           parametrization='kirkland', storage='gpu').build(pbar=True)
     detector = AnnularDetector(inner=40, outer=60)

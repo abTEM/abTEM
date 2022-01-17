@@ -4,7 +4,7 @@ import numpy as np
 from ase import Atoms
 
 from abtem.core.antialias import AntialiasAperture
-from abtem.core.backend import get_array_module
+from abtem.core.backend import get_array_module, copy_to_device
 from abtem.core.complex import complex_exponential
 from abtem.measure.measure import Images
 from abtem.potentials.potentials import validate_potential
@@ -12,7 +12,7 @@ from abtem.structures.slicing import SliceIndexedAtoms
 from abtem.waves.multislice import FresnelPropagator, multislice
 
 if TYPE_CHECKING:
-    from abtem.waves.prism import SMatrix
+    from abtem.waves.prism import SMatrix, SMatrixArray
 
 
 def validate_sites(potential=None, sites=None):
@@ -60,6 +60,7 @@ def transition_potential_multislice(waves,
     transmission_function = antialias_aperture.bandlimit(transmission_function)
 
     measurements = [detector.allocate_measurement(waves, scan=scan) for detector in detectors]
+
     for i, (transmission_function_slice, sites_slice) in enumerate(zip(transmission_function, sites)):
         sites_slice = transition_potentials.validate_sites(sites_slice)
 
@@ -88,7 +89,8 @@ def transition_potential_multislice(waves,
     return measurements
 
 
-def linear_scaling_transition_multislice(S1: 'SMatrix', S2: 'SMatrix', scan, transition_potentials):
+def linear_scaling_transition_multislice(S1: 'SMatrix', S2: 'SMatrix', scan, transition_potentials,
+                                         reverse_multislice=False):
     xp = get_array_module(S1._device)
     from tqdm.auto import tqdm
 
@@ -110,22 +112,36 @@ def linear_scaling_transition_multislice(S1: 'SMatrix', S2: 'SMatrix', scan, tra
     stream = S1._device == 'gpu' and S1._store_on_host
 
     S1 = S1.build(lazy=False, stop=0, normalization='planewaves')
-    S2 = S2.build(lazy=False, start=len(potential), stop=0, normalization='planewaves')
+
+    if reverse_multislice:
+        S2_multislice = S2.build(lazy=False, start=len(potential), stop=0, normalization='planewaves')
+    else:
+        S2_multislice = S2
 
     images = xp.zeros(len(positions), dtype=np.float32)
     for i in tqdm(range(len(potential))):
 
-        if stream:
-            S1 = S1.streaming_multislice(potential, chunks=chunks, start=max(i - 1, 0), stop=i)
-            S2 = S2.streaming_multislice(potential, chunks=chunks, start=max(i - 1, 0), stop=i)
+        # if stream:
+        #     S1 = S1.streaming_multislice(potential, chunks=chunks, start=max(i - 1, 0), stop=i)
+        #     # if hasattr(S2_multislice, 'build'):
+        #     S2 = S2.streaming_multislice(potential, chunks=chunks, start=max(i - 1, 0), stop=i)
+        #     # else:
+        #     #    S2_multislice = S2_multislice.build(potential, chunks=chunks, start=max(i - 1, 0),
+        #     #                                                       stop=i)
+        # else:
+        S1 = S1.multislice(potential, chunks=chunks, start=max(i - 1, 0), stop=i)
+        # S2_multislice = S2.build(start=len(potential), stop=i, lazy=False)
+
+        if reverse_multislice:
+            S2_multislice = S2_multislice.multislice(potential, chunks=chunks, start=max(i - 1, 0), stop=i)
         else:
-            S1 = S1.multislice(potential, start=max(i - 1, 0), stop=i)
-            S2 = S2.multislice(potential, start=max(i - 1, 0), stop=i)
+            S2_multislice = S2.build(lazy=False, start=len(potential), stop=i, normalization='planewaves')
 
         sites_slice = transition_potentials.validate_sites(sites[i])
 
         for site in sites_slice:
-            S2_crop = S2.crop_to_positions(site)
+            # S2_crop = S2.crop_to_positions(site)
+            S2_crop = S2_multislice.crop_to_positions(site)
             scattered_S1 = S1.crop_to_positions(site)
 
             if stream:
