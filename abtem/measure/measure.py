@@ -15,6 +15,7 @@ from scipy.interpolate import interp1d
 from abtem.core.axes import HasAxes, ScanAxis, RealSpaceAxis, AxisMetadata, FourierSpaceAxis, LinearAxis, axis_to_dict, \
     axis_from_dict
 from abtem.core.backend import cp, asnumpy, get_array_module, get_ndimage_module
+from abtem.core.complex import abs2
 from abtem.core.dask import HasDaskArray
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft2
@@ -205,6 +206,11 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
         d['extra_axes_metadata'] = axes
         return self.__class__(**d)
 
+    def _apply_element_wise_func(self, func):
+        d = self._copy_as_dict(copy_array=False)
+        d['array'] = func(self.array)
+        return self.__class__(**d)
+
     def __getitem__(self, items):
         return self._get_measurements(items)
 
@@ -264,6 +270,22 @@ class Images(AbstractMeasurement):
     def base_axes_metadata(self) -> List[AxisMetadata]:
         return [RealSpaceAxis(label='x', sampling=self.sampling[0], units='Å'),
                 RealSpaceAxis(label='y', sampling=self.sampling[0], units='Å')]
+
+    def _check_is_complex(self):
+        if not np.iscomplexobj(self.array):
+            raise RuntimeError('function not implemented for non-complex image')
+
+    def angle(self):
+        self._check_is_complex()
+        return self._apply_element_wise_func(get_array_module(self.array).angle)
+
+    def abs(self):
+        self._check_is_complex()
+        return self._apply_element_wise_func(get_array_module(self.array).abs)
+
+    def intensity(self):
+        self._check_is_complex()
+        return self._apply_element_wise_func(abs2)
 
     def to_hyperspy(self):
         from hyperspy._signals.signal2d import Signal2D
