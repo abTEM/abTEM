@@ -649,7 +649,8 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
                 if not np.allclose(transformation, 0.):
                     raise RuntimeError('The unit cell of the atoms is not orthogonal '
                                        'and could not be made orthogonal without ambiguity. '
-                                       'Use the function abtem.structure.orthogonalize_cell.')
+                                       'See our tutorial on making orthogonal cells '
+                                       'https://abtem.readthedocs.io/en/latest/tutorials/orthogonal_cells.html')
 
         if np.abs(atoms.cell[2, 2]) < 1e-12:
             raise RuntimeError('Atoms cell has no thickness')
