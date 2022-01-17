@@ -15,7 +15,7 @@ def test_dft():
     from gpaw import GPAW
     from abtem.potentials.gpaw import GPAWPotential
 
-    atoms = read(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data/hexagonal_graphene.cif'))
+    atoms = read(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../data/hexagonal_graphene.cif'))
 
     gpaw = GPAW(h=.1, txt=None, kpts=(3, 3, 1))
     atoms.calc = gpaw
