@@ -2,7 +2,7 @@
 from abc import abstractmethod, ABCMeta
 from typing import Mapping, Union, Sequence
 from numbers import Number
-from collections import Iterable
+from collections.abc import Iterable
 
 import numpy as np
 from ase import Atoms
