@@ -4,6 +4,8 @@ import os
 import numpy as np
 from numba import jit
 from scipy.special import kn
+
+from abtem.potentials.parametrizations.base import Parametrization
 from abtem.potentials.utils import kappa
 
 
@@ -72,3 +74,21 @@ def projected_scattering_factor(k, p):
          4 * np.pi * p[0, 2] / (4 * np.pi ** 2 * k ** 2 + p[1, 2] ** 2) +
          np.sqrt(np.pi / p[3, 2]) * p[2, 2] * np.pi / p[3, 2] * np.exp(-np.pi ** 2 * k ** 2. / p[3, 2]))
     return f / kappa
+
+
+class KirklandParametrization(Parametrization):
+
+    def __init__(self):
+        self._parameters = load_parameters()
+
+    def potential(self, r, symbol, charge=None):
+        return potential(r, self._parameters[symbol])
+
+    def scattering_factor(self, k, symbol, charge=None):
+        raise NotImplementedError
+
+    def projected_potential(self, r, symbol, charge=None):
+        raise NotImplementedError
+
+    def projected_scattering_factor(self, k, symbol, charge=None):
+        return projected_scattering_factor(k, self._parameters[symbol])

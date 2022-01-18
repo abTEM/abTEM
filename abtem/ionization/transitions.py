@@ -13,12 +13,11 @@ from scipy.special import spherical_jn, sph_harm
 
 from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import copy_to_device
-from abtem.core.complex import abs2
 from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2wavelength, relativistic_mass_correction
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.fft import ifft2
 from abtem.core.grid import HasGridMixin, Grid, polar_spatial_frequencies
-from abtem.ionization.electron_configurations import electron_configurations
+from abtem.core.electron_configurations import electron_configurations
 from abtem.ionization.utils import check_valid_quantum_number, config_str_to_config_tuples, \
     remove_electron_from_config_str
 from abtem.measure.measure import Images

@@ -5,6 +5,7 @@ import numpy as np
 from numba import jit
 from scipy.special import kn
 from abtem.potentials.utils import kappa
+from abtem.potentials.parametrizations.base import Parametrization
 
 
 def load_parameters(scale_parameters=True):
@@ -66,3 +67,21 @@ def projected_scattering_factor(k, p):
     f = 8 * np.pi * (p[0][:, None] / p[1][:, None] * 1 / (4 * np.pi ** 2 * k[None] ** 2 + p[1][:, None] ** 2) +
                      p[0][:, None] * p[1][:, None] / (4 * np.pi ** 2 * k[None] ** 2 + p[1][:, None] ** 2) ** 2).sum(0)
     return f / kappa
+
+
+class LobatoParametrization(Parametrization):
+
+    def __init__(self):
+        self._parameters = load_parameters()
+
+    def potential(self, r, symbol, charge=None):
+        return potential(r, self._parameters[symbol])
+
+    def scattering_factor(self, k, symbol, charge=None):
+        raise NotImplementedError
+
+    def projected_potential(self, r, symbol, charge=None):
+        raise NotImplementedError
+
+    def projected_scattering_factor(self, k, symbol, charge=None):
+        return projected_scattering_factor(k, self._parameters[symbol])

@@ -60,9 +60,6 @@ class AtomicPotential:
                  cutoff_tolerance: float = 1e-3,
                  num_integration_limits: int = 10):
 
-        if not isinstance(symbol, str):
-            symbol = chemical_symbols[symbol]
-
         self._symbol = symbol
         parametrization = parametrization_names[parametrization]
 

@@ -18,9 +18,13 @@ from abtem.core.utils import generate_chunks
 from abtem.measure.measure import Images
 from abtem.potentials.atom import AtomicPotential
 from abtem.potentials.infinite import calculate_scattering_factor, infinite_potential_projections
+from abtem.potentials.parametrizations.base import Parametrization
+from abtem.potentials.parametrizations.kirkland import KirklandParametrization
 from abtem.potentials.temperature import AbstractFrozenPhonons, FrozenPhonons
 from abtem.structures.slicing import _validate_slice_thickness, SliceIndexedAtoms, SlicedAtoms, unpack_item
 from abtem.structures.structures import is_cell_orthogonal, orthogonalize_cell
+from abtem.potentials.parametrizations import LobatoParametrization
+
 
 if TYPE_CHECKING:
     import Waves
@@ -301,7 +305,7 @@ class Potential(AbstractPotentialFromAtoms):
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
                  slice_thickness: Union[float, np.ndarray] = .5,
-                 parametrization: str = 'lobato',
+                 parametrization: str = 'kirkland',
                  projection: str = 'infinite',
                  chunks: Union[int, str] = 'auto',
                  precalculate: bool = False,
@@ -314,9 +318,18 @@ class Potential(AbstractPotentialFromAtoms):
         self._cutoff_tolerance = cutoff_tolerance
         self._parametrization = parametrization
 
-        parametrizations = ('kirkland', 'lobato', 'ewald')
-        if parametrization not in parametrizations:
-            raise RuntimeError('Parametrization must be "{}" or "{}"'.format(*parametrizations))
+        if isinstance(parametrization, str):
+            if parametrization == 'lobato':
+                parametrization = LobatoParametrization()
+            elif parametrization == 'kirkland':
+                parametrization = KirklandParametrization()
+            else:
+                raise RuntimeError
+
+        self._parametrization = parametrization
+
+        #if parametrization not in parametrizations:
+        #    raise RuntimeError('Parametrization must be "{}" or "{}"'.format(*parametrizations))
 
         if projection not in ('finite', 'infinite'):
             raise RuntimeError('Projection must be "finite" or "infinite"')
@@ -345,7 +358,7 @@ class Potential(AbstractPotentialFromAtoms):
         self.grid.events.observe(clear_data, ('sampling', 'gpts', 'extent'))
 
     @property
-    def parametrization(self) -> str:
+    def parametrization(self) -> Parametrization:
         """The potential parametrization."""
         return self._parametrization
 
@@ -388,7 +401,11 @@ class Potential(AbstractPotentialFromAtoms):
         if self._scattering_factors is None:
             scattering_factors = {}
             for number in np.unique(self.atoms.numbers):
-                f = calculate_scattering_factor(self.gpts, self.sampling, number, xp_to_str(xp))
+                f = calculate_scattering_factor(self.gpts,
+                                                self.sampling,
+                                                number,
+                                                parametrization=self.parametrization,
+                                                xp=xp)
                 scattering_factors[number] = f
 
             self._scattering_factors = scattering_factors

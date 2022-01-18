@@ -1,6 +1,6 @@
 from ase.data import chemical_symbols
 
-from abtem.ionization.electron_configurations import electron_configurations
+from abtem.core.electron_configurations import electron_configurations
 
 azimuthal_number = {'s': 0, 'p': 1, 'd': 2, 'f': 3, 'g': 4, 'h': 5, 'i': 6}
 azimuthal_letter = {value: key for key, value in azimuthal_number.items()}

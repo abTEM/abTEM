@@ -676,7 +676,6 @@ class Probe(WavesLikeMixin):
         self.accelerator.check_is_defined()
 
         validated_positions = self._validate_positions(positions, lazy=lazy, chunks=chunks)
-        print(validated_positions)
         xp = get_array_module(self._device)
 
         def calculate_probes(positions, xp):

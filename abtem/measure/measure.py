@@ -134,7 +134,6 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
         for (key, value), (other_key, other_value) in zip(self._copy_as_dict(copy_array=False).items(),
                                                           other._copy_as_dict(copy_array=False).items()):
             if np.any(value != other_value):
-                print(value, other_value)
                 return False
 
         if not np.allclose(self.array, other.array):
@@ -559,7 +558,6 @@ class LineProfiles(AbstractMeasurement):
         array = np.pad(self.array, ((5,) * 2,), mode=padding)
         pad = 5 / self.array.shape[-1]
         # points = self._linescan.get_positions(lazy=False)
-        # print(array)
 
         points = np.linspace(-pad, 1 + pad, len(array), endpoint=endpoint)
 

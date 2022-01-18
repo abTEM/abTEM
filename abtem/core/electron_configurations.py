@@ -118,3 +118,30 @@ electron_configurations = {
     "Ts": "1s2 2s2 2p6 3s2 3p6 3d10 4s2 4p6 4d10 5s2 5p6 4f14 5d10 6s2 6p6 5f14 6d10 7s2 7p5",
     "Og": "1s2 2s2 2p6 3s2 3p6 3d10 4s2 4p6 4d10 5s2 5p6 4f14 5d10 6s2 6p6 5f14 6d10 7s2 7p6"
 }
+
+azimuthal_number = {'s': 0, 'p': 1, 'd': 2, 'f': 3, 'g': 4, 'h': 5, 'i': 6}
+azimuthal_letter = {value: key for key, value in azimuthal_number.items()}
+
+
+def config_str_to_config_tuples(config_str):
+    config_tuples = []
+    for subshell_string in config_str.split(' '):
+        config_tuples.append((int(subshell_string[0]), azimuthal_number[subshell_string[1]], int(subshell_string[2])))
+    return config_tuples
+
+
+def config_tuples_to_config_str(config_tuples):
+    config_str = []
+    for n, ell, occ in config_tuples:
+        config_str.append(str(n) + azimuthal_letter[ell] + str(occ))
+    return ' '.join(config_str)
+
+
+def remove_electron_from_config_str(config_str, n, ell):
+    config_tuples = []
+    for shell in config_str_to_config_tuples(config_str):
+        if shell[:2] == (n, ell):
+            config_tuples.append(shell[:2] + (shell[2] - 1,))
+        else:
+            config_tuples.append(shell)
+    return config_tuples_to_config_str(config_tuples)
