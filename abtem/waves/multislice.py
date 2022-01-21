@@ -100,7 +100,7 @@ def multislice(waves: 'Waves',
                antialias_aperture: AntialiasAperture = None,
                start: int = 0,
                stop: int = None,
-               transpose: bool = False):
+               conjugate: bool = False):
 
     if stop is None:
         stop = len(potential)
@@ -127,13 +127,18 @@ def multislice(waves: 'Waves',
             transmission_functions = potential_slices
 
         for transmission_function in transmission_functions:
-            if start > stop:
-                propagator.thickness = transmission_function.slice_thickness[0]
-                waves = propagator.propagate(waves)
-                waves = transmission_function.transmit(waves)
+            if conjugate:
+
+                propagator.thickness = -transmission_function.slice_thickness[0]
             else:
                 propagator.thickness = transmission_function.slice_thickness[0]
-                waves = transmission_function.transmit(waves)
+
+            if start > stop:
+                waves = propagator.propagate(waves)
+                waves = transmission_function.transmit(waves, conjugate=conjugate)
+            else:
+                #propagator.thickness = transmission_function.slice_thickness[0]
+                waves = transmission_function.transmit(waves, conjugate=conjugate)
                 waves = propagator.propagate(waves)
 
     return waves

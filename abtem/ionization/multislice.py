@@ -133,7 +133,8 @@ def linear_scaling_transition_multislice(S1: 'SMatrix', S2: 'SMatrix', scan, tra
         # S2_multislice = S2.build(start=len(potential), stop=i, lazy=False)
 
         if reverse_multislice:
-            S2_multislice = S2_multislice.multislice(potential, chunks=chunks, start=max(i - 1, 0), stop=i)
+            S2_multislice = S2_multislice.multislice(potential, chunks=chunks, start=max(i - 1, 0), stop=i,
+                                                     conjugate=True)
         else:
             S2_multislice = S2.build(lazy=False, start=len(potential), stop=i, normalization='planewaves')
 

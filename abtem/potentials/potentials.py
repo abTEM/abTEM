@@ -709,11 +709,17 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
             raise RuntimeError()
         return self
 
-    def transmit(self, waves: 'Waves') -> 'Waves':
+    def transmit(self, waves: 'Waves', conjugate=False) -> 'Waves':
         # if hasattr(waves, 'array'):
         self.accelerator.check_match(waves)
         self.grid.check_match(waves)
-        waves._array *= self.array[0]
+
+        xp = get_array_module(self.array[0])
+
+        if conjugate:
+            waves._array *= xp.conjugate(self.array[0])
+        else:
+            waves._array *= self.array[0]
         # else:
         #    waves *= self.array
 

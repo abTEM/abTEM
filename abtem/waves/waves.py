@@ -318,7 +318,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
                    potential: AbstractPotential,
                    start: int = 0,
                    stop: int = None,
-                   transpose: bool = False,
+                   conjugate: bool = False,
                    in_place: bool = False) -> 'Waves':
         """
         Propagate and transmit wave function through the provided potential.
@@ -352,7 +352,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
                                      potential=potential_configuration,
                                      start=start,
                                      stop=stop,
-                                     transpose=transpose,
+                                     conjugate=conjugate,
                                      meta=xp.array((), dtype=xp.complex64))
 
             exit_waves.append(waves)
