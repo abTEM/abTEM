@@ -80,7 +80,7 @@ def transition_potential_multislice(waves,
                 else:
                     measurement = detector.detect(scattered_waves).sum(0)
 
-                measurements[j].add(measurement)
+                measurements[j].add(measurement, in_place=True)
 
         propagator.thickness = transmission_function_slice.thickness
         waves = transmission_function_slice.transmit(waves)
@@ -118,7 +118,7 @@ def linear_scaling_transition_multislice(S1: 'SMatrix', S2: 'SMatrix', scan, tra
     else:
         S2_multislice = S2
 
-    images = xp.zeros(len(positions), dtype=np.float32)
+    images = np.zeros(len(positions), dtype=np.float32)
     for i in tqdm(range(len(potential))):
 
         # if stream:
@@ -171,9 +171,9 @@ def linear_scaling_transition_multislice(S1: 'SMatrix', S2: 'SMatrix', scan, tra
             SHn0 = xp.swapaxes(SHn0[0], 0, 1)
 
             if mask is not None:
-                images[mask] += (xp.abs(xp.dot(SHn0, cropped_coefficients.T[None])) ** 2).sum((0, 1, 2))
+                images[mask] += (xp.abs(xp.dot(SHn0, cropped_coefficients.T[None])) ** 2).sum((0, 1, 2)).get()
             else:
-                images += (xp.abs(xp.dot(SHn0, cropped_coefficients.T[None])) ** 2).sum((0, 1, 2))
+                images += (xp.abs(xp.dot(SHn0, cropped_coefficients.T[None])) ** 2).sum((0, 1, 2)).get()
 
     images *= np.prod(S1.interpolation).astype(np.float32) ** 2
 

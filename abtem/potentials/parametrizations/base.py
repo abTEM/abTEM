@@ -18,3 +18,5 @@ class Parametrization(metaclass=ABCMeta):
     @abstractmethod
     def projected_scattering_factor(self, k, symbol, charge=None):
         pass
+
+

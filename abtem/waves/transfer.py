@@ -67,7 +67,7 @@ class CTF(HasAcceleratorMixin):
 
     def __init__(self,
                  semiangle_cutoff: float = np.inf,
-                 rolloff: float = 2,
+                 rolloff: float = 0.,
                  focal_spread: float = 0.,
                  angular_spread: float = 0.,
                  gaussian_spread: float = 0.,

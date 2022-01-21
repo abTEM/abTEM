@@ -153,15 +153,39 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
             if np.any(value != other_value):
                 raise RuntimeError(f'{key}, {other_key} {value} {other_value}')
 
-    def add(self, other) -> 'T':
-        self.check_is_compatible(other)
-        self.array[:] += other.array
-        return self
+    def __sub__(self, other):
+        return self.subtract(other)
 
-    def subtract(self, other) -> 'T':
+    def __isub__(self, other):
+        return self.add(other, in_place=True)
+
+    def __add__(self, other):
+        return self.add(other)
+
+    def __iadd__(self, other):
+        return self.add(other, in_place=True)
+
+    def add(self, other, in_place: bool = False) -> 'T':
         self.check_is_compatible(other)
-        self.array[:] -= other.array
-        return self
+
+        if in_place:
+            self.array[:] += other.array
+            return self
+
+        d = self._copy_as_dict(copy_array=False)
+        d['array'] = self.array + other.array
+        return self.__class__(**d)
+
+    def subtract(self, other, in_place: bool = False) -> 'T':
+        self.check_is_compatible(other)
+
+        if in_place:
+            self.array[:] -= other.array
+            return self
+
+        d = self._copy_as_dict(copy_array=False)
+        d['array'] = self.array - other.array
+        return self.__class__(**d)
 
     def mean(self, axes, **kwargs):
         return self._reduction(np.mean, axes=axes, **kwargs)

@@ -11,6 +11,8 @@ from ase import units
 import numpy as np
 
 from abtem.potentials.utils import validate_symbol
+from abtem.potentials.utils import kappa, eps0
+from scipy.interpolate import interp1d
 
 try:
     from gpaw import GPAW
@@ -41,23 +43,31 @@ class GPAWPotential(ChargeDensityPotential):
 class GPAWParametrization:
 
     def __init__(self):
-        pass
+        self._potential_functions = {}
 
-    def _calculate(self, symbol, charge):
-        qn = config_str_to_config_tuples(electron_configurations[self.symbol])[-1][:2]
+    def _calculate(self, symbol, charge=0.):
+        if symbol in self._potential_functions.keys():
+            return self._potential_functions[(symbol, charge)]
+
+        qn = config_str_to_config_tuples(electron_configurations[symbol])[-1][:2]
 
         with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-            ae = AllElectronAtom(self._symbol, spinpol=True)
-            if self.charge:
-                ae.add(2, 1, 1.7)
+            ae = AllElectronAtom(symbol, spinpol=True, xc='PBE')
+            if charge:
+                ae.add(*qn, -charge)
+    #    ae.add(*qn, charge)
+
             ae.run()
 
-        vr_e = interp1d(ae.rgd.r_g * units.Bohr, -ae.rgd.poisson(ae.n_sg.sum(0)),
-                        fill_value='extrapolate', bounds_error=False)
+        radial_coord = ae.rgd.r_g * units.Bohr
+        electron_potential = -ae.rgd.poisson(ae.n_sg.sum(0))
 
-        vr = lambda r: atomic_numbers[self.symbol] / r / (4 * np.pi * eps0) + vr_e(r) / r * units.Hartree * units.Bohr
+        vr_e = interp1d(radial_coord, electron_potential, fill_value='extrapolate', bounds_error=False)
+        vr = lambda r: atomic_numbers[symbol] / r / (4 * np.pi * eps0) + vr_e(r) / r * units.Hartree * units.Bohr
 
-        self._potential
+        self._potential_functions[(symbol, charge)] = vr
+        return self._potential_functions[(symbol, charge)]
 
-    def potential(self, charge=None):
-        pass
+    def potential(self, r, symbol, charge=0.):
+        potential = self._calculate(symbol, charge)
+        return potential(r)

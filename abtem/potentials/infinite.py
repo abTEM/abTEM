@@ -1,4 +1,4 @@
-from typing import Tuple, Sequence
+from typing import Tuple
 
 import numpy as np
 from ase.data import chemical_symbols
@@ -6,7 +6,6 @@ from ase.data import chemical_symbols
 from abtem.core.backend import get_array_module
 from abtem.core.fft import fft2, ifft2, fft2_convolve
 from abtem.core.grid import spatial_frequencies, polar_spatial_frequencies
-from abtem.potentials.parametrizations import names as parametrization_names
 from abtem.potentials.parametrizations.base import Parametrization
 
 
@@ -23,8 +22,8 @@ def calculate_scattering_factor(gpts: Tuple[int, int],
                                 xp: str = 'numpy',
                                 ) -> np.ndarray:
     xp = get_array_module(xp)
-    #parametrization = parametrization_names[parametrization]
-    #parameters = parametrization.load_parameters()
+    # parametrization = parametrization_names[parametrization]
+    # parameters = parametrization.load_parameters()
 
     k, _ = polar_spatial_frequencies(gpts, sampling, xp=xp)
     scattering_factors = xp.zeros(gpts, dtype=np.float32)

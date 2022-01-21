@@ -19,12 +19,10 @@ from abtem.measure.measure import Images
 from abtem.potentials.atom import AtomicPotential
 from abtem.potentials.infinite import calculate_scattering_factor, infinite_potential_projections
 from abtem.potentials.parametrizations.base import Parametrization
-from abtem.potentials.parametrizations.kirkland import KirklandParametrization
+from abtem.potentials.parametrizations import KirklandParametrization, LobatoParametrization
 from abtem.potentials.temperature import AbstractFrozenPhonons, FrozenPhonons
 from abtem.structures.slicing import _validate_slice_thickness, SliceIndexedAtoms, SlicedAtoms, unpack_item
 from abtem.structures.structures import is_cell_orthogonal, orthogonalize_cell
-from abtem.potentials.parametrizations import LobatoParametrization
-
 
 if TYPE_CHECKING:
     import Waves
@@ -328,7 +326,7 @@ class Potential(AbstractPotentialFromAtoms):
 
         self._parametrization = parametrization
 
-        #if parametrization not in parametrizations:
+        # if parametrization not in parametrizations:
         #    raise RuntimeError('Parametrization must be "{}" or "{}"'.format(*parametrizations))
 
         if projection not in ('finite', 'infinite'):

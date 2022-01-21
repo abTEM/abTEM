@@ -2,7 +2,6 @@ from typing import Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
-from ase.data import chemical_symbols
 from numba import jit
 from scipy.integrate import quad
 from scipy.interpolate import interp1d
@@ -10,7 +9,6 @@ from scipy.optimize import brentq
 
 from abtem.core.backend import cp, get_array_module
 from abtem.core.grid import disc_meshgrid
-from abtem.potentials.parametrizations import names as parametrization_names
 
 if cp is not None:
     from abtem.core.cuda import interpolate_radial_functions as interpolate_radial_functions_cuda

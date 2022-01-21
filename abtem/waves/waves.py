@@ -588,7 +588,7 @@ class Probe(WavesLikeMixin):
                  energy: float = None,
                  ctf: CTF = None,
                  tilt: Tuple[float, float] = None,
-                 normalize: bool = False,
+                 normalize: bool = True,
                  device: str = None,
                  **kwargs):
 
