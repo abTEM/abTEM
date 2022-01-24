@@ -248,8 +248,6 @@ class AbstractPotentialFromAtoms(AbstractPotential):
         else:
             array = np.concatenate(array)
 
-        print(array.shape, self.slice_thickness)
-
         return PotentialArray(array, self.slice_thickness, extent=self.extent)
 
 
@@ -427,7 +425,6 @@ class Potential(AbstractPotentialFromAtoms):
         else:
             array = infinite_potential_projections(atoms, shape, self.sampling, scattering_factors)
 
-        # array = xp.zeros(shape, dtype=xp.float32)
         potential = PotentialArray(array, slice_thickness=self.slice_thickness[first_slice:last_slice],
                                    extent=self.extent)
         return potential
@@ -445,18 +442,22 @@ class Potential(AbstractPotentialFromAtoms):
         array = xp.zeros((last_slice - first_slice,) + self.gpts, dtype=np.float32)
 
         cutoffs = {Z: atomic_potential.cutoff for Z, atomic_potential in self._atomic_potentials.items()}
-        sliced_atoms = SlicedAtoms(self.atoms, self._slice_thickness, plane=self._plane, box=self._box,
+        sliced_atoms = SlicedAtoms(self.atoms,
+                                   self._slice_thickness,
+                                   plane=self._plane,
+                                   box=self._box,
                                    padding=cutoffs)
-        print(cutoffs)
-        print(sliced_atoms.atoms)
 
         for i, slice_idx in enumerate(range(first_slice, last_slice)):
             for Z, atomic_potential in self._atomic_potentials.items():
                 atoms = sliced_atoms.get_atoms_in_slices(slice_idx, atomic_number=Z)
+
                 a = sliced_atoms.slice_limits[slice_idx][0] - atoms.positions[:, 2]
                 b = sliced_atoms.slice_limits[slice_idx][1] - atoms.positions[:, 2]
+
                 atomic_potential.project_on_grid(array[i], sampling, atoms.positions, a, b)
 
+        array -= array.min()
         return PotentialArray(array, slice_thickness=self.slice_thickness[first_slice:last_slice], extent=self.extent)
 
     def get_chunk(self, first_slice: int, last_slice: int) -> 'PotentialArray':

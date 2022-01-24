@@ -26,10 +26,10 @@ def calculate_scattering_factor(gpts: Tuple[int, int],
     # parameters = parametrization.load_parameters()
 
     k, _ = polar_spatial_frequencies(gpts, sampling, xp=xp)
-    scattering_factors = xp.zeros(gpts, dtype=np.float32)
+    #scattering_factors = xp.zeros(gpts, dtype=np.float32)
 
     # for i, number in enumerate(atomic_numbers):
-    f = parametrization.projected_scattering_factor(k, chemical_symbols[number])
+    f = parametrization.projected_scattering_factor(chemical_symbols[number])(k)
 
     # scattering_factors[i] = f
 

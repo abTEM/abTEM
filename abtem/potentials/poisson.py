@@ -192,7 +192,8 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
 
         #potential = ewald_potential.build()
         potential = ewald_potential.get_chunk(first_slice, last_slice)
-        potential._array = potential._array #+ chunk #np.concatenate(array)
+        potential._array = potential._array + chunk #np.concatenate(array)
+        potential._array -= potential._array.min()
         return potential
 
     def _get_chunk_fft(self, first_slice, last_slice):

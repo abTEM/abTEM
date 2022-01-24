@@ -59,25 +59,17 @@ class AtomicPotential:
                  charge: float = 0.,
                  core_size: float = .01,
                  cutoff_tolerance: float = 1e-3,
-                 num_integration_limits: int = 10):
+                 num_integration_limits: int = 40):
 
-        if isinstance(symbol, int):
+        if isinstance(symbol, (int, np.int32, np.int64)):
             symbol = chemical_symbols[symbol]
 
         self._symbol = symbol
-        #parametrization = parametrization_names[parametrization]
 
         if isinstance(parametrization, str):
             parametrization = parametrizations[parametrization]()
 
-        #elif not isinstance(parametrization, Parametrization):
-        #    raise RuntimeError()
-
-
-
         self._potential = parametrization.potential(symbol)
-        #self._parameters = parametrization.load_parameters()[symbol]
-        #self._potential = parametrization.potential
 
         self._cutoff_tolerance = cutoff_tolerance
         self._core_size = core_size
@@ -161,22 +153,6 @@ class AtomicPotential:
         disk_indices = xp.asarray(disc_meshgrid(int(np.ceil(self.cutoff / np.min(sampling)))))
         radial_potential = xp.asarray(self.project(a, b))
 
-        print(radial_potential.shape, a.shape)
-
-        import matplotlib.pyplot as plt
-        #for p in radial_potential:
-        plt.plot(radial_potential.T)
-        plt.show()
-
-        #print(a,b)
-        #sss
-
-
-        #plt.plot()
-
-        #print(a,b)
-
-        #sss
         positions = xp.asarray(positions)
         radial_potential_derivative = xp.zeros_like(radial_potential)
         radial_potential_derivative[:, :-1] = xp.diff(radial_potential, axis=1) / xp.diff(self.radial_gpts)[None]
