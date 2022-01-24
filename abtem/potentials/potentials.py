@@ -18,7 +18,7 @@ from abtem.core.utils import generate_chunks
 from abtem.measure.measure import Images
 from abtem.potentials.atom import AtomicPotential
 from abtem.potentials.infinite import calculate_scattering_factor, infinite_potential_projections
-from abtem.potentials.parametrizations.base import Parametrization
+from abtem.potentials.parametrizations import Parametrization
 from abtem.potentials.parametrizations import KirklandParametrization, LobatoParametrization
 from abtem.potentials.temperature import AbstractFrozenPhonons, FrozenPhonons
 from abtem.structures.slicing import _validate_slice_thickness, SliceIndexedAtoms, SlicedAtoms, unpack_item

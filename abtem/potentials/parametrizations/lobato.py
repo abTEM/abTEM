@@ -1,33 +1,7 @@
-import json
-import os
-
 import numpy as np
 from ase import units
 from numba import jit
 from scipy.special import kn
-from abtem.potentials.utils import kappa
-from abtem.potentials.parametrizations.base import Parametrization
-
-
-def load_parameters(scale_parameters=True):
-    """Function to load the default Lobato parameters (doi:10.1107/S205327331401643X)."""
-
-    with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data/lobato.json'), 'r') as f:
-        parameters = json.load(f)
-
-    for key, value in parameters.items():
-        value = np.array(value)
-
-        if scale_parameters:
-            a = np.array(value)[0]
-            b = np.array(value)[1]
-            a = np.pi ** 2 * a / b ** (3 / 2.)
-            b = 2 * np.pi / np.sqrt(b)
-            value = np.vstack((a, b))
-
-        parameters[key] = value
-
-    return parameters
 
 
 @jit(nopython=True, nogil=True)
@@ -59,14 +33,13 @@ def potential_derivative(r, p):
     return dvdr
 
 
-# @jit(nopython=True, nogil=True)
+@jit(nopython=True, nogil=True)
 def charge(r, p):
     n = (2 * np.pi ** 4 * units.Bohr * p[0, 0] / p[1, 0] ** (5 / 2) * np.exp(-2 * np.pi * r / np.sqrt(p[1, 0])) +
          2 * np.pi ** 4 * units.Bohr * p[0, 1] / p[1, 1] ** (5 / 2) * np.exp(-2 * np.pi * r / np.sqrt(p[1, 1])) +
          2 * np.pi ** 4 * units.Bohr * p[0, 2] / p[1, 2] ** (5 / 2) * np.exp(-2 * np.pi * r / np.sqrt(p[1, 2])) +
          2 * np.pi ** 4 * units.Bohr * p[0, 3] / p[1, 3] ** (5 / 2) * np.exp(-2 * np.pi * r / np.sqrt(p[1, 3])) +
-         2 * np.pi ** 4 * units.Bohr * p[0, 4] / p[1, 4] ** (5 / 2) * np.exp(-2 * np.pi * r / np.sqrt(p[1, 4]))
-         )
+         2 * np.pi ** 4 * units.Bohr * p[0, 4] / p[1, 4] ** (5 / 2) * np.exp(-2 * np.pi * r / np.sqrt(p[1, 4])))
     return n
 
 

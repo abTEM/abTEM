@@ -6,7 +6,7 @@ from ase.data import chemical_symbols
 from abtem.core.backend import get_array_module
 from abtem.core.fft import fft2, ifft2, fft2_convolve
 from abtem.core.grid import spatial_frequencies, polar_spatial_frequencies
-from abtem.potentials.parametrizations.base import Parametrization
+from abtem.potentials.parametrizations import Parametrization
 
 
 def _sinc(gpts: Tuple[int, int], sampling: Tuple[float, float], xp):

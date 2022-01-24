@@ -109,3 +109,4 @@ def test_sampling_change(grid_data, new_sampling):
         assert np.allclose(grid.sampling, adjusted_sampling)
 
     _test_grid_consistent(grid.extent, grid.gpts, grid.sampling)
+x

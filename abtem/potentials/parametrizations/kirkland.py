@@ -1,37 +1,6 @@
-import json
-import os
-
 import numpy as np
 from numba import jit
 from scipy.special import kn
-
-from abtem.potentials.parametrizations.base import Parametrization
-from abtem.potentials.utils import kappa
-
-
-def load_parameters(scale_parameters=True):
-    """Function to load the Kirkland parameters (doi:10.1007/978-1-4419-6533-2)."""
-    with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data/kirkland.json'), 'r') as f:
-        parameters = json.load(f)
-
-    for key, value in parameters.items():
-        value = np.array(value)
-
-        if scale_parameters:
-            a = value[0]
-            b = value[1]
-            c = value[2]
-            d = value[3]
-
-            a = np.pi * a
-            b = 2. * np.pi * np.sqrt(b)
-            c = np.pi ** (3. / 2.) * c / d ** (3. / 2.)
-            d = np.pi ** 2 / d
-            value = np.vstack((a, b, c, d))
-
-        parameters[key] = value
-
-    return parameters
 
 
 @jit(nopython=True, nogil=True)

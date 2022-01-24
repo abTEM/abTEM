@@ -53,6 +53,7 @@ class AtomicPotential:
 
     def __init__(self,
                  symbol: Union[int, str],
+                 charge: float = 0.,
                  parametrization: str = 'lobato',
                  core_size: float = .01,
                  cutoff_tolerance: float = 1e-3,

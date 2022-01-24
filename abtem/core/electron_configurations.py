@@ -1,3 +1,5 @@
+import numpy as np
+
 electron_configurations = {
     "H": "1s1",
     "He": "1s2",
@@ -145,3 +147,9 @@ def remove_electron_from_config_str(config_str, n, ell):
         else:
             config_tuples.append(shell)
     return config_tuples_to_config_str(config_tuples)
+
+
+def aufbau(n_max=7):
+    shells = np.array([(n + l, n, l) for n in range(1, n_max) for l in range(n)])
+    shells = shells[np.lexsort((shells[:, 1], shells[:, 0]))][:, 1:]
+    return [tuple(shell) for shell in shells]
