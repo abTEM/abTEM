@@ -2,6 +2,7 @@ from typing import Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
+from ase.data import chemical_symbols
 from numba import jit
 from scipy.integrate import quad
 from scipy.interpolate import interp1d
@@ -9,6 +10,7 @@ from scipy.optimize import brentq
 
 from abtem.core.backend import cp, get_array_module
 from abtem.core.grid import disc_meshgrid
+from abtem.potentials.parametrizations import parametrizations, Parametrization
 
 if cp is not None:
     from abtem.core.cuda import interpolate_radial_functions as interpolate_radial_functions_cuda
@@ -53,17 +55,29 @@ class AtomicPotential:
 
     def __init__(self,
                  symbol: Union[int, str],
-                 charge: float = 0.,
                  parametrization: str = 'lobato',
+                 charge: float = 0.,
                  core_size: float = .01,
                  cutoff_tolerance: float = 1e-3,
                  num_integration_limits: int = 10):
 
-        self._symbol = symbol
-        parametrization = parametrization_names[parametrization]
+        if isinstance(symbol, int):
+            symbol = chemical_symbols[symbol]
 
-        self._parameters = parametrization.load_parameters()[symbol]
-        self._potential = parametrization.potential
+        self._symbol = symbol
+        #parametrization = parametrization_names[parametrization]
+
+        if isinstance(parametrization, str):
+            parametrization = parametrizations[parametrization]()
+
+        #elif not isinstance(parametrization, Parametrization):
+        #    raise RuntimeError()
+
+
+
+        self._potential = parametrization.potential(symbol)
+        #self._parameters = parametrization.load_parameters()[symbol]
+        #self._potential = parametrization.potential
 
         self._cutoff_tolerance = cutoff_tolerance
         self._core_size = core_size
@@ -71,9 +85,9 @@ class AtomicPotential:
         self._cutoff = None
         self._num_integration_limits = num_integration_limits
 
-    @property
-    def parameters(self) -> np.ndarray:
-        return self._parameters
+    #@property
+    #def parameters(self) -> np.ndarray:
+    #    return self._parameters
 
     @property
     def cutoff_tolerance(self) -> float:
@@ -96,7 +110,7 @@ class AtomicPotential:
         return self._cutoff
 
     def evaluate(self, r) -> np.ndarray:
-        return self._potential(r, self._parameters)
+        return self._potential(r)
 
     def build_integral_table(self, taper: float = .85) -> Tuple[np.ndarray, np.ndarray]:
         limits = np.linspace(-self.cutoff, 0, self._num_integration_limits // 2)
@@ -147,6 +161,22 @@ class AtomicPotential:
         disk_indices = xp.asarray(disc_meshgrid(int(np.ceil(self.cutoff / np.min(sampling)))))
         radial_potential = xp.asarray(self.project(a, b))
 
+        print(radial_potential.shape, a.shape)
+
+        import matplotlib.pyplot as plt
+        #for p in radial_potential:
+        plt.plot(radial_potential.T)
+        plt.show()
+
+        #print(a,b)
+        #sss
+
+
+        #plt.plot()
+
+        #print(a,b)
+
+        #sss
         positions = xp.asarray(positions)
         radial_potential_derivative = xp.zeros_like(radial_potential)
         radial_potential_derivative[:, :-1] = xp.diff(radial_potential, axis=1) / xp.diff(self.radial_gpts)[None]

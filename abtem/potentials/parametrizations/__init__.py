@@ -1,11 +1,20 @@
 from abc import ABCMeta, abstractmethod
 
+from ase.data import chemical_symbols
+
 from abtem.potentials.parametrizations import lobato, kirkland, ewald, peng
 import numpy as np
 
 import os, json
+from ase import units
+from ase.data import chemical_symbols
 
-from abtem.potentials.utils import kappa
+# Vacuum permitivity in ASE units
+eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
+
+
+#from abtem.potentials.utils import kappa
+kappa = 4 * np.pi * eps0 / (2 * np.pi * units.Bohr * units._e * units.C)
 
 
 class Parametrization(metaclass=ABCMeta):
@@ -119,6 +128,10 @@ class KirklandParametrization(Parametrization):
         if charge > 0.:
             raise RuntimeError('charge not implemented for parametrization "kirkland"')
 
+        if isinstance(symbol, int):
+            symbol = chemical_symbols[symbol]
+
+
         try:
             func = self._functions[name]
             parameters = self._parameters[name][symbol]
@@ -157,6 +170,9 @@ class LobatoParametrization(Parametrization):
                            }
 
     def get_function(self, name, symbol, charge=0.):
+        if isinstance(symbol, (int, np.int32, np.int64)):
+            symbol = chemical_symbols[symbol]
+
         if charge > 0.:
             raise RuntimeError('charge not implemented for parametrization "lobato"')
 
@@ -167,6 +183,28 @@ class LobatoParametrization(Parametrization):
         except KeyError:
             raise RuntimeError(f'parametrized function "{name}" does not exist for element {symbol}')
 
+
+class EwaldParametrization(Parametrization):
+
+    def __init__(self):
+        self._functions = {'potential': ewald.potential}
+        self._parameters = {'potential': {chemical_symbols[i]: i for i in range(1, 100)}}
+
+    def get_function(self, name, symbol, charge=0.):
+        if charge > 0.:
+            raise RuntimeError('charge not implemented for parametrization "ewald"')
+
+        try:
+            func = self._functions[name]
+            parameters = self._parameters[name][symbol]
+            return lambda r: func(r, parameters)
+        except KeyError:
+            raise RuntimeError(f'parametrized function "{name}" does not exist for element {symbol}')
+
+
+parametrizations = {'ewald': EwaldParametrization,
+                    'lobato': LobatoParametrization,
+                    'kirkland': KirklandParametrization}
 # class PengParametrization(DataParametrization):
 #
 #     def __init__(self):

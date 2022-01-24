@@ -18,7 +18,7 @@ from abtem.core.utils import generate_chunks
 from abtem.measure.measure import Images
 from abtem.potentials.atom import AtomicPotential
 from abtem.potentials.infinite import calculate_scattering_factor, infinite_potential_projections
-from abtem.potentials.parametrizations import Parametrization
+from abtem.potentials.parametrizations import parametrizations, Parametrization
 from abtem.potentials.parametrizations import KirklandParametrization, LobatoParametrization
 from abtem.potentials.temperature import AbstractFrozenPhonons, FrozenPhonons
 from abtem.structures.slicing import _validate_slice_thickness, SliceIndexedAtoms, SlicedAtoms, unpack_item
@@ -248,6 +248,8 @@ class AbstractPotentialFromAtoms(AbstractPotential):
         else:
             array = np.concatenate(array)
 
+        print(array.shape, self.slice_thickness)
+
         return PotentialArray(array, self.slice_thickness, extent=self.extent)
 
 
@@ -317,12 +319,10 @@ class Potential(AbstractPotentialFromAtoms):
         self._parametrization = parametrization
 
         if isinstance(parametrization, str):
-            if parametrization == 'lobato':
-                parametrization = LobatoParametrization()
-            elif parametrization == 'kirkland':
-                parametrization = KirklandParametrization()
-            else:
-                raise RuntimeError
+            try:
+                parametrization = parametrizations[parametrization]()
+            except KeyError:
+                raise RuntimeError()
 
         self._parametrization = parametrization
 
@@ -373,8 +373,11 @@ class Potential(AbstractPotentialFromAtoms):
     def _calculate_atomic_potentials(self) -> Dict[int, AtomicPotential]:
         core_size = min(self.sampling)
         atomic_potentials = {}
+
         for Z in np.unique(self.atoms.numbers):
-            atomic_potentials[Z] = AtomicPotential(Z, self.parametrization, core_size,
+            atomic_potentials[Z] = AtomicPotential(symbol=Z,
+                                                   parametrization=self.parametrization,
+                                                   core_size=core_size,
                                                    cutoff_tolerance=self.cutoff_tolerance)
             atomic_potentials[Z].build_integral_table()
 
@@ -444,6 +447,8 @@ class Potential(AbstractPotentialFromAtoms):
         cutoffs = {Z: atomic_potential.cutoff for Z, atomic_potential in self._atomic_potentials.items()}
         sliced_atoms = SlicedAtoms(self.atoms, self._slice_thickness, plane=self._plane, box=self._box,
                                    padding=cutoffs)
+        print(cutoffs)
+        print(sliced_atoms.atoms)
 
         for i, slice_idx in enumerate(range(first_slice, last_slice)):
             for Z, atomic_potential in self._atomic_potentials.items():

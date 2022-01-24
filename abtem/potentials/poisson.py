@@ -167,31 +167,32 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
                                     box=self.box,
                                     origin=self.origin)
 
-        array = []
-        for first_slice, last_slice in generate_chunks(len(self), chunks=self._chunks):
-            # chunk = dask.delayed(interpolate_chunk)(first_slice,
-            #                                         last_slice,
-            #                                         self.slice_limits,
-            #                                         h,
-            #                                         self.gpts,
-            #                                         old_cell,
-            #                                         new_cell,
-            #                                         interpolator)
-            # array.append(da.from_delayed(chunk, shape=(last_slice - first_slice,) + self.gpts,
-            #                              meta=np.array((), dtype=np.float32)))
-            chunk = interpolate_chunk(first_slice,
-                                      last_slice,
-                                      self.slice_limits,
-                                      h,
-                                      self.gpts,
-                                      old_cell,
-                                      new_cell,
-                                      interpolator)
+        # array = []
+        # for first_slice, last_slice in generate_chunks(len(self), chunks=self._chunks):
+        #     # chunk = dask.delayed(interpolate_chunk)(first_slice,
+        #     #                                         last_slice,
+        #     #                                         self.slice_limits,
+        #     #                                         h,
+        #     #                                         self.gpts,
+        #     #                                         old_cell,
+        #     #                                         new_cell,
+        #     #                                         interpolator)
+        #     # array.append(da.from_delayed(chunk, shape=(last_slice - first_slice,) + self.gpts,
+        #     #                              meta=np.array((), dtype=np.float32)))
+        chunk = interpolate_chunk(first_slice,
+                                  last_slice,
+                                  self.slice_limits,
+                                  h,
+                                  self.gpts,
+                                  old_cell,
+                                  new_cell,
+                                  interpolator)
 
-            array.append(chunk)
+        #array.append(chunk)
 
-        potential = ewald_potential.build()
-        potential._array = potential._array + np.concatenate(array)
+        #potential = ewald_potential.build()
+        potential = ewald_potential.get_chunk(first_slice, last_slice)
+        potential._array = potential._array #+ chunk #np.concatenate(array)
         return potential
 
     def _get_chunk_fft(self, first_slice, last_slice):

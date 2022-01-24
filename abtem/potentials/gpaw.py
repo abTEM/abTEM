@@ -59,8 +59,6 @@ class GPAWParametrization:
         config = defaultdict(lambda: 0, {shell[:2]: shell[2] for shell in config})
         ionic_config = defaultdict(lambda: 0, {shell[:2]: shell[2] for shell in ionic_config})
 
-        print(config, ionic_config)
-
         electrons = []
         for key in set(config.keys()).union(set(ionic_config.keys())):
 
