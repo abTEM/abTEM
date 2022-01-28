@@ -1,6 +1,6 @@
 from abc import ABCMeta, abstractmethod
 
-from ase.data import chemical_symbols
+from ase.data import chemical_symbols, atomic_numbers
 
 from abtem.potentials.parametrizations import lobato, kirkland, ewald, peng
 import numpy as np
@@ -186,9 +186,9 @@ class LobatoParametrization(Parametrization):
 
 class EwaldParametrization(Parametrization):
 
-    def __init__(self):
+    def __init__(self, width=1.):
+        self._width = width
         self._functions = {'potential': ewald.potential}
-        self._parameters = {'potential': {chemical_symbols[i]: i for i in range(1, 100)}}
 
     def get_function(self, name, symbol, charge=0.):
         if charge > 0.:
@@ -196,8 +196,7 @@ class EwaldParametrization(Parametrization):
 
         try:
             func = self._functions[name]
-            parameters = self._parameters[name][symbol]
-            return lambda r: func(r, parameters)
+            return lambda r: func(r, atomic_numbers[symbol], self._width)
         except KeyError:
             raise RuntimeError(f'parametrized function "{name}" does not exist for element {symbol}')
 
@@ -205,6 +204,8 @@ class EwaldParametrization(Parametrization):
 parametrizations = {'ewald': EwaldParametrization,
                     'lobato': LobatoParametrization,
                     'kirkland': KirklandParametrization}
+
+
 # class PengParametrization(DataParametrization):
 #
 #     def __init__(self):

@@ -34,8 +34,11 @@ class GPAWPotential(ChargeDensityPotential):
                  origin: Tuple[float, float, float] = (0., 0., 0.),
                  chunks: int = 1,
                  fft_singularities: bool = False):
+
         charge_density = calc.get_all_electron_density(gridrefinement=4)
+
         atoms = calc.atoms
+
         super().__init__(charge_density=charge_density, atoms=atoms, gpts=gpts, sampling=sampling,
                          slice_thickness=slice_thickness, plane=plane, box=box, origin=origin, chunks=chunks,
                          fft_singularities=fft_singularities)
@@ -70,15 +73,16 @@ class GPAWParametrization:
 
     def _get_all_electron_atom(self, symbol, charge=0.):
 
-        #with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-        ae = AllElectronAtom(symbol, spinpol=True, xc='PBE')
+        with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
+            ae = AllElectronAtom(symbol, spinpol=True, xc='PBE')
 
-        added_electrons = self._get_added_electrons(symbol, charge)
-        for added_electron in added_electrons:
-            ae.add(*added_electron[:2], added_electron[-1])
-        # ae.run()
-        ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
-        ae.refine()
+            added_electrons = self._get_added_electrons(symbol, charge)
+        #     for added_electron in added_electrons:
+        #         ae.add(*added_electron[:2], added_electron[-1])
+        # # ae.run()
+            #ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
+            ae.run()
+            ae.refine()
 
         return ae
 

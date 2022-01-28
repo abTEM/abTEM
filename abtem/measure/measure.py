@@ -483,10 +483,13 @@ class Images(AbstractMeasurement):
     def diffractograms(self) -> 'DiffractionPatterns':
         array = fft2(self.array)
         array = np.fft.fftshift(np.abs(array), axes=(-2, -1))
-        wavelength = energy2wavelength(self.metadata['energy'])
-        angular_sampling = 1 / self.extent[0] * wavelength * 1e3, 1 / self.extent[1] * wavelength * 1e3
-        return DiffractionPatterns(array=array, angular_sampling=angular_sampling,
-                                   extra_axes_metadata=self.extra_axes_metadata, metadata=self.metadata)
+        #wavelength = energy2wavelength(self.metadata['energy'])
+        #angular_sampling = 1 / self.extent[0] * wavelength * 1e3, 1 / self.extent[1] * wavelength * 1e3
+        angular_sampling = 1 / self.extent[0], 1 / self.extent[1]
+        return DiffractionPatterns(array=array,
+                                   angular_sampling=angular_sampling,
+                                   extra_axes_metadata=self.extra_axes_metadata,
+                                   metadata=self.metadata)
 
     def show(self, ax=None, cbar: bool = False, power: float = 1., figsize: Tuple[int, int] = None, title: str = None,
              vmin=None, vmax=None, **kwargs):
@@ -965,7 +968,7 @@ class DiffractionPatterns(AbstractMeasurement):
         d['array'] = array
         return self.__class__(**d)
 
-    def show(self, ax=None, cbar=False, power=1., figsize=None, **kwargs):
+    def show(self, ax=None, cbar=False, power=1., figsize=None, max_angle=None, **kwargs):
         if ax is None:
             fig, ax = plt.subplots(figsize=figsize)
 
@@ -977,6 +980,10 @@ class DiffractionPatterns(AbstractMeasurement):
         im = ax.imshow(array, extent=extent, origin='lower', **kwargs)
         ax.set_xlabel('Scattering angle x [mrad]')
         ax.set_ylabel('Scattering angle y [mrad]')
+
+        if max_angle:
+            ax.set_xlim([-max_angle, max_angle])
+            ax.set_ylim([-max_angle, max_angle])
 
         if cbar:
             plt.colorbar(im, ax=ax)

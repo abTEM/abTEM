@@ -128,7 +128,6 @@ def multislice(waves: 'Waves',
 
         for transmission_function in transmission_functions:
             if conjugate:
-
                 propagator.thickness = -transmission_function.slice_thickness[0]
             else:
                 propagator.thickness = transmission_function.slice_thickness[0]

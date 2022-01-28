@@ -57,7 +57,7 @@ class AtomicPotential:
                  symbol: Union[int, str],
                  parametrization: str = 'lobato',
                  charge: float = 0.,
-                 core_size: float = .01,
+                 core_size: float = .001,
                  cutoff_tolerance: float = 1e-3,
                  num_integration_limits: int = 40):
 

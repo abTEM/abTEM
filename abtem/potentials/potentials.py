@@ -232,7 +232,11 @@ class AbstractPotentialFromAtoms(AbstractPotential):
             return potential.get_chunk(first_slice, last_slice).array
 
         array = []
-        for first_slice, last_slice in generate_chunks(len(self), chunks=self._chunks):
+
+        from tqdm.auto import tqdm
+
+        for first_slice, last_slice in tqdm(generate_chunks(len(self), chunks=self._chunks)):
+
             shape = (last_slice - first_slice,) + self.gpts
 
             if lazy:
