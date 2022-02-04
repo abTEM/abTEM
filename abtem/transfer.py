@@ -555,22 +555,24 @@ def polar2cartesian(polar):
     """
 
     polar = defaultdict(lambda: 0, polar)
-
+    
+    max_order = 5
     cartesian = dict()
-    cartesian['C10'] = polar['C10']
-    cartesian['C12a'] = - polar['C12'] * np.cos(2 * polar['phi12'])
-    cartesian['C12b'] = polar['C12'] * np.sin(2 * polar['phi12'])
-    cartesian['C21a'] = polar['C21'] * np.sin(polar['phi21'])
-    cartesian['C21b'] = polar['C21'] * np.cos(polar['phi21'])
-    cartesian['C23a'] = - polar['C23'] * np.sin(3 * polar['phi23'])
-    cartesian['C23b'] = polar['C23'] * np.cos(3 * polar['phi23'])
-    cartesian['C30'] = polar['C30']
-    cartesian['C32a'] = - polar['C32'] * np.cos(2 * polar['phi32'])
-    cartesian['C32b'] = polar['C32'] * np.cos(np.pi / 2 - 2 * polar['phi32'])
-    cartesian['C34a'] = polar['C34'] * np.cos(-4 * polar['phi34'])
-    K = np.sqrt(3 + np.sqrt(8.))
-    cartesian['C34b'] = 1 / 4. * (1 + K ** 2) ** 2 / (K ** 3 - K) * polar['C34'] * np.cos(
-        4 * np.arctan(1 / K) - 4 * polar['phi34'])
+    for n in range(1,max_order+1):
+        for s in range(0,n+2):
+            m = 2*s-n-1
+            if m < 0:
+                continue
+
+            modulus_name="C"+str(n)+str(m)
+            Ca_name = modulus_name + "a"
+            Cb_name = modulus_name + "b"
+            if m != 0:
+                argument_name="phi"+str(n)+str(m)
+                cartesian[Ca_name] = polar[modulus_name]*np.cos(polar[argument_name]*m)
+                cartesian[Cb_name] = polar[modulus_name]*np.sin(polar[argument_name]*m)
+            else:
+                cartesian[modulus_name] = polar[modulus_name]
 
     return cartesian
 
@@ -589,21 +591,23 @@ def cartesian2polar(cartesian):
     dict
         Mapping from polar aberration symbols to their corresponding values.
     """
-
+    
     cartesian = defaultdict(lambda: 0, cartesian)
-
+    max_order = 5
     polar = dict()
-    polar['C10'] = cartesian['C10']
-    polar['C12'] = - np.sqrt(cartesian['C12a'] ** 2 + cartesian['C12b'] ** 2)
-    polar['phi12'] = - np.arctan2(cartesian['C12b'], cartesian['C12a']) / 2.
-    polar['C21'] = np.sqrt(cartesian['C21a'] ** 2 + cartesian['C21b'] ** 2)
-    polar['phi21'] = np.arctan2(cartesian['C21a'], cartesian['C21b'])
-    polar['C23'] = np.sqrt(cartesian['C23a'] ** 2 + cartesian['C23b'] ** 2)
-    polar['phi23'] = -np.arctan2(cartesian['C23a'], cartesian['C23b']) / 3.
-    polar['C30'] = cartesian['C30']
-    polar['C32'] = -np.sqrt(cartesian['C32a'] ** 2 + cartesian['C32b'] ** 2)
-    polar['phi32'] = -np.arctan2(cartesian['C32b'], cartesian['C32a']) / 2.
-    polar['C34'] = np.sqrt(cartesian['C34a'] ** 2 + cartesian['C34b'] ** 2)
-    polar['phi34'] = np.arctan2(cartesian['C34b'], cartesian['C34a']) / 4
+    for n in range(1,max_order+1):
+        for s in range(0,n+2):
+            m = 2*s-n-1
+            if m < 0:
+                continue
 
+            modulus_name="C"+str(n)+str(m)
+            Ca_name = modulus_name + "a"
+            Cb_name = modulus_name + "b"
+            if m != 0:
+                argument_name="phi"+str(n)+str(m)
+                polar[modulus_name] = np.sqrt(cartesian[Ca_name]**2 + cartesian[Cb_name]**2)
+                polar[argument_name] = np.arctan2(cartesian[Cb_name],cartesian[Ca_name])/m
+            else:
+                polar[modulus_name] = cartesian[modulus_name]
     return polar
