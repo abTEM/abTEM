@@ -1,13 +1,13 @@
 """Module to describe the effect of temperature on the atomic positions."""
 from abc import abstractmethod, ABCMeta
-from collections.abc import Iterable
-from copy import copy
-from numbers import Number
 from typing import Mapping, Union, Sequence
+from numbers import Number
+from collections.abc import Iterable
 
 import numpy as np
 from ase import Atoms
 from ase.data import atomic_numbers
+from copy import copy
 
 
 class AbstractFrozenPhonons(metaclass=ABCMeta):
