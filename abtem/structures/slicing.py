@@ -148,7 +148,13 @@ class SliceIndexedAtoms(AbstractSlicedAtoms):
 
 class SlicedAtoms:
 
-    def __init__(self, atoms, slice_thickness, plane='xy', box=None, origin=(0., 0., 0.), padding=0.):
+    def __init__(self,
+                 atoms: Atoms,
+                 slice_thickness: Union[float, Sequence[float]],
+                 plane: Tuple[float, float, float] = 'xy',
+                 box: Tuple[float, float, float] = None,
+                 origin: Tuple[float, float, float] = (0., 0., 0.),
+                 padding: Union[float, dict] = 0.):
 
         if box is None:
             box = np.diag(atoms.cell)
@@ -160,7 +166,10 @@ class SlicedAtoms:
                     key = atomic_numbers[key]
                 new_padding[key] = value
             padding = new_padding
-            max_padding = max(padding.values())
+            if padding:
+                max_padding = max(padding.values())
+            else:
+                max_padding = 0.
         elif isinstance(padding, Number):
             max_padding = padding
         else:

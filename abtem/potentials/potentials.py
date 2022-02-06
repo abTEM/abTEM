@@ -9,7 +9,7 @@ import numpy as np
 import zarr
 from ase import Atoms
 
-from abtem.core.backend import get_array_module, xp_to_str, _validate_device
+from abtem.core.backend import get_array_module, _validate_device, copy_to_device
 from abtem.core.complex import complex_exponential
 from abtem.core.dask import HasDaskArray
 from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
@@ -19,7 +19,6 @@ from abtem.measure.measure import Images
 from abtem.potentials.atom import AtomicPotential
 from abtem.potentials.infinite import calculate_scattering_factor, infinite_potential_projections
 from abtem.potentials.parametrizations import parametrizations, Parametrization
-from abtem.potentials.parametrizations import KirklandParametrization, LobatoParametrization
 from abtem.potentials.temperature import AbstractFrozenPhonons, FrozenPhonons
 from abtem.structures.slicing import _validate_slice_thickness, SliceIndexedAtoms, SlicedAtoms, unpack_item
 from abtem.structures.structures import is_cell_orthogonal, orthogonalize_cell
@@ -100,7 +99,7 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def get_potential_configurations(self, lazy: bool = False):
+    def get_potential_distribution(self, lazy: bool = False):
         pass
 
     def show(self, **kwargs):
@@ -233,9 +232,7 @@ class AbstractPotentialFromAtoms(AbstractPotential):
 
         array = []
 
-        from tqdm.auto import tqdm
-
-        for first_slice, last_slice in tqdm(generate_chunks(len(self), chunks=self._chunks)):
+        for first_slice, last_slice in generate_chunks(len(self), chunks=self._chunks):
 
             shape = (last_slice - first_slice,) + self.gpts
 
@@ -256,7 +253,7 @@ class AbstractPotentialFromAtoms(AbstractPotential):
 
 
 def validate_potential(potential: Union[Atoms, AbstractPotential], waves=None) -> AbstractPotential:
-    if isinstance(potential, Atoms):
+    if isinstance(potential, (Atoms, AbstractFrozenPhonons)):
         device = None
         if waves is not None:
             device = waves._device
@@ -307,7 +304,7 @@ class Potential(AbstractPotentialFromAtoms):
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
                  slice_thickness: Union[float, np.ndarray] = .5,
-                 parametrization: str = 'kirkland',
+                 parametrization: Union[str, Parametrization] = 'lobato',
                  projection: str = 'infinite',
                  chunks: Union[int, str] = 'auto',
                  precalculate: bool = False,
@@ -470,7 +467,7 @@ class Potential(AbstractPotentialFromAtoms):
         else:
             return self._get_chunk_finite(first_slice, last_slice)
 
-    def get_potential_configurations(self, lazy: bool = True):
+    def get_potential_distribution(self, lazy: bool = True):
         """
         Function to generate scattering potentials for a set of frozen phonon configurations.
 
@@ -557,7 +554,9 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
         return self
 
     def get_chunk(self, first_slice, last_slice):
+
         array = self.array[first_slice:last_slice]
+
         if len(array.shape) == 2:
             array = array[None]
 
@@ -595,7 +594,7 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
     def num_configurations(self) -> int:
         return 1
 
-    def get_potential_configurations(self, *args, **kwargs):
+    def get_potential_distribution(self, *args, **kwargs):
         return [self]
 
     def tile(self, multiples: Union[Tuple[int, int], Tuple[int, int, int]]):
@@ -688,8 +687,13 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
         """
         return Images(array=self._array.sum(0), sampling=self.sampling)
 
-    def __copy__(self):
-        return self.__class__(array=self.array.copy(),
+    def __copy__(self, device: str = None):
+        if device is not None:
+            array = copy_to_device(self.array, device)
+        else:
+            array = self.array.copy()
+
+        return self.__class__(array=array,
                               slice_thickness=self.slice_thickness.copy(),
                               extent=self.extent)
 
@@ -735,8 +739,13 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
 
         return waves
 
-    def __copy__(self):
-        return self.__class__(array=self.array.copy(),
+    def __copy__(self, device: str = None):
+        if device is not None:
+            array = copy_to_device(self.array, device)
+        else:
+            array = self.array.copy()
+
+        return self.__class__(array=array,
                               slice_thickness=self.slice_thickness.copy(),
                               extent=self.extent,
                               energy=self.energy)

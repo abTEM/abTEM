@@ -1,6 +1,12 @@
 import numpy as np
 
 
+class Distribution:
+
+    def __init__(self, ensemble_mean: bool = True):
+        self._ensemble_mean = ensemble_mean
+
+
 class GaussianDistribution:
 
     def __init__(self, center, sigma, num_samples, sampling_limit=4):

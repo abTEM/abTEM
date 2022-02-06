@@ -137,8 +137,10 @@ class HasDaskArray:
         def wrapped_func(array, cls=None, cls_kwargs=None, **kwargs):
             has_dask_array = cls(array=array, **cls_kwargs)
             outputs = func(has_dask_array, **kwargs)
+
             if len(outputs) == 1:
                 return outputs[0].array
+
             return [output.array for output in outputs]
 
         cls_kwargs = self._copy_as_dict(copy_array=False)

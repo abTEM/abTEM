@@ -25,7 +25,7 @@ def batch_crop_2d(array, corners, new_shape):
     return result
 
 
-@cuda.jit
+@cuda.jit()
 def _sum_run_length_encoded(array, result, separators):
     x = cuda.grid(1)
     if x < result.shape[1]:
@@ -86,8 +86,6 @@ def interpolate_radial_functions(array,
     blockspergrid_x = int(math.ceil(positions.shape[0] / threadsperblock[0]))
     blockspergrid_y = int(math.ceil(disk_indices.shape[0] / threadsperblock[1]))
     blockspergrid = (blockspergrid_x, blockspergrid_y)
-
-    print(blockspergrid)
 
     dt = (cp.log(radial_gpts[-1] / radial_gpts[0]) / (radial_gpts.shape[0] - 1)).item()
 

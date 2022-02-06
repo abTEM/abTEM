@@ -16,8 +16,6 @@ try:
 except ModuleNotFoundError:
     mkl_fft = None
 
-
-
 try:
     import cupy as cp
 except ModuleNotFoundError:
@@ -25,7 +23,6 @@ except ModuleNotFoundError:
 
 
 def build_fftw_obj(x, allow_new_plan=False, overwrite_x=True, backward=False):
-
     # if backward:
     #     obj = pyfftw.builders.ifft2(x,
     #                                  overwrite_input=overwrite_x,
@@ -189,6 +186,11 @@ def fft_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
     return array
 
 
+def fft_shift(array, positions):
+    xp = get_array_module(array)
+    return xp.fft.ifft2(xp.fft.fft2(array) * fft_shift_kernel(positions, array.shape[-2:]))
+
+
 def _fft_interpolation_masks_1d(n1, n2):
     mask1 = np.zeros(n1, dtype=bool)
     mask2 = np.zeros(n2, dtype=bool)
@@ -278,12 +280,12 @@ def fft2_interpolate(array, new_shape, normalization='values', overwrite_x=False
         array = array.real
 
     if normalization == 'values':
-        #array *= old_size / np.prod(array.shape[-2:])
-        #array *= array.shape[-1] * array.shape[-2] / old_size
+        # array *= old_size / np.prod(array.shape[-2:])
+        # array *= array.shape[-1] * array.shape[-2] / old_size
         array *= np.prod(array.shape[-2:]) / old_size
 
     elif normalization == 'intensity':
-        #array *= np.sqrt(np.prod(array.shape[-2:]) / old_size)
+        # array *= np.sqrt(np.prod(array.shape[-2:]) / old_size)
         array *= np.sqrt(old_size / np.prod(array.shape[-2:]))
     elif normalization != 'amplitude':
         raise RuntimeError()

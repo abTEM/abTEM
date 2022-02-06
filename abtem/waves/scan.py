@@ -90,13 +90,12 @@ class CustomScan(AbstractScan):
         return [self._positions]
 
     def generate_positions(self, chunks):
-        #if isinstance(chunks, Number):
+        # if isinstance(chunks, Number):
         #    chunks = (int(np.floor(np.sqrt(chunks))),) * 2
 
-        #positions = self.get_positions(lazy=False)
+        # positions = self.get_positions(lazy=False)
 
-        yield (slice(0,1),), self._positions
-
+        yield (slice(0, 1),), self._positions
 
     @property
     def axes_metadata(self):
@@ -342,8 +341,8 @@ class GridScan(HasGridMixin, AbstractScan):
         return [self.start, self.end]
 
     @property
-    def endpoint(self) -> Tuple[int, int]:
-        return self.grid.endpoint
+    def endpoint(self) -> Tuple[bool, bool]:
+        return self.grid.endpoint[0], self.grid.endpoint[1]
 
     @property
     def shape(self) -> Tuple[int, int]:
@@ -388,8 +387,9 @@ class GridScan(HasGridMixin, AbstractScan):
 
     @property
     def axes_metadata(self):
-        return [ScanAxis(label='x', sampling=self.sampling[0], offset=self.start[0], units='Å'),
-                ScanAxis(label='y', sampling=self.sampling[0], offset=self.start[0], units='Å')]
+        return [
+            ScanAxis(label='x', sampling=self.sampling[0], offset=self.start[0], units='Å', endpoint=self.endpoint[0]),
+            ScanAxis(label='y', sampling=self.sampling[1], offset=self.start[1], units='Å', endpoint=self.endpoint[1])]
 
     def generate_positions(self, chunks):
         if isinstance(chunks, Number):

@@ -66,7 +66,7 @@ class CTF(HasAcceleratorMixin):
     """
 
     def __init__(self,
-                 semiangle_cutoff: float = np.inf,
+                 semiangle_cutoff: float = 30.,
                  rolloff: float = 0.,
                  focal_spread: float = 0.,
                  angular_spread: float = 0.,
@@ -207,12 +207,13 @@ class CTF(HasAcceleratorMixin):
             return xp.ones_like(alpha)
 
         if self.rolloff > 0.:
-            rolloff = self.rolloff / 1000.  # * semiangle_cutoff
+            rolloff = self.rolloff / 1000.
             array = .5 * (1 + xp.cos(np.pi * (alpha - semiangle_cutoff + rolloff) / rolloff))
             array[alpha > semiangle_cutoff] = 0.
             array = xp.where(alpha > semiangle_cutoff - rolloff, array, xp.ones_like(alpha, dtype=xp.float32))
         else:
-            array = xp.array(alpha < semiangle_cutoff).astype(xp.float32)
+            array = xp.array(alpha <= semiangle_cutoff).astype(xp.float32)
+
         return array
 
     def evaluate_temporal_envelope(self, alpha: Union[float, np.ndarray]) -> Union[float, np.ndarray]:

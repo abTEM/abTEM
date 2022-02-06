@@ -6,6 +6,7 @@ from ase import units
 from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import map_coordinates
 
+from abtem.core.backend import copy_to_device
 from abtem.core.fft import fft_crop
 from abtem.potentials.parametrizations import EwaldParametrization
 from abtem.potentials.potentials import AbstractPotentialFromAtoms, Potential
@@ -248,6 +249,8 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
         #                           new_cell,
         #                           interpolator)
 
+
+
         array = self._get_compensated_potential()
 
         chunk = np.zeros((last_slice - first_slice,) + self.gpts, dtype=np.float32)
@@ -266,9 +269,11 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
                                                  offset
                                                  ).sum(-1) * dz
 
+
         potential = self._ewald_potential.get_chunk(first_slice, last_slice)
-        potential._array = potential._array + chunk
+        potential._array = potential._array + copy_to_device(chunk, potential._array)
         potential._array -= potential._array.min()
+
         return potential
 
     def _get_chunk_fft(self, first_slice, last_slice):
@@ -286,7 +291,7 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
         else:
             return self._get_chunk_real_space(first_slice, last_slice)
 
-    def get_potential_configurations(self, lazy: bool = False):
+    def get_potential_distribution(self, lazy: bool = False):
         pass
 
     def __copy__(self):

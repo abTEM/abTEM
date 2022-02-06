@@ -5,6 +5,7 @@ import numpy as np
 from ase import Atoms
 
 from abtem.core.antialias import HasAntialiasApertureMixin
+from abtem.core.axes import HasAxes
 from abtem.core.axes import RealSpaceAxis, FourierSpaceAxis, AxisMetadata
 from abtem.core.energy import HasAcceleratorMixin
 from abtem.core.grid import HasGridMixin
@@ -12,7 +13,7 @@ from abtem.potentials.potentials import Potential, AbstractPotential
 from abtem.waves.tilt import HasBeamTiltMixin
 
 
-class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAntialiasApertureMixin):
+class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAntialiasApertureMixin, HasAxes):
 
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
@@ -25,7 +26,7 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAnt
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
         return [FourierSpaceAxis(label='scattering angle x', sampling=self.angular_sampling[0], units='mrad'),
-                FourierSpaceAxis(label='scattering angle y', sampling=self.angular_sampling[0], units='mrad')]
+                FourierSpaceAxis(label='scattering angle y', sampling=self.angular_sampling[1], units='mrad')]
 
     @property
     def antialias_valid_gpts(self) -> Tuple[int, int]:
@@ -65,10 +66,20 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAnt
                 self.antialias_valid_gpts[1] // 2 * self.angular_sampling[1])
 
     @property
-    def angular_sampling(self) -> Tuple[float, float]:
+    def full_cutoff_angles(self) -> Tuple[float, float]:
+        return (self.gpts[0] // 2 * self.angular_sampling[0],
+                self.gpts[1] // 2 * self.angular_sampling[1])
+
+    @property
+    def fourier_space_sampling(self) -> Tuple[float, float]:
         self.grid.check_is_defined()
+        return 1 / self.extent[0], 1 / self.extent[1]
+
+    @property
+    def angular_sampling(self) -> Tuple[float, float]:
         self.accelerator.check_is_defined()
-        return 1 / self.extent[0] * self.wavelength * 1e3, 1 / self.extent[1] * self.wavelength * 1e3
+        fourier_space_sampling = self.fourier_space_sampling
+        return fourier_space_sampling[0] * self.wavelength * 1e3, fourier_space_sampling[1] * self.wavelength * 1e3
 
     def _validate_potential(self, potential: Union[Atoms, AbstractPotential]) -> AbstractPotential:
         if isinstance(potential, Atoms):

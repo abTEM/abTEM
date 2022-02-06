@@ -1,8 +1,7 @@
 """Module to describe electron waves and their propagation."""
-import dataclasses
-from collections import Iterable
+
 from copy import copy, deepcopy
-from typing import Union, Sequence, Tuple, List, Dict
+from typing import Union, Sequence, Tuple, List, Dict, Iterable
 
 import dask
 import dask.array as da
@@ -20,24 +19,16 @@ from abtem.core.fft import fft2, ifft2, fft2_convolve, fft_crop, fft2_interpolat
 from abtem.core.grid import Grid
 from abtem.ionization.multislice import transition_potential_multislice
 from abtem.ionization.transitions import AbstractTransitionCollection, AbstractTransitionPotential
-from abtem.measure.detect import AbstractDetector, validate_detectors, PixelatedDetector
+from abtem.measure.detect import AbstractDetector, validate_detectors, PixelatedDetector, WavesDetector, \
+    FlexibleAnnularDetector, stack_measurement_ensembles, allocate_measurements
 from abtem.measure.measure import DiffractionPatterns, Images, AbstractMeasurement, stack_measurements
 from abtem.potentials.potentials import Potential, AbstractPotential, validate_potential
 from abtem.waves.base import WavesLikeMixin
 from abtem.waves.multislice import multislice
-from abtem.waves.scan import AbstractScan
+from abtem.waves.scan import AbstractScan, GridScan
 from abtem.waves.tilt import BeamTilt
 from abtem.waves.transfer import CTF
-
-
-def stack_waves(waves, axes_metadata):
-    if len(waves) == 0:
-        return waves[0]
-    array = np.stack([waves.array for waves in waves], axis=0)
-    d = waves[0]._copy_as_dict(copy_array=False)
-    d['array'] = array
-    d['extra_axes_metadata'] = [axes_metadata] + waves[0].extra_axes_metadata
-    return Waves(**d)
+from numbers import Number
 
 
 class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
@@ -237,7 +228,8 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
             pattern = _diffraction_pattern(self.array, new_gpts=new_gpts, fftshift=fftshift)
 
         diffraction_patterns = DiffractionPatterns(pattern,
-                                                   angular_sampling=self.angular_sampling,
+                                                   sampling=self.fourier_space_sampling,
+                                                   energy=self.energy,
                                                    fftshift=fftshift,
                                                    extra_axes_metadata=self.extra_axes_metadata,
                                                    metadata=self.metadata)
@@ -296,7 +288,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
                 transitions = transitions.get_transition_potentials()
 
         measurements = []
-        for potential_config in potential.get_potential_configurations(lazy=self.is_lazy):
+        for potential_config in potential.get_potential_distribution(lazy=self.is_lazy):
             config_measurements = self.copy().apply_detector_func(transition_potential_multislice,
                                                                   potential=potential_config,
                                                                   detectors=detectors,
@@ -314,8 +306,33 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
 
         return measurements[0] if len(measurements) == 1 else measurements
 
+    def _multislice(self,
+                    potential,
+                    start: int = 0,
+                    stop: int = None,
+                    conjugate: bool = False,
+                    in_place: bool = False):
+
+        xp = get_array_module(self.array)
+
+        if not in_place:
+            waves = self.copy()
+        else:
+            waves = self
+
+        waves = waves.map_blocks(multislice,
+                                 potential=potential,
+                                 start=start,
+                                 stop=stop,
+                                 conjugate=conjugate,
+                                 meta=xp.array((), dtype=xp.complex64))
+
+        waves.antialias_aperture = 2. / 3.
+        return waves
+
     def multislice(self,
                    potential: AbstractPotential,
+                   detectors=None,
                    start: int = 0,
                    stop: int = None,
                    conjugate: bool = False,
@@ -333,35 +350,62 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
         Waves object
             Wave function at the exit plane of the potential.
         """
-
         self.grid.match(potential)
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
-        xp = get_array_module(self.array)
-
         potential = self._validate_potential(potential)
-        potential_configurations = potential.get_potential_configurations(lazy=self.is_lazy)
 
-        exit_waves = []
-        for potential_configuration in potential_configurations:
-            waves = self
-            if not in_place and (len(potential_configurations) == 1):
-                waves = waves.copy()
+        if detectors is None:
+            detectors = [WavesDetector()]
 
-            waves = waves.map_blocks(multislice,
-                                     potential=potential_configuration,
+        potentials = potential.get_potential_distribution(lazy=self.is_lazy)
+
+        # if detectors is None:
+        #     waves = []
+        #     for potential in potentials:
+        #         waves.append(self._multislice(potential, start=start, stop=stop, conjugate=conjugate))
+
+        return multislice_and_detect(self._multislice,
+                                     potentials,
+                                     detectors,
                                      start=start,
                                      stop=stop,
                                      conjugate=conjugate,
-                                     meta=xp.array((), dtype=xp.complex64))
+                                     in_place=in_place)
 
-            exit_waves.append(waves)
+        # distribution = potential.get_potential_distribution(lazy=self.is_lazy)
+        #
+        # results = distribution.apply_distribution(self._multislice,
+        #                                           detectors=detectors,
+        #                                           start=start,
+        #                                           stop=stop,
+        #                                           conjugate=conjugate,
+        #                                           in_place=in_place)
+        #
+        # return results
 
-        exit_waves = stack_waves(exit_waves, FrozenPhononsAxis()) if len(exit_waves) > 1 else exit_waves[0]
-
-        exit_waves.antialias_aperture = 2 / 3.
-
-        return exit_waves
+        # potential_configurations = potential.get_potential_distribution(lazy=self.is_lazy)
+        #
+        # exit_waves = []
+        # for potential_configuration in potential_configurations:
+        #     waves = self
+        #     if not in_place and (len(potential_configurations) == 1):
+        #         waves = waves.copy()
+        #
+        #     waves = waves.map_blocks(multislice,
+        #                              potential=potential_configuration,
+        #                              start=start,
+        #                              stop=stop,
+        #                              conjugate=conjugate,
+        #                              meta=xp.array((), dtype=xp.complex64))
+        #
+        #     exit_waves.append(waves)
+        #
+        #
+        #
+        #
+        #
+        # return exit_waves
 
     def to_zarr(self, url: str, overwrite: bool = False):
         """
@@ -408,10 +452,28 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
         return cls(array=array, energy=energy, extent=extent, tilt=tilt, antialias_aperture=antialias_aperture,
                    extra_axes_metadata=extra_axes_metadata, metadata=metadata)
 
-    def __getitem__(self, item) -> 'Waves':
+    def __getitem__(self, items) -> 'Waves':
+        if isinstance(items, (Number, slice)):
+            items = (items,)
+
         if len(self.array.shape) <= self.grid.dimensions:
             raise RuntimeError()
-        return self.__class__(array=self._array[item], extent=self.extent, energy=self.energy)
+
+        removed_axes = []
+        for i, item in enumerate(items):
+            if isinstance(item, Number):
+                removed_axes.append(i)
+
+        # if self._check_is_base_axes(removed_axes):
+        #    raise RuntimeError('base axes cannot be indexed')
+
+        axes = [element for i, element in enumerate(self.extra_axes_metadata) if not i in removed_axes]
+
+        d = self._copy_as_dict(copy_array=False)
+        d['array'] = self._array[items]
+        d['extra_axes_metadata'] = axes
+
+        return self.__class__(**d)
 
     def show(self, ax=None, **kwargs):
         """
@@ -484,6 +546,14 @@ class PlaneWave(WavesLikeMixin):
         self._device = _validate_device(device)
         self._normalize = normalize
 
+    @property
+    def base_axes(self):
+        return 0, 1
+
+    @property
+    def shape(self):
+        return self.gpts
+
     def transition_multislice(self,
                               potential: Union[Atoms, AbstractPotential],
                               transitions: Union[AbstractTransitionCollection, AbstractTransitionPotential],
@@ -521,7 +591,7 @@ class PlaneWave(WavesLikeMixin):
         potential = validate_potential(potential, self)
 
         exit_waves = []
-        for potential_config in potential.get_potential_configurations(lazy=lazy):
+        for potential_config in potential.get_potential_distribution(lazy=lazy):
             waves = self.build(lazy=lazy)
             waves = waves.map_blocks(multislice, potential=potential_config, dtype=np.complex64)
             exit_waves.append(waves)
@@ -611,6 +681,16 @@ class Probe(WavesLikeMixin):
         self._device = _validate_device(device)
         self._normalize = normalize
 
+        self._extra_axes_metadata = []
+
+    @property
+    def metadata(self):
+        return {'energy': self.energy}
+
+    @property
+    def shape(self):
+        return self.gpts
+
     @property
     def ctf(self) -> CTF:
         """Probe contrast transfer function."""
@@ -653,6 +733,17 @@ class Probe(WavesLikeMixin):
 
         return positions
 
+    def _calculate_array(self, positions):
+        xp = get_array_module(self._device)
+        positions = xp.asarray(positions)
+        xp = get_array_module(positions)
+        positions = positions / xp.array(self.sampling).astype(np.float32)
+        array = fft_shift_kernel(positions, shape=self.gpts)
+        array *= self.ctf.evaluate_on_grid(gpts=self.gpts, sampling=self.sampling, xp=xp)
+        if self._normalize:
+            array /= xp.sqrt(abs2(array).sum((-2, -1), keepdims=True))
+        return ifft2(array)
+
     def build(self,
               positions: Union[AbstractScan, Sequence] = None,
               chunks: int = None,
@@ -678,40 +769,45 @@ class Probe(WavesLikeMixin):
         validated_positions = self._validate_positions(positions, lazy=lazy, chunks=chunks)
         xp = get_array_module(self._device)
 
-        def calculate_probes(positions, xp):
-            positions = xp.asarray(positions)
-            xp = get_array_module(positions)
-            positions = positions / xp.array(self.sampling).astype(np.float32)
-            array = fft_shift_kernel(positions, shape=self.gpts)
-            array *= self.ctf.evaluate_on_grid(gpts=self.gpts, sampling=self.sampling, xp=xp)
-            if self._normalize:
-                array /= xp.sqrt(abs2(array).sum((-2, -1), keepdims=True))
-            return ifft2(array)
-
         if isinstance(validated_positions, da.core.Array):
             drop_axis = len(validated_positions.shape) - 1
             new_axis = (len(validated_positions.shape) - 1, len(validated_positions.shape))
-            array = validated_positions.map_blocks(calculate_probes,
-                                                   xp=xp,
+            array = validated_positions.map_blocks(self._calculate_array,
                                                    meta=xp.array((), dtype=np.complex64),
                                                    drop_axis=drop_axis, new_axis=new_axis,
                                                    chunks=validated_positions.chunks[:-1] + (
                                                        (self.gpts[0],), (self.gpts[1],)))
 
         else:
-            array = calculate_probes(validated_positions, xp)
+            array = self._calculate_array(validated_positions)
 
         if hasattr(positions, 'axes_metadata'):
             extra_axes_metadata = positions.axes_metadata
         else:
             extra_axes_metadata = [PositionsAxis()] * (len(array.shape) - 2)
 
+        metadata = {'semiangle_cutoff': self.ctf.semiangle_cutoff}
+
         return Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt,
-                     extra_axes_metadata=extra_axes_metadata)
+                     extra_axes_metadata=extra_axes_metadata, metadata=metadata)
+
+    def _generate_waves(self, scan, potential, chunks):
+        extra_axes_metadata = scan.axes_metadata
+        for indices, positions in scan.generate_positions(chunks=chunks):
+            array = self._calculate_array(positions)
+            waves = Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt,
+                          extra_axes_metadata=extra_axes_metadata, metadata=self.metadata)
+            yield indices, multislice(waves, potential=potential)
+
+    def _multislice(self, potential, positions, chunks, lazy):
+        waves = self.build(positions, chunks=chunks, lazy=lazy)
+        waves = waves.map_blocks(multislice, potential=potential, dtype=np.complex64)
+        return waves
 
     def multislice(self,
                    potential: Union[AbstractPotential, Atoms],
-                   positions: Union[AbstractScan, Sequence] = None,
+                   detectors: AbstractDetector = None,
+                   scan: AbstractScan = None,
                    chunks: int = None,
                    lazy: bool = None):
         """
@@ -729,41 +825,60 @@ class Probe(WavesLikeMixin):
         Waves object
             Probe exit wave functions as a Waves object.
         """
-
-        potential = validate_potential(potential, self)
         lazy = validate_lazy(lazy)
+        potential = validate_potential(potential, self)
 
-        exit_waves = []
-        for potential_configuration in potential.get_potential_configurations(lazy=lazy):
-            waves = self.build(positions, chunks=chunks, lazy=lazy)
-            waves = waves.map_blocks(multislice, potential=potential_configuration, dtype=np.complex64)
-            exit_waves.append(waves)
+        # scan = self._validate_positions(scan, lazy=lazy, chunks=chunks)
 
-        if len(exit_waves) > 1:
-            return stack_waves(exit_waves, FrozenPhononsAxis())
+        if detectors is None:
+            detectors = [WavesDetector()]
+
+        if hasattr(scan, 'match_probe'):
+            scan.match_probe(self)
+
+        detectors = validate_detectors(detectors)
+
+        if lazy:
+            measurements = []
+            for potential in potential.get_potential_distribution(lazy=lazy):
+                waves = self._multislice(potential, scan, chunks, lazy)
+                measurements.append([detector.detect(waves) for detector in detectors])
+
+            measurements = list(map(list, zip(*measurements)))
+            return stack_measurement_ensembles(detectors, measurements)
+
+        measurements = allocate_measurements(self, scan, detectors, potential)
+        for i, potential in enumerate(potential.get_potential_distribution(lazy=lazy)):
+
+            for indices, waves in self._generate_waves(scan, potential, chunks):
+
+                for detector, measurement in zip(detectors, measurements):
+                    new_measurements = detector.detect(waves)
+
+                    if measurement.frozen_phonon_axes:
+                        indices = (i,) + indices
+
+                    measurement.array[indices] += new_measurements.array
+
+        if len(measurements) == 1:
+            return measurements[0]
         else:
-            return exit_waves[0]
+            return measurements
 
     def scan(self,
-             scan: Union[AbstractScan, np.ndarray, Sequence],
-             detectors: Union[AbstractDetector, Sequence[AbstractDetector]],
-             potential: Union[AbstractPotential],
+             potential: Union[Atoms, AbstractPotential],
+             detectors: Union[AbstractDetector, Sequence[AbstractDetector]] = None,
+             scan: Union[AbstractScan, np.ndarray, Sequence] = None,
              chunks: int = None,
              lazy: bool = None) -> Union[List, AbstractMeasurement]:
 
-        waves = self.multislice(potential, scan, chunks=chunks, lazy=lazy)
-        detectors = validate_detectors(detectors)
+        if scan is None:
+            scan = GridScan()
 
-        def detect(waves, detectors):
-            return [detector.detect(waves) for detector in detectors]
+        if detectors is None:
+            detectors = FlexibleAnnularDetector()
 
-        measurements = list(waves.apply_detector_func(detect, detectors))
-
-        for i, (detector, measurement) in enumerate(zip(detectors, measurements)):
-            if detector.ensemble_mean:
-                measurements[i] = measurement.mean(0)
-
-        return measurements[0] if len(measurements) == 1 else ComputableList(measurements)
+        return self.multislice(potential, detectors, scan, chunks=chunks, lazy=lazy)
 
     def profile(self, angle: float = 0.):
         self.grid.check_is_defined()
@@ -800,13 +915,16 @@ class Probe(WavesLikeMixin):
         point1, point2 = _line_intersect_rectangle(point1, point2, (0., 0.), self.extent)
         return measurement.interpolate_line(point1, point2)
 
-    def __copy__(self) -> 'Probe':
-        return self.__class__(gpts=self.gpts,
-                              extent=self.extent,
-                              sampling=self.sampling,
-                              energy=self.energy,
-                              tilt=self.tilt,
-                              ctf=self.ctf.copy())
+    def copy(self):
+        return deepcopy(self)
+
+    # def __copy__(self) -> 'Probe':
+    #     return self.__class__(gpts=self.gpts,
+    #                           extent=self.extent,
+    #                           sampling=self.sampling,
+    #                           energy=self.energy,
+    #                           tilt=self.tilt,
+    #                           ctf=self.ctf.copy())
 
     def show(self, **kwargs):
         """

@@ -71,13 +71,13 @@ def axis_from_dict(d):
 
 
 class HasAxes:
-    array: np.ndarray
+    shape: Tuple[int, ...]
     _extra_axes_metadata: List[AxisMetadata]
     base_axes_metadata: List[AxisMetadata]
 
     @property
     def num_axes(self):
-        return len(self.array.shape)
+        return len(self.shape)
 
     @property
     def num_base_axes(self):
@@ -123,7 +123,7 @@ class HasAxes:
         # extra_axes_metadata = [{'type': 'unknown'} for _ in range(missing_extra_axes_metadata)] + extra_axes_metadata
 
         if len(self.axes_metadata) != self.num_axes:
-            raise RuntimeError()
+            raise RuntimeError(f'{len(self.axes_metadata)} != {self.num_axes}')
 
     @property
     def scan_axes(self):
@@ -139,7 +139,7 @@ class HasAxes:
 
     @property
     def scan_shape(self):
-        return tuple(self.array.shape[i] for i in self.scan_axes)
+        return tuple(self.shape[i] for i in self.scan_axes)
 
     @property
     def scan_sampling(self):
@@ -147,16 +147,16 @@ class HasAxes:
 
     @property
     def base_axes_shape(self):
-        return tuple(self.array.shape[i] for i in self.base_axes)
+        return tuple(self.shape[i] for i in self.base_axes)
 
     @property
     def extra_axes_shape(self):
-        return tuple(self.array.shape[i] for i in self.extra_axes)
+        return tuple(self.shape[i] for i in self.extra_axes)
 
     @property
-    def ensemble_axes(self):
-        return self._type_indices(('ensemble',))
+    def frozen_phonon_axes(self):
+        return self.find_axes(FrozenPhononsAxis)
 
     @property
-    def num_ensemble_axes(self):
-        return len(self.ensemble_axes)
+    def num_frozen_phonon_axes(self):
+        return len(self.frozen_phonon_axes)

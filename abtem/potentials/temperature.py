@@ -1,9 +1,8 @@
 """Module to describe the effect of temperature on the atomic positions."""
 from abc import abstractmethod, ABCMeta
-from collections import Iterable
 from copy import copy
 from numbers import Number
-from typing import Mapping, Union, Sequence, List
+from typing import Mapping, Union, Sequence, List, Iterable
 
 import dask
 import numpy as np
@@ -13,6 +12,9 @@ from ase.data import chemical_symbols
 
 class AbstractFrozenPhonons(metaclass=ABCMeta):
     """Abstract base class for frozen phonons objects."""
+
+    def __init__(self, ensemble_mean: bool = True):
+        self._ensemble_mean = ensemble_mean
 
     @abstractmethod
     def __len__(self):

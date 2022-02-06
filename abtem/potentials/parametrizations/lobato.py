@@ -49,6 +49,16 @@ def projected_potential(r, p):
 
 
 def projected_scattering_factor(k, p):
-    f = 8 * np.pi * (p[0][:, None] / p[1][:, None] * 1 / (4 * np.pi ** 2 * k[None] ** 2 + p[1][:, None] ** 2) +
-                     p[0][:, None] * p[1][:, None] / (4 * np.pi ** 2 * k[None] ** 2 + p[1][:, None] ** 2) ** 2).sum(0)
+    four_pi2_k2 = 4 * np.pi ** 2 * k ** 2
+    f = 8 * np.pi * ((p[0, 0] / p[1, 0] / (four_pi2_k2 + p[1, 0] ** 2) +
+                      p[0, 0] * p[1, 0] / (four_pi2_k2 + p[1, 0] ** 2) ** 2) +
+                     (p[0, 1] / p[1, 1] / (four_pi2_k2 + p[1, 1] ** 2) +
+                      p[0, 1] * p[1, 1] / (four_pi2_k2 + p[1, 1] ** 2) ** 2) +
+                     (p[0, 2] / p[1, 2] / (four_pi2_k2 + p[1, 2] ** 2) +
+                      p[0, 2] * p[1, 2] / (four_pi2_k2 + p[1, 2] ** 2) ** 2) +
+                     (p[0, 3] / p[1, 3] / (four_pi2_k2 + p[1, 3] ** 2) +
+                      p[0, 3] * p[1, 3] / (four_pi2_k2 + p[1, 3] ** 2) ** 2) +
+                     (p[0, 4] / p[1, 4] / (four_pi2_k2 + p[1, 4] ** 2) +
+                      p[0, 4] * p[1, 4] / (four_pi2_k2 + p[1, 4] ** 2) ** 2)
+                     )
     return f

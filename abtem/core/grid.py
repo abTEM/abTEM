@@ -36,7 +36,7 @@ class Grid(HasEventsMixin):
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
                  dimensions: int = 2,
-                 endpoint: Union[int, Sequence[bool]] = False,
+                 endpoint: Union[bool, Sequence[bool]] = False,
                  lock_extent: bool = False,
                  lock_gpts: bool = False,
                  lock_sampling: bool = False):
@@ -151,6 +151,7 @@ class Grid(HasEventsMixin):
             raise RuntimeError('Sampling cannot be modified')
 
         sampling = self._validate(sampling, dtype=float)
+
         if self._lock_gpts:
             self._adjust_extent(self.gpts, sampling)
         elif self.extent is not None:

@@ -30,7 +30,6 @@ def calculate_scattering_factor(gpts: Tuple[int, int],
 
     # for i, number in enumerate(atomic_numbers):
     f = parametrization.projected_scattering_factor(chemical_symbols[number])(k)
-
     # scattering_factors[i] = f
 
     return f / _sinc(gpts, sampling, xp)

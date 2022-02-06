@@ -5,6 +5,7 @@ import numpy as np
 from ase.data import chemical_symbols
 from numba import jit
 from scipy.integrate import quad
+from scipy import integrate
 from scipy.interpolate import interp1d
 from scipy.optimize import brentq
 
@@ -77,8 +78,8 @@ class AtomicPotential:
         self._cutoff = None
         self._num_integration_limits = num_integration_limits
 
-    #@property
-    #def parameters(self) -> np.ndarray:
+    # @property
+    # def parameters(self) -> np.ndarray:
     #    return self._parameters
 
     @property
@@ -112,9 +113,9 @@ class AtomicPotential:
         for i, Ri in enumerate(self.radial_gpts):
             v = lambda z: self.evaluate(np.sqrt(Ri ** 2 + z ** 2))
 
-            table[0, i] = quad(v, -np.inf, limits[0])[0]
-            for j, limit in enumerate(limits[1:-1]):
-                table[j + 1, i] = table[j, i] + quad(v, limit, limits[j + 2])[0]
+            table[0, i] = integrate.fixed_quad(v, -limits[0] * 2, limits[0])[0]
+            for j, (a, b) in enumerate(zip(limits[1:-1], limits[2:])):
+                table[j + 1, i] = table[j, i] + integrate.fixed_quad(v, a, b)[0]
 
         taper_start = taper * self.cutoff
         taper_mask = self.radial_gpts > taper_start

@@ -7,13 +7,17 @@ from abtem.core.backend import get_array_module
 from abtem.core.grid import polar_spatial_frequencies
 
 
-def _label_to_index(labels):
+def _label_to_index(labels, max_label=None):
     xp = get_array_module(labels)
     labels = labels.flatten()
     labels_order = labels.argsort()
     sorted_labels = labels[labels_order]
     indices = xp.arange(0, len(labels) + 1)[labels_order]
-    index = xp.arange(0, np.max(labels) + 1)
+
+    if max_label is None:
+        max_label = np.max(labels)
+
+    index = xp.arange(0, max_label + 1)
     lo = xp.searchsorted(sorted_labels, index, side='left')
     hi = xp.searchsorted(sorted_labels, index, side='right')
     for i, (l, h) in enumerate(zip(lo, hi)):
@@ -62,7 +66,14 @@ def polar_detector_bins(gpts: Tuple[int, int],
     valid = (alpha >= inner) & (alpha < outer)
 
     radial_bins[valid] = (nbins_radial * (alpha[valid] - inner) / (outer - inner))
-    assert radial_bins.max() == nbins_radial - 1
+
+    # import matplotlib.pyplot as plt
+    #
+    # plt.imshow(radial_bins)
+    # plt.show()
+    # sss
+
+    # assert radial_bins.max() == nbins_radial - 1
 
     angular_bins = np.floor(nbins_azimuthal * (phi / (2 * np.pi)))
     angular_bins = np.clip(angular_bins, 0, nbins_azimuthal - 1).astype(int)
@@ -83,7 +94,7 @@ def polar_detector_bins(gpts: Tuple[int, int],
 
     if return_indices:
         indices = []
-        for i in _label_to_index(bins):
+        for i in _label_to_index(bins, nbins_radial * nbins_azimuthal - 1):
             indices.append(i)
         return indices
     else:

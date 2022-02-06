@@ -89,7 +89,10 @@ def transition_potential_multislice(waves,
     return measurements
 
 
-def linear_scaling_transition_multislice(S1: 'SMatrix', S2: 'SMatrix', scan, transition_potentials,
+def linear_scaling_transition_multislice(S1: 'SMatrix',
+                                         S2: 'SMatrix',
+                                         scan,
+                                         transition_potentials,
                                          reverse_multislice=False):
     xp = get_array_module(S1._device)
     from tqdm.auto import tqdm
