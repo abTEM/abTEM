@@ -183,7 +183,10 @@ def _reduce(s_matrix, basis, positions: np.ndarray, axes_metadata):
 
         array = batch_crop_2d(array, corners.reshape((-1, 2)), s_matrix.interpolated_gpts)
     else:
-        array = xp.tensordot(coefficients, s_matrix.array, axes=[-1, -3])
+        array = s_matrix.array
+        if s_matrix._device == 'gpu':
+            array = xp.asarray(array)
+        array = xp.tensordot(coefficients, array, axes=[-1, -3])
 
     array = array.reshape(out_shape + array.shape[-2:])
 
