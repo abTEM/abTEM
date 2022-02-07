@@ -11,7 +11,7 @@ from ase import Atoms
 
 from abtem.core.antialias import AntialiasAperture
 from abtem.core.axes import HasAxes, FrozenPhononsAxis, AxisMetadata, axis_from_dict, axis_to_dict, PositionsAxis
-from abtem.core.backend import get_array_module, _validate_device, copy_to_device
+from abtem.core.backend import get_array_module, _validate_device, copy_to_device, device_name_from_array_module
 from abtem.core.complex import abs2
 from abtem.core.dask import HasDaskArray, ComputableList, validate_lazy
 from abtem.core.energy import Accelerator
@@ -25,7 +25,7 @@ from abtem.measure.measure import DiffractionPatterns, Images, AbstractMeasureme
 from abtem.potentials.potentials import Potential, AbstractPotential, validate_potential
 from abtem.waves.base import WavesLikeMixin
 from abtem.waves.multislice import multislice
-from abtem.waves.scan import AbstractScan, GridScan
+from abtem.waves.scan import AbstractScan, GridScan, CustomScan, validate_scan
 from abtem.waves.tilt import BeamTilt
 from abtem.waves.transfer import CTF
 from numbers import Number
@@ -83,6 +83,10 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
 
         self._check_axes_metadata()
 
+    @property
+    def _device(self):
+        return device_name_from_array_module(get_array_module(self.array))
+
     def lazy(self):
         self._array = da.from_array(self.array)
 
@@ -131,8 +135,8 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
         xp = get_array_module(self.array)
         gpts = self._gpts_within_angle(max_angle)
         if self.is_lazy:
-
-            array = self.array.map_blocks(fft2_interpolate, new_shape=gpts,
+            array = self.array.map_blocks(fft2_interpolate,
+                                          new_shape=gpts,
                                           normalization=normalization,
                                           chunks=self.array.chunks[:-2] + gpts,
                                           meta=xp.array((), dtype=xp.complex64))
@@ -696,6 +700,13 @@ class Probe(WavesLikeMixin):
         """Probe contrast transfer function."""
         return self._ctf
 
+    def _validate_chunks(self, chunks):
+        if chunks is None:
+            chunk_size = dask.utils.parse_bytes(dask.config.get('array.chunk-size'))
+            chunks = int(chunk_size / self._bytes_per_wave())
+
+        return chunks
+
     def _validate_positions(self,
                             positions: Union[Sequence, AbstractScan] = None,
                             lazy: bool = None,
@@ -703,9 +714,7 @@ class Probe(WavesLikeMixin):
 
         lazy = validate_lazy(lazy)
 
-        if chunks is None:
-            chunk_size = dask.utils.parse_bytes(dask.config.get('array.chunk-size'))
-            chunks = int(chunk_size / self._bytes_per_wave())
+        chunks = self._validate_chunks(chunks)
 
         if hasattr(positions, 'match_probe'):
             positions.match_probe(self)
@@ -793,21 +802,19 @@ class Probe(WavesLikeMixin):
 
     def _generate_waves(self, scan, potential, chunks):
         extra_axes_metadata = scan.axes_metadata
+
+        chunks = self._validate_chunks(chunks)
+
         for indices, positions in scan.generate_positions(chunks=chunks):
             array = self._calculate_array(positions)
             waves = Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt,
                           extra_axes_metadata=extra_axes_metadata, metadata=self.metadata)
             yield indices, multislice(waves, potential=potential)
 
-    def _multislice(self, potential, positions, chunks, lazy):
-        waves = self.build(positions, chunks=chunks, lazy=lazy)
-        waves = waves.map_blocks(multislice, potential=potential, dtype=np.complex64)
-        return waves
-
     def multislice(self,
                    potential: Union[AbstractPotential, Atoms],
+                   positions: AbstractScan = None,
                    detectors: AbstractDetector = None,
-                   scan: AbstractScan = None,
                    chunks: int = None,
                    lazy: bool = None):
         """
@@ -828,20 +835,21 @@ class Probe(WavesLikeMixin):
         lazy = validate_lazy(lazy)
         potential = validate_potential(potential, self)
 
-        # scan = self._validate_positions(scan, lazy=lazy, chunks=chunks)
+        if positions is None:
+            positions = (self.extent[0] / 2, self.extent[1] / 2)
+
+        scan = validate_scan(positions, self.ctf, self.extent)
 
         if detectors is None:
             detectors = [WavesDetector()]
-
-        if hasattr(scan, 'match_probe'):
-            scan.match_probe(self)
 
         detectors = validate_detectors(detectors)
 
         if lazy:
             measurements = []
             for potential in potential.get_potential_distribution(lazy=lazy):
-                waves = self._multislice(potential, scan, chunks, lazy)
+                waves = self.build(scan, chunks=chunks, lazy=lazy)
+                waves = waves.map_blocks(multislice, potential=potential, dtype=np.complex64)
                 measurements.append([detector.detect(waves) for detector in detectors])
 
             measurements = list(map(list, zip(*measurements)))
@@ -856,19 +864,19 @@ class Probe(WavesLikeMixin):
                     new_measurements = detector.detect(waves)
 
                     if measurement.frozen_phonon_axes:
-                        indices = (i,) + indices
-
-                    measurement.array[indices] += new_measurements.array
+                        measurement.array[(i,) + indices] += new_measurements.array
+                    else:
+                        measurement.array[indices] += new_measurements.array
 
         if len(measurements) == 1:
             return measurements[0]
         else:
-            return measurements
+            return ComputableList(measurements)
 
     def scan(self,
              potential: Union[Atoms, AbstractPotential],
-             detectors: Union[AbstractDetector, Sequence[AbstractDetector]] = None,
              scan: Union[AbstractScan, np.ndarray, Sequence] = None,
+             detectors: Union[AbstractDetector, Sequence[AbstractDetector]] = None,
              chunks: int = None,
              lazy: bool = None) -> Union[List, AbstractMeasurement]:
 
@@ -878,7 +886,7 @@ class Probe(WavesLikeMixin):
         if detectors is None:
             detectors = FlexibleAnnularDetector()
 
-        return self.multislice(potential, detectors, scan, chunks=chunks, lazy=lazy)
+        return self.multislice(potential, scan, detectors, chunks=chunks, lazy=lazy)
 
     def profile(self, angle: float = 0.):
         self.grid.check_is_defined()

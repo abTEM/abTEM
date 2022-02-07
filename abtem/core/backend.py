@@ -77,6 +77,16 @@ def get_array_module(x):
     raise ValueError(f'array module specification {x} not recognized')
 
 
+def device_name_from_array_module(xp):
+    if xp is np:
+        return 'cpu'
+
+    if xp is cp:
+        return 'gpu'
+
+    assert False
+
+
 def get_scipy_module(x):
     xp = get_array_module(x)
 
@@ -123,3 +133,11 @@ def copy_to_device(array, device):
         return cp.asarray(array)
 
     raise RuntimeError()
+
+
+class HasDevice:
+    _device: str
+
+    @property
+    def device(self):
+        return self._device

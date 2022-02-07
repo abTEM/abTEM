@@ -16,6 +16,24 @@ from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.utils import subdivide_into_chunks, generate_chunks
 
 
+def validate_scan(scan, ctf=None, extent=None):
+    if not hasattr(scan, 'get_positions'):
+        scan = CustomScan(scan)
+
+    if isinstance(scan, GridScan):
+        if scan.extent is None and extent is not None:
+            scan.start = (0., 0.)
+            scan.end = extent
+
+    if isinstance(scan, (GridScan, LineScan)):
+        if scan.sampling is None and ctf is not None:
+            scan.sampling = .9 * ctf.nyquist_sampling
+
+        scan.grid.check_is_defined()
+
+    return scan
+
+
 class AbstractScan(metaclass=ABCMeta):
     """Abstract class to describe scans."""
 
@@ -63,16 +81,16 @@ class CustomScan(AbstractScan):
 
     def __init__(self, positions):
         positions = np.array(positions)
-
-        if len(positions.shape) == 1:
-            positions = positions[None]
-
         self._positions = positions
+
         super().__init__()
 
     @property
     def shape(self):
-        return self._positions.shape[:-1]
+        if len(self.positions.shape) > 1:
+            return self._positions.shape[:-1]
+        else:
+            return ()
 
     @property
     def positions(self):
@@ -87,7 +105,10 @@ class CustomScan(AbstractScan):
         return [CustomScan(self._positions)]
 
     def get_positions(self, chunks: Union[int, Tuple[int, int]] = None, lazy: bool = False) -> np.ndarray:
-        return [self._positions]
+        if lazy:
+            return da.from_array(self._positions)
+        else:
+            return self._positions
 
     def generate_positions(self, chunks):
         # if isinstance(chunks, Number):
@@ -95,11 +116,14 @@ class CustomScan(AbstractScan):
 
         # positions = self.get_positions(lazy=False)
 
-        yield (slice(0, 1),), self._positions
+        if len(self.positions.shape) > 1:
+            yield (slice(0, 1),), self._positions
+        else:
+            yield (), self._positions
 
     @property
     def axes_metadata(self):
-        return [PositionsAxis()]
+        return [PositionsAxis() for i in range(len(self.positions.shape) - 1)]
 
     def __copy__(self):
         pass

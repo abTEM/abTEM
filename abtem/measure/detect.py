@@ -51,7 +51,7 @@ def stack_measurement_ensembles(detectors, outputs):
 def allocate_measurements(waves, scan, detectors, potential):
     measurements = []
     for detector in detectors:
-        if detector.ensemble_mean:
+        if detector.ensemble_mean or potential.num_configurations == 1:
             measurements.append(detector.allocate_measurement(waves, scan))
         else:
             frozen_phonons_shape = (potential.num_configurations,)
@@ -154,9 +154,10 @@ class AbstractDetector(metaclass=ABCMeta):
         if self.to_cpu:
             xp = np
         else:
-            xp = get_array_module(waves.array)
+            xp = get_array_module(waves.device)
 
         d['array'] = xp.zeros(shape, dtype=self.measurement_dtype)
+
         return self.measurement_type(waves, scan)(**d)
 
     @property
@@ -760,7 +761,8 @@ class PixelatedDetector(AbstractDetector):
         if scan is not None:
             extra_axes_metadata = scan.axes_metadata + extra_axes_metadata
         if self.fourier_space:
-            return {'angular_sampling': waves.angular_sampling,
+            return {'sampling': waves.angular_sampling,
+                    'energy': waves.energy,
                     'extra_axes_metadata': extra_axes_metadata,
                     'metadata': waves.metadata}
         else:
@@ -851,11 +853,9 @@ class PixelatedDetector(AbstractDetector):
 
         if self.fourier_space:
             measurements = waves.diffraction_patterns(max_angle=self.max_angle)
+
         else:
             measurements = waves.intensity()
-
-        # if (waves.num_ensemble_axes > 0) & self.ensemble_mean:
-        #    measurements = measurements.mean(waves.ensemble_axes)
 
         if self.to_cpu:
             measurements = measurements.to_cpu()

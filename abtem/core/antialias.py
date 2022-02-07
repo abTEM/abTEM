@@ -93,14 +93,14 @@ class HasAntialiasApertureMixin:
             return gpts
         extent = (gpts[0] * sampling[0], gpts[1] * sampling[1])
         kcut = ((self.antialias_aperture - 2 * self.antialias_taper) / (max(sampling) * 2)) / np.sqrt(2)
-        return (int(np.floor(kcut * extent[0] * 2)), int(np.floor(kcut * extent[1] * 2)))
+        return int(np.floor(kcut * extent[0] * 2)), int(np.floor(kcut * extent[1] * 2))
 
     def _cutoff_rectangle(self, gpts, sampling):
         if self.antialias_aperture is None:
             return gpts
         kcut = 1 / max(sampling) / 2 * self.antialias_aperture
         extent = (gpts[0] * sampling[0], gpts[1] * sampling[1])
-        return (int(np.floor(kcut * extent[0] * 2)), int(np.floor(kcut * extent[1] * 2)))
+        return int(np.floor(kcut * extent[0] * 2)), int(np.floor(kcut * extent[1] * 2))
 
     @property
     def antialias_taper(self):

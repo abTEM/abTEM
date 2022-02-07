@@ -383,11 +383,10 @@ class Potential(AbstractPotentialFromAtoms):
         return atomic_potentials
 
     def get_sliced_atoms(self) -> SliceIndexedAtoms:
-
-        atoms = self.atoms
-        atoms.wrap(pbc=True)
-
         if self._sliced_atoms is None:
+            atoms = self.atoms
+            atoms.wrap(pbc=True)
+
             if self.projection == 'infinite':
                 self._sliced_atoms = SliceIndexedAtoms(atoms=atoms, slice_thickness=self.slice_thickness)
             else:
@@ -396,9 +395,9 @@ class Potential(AbstractPotentialFromAtoms):
         return self._sliced_atoms
 
     def _get_scattering_factors(self) -> np.ndarray:
-        xp = get_array_module(self._device)
 
         if self._scattering_factors is None:
+            xp = get_array_module(self._device)
             scattering_factors = {}
             for number in np.unique(self.atoms.numbers):
                 f = calculate_scattering_factor(self.gpts,
@@ -422,9 +421,9 @@ class Potential(AbstractPotentialFromAtoms):
         shape = (last_slice - first_slice,) + self.gpts
 
         if len(atoms) == 0:
-            array = xp.zeros(shape, dtype=xp.float32)
+           array = xp.zeros(shape, dtype=xp.float32)
         else:
-            array = infinite_potential_projections(atoms, shape, self.sampling, scattering_factors)
+           array = infinite_potential_projections(atoms, shape, self.sampling, scattering_factors)
 
         potential = PotentialArray(array, slice_thickness=self.slice_thickness[first_slice:last_slice],
                                    extent=self.extent)

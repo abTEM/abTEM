@@ -60,7 +60,7 @@ class AtomicPotential:
                  charge: float = 0.,
                  core_size: float = .001,
                  cutoff_tolerance: float = 1e-3,
-                 num_integration_limits: int = 40):
+                 num_integration_limits: int = 100):
 
         if isinstance(symbol, (int, np.int32, np.int64)):
             symbol = chemical_symbols[symbol]

@@ -8,6 +8,8 @@ from typing import Union, TYPE_CHECKING, List
 import numpy as np
 from contextlib import nullcontext
 
+from abtem.core.backend import get_array_module, device_name_from_array_module
+
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves
     from abtem.measure.detect import AbstractDetector

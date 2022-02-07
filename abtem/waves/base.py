@@ -8,12 +8,14 @@ from abtem.core.antialias import HasAntialiasApertureMixin
 from abtem.core.axes import HasAxes
 from abtem.core.axes import RealSpaceAxis, FourierSpaceAxis, AxisMetadata
 from abtem.core.energy import HasAcceleratorMixin
+from abtem.core.backend import HasDevice
 from abtem.core.grid import HasGridMixin
 from abtem.potentials.potentials import Potential, AbstractPotential
 from abtem.waves.tilt import HasBeamTiltMixin
 
 
-class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAntialiasApertureMixin, HasAxes):
+class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAntialiasApertureMixin, HasAxes,
+                     HasDevice):
 
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
