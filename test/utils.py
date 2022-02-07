@@ -23,7 +23,11 @@ def check_array_matches_laziness(array, lazy):
         assert isinstance(array, da.core.Array)
 
 
-def array_is_close(a1, a2, rel_tol=np.inf, abs_tol=np.inf, check_above_abs=0., check_above_rel=0.):
+def array_is_close(a1, a2, rel_tol=np.inf, abs_tol=np.inf, check_above_abs=0., check_above_rel=0., mask=None):
+    if mask is not None:
+        a1 = a1[mask]
+        a2 = a2[mask]
+
     if rel_tol < np.inf:
         element_is_checked = (a2 > check_above_abs) * (a2 > (a2.max() * check_above_rel))
         rel_error = (a1[element_is_checked] - a2[element_is_checked]) / a2[element_is_checked]

@@ -8,7 +8,6 @@ import hypothesis.strategies as st
 
 
 
-
 @given(Z=st.integers(min_value=1, max_value=90),
        gpts=st.integers(min_value=16, max_value=64),
        sampling=st.floats(min_value=.02, max_value=.05))
