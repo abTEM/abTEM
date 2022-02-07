@@ -260,7 +260,7 @@ def validate_potential(potential: Union[Atoms, AbstractPotential], waves=None) -
 
         potential = Potential(potential, device=device)
 
-    if waves is not None:
+    if waves is not None and potential is not None:
         potential.grid.match(waves)
 
     return potential
