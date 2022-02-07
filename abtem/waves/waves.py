@@ -20,7 +20,7 @@ from abtem.core.grid import Grid
 from abtem.ionization.multislice import transition_potential_multislice
 from abtem.ionization.transitions import AbstractTransitionCollection, AbstractTransitionPotential
 from abtem.measure.detect import AbstractDetector, validate_detectors, PixelatedDetector, WavesDetector, \
-    FlexibleAnnularDetector, stack_measurement_ensembles, allocate_measurements
+    FlexibleAnnularDetector, stack_measurement_ensembles, allocate_measurements, stack_waves
 from abtem.measure.measure import DiffractionPatterns, Images, AbstractMeasurement, stack_measurements
 from abtem.potentials.potentials import Potential, AbstractPotential, validate_potential
 from abtem.waves.base import WavesLikeMixin
@@ -364,18 +364,25 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
 
         potentials = potential.get_potential_distribution(lazy=self.is_lazy)
 
-        # if detectors is None:
-        #     waves = []
-        #     for potential in potentials:
-        #         waves.append(self._multislice(potential, start=start, stop=stop, conjugate=conjugate))
+        if detectors is None:
+            waves = []
+            for potential in potentials:
+                waves.append(self._multislice(potential, start=start, stop=stop, conjugate=conjugate))
 
-        return multislice_and_detect(self._multislice,
-                                     potentials,
-                                     detectors,
-                                     start=start,
-                                     stop=stop,
-                                     conjugate=conjugate,
-                                     in_place=in_place)
+            if len(waves) == 1:
+                return waves[0]
+            else:
+                return stack_waves(waves, FrozenPhononsAxis())
+        else:
+            raise NotImplementedError
+
+        # return multislice_and_detect(self._multislice,
+        #                              potentials,
+        #                              detectors,
+        #                              start=start,
+        #                              stop=stop,
+        #                              conjugate=conjugate,
+        #                              in_place=in_place)
 
         # distribution = potential.get_potential_distribution(lazy=self.is_lazy)
         #
