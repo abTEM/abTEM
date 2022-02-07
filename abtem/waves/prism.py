@@ -549,6 +549,7 @@ class SMatrixArray(HasDaskArray, AbstractSMatrix):
 
         waves = Waves(self.array, energy=self.energy, sampling=self.sampling,
                       extra_axes_metadata=extra_axes_metadata)
+
         array = waves.multislice(potential, **kwargs).array
 
         d = self._copy_as_dict(copy_array=False)

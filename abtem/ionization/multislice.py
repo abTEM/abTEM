@@ -114,10 +114,10 @@ def linear_scaling_transition_multislice(S1: 'SMatrix',
     chunks = S1.chunks
     stream = S1._device == 'gpu' and S1._store_on_host
 
-    S1 = S1.build(lazy=False, stop=0, normalization='planewaves')
+    S1 = S1.build(lazy=False, stop=0)
 
     if reverse_multislice:
-        S2_multislice = S2.build(lazy=False, start=len(potential), stop=0, normalization='planewaves')
+        S2_multislice = S2.build(lazy=False, start=len(potential), stop=0)
     else:
         S2_multislice = S2
 
@@ -139,7 +139,7 @@ def linear_scaling_transition_multislice(S1: 'SMatrix',
             S2_multislice = S2_multislice.multislice(potential, chunks=chunks, start=max(i - 1, 0), stop=i,
                                                      conjugate=True)
         else:
-            S2_multislice = S2.build(lazy=False, start=len(potential), stop=i, normalization='planewaves')
+            S2_multislice = S2.build(lazy=False, start=len(potential), stop=i)
 
         sites_slice = transition_potentials.validate_sites(sites[i])
 
@@ -171,13 +171,13 @@ def linear_scaling_transition_multislice(S1: 'SMatrix',
             b = xp.swapaxes(scattered_S1.array.reshape((len(scattered_S1.array), len(S1), -1)), 1, 2)
 
             SHn0 = xp.dot(a, b)
-
             SHn0 = xp.swapaxes(SHn0[0], 0, 1)
 
+            new_values = copy_to_device((xp.abs(xp.dot(SHn0, cropped_coefficients.T[None])) ** 2).sum((0, 1, 2)), np)
             if mask is not None:
-                images[mask] += (xp.abs(xp.dot(SHn0, cropped_coefficients.T[None])) ** 2).sum((0, 1, 2)).get()
+                images[mask] += new_values
             else:
-                images += (xp.abs(xp.dot(SHn0, cropped_coefficients.T[None])) ** 2).sum((0, 1, 2)).get()
+                images += new_values
 
     images *= np.prod(S1.interpolation).astype(np.float32) ** 2
 

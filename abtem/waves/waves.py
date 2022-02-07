@@ -359,8 +359,8 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
         self.accelerator.check_is_defined()
         potential = self._validate_potential(potential)
 
-        if detectors is None:
-            detectors = [WavesDetector()]
+        #if detectors is None:
+        #    detectors = [WavesDetector()]
 
         potentials = potential.get_potential_distribution(lazy=self.is_lazy)
 
@@ -374,7 +374,16 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
             else:
                 return stack_waves(waves, FrozenPhononsAxis())
         else:
-            raise NotImplementedError
+            sss
+            measurements = []
+            for potential in potentials:
+                waves = self._multislice(potential, start=start, stop=stop, conjugate=conjugate)
+                for detectors in detectors:
+                    pass
+
+
+
+
 
         # return multislice_and_detect(self._multislice,
         #                              potentials,
