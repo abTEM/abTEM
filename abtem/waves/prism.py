@@ -172,8 +172,10 @@ def _reduce(s_matrix, basis, positions: np.ndarray, axes_metadata):
     coefficients *= complex_exponential(-2. * xp.pi * positions[..., 1, None] * wave_vectors[:, 1][None])
     coefficients *= basis
 
+
     if not s_matrix.array.shape[-2:] == s_matrix.interpolated_gpts:
         crop_corner, size, corners = _minimum_crop(offset_positions, s_matrix.sampling, s_matrix.interpolated_gpts)
+
         array = wrapped_crop_2d(s_matrix.array, crop_corner, size)
 
         if s_matrix._device == 'gpu':
@@ -240,10 +242,18 @@ def _reduce(s_matrix, basis, positions: np.ndarray, axes_metadata):
 #     return measurements
 
 def reduce_s_matrix(s_matrix, detectors, scan, ctf, positions_per_reduction):
-    measurements = [detector.allocate_measurement(s_matrix, scan) for detector in detectors]
-    for indices, waves in s_matrix._generate_waves(scan, ctf, positions_per_reduction):
-        for i, detector in enumerate(detectors):
-            measurements[i].array[indices] = detector.detect(waves).array
+
+    measurements = []
+    for i, (indices, waves) in s_matrix._generate_waves(scan, ctf, positions_per_reduction):
+
+        print(waves.array)
+        sss
+
+        if i == 0:
+            measurements = [detector.allocate_measurement(s_matrix, scan) for detector in detectors]
+
+        for j, detector in enumerate(detectors):
+            measurements[j].array[indices] = detector.detect(waves).array
     return measurements
 
 
@@ -993,6 +1003,7 @@ class SMatrix(AbstractSMatrix):
 
             if downsample:
                 waves = waves.downsample(max_angle=downsample)
+
             return waves.array
         else:
             return array

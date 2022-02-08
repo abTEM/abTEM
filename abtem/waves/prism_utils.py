@@ -13,9 +13,6 @@ from abtem.waves.transfer import CTF
 
 
 def wrapped_slices(start: int, stop: int, n: int) -> Tuple[slice, slice]:
-    # if stop - start > n:
-    # raise RuntimeError(f'{start} {stop} {n} {stop - start}')
-
     if start < 0:
         if stop > n:
             raise RuntimeError(f'start = {start} stop = {stop}, n = {n}')
@@ -41,8 +38,16 @@ def wrapped_crop_2d(array: np.ndarray, corner: Tuple[int, int], size: Tuple[int,
 
     xp = get_array_module(array)
 
-    a, c = wrapped_slices(corner[0], upper_corner[0], array.shape[-2])
-    b, d = wrapped_slices(corner[1], upper_corner[1], array.shape[-1])
+    try:
+        a, c = wrapped_slices(corner[0], upper_corner[0], array.shape[-2])
+        b, d = wrapped_slices(corner[1], upper_corner[1], array.shape[-1])
+    except RuntimeError:
+        padding = tuple((abs(min(c, 0)), max(c + k - l, 0)) for c, l, k in zip(corner, array.shape, size))
+        slices = tuple(slice(c + p[0], c + p[0] + l) for c, l, p in zip(corner, size, padding))
+        padding = ((0, 0),) * (len(array.shape) - 2) + padding
+        slices = (slice(None),) * (len(array.shape) - 2) + slices
+        array = np.pad(array, padding)[slices]
+        return array
 
     A = array[..., a, b]
     B = array[..., c, b]
