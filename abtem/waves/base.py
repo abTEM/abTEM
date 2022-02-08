@@ -18,6 +18,10 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAnt
                      HasDevice):
 
     @property
+    def interpolated_gpts(self):
+        return self.gpts
+
+    @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
         self.grid.check_is_defined()
         return [RealSpaceAxis(label='x', sampling=self.sampling[0], units='Å', endpoint=False),
@@ -33,17 +37,17 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAnt
     @property
     def antialias_valid_gpts(self) -> Tuple[int, int]:
         self.grid.check_is_defined()
-        return self._valid_rectangle(self.gpts, self.sampling)
+        return self._valid_rectangle(self.interpolated_gpts, self.sampling)
 
     @property
     def antialias_cutoff_gpts(self) -> Tuple[int, int]:
         self.grid.check_is_defined()
-        return self._cutoff_rectangle(self.gpts, self.sampling)
+        return self._cutoff_rectangle(self.interpolated_gpts, self.sampling)
 
     def _gpts_within_angle(self, angle: Union[None, float, str]) -> Tuple[int, int]:
 
         if angle is None:
-            return self.gpts
+            return self.interpolated_gpts
 
         elif not isinstance(angle, str):
             return (int(2 * np.ceil(angle / self.angular_sampling[0])) + 1,
@@ -69,13 +73,13 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAnt
 
     @property
     def full_cutoff_angles(self) -> Tuple[float, float]:
-        return (self.gpts[0] // 2 * self.angular_sampling[0],
-                self.gpts[1] // 2 * self.angular_sampling[1])
+        return (self.interpolated_gpts[0] // 2 * self.angular_sampling[0],
+                self.interpolated_gpts[1] // 2 * self.angular_sampling[1])
 
     @property
     def fourier_space_sampling(self) -> Tuple[float, float]:
         self.grid.check_is_defined()
-        return 1 / self.extent[0], 1 / self.extent[1]
+        return 1 / (self.interpolated_gpts[0] * self.sampling[0]), 1 / (self.interpolated_gpts[1] * self.sampling[1])
 
     @property
     def angular_sampling(self) -> Tuple[float, float]:

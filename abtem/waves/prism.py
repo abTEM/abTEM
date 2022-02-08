@@ -73,7 +73,7 @@ def _minimum_crop(positions: Union[Sequence[float], AbstractScan], sampling, sha
     xp = get_array_module(positions)
 
     offset = (shape[0] // 2, shape[1] // 2)
-    corners = xp.rint(xp.array(positions) / xp.asarray(sampling) - xp.asarray(offset)).astype(np.int)
+    corners = xp.rint(xp.array(positions) / xp.asarray(sampling) - xp.asarray(offset)).astype(int)
     upper_corners = corners + xp.asarray(shape)
 
     crop_corner = (xp.min(corners[..., 0]).item(), xp.min(corners[..., 1]).item())
@@ -243,14 +243,14 @@ def _reduce(s_matrix, basis, positions: np.ndarray, axes_metadata):
 
 def reduce_s_matrix(s_matrix, detectors, scan, ctf, positions_per_reduction):
 
-    measurements = []
-    for i, (indices, waves) in s_matrix._generate_waves(scan, ctf, positions_per_reduction):
+    measurements = [detector.allocate_measurement(s_matrix, scan) for detector in detectors]
+    for i, (indices, waves) in enumerate(s_matrix._generate_waves(scan, ctf, positions_per_reduction)):
+        #print(s_matrix.cutoff_angles, waves.cutoff_angles)
+        #print(s_matrix.antialias_aperture, waves.antialias_aperture)
+        #print(s_matrix.interpolated_gpts, waves.gpts)
+        #print(s_matrix.antialias_cutoff_gpts, waves.antialias_cutoff_gpts)
+        #if i == 0:
 
-        print(waves.array)
-        sss
-
-        if i == 0:
-            measurements = [detector.allocate_measurement(s_matrix, scan) for detector in detectors]
 
         for j, detector in enumerate(detectors):
             measurements[j].array[indices] = detector.detect(waves).array
@@ -964,7 +964,7 @@ class SMatrix(AbstractSMatrix):
 
     @property
     def interpolated_gpts(self) -> Tuple[int, int]:
-        return self.gpts[0] // self.interpolation, self.gpts[1] // self.interpolation
+        return self.gpts[0] // self.interpolation[0], self.gpts[1] // self.interpolation[0]
 
     @property
     def partitions(self):

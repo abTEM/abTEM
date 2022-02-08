@@ -65,7 +65,8 @@ class Grid(HasEventsMixin):
         if self.gpts is None:
             self._adjust_gpts(self.extent, self.sampling)
 
-        self._adjust_sampling(self.extent, self.gpts)
+        if sampling is None or extent is not None:
+            self._adjust_sampling(self.extent, self.gpts)
 
         self._events = Events()
 
