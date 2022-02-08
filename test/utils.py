@@ -2,8 +2,10 @@ from typing import Iterable
 
 import dask.array as da
 
-from abtem.core.backend import get_array_module
+from abtem.core.backend import get_array_module, cp
 import numpy as np
+import pytest
+
 
 def check_array_matches_device(array, device):
     assert get_array_module(array) is get_array_module(device)
@@ -39,3 +41,6 @@ def array_is_close(a1, a2, rel_tol=np.inf, abs_tol=np.inf, check_above_abs=0., c
             return False
 
     return True
+
+
+gpu = pytest.param('gpu', marks=pytest.mark.skipif(cp is None, reason='no gpu'))

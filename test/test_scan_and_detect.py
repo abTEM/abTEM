@@ -7,7 +7,8 @@ from hypothesis import given, assume, settings, reproduce_failure
 import strats as abst
 from abtem import Probe, SMatrix, GridScan
 from abtem.potentials.temperature import AbstractFrozenPhonons
-
+from abtem.core.backend import cp
+from utils import gpu
 
 def _test_scan(probe, atoms, detectors, lazy):
     integration_limits = [detector.angular_limits(probe) for detector in detectors]
@@ -53,7 +54,7 @@ def _test_scan(probe, atoms, detectors, lazy):
        energy=st.floats(100e3, 200e3),
        detectors=abst.detectors())
 @pytest.mark.parametrize('lazy', [False, True])
-@pytest.mark.parametrize('device', ['cpu', 'gpu'])
+@pytest.mark.parametrize('device', ['cpu', gpu])
 def test_probe_scan(atoms, gpts, semiangle_cutoff, energy, detectors, lazy, device):
     probe = Probe(gpts=gpts,
                   semiangle_cutoff=semiangle_cutoff,
@@ -62,20 +63,23 @@ def test_probe_scan(atoms, gpts, semiangle_cutoff, energy, detectors, lazy, devi
                   device=device)
     _test_scan(probe, atoms, detectors, lazy)
 
-
+@reproduce_failure('6.29.3', b'AXicY2SAAcbwyZdWiXgzkAMYGRlBFACxvQLL')
 @settings(deadline=None, max_examples=20, print_blob=True)
 @given(atoms=abst.random_atoms(min_side_length=5, max_side_length=10) |
              abst.random_frozen_phonons(min_side_length=5, max_side_length=10),
        gpts=abst.gpts(min_value=64, max_value=128),
        planewave_cutoff=st.floats(5, 10),
        energy=st.floats(100e3, 200e3),
+       downsample=st.just('valid') | st.just('cutoff') | st.just(False),
+       interpolation=st.integers(min_value=1, max_value=3),
        detectors=abst.detectors())
-@pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('device', ['gpu', 'cpu'])
-def test_s_matrix_scan(atoms, gpts, planewave_cutoff, energy, detectors, lazy, device):
+@pytest.mark.parametrize('lazy', [True])
+@pytest.mark.parametrize('device', ['cpu', gpu])
+def test_s_matrix_scan(atoms, gpts, planewave_cutoff, energy, detectors, lazy, device, downsample, interpolation):
     probe = SMatrix(potential=atoms,
                     gpts=gpts,
                     planewave_cutoff=planewave_cutoff,
+                    interpolation=interpolation,
                     energy=energy,
                     device=device)
     integration_limits = [detector.angular_limits(probe) for detector in detectors]
@@ -86,5 +90,28 @@ def test_s_matrix_scan(atoms, gpts, planewave_cutoff, energy, detectors, lazy, d
     assume(outer_limit < min(probe.cutoff_angles))
 
     scan = GridScan()
-    measurements = probe.scan(scan=scan, detectors=detectors, lazy=lazy)
+    measurements = probe.scan(scan=scan, detectors=detectors, lazy=lazy, downsample=downsample)
     measurements.compute()
+
+    if not isinstance(measurements, list):
+        measurements = [measurements]
+
+    assert len(measurements) == len(detectors)
+
+    for detector, measurement in zip(detectors, measurements):
+
+        if isinstance(atoms, AbstractFrozenPhonons) and len(atoms) > 1 and not detector.ensemble_mean:
+            frozen_phonons_shape = (len(atoms),)
+        else:
+            frozen_phonons_shape = ()
+
+    #     base_shape = detector.measurement_shape(probe)
+    #     assert base_shape == measurement.shape[len(measurement.shape) - len(base_shape):]
+    #
+        scan_shape = scan.gpts
+        assert scan_shape == measurement.shape[len(frozen_phonons_shape): len(frozen_phonons_shape) + len(scan_shape)]
+
+        if frozen_phonons_shape:
+            assert frozen_phonons_shape[0] == measurement.shape[0]
+
+        assert not np.all(measurement.array == 0.)
