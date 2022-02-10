@@ -164,6 +164,10 @@ def orthogonalize_cell(atoms: Atoms,
     """
     eps = 1e-8
 
+    if np.any(np.linalg.norm(atoms.cell, axis=0) < eps):
+        raise RuntimeError("""A lattice vectors of the provided Atoms has no length. Please ensure that all lattice """ 
+        """vectors are defined, e.g. by adding vacuum along the undefined direction.""")
+
     k = np.arange(-max_repetitions, max_repetitions + 1)
     l = np.arange(-max_repetitions, max_repetitions + 1)
     m = np.arange(-max_repetitions, max_repetitions + 1)
