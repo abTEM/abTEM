@@ -173,4 +173,3 @@ def test_scatter(atoms_data, wave_data, sampling, lazy):
     xp = get_array_module(wave.array)
     if wave_data['normalize']:
         assert (xp.abs(xp.fft.fft2(wave.array)[..., 0, 0]) ** 2).sum() < 1.
-

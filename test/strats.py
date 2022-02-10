@@ -12,14 +12,25 @@ from abtem.measure.detect import AnnularDetector, FlexibleAnnularDetector, Segme
 from hypothesis.extra.numpy import arrays, array_shapes
 
 
+def round_to_multiple(x, base=5):
+    return base * round(x / base)
+
+
 @st.composite
-def gpts(draw, min_value=32, max_value=128, allow_none=False):
+def gpts(draw, min_value=32, max_value=128, allow_none=False, base=None):
     gpts = st.integers(min_value=min_value, max_value=max_value)
     gpts = gpts | st.tuples(gpts, gpts)
     if allow_none:
         gpts = gpts | st.none()
     gpts = st.one_of(gpts)
     gpts = draw(gpts)
+
+    if base is not None:
+        if isinstance(gpts, int):
+            return round_to_multiple(round_to_multiple(gpts, base))
+        else:
+            return tuple(round_to_multiple(n, base) for n in gpts)
+
     return gpts
 
 
@@ -140,7 +151,7 @@ def random_frozen_phonons(draw,
                               max_atoms=max_atoms))
     num_configs = draw(st.integers(min_value=1, max_value=max_configs))
     sigmas = draw(st.floats(min_value=0., max_value=.2))
-    return FrozenPhonons(atoms, num_configs=num_configs, sigmas=sigmas)
+    return FrozenPhonons(atoms, num_configs=num_configs, sigmas=sigmas, seed=13)
 
 
 @st.composite
@@ -207,13 +218,13 @@ def waves_detector(draw):
 
 
 @st.composite
-def detectors(draw):
+def detectors(draw, max_detectors=2):
     possible_detectors = st.one_of([annular_detector(),
                                     flexible_annular_detector(),
                                     segmented_detector(),
                                     pixelated_detector()])
-    num_detectors = 1
-    detectors = st.lists(possible_detectors, min_size=1, max_size=2)
+
+    detectors = st.lists(possible_detectors, min_size=1, max_size=max_detectors)
     return draw(detectors)
 
 
@@ -226,9 +237,6 @@ def probe(draw,
     gpts = draw(gpts(min_value=64, max_value=128))
     semiangle_cutoff = draw(st.floats(min_value=5, max_value=max_semiangle_cutoff))
     return Probe(gpts=gpts, semiangle_cutoff=semiangle_cutoff)
-
-
-
 
 
 device = st.sampled_from(['cpu', 'gpu'])
