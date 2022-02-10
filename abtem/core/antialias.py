@@ -31,7 +31,7 @@ def antialias_aperture(cutoff, taper, gpts, sampling, xp):
 class AntialiasAperture(HasGridMixin):
 
     def __init__(self,
-                 cutoff: float = CUTOFF,
+                 cutoff: float = 2. / 3.,
                  taper: float = TAPER,
                  extent: Union[float, Tuple[float, float]] = None,
                  gpts: Union[int, Tuple[int, int]] = None,
@@ -67,8 +67,8 @@ class AntialiasAperture(HasGridMixin):
     def bandlimit(self, x):
         x._array = fft2_convolve(x.array, self.array, overwrite_x=False)
 
-        if hasattr(x, 'antialias_aperture'):
-            x.antialias_aperture = 2 / 3.
+        if hasattr(x, '_antialias_cutoff_gpts'):
+            x._antialias_cutoff_gpts = x.antialias_cutoff_gpts
         return x
 
     @property
@@ -85,31 +85,44 @@ class AntialiasAperture(HasGridMixin):
         self._cutoff = value
 
 
+
+
 class HasAntialiasApertureMixin:
-    _antialias_aperture: AntialiasAperture
+    _antialias_cutoff: float
+    _antialias_taper = 0.01
+
+    def _calculate_cutoff_angles(self, gpts, sampling):
+        kcut = self.antialias_aperture / max(sampling)
+
+        extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
+        return safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
 
     def _valid_rectangle(self, gpts, sampling):
         if self.antialias_aperture is None:
             return gpts
         extent = (gpts[0] * sampling[0], gpts[1] * sampling[1])
-        kcut = ((self.antialias_aperture - 2 * self.antialias_taper) / (max(sampling) * 2)) / np.sqrt(2)
-        return int(np.floor(kcut * extent[0] * 2)), int(np.floor(kcut * extent[1] * 2))
+
+        kcut = self.antialias_aperture / (max(sampling) * np.sqrt(2))
+
+        return safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
 
     def _cutoff_rectangle(self, gpts, sampling):
         if self.antialias_aperture is None:
             return gpts
-        kcut = 1 / max(sampling) / 2 * self.antialias_aperture
-        extent = (gpts[0] * sampling[0], gpts[1] * sampling[1])
-        return int(np.floor(kcut * extent[0] * 2)), int(np.floor(kcut * extent[1] * 2))
+        kcut = self.antialias_aperture / max(sampling)
+        extent = gpts[0] * sampling[0], gpts[1] * sampling[1]
+        return safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
 
     @property
     def antialias_taper(self):
-        return self._antialias_aperture.taper
+        return self._antialias_taper
 
     @property
     def antialias_aperture(self) -> float:
-        return self._antialias_aperture.cutoff
+        return self._antialias_cutoff
 
-    @antialias_aperture.setter
-    def antialias_aperture(self, value):
-        self._antialias_aperture.cutoff = value
+
+
+    #@antialias_aperture.setter
+    #def antialias_aperture(self, value):
+    #    self._antialias_aperture.cutoff = value

@@ -124,13 +124,18 @@ def apply_detector_func(self, func, detectors, scan=None, **kwargs):
 class AbstractDetector(metaclass=ABCMeta):
     """Abstract base class for all detectors."""
 
-    def __init__(self, ensemble_mean: bool = True, to_cpu: bool = True, url: str = None):
+    def __init__(self, ensemble_mean: bool = True, to_cpu: bool = True, url: str = None, detect_every: int = None):
         self._ensemble_mean = ensemble_mean
         self._to_cpu = to_cpu
         self._url = url
+        self._detect_every = detect_every
 
     @property
     def ensemble_mean(self):
+        return self._ensemble_mean
+
+    @property
+    def detect_every(self):
         return self._ensemble_mean
 
     @property
@@ -219,11 +224,12 @@ class AnnularDetector(AbstractDetector):
                  offset: Tuple[float, float] = None,
                  ensemble_mean: bool = True,
                  to_cpu: bool = True,
-                 url: str = None):
+                 url: str = None,
+                 detect_every: int = None):
         self._inner = inner
         self._outer = outer
         self._offset = offset
-        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url)
+        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url, detect_every=detect_every)
 
     def stack_measurements(self, measurements, axes_metadata):
         return stack_measurements(measurements, axes_metadata)
@@ -580,7 +586,7 @@ class FlexibleAnnularDetector(AbstractRadialDetector):
         #     step_size = self.step_size
         # else:
         #     step_size = min(waves.angular_sampling)
-
+        #print(waves.cutoff_angles)
         return int(np.floor(min(waves.cutoff_angles)) / self.step_size)
 
     def _calculate_nbins_azimuthal(self, waves):
@@ -761,7 +767,8 @@ class PixelatedDetector(AbstractDetector):
         if scan is not None:
             extra_axes_metadata = scan.axes_metadata + extra_axes_metadata
         if self.fourier_space:
-            return {'sampling': waves.angular_sampling,
+            return {'sampling': waves.fourier_space_sampling,
+                    'fftshift':True,
                     'energy': waves.energy,
                     'extra_axes_metadata': extra_axes_metadata,
                     'metadata': waves.metadata}
@@ -839,15 +846,15 @@ class PixelatedDetector(AbstractDetector):
     #
     #     # return interpolate_bilinear(array, v, u, vw, uw)
 
-    def measurement_from_array(self, array, scan=None, waves=None, extra_axes_metadata=None, **kwargs):
-
-        if extra_axes_metadata is None:
-            extra_axes_metadata = []
-
-        extra_axes_metadata = extra_axes_metadata + scan.axes_metadata
-
-        return DiffractionPatterns(array, sampling=waves.fourier_space_sampling, energy=waves.energy,
-                                   extra_axes_metadata=extra_axes_metadata, fftshift=True)
+    # def measurement_from_array(self, array, scan=None, waves=None, extra_axes_metadata=None, **kwargs):
+    #
+    #     if extra_axes_metadata is None:
+    #         extra_axes_metadata = []
+    #
+    #     extra_axes_metadata = extra_axes_metadata + scan.axes_metadata
+    #
+    #     return DiffractionPatterns(array, sampling=waves.fourier_space_sampling, energy=waves.energy,
+    #                                extra_axes_metadata=extra_axes_metadata, fftshift=True)
 
     def detect(self, waves) -> np.ndarray:
 
@@ -939,7 +946,7 @@ class WavesDetector(AbstractDetector):
 
         return {'sampling': waves.sampling,
                 'energy': waves.energy,
-                'antialias_aperture': waves.antialias_aperture,
+                'antialias_cutoff_gpts': waves.antialias_cutoff_gpts,
                 'tilt': waves.tilt,
                 'extra_axes_metadata': extra_axes_metadata,
                 'metadata': waves.metadata}

@@ -17,6 +17,9 @@ from abtem.core.utils import subdivide_into_chunks, generate_chunks
 
 
 def validate_scan(scan, ctf=None, extent=None):
+    if scan is None:
+        scan = GridScan()
+
     if not hasattr(scan, 'get_positions'):
         scan = CustomScan(scan)
 

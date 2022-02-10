@@ -1,3 +1,4 @@
+from abc import abstractmethod
 from copy import copy, deepcopy
 from typing import Union, Sequence, Tuple, Dict, List
 
@@ -5,9 +6,10 @@ import dask
 import dask.array as da
 import numpy as np
 from ase import Atoms
+from numba.core.errors import NumbaPerformanceWarning
 
 from abtem.core.antialias import AntialiasAperture
-from abtem.core.axes import FrozenPhononsAxis, HasAxes, OrdinalAxis, RealSpaceAxis, AxisMetadata, PrismPlaneWavesAxis
+from abtem.core.axes import FrozenPhononsAxis, OrdinalAxis, RealSpaceAxis, AxisMetadata, PrismPlaneWavesAxis
 from abtem.core.backend import get_array_module, cp, copy_to_device, _validate_device
 from abtem.core.complex import complex_exponential
 from abtem.core.dask import HasDaskArray, validate_lazy, ComputableList
@@ -17,7 +19,7 @@ from abtem.core.utils import generate_chunks
 from abtem.ionization.multislice import linear_scaling_transition_multislice
 from abtem.measure.detect import AbstractDetector, validate_detectors, stack_measurement_ensembles, \
     allocate_measurements
-from abtem.measure.measure import AbstractMeasurement, stack_measurements
+from abtem.measure.measure import AbstractMeasurement
 from abtem.potentials.potentials import AbstractPotential, validate_potential
 from abtem.waves.base import WavesLikeMixin
 from abtem.waves.multislice import multislice
@@ -26,8 +28,7 @@ from abtem.waves.prism_utils import prism_wave_vectors, partitioned_prism_wave_v
 from abtem.waves.scan import AbstractScan, GridScan, LineScan, CustomScan, validate_scan
 from abtem.waves.tilt import BeamTilt
 from abtem.waves.transfer import CTF
-from abtem.waves.waves import Waves
-from numba.core.errors import NumbaPerformanceWarning
+from abtem.waves.waves import Waves, Probe, MetaWaves
 
 
 def batch_crop_2d(array: np.ndarray, corners: Tuple[int, int], new_shape: Tuple[int, int]):
@@ -150,7 +151,7 @@ def _reduce_partitioned(s_matrix, basis, positions: np.ndarray, axes_metadata) -
                   sampling=s_matrix.sampling,
                   energy=s_matrix.energy,
                   extra_axes_metadata=axes_metadata,
-                  antialias_aperture=s_matrix.antialias_aperture)
+                  antialias_cutoff_gpts=s_matrix.antialias_cutoff_gpts)
 
     return waves
 
@@ -172,7 +173,6 @@ def _reduce(s_matrix, basis, positions: np.ndarray, axes_metadata):
     coefficients *= complex_exponential(-2. * xp.pi * positions[..., 1, None] * wave_vectors[:, 1][None])
     coefficients *= basis
 
-
     if not s_matrix.array.shape[-2:] == s_matrix.interpolated_gpts:
         crop_corner, size, corners = _minimum_crop(offset_positions, s_matrix.sampling, s_matrix.interpolated_gpts)
 
@@ -189,11 +189,13 @@ def _reduce(s_matrix, basis, positions: np.ndarray, axes_metadata):
 
     array = array.reshape(out_shape + array.shape[-2:])
 
+    antialias_cutoff_gpts = s_matrix.meta_waves.antialias_cutoff_gpts
+
     waves = Waves(array,
                   sampling=s_matrix.sampling,
                   energy=s_matrix.energy,
                   extra_axes_metadata=axes_metadata,
-                  antialias_aperture=s_matrix.antialias_aperture,
+                  antialias_cutoff_gpts=antialias_cutoff_gpts,
                   metadata=s_matrix.metadata)
 
     return waves
@@ -242,15 +244,12 @@ def _reduce(s_matrix, basis, positions: np.ndarray, axes_metadata):
 #     return measurements
 
 def reduce_s_matrix(s_matrix, detectors, scan, ctf, positions_per_reduction):
-
-    measurements = [detector.allocate_measurement(s_matrix, scan) for detector in detectors]
+    measurements = None
     for i, (indices, waves) in enumerate(s_matrix._generate_waves(scan, ctf, positions_per_reduction)):
-        #print(s_matrix.cutoff_angles, waves.cutoff_angles)
-        #print(s_matrix.antialias_aperture, waves.antialias_aperture)
-        #print(s_matrix.interpolated_gpts, waves.gpts)
-        #print(s_matrix.antialias_cutoff_gpts, waves.antialias_cutoff_gpts)
-        #if i == 0:
 
+        if i == 0:
+            meta_waves = s_matrix.meta_waves
+            measurements = [detector.allocate_measurement(meta_waves, scan) for detector in detectors]
 
         for j, detector in enumerate(detectors):
             measurements[j].array[indices] = detector.detect(waves).array
@@ -273,6 +272,40 @@ def stack_s_matrices(s_matrices, axes_metadata):
 
 class AbstractSMatrix(WavesLikeMixin):
     planewave_cutoff: float
+    interpolation: Tuple[int, int]
+
+    @property
+    @abstractmethod
+    def interpolated_gpts(self):
+        pass
+
+    # def equivalent_probe(self):
+    #     gpts = self.interpolated_gpts
+    #     extent = (gpts[0] * self.sampling[0], gpts[1] * self.sampling[1])
+    #     probe = Probe(gpts=gpts, extent=extent, energy=self.energy, device=self.device)
+    #     if self._antialias_cutoff_gpts is not None:
+    #         probe._antialias_cutoff_gpts = (self._antialias_cutoff_gpts[0] // self.interpolation[0],
+    #                                         self._antialias_cutoff_gpts[1] // self.interpolation[1])
+    #     return probe
+
+    @property
+    def meta_waves(self):
+        gpts = self.interpolated_gpts
+        extent = (gpts[0] * self.sampling[0], gpts[1] * self.sampling[1])
+
+        if self._antialias_cutoff_gpts is not None:
+            antialias_cutoff_gpts = (self._antialias_cutoff_gpts[0] // self.interpolation[0],
+                                     self._antialias_cutoff_gpts[1] // self.interpolation[1])
+        else:
+            antialias_cutoff_gpts = None
+        waves = MetaWaves(gpts=gpts,
+                          extent=extent,
+                          energy=self.energy,
+                          antialias_cutoff_gpts=antialias_cutoff_gpts,
+                          extra_axes_shape=self.extra_axes_shape,
+                          extra_axes_metadata=self.extra_axes_metadata,
+                          device=self.device)
+        return waves
 
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
@@ -359,7 +392,7 @@ class SMatrixArray(HasDaskArray, AbstractSMatrix):
                  accumulated_defocus: float = 0.,
                  crop_offset: Tuple[int, int] = (0, 0),
                  uncropped_gpts: Tuple[int, int] = None,
-                 antialias_aperture: float = None,
+                 antialias_cutoff_gpts: Tuple[int, int] = None,
                  normalization: str = 'probe',
                  device: str = None,
                  extra_axes_metadata: List[Dict] = None,
@@ -370,7 +403,7 @@ class SMatrixArray(HasDaskArray, AbstractSMatrix):
         self._grid = Grid(gpts=array.shape[-2:], sampling=sampling, lock_gpts=True)
 
         self._beam_tilt = BeamTilt(tilt=tilt)
-        self._antialias_aperture = AntialiasAperture(cutoff=antialias_aperture)
+        self._antialias_cutoff_gpts = antialias_cutoff_gpts
         self._accelerator = Accelerator(energy=energy)
         self._device = _validate_device(device)
 
@@ -520,7 +553,6 @@ class SMatrixArray(HasDaskArray, AbstractSMatrix):
         d = self._copy_as_dict(copy_array=False)
         d['array'] = waves.array
         d['sampling'] = waves.sampling
-        d['antialias_aperture'] = waves.antialias_aperture
         return self.__class__(**d)
 
     def streaming_multislice(self, potential, chunks=None, **kwargs):
@@ -534,7 +566,7 @@ class SMatrixArray(HasDaskArray, AbstractSMatrix):
 
         return self
 
-    def multislice(self, potential: AbstractPotential, chunks=None, **kwargs) -> 'SMatrixArray':
+    def multislice(self, potential: Union[Atoms, AbstractPotential], chunks: int = None, **kwargs) -> 'SMatrixArray':
         """
         Propagate the scattering matrix through the provided potential.
 
@@ -651,16 +683,17 @@ class SMatrixArray(HasDaskArray, AbstractSMatrix):
 
     def _apply_reduction_func(self, func, detectors, scan, **kwargs):
         detectors = validate_detectors(detectors)
+        meta_waves = self.meta_waves
 
-        new_cls = [detector.measurement_type(self, scan) for detector in detectors]
-        new_cls_kwargs = [detector.measurement_kwargs(self, scan=scan) for detector in detectors]
+        new_cls = [detector.measurement_type(meta_waves, scan) for detector in detectors]
+        new_cls_kwargs = [detector.measurement_kwargs(meta_waves, scan=scan) for detector in detectors]
 
         signatures = []
         output_sizes = {}
         meta = []
         i = 3
         for detector in detectors:
-            shape = detector.measurement_shape(self, scan=scan)[self.num_extra_axes:]
+            shape = detector.measurement_shape(meta_waves, scan=scan)[self.num_extra_axes:]
             signatures.append(f'({",".join([str(i) for i in range(i, i + len(shape))])})')
             output_sizes.update({str(index): n for index, n in zip(range(i, i + len(shape)), shape)})
             meta.append(np.array((), dtype=detector.measurement_dtype))
@@ -758,8 +791,7 @@ class SMatrixArray(HasDaskArray, AbstractSMatrix):
                positions: Union[np.ndarray, AbstractScan] = None,
                ctf: Union[CTF, Dict] = None,
                distribute_scan: Union[int, Tuple[int, int]] = False,
-               probes_per_reduction: int = None,
-               max_concurrent: int = None) -> Union[Waves, AbstractMeasurement, List[AbstractMeasurement]]:
+               probes_per_reduction: int = None) -> Union[Waves, AbstractMeasurement, List[AbstractMeasurement]]:
 
         """
         Scan the probe across the potential and record a measurement for each detector.
@@ -775,10 +807,8 @@ class SMatrixArray(HasDaskArray, AbstractSMatrix):
         distribute_scan : two int, optional
             Partitioning of the scan. The scattering matrix will be reduced in similarly partitioned chunks.
             Should be equal to or greater than the interpolation.
-        positions_per_reduction : int, optional
-            Number of positions per reduction operation.
-        max_concurrent : int, optional
-            Maximum number of scattering matrices in memory at any point.
+        probes_per_reduction : int, optional
+            Number of positions per reduction operation. To utilize thread
         """
 
         positions_per_reduction = self._validate_positions_per_reduction(probes_per_reduction)
@@ -827,7 +857,7 @@ class SMatrixArray(HasDaskArray, AbstractSMatrix):
              'uncropped_gpts': self._uncropped_gpts,
              'tilt': self.tilt,
              'partitions': self.partitions,
-             'antialias_aperture': self.antialias_aperture,
+             'antialias_cutoff_gpts': self.antialias_cutoff_gpts,
              'device': self._device,
              'extra_axes_metadata': deepcopy(self._extra_axes_metadata),
              'metadata': copy(self.metadata)}
@@ -906,7 +936,6 @@ class SMatrix(AbstractSMatrix):
 
         self._accelerator = Accelerator(energy=energy)
         self._beam_tilt = BeamTilt(tilt=tilt)
-        self._antialias_aperture = AntialiasAperture()
         self._partitions = partitions
 
         self._normalize = normalize
@@ -914,6 +943,7 @@ class SMatrix(AbstractSMatrix):
         self._store_on_host = store_on_host
 
         self._extra_axes_metadata = []
+        self._antialias_cutoff_gpts = None
 
     @property
     def metadata(self):
@@ -1036,10 +1066,6 @@ class SMatrix(AbstractSMatrix):
             gpts = self.gpts
 
         sampling = (self.extent[0] / gpts[0], self.extent[1] / gpts[1])
-        antialias_aperture = self.antialias_aperture
-
-        if downsample:
-            antialias_aperture *= min(self.gpts[0] / gpts[0], self.gpts[1] / gpts[1])
 
         if self.potential is None:
             potentials = [None]
@@ -1084,10 +1110,14 @@ class SMatrix(AbstractSMatrix):
                                     tilt=self.tilt,
                                     partitions=self.partitions,
                                     wave_vectors=self.wave_vectors,
-                                    antialias_aperture=antialias_aperture,
+                                    antialias_cutoff_gpts=self.antialias_cutoff_gpts,
                                     device=self._device,
                                     metadata=self.metadata)
 
+            # print(gpts)
+            # print(sampling, self.sampling)
+            # print(s_matrix.cutoff_angles, self.cutoff_angles)
+            # sss
             if self.potential is not None:
                 s_matrix.accumulated_defocus = self.potential.thickness
 
@@ -1098,7 +1128,7 @@ class SMatrix(AbstractSMatrix):
                    start: int = 0,
                    stop: int = None,
                    lazy: bool = None,
-                   downsample=False):
+                   downsample: bool = False):
         if potential is not None:
             potential = validate_potential(potential, self)
             self.grid.match(potential)
@@ -1111,15 +1141,27 @@ class SMatrix(AbstractSMatrix):
               lazy: bool = None,
               downsample: Union[float, str] = False) -> SMatrixArray:
         """
-        Build scattering matrix and propagate the scattering matrix through the provided potential.
+        Build the plane waves of the scattering matrix and propagate the waves through the potential using the
+        multislice algorithm.
 
         Parameters
         ----------
+        start : int
+            First slice index for running the multislice algorithm. Default is first slice of the potential.
+        stop : int
+            Last slice for running the multislice algorithm. If smaller than start the multislice algorithm will run
+            in the reverse direction. Default is last slice of the potential.
         lazy : bool
+            If True, build the scattering matrix lazily with dask array.
+        downsample : float or str or False
+            If not False, the scattering matrix is downsampled to a maximum given scattering angle after running the
+            multislice algorithm. If downsample is given as a float angle may be given as a float
+
+            is given the scattering matrix is downsampled to a maximum scattering angle
 
         Returns
         -------
-        SMatrixArray object
+        SMatrixArray
         """
 
         generator = self._generate_s_matrices(lazy=lazy, start=start, stop=stop, downsample=downsample)
@@ -1154,19 +1196,19 @@ class SMatrix(AbstractSMatrix):
 
         Parameters
         ----------
-        detectors : List of Detector objects
+        detectors : detector and list of Detector
             The detectors recording the measurements.
-        positions : Scan object
+        scan : Scan object
             Scan defining the positions of the probe wave functions.
         ctf: CTF object, optional
             The probe contrast transfer function. Default is None (aperture is set by the planewave cutoff).
-        scan_partitions : two int, optional
+        distribute_scan : two int, optional
             Partitioning of the scan. The scattering matrix will be reduced in similarly partitioned chunks.
             Should be equal to or greater than the interpolation.
-        positions_per_reduction : int, optional
-            Number of positions per reduction operation.
-        max_concurrent : int, optional
-            Maximum number of scattering matrices in memory at any point.
+        probes_per_reduction : int, optional
+            Number of probe positions per reduction operation.
+        lazy : bool
+
         """
 
         lazy = validate_lazy(lazy)
@@ -1183,15 +1225,24 @@ class SMatrix(AbstractSMatrix):
         detectors = validate_detectors(detectors)
         s_matrix_generator = self._generate_s_matrices(lazy=lazy, downsample=downsample)
 
+        # print(detectors[0].measurement_shape(self.equivalent_probe()))
+
         measurements = []
         for i, s_matrix in enumerate(s_matrix_generator):
             waves_generator = s_matrix._generate_waves(scan, ctf, probes_per_reduction)
-
+            # print(self.cutoff_angles)
+            # print(s_matrix.cutoff_angles)
+            # sss
             if i == 0:
-                measurements = allocate_measurements(s_matrix, scan, detectors, self.potential)
+                meta_waves = s_matrix.meta_waves
+                measurements = allocate_measurements(meta_waves, scan, detectors, self.potential)
 
             for indices, exit_waves in waves_generator:
+
+                # print(exit_waves.cutoff_angles, probe.cutoff_angles, self.cutoff_angles)
+
                 for detector, measurement in zip(detectors, measurements):
+
                     new_measurements = detector.detect(exit_waves)
 
                     if measurement.frozen_phonon_axes:

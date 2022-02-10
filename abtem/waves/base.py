@@ -4,22 +4,21 @@ from typing import Union, Tuple, List
 import numpy as np
 from ase import Atoms
 
-from abtem.core.antialias import HasAntialiasApertureMixin
 from abtem.core.axes import HasAxes
 from abtem.core.axes import RealSpaceAxis, FourierSpaceAxis, AxisMetadata
-from abtem.core.energy import HasAcceleratorMixin
 from abtem.core.backend import HasDevice
+from abtem.core.energy import HasAcceleratorMixin
 from abtem.core.grid import HasGridMixin
 from abtem.potentials.potentials import Potential, AbstractPotential
 from abtem.waves.tilt import HasBeamTiltMixin
 
 
-class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAntialiasApertureMixin, HasAxes,
-                     HasDevice):
+def safe_floor_int(n: float, tol: int = 7):
+    return int(np.floor(np.round(n, decimals=tol)))
 
-    @property
-    def interpolated_gpts(self):
-        return self.gpts
+
+class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAxes, HasDevice):
+    _antialias_cutoff_gpts: Union[Tuple[int, int], None] = None
 
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
@@ -36,18 +35,24 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAnt
 
     @property
     def antialias_valid_gpts(self) -> Tuple[int, int]:
-        self.grid.check_is_defined()
-        return self._valid_rectangle(self.interpolated_gpts, self.sampling)
+        cutoff_gpts = self.antialias_cutoff_gpts
+        return safe_floor_int(cutoff_gpts[0] / np.sqrt(2)), safe_floor_int(cutoff_gpts[0] / np.sqrt(2))
 
     @property
     def antialias_cutoff_gpts(self) -> Tuple[int, int]:
         self.grid.check_is_defined()
-        return self._cutoff_rectangle(self.interpolated_gpts, self.sampling)
+        if self._antialias_cutoff_gpts is not None:
+            return self._antialias_cutoff_gpts
+
+        kcut = 2. / 3. / max(self.sampling)
+        extent = self.gpts[0] * self.sampling[0], self.gpts[1] * self.sampling[1]
+
+        return safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
 
     def _gpts_within_angle(self, angle: Union[None, float, str]) -> Tuple[int, int]:
 
         if angle is None:
-            return self.interpolated_gpts
+            return self.gpts
 
         elif not isinstance(angle, str):
             return (int(2 * np.ceil(angle / self.angular_sampling[0])) + 1,
@@ -73,13 +78,13 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAnt
 
     @property
     def full_cutoff_angles(self) -> Tuple[float, float]:
-        return (self.interpolated_gpts[0] // 2 * self.angular_sampling[0],
-                self.interpolated_gpts[1] // 2 * self.angular_sampling[1])
+        return (self.gpts[0] // 2 * self.angular_sampling[0],
+                self.gpts[1] // 2 * self.angular_sampling[1])
 
     @property
     def fourier_space_sampling(self) -> Tuple[float, float]:
         self.grid.check_is_defined()
-        return 1 / (self.interpolated_gpts[0] * self.sampling[0]), 1 / (self.interpolated_gpts[1] * self.sampling[1])
+        return 1 / (self.gpts[0] * self.sampling[0]), 1 / (self.gpts[1] * self.sampling[1])
 
     @property
     def angular_sampling(self) -> Tuple[float, float]:

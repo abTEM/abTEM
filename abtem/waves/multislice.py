@@ -97,9 +97,6 @@ class FresnelPropagator(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, Has
         return waves
 
 
-
-
-
 # def multislice_and_detect(exit_waves_func, potentials, detectors, **kwargs):
 #     measurements = [] #[[] for i in range(len(potentials))]
 #
@@ -142,6 +139,7 @@ def multislice(waves: 'Waves',
                antialias_aperture: AntialiasAperture = None,
                start: int = 0,
                stop: int = None,
+               detectors=None,
                conjugate: bool = False):
     if stop is None:
         stop = len(potential)
@@ -159,7 +157,6 @@ def multislice(waves: 'Waves',
 
     propagator.match_waves(waves)
 
-    streaming = False
     for i, potential_slices in enumerate(potential.generate_slices(start=start, stop=stop)):
 
         # if i == 0:
@@ -189,5 +186,8 @@ def multislice(waves: 'Waves',
                 # propagator.thickness = transmission_function.slice_thickness[0]
                 waves = transmission_function.transmit(waves, conjugate=conjugate)
                 waves = propagator.propagate(waves)
+
+            if detectors is not None:
+                pass
 
     return waves

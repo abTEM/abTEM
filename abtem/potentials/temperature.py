@@ -8,13 +8,11 @@ import dask
 import numpy as np
 from ase import Atoms
 from ase.data import chemical_symbols
+import dask.array as da
 
 
 class AbstractFrozenPhonons(metaclass=ABCMeta):
     """Abstract base class for frozen phonons objects."""
-
-    def __init__(self, ensemble_mean: bool = True):
-        self._ensemble_mean = ensemble_mean
 
     @abstractmethod
     def __len__(self):
@@ -145,13 +143,18 @@ class FrozenPhonons(AbstractFrozenPhonons):
         return axes
 
     def get_configurations(self, lazy: bool = False) -> List[Atoms]:
-        if self.seed:
-            np.random.seed(self.seed)
+        if self.seed is not False:
+            if lazy:
+                rnd = dask.delayed(np.random.RandomState)(seed=self.seed)
+            else:
+                rnd = np.random.RandomState(seed=self.seed)
+        else:
+            rnd = np.random.RandomState()
 
         def load_atoms():
             return self.atoms
 
-        def jiggle_atoms(atoms, sigmas, directions):
+        def jiggle_atoms(atoms, sigmas, directions, rnd):
 
             if isinstance(sigmas, Mapping):
                 temp = np.zeros(len(atoms.numbers), dtype=np.float32)
@@ -163,18 +166,20 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
             atoms = atoms.copy()
 
+            r = rnd.normal(size=(len(atoms), 3))
             for direction in directions:
-                atoms.positions[:, direction] += sigmas * np.random.randn(len(atoms))
+                atoms.positions[:, direction] += sigmas * r[:, direction]
 
             return atoms
 
         configurations = []
         for i in range(self.num_configs):
+
             if lazy:
                 atoms = dask.delayed(load_atoms)()
-                configurations.append(dask.delayed(jiggle_atoms)(atoms, self.sigmas, self.axes))
+                configurations.append(dask.delayed(jiggle_atoms)(atoms, self.sigmas, self.axes, rnd))
             else:
-                configurations.append(jiggle_atoms(self.atoms, self.sigmas, self.axes))
+                configurations.append(jiggle_atoms(self.atoms, self.sigmas, self.axes, rnd))
 
         return configurations
 

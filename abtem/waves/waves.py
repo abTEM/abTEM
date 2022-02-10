@@ -31,7 +31,39 @@ from abtem.waves.transfer import CTF
 from numbers import Number
 
 
-class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
+class MetaWaves(WavesLikeMixin):
+
+    def __init__(self,
+                 gpts=None,
+                 extent=None,
+                 sampling=None,
+                 energy=None,
+                 antialias_cutoff_gpts=None,
+                 tilt=(0., 0.),
+                 device='cpu',
+                 extra_axes_shape=(),
+                 extra_axes_metadata=None,
+                 metadata=None):
+        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
+        self._accelerator = Accelerator(energy=energy)
+        self._beam_tilt = BeamTilt(tilt=tilt)
+        self._antialias_cutoff_gpts = antialias_cutoff_gpts
+        self._extra_axes_shape = extra_axes_shape
+        self._extra_axes_metadata = [] if extra_axes_metadata is None else extra_axes_metadata
+        self._metadata = {} if metadata is None else metadata
+        self._device = device
+        self._check_axes_metadata()
+
+    @property
+    def metadata(self):
+        return self._metadata
+
+    @property
+    def shape(self):
+        return self._extra_axes_shape + self.gpts
+
+
+class Waves(HasDaskArray, WavesLikeMixin):
     """
     Waves object
 
@@ -57,7 +89,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
                  extent: Union[float, Tuple[float, float]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
                  tilt: Tuple[float, float] = (0., 0.),
-                 antialias_aperture: float = 2 / 3.,
+                 antialias_cutoff_gpts: Tuple[int, int] = None,
                  extra_axes_metadata: List[AxisMetadata] = None,
                  metadata: Dict = None):
 
@@ -67,18 +99,18 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
         self._grid = Grid(extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True)
         self._accelerator = Accelerator(energy=energy)
         self._beam_tilt = BeamTilt(tilt=tilt)
-        self._antialias_aperture = AntialiasAperture(cutoff=antialias_aperture)
+        self._antialias_cutoff_gpts = antialias_cutoff_gpts
+        # self._antialias_aperture = AntialiasAperture(cutoff=antialias_aperture)
 
         super().__init__(array=array)
 
         if extra_axes_metadata is None:
             extra_axes_metadata = []
 
-        self._extra_axes_metadata = extra_axes_metadata
-
         if metadata is None:
             metadata = {}
 
+        self._extra_axes_metadata = extra_axes_metadata
         self._metadata = metadata
 
         self._check_axes_metadata()
@@ -134,6 +166,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
 
         xp = get_array_module(self.array)
         gpts = self._gpts_within_angle(max_angle)
+
         if self.is_lazy:
             array = self.array.map_blocks(fft2_interpolate,
                                           new_shape=gpts,
@@ -143,11 +176,12 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
         else:
             array = fft2_interpolate(self.array, new_shape=gpts, normalization=normalization)
 
-        antialias_aperture = self.antialias_aperture * min(self.gpts[0] / gpts[0], self.gpts[1] / gpts[1])
+        # antialias_aperture = max(new_sampling) / max(self.sampling) * self.antialias_aperture
 
         d = self._copy_as_dict(copy_array=False)
         d['array'] = array
-        d['antialias_aperture'] = antialias_aperture
+        d['sampling'] = (self.extent[0] / gpts[0], self.extent[1] / gpts[1])
+        # d['antialias_aperture'] = antialias_aperture
         return self.__class__(**d)
 
     def detect(self, detectors: Union[AbstractDetector, List[AbstractDetector]]) \
@@ -359,7 +393,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
         self.accelerator.check_is_defined()
         potential = self._validate_potential(potential)
 
-        #if detectors is None:
+        # if detectors is None:
         #    detectors = [WavesDetector()]
 
         potentials = potential.get_potential_distribution(lazy=self.is_lazy)
@@ -380,10 +414,6 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
                 waves = self._multislice(potential, start=start, stop=stop, conjugate=conjugate)
                 for detectors in detectors:
                     pass
-
-
-
-
 
         # return multislice_and_detect(self._multislice,
         #                              potentials,
@@ -460,7 +490,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
             energy = f.attrs['energy']
             extent = f.attrs['extent']
             tilt = f.attrs['tilt']
-            antialias_aperture = f.attrs['antialias_aperture']
+            antialias_cutoff_gpts = f.attrs['antialias_cutoff_gpts']
             extra_axes_metadata = [axis_from_dict(d) for d in f.attrs['extra_axes_metadata']]
             metadata = f.attrs['metadata']
             shape = f['array'].shape
@@ -469,7 +499,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
             chunks = (-1,) * (len(shape) - 2)
 
         array = da.from_zarr(url, component='array', chunks=chunks + (-1, -1))
-        return cls(array=array, energy=energy, extent=extent, tilt=tilt, antialias_aperture=antialias_aperture,
+        return cls(array=array, energy=energy, extent=extent, tilt=tilt, antialias_cutoff_gpts=antialias_cutoff_gpts,
                    extra_axes_metadata=extra_axes_metadata, metadata=metadata)
 
     def __getitem__(self, items) -> 'Waves':
@@ -508,7 +538,7 @@ class Waves(HasDaskArray, WavesLikeMixin, HasAxes):
         d = {'tilt': self.tilt,
              'energy': self.energy,
              'extent': self.extent,
-             'antialias_aperture': self.antialias_aperture,
+             'antialias_cutoff_gpts': self.antialias_cutoff_gpts,
              'extra_axes_metadata': deepcopy(self._extra_axes_metadata),
              'metadata': copy(self.metadata)}
 
@@ -696,12 +726,12 @@ class Probe(WavesLikeMixin):
         self._ctf = ctf
         self._accelerator = self._ctf._accelerator
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
-        self._antialias_aperture = AntialiasAperture()
         self._beam_tilt = BeamTilt(tilt=tilt)
         self._device = _validate_device(device)
         self._normalize = normalize
 
         self._extra_axes_metadata = []
+        self._antialias_cutoff_gpts = None
 
     @property
     def metadata(self):
@@ -849,6 +879,7 @@ class Probe(WavesLikeMixin):
             Probe exit wave functions as a Waves object.
         """
         lazy = validate_lazy(lazy)
+
         potential = validate_potential(potential, self)
 
         if positions is None:
@@ -872,6 +903,7 @@ class Probe(WavesLikeMixin):
             return stack_measurement_ensembles(detectors, measurements)
 
         measurements = allocate_measurements(self, scan, detectors, potential)
+
         for i, potential in enumerate(potential.get_potential_distribution(lazy=lazy)):
 
             for indices, waves in self._generate_waves(scan, potential, chunks):
