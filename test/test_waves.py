@@ -10,7 +10,8 @@ from abtem.core.backend import get_array_module
 from abtem.core.energy import EnergyUndefinedError, energy2wavelength
 from abtem.core.grid import GridUndefinedError
 from test_grid import grid_data, _test_grid_consistent
-from utils import ensure_is_tuple, check_array_matches_device, check_array_matches_laziness
+from utils import ensure_is_tuple, check_array_matches_device, check_array_matches_laziness, gpu
+
 
 wave_data = st.fixed_dictionaries(
     {'energy': abst.energy(),
@@ -40,7 +41,7 @@ def test_energy_raises(grid_data, energy, builder):
 
 @settings(deadline=None)
 @pytest.mark.parametrize("builder", [Probe, PlaneWave, SMatrix])
-@pytest.mark.parametrize("device", ['cpu', 'gpu'])
+@pytest.mark.parametrize("device", ['cpu', gpu])
 @pytest.mark.parametrize("lazy", [True, False])
 @given(grid_data=grid_data(), wave_data=wave_data)
 def test_can_build(grid_data, wave_data, builder, device, lazy):
@@ -76,7 +77,7 @@ def test_can_compute(grid_data, wave_data, lazy, builder):
        gpts=abst.gpts())
 @pytest.mark.parametrize("builder", [PlaneWave, Probe, SMatrix])
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ['cpu', 'gpu'])
+@pytest.mark.parametrize("device", ['cpu', gpu])
 def test_can_multislice(atom_data, wave_data, gpts, lazy, builder, device):
     atoms = Atoms(**atom_data)
     probe = builder(gpts=gpts, **wave_data, device=device)
@@ -150,7 +151,7 @@ def test_probe_empty_multislice(atom_data, wave_data, sampling, lazy):
        planewave_cutoff=st.floats(min_value=5., max_value=10.),
        sampling=abst.sampling())
 @pytest.mark.parametrize("lazy", [True, False])
-@pytest.mark.parametrize("device", ['cpu', 'gpu'])
+@pytest.mark.parametrize("device", ['cpu', gpu])
 def test_s_matrix_empty_multislice(atom_data, wave_data, sampling, lazy, planewave_cutoff, device):
     atoms = Atoms(**atom_data)
     max_planewave_cutoff = 0.9 * antialias_cutoff_angle(max(ensure_is_tuple(sampling, 2)), wave_data['energy'])

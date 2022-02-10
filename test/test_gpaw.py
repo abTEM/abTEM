@@ -1,11 +1,16 @@
 from ase import Atoms
-from gpaw import GPAW
 
 from abtem import Potential
-from abtem.potentials.gpaw import GPAWPotential
 from utils import array_is_close
 import pytest
-from gpaw.utilities.ps2ae import PS2AE
+import sys
+
+try:
+    from abtem.potentials.gpaw import GPAWPotential
+    from gpaw import GPAW
+    from gpaw.utilities.ps2ae import PS2AE
+except ImportError:
+    pass
 
 
 @pytest.fixture
@@ -17,6 +22,7 @@ def single_atom_gpaw_calculator(symbol='C'):
     return gpaw
 
 
+@pytest.mark.skipif('gpaw' not in sys.modules, reason="requires gpaw")
 def test_ps2ae_vs_abtem(single_atom_gpaw_calculator):
     ps2ae_potential = PS2AE(single_atom_gpaw_calculator, grid_spacing=0.02).get_electrostatic_potential()
     ps2ae_potential = - ps2ae_potential * single_atom_gpaw_calculator.atoms.cell[2, 2] / ps2ae_potential.shape[-1]
@@ -29,6 +35,7 @@ def test_ps2ae_vs_abtem(single_atom_gpaw_calculator):
     array_is_close(ps2ae_potential[0, 2:-1], gpaw_potential[0, 2:-1], rel_tol=0.01, check_above_rel=.01)
 
 
+@pytest.mark.skipif('gpaw' not in sys.modules, reason="requires gpaw")
 def test_gpaw_vs_iam(single_atom_gpaw_calculator):
     gpaw_potential = GPAWPotential(single_atom_gpaw_calculator, gpts=256).build().project().array
     gpaw_potential -= gpaw_potential.min()

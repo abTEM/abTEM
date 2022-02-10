@@ -7,7 +7,8 @@ from hypothesis import given, settings
 import strats as abst
 from abtem.potentials.parametrizations import LobatoParametrization, KirklandParametrization
 from abtem.potentials.potentials import Potential
-from utils import array_is_close
+from utils import array_is_close, gpu
+
 
 
 @settings(deadline=None)
@@ -16,7 +17,7 @@ from utils import array_is_close
        slice_thickness=st.floats(min_value=.1, max_value=2.)
        )
 @pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('device', ['gpu', 'cpu'])
+@pytest.mark.parametrize('device', [gpu, 'cpu'])
 @pytest.mark.parametrize('parametrization', ['kirkland', 'lobato'])
 @pytest.mark.parametrize('projection', ['finite', 'infinite'])
 def test_build_is_lazy(atom_data, gpts, slice_thickness, lazy, device, parametrization, projection):
