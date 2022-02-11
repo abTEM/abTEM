@@ -3,9 +3,11 @@ from numbers import Number
 from typing import Union, Sequence
 
 import numpy as np
-from ase import Atoms
 from ase.build import cut
 from ase.cell import Cell
+from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.spatial.distance import pdist
+from ase import Atoms
 
 
 def is_cell_hexagonal(atoms: Atoms):
@@ -134,6 +136,61 @@ def decompose_affine_transform(A):
     return rotation, zoom, shear
 
 
+
+def label_to_index_generator(labels, first_label=0):
+    labels = labels.flatten()
+    labels_order = labels.argsort()
+    sorted_labels = labels[labels_order]
+    indices = np.arange(0, len(labels) + 1)[labels_order]
+    index = np.arange(first_label, np.max(labels) + 1)
+    lo = np.searchsorted(sorted_labels, index, side='left')
+    hi = np.searchsorted(sorted_labels, index, side='right')
+    for i, (l, h) in enumerate(zip(lo, hi)):
+        yield indices[l:h]
+
+def merge_close_atoms(atoms, tol=1e-7):
+    if len(atoms) < 2:
+        return atoms
+
+    points = atoms.positions
+    numbers = atoms.numbers
+
+    clusters = fcluster(linkage(pdist(points), method='complete'), tol, criterion='distance')
+    new_points = np.zeros_like(points)
+    new_numbers = np.zeros_like(numbers)
+
+    k = 0
+    for i, cluster in enumerate(label_to_index_generator(clusters, 1)):
+        new_points[i] = np.mean(points[cluster], axis=0)
+        assert np.all(numbers[cluster] == numbers[0])
+        new_numbers[i] = numbers[0]
+        k += 1
+
+    new_atoms = Atoms(positions = new_points[:k], numbers=new_numbers[:k], cell=atoms.cell)
+    return new_atoms
+
+def shrink_cell(atoms, n):
+    for i in range(3):
+        while True:
+            try:
+                atoms_copy = atoms.copy()
+                new_positions = atoms_copy.positions
+                new_positions[:,i] = new_positions[:,i] % (atoms_copy.cell[i,i] / n)
+                atoms_copy.positions[:] = new_positions
+
+                old_len = len(atoms_copy)
+                atoms_copy = merge_close_atoms(atoms_copy, 1e-5)
+
+                assert len(atoms_copy) == old_len // n
+                atoms_copy.cell[i] = atoms_copy.cell[i] / n
+
+                atoms = atoms_copy
+            except AssertionError:
+                break
+
+    return atoms
+
+
 def orthogonalize_cell(atoms: Atoms,
                        max_repetitions: int = 5,
                        return_transform: bool = False,
@@ -212,9 +269,9 @@ def orthogonalize_cell(atoms: Atoms,
 
     if return_transform and transform:
         rotation, zoom, shear = decompose_affine_transform(A)
-        return atoms, (np.array(rotation_matrix_to_euler(rotation)), zoom, shear)
+        return shrink_cell(atoms, 2), (np.array(rotation_matrix_to_euler(rotation)), zoom, shear)
     else:
-        return atoms
+        return shrink_cell(atoms, 2)
 
 
 def standardize_cell(atoms: Atoms, tol: float = 1e-12):
