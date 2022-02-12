@@ -34,11 +34,13 @@ else:
 T = TypeVar('T', bound='AbstractMeasurement')
 
 
-def _to_hyperspy_axes_metadata(axes_metadata, shape):
+def _to_hyperspy_axes_metadata(axes_metadata, shape, navigate_axes=None):
     hyperspy_axes = []
-    for metadata, n in zip(axes_metadata, shape):
-        hyperspy_axes.append({'size': n})
-        
+    if navigate_axes is None:
+        navigate_axes = (False, ) * len(shape)
+    for metadata, n, navigate in zip(axes_metadata, shape, navigate_axes):
+        hyperspy_axes.append({'size': n, 'navigate': navigate})
+
         axes_mapping = {'sampling': 'scale',
                         'units': 'units',
                         'label': 'name',
@@ -346,7 +348,7 @@ class Images(AbstractMeasurement):
             {'scale': self.sampling[0], 'units': 'Å', 'name': 'x', 'offset': 0., 'size': self.array.shape[0]}
         ]
 
-        axes += [{'size': n} for n in self.array.shape[:-2]]
+        axes += [{'size': n, 'navigate': True} for n in self.array.shape[:-2]]
 
         return Signal2D(self.array.T, axes=axes)
 
@@ -659,7 +661,13 @@ class LineProfiles(AbstractMeasurement):
 
     def to_hyperspy(self):
         from hyperspy._signals.signal1d import Signal1D
-        return Signal1D(self.array, axes=_to_hyperspy_axes_metadata(self.axes_metadata, self.shape)).as_lazy()
+
+        axes = _to_hyperspy_axes_metadata(self.axes_metadata, self.shape)
+        s = Signal1D(self.array, axes=axes)
+        if self.is_lazy:
+            s = s.as_lazy()
+
+        return s
 
     def _copy_as_dict(self, copy_array=True) -> dict:
         d = {'start': self.start,
@@ -766,7 +774,14 @@ class DiffractionPatterns(AbstractMeasurement, HasAcceleratorMixin):
 
     def to_hyperspy(self):
         from hyperspy._signals.signal2d import Signal2D
-        return Signal2D(self.array, axes=_to_hyperspy_axes_metadata(self.axes_metadata, self.shape)).as_lazy()
+
+        axes = _to_hyperspy_axes_metadata(self.axes_metadata, self.shape)
+        s = Signal2D(self.array, axes=axes)
+        s.set_signal_type('electron_diffraction')
+        if self.is_lazy:
+            s = s.as_lazy()
+
+        return s
 
     def _copy_as_dict(self, copy_array: bool = True) -> dict:
         d = {'sampling': self.sampling,
@@ -1137,7 +1152,18 @@ class PolarMeasurements(AbstractMeasurement):
                 LinearAxis(label='Azimuthal scattering angle', sampling=self.azimuthal_sampling, units='rad')]
 
     def to_hyperspy(self):
-        raise NotImplementedError
+        from hyperspy._signals.signal2d import Signal2D
+
+        axes = _to_hyperspy_axes_metadata(
+            self.axes_metadata,
+            self.shape,
+            (False, False, True, True)
+            )
+        s = Signal2D(self.array, axes=axes).squeeze()
+        if self.is_lazy:
+            s = s.as_lazy()
+
+        return s
 
     @property
     def radial_offset(self) -> float:
