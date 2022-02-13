@@ -9,7 +9,7 @@ _ROOT = os.path.abspath(os.path.dirname(__file__))
 @pytest.fixture(scope='session')
 def data_path():
     """Internal function to set the parametrization data directory."""
-    return os.path.join(_ROOT, '../data')
+    return os.path.join(_ROOT, '../test/data')
 
 @pytest.fixture(scope='session')
 def graphene_atoms(data_path):

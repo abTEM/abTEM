@@ -79,7 +79,7 @@ def test_partition():
 
 
 def test_partition_measurement():
-    atoms = read(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../data/amorphous_carbon.cif'))
+    atoms = read(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../test/data/amorphous_carbon.cif'))
     potential = Potential(atoms, gpts=256, slice_thickness=1, projection='infinite',
                           parametrization='kirkland').build(pbar=False)
 
@@ -100,7 +100,7 @@ def test_partition_measurement():
 
 
 def test_preallocated_measurement():
-    atoms = read(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../data/amorphous_carbon.cif'))
+    atoms = read(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../test/data/amorphous_carbon.cif'))
     potential = Potential(atoms, gpts=256, slice_thickness=1, projection='infinite',
                           parametrization='kirkland').build(pbar=False)
     scan = GridScan(start=[0, 0], end=potential.extent, gpts=4)
