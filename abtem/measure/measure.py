@@ -26,6 +26,7 @@ from abtem.visualize.utils import domain_coloring, add_domain_coloring_cbar
 
 if cp is not None:
     from abtem.core.cuda import sum_run_length_encoded as sum_run_length_encoded_cuda
+    from abtem.core.cuda import interpolate_bilinear as interpolate_bilinear_cuda
 else:
     sum_run_length_encoded_cuda = None
     interpolate_bilinear_cuda = None
@@ -689,33 +690,28 @@ class LineProfiles(AbstractMeasurement):
         return ax
 
 
-class RadialFourierSpaceLineProfiles(LineProfiles):
 
-    def __init__(self, array, sampling, extra_axes_metadata=None, metadata=None):
-        super().__init__(array=array, start=(0., 0.), end=(0., array.shape[-1] * sampling), sampling=sampling,
-                         extra_axes_metadata=extra_axes_metadata, metadata=metadata)
 
-    def show(self, ax=None, title='', **kwargs):
-        if ax is None:
-            ax = plt.subplot()
-
-        x = np.linspace(0., len(self.array) * self.sampling * 1000, len(self.array))
-
-        p = ax.plot(x, self.array, **kwargs)
-        ax.set_xlabel('Scattering angle [mrad]')
-        ax.set_title(title)
-        return ax, p
+def integrate_gradient_2d(gradient, sampling):
+    gx, gy = gradient.real, gradient.imag
+    (nx, ny) = gx.shape[-2:]
+    ikx = np.fft.fftfreq(nx, d=sampling[0])
+    iky = np.fft.fftfreq(ny, d=sampling[1])
+    grid_ikx, grid_iky = np.meshgrid(ikx, iky, indexing='ij')
+    k = grid_ikx ** 2 + grid_iky ** 2
+    k[k == 0] = 1e-12
+    That = (np.fft.fft2(gx) * grid_ikx + np.fft.fft2(gy) * grid_iky) / (2j * np.pi * k)
+    T = np.real(np.fft.ifft2(That))
+    T -= np.min(T)
+    return T
 
 
 def bilinear_nodes_and_weight(old_shape, new_shape, old_angular_sampling, new_angular_sampling, xp):
     nodes = []
     weights = []
 
-    old_sampling = (1 / old_angular_sampling[0] / old_shape[0],
-                    1 / old_angular_sampling[1] / old_shape[1])
-
-    new_sampling = (1 / new_angular_sampling[0] / new_shape[0],
-                    1 / new_angular_sampling[1] / new_shape[1])
+    old_sampling = 1 / old_angular_sampling[0] / old_shape[0], 1 / old_angular_sampling[1] / old_shape[1]
+    new_sampling = 1 / new_angular_sampling[0] / new_shape[0], 1 / new_angular_sampling[1] / new_shape[1]
 
     for n, m, r, d in zip(old_shape, new_shape, old_sampling, new_sampling):
         k = xp.fft.fftshift(xp.fft.fftfreq(n, r).astype(xp.float32))
@@ -731,20 +727,6 @@ def bilinear_nodes_and_weight(old_shape, new_shape, old_angular_sampling, new_an
     vw, uw = weights
     v, u, vw, uw = xp.broadcast_arrays(v[:, None], u[None, :], vw[:, None], uw[None, :])
     return v, u, vw, uw
-
-
-def integrate_gradient_2d(gradient, sampling):
-    gx, gy = gradient.real, gradient.imag
-    (nx, ny) = gx.shape[-2:]
-    ikx = np.fft.fftfreq(nx, d=sampling[0])
-    iky = np.fft.fftfreq(ny, d=sampling[1])
-    grid_ikx, grid_iky = np.meshgrid(ikx, iky, indexing='ij')
-    k = grid_ikx ** 2 + grid_iky ** 2
-    k[k == 0] = 1e-12
-    That = (np.fft.fft2(gx) * grid_ikx + np.fft.fft2(gy) * grid_iky) / (2j * np.pi * k)
-    T = np.real(np.fft.ifft2(That))
-    T -= np.min(T)
-    return T
 
 
 class DiffractionPatterns(AbstractMeasurement, HasAcceleratorMixin):
@@ -841,12 +823,10 @@ class DiffractionPatterns(AbstractMeasurement, HasAcceleratorMixin):
                             (self.shape[i] // 2 - 1) * self.angular_sampling[i])]
         return limits
 
-    def interpolate(self, new_sampling):
-        xp = get_array_module(self.array)
+    def interpolate(self, new_sampling: Union[str, float, Tuple[float, float]]):
 
         if new_sampling == 'uniform':
-            scale_factor = (self.angular_sampling[0] / max(self.angular_sampling),
-                            self.angular_sampling[1] / max(self.angular_sampling))
+            scale_factor = self.sampling[0] / max(self.sampling), self.sampling[1] / max(self.sampling)
 
             new_gpts = (int(np.ceil(self.base_shape[0] * scale_factor[0])),
                         int(np.ceil(self.base_shape[1] * scale_factor[1])))
@@ -854,19 +834,48 @@ class DiffractionPatterns(AbstractMeasurement, HasAcceleratorMixin):
             if np.abs(new_gpts[0] - new_gpts[1]) <= 2:
                 new_gpts = (min(new_gpts),) * 2
 
-            new_angular_sampling = (self.angular_sampling[0] / scale_factor[0],
-                                    self.angular_sampling[1] / scale_factor[1])
+            new_sampling = self.sampling[0] / scale_factor[0], self.sampling[1] / scale_factor[1]
 
         else:
             raise RuntimeError('')
 
-        v, u, vw, uw = bilinear_nodes_and_weight(self.array.shape[-2:],
-                                                 new_gpts,
-                                                 self.angular_sampling,
-                                                 new_angular_sampling,
-                                                 xp)
+        def interpolate(array, sampling, new_sampling, new_gpts):
+            xp = get_array_module(array)
+            v, u, vw, uw = bilinear_nodes_and_weight(array.shape[-2:],
+                                                     new_gpts,
+                                                     sampling,
+                                                     new_sampling,
+                                                     xp)
 
-        return interpolate_bilinear(self.array, v, u, vw, uw)
+            old_shape = array.shape
+            array = array.reshape((-1,) + array.shape[-2:])
+
+            old_sums = array.sum((-2, -1))
+
+            if xp is cp:
+                array = interpolate_bilinear_cuda(array, v, u, vw, uw)
+            else:
+                array = interpolate_bilinear(array, v, u, vw, uw)
+
+            array = array / array.sum((-2, -1)) * old_sums
+
+            array = array.reshape(old_shape[:-2] + array.shape[-2:])
+            return array
+
+        if self.is_lazy:
+            array = self.array.map_blocks(interpolate,
+                                          sampling=self.sampling,
+                                          new_sampling=new_sampling,
+                                          new_gpts=new_gpts,
+                                          chunks=self.array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
+                                          dtype=np.float32)
+        else:
+            array = interpolate(self.array, sampling=self.sampling, new_sampling=new_sampling, new_gpts=new_gpts)
+
+        d = self._copy_as_dict(copy_array=False)
+        d['sampling'] = new_sampling
+        d['array'] = array
+        return self.__class__(**d)
 
     def _check_integration_limits(self, inner, outer):
         if inner >= outer:

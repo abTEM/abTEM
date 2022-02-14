@@ -1,19 +1,18 @@
 """Module to handle ab initio electrostatic potentials from the DFT code GPAW."""
+import contextlib
+import os
 import warnings
 from collections import defaultdict
 from typing import Tuple, Union
 
+import numpy as np
+from ase import units
+from ase.data import chemical_symbols, atomic_numbers
+from scipy.interpolate import interp1d
+
 from abtem.core.electron_configurations import electron_configurations, config_str_to_config_tuples
 from abtem.potentials.poisson import ChargeDensityPotential
-import os
-import contextlib
-from ase.data import chemical_symbols, atomic_numbers
-from ase import units
-import numpy as np
-
-from abtem.potentials.utils import validate_symbol
-from abtem.potentials.utils import kappa, eps0
-from scipy.interpolate import interp1d
+from abtem.potentials.utils import eps0
 
 try:
     from gpaw import GPAW
@@ -34,7 +33,6 @@ class GPAWPotential(ChargeDensityPotential):
                  origin: Tuple[float, float, float] = (0., 0., 0.),
                  chunks: int = 1,
                  fft_singularities: bool = False):
-
         charge_density = calc.get_all_electron_density(gridrefinement=4)
 
         atoms = calc.atoms
@@ -77,10 +75,10 @@ class GPAWParametrization:
             ae = AllElectronAtom(symbol, spinpol=True, xc='PBE')
 
             added_electrons = self._get_added_electrons(symbol, charge)
-        #     for added_electron in added_electrons:
-        #         ae.add(*added_electron[:2], added_electron[-1])
-        # # ae.run()
-            #ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
+            #     for added_electron in added_electrons:
+            #         ae.add(*added_electron[:2], added_electron[-1])
+            # # ae.run()
+            # ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)
             ae.run()
             ae.refine()
 

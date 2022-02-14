@@ -68,12 +68,11 @@ def polar_detector_bins(gpts: Tuple[int, int],
     radial_bins[valid] = (nbins_radial * (alpha[valid] - inner) / (outer - inner))
 
     # import matplotlib.pyplot as plt
-    #
-    # plt.imshow(radial_bins)
+    # #print(inner)
+    # #plt.imshow(radial_bins[:10,:10])
+    # plt.imshow(valid[:10, :10])
+    # plt.colorbar()
     # plt.show()
-    # sss
-
-    # assert radial_bins.max() == nbins_radial - 1
 
     angular_bins = np.floor(nbins_azimuthal * (phi / (2 * np.pi)))
     angular_bins = np.clip(angular_bins, 0, nbins_azimuthal - 1).astype(int)

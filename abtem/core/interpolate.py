@@ -1,37 +1,4 @@
 import numpy as np
-from scipy.interpolate import RegularGridInterpolator
-
-
-# def interpolate_cube(array, old_cell, new_cell, new_gpts, origin=None):
-#     if origin is None:
-#         origin = (0., 0., 0.)
-#
-#     padded_array = np.zeros((array.shape[0] + 1, array.shape[1] + 1, array.shape[2] + 1))
-#     padded_array[:-1, :-1, :-1] = array
-#     padded_array[-1] = padded_array[0]
-#     padded_array[:, -1] = padded_array[:, 0]
-#     padded_array[:, :, -1] = padded_array[:, :, 0]
-#
-#     x = np.linspace(0, 1, padded_array.shape[0], endpoint=True)
-#     y = np.linspace(0, 1, padded_array.shape[1], endpoint=True)
-#     z = np.linspace(0, 1, padded_array.shape[2], endpoint=True)
-#
-#     interpolator = RegularGridInterpolator((x, y, z), padded_array)
-#
-#     x = np.linspace(origin[0], origin[0] + new_cell[0], new_gpts[0], endpoint=False)
-#     y = np.linspace(origin[1], origin[1] + new_cell[1], new_gpts[1], endpoint=False)
-#     z = np.linspace(origin[2], origin[2] + new_cell[2], new_gpts[2], endpoint=False)
-#
-#     x, y, z = np.meshgrid(x, y, z, indexing='xy')
-#
-#     points = np.array([x.ravel(), y.ravel(), z.ravel()]).T
-#
-#     P_inv = np.linalg.inv(np.array(old_cell))
-#
-#     scaled_points = np.dot(points, P_inv) % 1.0
-#     interpolated = interpolator(scaled_points)
-#
-#     return interpolated.reshape(new_gpts)
 
 
 def _infer_lines(B, H, W, out_H, out_W, kH, kW):

@@ -753,7 +753,6 @@ class SMatrixArray(HasDaskArray, AbstractSMatrix):
     def _distribute_reductions(self, detectors, scan, scan_divisions, ctf, positions_per_reduction):
 
         scans = scan.divide(scan_divisions)
-
         scans = [item for sublist in scans for item in sublist]
 
         measurements = []
@@ -776,11 +775,12 @@ class SMatrixArray(HasDaskArray, AbstractSMatrix):
             cls = measurement[0].__class__
             kwargs = measurement[0]._copy_as_dict(copy_array=False)
 
-            measurement = [measurement[i:i + scan_divisions[0]] for i in
-                           range(0, len(measurement), scan_divisions[0])]
+            measurement = [measurement[i:i + scan_divisions[1]] for i in
+                           range(0, len(measurement), scan_divisions[1])]
 
-            array = np.concatenate([np.concatenate([item.array for item in block], axis=1) for block in measurement],
-                                   axis=0)
+            array = da.concatenate([da.concatenate([item.array for item in block], axis=1)
+                                    for block in measurement], axis=0)
+
             kwargs['array'] = array
             measurements[i] = cls(**kwargs)
 
@@ -1099,6 +1099,8 @@ class SMatrix(AbstractSMatrix):
 
             if lazy:
                 array = da.concatenate(arrays)
+            elif self._store_on_host:
+                array = np.concatenate(arrays)
             else:
                 array = xp.concatenate(arrays)
 
@@ -1114,10 +1116,6 @@ class SMatrix(AbstractSMatrix):
                                     device=self._device,
                                     metadata=self.metadata)
 
-            # print(gpts)
-            # print(sampling, self.sampling)
-            # print(s_matrix.cutoff_angles, self.cutoff_angles)
-            # sss
             if self.potential is not None:
                 s_matrix.accumulated_defocus = self.potential.thickness
 

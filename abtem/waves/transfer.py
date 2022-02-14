@@ -1,14 +1,19 @@
 """Module to describe the contrast transfer function."""
 from collections import defaultdict
-from typing import Mapping, Union
+from typing import Mapping, Union, TYPE_CHECKING, Dict
 
 import numpy as np
+from matplotlib.axes import Axes
+import matplotlib.pyplot as plt
 
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
 from abtem.core.grid import Grid, polar_spatial_frequencies
-from abtem.measure import RadialFourierSpaceLineProfiles
+from abtem.measure.measure import LineProfiles
+
+if TYPE_CHECKING:
+    from abtem.waves.waves import Waves
 
 #: Symbols for the polar representation of all optical aberrations up to the fifth order.
 polar_symbols = ('C10', 'C12', 'phi12',
@@ -22,6 +27,35 @@ polar_aliases = {'defocus': 'C10', 'astigmatism': 'C12', 'astigmatism_angle': 'p
                  'coma': 'C21', 'coma_angle': 'phi21',
                  'Cs': 'C30',
                  'C5': 'C50'}
+
+
+class RadialFourierSpaceLineProfiles(LineProfiles):
+
+    def __init__(self,
+                 array,
+                 sampling,
+                 energy,
+                 extra_axes_metadata=None,
+                 metadata=None):
+        self._energy = energy
+
+        super().__init__(array=array, start=(0., 0.), end=(0., array.shape[-1] * sampling), sampling=sampling,
+                         extra_axes_metadata=extra_axes_metadata, metadata=metadata)
+
+    def show(self, ax=None, title='', angular_units=True, **kwargs):
+        if ax is None:
+            ax = plt.subplot()
+
+        if angular_units:
+            x = np.linspace(0., len(self.array) * self.sampling * 1000. * energy2wavelength(self._energy),
+                            len(self.array))
+        else:
+            x = np.linspace(0., len(self.array) * self.sampling, len(self.array))
+
+        p = ax.plot(x, self.array, **kwargs)
+        ax.set_xlabel('Scattering angle [mrad]')
+        ax.set_title(title)
+        return ax, p
 
 
 class CTF(HasAcceleratorMixin):
@@ -112,11 +146,11 @@ class CTF(HasAcceleratorMixin):
                 setattr(self.__class__, key, parametrization_property(value))
 
     @property
-    def nyquist_sampling(self):
+    def nyquist_sampling(self) -> float:
         return 1 / (4 * self.semiangle_cutoff / self.wavelength * 1e-3)
 
     @property
-    def parameters(self):
+    def parameters(self) -> Dict[str, float]:
         """The parameters."""
         return self._parameters
 
@@ -174,7 +208,7 @@ class CTF(HasAcceleratorMixin):
     def gaussian_spread(self, value: float):
         self._gaussian_spread = value
 
-    def set_parameters(self, parameters: dict):
+    def set_parameters(self, parameters: Dict[str, float]):
         """
         Set the phase of the phase aberration.
 
@@ -325,7 +359,7 @@ class CTF(HasAcceleratorMixin):
         alpha, phi = polar_spatial_frequencies(grid.gpts, grid.sampling, xp=xp)
         return self.evaluate(alpha * self.wavelength, phi)
 
-    def profiles(self, max_semiangle: float = None, phi: float = 0.):
+    def profiles(self, max_semiangle: float = None, phi: float = 0., units='mrad'):
         if max_semiangle is None:
             if self._semiangle_cutoff == np.inf:
                 max_semiangle = 50
@@ -333,7 +367,6 @@ class CTF(HasAcceleratorMixin):
                 max_semiangle = self._semiangle_cutoff * 1.6
 
         sampling = max_semiangle / 1000. / 1000.
-
         alpha = np.arange(0, max_semiangle / 1000., sampling)
 
         aberrations = self.evaluate_aberrations(alpha, phi)
@@ -343,52 +376,31 @@ class CTF(HasAcceleratorMixin):
         gaussian_envelope = self.evaluate_gaussian_envelope(alpha)
         envelope = aperture * temporal_envelope * spatial_envelope * gaussian_envelope
 
+        sampling = alpha[1] / energy2wavelength(self.energy)
+
         profiles = {}
-        profiles['ctf'] = RadialFourierSpaceLineProfiles(aberrations.imag * envelope, sampling=sampling)
-        profiles['aperture'] = RadialFourierSpaceLineProfiles(aperture, sampling=sampling)
-        profiles['envelope'] = RadialFourierSpaceLineProfiles(envelope, sampling=sampling)
-        profiles['temporal_envelope'] = RadialFourierSpaceLineProfiles(temporal_envelope, sampling=sampling)
-        profiles['spatial_envelope'] = RadialFourierSpaceLineProfiles(spatial_envelope, sampling=sampling)
-        profiles['gaussian_envelope'] = RadialFourierSpaceLineProfiles(gaussian_envelope, sampling=sampling)
+        profiles['ctf'] = RadialFourierSpaceLineProfiles(-aberrations.imag * envelope,
+                                                         sampling=sampling,
+                                                         energy=self.energy)
+        profiles['aperture'] = RadialFourierSpaceLineProfiles(aperture, sampling=sampling, energy=self.energy)
+        profiles['envelope'] = RadialFourierSpaceLineProfiles(envelope, sampling=sampling, energy=self.energy)
+        profiles['temporal_envelope'] = RadialFourierSpaceLineProfiles(temporal_envelope, sampling=sampling,
+                                                                       energy=self.energy)
+        profiles['spatial_envelope'] = RadialFourierSpaceLineProfiles(spatial_envelope, sampling=sampling,
+                                                                      energy=self.energy)
+        profiles['gaussian_envelope'] = RadialFourierSpaceLineProfiles(gaussian_envelope, sampling=sampling,
+                                                                       energy=self.energy)
         return profiles
 
-    def apply(self, waves, interact=False, sliders=None, throttling=0.):
-        if interact:
-            from abtem.visualize.interactive import Canvas, MeasurementArtist2d
-            from abtem.visualize.widgets import quick_sliders, throttle
-            import ipywidgets as widgets
+    def apply(self, waves: 'Waves'):
+        return waves.apply_ctf(self)
 
-            image_waves = waves.copy()
-            canvas = Canvas()
-            artist = MeasurementArtist2d()
-            canvas.artists = {'artist': artist}
-
-            def update(*args):
-                image_waves.array[:] = waves.apply_ctf(self).array
-                artist.measurement = image_waves.intensity()[0]
-                canvas.adjust_limits_to_artists()
-                canvas.adjust_labels_to_artists()
-
-            if throttling:
-                update = throttle(throttling)(update)
-
-            self.observe(update)
-            update()
-
-            if sliders:
-                sliders = quick_sliders(self, **sliders)
-                figure = widgets.HBox([canvas.figure, widgets.VBox(sliders)])
-            else:
-                figure = canvas.figure
-
-            return image_waves, figure
-        else:
-            if sliders:
-                raise RuntimeError()
-
-            return waves.apply_ctf(self)
-
-    def show(self, max_semiangle: float = None, phi: float = 0, ax=None, **kwargs):
+    def show(self,
+             max_semiangle: float = None,
+             phi: float = 0,
+             ax: Axes = None,
+             angular_units: bool = True,
+             legend: bool = True, **kwargs):
         """
         Show the contrast transfer function.
 
@@ -414,9 +426,10 @@ class CTF(HasAcceleratorMixin):
 
         for key, profile in self.profiles(max_semiangle, phi).items():
             if not np.all(profile.array == 1.):
-                ax, lines = profile.show(ax=ax, label=key, **kwargs)
+                ax, lines = profile.show(ax=ax, label=key, angular_units=angular_units, **kwargs)
 
-        ax.legend()
+        if legend:
+            ax.legend()
 
         return ax
 

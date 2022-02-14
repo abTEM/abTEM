@@ -229,7 +229,9 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
         return measurements
 
-    def diffraction_patterns(self, max_angle: Union[str, float] = 'valid', block_direct: bool = False,
+    def diffraction_patterns(self,
+                             max_angle: Union[str, float, None] = 'valid',
+                             block_direct: bool = False,
                              fftshift: bool = True) -> DiffractionPatterns:
         """
         Calculate the intensity of the wave functions at the diffraction plane.
