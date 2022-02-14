@@ -16,7 +16,7 @@ from abtem.core.axes import HasAxes, RealSpaceAxis, AxisMetadata, FourierSpaceAx
 from abtem.core.backend import cp, asnumpy, get_array_module, get_ndimage_module, copy_to_device
 from abtem.core.complex import abs2
 from abtem.core.dask import HasDaskArray
-from abtem.core.energy import energy2wavelength, Accelerator, HasAcceleratorMixin
+from abtem.core.energy import Accelerator, HasAcceleratorMixin
 from abtem.core.fft import fft2
 from abtem.core.fft import fft2_interpolate
 from abtem.core.grid import Grid
@@ -37,20 +37,15 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
     hyperspy_axes = []
     for metadata, n in zip(axes_metadata, shape):
         hyperspy_axes.append({'size': n})
-
-        if 'sampling' in metadata:
-            hyperspy_axes[-1]['scale'] = metadata['sampling']
-
-        if 'units' in metadata:
-            hyperspy_axes[-1]['units'] = metadata['units']
-
-        if 'label' in metadata:
-            hyperspy_axes[-1]['name'] = metadata['label']
-
-        if 'offset' in metadata:
-            hyperspy_axes[-1]['offset'] = metadata['offset']
-        else:
-            hyperspy_axes[-1]['offset'] = 0.
+        
+        axes_mapping = {'sampling': 'scale',
+                        'units': 'units',
+                        'label': 'name',
+                        'offset': 'offset'
+                        }
+        for attr, mapped_attr in axes_mapping.items():
+            if hasattr(metadata, attr):
+                hyperspy_axes[-1][mapped_attr] = getattr(metadata, attr)
 
     return hyperspy_axes
 
