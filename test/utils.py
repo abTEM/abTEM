@@ -1,10 +1,13 @@
 from typing import Iterable
 
+import cupy as cp
 import dask.array as da
-
-from abtem.core.backend import get_array_module, cp
 import numpy as np
 import pytest
+from hypothesis import assume
+
+from abtem.core.backend import get_array_module, cp
+from abtem.potentials.temperature import AbstractFrozenPhonons
 
 
 def check_array_matches_device(array, device):
@@ -41,6 +44,43 @@ def array_is_close(a1, a2, rel_tol=np.inf, abs_tol=np.inf, check_above_abs=0., c
             return False
 
     return True
+
+
+def assume_valid_probe_and_detectors(probe, detectors):
+    integration_limits = [detector.angular_limits(probe) for detector in detectors]
+    outer_limit = max([outer for inner, outer in integration_limits])
+    min_range = min([outer - inner for inner, outer in integration_limits])
+    assume(min(probe.angular_sampling) < min_range)
+    assume(outer_limit <= min(probe.cutoff_angles))
+
+
+def assert_scanned_measurement_as_expected(measurements, atoms, waves, scan, detectors):
+    if not isinstance(measurements, list):
+        measurements = [measurements]
+
+    assert len(measurements) == len(detectors)
+
+    for detector, measurement in zip(detectors, measurements):
+
+        if isinstance(atoms, AbstractFrozenPhonons) and len(atoms) > 1 and not detector.ensemble_mean:
+            frozen_phonons_shape = (len(atoms),)
+        else:
+            frozen_phonons_shape = ()
+
+        scan_shape = scan.gpts
+        assert scan_shape == measurement.shape[len(frozen_phonons_shape): len(frozen_phonons_shape) + len(scan_shape)]
+
+        if frozen_phonons_shape:
+            assert frozen_phonons_shape[0] == measurement.shape[0]
+
+        base_shape = detector.measurement_shape(waves)[len(frozen_phonons_shape + scan_shape):]
+        assert base_shape == measurement.shape[len(measurement.shape) - len(base_shape):]
+        assert not np.all(measurement.array == 0.)
+
+        if detector.to_cpu:
+            assert isinstance(measurement.array, np.ndarray)
+        elif waves.device == 'gpu':
+            assert isinstance(measurement.array, cp.ndarray)
 
 
 gpu = pytest.param('gpu', marks=pytest.mark.skipif(cp is None, reason='no gpu'))

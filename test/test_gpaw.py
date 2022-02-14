@@ -6,9 +6,9 @@ import pytest
 import sys
 
 try:
-    from abtem.potentials.gpaw import GPAWPotential
     from gpaw import GPAW
     from gpaw.utilities.ps2ae import PS2AE
+    from abtem.potentials.gpaw import GPAWPotential
 except ImportError:
     pass
 

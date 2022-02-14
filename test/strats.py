@@ -239,4 +239,7 @@ def probe(draw,
     return Probe(gpts=gpts, semiangle_cutoff=semiangle_cutoff)
 
 
-device = st.sampled_from(['cpu', 'gpu'])
+@st.composite
+def images(draw):
+    sampling = draw(sampling)
+    return sampling
