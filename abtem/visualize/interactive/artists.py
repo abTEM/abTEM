@@ -133,7 +133,7 @@ class ImageArtist(Artist):
 
     @property
     def power_scale_slider(self):
-        slider = widgets.FloatSlider(description='Power scale', min=1e-3, max=1, value=1, step=1e-3, )
+        slider = widgets.FloatSlider(description='Power scale', min=1e-3, max=4, value=1, step=1e-3, )
         slider.observe(self._observe_image, 'value')
         link((slider, 'value'), (self, 'power'))
         return slider
@@ -544,8 +544,8 @@ class AtomsArtist(Artist):
     scale = Float(100.)
     plane = Unicode('xy')
 
-    def __init__(self, **kwargs):
-        self._scatter_artist = ScatterArtist()
+    def __init__(self, gl=False, **kwargs):
+        self._scatter_artist = ScatterArtist(gl=gl)
         self._lines_artist = LinesArtist(colors='black')
         self._scatter_artist._mark.stroke = 'black'
         super().__init__(**kwargs)

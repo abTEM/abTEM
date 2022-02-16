@@ -3,6 +3,7 @@ import numpy as np
 from bqplot import Figure, LinearScale, Axis
 from traitlets import HasTraits, observe, Dict, Instance, link, Bool, List, default, Float
 from traitlets import Unicode
+import contextlib
 
 
 class Canvas(widgets.HBox):
@@ -12,8 +13,10 @@ class Canvas(widgets.HBox):
     title = Unicode()
     x_label = Unicode()
     y_label = Unicode()
+
     x_limits = List()
     y_limits = List()
+
     lock_scale = Bool(True, allow_none=True)
     _tool_artists = List()
 
@@ -64,8 +67,6 @@ class Canvas(widgets.HBox):
         link((self, 'x_label'), (x_axis, 'label'))
         link((self, 'y_label'), (y_axis, 'label'))
 
-        # link((self, 'title'), (figure, 'title'))
-
     @property
     def figure(self):
         return self._figure
@@ -90,7 +91,7 @@ class Canvas(widgets.HBox):
 
         x = domain_width / pixel_width * (x - self.figure.fig_margin['left']) + self.x_scale.min
         y = domain_height / pixel_height * (y - self.figure.fig_margin['top']) + self.y_scale.min
-        y = - y + self.y_scale.max +self.y_scale.min
+        y = - y + self.y_scale.max + self.y_scale.min
         return x, y
 
     @property
@@ -229,11 +230,17 @@ class Canvas(widgets.HBox):
         xmax = np.max([artist.limits[0][1] for artist in self.artists.values()])
         ymin = np.min([artist.limits[1][0] for artist in self.artists.values()])
         ymax = np.max([artist.limits[1][1] for artist in self.artists.values()])
+
         with self.x_scale.hold_trait_notifications(), self.y_scale.hold_trait_notifications():
             if adjust_x:
                 self.x_limits = [float(xmin), float(xmax)]
 
             if adjust_y:
                 self.y_limits = [float(ymin), float(ymax)]
+
+            self.x_scale.min = float(xmin)
+            self.x_scale.max = float(xmax)
+            self.y_scale.min = float(ymin)
+            self.y_scale.max = float(ymax)
 
             self._enforce_scale_lock()
