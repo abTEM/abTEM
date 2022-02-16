@@ -661,6 +661,33 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
         array = da.from_zarr(url, component='array', chunks=(chunks, -1, -1))
         return cls(array=array, slice_thickness=slice_thickness, extent=extent)
 
+    def to_hyperspy(self):
+        from hyperspy._signals.signal2d import Signal2D
+
+        axes = [
+            {'scale': self.slice_thickness[0],
+              'units': 'Å',
+              'name': 'Depth',
+              'size': self.shape[0],
+              'offset': 0.,
+              },
+            {'scale': self.sampling[1],
+              'units': 'Å',
+              'name': 'y',
+              'size': self.shape[2],
+              'offset': 0.,
+              },
+            {'scale': self.sampling[0],
+              'units': 'Å',
+              'name': 'x',
+              'size': self.shape[1],
+              'offset': 0.,
+              },
+        ]
+        s = Signal2D(np.transpose(self.array, (0, 2, 1)), axes=axes).squeeze()
+
+        return s
+
     def transmit(self, waves: 'Waves') -> 'Waves':
         """
         Transmit a wavefunction.
