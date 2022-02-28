@@ -36,9 +36,13 @@ T = TypeVar('T', bound='AbstractMeasurement')
 
 def _to_hyperspy_axes_metadata(axes_metadata, shape):
     hyperspy_axes = []
+
+    if not isinstance(shape, (list, tuple)):
+        shape = (shape, )
+    
     for metadata, n in zip(axes_metadata, shape):
         hyperspy_axes.append({'size': n})
-        
+
         axes_mapping = {'sampling': 'scale',
                         'units': 'units',
                         'label': 'name',
@@ -320,7 +324,7 @@ class Images(AbstractMeasurement):
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
         return [RealSpaceAxis(label='x', sampling=self.sampling[0], units='Å'),
-                RealSpaceAxis(label='y', sampling=self.sampling[0], units='Å')]
+                RealSpaceAxis(label='y', sampling=self.sampling[1], units='Å')]
 
     def _check_is_complex(self):
         if not np.iscomplexobj(self.array):
@@ -341,14 +345,25 @@ class Images(AbstractMeasurement):
     def to_hyperspy(self):
         from hyperspy._signals.signal2d import Signal2D
 
-        axes = [
-            {'scale': self.sampling[1], 'units': 'Å', 'name': 'y', 'offset': 0., 'size': self.array.shape[1]},
-            {'scale': self.sampling[0], 'units': 'Å', 'name': 'x', 'offset': 0., 'size': self.array.shape[0]}
-        ]
+        axes_base = _to_hyperspy_axes_metadata(
+            self.base_axes_metadata,
+            self.base_axes_shape,
+            )
+        axes_extra = _to_hyperspy_axes_metadata(
+            self.extra_axes_metadata,
+            self.extra_axes_shape,
+            )
+        
+        # We need to transpose the navigation axes to match hyperspy convention
+        array = np.transpose(self.array, self.extra_axes[::-1] + self.base_axes[::-1])
+        # The index in the array corresponding to each axis is determine from
+        # the index in the axis list
+        s = Signal2D(array, axes=axes_extra[::-1]+axes_base[::-1])
 
-        axes += [{'size': n} for n in self.array.shape[:-2]]
+        if self.is_lazy:
+            s = s.as_lazy()
 
-        return Signal2D(self.array.T, axes=axes)
+        return s
 
     def crop(self, extent):
         new_shape = (np.round(self.base_shape[0] * extent[0] / self.extent[0]),
@@ -658,8 +673,27 @@ class LineProfiles(AbstractMeasurement):
         # new_copy._array
 
     def to_hyperspy(self):
-        from hyperspy._signals.signal1d import Signal1D
-        return Signal1D(self.array, axes=_to_hyperspy_axes_metadata(self.axes_metadata, self.shape)).as_lazy()
+        from hyperspy._signals.signal2d import Signal1D
+
+        axes_base = _to_hyperspy_axes_metadata(
+            self.base_axes_metadata,
+            self.base_axes_shape,
+            )
+        axes_extra = _to_hyperspy_axes_metadata(
+            self.extra_axes_metadata,
+            self.extra_axes_shape,
+            )
+        
+        # We need to transpose the navigation axes to match hyperspy convention
+        array = np.transpose(self.array, self.extra_axes[::-1] + self.base_axes[::-1])
+        # The index in the array corresponding to each axis is determine from
+        # the index in the axis list
+        s = Signal1D(array, axes=axes_extra[::-1]+axes_base[::-1])
+
+        if self.is_lazy:
+            s = s.as_lazy()
+
+        return s
 
     def _copy_as_dict(self, copy_array=True) -> dict:
         d = {'start': self.start,
@@ -766,7 +800,29 @@ class DiffractionPatterns(AbstractMeasurement, HasAcceleratorMixin):
 
     def to_hyperspy(self):
         from hyperspy._signals.signal2d import Signal2D
-        return Signal2D(self.array, axes=_to_hyperspy_axes_metadata(self.axes_metadata, self.shape)).as_lazy()
+
+        axes_base = _to_hyperspy_axes_metadata(
+            self.base_axes_metadata,
+            self.base_axes_shape,
+            )
+        axes_extra = _to_hyperspy_axes_metadata(
+            self.extra_axes_metadata,
+            self.extra_axes_shape,
+            )
+        
+        # We need to transpose the navigation axes to match hyperspy convention
+        array = np.transpose(self.array, self.extra_axes[::-1] + self.base_axes[::-1])
+        # The index in the array corresponding to each axis is determine from
+        # the index in the axis list
+        s = Signal2D(array, axes=axes_extra[::-1]+axes_base[::-1])
+
+        s.set_signal_type('electron_diffraction')
+        for axis in s.axes_manager.signal_axes:
+            axis.offset = -int(axis.size / 2) * axis.scale
+        if self.is_lazy:
+            s = s.as_lazy()
+
+        return s
 
     def _copy_as_dict(self, copy_array: bool = True) -> dict:
         d = {'sampling': self.sampling,
@@ -1137,7 +1193,27 @@ class PolarMeasurements(AbstractMeasurement):
                 LinearAxis(label='Azimuthal scattering angle', sampling=self.azimuthal_sampling, units='rad')]
 
     def to_hyperspy(self):
-        raise NotImplementedError
+        from hyperspy._signals.signal2d import Signal2D
+
+        axes_base = _to_hyperspy_axes_metadata(
+            self.base_axes_metadata,
+            self.base_axes_shape,
+            )
+        axes_extra = _to_hyperspy_axes_metadata(
+            self.extra_axes_metadata,
+            self.extra_axes_shape,
+            )
+        
+        # We need to transpose the navigation axes to match hyperspy convention
+        array = np.transpose(self.array, self.extra_axes[::-1] + self.base_axes[::-1])
+        # The index in the array corresponding to each axis is determine from
+        # the index in the axis list
+        s = Signal2D(array, axes=axes_extra[::-1]+axes_base[::-1]).squeeze()
+
+        if self.is_lazy:
+            s = s.as_lazy()
+
+        return s
 
     @property
     def radial_offset(self) -> float:
