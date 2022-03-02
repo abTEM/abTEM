@@ -1,6 +1,8 @@
+import warnings
+
 import cupy as cp
 import numpy as np
-from numba import cuda
+from numba import cuda, NumbaPerformanceWarning
 import math
 
 
@@ -39,11 +41,13 @@ def sum_run_length_encoded(array, result, separators):
     assert len(result.shape) == 2
     assert result.shape[1] == len(separators) - 1
 
-    threadsperblock = (256,)
+    threadsperblock = (1024,)
     blockspergrid = int(np.ceil(result.shape[1] / threadsperblock[0]))
     blockspergrid = (blockspergrid,)
 
-    _sum_run_length_encoded[blockspergrid, threadsperblock](array, result, separators)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=NumbaPerformanceWarning)
+        _sum_run_length_encoded[blockspergrid, threadsperblock](array, result, separators)
 
 
 @cuda.jit

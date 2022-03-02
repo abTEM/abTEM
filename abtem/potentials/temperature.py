@@ -10,6 +10,22 @@ from ase import Atoms
 from ase.data import chemical_symbols
 import dask.array as da
 
+from abtem.core.axes import FrozenPhononsAxis
+from abtem.measure.detect import stack_measurements
+
+
+def stack_frozen_phonons(measurements, detectors):
+    measurements = list(map(list, zip(*measurements)))
+    stacked = []
+    for measurement, detector in zip(measurements, detectors):
+        new = stack_measurements(measurement, axes_metadata=FrozenPhononsAxis())
+
+        if detector.ensemble_mean:
+            new = new.mean(0)
+
+        stacked.append(new)
+    return stacked
+
 
 class AbstractFrozenPhonons(metaclass=ABCMeta):
     """Abstract base class for frozen phonons objects."""
@@ -40,6 +56,31 @@ class AbstractFrozenPhonons(metaclass=ABCMeta):
         Make a copy.
         """
         return copy(self)
+
+
+class DelayedAtoms:
+
+    def __init__(self, atoms, cell, num_atoms, numbers):
+        self._atoms = atoms
+        self._cell = cell
+        self._num_atoms = num_atoms
+        self._numbers = numbers
+
+    @property
+    def numbers(self):
+        return self._numbers
+
+    @property
+    def __len__(self):
+        return self._num_atoms
+
+    @property
+    def cell(self):
+        return self._cell
+
+    @property
+    def atoms(self):
+        return self._atoms
 
 
 class FrozenPhonons(AbstractFrozenPhonons):
@@ -143,18 +184,18 @@ class FrozenPhonons(AbstractFrozenPhonons):
         return axes
 
     def get_configurations(self, lazy: bool = False) -> List[Atoms]:
-        if self.seed is not False:
+        if self.seed is not False and self.seed is not None:
             if lazy:
-                rnd = dask.delayed(np.random.RandomState)(seed=self.seed)
+                random_state = dask.delayed(np.random.RandomState)(seed=self.seed)
             else:
-                rnd = np.random.RandomState(seed=self.seed)
+                random_state = np.random.RandomState(seed=self.seed)
         else:
-            rnd = np.random.RandomState()
+            random_state = None
 
         def load_atoms():
             return self.atoms
 
-        def jiggle_atoms(atoms, sigmas, directions, rnd):
+        def jiggle_atoms(atoms, sigmas, directions, random_state):
 
             if isinstance(sigmas, Mapping):
                 temp = np.zeros(len(atoms.numbers), dtype=np.float32)
@@ -166,20 +207,26 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
             atoms = atoms.copy()
 
-            r = rnd.normal(size=(len(atoms), 3))
+            if random_state:
+                r = random_state.normal(size=(len(atoms), 3))
+            else:
+                r = np.random.normal(size=(len(atoms), 3))
+
             for direction in directions:
                 atoms.positions[:, direction] += sigmas * r[:, direction]
 
             return atoms
 
+        unique_numbers = np.unique(self.atoms.numbers)
         configurations = []
         for i in range(self.num_configs):
 
             if lazy:
                 atoms = dask.delayed(load_atoms)()
-                configurations.append(dask.delayed(jiggle_atoms)(atoms, self.sigmas, self.axes, rnd))
+                atoms = dask.delayed(jiggle_atoms)(atoms, self.sigmas, self.axes, random_state)
+                configurations.append(DelayedAtoms(atoms, self.atoms.cell, len(self.atoms), unique_numbers))
             else:
-                configurations.append(jiggle_atoms(self.atoms, self.sigmas, self.axes, rnd))
+                configurations.append(jiggle_atoms(self.atoms, self.sigmas, self.axes, random_state))
 
         return configurations
 

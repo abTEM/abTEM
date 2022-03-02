@@ -1,6 +1,6 @@
 """Module for describing different types of scans."""
 from abc import ABCMeta, abstractmethod
-from copy import copy
+from copy import copy, deepcopy
 from numbers import Number
 from typing import Union, Sequence, Tuple
 
@@ -9,6 +9,7 @@ import dask.array as da
 import dask.bag
 import numpy as np
 from ase import Atom
+from matplotlib.axes import Axes
 from matplotlib.patches import Rectangle
 
 from abtem.core.axes import ScanAxis, PositionsAxis
@@ -16,23 +17,15 @@ from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.utils import subdivide_into_chunks, generate_chunks
 
 
-def validate_scan(scan, ctf=None, extent=None):
+def validate_scan(scan, probe=None):
     if scan is None:
         scan = GridScan()
 
     if not hasattr(scan, 'get_positions'):
         scan = CustomScan(scan)
 
-    if isinstance(scan, GridScan):
-        if scan.extent is None and extent is not None:
-            scan.start = (0., 0.)
-            scan.end = extent
-
-    if isinstance(scan, (GridScan, LineScan)):
-        if scan.sampling is None and ctf is not None:
-            scan.sampling = .9 * ctf.nyquist_sampling
-
-        scan.grid.check_is_defined()
+    if probe is not None:
+        scan.match_probe(probe)
 
     return scan
 
@@ -71,29 +64,32 @@ class AbstractScan(metaclass=ABCMeta):
     def limits(self):
         pass
 
-    @abstractmethod
-    def __copy__(self):
-        pass
-
     def copy(self):
         """Make a copy."""
-        return copy(self)
+        return deepcopy(self)
 
 
 class CustomScan(AbstractScan):
 
-    def __init__(self, positions):
-        positions = np.array(positions)
-        self._positions = positions
+    def __init__(self, positions=None):
+        if positions is None:
+            positions = np.zeros((0, 2), dtype=np.float32)
+        else:
+            positions = np.array(positions, dtype=np.float32)
 
+        if len(positions.shape) == 1:
+            positions = positions[None]
+
+        self._positions = positions
         super().__init__()
+
+    def match_probe(self, probe):
+        if len(self.positions) == 0:
+            self._positions = np.array(probe.extent, dtype=np.float32)[None] / 2.
 
     @property
     def shape(self):
-        if len(self.positions.shape) > 1:
-            return self._positions.shape[:-1]
-        else:
-            return ()
+        return self._positions.shape[:-1]
 
     @property
     def positions(self):
@@ -107,9 +103,14 @@ class CustomScan(AbstractScan):
     def divide(self, num_chunks):
         return [CustomScan(self._positions)]
 
-    def get_positions(self, chunks: Union[int, Tuple[int, int]] = None, lazy: bool = False) -> np.ndarray:
+    def get_positions(self, chunks: int = None, lazy: bool = False) -> np.ndarray:
+        if chunks is None:
+            chunks = (len(self._positions), 2)
+        else:
+            chunks = (min(chunks, len(self._positions)), 2)
+
         if lazy:
-            return da.from_array(self._positions)
+            return da.from_array(self._positions, chunks=chunks)
         else:
             return self._positions
 
@@ -128,11 +129,14 @@ class CustomScan(AbstractScan):
     def axes_metadata(self):
         return [PositionsAxis() for i in range(len(self.positions.shape) - 1)]
 
-    def __copy__(self):
-        pass
+
+def linescan_positions(start, end, gpts, endpoint):
+    x = np.linspace(start[0], end[0], gpts, endpoint=endpoint, dtype=np.float32)
+    y = np.linspace(start[1], end[1], gpts, endpoint=endpoint, dtype=np.float32)
+    return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
 
-class LineScan(AbstractScan, HasGridMixin):
+class LineScan(AbstractScan):
     """
     Line scan object.
 
@@ -153,66 +157,113 @@ class LineScan(AbstractScan, HasGridMixin):
     """
 
     def __init__(self,
-                 start: Union[Tuple[float, float], Atom],
-                 end: Union[Tuple[float, float], Atom] = None,
-                 angle: float = None,
+                 start: Union[Tuple[float, float], None] = (0., 0.),
+                 end: Union[Tuple[float, float], None] = None,
                  gpts: int = None,
                  sampling: float = None,
-                 margin: float = 0.,
                  endpoint: bool = True):
 
         super().__init__()
+        self._gpts = gpts
+        self._sampling = sampling
 
-        if isinstance(start, Atom):
-            start = (start.x, start.y)
+        self._start = start if start is None else tuple(start)
+        self._end = end if end is None else tuple(end)
 
-        if isinstance(end, Atom):
-            end = (end.x, end.y)
+        if self.start is not None and self.end is not None:
+            if np.allclose(self._start, self._end):
+                raise RuntimeError('line scan start and end is identical')
 
-        if (end is not None) & (angle is not None):
-            raise ValueError('only one of "end" and "angle" may be specified')
+        self._endpoint = endpoint
+        self._adjust_gpts()
+        self._adjust_sampling()
 
-        # if (gpts is None) & (sampling is None):
-        #    raise RuntimeError('grid gpts or sampling must be set')
+    @classmethod
+    def at_position(cls,
+                    position: Union[Tuple[float, float], Atom],
+                    extent: float = 1.,
+                    angle: float = 0.,
+                    gpts: int = None,
+                    sampling: float = None,
+                    endpoint: bool = True):
 
-        self._grid = Grid(gpts=gpts, sampling=sampling, endpoint=endpoint, dimensions=1)
+        if isinstance(position, Atom):
+            position = (position.x, position.y)
 
-        self._start = start[:2]
-        self._margin = margin
+        direction = np.array((np.cos(np.deg2rad(angle)), np.sin(np.deg2rad(angle))))
 
-        if end is not None:
-            self._set_direction_and_extent(self._start, end[:2])
-        else:
-            self.angle = angle
-            self.extent = 2 * self._margin
-
-    def _set_direction_and_extent(self, start: Tuple[float, float], end: Tuple[float, float]):
-        difference = np.array(end) - np.array(start)
-        extent = np.linalg.norm(difference, axis=0)
-        self._direction = difference / extent
-        extent = extent + 2 * self._margin
-        if extent == 0.:
-            raise RuntimeError('scan has no extent')
-        self.extent = extent
+        start = tuple(np.array(position) - extent / 2 * direction)
+        end = tuple(np.array(position) + extent / 2 * direction)
+        return cls(start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint)
 
     def match_probe(self, probe):
+        if self.start is None:
+            self.start = (0., 0.)
+
+        if self.end is None and probe.extent is not None:
+            self.end = (0., probe.extent[1])
+
         if self.sampling is None:
-            self.sampling = probe.ctf.nyquist_sampling
+            self.sampling = .9 * probe.ctf.nyquist_sampling
 
     @property
-    def limits(self):
-        return [self.margin_start, self.margin_end]
+    def extent(self) -> Union[float, None]:
+        if self._start is None or self._end is None:
+            return None
+
+        return np.linalg.norm(np.array(self._end) - np.array(self._start))
+
+    def _adjust_gpts(self):
+        if self.extent is None or self.sampling is None:
+            return
+
+        self._gpts = int(np.ceil(self.extent / self.sampling))
+
+        self._adjust_sampling()
+
+    def _adjust_sampling(self):
+
+        if self.extent is None or self.gpts is None:
+            return
+
+        self._sampling = self.extent / self.gpts
+
+    @property
+    def endpoint(self) -> bool:
+        return self._endpoint
+
+    @property
+    def limits(self) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+        return self.start, self.end
+
+    @property
+    def gpts(self) -> int:
+        return self._gpts
+
+    @gpts.setter
+    def gpts(self, gpts: int):
+        self._gpts = gpts
+        self._adjust_sampling()
+
+    @property
+    def sampling(self) -> float:
+        return self._sampling
+
+    @sampling.setter
+    def sampling(self, sampling: float):
+        self._sampling = sampling
+        self._adjust_gpts()
 
     @property
     def shape(self) -> Tuple[int]:
-        return self.gpts
+        return (self._gpts,)
 
     @property
     def axes_metadata(self):
-        return [ScanAxis(label='x', sampling=self.sampling[0], units='Å', start=self.start, end=self.end)]
+        return [ScanAxis(label='x', sampling=self.sampling, units='Å', start=self.start, end=self.end)]
 
     @property
-    def start(self) -> Tuple[float, float]:
+    def start(self) -> Union[Tuple[float, float], None]:
         """
         Start point of the scan [Å].
         """
@@ -221,70 +272,37 @@ class LineScan(AbstractScan, HasGridMixin):
     @start.setter
     def start(self, start: Tuple[float, float]):
         self._start = start
-        self._set_direction_and_extent(self._start, self.end)
+        self._adjust_gpts()
 
     @property
-    def end(self) -> Tuple[float, float]:
+    def end(self) -> Union[Tuple[float, float], None]:
         """
         End point of the scan [Å].
         """
-        return (self.start[0] + self.direction[0] * self.extent[0] - self.direction[0] * 2 * self._margin,
-                self.start[1] + self.direction[1] * self.extent[0] - self.direction[1] * 2 * self._margin)
+        return self._end
 
     @end.setter
     def end(self, end: Tuple[float, float]):
-        self._set_direction_and_extent(self.start, end)
-
-    @property
-    def angle(self) -> float:
-        """
-        End point of the scan [Å].
-        """
-        return np.arctan2(self._direction[0], self._direction[1])
-
-    @angle.setter
-    def angle(self, angle: float):
-        self._direction = (np.cos(np.deg2rad(angle)), np.sin(np.deg2rad(angle)))
-
-    @property
-    def direction(self) -> Tuple[float, float]:
-        """Direction of the scan line."""
-        return self._direction
-
-    @property
-    def margin(self) -> float:
-        return self._margin
-
-    @property
-    def margin_start(self) -> Tuple[float, float]:
-        return self.start[0] - self.direction[0] * self.margin, self.start[1] - self.direction[1] * self.margin
-
-    @property
-    def margin_end(self) -> Tuple[float, float]:
-        return self.end[0] + self.direction[0] * self.margin, self.end[1] + self.direction[1] * self.margin
+        self._end = end
+        self._adjust_gpts()
 
     def get_positions(self, chunks: int = None, lazy: bool = False) -> np.ndarray:
-        def linescan_positions(start, end, gpts, endpoint):
-            x = np.linspace(start[0], end[0], gpts[0], endpoint=endpoint[0], dtype=np.float32)
-            y = np.linspace(start[1], end[1], gpts[0], endpoint=endpoint[0], dtype=np.float32)
-
-            return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
         if chunks is None:
-            return linescan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
+            return linescan_positions(self.start, self.end, self.gpts, self.endpoint)
 
         chunks = (chunks,)
 
         if lazy:
-            positions = dask.delayed(linescan_positions)(self.start, self.end, self.gpts, self.grid.endpoint)
-            positions = da.from_delayed(positions, shape=self.gpts + (2,), dtype=np.float32)
+            positions = dask.delayed(linescan_positions)(self.start, self.end, self.gpts, self.endpoint)
+            positions = da.from_delayed(positions, shape=(self.gpts, 2), dtype=np.float32)
             positions = positions.rechunk(chunks + (2,))
         else:
-            positions = linescan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
+            positions = linescan_positions(self.start, self.end, self.gpts, self.endpoint)
 
         return positions
 
-    def add_to_plot(self, ax, linestyle: str = '-', color: str = 'r', **kwargs):
+    def add_to_plot(self, ax: Axes, linestyle: str = '-', color: str = 'r', **kwargs):
         """
         Add a visualization of a scan line to a matplotlib plot.
 
@@ -299,12 +317,7 @@ class LineScan(AbstractScan, HasGridMixin):
         kwargs :
             Additional options for matplotlib.pyplot.plot as keyword arguments.
         """
-        start = self.margin_start
-        end = self.margin_end
-        ax.plot([start[0], end[0]], [start[1], end[1]], linestyle=linestyle, color=color, **kwargs)
-
-    def __copy__(self):
-        return self.__class__(start=self.start, end=self.end, gpts=self.gpts, endpoint=self.grid.endpoint[0])
+        ax.plot([self.start[0], self.end[0]], [self.start[1], self.end[1]], linestyle=linestyle, color=color, **kwargs)
 
 
 def split_array_2d(array, chunks):
@@ -342,7 +355,7 @@ class GridScan(HasGridMixin, AbstractScan):
                  start: Tuple[float, float] = None,
                  end: Tuple[float, float] = None,
                  gpts: Union[int, Tuple[int, int]] = None,
-                 sampling: Union[float, Sequence[float]] = None,
+                 sampling: Union[float, Tuple[float, float]] = None,
                  endpoint: Union[bool, Tuple[bool, bool]] = False):
 
         super().__init__()
@@ -387,8 +400,10 @@ class GridScan(HasGridMixin, AbstractScan):
             self.extent = self.end - self._start
 
     def match_probe(self, probe):
-        if self.extent is None:
+        if self.start is None:
             self.start = (0., 0.)
+
+        if self.end is None:
             self.end = probe.extent
 
         if self.sampling is None:
@@ -432,28 +447,24 @@ class GridScan(HasGridMixin, AbstractScan):
 
     def get_positions(self, chunks: Union[int, Tuple[int, int]] = None, lazy: bool = False) -> np.ndarray:
 
-        if chunks is None:
-            if lazy:
-                positions = dask.delayed(gridscan_positions)(self.start, self.end, self.gpts, self.grid.endpoint)
-                positions = da.from_delayed(positions, shape=self.gpts + (2,), dtype=np.float32)
-                return positions
-            else:
-                positions = gridscan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
-                return positions
-
         if isinstance(chunks, Number):
             chunks = (int(np.floor(np.sqrt(chunks))),) * 2
 
-        chunks = (subdivide_into_chunks(self.gpts[0], chunks=chunks[0]),
-                  subdivide_into_chunks(self.gpts[1], chunks=chunks[1]), 2)
+        if chunks is not None:
+            chunks = (subdivide_into_chunks(self.gpts[0], chunks=chunks[0]),
+                      subdivide_into_chunks(self.gpts[1], chunks=chunks[1]), 2)
+
+            assert len(chunks) == 3
 
         if lazy:
             positions = dask.delayed(gridscan_positions)(self.start, self.end, self.gpts, self.grid.endpoint)
             positions = da.from_delayed(positions, shape=self.gpts + (2,), dtype=np.float32)
-            positions = positions.rechunk(chunks)
+            if chunks:
+                positions = positions.rechunk(chunks)
         else:
             positions = gridscan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
-            positions = split_array_2d(positions, chunks)
+            if chunks:
+                positions = split_array_2d(positions, chunks)
 
         return positions
 
@@ -483,8 +494,8 @@ class GridScan(HasGridMixin, AbstractScan):
         for i, nx in enumerate(Nx):
             inner_scans = []
             for j, ny in enumerate(Ny):
-                start = [Sx[i] * self.sampling[0], Sy[j] * self.sampling[1]]
-                end = [start[0] + nx * self.sampling[0], start[1] + ny * self.sampling[1]]
+                start = (Sx[i] * self.sampling[0], Sy[j] * self.sampling[1])
+                end = (start[0] + nx * self.sampling[0], start[1] + ny * self.sampling[1])
                 endpoint = False
 
                 if i + 1 == divisions[0]:
@@ -523,9 +534,3 @@ class GridScan(HasGridMixin, AbstractScan):
         rect = Rectangle(tuple(self.start), *self.extent, alpha=alpha, facecolor=facecolor, edgecolor=edgecolor,
                          **kwargs)
         ax.add_patch(rect)
-
-    def __copy__(self):
-        return self.__class__(start=self.start,
-                              end=self.end,
-                              gpts=self.gpts,
-                              endpoint=self.grid.endpoint)

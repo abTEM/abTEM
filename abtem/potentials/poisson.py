@@ -291,7 +291,7 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
         else:
             return self._get_chunk_real_space(first_slice, last_slice)
 
-    def get_potential_distribution(self, lazy: bool = False):
+    def get_distribution(self, lazy: bool = False):
         pass
 
     def __copy__(self):

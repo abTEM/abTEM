@@ -1,12 +1,13 @@
 """Module for describing the detection of transmitted waves and different detector types."""
 from abc import ABCMeta, abstractmethod
 from copy import copy, deepcopy
-from typing import Tuple, Any, Union, TYPE_CHECKING, List
+from typing import Tuple, Any, Union, List
 
+import dask.array as da
 import matplotlib.pyplot as plt
 import numpy as np
 
-from abtem.core.axes import ScanAxis, AxisMetadata, FrozenPhononsAxis
+from abtem.core.axes import ScanAxis, AxisMetadata, FrozenPhononsAxis, OrdinalAxis
 from abtem.core.backend import get_array_module
 from abtem.core.dask import ComputableList
 from abtem.measure.measure import DiffractionPatterns, PolarMeasurements, Images, LineProfiles
@@ -31,40 +32,46 @@ def stack_measurements(measurements, axes_metadata):
     return cls(**d)
 
 
-def stack_measurement_ensembles(detectors, outputs):
-    for i, (detector, output) in enumerate(zip(detectors, outputs)):
+def stack_measurement_ensembles(detectors, measurements):
+    for i, (detector, output) in enumerate(zip(detectors, measurements)):
         if not detector.ensemble_mean or isinstance(output, list):
-            outputs[i] = detector.stack_measurements(output, axes_metadata=FrozenPhononsAxis())
+            measurements[i] = stack_measurements(output, axes_metadata=FrozenPhononsAxis())
 
             if detector.ensemble_mean:
-                outputs[i] = outputs[i].mean(0)
+                measurements[i] = measurements[i].mean(0)
 
-        if len(outputs[i]) == 1:
-            outputs[i] = outputs[i][0]
+        measurements[i] = measurements[i].squeeze()
 
-    if len(outputs) == 1:
-        return outputs[0]
+    if len(measurements) == 1:
+        return measurements[0]
     else:
-        return ComputableList(outputs)
+        return ComputableList(measurements)
 
 
 def allocate_measurements(waves, scan, detectors, potential):
     measurements = []
     for detector in detectors:
-        if detector.ensemble_mean or potential.num_configurations == 1:
-            measurements.append(detector.allocate_measurement(waves, scan))
-        else:
-            frozen_phonons_shape = (potential.num_configurations,)
-            measurements.append(detector.allocate_measurement(waves,
-                                                              scan,
-                                                              extra_axes_shape=frozen_phonons_shape,
-                                                              extra_axes_metadata=[FrozenPhononsAxis()]))
+
+        extra_axes_shape = ()
+        extra_axes_metadata = []
+
+        if potential.num_configurations > 1 and not detector.ensemble_mean:
+            extra_axes_shape = (potential.num_configurations,)
+            extra_axes_metadata = [FrozenPhononsAxis()]
+
+        if detector.detect_every:
+            extra_axes_shape = (detector.num_detections(potential),)
+            extra_axes_metadata = [OrdinalAxis()]
+
+
+        measurement = detector.allocate_measurement(waves,
+                                                    scan,
+                                                    extra_axes_shape=extra_axes_shape,
+                                                    extra_axes_metadata=extra_axes_metadata)
+
+        measurements.append(measurement)
 
     return measurements
-
-
-if TYPE_CHECKING:
-    pass
 
 
 def simple_repr(obj, keys):
@@ -90,37 +97,6 @@ def validate_detectors(detectors):
     return detectors
 
 
-def apply_detector_func(self, func, detectors, scan=None, **kwargs):
-    detectors = validate_detectors(detectors)
-
-    new_cls = [detector.measurement_type(self, scan) for detector in detectors]
-    new_cls_kwargs = [detector.measurement_kwargs(self, scan) for detector in detectors]
-
-    signatures = []
-    output_sizes = {}
-    meta = []
-    i = 2
-    for detector in detectors:
-        shape = detector.measurement_shape(self, scan=scan)
-        signatures.append(f'({",".join([str(i) for i in range(i, i + len(shape))])})')
-        output_sizes.update({str(index): n for index, n in zip(range(i, i + len(shape)), shape)})
-        meta.append(np.array((), dtype=detector.measurement_dtype))
-        i += len(shape)
-
-    signature = '(0,1)->' + ','.join(signatures)
-
-    measurements = self.apply_gufunc(func,
-                                     detectors=detectors,
-                                     new_cls=new_cls,
-                                     new_cls_kwargs=new_cls_kwargs,
-                                     signature=signature,
-                                     output_sizes=output_sizes,
-                                     meta=meta,
-                                     **kwargs)
-
-    return measurements
-
-
 class AbstractDetector(metaclass=ABCMeta):
     """Abstract base class for all detectors."""
 
@@ -130,13 +106,24 @@ class AbstractDetector(metaclass=ABCMeta):
         self._url = url
         self._detect_every = detect_every
 
+    def num_detections(self, potential):
+        if self.detect_every:
+            num_detect_thicknesses = len(potential) // self.detect_every
+
+            if len(potential) % self.detect_every != 0:
+                num_detect_thicknesses += 1
+
+            return num_detect_thicknesses
+
+        return 1
+
     @property
     def ensemble_mean(self):
         return self._ensemble_mean
 
     @property
     def detect_every(self):
-        return self._ensemble_mean
+        return self._detect_every
 
     @property
     def to_cpu(self):
@@ -144,12 +131,12 @@ class AbstractDetector(metaclass=ABCMeta):
 
     def allocate_measurement(self,
                              waves,
-                             scan=None,
                              extra_axes_shape: Tuple[int, ...] = None,
-                             extra_axes_metadata: List[AxisMetadata] = None):
+                             extra_axes_metadata: List[AxisMetadata] = None,
+                             lazy: bool = False):
 
-        d = self.measurement_kwargs(waves, scan)
-        shape = self.measurement_shape(waves, scan)
+        d = self.measurement_kwargs(waves)
+        shape = self.measurement_shape(waves)
 
         if extra_axes_shape:
             assert len(extra_axes_metadata) == len(extra_axes_shape)
@@ -161,9 +148,12 @@ class AbstractDetector(metaclass=ABCMeta):
         else:
             xp = get_array_module(waves.device)
 
-        d['array'] = xp.zeros(shape, dtype=self.measurement_dtype)
+        if lazy:
+            d['array'] = da.zeros(shape, dtype=self.measurement_dtype)
+        else:
+            d['array'] = xp.zeros(shape, dtype=self.measurement_dtype)
 
-        return self.measurement_type(waves, scan)(**d)
+        return self.measurement_type(waves)(**d)
 
     @property
     @abstractmethod
@@ -171,15 +161,15 @@ class AbstractDetector(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def measurement_shape(self, waves, scan) -> Tuple:
+    def measurement_shape(self, waves) -> Tuple:
         pass
 
     @abstractmethod
-    def measurement_type(self, waves, scan):
+    def measurement_type(self, waves):
         pass
 
     @abstractmethod
-    def measurement_kwargs(self, waves, scan):
+    def measurement_kwargs(self, waves):
         pass
 
     @abstractmethod
@@ -272,20 +262,15 @@ class AnnularDetector(AbstractDetector):
 
         return inner, outer
 
-    def measurement_shape(self, waves, scan=None) -> Tuple:
-        shape = waves.extra_axes_shape
-        if scan is not None:
-            shape = scan.gpts + shape
-        return shape
+    def measurement_shape(self, waves) -> Tuple:
+        return waves.extra_axes_shape
 
     @property
     def measurement_dtype(self) -> type:
         return np.float32
 
-    def measurement_type(self, waves, scan=None):
+    def measurement_type(self, waves):
         num_scan_axes = waves.num_scan_axes
-        if scan is not None:
-            num_scan_axes += len(scan.shape)
 
         if num_scan_axes == 1:
             return LineProfiles
@@ -294,10 +279,8 @@ class AnnularDetector(AbstractDetector):
         else:
             raise RuntimeError(f'no measurement type for AnnularDetector and Waves with {num_scan_axes} scan axes')
 
-    def measurement_kwargs(self, waves, scan=None):
+    def measurement_kwargs(self, waves):
         extra_axes_metadata = copy(waves.extra_axes_metadata)
-        if scan is not None:
-            extra_axes_metadata = scan.axes_metadata + extra_axes_metadata
 
         sampling = ()
         n = len(extra_axes_metadata) - 1
@@ -312,23 +295,16 @@ class AnnularDetector(AbstractDetector):
         if len(sampling) == 1:
             sampling = sampling[0]
 
-        measurement_type = self.measurement_type(waves, scan)
+        measurement_type = self.measurement_type(waves)
+
         if measurement_type is LineProfiles:
-
-            if scan is not None:
-                start = scan.start
-                end = scan.end
-            else:
-                start = waves.scan_axes_metadata[0].start
-                end = waves.scan_axes_metadata[0].end
-
             return {'sampling': sampling,
-                    'start': start,
-                    'end': end,
+                    'start': waves.scan_axes_metadata[0].start,
+                    'end': waves.scan_axes_metadata[0].end,
                     'extra_axes_metadata': extra_axes_metadata,
                     'metadata': waves.metadata}
-        elif measurement_type is Images:
 
+        elif measurement_type is Images:
             return {'sampling': sampling,
                     'extra_axes_metadata': extra_axes_metadata,
                     'metadata': waves.metadata}
@@ -379,11 +355,12 @@ class AnnularDetector(AbstractDetector):
 
 class AbstractRadialDetector(AbstractDetector):
 
-    def __init__(self, inner, outer, rotation, ensemble_mean: bool = True, to_cpu: bool = True, url: str = None):
+    def __init__(self, inner, outer, rotation, ensemble_mean: bool = True, to_cpu: bool = True, url: str = None,
+                 detect_every: int = None):
         self._inner = inner
         self._outer = outer
         self._rotation = rotation
-        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url)
+        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url, detect_every=detect_every)
 
     def stack_measurements(self, measurements, axes_metadata):
         return stack_measurements(measurements, axes_metadata)
@@ -428,22 +405,16 @@ class AbstractRadialDetector(AbstractDetector):
     def measurement_dtype(self):
         return np.float32
 
-    def measurement_shape(self, waves, scan=None):
+    def measurement_shape(self, waves):
 
         shape = self._calculate_nbins_radial(waves), self._calculate_nbins_azimuthal(waves)
 
         shape = waves.shape[:-len(waves.base_axes)] + shape
 
-        if scan is not None:
-            shape = scan.shape + shape
-
         return shape
 
-    def measurement_kwargs(self, waves, scan=None):
+    def measurement_kwargs(self, waves):
         extra_axes_metadata = waves.extra_axes_metadata
-
-        if scan is not None:
-            extra_axes_metadata = scan.axes_metadata + extra_axes_metadata
 
         d = {'radial_sampling': self.radial_sampling,
              'azimuthal_sampling': self.azimuthal_sampling,
@@ -480,12 +451,9 @@ class AbstractRadialDetector(AbstractDetector):
         if self.to_cpu:
             measurement = measurement.to_cpu()
 
-        # if probes.num_ensemble_axes > 0:
-        #     measurement = measurement.mean(probes.ensemble_axes)
-
         return measurement
 
-    def measurement_type(self, waves, scan):
+    def measurement_type(self, waves):
         return PolarMeasurements
 
     def show(self, waves=None, ax=None, cmap='prism'):
@@ -507,25 +475,6 @@ class AbstractRadialDetector(AbstractDetector):
         plt.colorbar(im, extend='min', label='Detector region')
         # ax.set_rlim([-0, min(waves.cutoff_angles) * 1.1])
         return ax, im
-
-    # def show(self, waves, ax=None):
-    #     bins = np.arange(0., self.nbins_radial(waves))[:, None]
-    #
-    #     cmap = plt.get_cmap('prism', np.nanmax(bins) + 1)
-    #     cmap.set_under(color='white')
-    #
-    #     polar_measurements = PolarMeasurements(bins,
-    #                                            radial_sampling=self._radial_steps,
-    #                                            azimuthal_sampling=2 * np.pi,
-    #                                            radial_offset=0,
-    #                                            azimuthal_offset=0.)
-    #
-    #     ax, im = polar_measurements.show(ax=ax, cmap=cmap, vmin=-.5, vmax=np.max(bins) + .5)
-    #
-    #     plt.colorbar(im, extend='min', label='Detector region')
-    #
-    #
-    #     return ax, im
 
 
 class FlexibleAnnularDetector(AbstractRadialDetector):
@@ -549,12 +498,14 @@ class FlexibleAnnularDetector(AbstractRadialDetector):
                  outer: float = None,
                  ensemble_mean: bool = True,
                  to_cpu: bool = True,
-                 url: str = None):
+                 url: str = None,
+                 detect_every: int = None):
         self._step_size = step_size
-        super().__init__(inner=inner, outer=outer, rotation=0., ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url)
+        super().__init__(inner=inner, outer=outer, rotation=0., ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url,
+                         detect_every=detect_every)
 
     def __repr__(self):
-        return simple_repr(self, ('inner', 'outer', 'step_size'))
+        return simple_repr(self, ('inner', 'outer', 'step_size', 'detect_every'))
 
     @property
     def step_size(self) -> float:
@@ -586,20 +537,11 @@ class FlexibleAnnularDetector(AbstractRadialDetector):
         #     step_size = self.step_size
         # else:
         #     step_size = min(waves.angular_sampling)
-        #print(waves.cutoff_angles)
+        # print(waves.cutoff_angles)
         return int(np.floor(min(waves.cutoff_angles)) / self.step_size)
 
     def _calculate_nbins_azimuthal(self, waves):
         return 1
-
-    def __copy__(self) -> 'FlexibleAnnularDetector':
-        return self.__class__(self.step_size, ensemble_mean=self.ensemble_mean)
-
-    def copy(self) -> 'FlexibleAnnularDetector':
-        """
-        Make a copy.
-        """
-        return copy(self)
 
 
 class SegmentedDetector(AbstractRadialDetector):
@@ -631,11 +573,12 @@ class SegmentedDetector(AbstractRadialDetector):
                  rotation: float = 0.,
                  ensemble_mean: bool = True,
                  to_cpu: bool = False,
-                 url: str = None):
+                 url: str = None,
+                 detect_every: int = None):
         self._nbins_radial = nbins_radial
         self._nbins_azimuthal = nbins_azimuthal
         super().__init__(inner=inner, outer=outer, rotation=rotation, ensemble_mean=ensemble_mean, to_cpu=to_cpu,
-                         url=url)
+                         url=url, detect_every=detect_every)
 
     def __repr__(self):
         return simple_repr(self, ('inner', 'outer', 'nbins_radial', 'nbins_azimuthal', 'rotation'))
@@ -676,14 +619,6 @@ class SegmentedDetector(AbstractRadialDetector):
     def _calculate_nbins_azimuthal(self, waves=None):
         return self.nbins_azimuthal
 
-    def __copy__(self) -> 'SegmentedDetector':
-        return self.__class__(inner=self.inner, outer=self.outer, nbins_radial=self.nbins_radial,
-                              nbins_azimuthal=self.nbins_azimuthal, ensemble_mean=self.ensemble_mean)
-
-    def copy(self) -> 'SegmentedDetector':
-        """Make a copy."""
-        return copy(self)
-
 
 class PixelatedDetector(AbstractDetector):
     """
@@ -709,12 +644,13 @@ class PixelatedDetector(AbstractDetector):
                  ensemble_mean: bool = True,
                  fourier_space: bool = True,
                  to_cpu: bool = True,
-                 url: str = None):
+                 url: str = None,
+                 detect_every: int = None):
 
         self._resample = resample
         self._max_angle = max_angle
         self._fourier_space = fourier_space
-        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url)
+        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url, detect_every=detect_every)
 
     def stack_measurements(self, measurements, axes_metadata):
         return stack_measurements(measurements, axes_metadata)
@@ -747,29 +683,25 @@ class PixelatedDetector(AbstractDetector):
 
         return 0., outer
 
-    def measurement_shape(self, waves, scan=None):
+    def measurement_shape(self, waves):
         if self.fourier_space:
             shape = waves._gpts_within_angle(self.max_angle)
         else:
             shape = waves.gpts
 
         shape = waves.extra_axes_shape + shape
-        if scan is not None:
-            shape = scan.shape + shape
         return shape
 
     @property
     def measurement_dtype(self):
         return np.float32
 
-    def measurement_kwargs(self, waves, scan=None):
-        extra_axes_metadata = waves.extra_axes_metadata
-        if scan is not None:
-            extra_axes_metadata = scan.axes_metadata + extra_axes_metadata
+    def measurement_kwargs(self, waves):
+        extra_axes_metadata = deepcopy(waves.extra_axes_metadata)
+
         if self.fourier_space:
             return {'sampling': waves.fourier_space_sampling,
-                    'fftshift':True,
-                    'energy': waves.energy,
+                    'fftshift': True,
                     'extra_axes_metadata': extra_axes_metadata,
                     'metadata': waves.metadata}
         else:
@@ -783,92 +715,7 @@ class PixelatedDetector(AbstractDetector):
         else:
             return Images
 
-    # def _bilinear_nodes_and_weight(self, old_shape, new_shape, old_angular_sampling, new_angular_sampling, xp):
-    #     nodes = []
-    #     weights = []
-    #
-    #     old_sampling = (1 / old_angular_sampling[0] / old_shape[0],
-    #                     1 / old_angular_sampling[1] / old_shape[1])
-    #
-    #     new_sampling = (1 / new_angular_sampling[0] / new_shape[0],
-    #                     1 / new_angular_sampling[1] / new_shape[1])
-    #
-    #     for n, m, r, d in zip(old_shape, new_shape, old_sampling, new_sampling):
-    #         k = xp.fft.fftshift(xp.fft.fftfreq(n, r).astype(xp.float32))
-    #         k_new = xp.fft.fftshift(xp.fft.fftfreq(m, d).astype(xp.float32))
-    #
-    #         distances = k_new[None] - k[:, None]
-    #         distances[distances < 0.] = np.inf
-    #
-    #         w = distances.min(0) / (k[1] - k[0])
-    #         w[w == np.inf] = 0.
-    #
-    #         nodes.append(distances.argmin(0))
-    #         weights.append(w)
-    #
-    #     v, u = nodes
-    #     vw, uw = weights
-    #     v, u, vw, uw = xp.broadcast_arrays(v[:, None], u[None, :], vw[:, None], uw[None, :])
-    #     return v, u, vw, uw
-    #
-    # def _resampled_gpts(self, gpts, angular_sampling):
-    #     if self._resample is False:
-    #         return gpts, angular_sampling
-    #
-    #     if self._resample == 'uniform':
-    #         scale_factor = (angular_sampling[0] / max(angular_sampling),
-    #                         angular_sampling[1] / max(angular_sampling))
-    #
-    #         new_gpts = (int(np.ceil(gpts[0] * scale_factor[0])),
-    #                     int(np.ceil(gpts[1] * scale_factor[1])))
-    #
-    #         if np.abs(new_gpts[0] - new_gpts[1]) <= 2:
-    #             new_gpts = (min(new_gpts),) * 2
-    #
-    #         new_angular_sampling = (angular_sampling[0] / scale_factor[0],
-    #                                 angular_sampling[1] / scale_factor[1])
-    #
-    #     else:
-    #         raise RuntimeError('')
-    #
-    #     return new_gpts, new_angular_sampling
-    #
-    # def _interpolate(self, array, angular_sampling):
-    #     xp = get_array_module(array)
-    #     # interpolate_bilinear = get_device_function(xp, 'interpolate_bilinear')
-    #
-    #     new_gpts, new_angular_sampling = self._resampled_gpts(array.shape[-2:], angular_sampling)
-    #     v, u, vw, uw = self._bilinear_nodes_and_weight(array.shape[-2:],
-    #                                                    new_gpts,
-    #                                                    angular_sampling,
-    #                                                    new_angular_sampling,
-    #                                                    xp)
-    #
-    #     # return interpolate_bilinear(array, v, u, vw, uw)
-
-    # def measurement_from_array(self, array, scan=None, waves=None, extra_axes_metadata=None, **kwargs):
-    #
-    #     if extra_axes_metadata is None:
-    #         extra_axes_metadata = []
-    #
-    #     extra_axes_metadata = extra_axes_metadata + scan.axes_metadata
-    #
-    #     return DiffractionPatterns(array, sampling=waves.fourier_space_sampling, energy=waves.energy,
-    #                                extra_axes_metadata=extra_axes_metadata, fftshift=True)
-
     def detect(self, waves) -> np.ndarray:
-
-        if self.fourier_space:
-            measurements = waves.diffraction_patterns(max_angle=self.max_angle)
-
-        else:
-            measurements = waves.intensity()
-
-        if self.to_cpu:
-            measurements = measurements.to_cpu()
-
-        return measurements
-
         # """
         # Calculate the far field intensity of the wave functions. The output is cropped to include the non-suppressed
         # frequencies from the antialiased 2D fourier spectrum.
@@ -883,37 +730,22 @@ class PixelatedDetector(AbstractDetector):
         #     Detected values. The first dimension indexes the batch size, the second and third indexes the two components
         #     of the spatial frequency.
         # """
-        #
-        # xp = get_array_module(waves.array)
-        # abs2 = get_device_function(xp, 'abs2')
-        #
-        # waves = waves.far_field(max_angle=self.max_angle)
-        #
-        # if self._mode == 'intensity':
-        #     array = abs2(waves.array)
-        # elif self._mode == 'complex':
-        #     array = waves.array
-        # else:
-        #     raise ValueError()
-        #
-        # array = xp.fft.fftshift(array, axes=(-2, -1))
-        #
-        # if self._resample:
-        #     array = self._interpolate(array, waves.angular_sampling)
-        # return array
+        if self.fourier_space:
+            measurements = waves.diffraction_patterns(max_angle=self.max_angle)
 
-    def __copy__(self) -> 'PixelatedDetector':
-        return self.__class__(max_angle=self.max_angle,
-                              resample=self.resample,
-                              ensemble_mean=self.ensemble_mean,
-                              to_cpu=self.to_cpu,
-                              url=self.url)
+        else:
+            measurements = waves.intensity()
+
+        if self.to_cpu:
+            measurements = measurements.to_cpu()
+
+        return measurements
 
 
 class WavesDetector(AbstractDetector):
 
-    def __init__(self, to_cpu: bool = True, url: str = None):
-        super().__init__(ensemble_mean=False, to_cpu=to_cpu, url=url)
+    def __init__(self, to_cpu: bool = False, url: str = None, detect_every: int = None):
+        super().__init__(ensemble_mean=False, to_cpu=to_cpu, url=url, detect_every=detect_every)
 
     def detect(self, waves):
         if self.to_cpu:
@@ -927,32 +759,23 @@ class WavesDetector(AbstractDetector):
     def measurement_dtype(self):
         return np.complex64
 
-    def measurement_shape(self, waves, scan=None) -> Tuple:
+    def measurement_shape(self, waves) -> Tuple:
         shape = waves.extra_axes_shape + waves.gpts
-        if scan is not None:
-            shape = scan.shape + shape
         return shape
 
-    def measurement_type(self, waves, scan=None):
+    def measurement_type(self, waves):
         from abtem.waves import Waves
         return Waves
 
-    def measurement_kwargs(self, waves, scan=None):
-
+    def measurement_kwargs(self, waves):
         extra_axes_metadata = waves.extra_axes_metadata
-
-        if scan is not None:
-            extra_axes_metadata = scan.axes_metadata + extra_axes_metadata
 
         return {'sampling': waves.sampling,
                 'energy': waves.energy,
                 'antialias_cutoff_gpts': waves.antialias_cutoff_gpts,
                 'tilt': waves.tilt,
-                'extra_axes_metadata': extra_axes_metadata,
+                'extra_axes_metadata': deepcopy(extra_axes_metadata),
                 'metadata': waves.metadata}
 
     def stack_measurements(self, measurements, axes_metadata):
         return stack_waves(measurements, axes_metadata)
-
-    def __copy__(self):
-        pass

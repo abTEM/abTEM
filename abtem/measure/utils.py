@@ -1,4 +1,4 @@
-from typing import Tuple, Union
+from typing import Tuple, Union, List
 
 import numpy as np
 from numba import prange, jit
@@ -32,9 +32,9 @@ def polar_detector_bins(gpts: Tuple[int, int],
                         nbins_azimuthal: int,
                         rotation: float = 0.,
                         offset: Tuple[float, float] = (0., 0.),
-                        fftshift=False,
-                        return_indices=False,
-                        ) -> np.ndarray:
+                        fftshift: bool = False,
+                        return_indices: bool = False,
+                        ) -> Union[np.ndarray, List[np.ndarray]]:
     """
     Create an array of labels for the regions of a given detector geometry.
 
@@ -52,11 +52,6 @@ def polar_detector_bins(gpts: Tuple[int, int],
         Number of radial detector bins.
     nbins_azimuthal
         Number of azimuthal detector bins.
-
-    Returns
-    -------
-    2d array
-        Array of integer labels representing the detector regions.
     """
 
     alpha, phi = polar_spatial_frequencies(gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]))
@@ -66,13 +61,6 @@ def polar_detector_bins(gpts: Tuple[int, int],
     valid = (alpha >= inner) & (alpha < outer)
 
     radial_bins[valid] = (nbins_radial * (alpha[valid] - inner) / (outer - inner))
-
-    # import matplotlib.pyplot as plt
-    # #print(inner)
-    # #plt.imshow(radial_bins[:10,:10])
-    # plt.imshow(valid[:10, :10])
-    # plt.colorbar()
-    # plt.show()
 
     angular_bins = np.floor(nbins_azimuthal * (phi / (2 * np.pi)))
     angular_bins = np.clip(angular_bins, 0, nbins_azimuthal - 1).astype(int)

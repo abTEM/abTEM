@@ -92,7 +92,7 @@ def prism_wave_vectors(cutoff: float, extent: Tuple[float, float], energy: float
     kx = n / w * np.float32(interpolation[0])
     ky = m / h * np.float32(interpolation[1])
 
-    mask = kx[:, None] ** 2 + ky[None, :] ** 2 <= (cutoff / 1.e3 / wavelength) ** 2
+    mask = kx[:, None] ** 2 + ky[None, :] ** 2 < (cutoff / 1.e3 / wavelength) ** 2
 
     kx, ky = np.meshgrid(kx, ky, indexing='ij')
     kx = kx[mask]

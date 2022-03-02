@@ -92,5 +92,9 @@ class FresnelPropagator(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, Has
         return array
 
     def propagate(self, waves: Union['Waves']):
-        waves._array = fft2_convolve(waves.array, self.array, overwrite_x=False)
+        from cupyx.scipy.signal import fftconvolve
+        #print(waves.array.dtype)
+
+        waves._array = fftconvolve(waves.array, self.array, axes=(-2, -1))
+        # waves._array = fft2_convolve(waves.array, self.array, overwrite_x=True)
         return waves

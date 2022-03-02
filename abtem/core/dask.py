@@ -9,6 +9,7 @@ import numpy as np
 from contextlib import nullcontext
 
 from abtem.core.backend import get_array_module, device_name_from_array_module
+from abtem.core.device import HasDeviceMixin
 
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves
@@ -122,6 +123,14 @@ class HasDaskArray:
     def _copy_as_dict(self, copy_array: bool = True) -> dict:
         pass
 
+    def to_delayed(self):
+
+        def wrap(array, cls, cls_kwargs):
+            return cls(array, **cls_kwargs)
+
+        return dask.delayed(wrap)(self.array, self.__class__, self._copy_as_dict(copy_array=False))
+
+
     def apply_gufunc(self,
                      func,
                      signature,
@@ -210,11 +219,10 @@ class HasDaskArray:
 
         return new_cls(array=array, **new_cls_kwargs)
 
-    def delay(self, chunks=None):
+    def delay(self, chunks=-1):
         if self.is_lazy:
             return self
-
-        self._array = da.from_array(self._array, chunks=-1)
+        self._array = da.from_array(self._array, chunks=chunks)
         return self
 
     def compute(self, progress_bar: bool = None, **kwargs):
