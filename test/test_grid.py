@@ -1,3 +1,5 @@
+import random
+
 import hypothesis.strategies as st
 import numpy as np
 import pytest
@@ -6,7 +8,6 @@ from hypothesis import given, assume
 import strats as abst
 from abtem.core.grid import Grid, GridUndefinedError
 from utils import ensure_is_tuple
-import random
 
 
 def grid_data(allow_none=False, allow_overdefined=True):
@@ -23,6 +24,7 @@ def grid_data(allow_none=False, allow_overdefined=True):
     return st.fixed_dictionaries(
         data
     )
+
 
 def create_grid(kwargs):
     return Grid(**kwargs)

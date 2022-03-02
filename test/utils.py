@@ -6,12 +6,20 @@ import numpy as np
 import pytest
 from hypothesis import assume
 
+from abtem import Potential
 from abtem.core.backend import get_array_module, cp
 from abtem.potentials.temperature import AbstractFrozenPhonons
 
 
 def check_array_matches_device(array, device):
     assert get_array_module(array) is get_array_module(device)
+
+
+def assert_array_matches_laziness(array, lazy):
+    if lazy:
+        assert isinstance(array, da.core.Array)
+    else:
+        assert not isinstance(array, da.core.Array)
 
 
 def ensure_is_tuple(x, length: int = 1):
@@ -21,11 +29,6 @@ def ensure_is_tuple(x, length: int = 1):
         x = tuple(x)
     assert len(x) == length
     return x
-
-
-def check_array_matches_laziness(array, lazy):
-    if lazy:
-        assert isinstance(array, da.core.Array)
 
 
 def array_is_close(a1, a2, rel_tol=np.inf, abs_tol=np.inf, check_above_abs=0., check_above_rel=0., mask=None):
@@ -54,7 +57,7 @@ def assume_valid_probe_and_detectors(probe, detectors):
     assume(outer_limit <= min(probe.cutoff_angles))
 
 
-def assert_scanned_measurement_as_expected(measurements, atoms, waves, scan, detectors):
+def assert_scanned_measurement_as_expected(measurements, atoms, waves, detectors, scan=None):
     if not isinstance(measurements, list):
         measurements = [measurements]
 
@@ -62,19 +65,28 @@ def assert_scanned_measurement_as_expected(measurements, atoms, waves, scan, det
 
     for detector, measurement in zip(detectors, measurements):
 
-        if isinstance(atoms, AbstractFrozenPhonons) and len(atoms) > 1 and not detector.ensemble_mean:
-            frozen_phonons_shape = (len(atoms),)
-        else:
-            frozen_phonons_shape = ()
+        expected_shape = ()
+        if isinstance(atoms, AbstractFrozenPhonons) and not detector.ensemble_mean:
+            expected_shape = (len(atoms),)
 
-        scan_shape = scan.gpts
-        assert scan_shape == measurement.shape[len(frozen_phonons_shape): len(frozen_phonons_shape) + len(scan_shape)]
+        if detector.detect_every:
+            num_detect_thicknesses = len(Potential(atoms)) // detector.detect_every
+            if len(Potential(atoms)) % detector.detect_every != 0:
+                num_detect_thicknesses += 1
 
-        if frozen_phonons_shape:
-            assert frozen_phonons_shape[0] == measurement.shape[0]
+            if num_detect_thicknesses > 1:
+                expected_shape += (num_detect_thicknesses,)
 
-        base_shape = detector.measurement_shape(waves)[len(frozen_phonons_shape + scan_shape):]
-        assert base_shape == measurement.shape[len(measurement.shape) - len(base_shape):]
+        if scan is not None:
+            expected_shape += scan.shape
+
+        expected_shape = tuple(s for s in expected_shape if s > 1)
+
+        expected_shape += detector.measurement_shape(waves)
+
+        # print(expected_shape, measurement.shape)
+
+        assert expected_shape == measurement.shape
         assert not np.all(measurement.array == 0.)
 
         if detector.to_cpu:

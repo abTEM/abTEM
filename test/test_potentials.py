@@ -10,7 +10,6 @@ from abtem.potentials.potentials import Potential
 from utils import array_is_close, gpu
 
 
-
 @settings(deadline=None)
 @given(atom_data=abst.empty_atoms_data(),
        gpts=abst.gpts(),

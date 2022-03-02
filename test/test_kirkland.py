@@ -3,15 +3,17 @@ from ase import Atoms
 
 from abtem.potentials import Potential
 from abtem.waves.waves import PlaneWave
+import pytest
 
-
-def test_fig_5_12():
+@pytest.mark.parametrize('lazy', [False, True])
+@pytest.mark.parametrize('projection', ['finite', 'infinite'])
+def test_fig_5_12(projection, lazy):
     atoms = Atoms('CSiCuAuU', positions=[(x, 25, 4) for x in np.linspace(5, 45, 5)], cell=(50, 50, 8))
 
-    potential = Potential(atoms=atoms, gpts=512, parametrization='kirkland')
+    potential = Potential(atoms=atoms, gpts=512, parametrization='kirkland', projection=projection)
     waves = PlaneWave(energy=200e3)
 
-    waves = waves.multislice(potential)
+    waves = waves.multislice(potential, lazy=lazy)
     waves = waves.apply_ctf(defocus=700, Cs=1.3e7, semiangle_cutoff=10.37, rolloff=0.)
 
     intensity = waves.intensity().compute().array
