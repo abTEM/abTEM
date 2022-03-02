@@ -47,6 +47,10 @@ T = TypeVar('T', bound='AbstractMeasurement')
 
 def _to_hyperspy_axes_metadata(axes_metadata, shape):
     hyperspy_axes = []
+
+    if not isinstance(shape, (list, tuple)):
+        shape = (shape, )
+
     for metadata, n in zip(axes_metadata, shape):
         hyperspy_axes.append({'size': n})
 
@@ -55,7 +59,6 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
                         'label': 'name',
                         'offset': 'offset'
                         }
-
         for attr, mapped_attr in axes_mapping.items():
             if hasattr(metadata, attr):
                 hyperspy_axes[-1][mapped_attr] = getattr(metadata, attr)
@@ -209,24 +212,17 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
 
     def __eq__(self, other: 'AbstractMeasurement') -> bool:
         if not isinstance(other, self.__class__):
-            print('aaa')
             return False
 
         if not self.shape == other.shape:
-            print('bbb')
             return False
 
         for (key, value), (other_key, other_value) in zip(self._copy_as_dict(copy_array=False).items(),
                                                           other._copy_as_dict(copy_array=False).items()):
             if np.any(value != other_value):
-                # try:
-                print(np.allclose(value, other_value), value, other_value)
-                return np.allclose(value, other_value)
-
                 return False
 
         if not np.allclose(self.array, other.array):
-            print('ddd')
             return False
 
         return True
@@ -245,11 +241,16 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
 
     def relative_difference(self, other, min_relative_tol=0.):
         difference = self.subtract(other)
+
         xp = get_array_module(self.array)
 
+        # if min_relative_tol > 0.:
         valid = xp.abs(self.array) >= min_relative_tol * self.array.max()
         difference._array[valid] /= self.array[valid]
         difference._array[valid == 0] = 0.
+        # else:
+        #    difference._array[:] /= self.array
+
         return difference
 
     def __mul__(self, other) -> 'T':
@@ -325,6 +326,8 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
     def __getitem__(self, items):
         if isinstance(items, (Number, slice)):
             items = (items,)
+        # elif isinstance(items, ):
+        #    items = (items,)
 
         removed_axes = []
         for i, item in enumerate(items):
@@ -448,8 +451,27 @@ class Images(AbstractMeasurement):
         return self.__class__(**d)
 
     def to_hyperspy(self):
-        axes = _to_hyperspy_axes_metadata(self.axes_metadata, self.shape)
-        return Signal2D(data=np.swapaxes(self.array, -2, -1), axes=axes)
+        from hyperspy._signals.signal2d import Signal2D
+
+        axes_base = _to_hyperspy_axes_metadata(
+            self.base_axes_metadata,
+            self.base_axes_shape,
+            )
+        axes_extra = _to_hyperspy_axes_metadata(
+            self.extra_axes_metadata,
+            self.extra_axes_shape,
+            )
+
+        # We need to transpose the navigation axes to match hyperspy convention
+        array = np.transpose(self.array, self.extra_axes[::-1] + self.base_axes[::-1])
+        # The index in the array corresponding to each axis is determine from
+        # the index in the axis list
+        s = Signal2D(array, axes=axes_extra[::-1]+axes_base[::-1])
+
+        if self.is_lazy:
+            s = s.as_lazy()
+
+        return s
 
     def crop(self, extent: Tuple[float, float], offset: Tuple[float, float] = (0., 0.)):
         offset = (np.round(self.base_shape[0] * offset[0] / self.extent[0]),
@@ -845,17 +867,30 @@ class LineProfiles(AbstractMeasurement):
         return self.__class__(**d)
 
     def to_hyperspy(self):
-        from hyperspy._signals.signal1d import Signal1D
-        return Signal1D(self.array, axes=_to_hyperspy_axes_metadata(self.axes_metadata, self.shape)).as_lazy()
+        from hyperspy._signals.signal2d import Signal1D
+
+        axes_base = _to_hyperspy_axes_metadata(
+            self.base_axes_metadata,
+            self.base_axes_shape,
+            )
+        axes_extra = _to_hyperspy_axes_metadata(
+            self.extra_axes_metadata,
+            self.extra_axes_shape,
+            )
+
+        # We need to transpose the navigation axes to match hyperspy convention
+        array = np.transpose(self.array, self.extra_axes[::-1] + self.base_axes[::-1])
+        # The index in the array corresponding to each axis is determine from
+        # the index in the axis list
+        s = Signal1D(array, axes=axes_extra[::-1]+axes_base[::-1])
+
+        if self.is_lazy:
+            s = s.as_lazy()
+
+        return s
 
     def _copy_as_dict(self, copy_array: bool = True) -> dict:
-        # array: np.ndarray,
-        # start: Tuple[float, float] = None,
-        # end: Tuple[float, float] = None,
-        # sampling: float = None,
-        # endpoint: bool = True,
-        # extra_axes_metadata: List[AxisMetadata] = None,
-        # metadata: dict = None):
+
         d = {'start': self.start,
              'end': self.end,
              'sampling': self.sampling,
@@ -993,10 +1028,33 @@ class DiffractionPatterns(AbstractMeasurement):
 
     def to_hyperspy(self):
         from hyperspy._signals.signal2d import Signal2D
-        return Signal2D(self.array, axes=_to_hyperspy_axes_metadata(self.axes_metadata, self.shape))
+
+        axes_base = _to_hyperspy_axes_metadata(
+            self.base_axes_metadata,
+            self.base_axes_shape,
+            )
+        axes_extra = _to_hyperspy_axes_metadata(
+            self.extra_axes_metadata,
+            self.extra_axes_shape,
+            )
+
+        # We need to transpose the navigation axes to match hyperspy convention
+        array = np.transpose(self.array, self.extra_axes[::-1] + self.base_axes[::-1])
+        # The index in the array corresponding to each axis is determine from
+        # the index in the axis list
+        s = Signal2D(array, axes=axes_extra[::-1]+axes_base[::-1])
+
+        s.set_signal_type('electron_diffraction')
+        for axis in s.axes_manager.signal_axes:
+            axis.offset = -int(axis.size / 2) * axis.scale
+        if self.is_lazy:
+            s = s.as_lazy()
+
+        return s
 
     def _copy_as_dict(self, copy_array: bool = True) -> dict:
         d = {'sampling': self.sampling,
+             'energy': self.energy,
              'extra_axes_metadata': copy.deepcopy(self.extra_axes_metadata),
              'metadata': copy.deepcopy(self.metadata),
              'fftshift': self.fftshift}
@@ -1004,6 +1062,9 @@ class DiffractionPatterns(AbstractMeasurement):
         if copy_array:
             d['array'] = self.array.copy()
         return d
+
+    def __getitem__(self, items):
+        return self._get_measurements(items)
 
     @property
     def fftshift(self):
@@ -1015,6 +1076,7 @@ class DiffractionPatterns(AbstractMeasurement):
 
     @property
     def angular_sampling(self) -> Tuple[float, float]:
+        self.accelerator.check_is_defined()
         return self.sampling[0] * self.wavelength * 1e3, self.sampling[1] * self.wavelength * 1e3
 
     @property
@@ -1239,6 +1301,7 @@ class DiffractionPatterns(AbstractMeasurement):
 
     def integrate_radial(self, inner: float, outer: float):
         self._check_integration_limits(inner, outer)
+
         xp = get_array_module(self.array)
 
         def integrate_fourier_space(array, sampling):
@@ -1274,6 +1337,7 @@ class DiffractionPatterns(AbstractMeasurement):
         return self.center_of_mass().integrate_gradient()
 
     def center_of_mass(self) -> Images:
+
         def com(array):
             x, y = self.angular_coordinates()
             com_x = (array * x[:, None]).sum(axis=(-2, -1))
@@ -1390,7 +1454,26 @@ class PolarMeasurements(AbstractMeasurement):
 
     def to_hyperspy(self):
         from hyperspy._signals.signal2d import Signal2D
-        return Signal2D(self.array, axes=_to_hyperspy_axes_metadata(self.axes_metadata, self.shape))
+
+        axes_base = _to_hyperspy_axes_metadata(
+            self.base_axes_metadata,
+            self.base_axes_shape,
+            )
+        axes_extra = _to_hyperspy_axes_metadata(
+            self.extra_axes_metadata,
+            self.extra_axes_shape,
+            )
+
+        # We need to transpose the navigation axes to match hyperspy convention
+        array = np.transpose(self.array, self.extra_axes[::-1] + self.base_axes[::-1])
+        # The index in the array corresponding to each axis is determine from
+        # the index in the axis list
+        s = Signal2D(array, axes=axes_extra[::-1]+axes_base[::-1]).squeeze()
+
+        if self.is_lazy:
+            s = s.as_lazy()
+
+        return s
 
     @property
     def radial_offset(self) -> float:
