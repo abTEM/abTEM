@@ -5,13 +5,13 @@ from ase import Atoms
 from hypothesis import given, assume, settings
 
 import strats as abst
-from abtem import Probe, PlaneWave, SMatrix
+from strategies import core as core_st
+from abtem import Probe, PlaneWave, SMatrix, Waves
 from abtem.core.backend import get_array_module
 from abtem.core.energy import EnergyUndefinedError, energy2wavelength
 from abtem.core.grid import GridUndefinedError
 from test_grid import grid_data, _test_grid_consistent
 from utils import ensure_is_tuple, check_array_matches_device, gpu
-
 
 wave_data = st.fixed_dictionaries(
     {'energy': abst.energy(),
@@ -99,8 +99,8 @@ def test_can_build(grid_data, wave_data, builder, device, lazy):
 @pytest.mark.parametrize("builder", [Probe, PlaneWave, SMatrix])
 @pytest.mark.parametrize("lazy", [True, False])
 def test_normalized(grid_data, wave_data, lazy, builder):
-    plane_wave = builder(**grid_data, **wave_data)
-    wave = plane_wave.build(lazy=lazy)
+    builder = builder(**grid_data, **wave_data)
+    wave = builder.build(lazy=lazy)
     wave = wave.compute()
 
     if hasattr(wave, 'reduce'):
@@ -167,7 +167,42 @@ def test_s_matrix_empty_multislice(atom_data, wave_data, sampling, lazy, planewa
        wave_data=wave_data,
        sampling=abst.sampling(min_value=.1))
 @pytest.mark.parametrize("lazy", [True, False])
-def test_scatter(atoms_data, wave_data, sampling, lazy):
+@pytest.mark.parametrize("builder", [Probe, PlaneWave])
+def test_scatter(atoms_data, builder, wave_data, sampling, lazy):
+    atoms = Atoms(**atoms_data)
+    builder = builder(sampling=sampling, **wave_data)
+    wave = builder.multislice(atoms, lazy=lazy).compute()
+    xp = get_array_module(wave.array)
+    if wave_data['normalize']:
+        assert (xp.abs(xp.fft.fft2(wave.array)[..., 0, 0]) ** 2).sum() < 1.
+
+
+@given(gpts=core_st.gpts(),
+       energy=core_st.energy(),
+       sampling=core_st.sampling(min_value=.1))
+def test_downsample(gpts, sampling, energy):
+    gpts = ensure_is_tuple(gpts, 2)
+    waves = Waves(np.ones(gpts, dtype=np.complex64), sampling=sampling, energy=energy)
+
+    amplitude = np.abs(waves.array).sum()
+
+    downsampled_waves = waves.downsample(waves.full_cutoff_angles[0] / 2, normalization='values')
+
+    assert downsampled_waves
+
+    assert np.allclose(downsampled_waves.array, 1)
+
+    downsampled_waves = waves.downsample(waves.full_cutoff_angles[0] / 2, normalization='amplitude')
+
+    assert np.allclose(np.abs(downsampled_waves.array).sum(), amplitude)
+
+
+@settings(deadline=None)
+@given(atoms_data=abst.random_atoms_data(),
+       wave_data=wave_data,
+       sampling=abst.sampling(min_value=.1))
+@pytest.mark.parametrize("lazy", [True, False])
+def test_build_then_multislice(atoms_data, wave_data, sampling, lazy):
     atoms = Atoms(**atoms_data)
     plane_wave = PlaneWave(sampling=sampling, **wave_data)
     wave = plane_wave.multislice(atoms, lazy=lazy).compute()
