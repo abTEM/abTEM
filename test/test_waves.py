@@ -112,7 +112,7 @@ def test_normalized(grid_data, wave_data, lazy, builder):
 
 def check_is_normalized(array):
     xp = get_array_module(array)
-    assert np.isclose((xp.abs(xp.fft.fft2(array)) ** 2).sum(), 1., atol=1e-7)
+    assert np.isclose((xp.abs(xp.fft.fft2(array)) ** 2).sum(), 1., atol=1e-6)
 
 
 @settings(deadline=None)
