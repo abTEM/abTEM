@@ -9,6 +9,7 @@ import dask.array as da
 import numpy as np
 import zarr
 from ase import Atoms
+from matplotlib.axes import Axes
 
 from abtem.core.antialias import AntialiasAperture
 from abtem.core.axes import FrozenPhononsAxis, AxisMetadata, axis_from_dict, axis_to_dict, PositionsAxis, OrdinalAxis
@@ -156,6 +157,14 @@ class Waves(HasDaskArray, WavesLikeMixin):
         self._array = da.from_array(self.array)
 
     def squeeze(self) -> 'Waves':
+        """
+        Remove axes of length one from the waves.
+
+        Returns
+        -------
+        squeezed : Waves
+        """
+
         shape = self.shape[:-2]
         squeezed = tuple(np.where([n == 1 for n in shape])[0])
         xp = get_array_module(self.array)
@@ -189,10 +198,20 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
         Parameters
         ----------
-        max_angle : str or float
+        max_angle : {'cutoff', 'valid'} or float
             Maximum scattering angle after downsampling.
-        normalization :
+            ``cutoff`` :
+            The maximum scattering angle after downsampling will be the cutoff of the antialias aperture.
+            ``valid`` :
+            The maximum scattering angle after downsampling will be the largest rectangle that fits inside the
+            circular antialias aperture.
 
+        normalization : {'values', 'intensity', 'amplitude'}
+            The normalization parameter determines which quantity is preserved after normalization.
+                ``values`` :
+                The pixelwise values of the wave function are preserved.
+                ``amplitude`` :
+                The total amplitude of the wave function is preserved.
 
         Returns
         -------
@@ -212,12 +231,9 @@ class Waves(HasDaskArray, WavesLikeMixin):
         else:
             array = fft2_interpolate(self.array, new_shape=gpts, normalization=normalization)
 
-        # antialias_aperture = max(new_sampling) / max(self.sampling) * self.antialias_aperture
-
         d = self._copy_as_dict(copy_array=False)
         d['array'] = array
         d['sampling'] = (self.extent[0] / gpts[0], self.extent[1] / gpts[1])
-        # d['antialias_aperture'] = antialias_aperture
         return self.__class__(**d)
 
     def detect(self, detectors: Union[AbstractDetector, List[AbstractDetector]]) \
@@ -254,23 +270,27 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
     def diffraction_patterns(self,
                              max_angle: Union[str, float, None] = 'valid',
-                             block_direct: bool = False,
+                             block_direct: Union[bool, float] = False,
                              fftshift: bool = True) -> DiffractionPatterns:
         """
         Calculate the intensity of the wave functions at the diffraction plane.
 
         Parameters
         ----------
-        max_angle : float, str, optional
-            Maximum scattering angle of diffraction patterns in mrad. The
-        block_direct : bool
-            If true the direct beam is will be masked.
+        max_angle : {'cutoff', 'valid'} or float
+            Maximum scattering angle of the diffraction patterns.
+            ``cutoff`` :
+            The maximum scattering angle will be the cutoff of the antialias aperture.
+            ``valid`` :
+            The maximum scattering angle will be the largest rectangle that fits inside the circular antialias aperture.
+        block_direct : bool or float
+            If true the direct beam is masked.
         fftshift : bool
-            If true
+            If true, shift the zero-angle component to the center of the diffraction patterns.
 
         Returns
         -------
-        DiffractionPatterns
+        diffraction_patterns : DiffractionPatterns
         """
 
         def _diffraction_pattern(array, new_gpts, fftshift):
@@ -309,9 +329,11 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
         return diffraction_patterns
 
-    def apply_ctf(self, ctf: CTF = None, in_place: bool = False, **kwargs) -> 'Waves':
+    def apply_ctf(self,
+                  ctf: CTF = None,
+                  in_place: bool = False, **kwargs) -> 'Waves':
         """
-        Apply the aberrations defined by a CTF object to wave function.
+        Apply the aberrations defined by a CTF to this collection of wave functions.
 
         Parameters
         ----------
@@ -323,7 +345,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
         Returns
         -------
-        Waves
+        aberrated_waves : Waves
             The wave functions with the contrast transfer function applied.
         """
 
@@ -390,6 +412,10 @@ class Waves(HasDaskArray, WavesLikeMixin):
         ----------
         potential : Potential
             The potential through which to propagate the wave function.
+        detectors : detector or list of detectors
+        start : int
+        stop : int
+        conjugate : bool
 
         Returns
         -------
@@ -426,12 +452,16 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
     def to_zarr(self, url: str, overwrite: bool = False):
         """
-        Write potential to a zarr file.
+        Write wave functions to a zarr file.
 
         Parameters
         ----------
-        url: str
-            url to which the data is saved.
+        url : str
+            Location of the data, typically a path to a local file. A URL can also include a protocol specifier like
+            s3:// for remote data.
+        overwrite : bool
+            If given array already exists, overwrite=False will cause an error, where overwrite=True will replace the
+            existing data.
         """
 
         with zarr.open(url, mode='w') as root:
@@ -449,8 +479,9 @@ class Waves(HasDaskArray, WavesLikeMixin):
         """
         Read wave functions from a hdf5 file.
 
-        path : str
-            The path to read the file.
+        url : str
+            Location of the data, typically a path to a local file. A URL can also include a protocol specifier like
+            s3:// for remote data.
         """
 
         with zarr.open(url, mode='r') as f:
@@ -481,18 +512,14 @@ class Waves(HasDaskArray, WavesLikeMixin):
             if isinstance(item, Number):
                 removed_axes.append(i)
 
-        # if self._check_is_base_axes(removed_axes):
-        #    raise RuntimeError('base axes cannot be indexed')
-
         axes = [element for i, element in enumerate(self.extra_axes_metadata) if not i in removed_axes]
 
         d = self._copy_as_dict(copy_array=False)
         d['array'] = self._array[items]
         d['extra_axes_metadata'] = axes
-
         return self.__class__(**d)
 
-    def show(self, ax=None, **kwargs):
+    def show(self, ax: Axes = None, **kwargs):
         """
         Show the wave function.
 
@@ -542,7 +569,7 @@ class PlaneWave(WavesLikeMixin):
         Lateral sampling of wave functions [1 / Å].
     energy : float
         Electron energy [eV].
-    tilt : two floats
+    tilt : two float
         Small angle beam tilt [mrad].
     device : str
         The plane waves will be build on this device.
@@ -556,16 +583,13 @@ class PlaneWave(WavesLikeMixin):
                  tilt: Tuple[float, float] = None,
                  normalize: bool = False,
                  device: str = None):
+
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
         self._beam_tilt = BeamTilt(tilt=tilt)
         self._antialias_aperture = AntialiasAperture()
         self._device = _validate_device(device)
         self._normalize = normalize
-
-    @property
-    def base_axes(self):
-        return 0, 1
 
     @property
     def shape(self):
