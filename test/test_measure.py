@@ -4,7 +4,7 @@ import hypothesis.extra.numpy as numpy_st
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given, settings, assume, reproduce_failure
+from hypothesis import given, settings, assume
 from hypothesis.strategies import composite
 
 from abtem import Probe
@@ -132,15 +132,6 @@ def test_to_zarr_from_zarr(data, measurement, url, lazy, device):
     imported_measurement = measurement.__class__.from_zarr(url)
     imported_measurement.compute()
     assert imported_measurement == measurement.to_cpu().compute()
-
-
-@settings(deadline=None, max_examples=40, print_blob=True)
-@given(data=st.data())
-@pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('measurement', list(all_measurements.keys()))
-def test_hyperspy(data, measurement, lazy):
-    measurement = data.draw(all_measurements[measurement](lazy=lazy))
-    hyperspy_signal = measurement.to_hyperspy()
 
 
 @composite

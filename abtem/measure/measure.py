@@ -11,7 +11,6 @@ import numpy as np
 import zarr
 from ase import Atom
 from matplotlib.axes import Axes
-from scipy.interpolate import interp1d
 
 from abtem.core.axes import HasAxes, RealSpaceAxis, AxisMetadata, FourierSpaceAxis, LinearAxis, axis_to_dict, \
     axis_from_dict, OrdinalAxis
@@ -21,7 +20,6 @@ from abtem.core.complex import abs2
 from abtem.core.dask import HasDaskArray
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft2, fft2_interpolate
-from abtem.core.grid import Grid
 from abtem.core.interpolate import interpolate_bilinear
 from abtem.measure.utils import polar_detector_bins, sum_run_length_encoded
 from abtem.visualize.utils import domain_coloring, add_domain_coloring_cbar
@@ -44,12 +42,14 @@ except ImportError:
 
 T = TypeVar('T', bound='AbstractMeasurement')
 
+missing_hyperspy_message = 'This functionality of abTEM requires hyperspy, see https://hyperspy.org/.'
+
 
 def _to_hyperspy_axes_metadata(axes_metadata, shape):
     hyperspy_axes = []
 
     if not isinstance(shape, (list, tuple)):
-        shape = (shape, )
+        shape = (shape,)
 
     for metadata, n in zip(axes_metadata, shape):
         hyperspy_axes.append({'size': n})
@@ -361,9 +361,9 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
             if not measurement.is_lazy:
                 measurement._array = da.from_array(measurement.array)
 
-            #if measurement.is_lazy:
+            # if measurement.is_lazy:
             array = measurement.array.to_zarr(url, compute=compute, component='array', overwrite=overwrite)
-            #else:
+            # else:
             #    array = zarr.save(url, array=measurement.array, chunks=None)
 
             d = measurement._copy_as_dict(copy_array=False)
@@ -451,22 +451,23 @@ class Images(AbstractMeasurement):
         return self.__class__(**d)
 
     def to_hyperspy(self):
-        from hyperspy._signals.signal2d import Signal2D
+        if Signal2D is None:
+            raise RuntimeError(missing_hyperspy_message)
 
         axes_base = _to_hyperspy_axes_metadata(
             self.base_axes_metadata,
             self.base_axes_shape,
-            )
+        )
         axes_extra = _to_hyperspy_axes_metadata(
             self.extra_axes_metadata,
             self.extra_axes_shape,
-            )
+        )
 
         # We need to transpose the navigation axes to match hyperspy convention
         array = np.transpose(self.array, self.extra_axes[::-1] + self.base_axes[::-1])
         # The index in the array corresponding to each axis is determine from
         # the index in the axis list
-        s = Signal2D(array, axes=axes_extra[::-1]+axes_base[::-1])
+        s = Signal2D(array, axes=axes_extra[::-1] + axes_base[::-1])
 
         if self.is_lazy:
             s = s.as_lazy()
@@ -867,22 +868,23 @@ class LineProfiles(AbstractMeasurement):
         return self.__class__(**d)
 
     def to_hyperspy(self):
-        from hyperspy._signals.signal2d import Signal1D
+        if Signal1D is None:
+            raise RuntimeError(missing_hyperspy_message)
 
         axes_base = _to_hyperspy_axes_metadata(
             self.base_axes_metadata,
             self.base_axes_shape,
-            )
+        )
         axes_extra = _to_hyperspy_axes_metadata(
             self.extra_axes_metadata,
             self.extra_axes_shape,
-            )
+        )
 
         # We need to transpose the navigation axes to match hyperspy convention
         array = np.transpose(self.array, self.extra_axes[::-1] + self.base_axes[::-1])
         # The index in the array corresponding to each axis is determine from
         # the index in the axis list
-        s = Signal1D(array, axes=axes_extra[::-1]+axes_base[::-1])
+        s = Signal1D(array, axes=axes_extra[::-1] + axes_base[::-1])
 
         if self.is_lazy:
             s = s.as_lazy()
@@ -1027,22 +1029,23 @@ class DiffractionPatterns(AbstractMeasurement):
                 FourierSpaceAxis(sampling=self.sampling[1], label='y', units='mrad')]
 
     def to_hyperspy(self):
-        from hyperspy._signals.signal2d import Signal2D
+        if Signal2D is None:
+            raise RuntimeError(missing_hyperspy_message)
 
         axes_base = _to_hyperspy_axes_metadata(
             self.base_axes_metadata,
             self.base_axes_shape,
-            )
+        )
         axes_extra = _to_hyperspy_axes_metadata(
             self.extra_axes_metadata,
             self.extra_axes_shape,
-            )
+        )
 
         # We need to transpose the navigation axes to match hyperspy convention
         array = np.transpose(self.array, self.extra_axes[::-1] + self.base_axes[::-1])
         # The index in the array corresponding to each axis is determine from
         # the index in the axis list
-        s = Signal2D(array, axes=axes_extra[::-1]+axes_base[::-1])
+        s = Signal2D(array, axes=axes_extra[::-1] + axes_base[::-1])
 
         s.set_signal_type('electron_diffraction')
         for axis in s.axes_manager.signal_axes:
@@ -1054,7 +1057,6 @@ class DiffractionPatterns(AbstractMeasurement):
 
     def _copy_as_dict(self, copy_array: bool = True) -> dict:
         d = {'sampling': self.sampling,
-             'energy': self.energy,
              'extra_axes_metadata': copy.deepcopy(self.extra_axes_metadata),
              'metadata': copy.deepcopy(self.metadata),
              'fftshift': self.fftshift}
@@ -1062,9 +1064,6 @@ class DiffractionPatterns(AbstractMeasurement):
         if copy_array:
             d['array'] = self.array.copy()
         return d
-
-    def __getitem__(self, items):
-        return self._get_measurements(items)
 
     @property
     def fftshift(self):
@@ -1076,7 +1075,6 @@ class DiffractionPatterns(AbstractMeasurement):
 
     @property
     def angular_sampling(self) -> Tuple[float, float]:
-        self.accelerator.check_is_defined()
         return self.sampling[0] * self.wavelength * 1e3, self.sampling[1] * self.wavelength * 1e3
 
     @property
@@ -1453,22 +1451,23 @@ class PolarMeasurements(AbstractMeasurement):
                 LinearAxis(label='Azimuthal scattering angle', sampling=self.azimuthal_sampling, units='rad')]
 
     def to_hyperspy(self):
-        from hyperspy._signals.signal2d import Signal2D
+        if Signal2D is None:
+            raise RuntimeError(missing_hyperspy_message)
 
         axes_base = _to_hyperspy_axes_metadata(
             self.base_axes_metadata,
             self.base_axes_shape,
-            )
+        )
         axes_extra = _to_hyperspy_axes_metadata(
             self.extra_axes_metadata,
             self.extra_axes_shape,
-            )
+        )
 
         # We need to transpose the navigation axes to match hyperspy convention
         array = np.transpose(self.array, self.extra_axes[::-1] + self.base_axes[::-1])
         # The index in the array corresponding to each axis is determine from
         # the index in the axis list
-        s = Signal2D(array, axes=axes_extra[::-1]+axes_base[::-1]).squeeze()
+        s = Signal2D(array, axes=axes_extra[::-1] + axes_base[::-1]).squeeze()
 
         if self.is_lazy:
             s = s.as_lazy()
