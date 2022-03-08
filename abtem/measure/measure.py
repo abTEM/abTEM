@@ -13,7 +13,7 @@ from ase import Atom
 from matplotlib.axes import Axes
 
 from abtem.core.axes import HasAxes, RealSpaceAxis, AxisMetadata, FourierSpaceAxis, LinearAxis, axis_to_dict, \
-    axis_from_dict, OrdinalAxis
+    axis_from_dict, OrdinalAxis, NonLinearAxis
 from abtem.core.backend import cp, asnumpy, get_array_module, get_ndimage_module, copy_to_device, \
     device_name_from_array_module
 from abtem.core.complex import abs2
@@ -59,6 +59,15 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
                         'label': 'name',
                         'offset': 'offset'
                         }
+
+        if isinstance(metadata, NonLinearAxis):
+            # TODO : when hyperspy supports arbitrary (non-uniform) DataAxis this should be updated
+
+            metadata = LinearAxis(label=metadata.label,
+                                  units=metadata.units,
+                                  sampling=metadata.values[1] - metadata.values[0],
+                                  offset=metadata.values[0])
+
         for attr, mapped_attr in axes_mapping.items():
             if hasattr(metadata, attr):
                 hyperspy_axes[-1][mapped_attr] = getattr(metadata, attr)

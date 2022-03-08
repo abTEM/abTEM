@@ -1,4 +1,6 @@
 """Module to describe the contrast transfer function."""
+import copy
+import itertools
 from collections import defaultdict
 from typing import Mapping, Union, TYPE_CHECKING, Dict
 
@@ -6,8 +8,10 @@ import numpy as np
 from matplotlib.axes import Axes
 import matplotlib.pyplot as plt
 
+from abtem.core.axes import NonLinearAxis
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
+from abtem.core.distributions import Distribution
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
 from abtem.core.grid import Grid, polar_spatial_frequencies
 from abtem.measure.measure import LineProfiles
@@ -133,7 +137,6 @@ class CTF(HasAcceleratorMixin):
                 return self._parameters[key]
 
             def setter(self, value):
-                old = getattr(self, key)
                 self._parameters[key] = value
 
             return property(getter, setter)
@@ -433,6 +436,32 @@ class CTF(HasAcceleratorMixin):
 
         return ax
 
+    @property
+    def is_distribution(self):
+        return any(isinstance(parameter, Distribution) for parameter in self._parameters.values())
+
+    def parameter_distribution(self):
+        ctf_parameter_distribution = {}
+        shape = ()
+        axes_metadata = []
+        for parameter, values in self._parameters.items():
+            if isinstance(values, Distribution):
+                ctf_parameter_distribution[parameter] = values
+                shape += (len(values),)
+                axes_metadata += [NonLinearAxis(label=parameter, values=tuple(values.values), units='Å')]
+
+        keys = ctf_parameter_distribution.keys()
+        values = np.empty(np.prod(shape), dtype=object)
+        weights = np.zeros(np.prod(shape), dtype=np.float32)
+        for i, value in enumerate(itertools.product(*ctf_parameter_distribution.values())):
+            values[i] = dict(zip(keys, [v[0] for v in value]))
+            weights[i] = np.prod([v[1] for v in value])
+
+        values = values.reshape(shape)
+        weights = weights.reshape(shape)
+
+        return values, weights, axes_metadata
+
     def copy(self):
         parameters = self.parameters.copy()
         return self.__class__(semiangle_cutoff=self.semiangle_cutoff,
@@ -441,7 +470,7 @@ class CTF(HasAcceleratorMixin):
                               angular_spread=self.angular_spread,
                               gaussian_spread=self.gaussian_spread,
                               energy=self.energy,
-                              parameters=parameters)
+                              parameters=copy.deepcopy(parameters))
 
 
 def scherzer_defocus(Cs, energy):

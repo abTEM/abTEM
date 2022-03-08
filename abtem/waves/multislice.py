@@ -112,16 +112,13 @@ def stack_measurements(measurements, axes_metadata):
     return cls(**d)
 
 
-def multislice_and_detect_with_frozen_phonons(waves, potential, detectors, lazy, func, func_kwargs=None):
+def multislice_and_detect_with_frozen_phonons(waves, potential, detectors):
     detectors = validate_detectors(detectors)
 
-    if func_kwargs is None:
-        func_kwargs = {}
-
     measurements = []
-    for potential in potential.get_distribution(lazy=lazy):
-
-        new_measurements = func(waves, potential, detectors, **func_kwargs)
+    for potential in potential.get_distribution(lazy=True):
+        cloned_waves = waves.clone()
+        new_measurements = _lazy_multislice_and_detect(cloned_waves, potential, detectors)
         measurements.append(new_measurements)
 
     measurements = list(map(list, zip(*measurements)))
@@ -141,10 +138,64 @@ def multislice_and_detect_with_frozen_phonons(waves, potential, detectors, lazy,
         return ComputableList(measurements)
 
 
-def multislice_and_detect(waves, potential, detectors, func, func_kwargs=None):
-    if func is None:
-        func_kwargs = {}
+def concatenate_last_axis_recursively(arrays, axis=-1):
+    new_shape = list(arrays.shape)
+    del new_shape[-1]
 
+    new_arrays = np.empty(new_shape, dtype=object)
+    for item in np.ndindex(*new_shape):
+        new_arrays[item] = da.concatenate(arrays[item], axis=axis)
+
+    if len(new_shape) > 0:
+        return concatenate_last_axis_recursively(new_arrays, axis=axis - 1)
+    else:
+        return new_arrays
+
+
+def _lazy_multislice_and_detect(waves, potential, detectors):
+    chunks = waves.array.chunks[:-2]
+    delayed_waves = waves.to_delayed()
+
+    def wrapped_multislice_detect(waves, potential, detectors):
+        return [measurement.array for measurement in multislice_and_detect(waves, potential, detectors)]
+
+    dwrapped = dask.delayed(wrapped_multislice_detect, nout=len(detectors))
+    delayed_potential = potential.to_delayed()
+
+    collections = np.empty_like(delayed_waves, dtype=object)
+    for index, waves_block in np.ndenumerate(delayed_waves):
+        collections[index] = dwrapped(waves_block, delayed_potential, detectors)
+
+    _, _, thickness_axes_metadata = thickness_series_precursor(detectors, potential)
+
+    measurements = []
+    for i, (detector, axes_metadata) in enumerate(zip(detectors, thickness_axes_metadata)):
+        arrays = np.empty_like(collections, dtype=object)
+
+        thicknesses = detector.num_detections(potential)
+        measurement_shape = detector.measurement_shape(waves)[waves.num_extra_axes:]
+
+        for (index, collection), chunk in zip(np.ndenumerate(collections), itertools.product(*chunks)):
+            shape = (thicknesses,) + chunk + measurement_shape
+            arrays[index] = da.from_delayed(collection[i], shape=shape, meta=np.array((), dtype=np.float32))
+
+        if len(arrays.shape) > 0:
+            arrays = concatenate_last_axis_recursively(arrays, axis=-max(len(measurement_shape), 1))
+
+        arrays = arrays.item()
+
+        d = detector.measurement_kwargs(waves)
+        d['extra_axes_metadata'] = [axes_metadata] + d['extra_axes_metadata']
+
+        measurement = detector.measurement_type(waves)(arrays, **d)
+
+        measurement = measurement.squeeze()
+        measurements.append(measurement)
+
+    return ComputableList(measurements)
+
+
+def multislice_and_detect(waves, potential, detectors):
     antialias_aperture = AntialiasAperture(device=get_array_module(waves.array))
     antialias_aperture.match_grid(waves)
 
@@ -168,7 +219,7 @@ def multislice_and_detect(waves, potential, detectors, func, func_kwargs=None):
 
         detectors_at = detectors_at_stop_slice(detect_every, stop)
 
-        new_measurements = func(waves, detectors_at, **func_kwargs)
+        new_measurements = [detector.detect(waves) for detector in detectors_at]
 
         for detector, new_measurement in zip(detectors_at, new_measurements):
 

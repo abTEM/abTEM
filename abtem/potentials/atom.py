@@ -57,8 +57,7 @@ class AtomicPotential:
     def __init__(self,
                  symbol: Union[int, str],
                  parametrization: str = 'lobato',
-                 charge: float = 0.,
-                 core_size: float = .001,
+                 inner_cutoff: float = .001,
                  cutoff_tolerance: float = 1e-3,
                  num_integration_limits: int = 100):
 
@@ -73,14 +72,10 @@ class AtomicPotential:
         self._potential = parametrization.potential(symbol)
 
         self._cutoff_tolerance = cutoff_tolerance
-        self._core_size = core_size
+        self._inner_cutoff = inner_cutoff
         self._integral_table = None
         self._cutoff = None
         self._num_integration_limits = num_integration_limits
-
-    # @property
-    # def parameters(self) -> np.ndarray:
-    #    return self._parameters
 
     @property
     def cutoff_tolerance(self) -> float:
@@ -92,8 +87,9 @@ class AtomicPotential:
 
     @property
     def radial_gpts(self) -> np.ndarray:
-        num_points = int(np.ceil(self.cutoff / self._core_size))
-        return np.geomspace(self._core_size, self.cutoff, num_points)
+        num_points = int(np.ceil(self.cutoff / self._inner_cutoff))
+        r = np.geomspace(self._inner_cutoff, self.cutoff, num_points)
+        return r
 
     @property
     def cutoff(self) -> float:
@@ -107,6 +103,7 @@ class AtomicPotential:
 
     def build_integral_table(self, taper: float = .85) -> Tuple[np.ndarray, np.ndarray]:
         limits = np.linspace(-self.cutoff, 0, self._num_integration_limits // 2)
+
         limits = np.concatenate((limits, -limits[::-1][1:]))
         table = np.zeros((len(limits) - 1, len(self.radial_gpts)))
 

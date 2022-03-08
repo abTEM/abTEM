@@ -11,6 +11,7 @@ class AxisMetadata:
 @dataclass
 class LinearAxis(AxisMetadata):
     sampling: float = 1.
+    offset: float = 0.
     units: str = 'pixels'
 
 
@@ -35,18 +36,25 @@ class ScanAxis(RealSpaceAxis):
 
 
 @dataclass
+class NonLinearAxis(AxisMetadata):
+    values: tuple = ()
+    units: str = ''
+
+
+@dataclass
+class ThicknessSeriesAxis(NonLinearAxis):
+    label: str = 'Thickness'
+    units: str = 'Å'
+
+
+@dataclass
 class OrdinalAxis(AxisMetadata):
     domain: tuple = None
 
 
 @dataclass
 class PositionsAxis(OrdinalAxis):
-    pass
-
-
-@dataclass
-class ThicknessSeriesAxis(OrdinalAxis):
-    label: str = 'Thickness'
+    label: str = 'Positions'
     units: str = 'Å'
 
 

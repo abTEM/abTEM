@@ -1,15 +1,8 @@
 from collections import defaultdict
 
-import numpy as np
-
 from abtem.core.axes import ThicknessSeriesAxis
 from abtem.measure.detect import stack_measurements
-
-
-def thickness_series_axes_metadata(multislice_start_stop, potential):
-    domain = tuple(potential.slices_thickness[start:stop].sum() for start, stop in multislice_start_stop)
-    return ThicknessSeriesAxis(domain=domain)
-
+import numpy as np
 
 def thickness_series_precursor(detectors, potential):
     detect_every = defaultdict(list)
@@ -29,11 +22,11 @@ def thickness_series_precursor(detectors, potential):
             all_detect_at += detect_at
 
             multislice_start_stop = [(detect_at[i], detect_at[i + 1]) for i in range(len(detect_at) - 1)]
-            domain = tuple([potential.slice_thickness[start:stop].sum() for start, stop in multislice_start_stop])
-            axes_metadata += [ThicknessSeriesAxis(domain=domain)]
+            domain = np.cumsum([potential.slice_thickness[start:stop].sum() for start, stop in multislice_start_stop])
+            axes_metadata += [ThicknessSeriesAxis(values=tuple(domain))]
         else:
             detect_every[len(potential)].append(detector)
-            axes_metadata += [ThicknessSeriesAxis(domain=(potential.thickness,))]
+            axes_metadata += [ThicknessSeriesAxis(values=(potential.thickness,))]
 
     all_detect_at += [0, len(potential)]
     all_detect_at = sorted(list(set(all_detect_at)))

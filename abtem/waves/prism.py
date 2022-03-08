@@ -533,7 +533,6 @@ class SMatrixArray(HasDaskArray, AbstractSMatrix):
         waves = self.to_waves()
 
         if self._is_streaming:
-
             waves._array = waves._array.map_blocks(cp.asarray)
             waves = waves.multislice(potential, start=start, stop=stop, conjugate=conjugate)
             waves._array = waves._array.map_blocks(cp.asnumpy)
@@ -936,6 +935,7 @@ class SMatrix(AbstractSMatrix):
                     array = da.from_delayed(array,
                                             shape=(chunk_stop - chunk_start,) + gpts,
                                             meta=storage_xp.array((), dtype=storage_xp.complex64))
+
                 else:
                     array = self._build_chunk(chunk_start, chunk_stop, start, stop, potential, downsample)
 

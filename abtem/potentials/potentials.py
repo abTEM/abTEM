@@ -399,7 +399,7 @@ class Potential(AbstractPotentialFromAtoms):
         for Z in np.unique(self.atoms.numbers):
             atomic_potentials[Z] = AtomicPotential(symbol=Z,
                                                    parametrization=self.parametrization,
-                                                   core_size=core_size,
+                                                   inner_cutoff=min(self.sampling) / 2,
                                                    cutoff_tolerance=self.cutoff_tolerance)
             atomic_potentials[Z].build_integral_table()
 

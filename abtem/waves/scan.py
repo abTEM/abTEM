@@ -457,8 +457,10 @@ class GridScan(HasGridMixin, AbstractScan):
             assert len(chunks) == 3
 
         if lazy:
-            positions = dask.delayed(gridscan_positions)(self.start, self.end, self.gpts, self.grid.endpoint)
+            positions = dask.delayed(gridscan_positions, pure=False)(self.start, self.end, self.gpts, self.grid.endpoint)
+
             positions = da.from_delayed(positions, shape=self.gpts + (2,), dtype=np.float32)
+
             if chunks:
                 positions = positions.rechunk(chunks)
         else:
