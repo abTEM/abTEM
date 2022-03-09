@@ -14,6 +14,7 @@ from strategies import core as core_st
 from strategies import detectors as detectors_st
 from strategies import measurements as measurements_st
 from utils import ensure_is_tuple, gpu
+from abtem.core.backend import cp
 
 all_measurements = {'images': measurements_st.images,
                     'diffraction_patterns': measurements_st.diffraction_patterns,
@@ -111,6 +112,7 @@ def test_reduce(data, measurement, method, device):
 @given(data=st.data(), url=detectors_st.temporary_path(allow_none=False))
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('measurement', list(all_measurements.keys()))
+@pytest.mark.skipif(cp is None,reason="no gpu")
 def test_to_cpu(data, measurement, url, lazy):
     measurement = data.draw(all_measurements[measurement](lazy=lazy, device='gpu'))
     measurement = measurement.to_cpu()

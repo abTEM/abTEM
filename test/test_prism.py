@@ -8,7 +8,7 @@ from abtem import Probe, SMatrix, GridScan, Potential
 from abtem.core.backend import get_array_module
 from strategies import detectors as detector_st
 from utils import gpu, assume_valid_probe_and_detectors, assert_scanned_measurement_as_expected
-
+from abtem.core.backend import cp
 
 @settings(deadline=None, max_examples=20, print_blob=True)
 @given(data=st.data(),
@@ -76,6 +76,7 @@ def test_prism_interpolation(data, atoms, gpts, planewave_cutoff, energy, lazy, 
        interpolation=st.integers(min_value=1, max_value=4),
        data=st.data())
 @pytest.mark.parametrize('lazy', [False, True])
+@pytest.mark.skipif(cp is None, reason="no gpu")
 def test_store_on_host(data, atoms, gpts, planewave_cutoff, energy, lazy, interpolation):
     detectors = data.draw(detector_st.detectors(allow_detect_every=lazy, max_detectors=1))
 

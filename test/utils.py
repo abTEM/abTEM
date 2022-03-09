@@ -1,6 +1,5 @@
 from typing import Iterable
 
-import cupy as cp
 import dask.array as da
 import numpy as np
 import pytest

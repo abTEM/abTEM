@@ -14,8 +14,7 @@ from test_grid import grid_data, _test_grid_consistent
 from utils import ensure_is_tuple, check_array_matches_device, gpu
 
 wave_data = st.fixed_dictionaries(
-    {'energy': abst.energy(),
-     'normalize': st.booleans()}
+    {'energy': abst.energy()}
 )
 
 
@@ -43,16 +42,16 @@ def test_energy_raises(grid_data, energy, builder):
 @pytest.mark.parametrize("builder", [Probe, PlaneWave, SMatrix])
 @pytest.mark.parametrize("device", ['cpu', gpu])
 @pytest.mark.parametrize("lazy", [True, False])
-@given(grid_data=grid_data(), wave_data=wave_data)
-def test_can_build(grid_data, wave_data, builder, device, lazy):
-    probe = builder(**grid_data, **wave_data, device=device)
+@given(grid_data=grid_data(), energy=abst.energy())
+def test_can_build(grid_data, energy, builder, device, lazy):
+    probe = builder(**grid_data, energy=energy, device=device)
     wave = probe.build(lazy=lazy)
     check_array_matches_device(wave.array, device)
     assert wave.array.shape[-2:] == wave.gpts == ensure_is_tuple(grid_data['gpts'], 2)
     assert np.all(np.isclose(probe.extent, wave.extent))
     assert np.all(np.isclose(probe.extent, ensure_is_tuple(grid_data['extent'], 2)))
     _test_grid_consistent(wave.extent, wave.gpts, wave.sampling)
-    assert np.isclose(wave.energy, wave_data['energy'])
+    assert np.isclose(wave.energy, energy)
 
 
 # @settings(deadline=None)
@@ -95,19 +94,23 @@ def test_can_build(grid_data, wave_data, builder, device, lazy):
 
 
 @settings(deadline=None)
-@given(grid_data=grid_data(), wave_data=wave_data)
+@given(grid_data=grid_data(), energy=abst.energy())
 @pytest.mark.parametrize("builder", [Probe, PlaneWave, SMatrix])
 @pytest.mark.parametrize("lazy", [True, False])
-def test_normalized(grid_data, wave_data, lazy, builder):
-    builder = builder(**grid_data, **wave_data)
+def test_normalized(grid_data, energy, lazy, builder):
+    builder = builder(**grid_data, energy=energy)
+
+    if hasattr(builder, '_normalize'):
+        builder._normalize = True
+
     wave = builder.build(lazy=lazy)
     wave = wave.compute()
 
     if hasattr(wave, 'reduce'):
         wave = wave.reduce()
 
-    if wave_data['normalize']:
-        check_is_normalized(wave.array)
+    # if wave_data['normalize']:
+    check_is_normalized(wave.array)
 
 
 def check_is_normalized(array):
@@ -116,15 +119,17 @@ def check_is_normalized(array):
 
 
 @settings(deadline=None)
-@given(atom_data=abst.empty_atoms_data(), wave_data=wave_data, gpts=abst.gpts())
+@given(atom_data=abst.empty_atoms_data(), energy=abst.energy(), gpts=abst.gpts())
 @pytest.mark.parametrize("lazy", [True, False])
-def test_planewave_empty_multislice(atom_data, wave_data, gpts, lazy):
+def test_planewave_empty_multislice(atom_data, energy, gpts, lazy):
     atoms = Atoms(**atom_data)
-    plane_wave = PlaneWave(gpts=gpts, **wave_data)
-    wave = plane_wave.multislice(atoms, lazy=lazy).compute()
+    plane_wave = PlaneWave(gpts=gpts, energy=energy, extent=10)
 
-    if wave_data['normalize']:
-        check_is_normalized(wave.array)
+    wave = plane_wave.build()
+
+    #print(wave.array.sum().compute())
+    wave = plane_wave.multislice(atoms, lazy=lazy).compute()
+    #check_is_normalized(wave.array)
 
 
 def antialias_cutoff_angle(sampling, energy):
@@ -133,48 +138,46 @@ def antialias_cutoff_angle(sampling, energy):
 
 @settings(deadline=None)
 @given(atom_data=abst.empty_atoms_data(),
-       wave_data=wave_data,
+       energy=abst.energy(),
        sampling=abst.sampling())
 @pytest.mark.parametrize("lazy", [True, False])
-def test_probe_empty_multislice(atom_data, wave_data, sampling, lazy):
+def test_probe_empty_multislice(atom_data, energy, sampling, lazy):
     atoms = Atoms(**atom_data)
-    cutoff = 0.9 * antialias_cutoff_angle(max(ensure_is_tuple(sampling, 2)), wave_data['energy'])
-    plane_wave = Probe(semiangle_cutoff=cutoff, sampling=sampling, **wave_data)
+    cutoff = 0.9 * antialias_cutoff_angle(max(ensure_is_tuple(sampling, 2)), energy)
+    plane_wave = Probe(semiangle_cutoff=cutoff, sampling=sampling, energy=energy)
     wave = plane_wave.multislice(atoms, lazy=lazy).compute()
-    if wave_data['normalize']:
-        check_is_normalized(wave.array)
+    check_is_normalized(wave.array)
 
 
 @settings(deadline=None)
 @given(atom_data=abst.empty_atoms_data(),
-       wave_data=wave_data,
+       energy=abst.energy(),
        planewave_cutoff=st.floats(min_value=5., max_value=10.),
        sampling=abst.sampling())
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ['cpu', gpu])
-def test_s_matrix_empty_multislice(atom_data, wave_data, sampling, lazy, planewave_cutoff, device):
+def test_s_matrix_empty_multislice(atom_data, energy, sampling, lazy, planewave_cutoff, device):
     atoms = Atoms(**atom_data)
-    max_planewave_cutoff = 0.9 * antialias_cutoff_angle(max(ensure_is_tuple(sampling, 2)), wave_data['energy'])
+    max_planewave_cutoff = 0.9 * antialias_cutoff_angle(max(ensure_is_tuple(sampling, 2)), energy)
     planewave_cutoff = min(planewave_cutoff, max_planewave_cutoff)
-    plane_wave = SMatrix(atoms, planewave_cutoff=planewave_cutoff, sampling=sampling, device=device, **wave_data)
+    plane_wave = SMatrix(atoms, planewave_cutoff=planewave_cutoff, sampling=sampling, device=device,
+                         energy=energy)
     wave = plane_wave.build(lazy=lazy).reduce().compute()
-    if wave_data['normalize']:
-        check_is_normalized(wave.array)
+    check_is_normalized(wave.array)
 
 
 @settings(deadline=None)
 @given(atoms_data=abst.random_atoms_data(),
-       wave_data=wave_data,
+       energy=abst.energy(),
        sampling=abst.sampling(min_value=.1))
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("builder", [Probe, PlaneWave])
-def test_scatter(atoms_data, builder, wave_data, sampling, lazy):
+def test_scatter(atoms_data, builder, energy, sampling, lazy):
     atoms = Atoms(**atoms_data)
-    builder = builder(sampling=sampling, **wave_data)
+    builder = builder(sampling=sampling, energy=energy)
     wave = builder.multislice(atoms, lazy=lazy).compute()
     xp = get_array_module(wave.array)
-    if wave_data['normalize']:
-        assert (xp.abs(xp.fft.fft2(wave.array)[..., 0, 0]) ** 2).sum() < 1.
+    assert (xp.abs(xp.fft.fft2(wave.array)[..., 0, 0]) ** 2).sum() < 1.
 
 
 @given(gpts=core_st.gpts(),
@@ -199,13 +202,13 @@ def test_downsample(gpts, sampling, energy):
 
 @settings(deadline=None)
 @given(atoms_data=abst.random_atoms_data(),
-       wave_data=wave_data,
+       energy=abst.energy(),
        sampling=abst.sampling(min_value=.1))
 @pytest.mark.parametrize("lazy", [True, False])
-def test_build_then_multislice(atoms_data, wave_data, sampling, lazy):
+def test_build_then_multislice(atoms_data, energy, sampling, lazy):
     atoms = Atoms(**atoms_data)
-    plane_wave = PlaneWave(sampling=sampling, **wave_data)
+    plane_wave = PlaneWave(sampling=sampling, energy=energy)
     wave = plane_wave.multislice(atoms, lazy=lazy).compute()
     xp = get_array_module(wave.array)
-    if wave_data['normalize']:
-        assert (xp.abs(xp.fft.fft2(wave.array)[..., 0, 0]) ** 2).sum() < 1.
+
+    assert (xp.abs(xp.fft.fft2(wave.array)[..., 0, 0]) ** 2).sum() < 1.
