@@ -125,8 +125,8 @@ class Canvas(HasTraits):
 
     @observe('tool')
     def _observe_tool(self, change):
-        if change['old'] != 'None':
-            self.tools[change['old']].deactivate(self)
+        if change['old_tests'] != 'None':
+            self.tools[change['old_tests']].deactivate(self)
 
         if change['new'] == 'None':
             self.figure.interaction = None

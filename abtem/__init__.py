@@ -10,5 +10,6 @@ from abtem.waves.prism import SMatrix, SMatrixArray
 from abtem.waves.scan import LineScan, GridScan, CustomScan
 from abtem.waves.transfer import CTF
 from abtem.waves.waves import Waves, PlaneWave, Probe
-from abtem.core import config
+
 from abtem.core.distributions import ParameterSeries, GaussianDistribution
+from abtem.core import config

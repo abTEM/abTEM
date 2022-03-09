@@ -1,3 +1,5 @@
+from typing import Tuple
+
 try:
     import pyfftw
 except ModuleNotFoundError:
@@ -263,13 +265,13 @@ def fft_crop(array, new_shape):
     return new_array
 
 
-def fft2_interpolate(array, new_shape, normalization='values', overwrite_x=False):
+def fft2_interpolate(array: np.ndarray,
+                     new_shape: Tuple[int, int],
+                     normalization: str = 'values',
+                     overwrite_x: bool = False):
+
     xp = get_array_module(array)
-
     old_size = array.shape[-2] * array.shape[-1]
-
-    # def _fft2_interpolate(array, new_shape):
-    #    return ifft2(fft_crop(fft2(array), new_shape), overwrite_x=overwrite_x)
 
     is_complex = np.iscomplexobj(array)
     array = array.astype(xp.complex64)
@@ -280,13 +282,12 @@ def fft2_interpolate(array, new_shape, normalization='values', overwrite_x=False
         array = array.real
 
     if normalization == 'values':
-        # array *= old_size / np.prod(array.shape[-2:])
-        # array *= array.shape[-1] * array.shape[-2] / old_size
         array *= np.prod(array.shape[-2:]) / old_size
 
-    elif normalization == 'intensity':
-        # array *= np.sqrt(np.prod(array.shape[-2:]) / old_size)
-        array *= np.sqrt(old_size / np.prod(array.shape[-2:]))
+    #elif normalization == 'intensity':
+    #    # array *= np.sqrt(np.prod(array.shape[-2:]) / old_size)
+    #    array *= np.sqrt(old_size / np.prod(array.shape[-2:]))
+
     elif normalization != 'amplitude':
         raise RuntimeError()
 

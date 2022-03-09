@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from ase.data import chemical_symbols
 from numba import jit
-from scipy.integrate import quad
 from scipy import integrate
 from scipy.interpolate import interp1d
 from scipy.optimize import brentq
@@ -56,7 +55,7 @@ class AtomicPotential:
 
     def __init__(self,
                  symbol: Union[int, str],
-                 parametrization: str = 'lobato',
+                 parametrization: Union[str, Parametrization] = 'lobato',
                  inner_cutoff: float = .001,
                  cutoff_tolerance: float = 1e-3,
                  num_integration_limits: int = 100):

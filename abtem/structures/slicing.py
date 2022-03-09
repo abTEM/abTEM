@@ -109,7 +109,6 @@ class SliceIndexedAtoms(AbstractSlicedAtoms):
     def __init__(self,
                  atoms: Atoms,
                  slice_thickness: Union[float, np.ndarray, str],
-                 slice_index=None,
                  reverse: bool = False):
 
         super().__init__(atoms, slice_thickness, reverse)
@@ -129,6 +128,8 @@ class SliceIndexedAtoms(AbstractSlicedAtoms):
 
         if last_slice - first_slice == 1:
             is_in_slices = self.slice_index[first_slice]
+        else:
+            raise NotImplementedError()
         # else:
         #     is_in_slices = (self.slice_index >= first_slice) * (self.slice_index < last_slice)
 
@@ -137,13 +138,7 @@ class SliceIndexedAtoms(AbstractSlicedAtoms):
         atoms.cell[2, 2] = np.sum(slice_thickness)
 
         atoms.positions[:, 2] -= np.sum(self.slice_thickness[:first_slice])
-
-        if last_slice - first_slice > 1:
-            slice_index = self.slice_index[is_in_slices]
-            raise NotImplementedError
-            return self.__class__
-        else:
-            return atoms
+        return atoms
 
 
 class SlicedAtoms:

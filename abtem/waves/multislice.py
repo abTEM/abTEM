@@ -19,7 +19,6 @@ from abtem.core.grid import spatial_frequencies, HasGridMixin, Grid
 from abtem.measure.detect import stack_waves, AbstractDetector, validate_detectors
 from abtem.measure.thickness import thickness_series_precursor, detectors_at_stop_slice
 from abtem.potentials.potentials import AbstractPotential, TransmissionFunction
-from abtem.waves.fresnel import FresnelPropagator
 from abtem.waves.tilt import HasBeamTiltMixin, BeamTilt
 
 if TYPE_CHECKING:
@@ -112,7 +111,10 @@ def stack_measurements(measurements, axes_metadata):
     return cls(**d)
 
 
-def multislice_and_detect_with_frozen_phonons(waves, potential, detectors):
+def multislice_and_detect_with_frozen_phonons(waves: 'Waves',
+                                              potential: AbstractPotential,
+                                              detectors: List[AbstractDetector]):
+
     detectors = validate_detectors(detectors)
 
     measurements = []
@@ -208,12 +210,16 @@ def multislice_and_detect(waves, potential, detectors):
 
     for i, (start, stop) in enumerate(multislice_start_stop):
 
+        #print(waves.array)
         waves = multislice(waves,
                            potential=potential,
                            start=start,
                            stop=stop,
                            propagator=propagator,
                            antialias_aperture=antialias_aperture)
+        #print(waves.array)
+
+        #sss
 
         waves.antialias_aperture = 2. / 3.
 
@@ -249,6 +255,7 @@ def multislice(waves: 'Waves',
                start: int = 0,
                stop: int = None,
                conjugate: bool = False):
+
     if stop is None:
         stop = len(potential)
 
@@ -264,7 +271,6 @@ def multislice(waves: 'Waves',
         propagator = FresnelPropagator(device=get_array_module(waves.array))
 
     propagator.match_waves(waves)
-
     for i, potential_slices in enumerate(potential.generate_slices(start=start, stop=stop)):
 
         if isinstance(potential_slices, TransmissionFunction):
@@ -275,6 +281,7 @@ def multislice(waves: 'Waves',
             transmission_functions = antialias_aperture.bandlimit(transmission_functions)
 
         for transmission_function in transmission_functions:
+
             if conjugate:
                 propagator.thickness = -transmission_function.slice_thickness[0]
             else:

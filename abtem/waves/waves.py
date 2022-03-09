@@ -138,7 +138,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
         Returns
         -------
-        Images
+        intensity_images : Images
             The wave function intensity.
         """
 
@@ -205,6 +205,15 @@ class Waves(HasDaskArray, WavesLikeMixin):
         return measurements
 
     def to_delayed(self):
+        """
+        Convert into an array of :class:`dask.delayed.Delayed` objects, one per chunk of the ``array.
+        The delayed objects can be evaluated to :class:`abtem.waves.Waves` objects.
+
+        Returns
+        -------
+
+        """
+
         d = self._copy_as_dict(copy_array=False)
 
         def wrap_array(array):
@@ -332,7 +341,14 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
             return array
 
-        if ctf.is_distribution:
+        if not self.is_lazy:
+            array = apply_ctf(self.array, ctf=ctf)
+            axes_metadata = []
+
+            if ctf.is_distribution:
+                raise NotImplementedError
+
+        elif ctf.is_distribution:
             values, weights, axes_metadata = ctf.parameter_distribution()
 
             values = da.from_array(values, chunks=(1,) * len(values.shape))
@@ -359,7 +375,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
         # kernel = xp.asarray(ctf.evaluate_on_grid(extent=self.extent, gpts=self.gpts, sampling=self.sampling))
 
         d = self._copy_as_dict(copy_array=False)
-        d['array'] = array #fft2_convolve(self.array, kernel, overwrite_x=in_place)
+        d['array'] = array  # fft2_convolve(self.array, kernel, overwrite_x=in_place)
         d['extra_axes_metadata'] = axes_metadata + d['extra_axes_metadata']
         return self.__class__(**d)
 
@@ -425,6 +441,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
                 potential = potential.to_delayed()
 
             xp = get_array_module(self.array)
+
             return self.map_blocks(multislice,
                                    potential=potential,
                                    start=start, stop=stop,
@@ -434,7 +451,8 @@ class Waves(HasDaskArray, WavesLikeMixin):
         if detectors is None:
             detectors = [WavesDetector()]
 
-        return multislice_and_detect_with_frozen_phonons(self, potential, detectors)
+        return multislice_and_detect_with_frozen_phonons(self, potential, detectors,
+                                                         start=start, stop=stop, conjugate=conjugate)
 
     def to_zarr(self, url: str, overwrite: bool = False):
         """
@@ -626,12 +644,13 @@ class PlaneWave(WavesLikeMixin):
         """
 
         lazy = validate_lazy(lazy)
+
         potential = validate_potential(potential, self)
 
         if detectors is None:
             detectors = [WavesDetector()]
 
-        waves = self.build()
+        waves = self.build(True)
 
         measurements = multislice_and_detect_with_frozen_phonons(waves, potential, detectors)
 
@@ -646,30 +665,32 @@ class PlaneWave(WavesLikeMixin):
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
 
-        def plane_wave(gpts, normalize, xp):
-            if normalize:
+        def plane_wave(gpts, xp):
+            if self._normalize:
                 wave = xp.full(gpts, (1 / np.prod(gpts)).astype(xp.complex64), dtype=xp.complex64)
             else:
                 wave = xp.ones(gpts, dtype=xp.complex64)
+
             return wave
 
         if validate_lazy(lazy):
-            array = dask.delayed(plane_wave)(self.gpts, self._normalize, xp)
+            array = dask.delayed(plane_wave)(self.gpts, xp)
             array = da.from_delayed(array, shape=self.gpts, meta=xp.array((), dtype=xp.complex64))
         else:
-            array = plane_wave(self.gpts, self._normalize, xp)
+            array = plane_wave(self.gpts, xp)
 
         return Waves(array, extent=self.extent, energy=self.energy)
 
 
 class Probe(WavesLikeMixin):
     """
-    Probe wave function object
+    Probe wave function
 
     The probe object can represent a stack of electron probe wave functions for simulating scanning transmission
     electron microscopy.
 
-    See the docs of abtem.transfer.CTF for a description of the parameters related to the contrast transfer function.
+    See the documentation for abtem.transfer.CTF for a description of the parameters related to the contrast transfer
+    function.
 
     Parameters
     ----------
@@ -681,10 +702,12 @@ class Probe(WavesLikeMixin):
         Lateral sampling of wave functions [1 / Å].
     energy : float, optional
         Electron energy [eV].
-    ctf : CTF
-        Contrast transfer function object. Note that this can be specified
     device : str
         The probe wave functions will be build on this device.
+    tilt : two float, optional
+        Small angle beam tilt [mrad].
+    ctf : CTF
+        Contrast transfer function object. Note that this can be specified
     kwargs :
         Provide the parameters of the contrast transfer function as keyword arguments. See the documentation for the
         CTF object.
@@ -695,10 +718,9 @@ class Probe(WavesLikeMixin):
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
                  energy: float = None,
-                 ctf: CTF = None,
                  tilt: Tuple[float, float] = None,
-                 normalize: bool = True,
                  device: str = None,
+                 ctf: CTF = None,
                  **kwargs):
 
         if ctf is None:
@@ -717,8 +739,6 @@ class Probe(WavesLikeMixin):
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._beam_tilt = BeamTilt(tilt=tilt)
         self._device = _validate_device(device)
-        self._normalize = normalize
-
         self._extra_axes_metadata = []
         self._antialias_cutoff_gpts = None
 
@@ -728,6 +748,7 @@ class Probe(WavesLikeMixin):
 
     @property
     def shape(self):
+
         return self.gpts
 
     @property
@@ -789,8 +810,8 @@ class Probe(WavesLikeMixin):
         positions = positions / xp.array(self.sampling).astype(np.float32)
         array = fft_shift_kernel(positions, shape=self.gpts)
         array *= ctf.evaluate_on_grid(gpts=self.gpts, sampling=self.sampling, xp=xp)
-        if self._normalize:
-            array /= xp.sqrt(abs2(array).sum((-2, -1), keepdims=True))
+
+        array /= xp.sqrt(abs2(array).sum((-2, -1), keepdims=True))
 
         if ctf_parameters is not None:
             array *= weights.item()
@@ -808,13 +829,18 @@ class Probe(WavesLikeMixin):
 
         Parameters
         ----------
-        positions : array of xy-positions
+        positions : scan object or array of xy-positions
             Positions of the probe wave functions
+        chunks : int
+            Specifices the number of wave functions in each chunk of a the created dask array. If None, the number
+            of chunks are automatically estimated based on the "dask.chunk-size" parameter in the configuration.
+        lazy : boolean, optional
+            If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
+            value set in the configuration file.
 
         Returns
         -------
-        Waves object
-            Probe wave functions as a Waves object.
+        probe_wave_functions : Waves
         """
 
         self.grid.check_is_defined()
@@ -888,21 +914,30 @@ class Probe(WavesLikeMixin):
                    positions: AbstractScan = None,
                    detectors: AbstractDetector = None,
                    chunks: int = None,
-                   lazy: bool = None):
+                   lazy: bool = None) -> Union[AbstractMeasurement, Waves, List[Union[AbstractMeasurement, Waves]]]:
         """
         Build probe wave functions at the provided positions and propagate them through the potential.
 
         Parameters
         ----------
-        positions : array of xy-positions
-            Positions of the probe wave functions.
         potential : Potential or Atoms object
             The scattering potential.
+        positions : scan object, array of xy-positions, optional
+            Positions of the probe wave functions. If None, the positions are a single position at the center of the
+            potential.
+        detectors : detector, list of detectors, optional
+            A detector or a list of detectors defining how the wave functions should be converted to measurements after
+            running the multislice algorithm. See abtem.measure.detect for a list of implemented detectors.
+        chunks : int, optional
+            Specifices the number of wave functions in each chunk of a the created dask array. If None, the number
+            of chunks are automatically estimated based on the "dask.chunk-size" parameter in the configuration.
+        lazy : boolean, optional
+            If True, create the measurements lazily, otherwise, calculate instantly. If None, this defaults to the value
+            set in the configuration file.
 
         Returns
         -------
-        Waves object
-            Probe exit wave functions as a Waves object.
+        list_of_measurements : measurement, wave functions, list of measurements
         """
         lazy = validate_lazy(lazy)
 
@@ -930,7 +965,31 @@ class Probe(WavesLikeMixin):
              scan: Union[AbstractScan, np.ndarray, Sequence] = None,
              detectors: Union[AbstractDetector, Sequence[AbstractDetector]] = None,
              chunks: int = None,
-             lazy: bool = None) -> Union[List, AbstractMeasurement]:
+             lazy: bool = None) -> Union[AbstractMeasurement, Waves, List[Union[AbstractMeasurement, Waves]]]:
+        """
+        Build probe wave functions at the provided positions and propagate them through the potential.
+
+        Parameters
+        ----------
+        potential : Potential or Atoms object
+            The scattering potential.
+        scan : scan object
+            Positions of the probe wave functions. If None, the positions are a single position at the center of the
+            potential.
+        detectors : detector, list of detectors, optional
+            A detector or a list of detectors defining how the wave functions should be converted to measurements after
+            running the multislice algorithm. See abtem.measure.detect for a list of implemented detectors.
+        chunks : int, optional
+            Specifices the number of wave functions in each chunk of a the created dask array. If None, the number
+            of chunks are automatically estimated based on the "dask.chunk-size" parameter in the configuration.
+        lazy : boolean, optional
+            If True, create the measurements lazily, otherwise, calculate instantly. If None, this defaults to the value
+            set in the configuration file.
+
+        Returns
+        -------
+        list_of_measurements : measurement, wave functions, list of measurements
+        """
 
         if scan is None:
             scan = GridScan()
@@ -941,7 +1000,14 @@ class Probe(WavesLikeMixin):
         return self.multislice(potential, scan, detectors, chunks=chunks, lazy=lazy)
 
     def profile(self, angle: float = 0.):
-        self.grid.check_is_defined()
+        """
+        Creates a line profile through the center of the probe.
+
+        Parameters
+        ----------
+        angle : float
+            Angle to the x-axis of the line profile in radians.
+        """
 
         def _line_intersect_rectangle(point0, point1, lower_corner, upper_corner):
             if point0[0] == point1[0]:
@@ -976,6 +1042,7 @@ class Probe(WavesLikeMixin):
         return measurement.interpolate_line(point1, point2)
 
     def copy(self):
+        """ Make a copy. """
         return deepcopy(self)
 
     def show(self, **kwargs):
@@ -984,9 +1051,6 @@ class Probe(WavesLikeMixin):
 
         Parameters
         ----------
-        angle : float, optional
-            Angle along which the profile is shown [deg]. Default is 0 degrees.
         kwargs : Additional keyword arguments for the abtem.plot.show_image function.
         """
-        self.grid.check_is_defined()
         return self.build((self.extent[0] / 2, self.extent[1] / 2)).intensity().show(**kwargs)

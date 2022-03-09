@@ -393,7 +393,6 @@ class Potential(AbstractPotentialFromAtoms):
         return self._cutoff_tolerance
 
     def _calculate_atomic_potentials(self) -> Dict[int, AtomicPotential]:
-        core_size = min(self.sampling)
         atomic_potentials = {}
 
         for Z in np.unique(self.atoms.numbers):
