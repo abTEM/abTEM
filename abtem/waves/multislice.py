@@ -1,22 +1,21 @@
 import itertools
-from collections import defaultdict
-from itertools import chain
 from typing import TYPE_CHECKING, Union, Tuple, List
+
 import dask
 import dask.array as da
-
 import numpy as np
 
 from abtem.core.antialias import AntialiasAperture
 from abtem.core.axes import FrozenPhononsAxis, OrdinalAxis
-from abtem.core.backend import get_array_module, copy_to_device
+from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.dask import ComputableList
 from abtem.core.energy import energy2wavelength, HasAcceleratorMixin, Accelerator
 from abtem.core.events import Events, watch, HasEventsMixin
 from abtem.core.fft import fft2_convolve
 from abtem.core.grid import spatial_frequencies, HasGridMixin, Grid
-from abtem.measure.detect import stack_waves, AbstractDetector, validate_detectors
+from abtem.measure.detect import AbstractDetector, validate_detectors
+from abtem.measure.measure import AbstractMeasurement
 from abtem.measure.thickness import thickness_series_precursor, detectors_at_stop_slice
 from abtem.potentials.potentials import AbstractPotential, TransmissionFunction
 from abtem.waves.tilt import HasBeamTiltMixin, BeamTilt
@@ -113,26 +112,26 @@ def stack_measurements(measurements, axes_metadata):
 
 def multislice_and_detect_with_frozen_phonons(waves: 'Waves',
                                               potential: AbstractPotential,
-                                              detectors: List[AbstractDetector]):
-
+                                              detectors: List[AbstractDetector]) \
+        -> Union[AbstractMeasurement, 'Waves', List[Union[AbstractMeasurement, 'Waves']]]:
     detectors = validate_detectors(detectors)
 
     measurements = []
-    for potential in potential.get_distribution(lazy=True):
+    for frozen_phonon_potential in potential.get_frozen_phonon_potentials(lazy=True):
         cloned_waves = waves.clone()
-        new_measurements = _lazy_multislice_and_detect(cloned_waves, potential, detectors)
+        new_measurements = _lazy_multislice_and_detect(cloned_waves, frozen_phonon_potential, detectors)
         measurements.append(new_measurements)
 
     measurements = list(map(list, zip(*measurements)))
 
     for i, (detector, output) in enumerate(zip(detectors, measurements)):
-        if not detector.ensemble_mean or isinstance(output, list):
-            measurements[i] = stack_measurements(output, axes_metadata=FrozenPhononsAxis())
-
-            if detector.ensemble_mean:
-                measurements[i] = measurements[i].mean(0)
+        if not potential.ensemble_mean or isinstance(output, list):
+            measurements[i] = stack_measurements(output, axes_metadata=potential.frozen_phonons.axes_metadata)
 
         measurements[i] = measurements[i].squeeze()
+
+        if hasattr(measurements[i], '_reduce_ensemble'):
+            measurements[i] = measurements[i]._reduce_ensemble()
 
     if len(measurements) == 1:
         return measurements[0]
@@ -182,7 +181,7 @@ def _lazy_multislice_and_detect(waves, potential, detectors):
             arrays[index] = da.from_delayed(collection[i], shape=shape, meta=np.array((), dtype=np.float32))
 
         if len(arrays.shape) > 0:
-            arrays = concatenate_last_axis_recursively(arrays, axis=-max(len(measurement_shape), 1))
+            arrays = concatenate_last_axis_recursively(arrays, axis=-max(len(measurement_shape) + 1, 1))
 
         arrays = arrays.item()
 
@@ -210,16 +209,16 @@ def multislice_and_detect(waves, potential, detectors):
 
     for i, (start, stop) in enumerate(multislice_start_stop):
 
-        #print(waves.array)
+        # print(waves.array)
         waves = multislice(waves,
                            potential=potential,
                            start=start,
                            stop=stop,
                            propagator=propagator,
                            antialias_aperture=antialias_aperture)
-        #print(waves.array)
+        # print(waves.array)
 
-        #sss
+        # sss
 
         waves.antialias_aperture = 2. / 3.
 
@@ -255,11 +254,10 @@ def multislice(waves: 'Waves',
                start: int = 0,
                stop: int = None,
                conjugate: bool = False):
-
     if stop is None:
         stop = len(potential)
 
-    if potential.num_configurations > 1:
+    if potential.num_frozen_phonons > 1:
         raise RuntimeError()
 
     if antialias_aperture is None:

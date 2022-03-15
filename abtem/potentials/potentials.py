@@ -19,7 +19,7 @@ from abtem.measure.measure import Images
 from abtem.potentials.atom import AtomicPotential
 from abtem.potentials.infinite import calculate_scattering_factor, infinite_potential_projections
 from abtem.potentials.parametrizations import parametrizations, Parametrization
-from abtem.potentials.temperature import AbstractFrozenPhonons, FrozenPhonons, DelayedAtoms
+from abtem.potentials.temperature import AbstractFrozenPhonons, FrozenPhonons, DelayedAtoms, DummyFrozenPhonons
 from abtem.structures.slicing import _validate_slice_thickness, SliceIndexedAtoms, SlicedAtoms, unpack_item
 from abtem.structures.structures import is_cell_orthogonal, orthogonalize_cell
 
@@ -99,11 +99,19 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    def num_configurations(self) -> int:
+    def frozen_phonons(self) -> AbstractFrozenPhonons:
         pass
 
+    @property
+    def num_frozen_phonons(self) -> int:
+        return len(self.frozen_phonons)
+
+    @property
+    def ensemble_mean(self) -> bool:
+        return self.frozen_phonons.ensemble_mean
+
     @abstractmethod
-    def get_distribution(self, lazy: bool = False):
+    def get_frozen_phonon_potentials(self, lazy: bool = False) -> List['AbstractPotential']:
         pass
 
     def show(self, **kwargs):
@@ -143,7 +151,7 @@ class AbstractPotentialFromAtoms(AbstractPotential):
         if np.abs(atoms.cell[2, 2]) < 1e-12:
             raise RuntimeError('cell has no thickness')
 
-        if hasattr(atoms, 'get_configurations'):
+        if hasattr(atoms, 'get_frozen_phonon_atoms'):
             self._frozen_phonons = atoms
         else:
             self._frozen_phonons = FrozenPhonons(atoms, sigmas=0., num_configs=1)
@@ -222,11 +230,7 @@ class AbstractPotentialFromAtoms(AbstractPotential):
     def num_frozen_phonons(self) -> int:
         return len(self._frozen_phonons)
 
-    @property
-    def num_configurations(self) -> int:
-        return self.num_frozen_phonons
-
-    def build(self, lazy: bool = False) -> 'PotentialArray':
+    def build(self, lazy: bool = True) -> 'PotentialArray':
         self.grid.check_is_defined()
 
         xp = get_array_module(self._device)
@@ -236,15 +240,21 @@ class AbstractPotentialFromAtoms(AbstractPotential):
 
         array = []
 
-        for first_slice, last_slice in generate_chunks(len(self), chunks=self._chunks):
+        if hasattr(self.atoms, 'atoms'):
+            potential = self.to_delayed()
+            lazy = True
+        else:
+            potential = self
+            lazy = False
 
+        for first_slice, last_slice in generate_chunks(len(self), chunks=self._chunks):
             shape = (last_slice - first_slice,) + self.gpts
 
             if lazy:
-                new_chunk = dask.delayed(get_chunk)(self, first_slice, last_slice)
+                new_chunk = dask.delayed(get_chunk)(potential, first_slice, last_slice)
                 new_chunk = da.from_delayed(new_chunk, shape=shape, meta=xp.array((), dtype=np.float32))
             else:
-                new_chunk = get_chunk(self, first_slice, last_slice)
+                new_chunk = get_chunk(potential, first_slice, last_slice)
 
             array.append(new_chunk)
 
@@ -362,7 +372,7 @@ class Potential(AbstractPotentialFromAtoms):
         return isinstance(self.atoms, DelayedAtoms)
 
     def to_delayed(self):
-        if self.num_configurations > 1:
+        if self.num_frozen_phonons > 1:
             raise RuntimeError()
 
         if isinstance(self.atoms, DelayedAtoms):
@@ -407,6 +417,7 @@ class Potential(AbstractPotentialFromAtoms):
     def get_sliced_atoms(self) -> SliceIndexedAtoms:
         if self._sliced_atoms is None:
             atoms = self.atoms
+
             atoms.wrap(pbc=True)
 
             if self.projection == 'infinite':
@@ -488,7 +499,7 @@ class Potential(AbstractPotentialFromAtoms):
         else:
             return self._get_chunk_finite(first_slice, last_slice)
 
-    def get_distribution(self, lazy: bool = True):
+    def get_frozen_phonon_potentials(self, lazy: bool = True):
         """
         Function to generate scattering potentials for a set of frozen phonon configurations.
 
@@ -514,7 +525,7 @@ class Potential(AbstractPotentialFromAtoms):
                                   cutoff_tolerance=self.cutoff_tolerance)
 
         potentials = []
-        for atoms in self.frozen_phonons.get_configurations(lazy=lazy):
+        for atoms in self.frozen_phonons.get_frozen_phonon_atoms(lazy=lazy):
             potentials.append(potential_configuration(atoms))
 
         return potentials
@@ -586,8 +597,13 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
     def to_delayed(self):
         def wrap(array, d):
             return PotentialArray(array, **d)
+
         d = self._copy_as_dict(copy_array=False)
         return dask.delayed(wrap)(self.array, d)
+
+    @property
+    def frozen_phonons(self):
+        return DummyFrozenPhonons()
 
     def build(self):
         return self
@@ -633,7 +649,7 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
     def num_configurations(self) -> int:
         return 1
 
-    def get_distribution(self, *args, **kwargs) -> List['PotentialArray']:
+    def get_frozen_phonon_potentials(self, *args, **kwargs) -> List['PotentialArray']:
         return [self]
 
     def tile(self, multiples: Union[Tuple[int, int], Tuple[int, int, int]]):
@@ -706,23 +722,23 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
 
         axes = [
             {'scale': self.slice_thickness[0],
-              'units': 'Å',
-              'name': 'Depth',
-              'size': self.shape[0],
-              'offset': 0.,
-              },
+             'units': 'Å',
+             'name': 'Depth',
+             'size': self.shape[0],
+             'offset': 0.,
+             },
             {'scale': self.sampling[1],
-              'units': 'Å',
-              'name': 'y',
-              'size': self.shape[2],
-              'offset': 0.,
-              },
+             'units': 'Å',
+             'name': 'y',
+             'size': self.shape[2],
+             'offset': 0.,
+             },
             {'scale': self.sampling[0],
-              'units': 'Å',
-              'name': 'x',
-              'size': self.shape[1],
-              'offset': 0.,
-              },
+             'units': 'Å',
+             'name': 'x',
+             'size': self.shape[1],
+             'offset': 0.,
+             },
         ]
         s = Signal2D(np.transpose(self.array, (0, 2, 1)), axes=axes).squeeze()
 

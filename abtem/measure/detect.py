@@ -1,26 +1,19 @@
 """Module for describing the detection of transmitted waves and different detector types."""
 from abc import ABCMeta, abstractmethod
 from copy import copy, deepcopy
-from typing import Tuple, Any, Union, List
+from typing import Tuple, Any, Union, List, TYPE_CHECKING
 
 import dask.array as da
 import matplotlib.pyplot as plt
 import numpy as np
 
-from abtem.core.axes import ScanAxis, AxisMetadata, FrozenPhononsAxis, OrdinalAxis
+from abtem.core.axes import ScanAxis, FrozenPhononsAxis, OrdinalAxis, AxisMetadata
 from abtem.core.backend import get_array_module
-from abtem.core.dask import ComputableList
 from abtem.measure.measure import DiffractionPatterns, PolarMeasurements, Images, LineProfiles
 
-
-def stack_waves(waves, axes_metadata):
-    if len(waves) == 0:
-        return waves[0]
-    array = np.stack([waves.array for waves in waves], axis=0)
-    d = waves[0]._copy_as_dict(copy_array=False)
-    d['array'] = array
-    d['extra_axes_metadata'] = [axes_metadata] + waves[0].extra_axes_metadata
-    return waves[0].__class__(**d)
+if TYPE_CHECKING:
+    from abtem.waves.waves import Waves
+    from abtem.potentials.potentials import AbstractPotential
 
 
 def stack_measurements(measurements, axes_metadata):
@@ -32,37 +25,20 @@ def stack_measurements(measurements, axes_metadata):
     return cls(**d)
 
 
-def stack_measurement_ensembles(detectors, measurements):
-    for i, (detector, output) in enumerate(zip(detectors, measurements)):
-        if not detector.ensemble_mean or isinstance(output, list):
-            measurements[i] = stack_measurements(output, axes_metadata=FrozenPhononsAxis())
-
-            if detector.ensemble_mean:
-                measurements[i] = measurements[i].mean(0)
-
-        measurements[i] = measurements[i].squeeze()
-
-    if len(measurements) == 1:
-        return measurements[0]
-    else:
-        return ComputableList(measurements)
-
-
-def allocate_measurements(waves, scan, detectors, potential):
+def allocate_measurements(waves, scan, detectors, potential: 'AbstractPotential'):
     measurements = []
     for detector in detectors:
 
         extra_axes_shape = ()
         extra_axes_metadata = []
 
-        if potential.num_configurations > 1 and not detector.ensemble_mean:
-            extra_axes_shape = (potential.num_configurations,)
+        if potential.num_frozen_phonons > 1 and not potential.ensemble_mean:
+            extra_axes_shape = (potential.num_frozen_phonons,)
             extra_axes_metadata = [FrozenPhononsAxis()]
 
         if detector.detect_every:
             extra_axes_shape = (detector.num_detections(potential),)
             extra_axes_metadata = [OrdinalAxis()]
-
 
         measurement = detector.allocate_measurement(waves,
                                                     scan,
@@ -74,39 +50,46 @@ def allocate_measurements(waves, scan, detectors, potential):
     return measurements
 
 
-def simple_repr(obj, keys):
-    keys = ', '.join([f'{key}={getattr(obj, key)}' for key in keys])
-    return f'{obj.__class__.__name__}({keys})'
-
-
-def check_cutoff_angle(waves, angle):
-    if (angle is not None) and (not isinstance(angle, str)):
-        if (angle > waves.cutoff_angles[0]) or (angle > waves.cutoff_angles[1]):
-            raise RuntimeError('Detector max angle exceeds the cutoff scattering angle.')
-
-
-def validate_detectors(detectors):
+def validate_detectors(detectors: Union['AbstractDetector', List['AbstractDetector']]) -> List['AbstractDetector']:
     if hasattr(detectors, 'detect'):
         detectors = [detectors]
+
     elif detectors is None:
         detectors = [WavesDetector()]
-    elif isinstance(detectors, (list, tuple)):
-        pass
-    else:
-        raise RuntimeError()
+
+    elif not (isinstance(detectors, list) and all(hasattr(detector, 'detect') for detector in detectors)):
+
+        raise RuntimeError('detectors must be AbstractDetector or list of AbstractDetector')
+
     return detectors
 
 
 class AbstractDetector(metaclass=ABCMeta):
-    """Abstract base class for all detectors."""
 
-    def __init__(self, ensemble_mean: bool = True, to_cpu: bool = True, url: str = None, detect_every: int = None):
-        self._ensemble_mean = ensemble_mean
+    def __init__(self, to_cpu: bool = True, url: str = None, detect_every: int = None):
+        """
+        Abstract base detector class
+
+        Parameters
+        ----------
+        to_cpu : bool, optional
+            If True, copy the measurement data after applying the detector from the calculation device to cpu memory,
+            otherwise the data stays on the respective devices. Default is True.
+        url : str, optional
+            If this parameter is set the measurement data is saved at the specified location, typically a path to a
+            local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
+            the data stays in memory.
+        detect_every : int, optional
+            If this parameter is set the 'detect' method of the detector is applied after every 'detect_every' step of
+            the multislice algorithm, in addition to after the last step.
+            If not set (default), the detector is only applied after the last step.
+        """
         self._to_cpu = to_cpu
         self._url = url
         self._detect_every = detect_every
 
     def num_detections(self, potential):
+
         if self.detect_every:
             num_detect_thicknesses = len(potential) // self.detect_every
 
@@ -118,8 +101,8 @@ class AbstractDetector(metaclass=ABCMeta):
         return 1
 
     @property
-    def ensemble_mean(self):
-        return self._ensemble_mean
+    def url(self):
+        return self._url
 
     @property
     def detect_every(self):
@@ -180,10 +163,6 @@ class AbstractDetector(metaclass=ABCMeta):
     def angular_limits(self, waves) -> Tuple[float, float]:
         pass
 
-    @property
-    def url(self):
-        return self._url
-
     def copy(self):
         """Make a copy."""
         return deepcopy(self)
@@ -191,10 +170,10 @@ class AbstractDetector(metaclass=ABCMeta):
 
 class AnnularDetector(AbstractDetector):
     """
-    Annular detector object.
+    Annular detector.
 
-    The annular detector integrates the intensity of the detected wave functions between an inner and outer integration
-    limit.
+    The annular detector integrates the intensity of the detected wave functions between an inner and outer radial
+    integration limit, i.e. over an annulus.
 
     Parameters
     ----------
@@ -203,29 +182,32 @@ class AnnularDetector(AbstractDetector):
     outer: float
         Outer integration limit [mrad].
     offset: two float, optional
-        Center offset of integration region [mrad].
-    path: str, optional
-        The path to the file for saving the detector output.
+        Center offset of the annular integration region [mrad].
+    to_cpu : bool, optional
+        If True, copy the measurement data after applying the detector from the calculation device to cpu memory,
+        otherwise the data stays on the respective devices. Default is True.
+    url : str, optional
+        If this parameter is set the measurement data is saved at the specified location, typically a path to a
+        local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
+        the data stays in memory.
+    detect_every : int, optional
+        If this parameter is set the 'detect' method of the detector is applied after every 'detect_every' step of
+        the multislice algorithm, in addition to after the last step.
+        If not set (default), the detector is only applied after the last step.
     """
 
     def __init__(self,
                  inner: float,
                  outer: float,
                  offset: Tuple[float, float] = None,
-                 ensemble_mean: bool = True,
                  to_cpu: bool = True,
                  url: str = None,
                  detect_every: int = None):
+
         self._inner = inner
         self._outer = outer
         self._offset = offset
-        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url, detect_every=detect_every)
-
-    def stack_measurements(self, measurements, axes_metadata):
-        return stack_measurements(measurements, axes_metadata)
-
-    def __repr__(self):
-        return simple_repr(self, ('inner', 'outer', 'ensemble_mean', 'to_cpu', 'url'))
+        super().__init__(to_cpu=to_cpu, url=url, detect_every=detect_every)
 
     @property
     def inner(self) -> float:
@@ -262,14 +244,14 @@ class AnnularDetector(AbstractDetector):
 
         return inner, outer
 
-    def measurement_shape(self, waves) -> Tuple:
+    def measurement_shape(self, waves: 'Waves') -> Tuple:
         return waves.extra_axes_shape
 
     @property
-    def measurement_dtype(self) -> type:
+    def measurement_dtype(self) -> type(np.float32):
         return np.float32
 
-    def measurement_type(self, waves):
+    def measurement_type(self, waves: 'Waves') -> Union[type(LineProfiles), type(Images)]:
         num_scan_axes = waves.num_scan_axes
 
         if num_scan_axes == 1:
@@ -279,7 +261,7 @@ class AnnularDetector(AbstractDetector):
         else:
             raise RuntimeError(f'no measurement type for AnnularDetector and Waves with {num_scan_axes} scan axes')
 
-    def measurement_kwargs(self, waves):
+    def measurement_kwargs(self, waves: 'Waves') -> dict:
         extra_axes_metadata = copy(waves.extra_axes_metadata)
 
         sampling = ()
@@ -311,7 +293,7 @@ class AnnularDetector(AbstractDetector):
         else:
             raise RuntimeError()
 
-    def detect(self, waves) -> Images:
+    def detect(self, waves: 'Waves') -> Images:
 
         if self.outer is None:
             outer = np.floor(min(waves.cutoff_angles))
@@ -321,11 +303,8 @@ class AnnularDetector(AbstractDetector):
         diffraction_patterns = waves.diffraction_patterns(max_angle='cutoff')
         measurement = diffraction_patterns.integrate_radial(inner=self.inner, outer=outer)
 
-        if self._to_cpu:
+        if self.to_cpu:
             measurement = measurement.to_cpu()
-
-        # if probes.num_ensemble_axes > 0 and self.ensemble_mean:
-        #    measurement = measurement.mean(probes.ensemble_axes)
 
         return measurement
 
@@ -355,15 +334,19 @@ class AnnularDetector(AbstractDetector):
 
 class AbstractRadialDetector(AbstractDetector):
 
-    def __init__(self, inner, outer, rotation, ensemble_mean: bool = True, to_cpu: bool = True, url: str = None,
+    def __init__(self,
+                 inner: float,
+                 outer: float,
+                 rotation: float,
+                 offset: Tuple[float, float],
+                 to_cpu: bool = True,
+                 url: str = None,
                  detect_every: int = None):
         self._inner = inner
         self._outer = outer
         self._rotation = rotation
-        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url, detect_every=detect_every)
-
-    def stack_measurements(self, measurements, axes_metadata):
-        return stack_measurements(measurements, axes_metadata)
+        self._offset = offset
+        super().__init__(to_cpu=to_cpu, url=url, detect_every=detect_every)
 
     @property
     def inner(self) -> float:
@@ -446,7 +429,8 @@ class AbstractRadialDetector(AbstractDetector):
                                                 nbins_azimuthal=self._calculate_nbins_azimuthal(waves),
                                                 inner=inner,
                                                 outer=outer,
-                                                rotation=self._rotation)
+                                                rotation=self._rotation,
+                                                offset=self._offset)
 
         if self.to_cpu:
             measurement = measurement.to_cpu()
@@ -479,39 +463,46 @@ class AbstractRadialDetector(AbstractDetector):
 
 class FlexibleAnnularDetector(AbstractRadialDetector):
     """
-    Flexible annular detector object.
+    Flexible annular detector.
 
-    The FlexibleAnnularDetector object allows choosing the integration limits after running the simulation by radially
-    binning the intensity.
+    The FlexibleAnnularDetector allows choosing the integration limits after running the simulation by binning the
+    intensity in annular integration regions.
 
     Parameters
     ----------
-    step_size: float
-        The radial separation between integration regions [mrad].
-    save_file: str
-        The path to the file used for saving the detector output.
+    step_size : float, optional
+        Radial extent of the bins [mrad]. Default is 1.
+    inner : float, optional
+        Inner integration limit of the bins [mrad].
+    outer : float, optional
+        Outer integration limit of the bins [mrad].
+    to_cpu : bool, optional
+        If True, copy the measurement data after applying the detector from the calculation device to cpu memory,
+        otherwise the data stays on the respective devices. Default is True.
+    url : str, optional
+        If this parameter is set the measurement data is saved at the specified location, typically a path to a
+        local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
+        the data stays in memory.
+    detect_every : int, optional
+        If this parameter is set the 'detect' method of the detector is applied after every 'detect_every' step of
+        the multislice algorithm, in addition to after the last step.
+        If not set (default), the detector is only applied after the last step.
     """
 
     def __init__(self,
                  step_size: float = 1.,
                  inner: float = 0.,
                  outer: float = None,
-                 ensemble_mean: bool = True,
                  to_cpu: bool = True,
                  url: str = None,
                  detect_every: int = None):
         self._step_size = step_size
-        super().__init__(inner=inner, outer=outer, rotation=0., ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url,
+        super().__init__(inner=inner, outer=outer, rotation=0., offset=(0., 0.), to_cpu=to_cpu, url=url,
                          detect_every=detect_every)
-
-    def __repr__(self):
-        return simple_repr(self, ('inner', 'outer', 'step_size', 'detect_every'))
 
     @property
     def step_size(self) -> float:
-        """
-        Step size [mrad].
-        """
+        """ Step size [mrad]. """
         return self._step_size
 
     @step_size.setter
@@ -519,69 +510,70 @@ class FlexibleAnnularDetector(AbstractRadialDetector):
         self._step_size = value
 
     @property
-    def radial_sampling(self):
+    def radial_sampling(self) -> float:
         return self.step_size
 
     @property
-    def azimuthal_sampling(self):
+    def azimuthal_sampling(self) -> float:
         return 2 * np.pi
 
-    def _calculate_nbins_radial(self, waves) -> int:
-        # if self.step_size is not None:
-        #     # print()
-        #     # if self.step_size <= min(waves.angular_sampling):
-        #     #     raise RuntimeError(
-        #     #         (f'step_size ({self.step_size} mrad) of FlexibleAnnularDetector smaller than simulated angular'
-        #     #          f'sampling ({min(waves.angular_sampling)} mrad)'))
-        #
-        #     step_size = self.step_size
-        # else:
-        #     step_size = min(waves.angular_sampling)
-        # print(waves.cutoff_angles)
+    def _calculate_nbins_radial(self, waves: 'Waves') -> int:
         return int(np.floor(min(waves.cutoff_angles)) / self.step_size)
 
-    def _calculate_nbins_azimuthal(self, waves):
+    def _calculate_nbins_azimuthal(self, waves: 'Waves') -> int:
         return 1
 
 
 class SegmentedDetector(AbstractRadialDetector):
-    """
-    Segmented detector object.
-
-    The segmented detector covers an annular angular range, and is partitioned into several integration regions divided
-    to radial and angular segments. This can be used for simulating differential phase contrast (DPC) imaging.
-
-    Parameters
-    ----------
-    inner: float
-        Inner integration limit [mrad].
-    outer: float
-        Outer integration limit [mrad].
-    nbins_radial: int
-        Number of radial bins.
-    nbins_angular: int
-        Number of angular bins.
-    save_file: str
-        The path to the file used for saving the detector output.
-    """
 
     def __init__(self,
-                 inner: float,
-                 outer: float,
                  nbins_radial: int,
                  nbins_azimuthal: int,
+                 inner: float,
+                 outer: float,
                  rotation: float = 0.,
-                 ensemble_mean: bool = True,
+                 offset: Tuple[float, float] = (0., 0.),
                  to_cpu: bool = False,
                  url: str = None,
                  detect_every: int = None):
+        """
+        Segmented detector.
+
+        The segmented detector covers an annular angular range, and is partitioned into several integration regions
+        divided to radial and angular segments. This can be used for simulating differential phase contrast (DPC)
+        imaging.
+
+        Parameters
+        ----------
+        nbins_radial : int
+            Number of radial bins.
+        nbins_azimuthal : int
+            Number of angular bins.
+        inner : float
+            Inner integration limit of the bins [mrad].
+        outer : float
+            Outer integration limit of the bins [mrad].
+        rotation : float
+            Rotation of the bins around the origin [mrad].
+        offset : two float
+            Offset of the bins from the origin in x and y [mrad].
+        to_cpu : bool, optional
+            If True, copy the measurement data after applying the detector from the calculation device to cpu memory,
+            otherwise the data stays on the respective devices. Default is True.
+        url : str, optional
+            If this parameter is set the measurement data is saved at the specified location, typically a path to a
+            local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
+            the data stays in memory.
+        detect_every : int, optional
+            If this parameter is set the 'detect' method of the detector is applied after every 'detect_every' step of
+            the multislice algorithm, in addition to after the last step.
+            If not set (default), the detector is only applied after the last step.
+        """
+
         self._nbins_radial = nbins_radial
         self._nbins_azimuthal = nbins_azimuthal
-        super().__init__(inner=inner, outer=outer, rotation=rotation, ensemble_mean=ensemble_mean, to_cpu=to_cpu,
-                         url=url, detect_every=detect_every)
-
-    def __repr__(self):
-        return simple_repr(self, ('inner', 'outer', 'nbins_radial', 'nbins_azimuthal', 'rotation'))
+        super().__init__(inner=inner, outer=outer, rotation=rotation, offset=offset, to_cpu=to_cpu, url=url,
+                         detect_every=detect_every)
 
     @property
     def rotation(self):
@@ -621,39 +613,50 @@ class SegmentedDetector(AbstractRadialDetector):
 
 
 class PixelatedDetector(AbstractDetector):
-    """
-    Pixelated detector object.
-
-    The pixelated detector records the intensity of the Fourier-transformed exit wavefunction. This may be used for
-    example for simulating 4D-STEM.
-
-    Parameters
-    ----------
-    max_angle : str or float or None
-        The diffraction patterns will be detected up to this angle. If set to a string it must be 'limit' or 'valid'
-    resample : 'uniform' or False
-        If 'uniform', the diffraction patterns from rectangular cells will be downsampled to a uniform angular sampling.
-    mode : 'intensity' or 'complex'
-    url : str
-        The path to the file used for saving the detector output.
-    """
 
     def __init__(self,
                  max_angle: Union[str, float] = 'valid',
                  resample: bool = False,
-                 ensemble_mean: bool = True,
                  fourier_space: bool = True,
                  to_cpu: bool = True,
                  url: str = None,
                  detect_every: int = None):
+        """
+        Pixelated detector.
 
+        The pixelated detector records the intensity of the Fourier-transformed exit wave function. This may be used for
+        example for simulating 4D-STEM.
+
+        Parameters
+        ----------
+        max_angle : str or float or None
+            The diffraction patterns will be detected up to this angle. If set to a string it must be 'limit' or 'valid'
+        resample : 'uniform' or False
+            If 'uniform', the diffraction patterns from rectangular cells will be downsampled to a uniform angular sampling.
+        max_angle : {'cutoff', 'valid'} or float
+            Maximum detected scattering angle of the diffraction patterns. If str, it must be one of:
+            ``cutoff`` :
+            The maximum scattering angle will be the cutoff of the antialias aperture.
+            ``valid`` :
+            The maximum scattering angle will be the largest rectangle that fits inside the circular antialias aperture
+            (default).
+
+        to_cpu : bool, optional
+            If True, copy the measurement data after applying the detector from the calculation device to cpu memory,
+            otherwise the data stays on the respective devices. Default is True.
+        url : str, optional
+            If this parameter is set the measurement data is saved at the specified location, typically a path to a
+            local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
+            the data stays in memory.
+        detect_every : int, optional
+            If this parameter is set the 'detect' method of the detector is applied after every 'detect_every' step of
+            the multislice algorithm, in addition to after the last step.
+            If not set (default), the detector is only applied after the last step.
+        """
         self._resample = resample
         self._max_angle = max_angle
         self._fourier_space = fourier_space
-        super().__init__(ensemble_mean=ensemble_mean, to_cpu=to_cpu, url=url, detect_every=detect_every)
-
-    def stack_measurements(self, measurements, axes_metadata):
-        return stack_measurements(measurements, axes_metadata)
+        super().__init__(to_cpu=to_cpu, url=url, detect_every=detect_every)
 
     @property
     def max_angle(self):
@@ -730,6 +733,7 @@ class PixelatedDetector(AbstractDetector):
         #     Detected values. The first dimension indexes the batch size, the second and third indexes the two components
         #     of the spatial frequency.
         # """
+
         if self.fourier_space:
             measurements = waves.diffraction_patterns(max_angle=self.max_angle)
 
@@ -745,7 +749,7 @@ class PixelatedDetector(AbstractDetector):
 class WavesDetector(AbstractDetector):
 
     def __init__(self, to_cpu: bool = False, url: str = None, detect_every: int = None):
-        super().__init__(ensemble_mean=False, to_cpu=to_cpu, url=url, detect_every=detect_every)
+        super().__init__(to_cpu=to_cpu, url=url, detect_every=detect_every)
 
     def detect(self, waves):
         if self.to_cpu:
@@ -769,13 +773,9 @@ class WavesDetector(AbstractDetector):
 
     def measurement_kwargs(self, waves):
         extra_axes_metadata = waves.extra_axes_metadata
-
         return {'sampling': waves.sampling,
                 'energy': waves.energy,
                 'antialias_cutoff_gpts': waves.antialias_cutoff_gpts,
                 'tilt': waves.tilt,
                 'extra_axes_metadata': deepcopy(extra_axes_metadata),
                 'metadata': waves.metadata}
-
-    def stack_measurements(self, measurements, axes_metadata):
-        return stack_waves(measurements, axes_metadata)

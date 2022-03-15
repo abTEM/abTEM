@@ -109,9 +109,9 @@ class AtomicPotential:
         for i, Ri in enumerate(self.radial_gpts):
             v = lambda z: self.evaluate(np.sqrt(Ri ** 2 + z ** 2))
 
-            table[0, i] = integrate.fixed_quad(v, -limits[0] * 2, limits[0])[0]
+            table[0, i] = integrate.fixed_quad(v, -limits[0] * 2, limits[0], n=7)[0]
             for j, (a, b) in enumerate(zip(limits[1:-1], limits[2:])):
-                table[j + 1, i] = table[j, i] + integrate.fixed_quad(v, a, b)[0]
+                table[j + 1, i] = table[j, i] + integrate.fixed_quad(v, a, b, n=7)[0]
 
         taper_start = taper * self.cutoff
         taper_mask = self.radial_gpts > taper_start

@@ -27,13 +27,12 @@ def axes_metadata(draw):
 @st.composite
 def measurement_array(draw,
                       num_dims,
-                      # num_base_axes=2,
                       lazy=False,
                       device='cpu',
                       min_value=0.,
                       max_value=1.,
                       min_side=1,
-                      max_side=32,
+                      max_side=24,
                       base_axes_chunks=True):
     shape = draw(numpy_strats.array_shapes(min_dims=num_dims, max_dims=num_dims, min_side=min_side, max_side=max_side))
 
@@ -87,6 +86,7 @@ def line_profiles(draw, lazy=False, device='cpu'):
     sampling = draw(core_st.sensible_floats(min_value=0.01, max_value=0.1))
     metadata = {'energy': draw(core_st.energy())}
     axes = draw(axes_metadata())
+
     start_floats = core_st.sensible_floats(min_value=-10., max_value=10.)
     start = draw(st.tuples(start_floats, start_floats))
 

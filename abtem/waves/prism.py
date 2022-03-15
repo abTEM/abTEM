@@ -15,7 +15,7 @@ from abtem.core.dask import HasDaskArray, validate_lazy, ComputableList
 from abtem.core.energy import Accelerator
 from abtem.core.grid import Grid
 from abtem.core.utils import generate_chunks
-from abtem.measure.detect import AbstractDetector, validate_detectors
+from abtem.measure.detect import AbstractDetector, validate_detectors, stack_measurements
 from abtem.measure.measure import AbstractMeasurement
 from abtem.measure.thickness import thickness_series_precursor, detectors_at_stop_slice, stack_thickness_series
 from abtem.potentials.potentials import AbstractPotential, validate_potential
@@ -674,9 +674,21 @@ class SMatrixArray(HasDaskArray, AbstractSMatrix):
                                                              ctf=ctf,
                                                              probes_per_reduction=probes_per_reduction)
 
+
+
             measurements.append(measurement)
 
-        measurements = stack_frozen_phonons(measurements, detectors)
+        measurements = list(map(list, zip(*measurements)))
+
+        if len(self.array.shape) > 3:
+            axes_metadata = self.axes_metadata[-4]
+        else:
+            axes_metadata = FrozenPhononsAxis()
+
+        for i in range(len(measurements)):
+            measurements[i] = stack_measurements(measurements[i], axes_metadata=axes_metadata)
+            if hasattr(measurements[i], '_reduce_ensemble'):
+                measurements[i] = measurements[i]._reduce_ensemble()
 
         measurements = [measurement.squeeze() for measurement in measurements]
 
@@ -923,7 +935,7 @@ class SMatrix(AbstractSMatrix):
 
         gpts = self._gpts_within_angle(downsample) if downsample else self.gpts
 
-        for potential in [None] if self.potential is None else self.potential.get_distribution(lazy=lazy):
+        for potential in [None] if self.potential is None else self.potential.get_frozen_phonon_potentials(lazy=lazy):
 
             arrays = []
             for chunk_start, chunk_stop in generate_chunks(len(self), chunks=self.chunks):
@@ -999,7 +1011,7 @@ class SMatrix(AbstractSMatrix):
         s_matrices = [s_matrix for s_matrix in generator]
 
         if len(s_matrices) > 1:
-            return stack_s_matrices(s_matrices, FrozenPhononsAxis())
+            return stack_s_matrices(s_matrices, FrozenPhononsAxis(ensemble_mean=self.potential.ensemble_mean))
         else:
             return s_matrices[0]
 
@@ -1066,9 +1078,6 @@ class SMatrix(AbstractSMatrix):
 
         measurements = []
         for i, (s_matrix, potential) in enumerate(self.generate_distribution(stop=0, yield_potential=True)):
-
-            # waves = s_matrix.to_waves()
-            # d = s_matrix._copy_as_dict(copy_array=False)
 
             thickness_series = defaultdict(list)
             for i, (start, stop) in enumerate(multislice_start_stop):

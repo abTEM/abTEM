@@ -4,8 +4,9 @@ import pytest
 from ase import Atoms
 from hypothesis import given, assume, settings
 
-import strats as abst
+
 from strategies import core as core_st
+from strategies import atoms as atoms_st
 from abtem import Probe, PlaneWave, SMatrix, Waves
 from abtem.core.backend import get_array_module
 from abtem.core.energy import EnergyUndefinedError, energy2wavelength
@@ -14,7 +15,7 @@ from test_grid import grid_data, _test_grid_consistent
 from utils import ensure_is_tuple, check_array_matches_device, gpu
 
 wave_data = st.fixed_dictionaries(
-    {'energy': abst.energy()}
+    {'energy': core_st.energy()}
 )
 
 
@@ -29,7 +30,7 @@ def test_grid_raises(grid_data, builder):
             probe.build()
 
 
-@given(grid_data=grid_data(), energy=abst.energy(allow_none=True))
+@given(grid_data=grid_data(), energy=core_st.energy(allow_none=True))
 @pytest.mark.parametrize("builder", [Probe, PlaneWave, SMatrix])
 def test_energy_raises(grid_data, energy, builder):
     probe = builder(energy=energy, **grid_data)
@@ -42,7 +43,7 @@ def test_energy_raises(grid_data, energy, builder):
 @pytest.mark.parametrize("builder", [Probe, PlaneWave, SMatrix])
 @pytest.mark.parametrize("device", ['cpu', gpu])
 @pytest.mark.parametrize("lazy", [True, False])
-@given(grid_data=grid_data(), energy=abst.energy())
+@given(grid_data=grid_data(), energy=core_st.energy())
 def test_can_build(grid_data, energy, builder, device, lazy):
     probe = builder(**grid_data, energy=energy, device=device)
     wave = probe.build(lazy=lazy)
@@ -94,7 +95,7 @@ def test_can_build(grid_data, energy, builder, device, lazy):
 
 
 @settings(deadline=None)
-@given(grid_data=grid_data(), energy=abst.energy())
+@given(grid_data=grid_data(), energy=core_st.energy())
 @pytest.mark.parametrize("builder", [Probe, PlaneWave, SMatrix])
 @pytest.mark.parametrize("lazy", [True, False])
 def test_normalized(grid_data, energy, lazy, builder):
@@ -119,15 +120,11 @@ def check_is_normalized(array):
 
 
 @settings(deadline=None)
-@given(atom_data=abst.empty_atoms_data(), energy=abst.energy(), gpts=abst.gpts())
+@given(atom_data=atoms_st.empty_atoms_data(), energy=core_st.energy(), gpts=core_st.gpts())
 @pytest.mark.parametrize("lazy", [True, False])
 def test_planewave_empty_multislice(atom_data, energy, gpts, lazy):
     atoms = Atoms(**atom_data)
-    plane_wave = PlaneWave(gpts=gpts, energy=energy, extent=10)
-
-    wave = plane_wave.build()
-
-    #print(wave.array.sum().compute())
+    plane_wave = PlaneWave(gpts=gpts, energy=energy)
     wave = plane_wave.multislice(atoms, lazy=lazy).compute()
     #check_is_normalized(wave.array)
 
@@ -137,9 +134,9 @@ def antialias_cutoff_angle(sampling, energy):
 
 
 @settings(deadline=None)
-@given(atom_data=abst.empty_atoms_data(),
-       energy=abst.energy(),
-       sampling=abst.sampling())
+@given(atom_data=atoms_st.empty_atoms_data(),
+       energy=core_st.energy(),
+       sampling=core_st.sampling())
 @pytest.mark.parametrize("lazy", [True, False])
 def test_probe_empty_multislice(atom_data, energy, sampling, lazy):
     atoms = Atoms(**atom_data)
@@ -150,10 +147,10 @@ def test_probe_empty_multislice(atom_data, energy, sampling, lazy):
 
 
 @settings(deadline=None)
-@given(atom_data=abst.empty_atoms_data(),
-       energy=abst.energy(),
+@given(atom_data=atoms_st.empty_atoms_data(),
+       energy=core_st.energy(),
        planewave_cutoff=st.floats(min_value=5., max_value=10.),
-       sampling=abst.sampling())
+       sampling=core_st.sampling())
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ['cpu', gpu])
 def test_s_matrix_empty_multislice(atom_data, energy, sampling, lazy, planewave_cutoff, device):
@@ -167,9 +164,9 @@ def test_s_matrix_empty_multislice(atom_data, energy, sampling, lazy, planewave_
 
 
 @settings(deadline=None)
-@given(atoms_data=abst.random_atoms_data(),
-       energy=abst.energy(),
-       sampling=abst.sampling(min_value=.1))
+@given(atoms_data=atoms_st.random_atoms_data(),
+       energy=core_st.energy(),
+       sampling=core_st.sampling(min_value=.1))
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("builder", [Probe, PlaneWave])
 def test_scatter(atoms_data, builder, energy, sampling, lazy):
@@ -201,9 +198,9 @@ def test_downsample(gpts, sampling, energy):
 
 
 @settings(deadline=None)
-@given(atoms_data=abst.random_atoms_data(),
-       energy=abst.energy(),
-       sampling=abst.sampling(min_value=.1))
+@given(atoms_data=atoms_st.random_atoms_data(),
+       energy=core_st.energy(),
+       sampling=core_st.sampling(min_value=.1))
 @pytest.mark.parametrize("lazy", [True, False])
 def test_build_then_multislice(atoms_data, energy, sampling, lazy):
     atoms = Atoms(**atoms_data)

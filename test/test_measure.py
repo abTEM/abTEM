@@ -4,17 +4,17 @@ import hypothesis.extra.numpy as numpy_st
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given, settings, assume
+from hypothesis import given, settings, assume, HealthCheck
 from hypothesis.strategies import composite
 
 from abtem import Probe
 from abtem.core.axes import OrdinalAxis
-from abtem.measure.measure import stack_measurements, Images
+from abtem.core.backend import cp
+from abtem.measure.measure import stack_measurements, Images, from_zarr
 from strategies import core as core_st
 from strategies import detectors as detectors_st
 from strategies import measurements as measurements_st
-from utils import ensure_is_tuple, gpu
-from abtem.core.backend import cp
+from utils import ensure_is_tuple, gpu, array_is_close
 
 all_measurements = {'images': measurements_st.images,
                     'diffraction_patterns': measurements_st.diffraction_patterns,
@@ -41,7 +41,6 @@ def test_indexing(data, measurement, lazy, device):
     assert len(measurement[indices].shape) == len(measurement.shape) - num_lost_axes
 
 
-@settings(deadline=None, max_examples=40, print_blob=True)
 @given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('device', ['cpu', gpu])
@@ -56,7 +55,6 @@ def test_copy_equals_measurement(data, measurement, lazy, device):
     assert measurement_copy.metadata is not measurement.metadata
 
 
-@settings(deadline=None, max_examples=40, print_blob=True)
 @given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('device', ['cpu', gpu])
@@ -88,7 +86,6 @@ def test_inplace_add_subtract(data, measurement, method, device):
     assert new_measurement.array is measurement.array
 
 
-@settings(deadline=None, max_examples=40, print_blob=True)
 @given(data=st.data())
 @pytest.mark.parametrize('method', ['mean', 'sum', 'std'])
 @pytest.mark.parametrize('device', ['cpu', gpu])
@@ -100,8 +97,6 @@ def test_reduce(data, measurement, method, device):
     axes_indices = st.lists(elements=axes_indices, min_size=0, max_size=len(measurement.extra_axes), unique=True)
     axes_indices = data.draw(axes_indices)
 
-    assume(len(axes_indices) > 0)
-
     axes = tuple(measurement.extra_axes[i] for i in axes_indices)
     num_lost_dims = len(axes)
     new_measurement = getattr(measurement, method)(axes)
@@ -112,7 +107,7 @@ def test_reduce(data, measurement, method, device):
 @given(data=st.data(), url=detectors_st.temporary_path(allow_none=False))
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('measurement', list(all_measurements.keys()))
-@pytest.mark.skipif(cp is None,reason="no gpu")
+@pytest.mark.skipif(cp is None, reason="no gpu")
 def test_to_cpu(data, measurement, url, lazy):
     measurement = data.draw(all_measurements[measurement](lazy=lazy, device='gpu'))
     measurement = measurement.to_cpu()
@@ -122,7 +117,6 @@ def test_to_cpu(data, measurement, url, lazy):
     assert isinstance(measurement.array, np.ndarray)
 
 
-@settings(deadline=None, max_examples=40, print_blob=True)
 @given(data=st.data(), url=detectors_st.temporary_path(allow_none=False))
 @pytest.mark.parametrize('lazy', [False, True])
 @pytest.mark.parametrize('device', ['cpu', gpu])
@@ -142,13 +136,13 @@ def gpts_or_sampling(draw):
                           st.fixed_dictionaries({'gpts': st.none(), 'sampling': core_st.sampling()})))
 
 
-@settings(deadline=None)
 @given(data=st.data(), gpts_or_sampling=gpts_or_sampling())
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('device', ['cpu', gpu])
-def test_interpolate_images(data, gpts_or_sampling, lazy, device):
+@pytest.mark.parametrize('method', ['spline', 'fft'])
+def test_interpolate_images(data, gpts_or_sampling, lazy, device, method):
     measurement = data.draw(measurements_st.images(lazy=lazy, device=device))
-    interpolated = measurement.interpolate(**gpts_or_sampling)
+    interpolated = measurement.interpolate(**gpts_or_sampling, method=method)
     assert np.allclose(interpolated.extent, measurement.extent)
     if gpts_or_sampling['gpts']:
         assert interpolated.base_shape == ensure_is_tuple(gpts_or_sampling['gpts'], 2)
@@ -209,7 +203,6 @@ def test_diffractograms(data, lazy, device):
     measurement.diffractograms()
 
 
-@settings(deadline=None, max_examples=10, print_blob=True)
 @given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('device', ['cpu', gpu])
@@ -232,10 +225,9 @@ def test_images_interpolate_line(data, lazy, device):
     line2 = image.interpolate_line_at_position(center=center, angle=angle2, extent=wave.extent[0] / 2, width=width,
                                                gpts=32)
 
-    assert np.allclose(line1.array, line2.array)
+    assert np.allclose(line1.array, line2.array, rtol=1e-6, atol=1e-6)
 
 
-@settings(deadline=None, max_examples=10, print_blob=True)
 @given(data=st.data(), dose=core_st.sensible_floats(min_value=1e8, max_value=1e9))
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('device', ['cpu', gpu])
@@ -258,7 +250,6 @@ def test_poisson_noise(data, measurement, dose, lazy, device):
     assert np.allclose(expected_total_dose, actual_total_dose, rtol=0.1)
 
 
-@settings(deadline=None)
 @given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('device', ['cpu', gpu])
@@ -293,7 +284,6 @@ def test_diffraction_patterns_polar_binning(data, lazy, device):
                                outer=outer)
 
 
-@settings(deadline=None)
 @given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('device', ['cpu', gpu])
@@ -328,7 +318,6 @@ def test_diffraction_patterns_polar_binning(data, lazy, device):
                                outer=outer)
 
 
-@settings(deadline=None)
 @given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('device', ['cpu', gpu])
@@ -338,7 +327,6 @@ def test_diffraction_patterns_center_of_mass(data, lazy, device):
     measurement.center_of_mass().compute()
 
 
-@settings(deadline=None)
 @given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('device', ['cpu', gpu])
@@ -348,7 +336,6 @@ def test_diffraction_patterns_integrated_center_of_mass(data, lazy, device):
     measurement.integrated_center_of_mass().compute()
 
 
-@settings(deadline=None)
 @given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('device', ['cpu', gpu])
@@ -358,7 +345,6 @@ def test_diffraction_patterns_integrated_center_of_mass(data, lazy, device):
     measurement.integrated_center_of_mass().compute()
 
 
-@settings(deadline=None)
 @given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('device', ['cpu', gpu])
@@ -390,7 +376,7 @@ def test_diffraction_patterns_gaussian_source_size(data, sigma, lazy, device):
     measurement.gaussian_source_size(sigma).compute()
 
 
-@settings(deadline=None, max_examples=20)
+@settings(suppress_health_check=(HealthCheck.data_too_large,))
 @given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('device', ['cpu', gpu])
@@ -417,7 +403,6 @@ def test_polar_measurements_integrate(data, lazy, device):
     measurement.integrate(detector_regions=data.draw(detector_regions)).compute()
 
 
-@settings(deadline=None, max_examples=20)
 @given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('device', ['cpu', gpu])
@@ -426,7 +411,6 @@ def test_line_profiles_interpolate(data, lazy, device):
     measurement.interpolate().compute()
 
 
-@settings(deadline=None, max_examples=20)
 @given(data=st.data(), reps=st.integers(min_value=1, max_value=3))
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('device', ['cpu', gpu])
@@ -439,3 +423,29 @@ def test_line_profiles_interpolate_comparison():
     images = Images.from_zarr('data/silicon_image.zarr').compute().interpolate(.2)
     assert np.allclose(images.interpolate_line().interpolate(.01).array,
                        images.interpolate(.01).interpolate_line().array, rtol=.01)
+
+
+def test_interpolate_periodic_spline_and_fft():
+    images = Images.from_zarr('data/silicon_image.zarr')
+    spline_interpolated = images.interpolate(method='spline', sampling=.05, boundary='periodic', order=5)
+    fft_interpolated = images.interpolate(method='fft', sampling=.05)
+    array_is_close(spline_interpolated.array, fft_interpolated.array, rel_tol=0.01)
+
+
+@given(gpts=st.integers(min_value=16, max_value=32), extent=st.floats(min_value=5, max_value=10))
+def test_diffraction_patterns_interpolate_uniform(gpts, extent):
+    probe = Probe(energy=100e3, semiangle_cutoff=20, extent=extent, gpts=gpts)
+    diffraction_patterns = probe.build().diffraction_patterns(max_angle=None)
+    probe.gpts = (gpts * 2, gpts)
+    probe.extent = (extent * 2, extent)
+    interpolated_diffraction_patterns = probe.build().diffraction_patterns(max_angle=None).interpolate('uniform')
+    assert np.allclose(interpolated_diffraction_patterns.array, diffraction_patterns.array)
+
+
+@given(sigma=st.floats(min_value=.1, max_value=.5),
+       outer=st.floats(min_value=10., max_value=100))
+def test_gaussian_source_size_order(sigma, outer):
+    diffraction_patterns = from_zarr('data/silicon_diffraction_patterns.zarr').compute()
+    image1 = diffraction_patterns.gaussian_source_size(sigma).integrate_radial(0, outer)
+    image2 = diffraction_patterns.integrate_radial(0, outer).gaussian_filter(sigma)
+    assert np.allclose(image1.array, image2.array)

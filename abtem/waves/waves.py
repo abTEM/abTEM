@@ -159,8 +159,8 @@ class Waves(HasDaskArray, WavesLikeMixin):
             The maximum scattering angle after downsampling will be the largest rectangle that fits inside the
             circular antialias aperture.
 
-        normalization : {'values', 'intensity', 'amplitude'}
-            The normalization parameter determines which quantity is preserved after normalization.
+        normalization : {'values', 'amplitude'}
+            The normalization parameter determines the preserved quantity after normalization.
                 ``values`` :
                 The pixelwise values of the wave function are preserved.
                 ``amplitude`` :
@@ -349,7 +349,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
                 raise NotImplementedError
 
         elif ctf.is_distribution:
-            values, weights, axes_metadata = ctf.parameter_distribution()
+            values, weights, axes_metadata = ctf.parameter_series()
 
             values = da.from_array(values, chunks=(1,) * len(values.shape))
             weights = da.from_array(weights, chunks=(1,) * len(weights.shape))
@@ -583,6 +583,8 @@ class PlaneWave(WavesLikeMixin):
         Electron energy [eV].
     tilt : two float
         Small angle beam tilt [mrad].
+    normalize : bool
+        If True,
     device : str
         The plane waves will be build on this device.
     """
@@ -593,7 +595,7 @@ class PlaneWave(WavesLikeMixin):
                  sampling: Union[float, Tuple[float, float]] = None,
                  energy: float = None,
                  tilt: Tuple[float, float] = None,
-                 normalize: bool = False,
+                 normalize: bool = True,
                  device: str = None):
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
@@ -618,7 +620,7 @@ class PlaneWave(WavesLikeMixin):
         potential = validate_potential(potential, self)
 
         if detectors is None:
-            detectors = PixelatedDetector(ensemble_mean=True, fourier_space=False)
+            detectors = PixelatedDetector(fourier_space=False)
 
         measurements = self.build(lazy=lazy).transition_multislice(potential, transitions, detectors, ctf=ctf)
         return measurements
@@ -744,16 +746,16 @@ class Probe(WavesLikeMixin):
 
     @property
     def metadata(self):
-        return {'energy': self.energy}
+        return {'energy': self.energy, 'semiangle_cutoff': self.ctf.semiangle_cutoff}
 
     @property
     def shape(self):
-
+        """ Shape of Waves. """
         return self.gpts
 
     @property
     def ctf(self) -> CTF:
-        """Probe contrast transfer function."""
+        """ Probe contrast transfer function. """
         return self._ctf
 
     def _validate_chunks(self, chunks):
@@ -796,7 +798,7 @@ class Probe(WavesLikeMixin):
 
         return positions
 
-    def _calculate_probe(self, positions, ctf_parameters=None, weights=None):
+    def _calculate_probe(self, positions, ctf_parameters=None, weights=None, sampling=None, gpts=None):
         xp = get_array_module(self._device)
 
         if ctf_parameters is not None:
@@ -807,9 +809,9 @@ class Probe(WavesLikeMixin):
 
         positions = xp.asarray(positions)
         xp = get_array_module(positions)
-        positions = positions / xp.array(self.sampling).astype(np.float32)
-        array = fft_shift_kernel(positions, shape=self.gpts)
-        array *= ctf.evaluate_on_grid(gpts=self.gpts, sampling=self.sampling, xp=xp)
+        positions = positions / xp.array(sampling).astype(np.float32)
+        array = fft_shift_kernel(positions, shape=gpts)
+        array *= ctf.evaluate_on_grid(gpts=gpts, sampling=sampling, xp=xp)
 
         array /= xp.sqrt(abs2(array).sum((-2, -1), keepdims=True))
 
@@ -832,7 +834,7 @@ class Probe(WavesLikeMixin):
         positions : scan object or array of xy-positions
             Positions of the probe wave functions
         chunks : int
-            Specifices the number of wave functions in each chunk of a the created dask array. If None, the number
+            Specifies the number of wave functions in each chunk of a the created dask array. If None, the number
             of chunks are automatically estimated based on the "dask.chunk-size" parameter in the configuration.
         lazy : boolean, optional
             If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
@@ -849,11 +851,10 @@ class Probe(WavesLikeMixin):
         lazy = validate_lazy(lazy)
 
         validated_positions = self._validate_positions(positions, lazy=lazy, chunks=chunks)
-
         xp = get_array_module(self._device)
 
         if lazy and self.ctf.is_distribution:
-            values, weights, axes_metadata = self.ctf.parameter_distribution()
+            values, weights, axes_metadata = self.ctf.parameter_series()
 
             values = da.from_array(values, chunks=(1,) * len(values.shape))
             weights = da.from_array(weights, chunks=(1,) * len(weights.shape))
@@ -868,11 +869,11 @@ class Probe(WavesLikeMixin):
                                  validated_positions, m,
                                  values, n,
                                  weights, n,
+                                 sampling=self.sampling,
+                                 gpts=self.gpts,
                                  concatenate=True,
                                  meta=xp.array((), dtype=np.complex64),
                                  new_axes=new_axes)
-
-
 
         elif lazy:
             drop_axis = len(validated_positions.shape) - 1
@@ -880,6 +881,8 @@ class Probe(WavesLikeMixin):
 
             array = validated_positions.map_blocks(self._calculate_probe,
                                                    meta=xp.array((), dtype=np.complex64),
+                                                   sampling=self.sampling,
+                                                   gpts=self.gpts,
                                                    drop_axis=drop_axis,
                                                    new_axis=new_axis,
                                                    chunks=validated_positions.chunks[:-1] + (
@@ -891,7 +894,7 @@ class Probe(WavesLikeMixin):
             if self.ctf.is_distribution:
                 raise NotImplementedError
 
-            array = self._calculate_probe(validated_positions)
+            array = self._calculate_probe(validated_positions, sampling=self.sampling, gpts=self.gpts)
             axes_metadata = []
 
         if hasattr(positions, 'axes_metadata'):
@@ -916,7 +919,8 @@ class Probe(WavesLikeMixin):
                    chunks: int = None,
                    lazy: bool = None) -> Union[AbstractMeasurement, Waves, List[Union[AbstractMeasurement, Waves]]]:
         """
-        Build probe wave functions at the provided positions and propagate them through the potential.
+        Build probe wave functions at the provided positions and run the multislice algorithm using the wave functions
+        as initial.
 
         Parameters
         ----------
@@ -937,7 +941,7 @@ class Probe(WavesLikeMixin):
 
         Returns
         -------
-        list_of_measurements : measurement, wave functions, list of measurements
+        measurements : AbstractMeasurement or Waves or list of AbstractMeasurement
         """
         lazy = validate_lazy(lazy)
 
@@ -988,7 +992,7 @@ class Probe(WavesLikeMixin):
 
         Returns
         -------
-        list_of_measurements : measurement, wave functions, list of measurements
+        #list_of_measurements : measurement, wave functions, list of measurements
         """
 
         if scan is None:

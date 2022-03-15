@@ -8,7 +8,7 @@ import numpy as np
 from matplotlib.axes import Axes
 import matplotlib.pyplot as plt
 
-from abtem.core.axes import NonLinearAxis
+from abtem.core.axes import NonLinearAxis, ParameterSeriesAxis
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.distributions import Distribution
@@ -440,7 +440,7 @@ class CTF(HasAcceleratorMixin):
     def is_distribution(self):
         return any(isinstance(parameter, Distribution) for parameter in self._parameters.values())
 
-    def parameter_distribution(self):
+    def parameter_series(self):
         ctf_parameter_distribution = {}
         shape = ()
         axes_metadata = []
@@ -448,7 +448,10 @@ class CTF(HasAcceleratorMixin):
             if isinstance(values, Distribution):
                 ctf_parameter_distribution[parameter] = values
                 shape += (len(values),)
-                axes_metadata += [NonLinearAxis(label=parameter, values=tuple(values.values), units='Å')]
+                axes_metadata += [ParameterSeriesAxis(label=parameter,
+                                                      values=tuple(values.values),
+                                                      units='Å',
+                                                      ensemble_mean=values.ensemble_mean)]
 
         keys = ctf_parameter_distribution.keys()
         values = np.empty(np.prod(shape), dtype=object)

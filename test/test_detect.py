@@ -1,16 +1,16 @@
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given, settings
+from hypothesis import given
 
-import strats as abst
 from abtem import Probe, AnnularDetector, FlexibleAnnularDetector, PixelatedDetector
+from strategies import atoms as atoms_st
+from strategies import core as core_st
 from utils import assume_valid_probe_and_detectors, gpu
 
 
-@settings(deadline=None, max_examples=20, print_blob=True)
-@given(atoms=abst.random_atoms(min_side_length=5, max_side_length=10),
-       gpts=abst.gpts(min_value=128, max_value=128),
+@given(atoms=atoms_st.random_atoms(min_side_length=5, max_side_length=10),
+       gpts=core_st.gpts(min_value=128, max_value=128),
        semiangle_cutoff=st.floats(5, 10),
        inner=st.floats(0, 50),
        outer=st.floats(50, 100),
@@ -38,7 +38,6 @@ def test_integrate_consistent(atoms, gpts, semiangle_cutoff, energy, lazy, inner
     assert np.allclose(annular_measurement.array, pixelated_measurement.integrate_radial(inner, outer).array)
 
 
-@settings(deadline=None, max_examples=20, print_blob=True)
 @given(gpts=st.integers(min_value=64, max_value=128),
        extent=st.floats(min_value=5, max_value=10))
 @pytest.mark.parametrize('device', ['cpu', gpu])

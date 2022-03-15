@@ -35,24 +35,6 @@ def polar_detector_bins(gpts: Tuple[int, int],
                         fftshift: bool = False,
                         return_indices: bool = False,
                         ) -> Union[np.ndarray, List[np.ndarray]]:
-    """
-    Create an array of labels for the regions of a given detector geometry.
-
-    Parameters
-    ----------
-    gpts : two int
-        Number of grid points describing the detector regions.
-    angular_sampling : two float
-        Angular sampling of the discretized detector regions in radians.
-    inner : float
-        Inner boundary of the detector regions [rad].
-    outer : float
-        Outer boundary of the detector regions [rad].
-    nbins_radial : int
-        Number of radial detector bins.
-    nbins_azimuthal
-        Number of azimuthal detector bins.
-    """
 
     alpha, phi = polar_spatial_frequencies(gpts, (1 / sampling[0] / gpts[0], 1 / sampling[1] / gpts[1]))
     phi = (phi + rotation) % (2 * np.pi)

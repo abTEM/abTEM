@@ -19,16 +19,23 @@ def stack_frozen_phonons(measurements, detectors):
     stacked = []
     for measurement, detector in zip(measurements, detectors):
         new = stack_measurements(measurement, axes_metadata=FrozenPhononsAxis())
-
-        if detector.ensemble_mean:
-            new = new.mean(0)
-
         stacked.append(new)
     return stacked
 
 
 class AbstractFrozenPhonons(metaclass=ABCMeta):
     """Abstract base class for frozen phonons objects."""
+
+    def __init__(self, ensemble_mean: bool = True):
+        self._ensemble_mean = ensemble_mean
+
+    @property
+    def axes_metadata(self):
+        return FrozenPhononsAxis(ensemble_mean=self.ensemble_mean)
+
+    @property
+    def ensemble_mean(self):
+        return self._ensemble_mean
 
     @abstractmethod
     def __len__(self):
@@ -40,11 +47,11 @@ class AbstractFrozenPhonons(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def get_configurations(self, lazy: bool = True):
+    def get_frozen_phonon_atoms(self, lazy: bool = True):
         pass
 
     def __getitem__(self, item):
-        configurations = self.get_configurations(lazy=False)
+        configurations = self.get_frozen_phonon_atoms(lazy=False)
         return configurations[item]
 
     @abstractmethod
@@ -56,6 +63,25 @@ class AbstractFrozenPhonons(metaclass=ABCMeta):
         Make a copy.
         """
         return copy(self)
+
+
+class DummyFrozenPhonons(AbstractFrozenPhonons):
+
+    def __init__(self):
+        super().__init__(ensemble_mean=True)
+
+    @property
+    def cell(self):
+        return None
+
+    def get_frozen_phonon_atoms(self, lazy: bool = True):
+        return [None]
+
+    def __len__(self):
+        return 1
+
+    def __copy__(self):
+        return self.__class__()
 
 
 class DelayedAtoms:
@@ -104,6 +130,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
     directions: str
         The displacement directions of the atoms as a string; for example 'xy' for displacement in the x- and
         y-direction.
+    ensemble_mean : True
     seed: int
         Seed for random number generator.
     """
@@ -113,6 +140,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
                  num_configs: int,
                  sigmas: Union[float, Mapping[Union[str, int], float], Sequence[float]],
                  directions: str = 'xyz',
+                 ensemble_mean: bool = True,
                  seed: int = None):
 
         self._unique_numbers = np.unique(atoms.numbers)
@@ -141,6 +169,8 @@ class FrozenPhonons(AbstractFrozenPhonons):
         self._atoms = atoms
         self._num_configs = num_configs
         self._seed = seed
+
+        super().__init__(ensemble_mean)
 
     @property
     def num_configs(self) -> int:
@@ -183,7 +213,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
                 raise RuntimeError('Directions must be "x", "y" or "z" not {}.')
         return axes
 
-    def get_configurations(self, lazy: bool = False) -> List[Atoms]:
+    def get_frozen_phonon_atoms(self, lazy: bool = True):
         if self.seed is not False and self.seed is not None:
             if lazy:
                 random_state = dask.delayed(np.random.RandomState)(seed=self.seed)
@@ -202,6 +232,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
                 for unique in np.unique(atoms.numbers):
                     temp[atoms.numbers == unique] = np.float32(sigmas[chemical_symbols[unique]])
                 sigmas = temp
+
             elif not isinstance(sigmas, np.ndarray):
                 raise RuntimeError()
 
@@ -245,8 +276,10 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
         Sequence of Atoms objects representing a thermal distribution of atomic configurations.
     """
 
-    def __init__(self, trajectory: Sequence[Atoms]):
+    def __init__(self, trajectory: Sequence[Atoms], ensemble_mean: bool = True):
         self._trajectory = trajectory
+
+        super().__init__(ensemble_mean=ensemble_mean)
 
     def __len__(self) -> int:
         return len(self._trajectory)
@@ -267,7 +300,7 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
         squared_deviations = [(atoms.positions - mean_positions) ** 2 for atoms in self]
         return np.sqrt(np.sum(squared_deviations, axis=0) / (len(self) - 1))
 
-    def get_configurations(self, lazy: bool = True):
+    def get_frozen_phonon_atoms(self, lazy: bool = True):
         return self._trajectory
 
     # def generate_atoms(self):

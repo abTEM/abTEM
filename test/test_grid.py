@@ -5,16 +5,16 @@ import numpy as np
 import pytest
 from hypothesis import given, assume
 
-import strats as abst
 from abtem.core.grid import Grid, GridUndefinedError
+from strategies import core as core_st
 from utils import ensure_is_tuple
 
 
 def grid_data(allow_none=False, allow_overdefined=True):
     data = {
-        'gpts': abst.gpts(allow_none=allow_none),
-        'sampling': abst.sampling(allow_none=allow_none),
-        'extent': abst.extent(allow_none=allow_none)
+        'gpts': core_st.gpts(allow_none=allow_none),
+        'sampling': core_st.sampling(allow_none=allow_none),
+        'extent': core_st.extent(allow_none=allow_none)
     }
 
     if not allow_overdefined:
@@ -81,7 +81,7 @@ def test_grid_consistent(grid_data):
     _test_grid_consistent(grid.extent, grid.gpts, grid.sampling)
 
 
-@given(grid_data=grid_data(), new_gpts=abst.gpts())
+@given(grid_data=grid_data(), new_gpts=core_st.gpts())
 def test_gpts_change(grid_data, new_gpts):
     grid = create_grid(grid_data)
 
@@ -90,7 +90,7 @@ def test_gpts_change(grid_data, new_gpts):
     _test_grid_consistent(grid.extent, grid.gpts, grid.sampling)
 
 
-@given(grid_data=grid_data(), new_extent=abst.extent())
+@given(grid_data=grid_data(), new_extent=core_st.extent())
 def test_gpts_change(grid_data, new_extent):
     grid = create_grid(grid_data)
 
@@ -99,7 +99,7 @@ def test_gpts_change(grid_data, new_extent):
     _test_grid_consistent(grid.extent, grid.gpts, grid.sampling)
 
 
-@given(grid_data=grid_data(), new_sampling=abst.sampling())
+@given(grid_data=grid_data(), new_sampling=core_st.sampling())
 def test_sampling_change(grid_data, new_sampling):
     grid = create_grid(grid_data)
 

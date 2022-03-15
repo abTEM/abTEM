@@ -3,17 +3,19 @@ import numpy as np
 import pytest
 from hypothesis import given, settings, reproduce_failure, assume
 
-import strats as abst
+from strategies import core as core_st
+from strategies import atoms as atoms_st
 from abtem import Probe, SMatrix, GridScan, Potential
 from abtem.core.backend import get_array_module
 from strategies import detectors as detector_st
 from utils import gpu, assume_valid_probe_and_detectors, assert_scanned_measurement_as_expected
 from abtem.core.backend import cp
 
-@settings(deadline=None, max_examples=20, print_blob=True)
+
+
 @given(data=st.data(),
-       atoms=abst.random_atoms(min_side_length=5, max_side_length=10),
-       gpts=abst.gpts(min_value=32, max_value=64),
+       atoms=atoms_st.random_atoms(min_side_length=5, max_side_length=10),
+       gpts=core_st.gpts(min_value=32, max_value=64),
        planewave_cutoff=st.floats(10, 15),
        energy=st.floats(100e3, 200e3))
 @pytest.mark.parametrize('lazy', [True, False])
@@ -33,9 +35,9 @@ def test_multislice_matches_prism(data, atoms, gpts, planewave_cutoff, energy, l
     assert np.allclose(measurement.array, prism_measurement.array)
 
 
-@settings(deadline=None, max_examples=20, print_blob=True)
-@given(atoms=abst.random_atoms(min_side_length=5, max_side_length=10),
-       gpts=abst.gpts(min_value=32, max_value=64),
+
+@given(atoms=atoms_st.random_atoms(min_side_length=5, max_side_length=10),
+       gpts=core_st.gpts(min_value=32, max_value=64),
        planewave_cutoff=st.floats(10, 15),
        interpolation=st.integers(min_value=1, max_value=4),
        energy=st.floats(100e3, 200e3),
@@ -68,9 +70,9 @@ def test_prism_interpolation(data, atoms, gpts, planewave_cutoff, energy, lazy, 
     assert np.allclose(measurement.array, prism_measurement.array, atol=1e-6)
 
 
-@settings(deadline=None, max_examples=10, print_blob=True)
-@given(atoms=abst.random_atoms(min_side_length=5, max_side_length=10),
-       gpts=abst.gpts(min_value=32, max_value=64),
+
+@given(atoms=atoms_st.random_atoms(min_side_length=5, max_side_length=10),
+       gpts=core_st.gpts(min_value=32, max_value=64),
        planewave_cutoff=st.floats(10, 15),
        energy=st.floats(100e3, 200e3),
        interpolation=st.integers(min_value=1, max_value=4),
@@ -96,9 +98,9 @@ def test_store_on_host(data, atoms, gpts, planewave_cutoff, energy, lazy, interp
     assert_scanned_measurement_as_expected(measurements, atoms, probe, detectors, scan)
 
 
-@settings(deadline=None, max_examples=10, print_blob=True)
-@given(atoms=abst.random_atoms(min_side_length=5, max_side_length=10),
-       gpts=abst.gpts(min_value=32, max_value=64),
+
+@given(atoms=atoms_st.random_atoms(min_side_length=5, max_side_length=10),
+       gpts=core_st.gpts(min_value=32, max_value=64),
        planewave_cutoff=st.floats(5, 15),
        energy=st.floats(100e3, 200e3),
        interpolation=st.integers(min_value=2, max_value=4),

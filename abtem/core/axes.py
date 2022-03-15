@@ -48,6 +48,12 @@ class ThicknessSeriesAxis(NonLinearAxis):
 
 
 @dataclass
+class ParameterSeriesAxis(NonLinearAxis):
+    label: str = ''
+    ensemble_mean: bool = False
+
+
+@dataclass
 class OrdinalAxis(AxisMetadata):
     domain: tuple = None
 
@@ -61,6 +67,7 @@ class PositionsAxis(OrdinalAxis):
 @dataclass
 class FrozenPhononsAxis(OrdinalAxis):
     label = 'Frozen phonons'
+    ensemble_mean: bool = False
 
 
 @dataclass
@@ -159,6 +166,13 @@ class HasAxes:
     @property
     def frozen_phonon_axes(self):
         return self.find_axes(FrozenPhononsAxis)
+
+    def _axes_to_reduce(self):
+        reduce = ()
+        for i, axis in enumerate(self.axes_metadata):
+            if hasattr(axis, 'ensemble_mean') and axis.ensemble_mean:
+                reduce += (i,)
+        return reduce
 
     @property
     def num_frozen_phonon_axes(self):

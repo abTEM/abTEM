@@ -177,8 +177,7 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
 
         self._electron_potential = None
 
-    @property
-    def frozen_phonon_potentials(self):
+    def get_frozen_phonon_potentials(self, lazy=False):
         return [self]
 
     def _get_compensated_potential(self):
@@ -295,4 +294,7 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
         pass
 
     def __copy__(self):
+        raise NotImplementedError
+
+    def to_delayed(self):
         raise NotImplementedError

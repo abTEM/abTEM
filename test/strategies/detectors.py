@@ -34,16 +34,14 @@ def annular_detector(draw, max_angle=50., allow_detect_every=True):
     return AnnularDetector(inner=inner,
                            outer=outer,
                            offset=offset,
-                           ensemble_mean=draw(st.booleans()),
                            to_cpu=draw(st.booleans()),
                            url=draw(temporary_path()),
                            detect_every=draw(detect_every(allow_detect_every)))
 
 
 @st.composite
-def flexible_annular_detector(draw, allow_detect_every=True):
-    return FlexibleAnnularDetector(ensemble_mean=draw(st.booleans()),
-                                   to_cpu=draw(st.booleans()),
+def flexible_annular_detector(draw, max_angle=None, allow_detect_every=True):
+    return FlexibleAnnularDetector(to_cpu=draw(st.booleans()),
                                    url=draw(temporary_path()),
                                    detect_every=draw(detect_every(allow_detect_every)))
 
@@ -60,24 +58,22 @@ def segmented_detector(draw, max_angle=20, allow_detect_every=True):
                              nbins_radial=nbins_radial,
                              nbins_azimuthal=nbins_azimuthal,
                              rotation=rotation,
-                             ensemble_mean=draw(st.booleans()),
                              to_cpu=draw(st.booleans()),
                              url=draw(temporary_path()),
                              detect_every=draw(detect_every(allow_detect_every)))
 
 
 @st.composite
-def pixelated_detector(draw, allow_detect_every=True):
-    max_angle = draw(st.one_of(st.just('valid'), st.just('cutoff'), st.none(), st.floats(min_value=5, max_value=20)))
+def pixelated_detector(draw, max_angle=None, allow_detect_every=True):
+    #max_angle = draw(st.one_of(st.just('valid'), st.just('cutoff'), st.none(), st.floats(min_value=5, max_value=20)))
     return PixelatedDetector(max_angle=max_angle,
-                             ensemble_mean=draw(st.booleans()),
                              to_cpu=draw(st.booleans()),
                              url=draw(temporary_path()),
                              detect_every=draw(detect_every(allow_detect_every)))
 
 
 @st.composite
-def waves_detector(draw, allow_detect_every=True):
+def waves_detector(draw, max_angle=None, allow_detect_every=True):
     return WavesDetector(to_cpu=draw(st.booleans()), url=draw(temporary_path()),
                          detect_every=draw(detect_every(allow_detect_every)))
 

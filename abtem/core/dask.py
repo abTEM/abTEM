@@ -219,11 +219,12 @@ class HasDaskArray:
 
         return new_cls(array=array, **new_cls_kwargs)
 
-    def delay(self, chunks=-1):
+    def delay_array(self, chunks=-1):
         if self.is_lazy:
             return self
-        self._array = da.from_array(self._array, chunks=chunks)
-        return self
+        d = self._copy_as_dict(copy_array=False)
+        d['array'] = da.from_array(self._array, chunks=chunks)
+        return self.__class__(**d)
 
     def compute(self, progress_bar: bool = None, **kwargs):
         if not self.is_lazy:
