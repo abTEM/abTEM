@@ -1,0 +1,34 @@
+{
+    "extra_axes_metadata": [
+        {
+            "end": null,
+            "endpoint": false,
+            "label": "x",
+            "offset": 0.0,
+            "sampling": 0.38785714285714284,
+            "start": null,
+            "type": "ScanAxis",
+            "units": "\u00c5"
+        },
+        {
+            "end": null,
+            "endpoint": false,
+            "label": "y",
+            "offset": 0.0,
+            "sampling": 0.38785714285714284,
+            "start": null,
+            "type": "ScanAxis",
+            "units": "\u00c5"
+        }
+    ],
+    "fftshift": true,
+    "metadata": {
+        "energy": 100000.0,
+        "semiangle_cutoff": 20
+    },
+    "sampling": [
+        0.1841620626151013,
+        0.1841620626151013
+    ],
+    "type": "DiffractionPatterns"
+}
