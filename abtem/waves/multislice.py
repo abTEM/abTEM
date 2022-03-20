@@ -208,17 +208,13 @@ def multislice_and_detect(waves, potential, detectors):
     multislice_start_stop, detect_every, _ = thickness_series_precursor(detectors, potential)
 
     for i, (start, stop) in enumerate(multislice_start_stop):
-
-        # print(waves.array)
         waves = multislice(waves,
                            potential=potential,
                            start=start,
                            stop=stop,
                            propagator=propagator,
                            antialias_aperture=antialias_aperture)
-        # print(waves.array)
 
-        # sss
 
         waves.antialias_aperture = 2. / 3.
 
@@ -254,6 +250,34 @@ def multislice(waves: 'Waves',
                start: int = 0,
                stop: int = None,
                conjugate: bool = False):
+    """
+    Run the multislice algorithm given a batch of wave functions and a potential.
+
+    Parameters
+    ----------
+    waves : Waves
+        A batch of wave functions as a Waves type object.
+    potential : AbstractPotential
+        A potential as an AbstractPotential type object.
+    propagator : FresnelPropagator, optional
+        A fresnel propapgator type matching the wave functions. The main reason for using this argument is to reuse
+        a previously calculated propagator. If not provided a new propagator is created.
+    antialias_aperture : AntialiasAperture, optional
+        An antialias aperture type matching the wave functions. The main reason for using this argument is to reuse
+        a previously calculated antialias aperture. If not provided a new antialias aperture is created.
+    start : int
+        First slice index for running the multislice algorithm. Default is first slice of the potential.
+    stop : int
+        Last slice for running the multislice algorithm. If smaller than start the multislice algorithm will run
+        in the reverse direction. Default is last slice of the potential.
+    conjugate : bool
+        I True, run the multislice algorithm using the conjugate of the transmission function
+
+    Returns
+    -------
+    exit_waves : Waves
+    """
+
     if stop is None:
         stop = len(potential)
 
