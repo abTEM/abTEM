@@ -4,7 +4,7 @@ import hypothesis.extra.numpy as numpy_st
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given, settings, assume, HealthCheck
+from hypothesis import given, settings, assume, HealthCheck, reproduce_failure
 from hypothesis.strategies import composite
 
 from abtem import Probe
@@ -179,10 +179,9 @@ def sigma(draw):
     return draw(st.one_of(st.tuples(sigma, sigma), sigma))
 
 
-@settings(deadline=None, max_examples=10, print_blob=True)
 @given(data=st.data(), sigma=sigma())
 @pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('device', [gpu, 'cpu'])
+@pytest.mark.parametrize('device', ['cpu', gpu])
 def test_gaussian_filter_images(data, sigma, lazy, device):
     if lazy is True and device == gpu.values[0]:
         return
@@ -191,8 +190,10 @@ def test_gaussian_filter_images(data, sigma, lazy, device):
     assume(all(n > 1 for n in measurement.base_shape))
     filtered = measurement.gaussian_filter(sigma)
     filtered.compute()
+    measurement.compute()
 
-    assert not np.allclose(filtered.array, measurement.array)
+    if np.any(np.array(sigma)) > 1e-6:
+        assert not np.allclose(filtered.array, measurement.array)
 
 
 @given(data=st.data())

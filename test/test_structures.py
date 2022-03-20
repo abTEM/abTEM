@@ -1,29 +1,94 @@
 import hypothesis.strategies as st
 import numpy as np
-from ase.build import bulk
+import pytest
+from ase.build import bulk, graphene
+from ase import build
 from ase.data import chemical_symbols
 from ase.data import reference_states
 from hypothesis import given
 
-from abtem.structures import orthogonalize_cell
+from abtem.structures.structures import orthogonalize_cell, shrink_cell, merge_close_atoms, cut_box
 
 
-@given(number=st.integers(min_value=1, max_value=102))
-def test_orthogonalize_atoms(number):
-    if not reference_states[number - 1] in ('sc', 'fcc', 'bcc', 'diamond', 'hcp'):
-        return
+def fcc(orthogonal=False):
+    if orthogonal:
+        return bulk('Au', cubic=True)
+    else:
+        return bulk('Au')
 
-    symbol = chemical_symbols[number]
-    atoms = bulk(symbol)
 
-    cubic_atoms = bulk(symbol, cubic=True)
+def fcc110(orthogonal=False):
+    if orthogonal:
+        atoms = build.fcc110('Au', size=(1, 1, 2), periodic=True)
+        atoms.positions[:] -= atoms.positions[-1]
+        atoms.wrap()
+        return atoms
+    else:
+        atoms = bulk('Au')
+        atoms.rotate(45, 'x', rotate_cell=True)
+        return atoms
+
+
+def bcc(orthogonal=False):
+    if orthogonal:
+        return bulk('Fe', cubic=True)
+    else:
+        return bulk('Fe')
+
+
+def diamond(orthogonal=False):
+    if orthogonal:
+        return bulk('C', cubic=True)
+    else:
+        return bulk('C')
+
+
+def hcp(orthogonal=False):
+    if orthogonal:
+        atoms = bulk('Be', orthorhombic=True)
+        atoms.positions[:] -= atoms.positions[2]
+        atoms.wrap()
+        return atoms
+    else:
+        return bulk('Be')
+
+
+def assert_atoms_close(atoms1, atoms2):
+    merged = merge_close_atoms(atoms1 + atoms2)
+
+    assert len(atoms1) == len(atoms2)
+    assert len(atoms1) == len(merged)
+
+    cell1 = atoms1.cell[np.lexsort(np.rot90(atoms1.cell))]
+    cell2 = atoms2.cell[np.lexsort(np.rot90(atoms2.cell))]
+    assert np.allclose(cell1, cell2)
+
+
+@pytest.mark.parametrize('structure', [fcc, fcc110, bcc, diamond, hcp])
+def test_orthogonalize_atoms(structure):
+    atoms = structure()
+    orthogonal_atoms = structure(orthogonal=True)
     orthogonalized_atoms = orthogonalize_cell(atoms)
+    assert_atoms_close(orthogonal_atoms, orthogonalized_atoms)
 
-    cubic_positions = cubic_atoms.positions[np.lexsort(np.rot90(cubic_atoms.positions))]
-    orthogonalized_positions = orthogonalized_atoms.positions[np.lexsort(np.rot90(orthogonalized_atoms.positions))]
 
-    cubic_cell = cubic_atoms.cell[np.lexsort(np.rot90(cubic_atoms.cell))]
-    orthogonalized_cell = orthogonalized_atoms.cell[np.lexsort(np.rot90(orthogonalized_atoms.cell))]
+@pytest.mark.parametrize('structure', [fcc, bcc, diamond, hcp])
+@pytest.mark.parametrize('n', [2, 3])
+def test_shrink_cell(structure, n):
+    atoms = structure()
 
-    assert np.allclose(cubic_positions, orthogonalized_positions)
-    assert np.allclose(cubic_cell, orthogonalized_cell)
+    repeated_atoms = atoms * (n, n, n)
+
+    shrinked_atoms = shrink_cell(repeated_atoms)
+
+    assert_atoms_close(atoms, shrinked_atoms)
+
+
+@pytest.mark.parametrize('structure', [fcc, fcc110, bcc, diamond, hcp])
+def test_cut_matches(structure):
+    atoms = structure()
+
+    orthogonalized_atoms = orthogonalize_cell(atoms)
+    cut_atoms = cut_box(atoms, box=np.diag(orthogonalized_atoms.cell) - 1e-12)
+
+    assert_atoms_close(orthogonalized_atoms, cut_atoms)
