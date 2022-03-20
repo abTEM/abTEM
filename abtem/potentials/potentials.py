@@ -144,9 +144,8 @@ class AbstractPotentialFromAtoms(AbstractPotential):
                  box: Tuple[float, float, float] = None,
                  plane: str = 'xy',
                  origin: Tuple[float, float, float] = (0., 0., 0.),
-                 chunks: int = None,
-                 device: str = None,
-                 precalculate: bool = False):
+                 chunks: int = 1,
+                 device: str = None):
 
         if np.abs(atoms.cell[2, 2]) < 1e-12:
             raise RuntimeError('cell has no thickness')
@@ -174,15 +173,7 @@ class AbstractPotentialFromAtoms(AbstractPotential):
 
         slice_thickness = _validate_slice_thickness(slice_thickness, box[2])
 
-        self._precalculate = precalculate
         self._device = _validate_device(device)
-
-        if chunks == 'auto':
-            if precalculate:
-                chunks = int(np.floor(256 / (4 * np.prod(self.gpts) / 1e6)))
-            else:
-                chunks = 1
-
         self._chunks = chunks
 
         super().__init__(slice_thickness=slice_thickness)
@@ -195,10 +186,6 @@ class AbstractPotentialFromAtoms(AbstractPotential):
     @property
     def device(self) -> str:
         return self._device
-
-    @property
-    def precalculate(self) -> bool:
-        return self._precalculate
 
     @property
     def plane(self) -> str:
@@ -325,6 +312,10 @@ class Potential(AbstractPotentialFromAtoms):
                  slice_thickness: Union[float, np.ndarray] = .5,
                  parametrization: Union[str, Parametrization] = 'lobato',
                  projection: str = 'infinite',
+                 plane='xy',
+                 origin=(0., 0., 0.),
+                 box: Tuple[float, float, float] = None,
+                 periodic: bool = True,
                  chunks: int = 1,
                  device: str = None,
                  cutoff_tolerance: float = 1e-3):
@@ -356,8 +347,7 @@ class Potential(AbstractPotentialFromAtoms):
                          box=box,
                          origin=origin,
                          device=device,
-                         chunks=chunks,
-                         precalculate=precalculate)
+                         chunks=chunks)
 
         self._sliced_atoms = None
         self._scattering_factors = None
@@ -518,7 +508,6 @@ class Potential(AbstractPotentialFromAtoms):
                                   parametrization=self.parametrization,
                                   projection=self.projection,
                                   chunks=self.chunks,
-                                  precalculate=self.precalculate,
                                   device=self._device,
                                   plane=self.plane,
                                   box=self.box,
@@ -538,7 +527,6 @@ class Potential(AbstractPotentialFromAtoms):
              'parametrization': self.parametrization,
              'projection': self.projection,
              'chunks': self.chunks,
-             'precalculate': self.precalculate,
              'device': self.device,
              'plane': self.plane,
              'box': self.box,

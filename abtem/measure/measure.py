@@ -662,8 +662,9 @@ class Images(AbstractMeasurement):
         sampling = (self.extent[0] / gpts[0], self.extent[1] / gpts[1])
 
         def interpolate_spline(array, old_gpts, new_gpts, pad_mode, order, cval):
-            x = np.linspace(0., old_gpts[0], new_gpts[0], endpoint=False)
-            y = np.linspace(0., old_gpts[1], new_gpts[1], endpoint=False)
+            xp  = get_array_module(array)
+            x = xp.linspace(0., old_gpts[0], new_gpts[0], endpoint=False)
+            y = xp.linspace(0., old_gpts[1], new_gpts[1], endpoint=False)
             positions = xp.meshgrid(x, y, indexing='ij')
             positions = xp.stack(positions, axis=-1)
             return interpolate_stack(array, positions, pad_mode, order=order, cval=cval)

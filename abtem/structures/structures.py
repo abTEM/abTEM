@@ -118,7 +118,6 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12):
 
     atoms.set_cell(np.abs(atoms.get_cell()))
 
-    # atoms.wrap()
     return atoms
 
 
@@ -176,7 +175,7 @@ def decompose_affine_transform(A: np.ndarray) -> Tuple[np.ndarray, np.ndarray, n
     return rotation, zoom, shear
 
 
-def label_to_index_generator(labels: np.ndarray, first_label: int = 0):
+def _label_to_index_generator(labels: np.ndarray, first_label: int = 0):
     labels = labels.flatten()
     labels_order = labels.argsort()
     sorted_labels = labels[labels_order]
@@ -192,6 +191,8 @@ def merge_close_atoms(atoms: Atoms, tol: float = 1e-7) -> Atoms:
     if len(atoms) < 2:
         return atoms
 
+    atoms = wrap_with_tolerance(atoms)
+
     points = atoms.positions
     numbers = atoms.numbers
 
@@ -200,7 +201,7 @@ def merge_close_atoms(atoms: Atoms, tol: float = 1e-7) -> Atoms:
     new_numbers = np.zeros_like(numbers)
 
     k = 0
-    for i, cluster in enumerate(label_to_index_generator(clusters, 1)):
+    for i, cluster in enumerate(_label_to_index_generator(clusters, 1)):
         new_points[i] = np.mean(points[cluster], axis=0)
         assert np.all(numbers[cluster] == numbers[0])
         new_numbers[i] = numbers[0]
@@ -210,24 +211,39 @@ def merge_close_atoms(atoms: Atoms, tol: float = 1e-7) -> Atoms:
     return new_atoms
 
 
-def shrink_cell(atoms: Atoms, n: int) -> Atoms:
-    for i in range(3):
-        while True:
-            try:
-                atoms_copy = atoms.copy()
-                new_positions = atoms_copy.positions
-                new_positions[:, i] = new_positions[:, i] % (atoms_copy.cell[i, i] / n)
-                atoms_copy.positions[:] = new_positions
+def wrap_with_tolerance(atoms, tol=1e-6):
+    atoms = atoms.copy()
 
-                old_len = len(atoms_copy)
-                atoms_copy = merge_close_atoms(atoms_copy, 1e-5)
+    atoms.wrap()
+    d = np.linalg.norm(np.array(atoms.cell), axis=0)
+    tol = tol / d
+    scaled_positions = atoms.get_scaled_positions()
+    scaled_positions = ((tol + scaled_positions) % 1) - tol
 
-                assert len(atoms_copy) == old_len // n
-                atoms_copy.cell[i] = atoms_copy.cell[i] / n
+    atoms.positions[:] = atoms.cell.cartesian_positions(scaled_positions)
+    return atoms
 
-                atoms = atoms_copy
-            except AssertionError:
-                break
+
+def shrink_cell(atoms, repetitions=(2, 3), tol=1e-6):
+    atoms = wrap_with_tolerance(atoms, tol=tol)
+
+    for repetition in repetitions:
+        for i in range(3):
+            while True:
+                try:
+                    atoms_copy = atoms.copy()
+                    atoms_copy.cell[i] = atoms_copy.cell[i] / repetition
+
+                    atoms_copy = wrap_with_tolerance(atoms_copy)
+
+                    old_len = len(atoms_copy)
+                    atoms_copy = merge_close_atoms(atoms_copy, tol=1e-5)
+
+                    assert len(atoms_copy) == old_len // repetition
+
+                    atoms = atoms_copy
+                except AssertionError:
+                    break
 
     return atoms
 
@@ -235,7 +251,8 @@ def shrink_cell(atoms: Atoms, n: int) -> Atoms:
 def orthogonalize_cell(atoms: Atoms,
                        max_repetitions: int = 5,
                        return_transform: bool = False,
-                       transform: Union[bool, str] = True):
+                       transform: Union[bool, str] = True,
+                       tolerance=0.01):
     """
     Make the cell of an ASE atoms object orthogonal. This is accomplished by repeating the cell until lattice vectors
     are close to the three principal Cartesian directions. If the structure is not exactly orthogonal after the
@@ -250,7 +267,7 @@ def orthogonalize_cell(atoms: Atoms,
     return_transform : bool
         If true, return the transformations that were applied to make the atoms orthogonal.
     transform : bool
-        If False, no transformation is applied to make the cell orthogonal, hence a non-orthogonal cell may be returned.
+        If false no transformation is applied to make the cell orthogonal, hence a non-orthogonal cell may be returned.
 
 
     Returns
@@ -260,11 +277,14 @@ def orthogonalize_cell(atoms: Atoms,
     transform : tuple of arrays
         The applied transform in the form the euler angles
     """
-    eps = 1e-8
+    eps = 1e-12
 
-    if np.any(np.linalg.norm(atoms.cell, axis=0) < eps):
-        raise RuntimeError("""A lattice vectors of the provided Atoms has no length. Please ensure that all lattice """
-                           """vectors are defined, e.g. by adding vacuum along the undefined direction.""")
+    zero_vectors = np.linalg.norm(atoms.cell, axis=0) < eps
+
+    if zero_vectors.sum() > 1:
+        raise RuntimeError("two or more lattice vectors of the provided Atoms has no length")
+    elif zero_vectors.sum() == 1:
+        atoms.center(axis=np.where(zero_vectors)[0], vacuum=tolerance + eps)
 
     k = np.arange(-max_repetitions, max_repetitions + 1)
     l = np.arange(-max_repetitions, max_repetitions + 1)
@@ -295,7 +315,7 @@ def orthogonalize_cell(atoms: Atoms,
         new_vector = np.sign(np.dot(new_vector, atoms.cell)[i]) * new_vector
         new_vectors.append(new_vector)
 
-    atoms = cut(atoms, *new_vectors)
+    atoms = cut(atoms, *new_vectors, tolerance=tolerance)
 
     cell = Cell.new(np.linalg.norm(atoms.cell, axis=0))
     A = np.linalg.solve(atoms.cell.complete(), cell.complete())
@@ -308,11 +328,13 @@ def orthogonalize_cell(atoms: Atoms,
         if not is_cell_orthogonal(atoms):
             raise RuntimeError()
 
+    atoms = shrink_cell(atoms)
+
     if return_transform and transform:
         rotation, zoom, shear = decompose_affine_transform(A)
-        return shrink_cell(atoms, 2), (np.array(rotation_matrix_to_euler(rotation)), zoom, shear)
+        return atoms, (np.array(rotation_matrix_to_euler(rotation)), zoom, shear)
     else:
-        return shrink_cell(atoms, 2)
+        return atoms
 
 
 def atoms_in_box(atoms: Atoms, box, margin: float = 0., origin: Tuple[float, float, float] = (0., 0., 0.)) -> Atoms:
@@ -366,10 +388,12 @@ def cut_box(atoms: Atoms,
         atoms.cell = box
         return atoms
 
+    new_cell = np.diag(np.array(box) + 2 * np.array(margin))
+    new_cell = np.dot(atoms.cell.scaled_positions(new_cell), atoms.cell)
+
     scaled_margin = atoms.cell.scaled_positions(np.diag(margin))
     scaled_margin = np.sign(scaled_margin) * (np.ceil(np.abs(scaled_margin)))
-    new_cell = np.diag(np.array(box)) + 2 * np.abs(atoms.cell.cartesian_positions(scaled_margin))
-    new_cell = np.dot(atoms.cell.scaled_positions(new_cell), atoms.cell)
+
 
     scaled_corners_new_cell = np.array([[0., 0., 0.], [0., 0., 1.],
                                         [0., 1., 0.], [0., 1., 1.],
@@ -382,6 +406,8 @@ def cut_box(atoms: Atoms,
 
     center_translate = np.dot(np.floor(scaled_corners.min(axis=0)), atoms.cell)
     margin_translate = atoms.cell.cartesian_positions(scaled_margin).sum(0)
+
+
     new_atoms.positions[:] += center_translate - margin_translate
 
     new_atoms = atoms_in_box(new_atoms, box, margin=margin)
@@ -389,7 +415,7 @@ def cut_box(atoms: Atoms,
     return new_atoms
 
 
-def pad_atoms(atoms: Atoms, margins: Tuple[float, float], directions: str = 'xy'):
+def pad_atoms(atoms: Atoms, margins: Tuple[float, float, float], directions: str = 'xy'):
     """
     Repeat the atoms in x and y, retaining only the repeated atoms within the margin distance from the cell boundary.
 
