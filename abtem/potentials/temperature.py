@@ -303,9 +303,5 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
     def get_frozen_phonon_atoms(self, lazy: bool = True):
         return self._trajectory
 
-    # def generate_atoms(self):
-    #    for i in range(len(self)):
-    #        yield self._trajectory[i]
-
     def __copy__(self):
         return self.__class__(trajectory=[atoms.copy() for atoms in self._trajectory])

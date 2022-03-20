@@ -738,11 +738,12 @@ class SMatrix(AbstractSMatrix):
 
     Parameters
     ----------
-    potential : Atoms or Potential
+    potential : Atoms or AbstractPotential
+        Potential or atoms
     energy : float
         Electron energy [eV].
     planewave_cutoff : float
-        The angular cutoff of the plane wave expansion [mrad]. Default is 30 mrad.
+        The radial cutoff of the plane wave expansion [mrad]. Default is 30 mrad.
     interpolation : one or two int, optional
         Interpolation factor. Default is 1 (no interpolation).
     extent : one or two float, optional

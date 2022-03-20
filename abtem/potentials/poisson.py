@@ -10,6 +10,7 @@ from abtem.core.backend import copy_to_device
 from abtem.core.fft import fft_crop
 from abtem.potentials.parametrizations import EwaldParametrization
 from abtem.potentials.potentials import AbstractPotentialFromAtoms, Potential
+from abtem.potentials.temperature import MDFrozenPhonons
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
@@ -134,7 +135,7 @@ def interpolate_between_cells(array, new_shape, old_cell, new_cell, offset=(0., 
 class ChargeDensityPotential(AbstractPotentialFromAtoms):
 
     def __init__(self,
-                 atoms: Atoms,
+                 atoms: Union[Atoms, MDFrozenPhonons],
                  charge_density: np.ndarray = None,
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
@@ -289,9 +290,6 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
             return self._get_chunk_fft(first_slice, last_slice)
         else:
             return self._get_chunk_real_space(first_slice, last_slice)
-
-    def get_distribution(self, lazy: bool = False):
-        pass
 
     def __copy__(self):
         raise NotImplementedError

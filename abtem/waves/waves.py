@@ -68,6 +68,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
         A dictionary defining simulation metadata. All items will be added to the metadata of measurements derived from
         the waves.
     extra_axes_metadata : list of AxesMetadata
+        Metadata associated with an axis of
     """
 
     def __init__(self,
@@ -662,7 +663,17 @@ class PlaneWave(WavesLikeMixin):
         return measurements
 
     def build(self, lazy: bool = None) -> Waves:
-        """Build the plane wave function as a Waves object."""
+        """
+        Build the plane wave function as a Waves object.
+
+        Parameters
+        ----------
+        lazy :
+
+        Returns
+        -------
+
+        """
         xp = get_array_module(self._device)
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
@@ -688,7 +699,7 @@ class Probe(WavesLikeMixin):
     """
     Probe wave function
 
-    The probe object can represent a stack of electron probe wave functions for simulating scanning transmission
+    The probe can represent a stack of electron probe wave functions for simulating scanning transmission
     electron microscopy.
 
     See the documentation for abtem.transfer.CTF for a description of the parameters related to the contrast transfer
@@ -704,10 +715,10 @@ class Probe(WavesLikeMixin):
         Lateral sampling of wave functions [1 / Å].
     energy : float, optional
         Electron energy [eV].
-    device : str
-        The probe wave functions will be build on this device.
     tilt : two float, optional
         Small angle beam tilt [mrad].
+    device : str
+        The probe wave functions will be build on this device.
     ctf : CTF
         Contrast transfer function object. Note that this can be specified
     kwargs :

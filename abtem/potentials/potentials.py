@@ -171,10 +171,10 @@ class AbstractPotentialFromAtoms(AbstractPotential):
         self._plane = plane
         self._origin = origin
         self._grid = Grid(extent=box[:2], gpts=gpts, sampling=sampling, lock_extent=True)
+
         slice_thickness = _validate_slice_thickness(slice_thickness, box[2])
 
         self._precalculate = precalculate
-
         self._device = _validate_device(device)
 
         if chunks == 'auto':
@@ -290,14 +290,17 @@ class Potential(AbstractPotentialFromAtoms):
 
     Parameters
     ----------
-    atoms : Atoms or FrozenPhonons object
+    atoms : Atoms or FrozenPhonons
         Atoms or FrozenPhonons defining the atomic configuration(s) used in the IAM of the electrostatic potential(s).
     gpts : one or two int, optional
         Number of grid points describing each slice of the potential.
     sampling : one or two float, optional
         Lateral sampling of the potential [1 / Å].
-    slice_thickness : float, optional
-        Thickness of the potential slices in Å for calculating the number of slices used by the multislice algorithm.
+    slice_thickness : float or sequence of float, optional
+        Thickness of the potential slices in Å. If given as a float the number of slices are calculated by dividing the
+        slice thickness into the z-height of supercell.
+        The slice thickness may be as a sequence of values for each slice, in which case an error will be thrown is the
+        sum of slice thicknesses is not equal to the z-height of the supercell.
         Default is 0.5 Å.
     parametrization : 'lobato' or 'kirkland', optional
         The potential parametrization describes the radial dependence of the potential for each element. Two of the
@@ -306,11 +309,13 @@ class Potential(AbstractPotentialFromAtoms):
     projection : 'finite' or 'infinite'
         If 'finite' the 3d potential is numerically integrated between the slice boundaries. If 'infinite' the infinite
         potential projection of each atom will be assigned to a single slice.
+    chunks : int, optional
+        Number of potential slices in each chunk of a lazy calculation. Default is 1.
+    device : str, optional
+        The device used for calculating the potential. The default is determined by the user configuration file.
     cutoff_tolerance : float, optional
         The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]. The cutoff is only
         relevant for potentials using the 'finite' projection scheme.
-    device : str, optional
-        The device used for calculating the potential. The default is 'cpu'.
     """
 
     def __init__(self,
@@ -320,12 +325,8 @@ class Potential(AbstractPotentialFromAtoms):
                  slice_thickness: Union[float, np.ndarray] = .5,
                  parametrization: Union[str, Parametrization] = 'lobato',
                  projection: str = 'infinite',
-                 chunks: Union[int, str] = 'auto',
-                 precalculate: bool = False,
+                 chunks: int = 1,
                  device: str = None,
-                 plane: str = 'xy',
-                 box: Tuple[float, float, float] = None,
-                 origin: Tuple[float, float, float] = (0., 0., 0.),
                  cutoff_tolerance: float = 1e-3):
 
         self._cutoff_tolerance = cutoff_tolerance
