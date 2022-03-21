@@ -144,8 +144,16 @@ class AbstractPotentialFromAtoms(AbstractPotential):
                  box: Tuple[float, float, float] = None,
                  plane: str = 'xy',
                  origin: Tuple[float, float, float] = (0., 0., 0.),
+                 periodic: bool = True,
                  chunks: int = 1,
                  device: str = None):
+
+        self._periodic = periodic
+        self._box = box
+        self._plane = plane
+        self._origin = origin
+
+        #atoms = self._prepare_atoms(atoms)
 
         if np.abs(atoms.cell[2, 2]) < 1e-12:
             raise RuntimeError('cell has no thickness')
@@ -166,9 +174,7 @@ class AbstractPotentialFromAtoms(AbstractPotential):
             else:
                 box = np.diag(atoms.cell)
 
-        self._box = box
-        self._plane = plane
-        self._origin = origin
+
         self._grid = Grid(extent=box[:2], gpts=gpts, sampling=sampling, lock_extent=True)
 
         slice_thickness = _validate_slice_thickness(slice_thickness, box[2])
@@ -177,6 +183,32 @@ class AbstractPotentialFromAtoms(AbstractPotential):
         self._chunks = chunks
 
         super().__init__(slice_thickness=slice_thickness)
+
+    # def _prepare_atoms(self, atoms):
+    #
+    #     if self._periodic:
+    #         return self._prepare_atoms_periodic(atoms)
+    #
+    #     else:
+    #         return self._prepare_atoms_periodic(atoms)
+    #
+    # def _prepare_atoms_periodic(self, atoms):
+    #
+    #     if not is_cell_orthogonal(atoms):
+    #         try:
+    #             atoms, transform = orthogonalize_cell(atoms, return_transform=True, allow_transform=False)
+    #         except RuntimeError:
+    #             raise RuntimeError('The unit cell of the atoms is not orthogonal and could not be made orthogonal '
+    #                                'without ambiguity. See our tutorial on making orthogonal cells '
+    #                                'https://abtem.readthedocs.io/en/latest/tutorials/orthogonal_cells.html')
+    #
+    #         return atoms
+    #     else:
+    #         return atoms
+
+    def _prepare_atoms_nonperiodic(self, atoms):
+        pass
+
 
     @property
     def chunks(self) -> int:

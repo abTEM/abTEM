@@ -248,11 +248,67 @@ def shrink_cell(atoms, repetitions=(2, 3), tol=1e-6):
     return atoms
 
 
+def plane_to_axes(plane):
+    """Internal function for extracting axes from a plane."""
+    axes = ()
+    last_axis = [0, 1, 2]
+    for axis in list(plane):
+        if axis == 'x':
+            axes += (0,)
+            last_axis.remove(0)
+        if axis == 'y':
+            axes += (1,)
+            last_axis.remove(1)
+        if axis == 'z':
+            axes += (2,)
+            last_axis.remove(2)
+    return axes + (last_axis[0],)
+
+
+def rotate_atoms_to_plane(atoms, plane='xy'):
+    # if plane == 'xy':
+    #     return atoms
+    #
+    # axes = plane_to_axes(plane)
+    #
+    # positions = atoms.positions[:, axes]
+    # cell = atoms.cell[:, axes]
+    # cell = cell[list(axes)]
+    #
+    # new_atoms = atoms.copy()
+    # new_atoms.positions[:] = positions
+    # new_atoms.cell[:] = cell
+    atoms = atoms.copy()
+
+    if isinstance(plane, str):
+        plane = [{'x': (1, 0, 0), 'y': (0, 1, 0), 'z': (0, 0, 1)}[axis] for axis in plane]
+
+    plane = plane / np.linalg.norm(plane, axis=1, keepdims=True)
+
+    if np.dot(plane[0], plane[1]) > 1e-12:
+        raise RuntimeError()
+
+    xy_plane = np.array([[1, 0, 0], [0, 1, 0]])
+    if np.any(plane != xy_plane):
+        R = rotation_matrix(xy_plane[0], plane[0], xy_plane[1], plane[1])
+        atoms.positions[:] = np.dot(R, atoms.positions[:].T).T
+        atoms.cell[:] = np.dot(R, atoms.cell[:].T).T
+
+    return atoms
+
+
+def flip_atoms(atoms):
+    atoms = atoms.copy()
+    atoms.positions[:] = atoms.cell[2, 2] - atoms.positions[:]
+    return atoms
+
+
 def orthogonalize_cell(atoms: Atoms,
-                       max_repetitions: int = 5,
+                       target_box: Tuple[float, float, float] = None,
+                       max_repetitions: int = None,
                        return_transform: bool = False,
-                       transform: Union[bool, str] = True,
-                       tolerance=0.01):
+                       allow_transform: bool = True,
+                       tolerance: float = 0.01):
     """
     Make the cell of an ASE atoms object orthogonal. This is accomplished by repeating the cell until lattice vectors
     are close to the three principal Cartesian directions. If the structure is not exactly orthogonal after the
@@ -266,7 +322,7 @@ def orthogonalize_cell(atoms: Atoms,
         The maximum number of repetions allowed. Increase this to allow more repetitions and hence less strain.
     return_transform : bool
         If true, return the transformations that were applied to make the atoms orthogonal.
-    transform : bool
+    allow_transform : bool
         If false no transformation is applied to make the cell orthogonal, hence a non-orthogonal cell may be returned.
 
 
@@ -286,11 +342,16 @@ def orthogonalize_cell(atoms: Atoms,
     elif zero_vectors.sum() == 1:
         atoms.center(axis=np.where(zero_vectors)[0], vacuum=tolerance + eps)
 
+    a, b, c = atoms.cell
+
+    if target_box is not None and max_repetitions is None:
+        max_repetitions = int(np.ceil(np.sum(target_box) / np.min(np.linalg.norm(atoms.cell, axis=0))))
+    elif max_repetitions is None:
+        max_repetitions = 5
+
     k = np.arange(-max_repetitions, max_repetitions + 1)
     l = np.arange(-max_repetitions, max_repetitions + 1)
     m = np.arange(-max_repetitions, max_repetitions + 1)
-
-    a, b, c = atoms.cell
 
     vectors = np.abs(((k[:, None] * a[None])[:, None, None] +
                       (l[:, None] * b[None])[None, :, None] +
@@ -302,39 +363,64 @@ def orthogonalize_cell(atoms: Atoms,
 
     new_vectors = []
     for i in range(3):
-        angles = vectors[..., i] / norm
 
-        optimal = np.abs(angles.max() - angles < eps)
+        if target_box:
+            target_vector = np.zeros(3)
+            target_vector[i] = target_box[i]
+            closest_vector = np.linalg.norm(vectors - target_vector[None, None, None], axis=-1)
+            closest_vector = np.where((closest_vector == np.min(closest_vector)) * nonzero)
+            new_vector = np.array([k[closest_vector[0][0]],
+                                   l[closest_vector[1][0]],
+                                   m[closest_vector[2][0]]])
 
-        optimal = np.where(optimal * nonzero)
-        n = np.linalg.norm(vectors[optimal], axis=1)
+        else:
+            angles = vectors[..., i] / norm
+            small_angles = np.abs(angles.max() - angles < eps)
+            small_angles = np.where(small_angles * nonzero)
+            shortest_small_angles = np.argmin(np.linalg.norm(vectors[small_angles], axis=1))
 
-        j = np.argmin(n)
-        new_vector = np.array([k[optimal[0][j]], l[optimal[1][j]], m[optimal[2][j]]])
+            new_vector = np.array([k[small_angles[0][shortest_small_angles]],
+                                   l[small_angles[1][shortest_small_angles]],
+                                   m[small_angles[2][shortest_small_angles]]])
 
         new_vector = np.sign(np.dot(new_vector, atoms.cell)[i]) * new_vector
         new_vectors.append(new_vector)
 
     atoms = cut(atoms, *new_vectors, tolerance=tolerance)
 
-    cell = Cell.new(np.linalg.norm(atoms.cell, axis=0))
-    A = np.linalg.solve(atoms.cell.complete(), cell.complete())
+    if target_box:
+        cell = np.diag(target_box)
+    else:
+        cell = Cell.new(np.linalg.norm(atoms.cell, axis=0)).complete()
 
-    if transform is True:
+    A = np.linalg.solve(atoms.cell.complete(), cell)
+
+    if allow_transform:
         atoms.positions[:] = np.dot(atoms.positions, A)
         atoms.cell[:] = cell
 
-    elif transform == 'raise':
+    else:
         if not is_cell_orthogonal(atoms):
             raise RuntimeError()
 
-    atoms = shrink_cell(atoms)
-
-    if return_transform and transform:
+    if return_transform:
         rotation, zoom, shear = decompose_affine_transform(A)
         return atoms, (np.array(rotation_matrix_to_euler(rotation)), zoom, shear)
     else:
         return atoms
+
+
+def view_box(atoms, box=None, plane=None, origin=(0.,0.,0. )):
+
+    if not np.all(np.isclose(origin, (0., 0., 0.))):
+        atoms.positions[:] = atoms.positions - origin
+        atoms.wrap()
+
+    atoms = rotate_atoms_to_plane(atoms, plane)
+
+    atoms = orthogonalize_cell(atoms, target_box=box)
+
+    return atoms
 
 
 def atoms_in_box(atoms: Atoms, box, margin: float = 0., origin: Tuple[float, float, float] = (0., 0., 0.)) -> Atoms:
@@ -394,7 +480,6 @@ def cut_box(atoms: Atoms,
     scaled_margin = atoms.cell.scaled_positions(np.diag(margin))
     scaled_margin = np.sign(scaled_margin) * (np.ceil(np.abs(scaled_margin)))
 
-
     scaled_corners_new_cell = np.array([[0., 0., 0.], [0., 0., 1.],
                                         [0., 1., 0.], [0., 1., 1.],
                                         [1., 0., 0.], [1., 0., 1.],
@@ -406,7 +491,6 @@ def cut_box(atoms: Atoms,
 
     center_translate = np.dot(np.floor(scaled_corners.min(axis=0)), atoms.cell)
     margin_translate = atoms.cell.cartesian_positions(scaled_margin).sum(0)
-
 
     new_atoms.positions[:] += center_translate - margin_translate
 
