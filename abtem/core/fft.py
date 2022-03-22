@@ -1,3 +1,4 @@
+import functools
 from typing import Tuple
 
 try:
@@ -92,11 +93,13 @@ def fft2(x, overwrite_x=False):
         if config.get('fft') == 'mkl':
             return mkl_fft.fft2(x, overwrite_x=overwrite_x)
         elif config.get('fft') == 'fftw':
-            # if not overwrite_x:
-            #    x = x.copy()
+            fftw_obj = pyfftw.builders.fft2(x,
+                                            overwrite_input=overwrite_x,
+                                            planner_effort=config.get('fftw.planning_effort'),
+                                            threads=config.get('fftw.threads'),
+                                            avoid_copy=False)
 
-            x = build_fftw_obj(x, overwrite_x=overwrite_x, backward=False)
-            return x
+            return fftw_obj()
         else:
             raise RuntimeError()
 
@@ -116,9 +119,13 @@ def ifft2(x, overwrite_x=False):
         if config.get('fft') == 'mkl':
             return mkl_fft.ifft2(x, overwrite_x=overwrite_x)
         elif config.get('fft') == 'fftw':
+            fftw_obj = pyfftw.builders.ifft2(x,
+                                             overwrite_input=overwrite_x,
+                                             planner_effort=config.get('fftw.planning_effort'),
+                                             threads=config.get('fftw.threads'),
+                                             avoid_copy=False)
 
-            x = build_fftw_obj(x, overwrite_x=overwrite_x, backward=True)
-            return x
+            return fftw_obj()
         else:
             raise RuntimeError()
 
@@ -131,13 +138,13 @@ def ifft2(x, overwrite_x=False):
         return cp.fft.ifft2(x)
 
 
-def _fft2_convolve(x, kernel, overwrite_x=False):
+def _fft2_convolve(x, kernel, overwrite_x: bool = False):
     x = fft2(x, overwrite_x=overwrite_x)
     x *= kernel
     return ifft2(x, overwrite_x=overwrite_x)
 
 
-def fft2_convolve(x, kernel, overwrite_x=False, ):
+def fft2_convolve(x, kernel, overwrite_x: bool = False):
     xp = get_array_module(x)
 
     if isinstance(x, np.ndarray):
@@ -269,7 +276,6 @@ def fft2_interpolate(array: np.ndarray,
                      new_shape: Tuple[int, int],
                      normalization: str = 'values',
                      overwrite_x: bool = False):
-
     xp = get_array_module(array)
     old_size = array.shape[-2] * array.shape[-1]
 
@@ -284,7 +290,7 @@ def fft2_interpolate(array: np.ndarray,
     if normalization == 'values':
         array *= np.prod(array.shape[-2:]) / old_size
 
-    #elif normalization == 'intensity':
+    # elif normalization == 'intensity':
     #    # array *= np.sqrt(np.prod(array.shape[-2:]) / old_size)
     #    array *= np.sqrt(old_size / np.prod(array.shape[-2:]))
 
