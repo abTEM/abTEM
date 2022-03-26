@@ -7,7 +7,7 @@ import dask.array as da
 import matplotlib.pyplot as plt
 import numpy as np
 
-from abtem.core.axes import ScanAxis, FrozenPhononsAxis, OrdinalAxis, AxisMetadata
+from abtem.core.axes import ScanAxis, FrozenPhononsAxis, OrdinalAxis, AxisMetadata, ThicknessSeriesAxis
 from abtem.core.backend import get_array_module
 from abtem.measure.measure import DiffractionPatterns, PolarMeasurements, Images, LineProfiles
 
@@ -88,17 +88,23 @@ class AbstractDetector(metaclass=ABCMeta):
         self._url = url
         self._detect_every = detect_every
 
-    def num_detections(self, potential):
+    def measurement_slices(self, potential):
+        detect_at = list(range(0, len(potential), self.detect_every))
+        if not len(potential) % self.detect_every:
+            detect_at += [len(potential)]
+
+        return detect_at
+
+    def thickness_series_axes(self, potential):
 
         if self.detect_every:
-            num_detect_thicknesses = len(potential) // self.detect_every
+            detect_at = self.measurement_slices(potential)
 
-            if len(potential) % self.detect_every != 0:
-                num_detect_thicknesses += 1
+            multislice_start_stop = [(detect_at[i], detect_at[i + 1]) for i in range(len(detect_at) - 1)]
+            domain = np.cumsum([potential.slice_thickness[start:stop].sum() for start, stop in multislice_start_stop])
+            return len(detect_at) - 1, ThicknessSeriesAxis(values=tuple(domain))
 
-            return num_detect_thicknesses
-
-        return 1
+        return 1, ThicknessSeriesAxis(values=(potential.thickness,))
 
     @property
     def url(self):
@@ -169,6 +175,7 @@ class AbstractDetector(metaclass=ABCMeta):
 
 
 class AnnularDetector(AbstractDetector):
+
     """
     Annular detector.
 
@@ -243,6 +250,9 @@ class AnnularDetector(AbstractDetector):
             outer = min(waves.cutoff_angles)
 
         return inner, outer
+
+    def _consumed_scan_axes(self, waves):
+        return min(waves.num_scan_axes, 2)
 
     def measurement_shape(self, waves: 'Waves') -> Tuple:
         return waves.extra_axes_shape
@@ -383,6 +393,9 @@ class AbstractRadialDetector(AbstractDetector):
     @abstractmethod
     def _calculate_nbins_azimuthal(self, waves):
         pass
+
+    def _consumed_scan_axes(self, waves):
+        return 0
 
     @property
     def measurement_dtype(self):
@@ -686,6 +699,9 @@ class PixelatedDetector(AbstractDetector):
 
         return 0., outer
 
+    def _consumed_scan_axes(self, waves):
+        return 0
+
     def measurement_shape(self, waves):
         if self.fourier_space:
             shape = waves._gpts_within_angle(self.max_angle)
@@ -758,6 +774,9 @@ class WavesDetector(AbstractDetector):
 
     def angular_limits(self, waves) -> Tuple[float, float]:
         return 0., min(waves.full_cutoff_angles)
+
+    def _consumed_scan_axes(self, waves):
+        return 0
 
     @property
     def measurement_dtype(self):

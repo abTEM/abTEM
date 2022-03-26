@@ -4,13 +4,29 @@ from typing import Sequence
 
 import numpy as np
 
+from abtem.core.utils import generate_chunks
+
 
 class Distribution:
 
-    def __init__(self, values: Sequence[Number], weights: Sequence[Number], ensemble_mean: bool = True):
+    def __init__(self,
+                 values: Sequence[Number],
+                 weights: Sequence[Number],
+                 ensemble_mean: bool = True,
+                 chunks: int = 1):
         self._values = np.array(values)
         self._weights = np.array(weights)
         self._ensemble_mean = ensemble_mean
+        self._chunks = chunks
+
+    @abstractmethod
+    def divide(self):
+        pass
+
+    @property
+    def chunks(self):
+        return self._chunks
+        #return tuple(stop - start for start, stop in generate_chunks(len(self), chunks=self._chunks))
 
     def __len__(self):
         return len(self._values)
@@ -21,9 +37,6 @@ class Distribution:
     @property
     def ensemble_mean(self):
         return self._ensemble_mean
-
-    def __repr__(self):
-        return repr(self.values)
 
     @property
     def values(self):
@@ -52,9 +65,13 @@ class GaussianDistribution:
 
 class ParameterSeries(Distribution):
 
-    def __init__(self, values: Sequence[Number], ensemble_mean: bool = False):
+    def __init__(self, values: Sequence[Number], ensemble_mean: bool = False, chunks: int = 1):
         weights = np.ones(len(values))
-        super().__init__(values=values, weights=weights, ensemble_mean=ensemble_mean)
+        super().__init__(values=values, weights=weights, ensemble_mean=ensemble_mean, chunks=chunks)
 
     def __neg__(self):
-        return self.__class__(-self.values, ensemble_mean=self.ensemble_mean)
+        return self.__class__(-self.values, ensemble_mean=self.ensemble_mean, chunks=self._chunks)
+
+    def divide(self):
+        chunks = [self.values[start:stop] for start, stop in generate_chunks(len(self), chunks=self._chunks)]
+        return [self.__class__(chunk, ensemble_mean=self.ensemble_mean, chunks=1) for chunk in chunks]

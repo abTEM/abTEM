@@ -489,7 +489,7 @@ class Images(AbstractMeasurement):
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
         return [RealSpaceAxis(label='x', sampling=self.sampling[0], units='Å'),
-                RealSpaceAxis(label='y', sampling=self.sampling[0], units='Å')]
+                RealSpaceAxis(label='y', sampling=self.sampling[1], units='Å')]
 
     def _check_is_complex(self):
         if not np.iscomplexobj(self.array):
