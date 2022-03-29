@@ -71,8 +71,8 @@ def test_planewave_detect(data, wave_cls, wave_cls_kwargs, detector, lazy, devic
     measurements.compute()
 
     assert_scanned_measurement_as_expected(measurements, atoms, wave, detectors, scan=None)
-#@reproduce_failure('6.29.3', b'AXicY2AgCTDCWQAAQwAC')
-@settings(print_blob=True)
+
+
 @given(data=st.data(),
        gpts=core_st.gpts(min_value=32, max_value=64),
        planewave_cutoff=st.floats(5, 10),

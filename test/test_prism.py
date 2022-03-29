@@ -11,8 +11,8 @@ from strategies import detectors as detector_st
 from utils import gpu, assume_valid_probe_and_detectors, assert_scanned_measurement_as_expected
 from abtem.core.backend import cp
 
-
-
+#@reproduce_failure('6.29.3', b'AXicY2AgCTAyMAAAADUAAg==')
+#@settings(print_blob=True)
 @given(data=st.data(),
        atoms=atoms_st.random_atoms(min_side_length=5, max_side_length=10),
        gpts=core_st.gpts(min_value=32, max_value=64),
@@ -35,19 +35,18 @@ def test_multislice_matches_prism(data, atoms, gpts, planewave_cutoff, energy, l
     assert np.allclose(measurement.array, prism_measurement.array)
 
 
-
 @given(atoms=atoms_st.random_atoms(min_side_length=5, max_side_length=10),
        gpts=core_st.gpts(min_value=32, max_value=64),
        planewave_cutoff=st.floats(10, 15),
        interpolation=st.integers(min_value=1, max_value=4),
        energy=st.floats(100e3, 200e3),
        data=st.data())
-@pytest.mark.parametrize('lazy', [False, True])
-@pytest.mark.parametrize('device', [gpu, 'cpu'])
+@pytest.mark.parametrize('lazy', [True, False])
+@pytest.mark.parametrize('device', ['cpu', gpu])
 def test_prism_interpolation(data, atoms, gpts, planewave_cutoff, energy, lazy, device, interpolation):
     detectors = data.draw(detector_st.detectors(allow_detect_every=lazy, max_detectors=1))
 
-    potential = Potential(atoms, gpts=gpts, device=device).build()
+    potential = Potential(atoms, gpts=gpts, device=device).build().compute()
     scan = GridScan(start=(0, 0), end=potential.extent)
 
     probe = Probe(semiangle_cutoff=planewave_cutoff, energy=energy, device=device)
