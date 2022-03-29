@@ -7,7 +7,7 @@ from ase import Atoms
 from ase.data import atomic_numbers
 
 from abtem.core.utils import label_to_index
-from abtem.structures.structures import cut_box
+from abtem.structures.structures import cut_box, pad_atoms, is_cell_orthogonal
 
 
 def _validate_slice_thickness(slice_thickness: Union[float, np.ndarray, Sequence[float]],
@@ -63,25 +63,32 @@ def unpack_item(item, num_items):
 
 class AbstractSlicedAtoms:
 
-    def __init__(self, atoms: Atoms, slice_thickness: Union[float, np.ndarray, str], reverse: bool = False):
+    def __init__(self, atoms: Atoms, slice_thickness: Union[float, np.ndarray, str]):
+
+        if not is_cell_orthogonal(atoms):
+            raise RuntimeError('atoms must have an orthgonal cell')
+
         self._atoms = atoms
 
         if isinstance(slice_thickness, str):
             raise NotImplementedError
 
         self._slice_thickness = _validate_slice_thickness(slice_thickness, thickness=atoms.cell[2, 2])
-        self._reverse = reverse
 
     def __len__(self):
         return self.num_slices
 
     @property
-    def num_slices(self):
-        return len(self._slice_thickness)
+    def atoms(self):
+        return self._atoms
 
     @property
-    def reverse(self):
-        return self._reverse
+    def box(self) -> Tuple[float, float, float]:
+        return tuple(np.diag(self._atoms.cell))
+
+    @property
+    def num_slices(self) -> int:
+        return len(self._slice_thickness)
 
     @property
     def slice_thickness(self):
@@ -97,138 +104,67 @@ class AbstractSlicedAtoms:
             raise RuntimeError('Slice index {} too large for sliced atoms with {} slices'.format(i, self.num_slices))
 
     @abstractmethod
-    def _get_atoms_in_slices(self, first_slice, last_slice):
+    def get_atoms_in_slices(self, first_slice: int, last_slice: int, **kwargs):
         pass
 
     def __getitem__(self, item):
-        return self._get_atoms_in_slices(*unpack_item(item, len(self)))
+        return self.get_atoms_in_slices(*unpack_item(item, len(self)))
 
 
 class SliceIndexedAtoms(AbstractSlicedAtoms):
 
     def __init__(self,
                  atoms: Atoms,
-                 slice_thickness: Union[float, np.ndarray, str],
-                 reverse: bool = False):
+                 slice_thickness: Union[float, np.ndarray, str]):
 
-        super().__init__(atoms, slice_thickness, reverse)
+        super().__init__(atoms, slice_thickness)
 
         labels = np.digitize(self.atoms.positions[:, 2], np.cumsum(self.slice_thickness))
         self._slice_index = [indices for indices in label_to_index(labels, max_label=len(self) - 1)]
 
     @property
-    def atoms(self):
-        return self._atoms
-
-    @property
     def slice_index(self):
         return self._slice_index
 
-    def _get_atoms_in_slices(self, first_slice: int, last_slice: int):
+    def get_atoms_in_slices(self, first_slice: int, last_slice: int, **kwargs):
 
         if last_slice - first_slice == 1:
             is_in_slices = self.slice_index[first_slice]
         else:
-            raise NotImplementedError()
-        # else:
-        #     is_in_slices = (self.slice_index >= first_slice) * (self.slice_index < last_slice)
+            is_in_slices = np.concatenate(self.slice_index[first_slice:last_slice])
 
         atoms = self.atoms[is_in_slices]
         slice_thickness = self.slice_thickness[first_slice:last_slice]
         atoms.cell[2, 2] = np.sum(slice_thickness)
-
         atoms.positions[:, 2] -= np.sum(self.slice_thickness[:first_slice])
         return atoms
 
 
-class SlicedAtoms:
+class SlicedAtoms(AbstractSlicedAtoms):
 
     def __init__(self,
                  atoms: Atoms,
                  slice_thickness: Union[float, Sequence[float]],
-                 plane: Tuple[float, float, float] = 'xy',
-                 box: Tuple[float, float, float] = None,
-                 origin: Tuple[float, float, float] = (0., 0., 0.),
-                 padding: Union[float, dict] = 0.):
+                 xy_padding: float = 0.,
+                 z_padding: float = 0.):
 
-        if box is None:
-            box = np.diag(atoms.cell)
+        super().__init__(atoms, slice_thickness)
+        self._xy_padding = xy_padding
+        self._z_padding = z_padding
 
-        if isinstance(padding, dict):
-            new_padding = {}
-            for key, value in padding.items():
-                if isinstance(key, str):
-                    key = atomic_numbers[key]
-                new_padding[key] = value
-            padding = new_padding
-            if padding:
-                max_padding = max(padding.values())
-            else:
-                max_padding = 0.
-        elif isinstance(padding, Number):
-            max_padding = padding
-        else:
-            raise ValueError()
+    def get_atoms_in_slices(self,
+                            first_slice: int,
+                            last_slice: int = None,
+                            atomic_number: int = None):
 
-        atoms = cut_box(atoms, box, plane, origin=origin, margin=max_padding)
+        if last_slice is None:
+            last_slice = first_slice
 
-        self._padding = padding
-        self._atoms = atoms
-        self._slice_thickness = _validate_slice_thickness(slice_thickness, box[2])
-        self._slice_limits = _slice_limits(self._slice_thickness)
-        self._padding = padding
+        a = self.slice_limits[first_slice][0]
+        b = self.slice_limits[last_slice][1]
 
-    @property
-    def atoms(self):
-        return self._atoms
-
-    @property
-    def num_slices(self):
-        """The number of projected potential slices."""
-        return len(self._slice_thickness)
-
-    def __len__(self):
-        return self.num_slices
-
-    @property
-    def slice_thickness(self):
-        return self._slice_thickness
-
-    @slice_thickness.setter
-    def slice_thickness(self, value):
-        self._slice_thickness = value
-        self._slice_limits = _slice_limits(self._slice_thickness)
-
-    @property
-    def slice_limits(self) -> List[Tuple[float, float]]:
-        return self._slice_limits
-
-    # def flip(self):
-    #     self._atoms.positions[:] = self._atoms.cell[2, 2] - self._atoms.positions[:]
-    #     self._slice_thicknesses[:] = self._slice_thicknesses[::-1]
-
-    def get_atoms_in_slices(self, start, end=None, atomic_number=None):
-
-        if isinstance(atomic_number, str):
-            atomic_number = atomic_numbers[atomic_number]
-
-        if end is None:
-            end = start
-
-        if isinstance(self._padding, dict):
-            if atomic_number is None:
-                padding = max(self._padding.values())
-            else:
-                padding = self._padding[atomic_number]
-        elif isinstance(self._padding, Number):
-            padding = self._padding
-        else:
-            raise RuntimeError()
-
-        a = self.slice_limits[start][0]
-        b = self.slice_limits[end][1]
-
-        in_slice = (self.atoms.positions[:, 2] >= (a - padding)) * (self.atoms.positions[:, 2] < (b + padding))
+        in_slice = (self.atoms.positions[:, 2] >= (a - self._z_padding)) * \
+                   (self.atoms.positions[:, 2] < (b + self._z_padding))
 
         if atomic_number is not None:
             in_slice = (self.atoms.numbers == atomic_number) * in_slice

@@ -5,6 +5,7 @@ import dask
 import dask.array as da
 import numpy as np
 
+from abtem.core import config
 from abtem.core.antialias import AntialiasAperture
 from abtem.core.axes import FrozenPhononsAxis, OrdinalAxis
 from abtem.core.backend import get_array_module
@@ -96,8 +97,8 @@ class FresnelPropagator(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, Has
         array *= antialias_aperture.array
         return array
 
-    def propagate(self, waves: Union['Waves']):
-        waves._array = fft2_convolve(waves.array, self.array, overwrite_x=False)
+    def propagate(self, waves: Union['Waves'], overwrite_x: bool = False, **kwargs):
+        waves._array = fft2_convolve(waves.array, self.array, overwrite_x=overwrite_x, **kwargs)
         return waves
 
 
@@ -117,7 +118,7 @@ def multislice_and_detect_with_frozen_phonons(waves: 'Waves',
     detectors = validate_detectors(detectors)
 
     measurements = []
-    for frozen_phonon_potential in potential.get_frozen_phonon_potentials(lazy=True):
+    for frozen_phonon_potential in potential.get_configurations(lazy=True):
         cloned_waves = waves.clone()
         new_measurements = _lazy_multislice_and_detect(cloned_waves, frozen_phonon_potential, detectors)
         measurements.append(new_measurements)
@@ -214,7 +215,6 @@ def multislice_and_detect(waves, potential, detectors):
                            stop=stop,
                            propagator=propagator,
                            antialias_aperture=antialias_aperture)
-
 
         waves.antialias_aperture = 2. / 3.
 

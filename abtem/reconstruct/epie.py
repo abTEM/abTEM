@@ -57,7 +57,7 @@ def _run_epie(object,
     outer_pbar = ProgressBar(total=maxiter)
     inner_pbar = ProgressBar(total=len(positions))
 
-    #center_of_mass = get_scipy_module(xp).ndimage.center_of_mass
+    center_of_mass = get_scipy_module(xp).ndimage.center_of_mass
 
     while k < maxiter:
         indices = np.arange(len(positions))
