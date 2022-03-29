@@ -25,65 +25,9 @@ except ModuleNotFoundError:
     cp = None
 
 
-def build_fftw_obj(x, allow_new_plan=False, overwrite_x=True, backward=False):
-    # if backward:
-    #     obj = pyfftw.builders.ifft2(x,
-    #                                  overwrite_input=overwrite_x,
-    #                                  planner_effort=config.get('fftw.planning_effort'),
-    #                                  threads=config.get('fftw.threads'))
-    # else:
-    #     obj = pyfftw.builders.fft2(x,
-    #                                 overwrite_input=overwrite_x,
-    #                                 planner_effort=config.get('fftw.planning_effort'),
-    #                                 threads=config.get('fftw.threads'))
-    # return obj()
-
-    # flags = (,)
-    # if overwrite_x:
-    #    flags += ('FFTW_DESTROY_INPUT',)
-    # if not allow_new_plan:
-    #    flags +=
-
-    try:
-        out = pyfftw.byte_align(np.zeros_like(x))
-        fftw_obj = pyfftw.FFTW(x, out, axes=(-1, -2),
-                               direction='FFTW_BACKWARD' if backward else 'FFTW_FORWARD',
-                               threads=config.get('fftw.threads'),
-                               flags=(config.get('fftw.planning_effort'), 'FFTW_WISDOM_ONLY',))
-        fftw_obj()
-        return out
-
-    except RuntimeError:
-        out = pyfftw.byte_align(np.zeros_like(x))
-        fftw_obj = pyfftw.FFTW(x.copy(), out, axes=(-1, -2),
-                               direction='FFTW_BACKWARD' if backward else 'FFTW_FORWARD',
-                               threads=config.get('fftw.threads'),
-                               flags=(config.get('fftw.planning_effort'),))
-
-        return build_fftw_obj(x, allow_new_plan=True, overwrite_x=overwrite_x, backward=backward)
-
-        # if not allow_new_plan:
-        #     if backward:
-        #         return pyfftw.builders.ifft2(x,
-        #                                      overwrite_input=overwrite_x,
-        #                                      planner_effort=config.get('fftw.planning_effort'),
-        #                                      threads=config.get('fftw.threads'))
-        #     else:
-        #         return pyfftw.builders.fft2(x,
-        #                                     overwrite_input=overwrite_x,
-        #                                     planner_effort=config.get('fftw.planning_effort'),
-        #                                     threads=config.get('fftw.threads'))
-
-        # dummy = pyfftw.byte_align(np.zeros_like(x))
-        #
-        # pyfftw.FFTW(dummy, dummy,
-        #             axes=(-1, -2),
-        #             direction='FFTW_BACKWARD' if backward else 'FFTW_FORWARD',
-        #             threads=config.get('fftw.threads'),
-        #             flags=flags,
-        #             planning_timelimit=120)
-        #
-        # return build_fftw_obj(x, allow_new_plan=False, overwrite_x=overwrite_x)
+def raise_fft_lib_not_present(lib_name):
+    raise RuntimeError(f'FFT library {lib_name} not present. Install this package or change the FFT library in your '
+                       f'configuration')
 
 
 def fft2(x, overwrite_x=False):
@@ -91,8 +35,14 @@ def fft2(x, overwrite_x=False):
 
     if isinstance(x, np.ndarray):
         if config.get('fft') == 'mkl':
+            if mkl_fft is None:
+                raise_fft_lib_not_present('mkl_fft')
+
             return mkl_fft.fft2(x, overwrite_x=overwrite_x)
         elif config.get('fft') == 'fftw':
+            if pyfftw is None:
+                raise_fft_lib_not_present('pyfftw')
+
             fftw_obj = pyfftw.builders.fft2(x,
                                             overwrite_input=overwrite_x,
                                             planner_effort=config.get('fftw.planning_effort'),
@@ -117,8 +67,14 @@ def ifft2(x, overwrite_x=False):
 
     if isinstance(x, np.ndarray):
         if config.get('fft') == 'mkl':
+            if mkl_fft is None:
+                raise_fft_lib_not_present('mkl_fft')
+
             return mkl_fft.ifft2(x, overwrite_x=overwrite_x)
         elif config.get('fft') == 'fftw':
+            if pyfftw is None:
+                raise_fft_lib_not_present('pyfftw')
+
             fftw_obj = pyfftw.builders.ifft2(x,
                                              overwrite_input=overwrite_x,
                                              planner_effort=config.get('fftw.planning_effort'),
