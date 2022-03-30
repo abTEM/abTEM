@@ -7,7 +7,8 @@ import dask.array as da
 import matplotlib.pyplot as plt
 import numpy as np
 
-from abtem.core.axes import ScanAxis, FrozenPhononsAxis, OrdinalAxis, AxisMetadata, ThicknessSeriesAxis
+from abtem.core.axes import ScanAxis, FrozenPhononsAxis, OrdinalAxis, AxisMetadata, ThicknessSeriesAxis, \
+    FourierSpaceAxis, LinearAxis, RealSpaceAxis
 from abtem.core.backend import get_array_module
 from abtem.measure.measure import DiffractionPatterns, PolarMeasurements, Images, LineProfiles
 
@@ -64,6 +65,9 @@ def validate_detectors(detectors: Union['AbstractDetector', List['AbstractDetect
     return detectors
 
 
+# def measurement_from_array()
+
+
 class AbstractDetector(metaclass=ABCMeta):
 
     def __init__(self, to_cpu: bool = True, url: str = None, detect_every: int = None):
@@ -88,23 +92,21 @@ class AbstractDetector(metaclass=ABCMeta):
         self._url = url
         self._detect_every = detect_every
 
-    def measurement_slices(self, potential):
+    def detect_at_slices(self, potential):
         detect_at = list(range(0, len(potential), self.detect_every))
-        if not len(potential) % self.detect_every:
+        if len(potential) % self.detect_every:
             detect_at += [len(potential)]
 
         return detect_at
 
-    def thickness_series_axes(self, potential):
-
+    def thickness_series_axes_metadata(self, potential):
         if self.detect_every:
-            detect_at = self.measurement_slices(potential)
-
+            detect_at = self.detect_at_slices(potential)
             multislice_start_stop = [(detect_at[i], detect_at[i + 1]) for i in range(len(detect_at) - 1)]
             domain = np.cumsum([potential.slice_thickness[start:stop].sum() for start, stop in multislice_start_stop])
-            return len(detect_at) - 1, ThicknessSeriesAxis(values=tuple(domain))
+            return ThicknessSeriesAxis(values=tuple(domain))
 
-        return 1, ThicknessSeriesAxis(values=(potential.thickness,))
+        return ThicknessSeriesAxis(values=(potential.thickness,))
 
     @property
     def url(self):
@@ -144,21 +146,28 @@ class AbstractDetector(metaclass=ABCMeta):
 
         return self.measurement_type(waves)(**d)
 
+    def measurement_meta(self, waves):
+        if self.to_cpu:
+            return np.array((), dtype=self.measurement_dtype)
+        else:
+            xp = get_array_module(waves.array)
+            return xp.array((), dtype=self.measurement_dtype)
+
     @property
     @abstractmethod
     def measurement_dtype(self):
         pass
 
     @abstractmethod
-    def measurement_shape(self, waves) -> Tuple:
+    def measurement_shape(self, waves, potential=None) -> Tuple:
         pass
 
     @abstractmethod
-    def measurement_type(self, waves):
+    def measurement_type(self, scan):
         pass
 
     @abstractmethod
-    def measurement_kwargs(self, waves):
+    def measurement_axes_metadata(self, waves):
         pass
 
     @abstractmethod
@@ -175,7 +184,6 @@ class AbstractDetector(metaclass=ABCMeta):
 
 
 class AnnularDetector(AbstractDetector):
-
     """
     Annular detector.
 
@@ -251,57 +259,32 @@ class AnnularDetector(AbstractDetector):
 
         return inner, outer
 
-    def _consumed_scan_axes(self, waves):
-        return min(waves.num_scan_axes, 2)
+    def dropped_scan_axes(self, waves):
+        return 2
 
-    def measurement_shape(self, waves: 'Waves') -> Tuple:
-        return waves.extra_axes_shape
+    def measurement_axes_metadata(self, waves, potential=None):
+        if self.detect_every and potential:
+            return self.thickness_series_axes_metadata(potential)
+
+        return []
+
+    def measurement_shape(self, waves, potential=None) -> Tuple:
+        if self.detect_every and potential:
+            return (len(self.detect_at_slices(potential)),)
+
+        return ()
 
     @property
     def measurement_dtype(self) -> type(np.float32):
         return np.float32
 
-    def measurement_type(self, waves: 'Waves') -> Union[type(LineProfiles), type(Images)]:
-        num_scan_axes = waves.num_scan_axes
-
-        if num_scan_axes == 1:
+    def measurement_type(self, scan) -> Union[type(LineProfiles), type(Images)]:
+        if scan._num_scan_axes == 1:
             return LineProfiles
-        elif num_scan_axes == 2:
+        elif scan._num_scan_axes == 2:
             return Images
         else:
-            raise RuntimeError(f'no measurement type for AnnularDetector and Waves with {num_scan_axes} scan axes')
-
-    def measurement_kwargs(self, waves: 'Waves') -> dict:
-        extra_axes_metadata = copy(waves.extra_axes_metadata)
-
-        sampling = ()
-        n = len(extra_axes_metadata) - 1
-        for i, axes_metadata in enumerate(extra_axes_metadata[::-1]):
-            if not isinstance(axes_metadata, ScanAxis):
-                continue
-            del extra_axes_metadata[n - i]
-            sampling += (axes_metadata.sampling,)
-            if len(sampling) == 2:
-                break
-
-        if len(sampling) == 1:
-            sampling = sampling[0]
-
-        measurement_type = self.measurement_type(waves)
-
-        if measurement_type is LineProfiles:
-            return {'sampling': sampling,
-                    'start': waves.scan_axes_metadata[0].start,
-                    'end': waves.scan_axes_metadata[0].end,
-                    'extra_axes_metadata': extra_axes_metadata,
-                    'metadata': waves.metadata}
-
-        elif measurement_type is Images:
-            return {'sampling': sampling,
-                    'extra_axes_metadata': extra_axes_metadata,
-                    'metadata': waves.metadata}
-        else:
-            raise RuntimeError()
+            raise RuntimeError(f'no measurement type for AnnularDetector and scan with {scan._num_scan_axes} scan axes')
 
     def detect(self, waves: 'Waves') -> Images:
 
@@ -699,9 +682,6 @@ class PixelatedDetector(AbstractDetector):
 
         return 0., outer
 
-    def _consumed_scan_axes(self, waves):
-        return 0
-
     def measurement_shape(self, waves):
         if self.fourier_space:
             shape = waves._gpts_within_angle(self.max_angle)
@@ -715,20 +695,16 @@ class PixelatedDetector(AbstractDetector):
     def measurement_dtype(self):
         return np.float32
 
-    def measurement_kwargs(self, waves):
-        extra_axes_metadata = deepcopy(waves.extra_axes_metadata)
-
+    def measurement_axes_metadata(self, waves):
         if self.fourier_space:
-            return {'sampling': waves.fourier_space_sampling,
-                    'fftshift': True,
-                    'extra_axes_metadata': extra_axes_metadata,
-                    'metadata': waves.metadata}
+            sampling = waves.fourier_space_sampling
+            return [FourierSpaceAxis(sampling=sampling[0], label='x', units='mrad', fftshift=True),
+                    FourierSpaceAxis(sampling=sampling[1], label='y', units='mrad', fftshift=True)]
         else:
-            return {'sampling': waves.sampling,
-                    'extra_axes_metadata': extra_axes_metadata,
-                    'metadata': waves.metadata}
+            return [RealSpaceAxis(label='x', sampling=waves.sampling[0], units='Å'),
+                    RealSpaceAxis(label='y', sampling=waves.sampling[1], units='Å')]
 
-    def measurement_type(self, waves, scan=None):
+    def measurement_type(self, scan):
         if self.fourier_space:
             return DiffractionPatterns
         else:

@@ -70,6 +70,7 @@ class AbstractScan(metaclass=ABCMeta):
 
 
 class CustomScan(AbstractScan):
+    _num_scan_axes = 0
 
     def __init__(self, positions=None):
         if positions is None:
@@ -155,6 +156,7 @@ class LineScan(AbstractScan):
     endpoint: bool
         If True, end is the last position. Otherwise, it is not included. Default is True.
     """
+    _num_scan_axes = 1
 
     def __init__(self,
                  start: Union[Tuple[float, float], None] = (0., 0.),
@@ -351,6 +353,8 @@ class GridScan(HasGridMixin, AbstractScan):
         If True, end is the last position. Otherwise, it is not included. Default is False.
     """
 
+    _num_scan_axes = 2
+
     def __init__(self,
                  start: Tuple[float, float] = None,
                  end: Tuple[float, float] = None,
@@ -457,12 +461,17 @@ class GridScan(HasGridMixin, AbstractScan):
             assert len(chunks) == 3
 
         if lazy:
-            positions = dask.delayed(gridscan_positions, pure=False)(self.start, self.end, self.gpts, self.grid.endpoint)
+            #positions = dask.delayed(gridscan_positions, pure=False)(self.start, self.end, self.gpts, self.grid.endpoint)
 
-            positions = da.from_delayed(positions, shape=self.gpts + (2,), dtype=np.float32)
+            positions = gridscan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
+            positions = da.from_array(positions, chunks=chunks)
 
-            if chunks:
-                positions = positions.rechunk(chunks)
+            #gridscan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
+
+            #positions = da.from_delayed(positions, shape=self.gpts + (2,), chunks=chunks, dtype=np.float32)
+
+            #if chunks:
+            #    positions = positions.rechunk(chunks)
         else:
             positions = gridscan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
             if chunks:

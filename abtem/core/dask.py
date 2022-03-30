@@ -1,19 +1,18 @@
 from abc import abstractmethod
-
-import dask.array as da
-from dask.diagnostics import ProgressBar
-import dask
-from abtem.core import config
-from typing import Union, TYPE_CHECKING, List
-import numpy as np
 from contextlib import nullcontext
+from typing import TYPE_CHECKING
 
-from abtem.core.backend import get_array_module, device_name_from_array_module
-from abtem.core.device import HasDeviceMixin
+import dask
+import dask.array as da
+from dask.array.core import Array, getitem
+from dask.core import flatten
+from dask.diagnostics import ProgressBar
+from dask.highlevelgraph import HighLevelGraph
+
+from abtem.core import config
 
 if TYPE_CHECKING:
-    from abtem.waves.waves import Waves
-    from abtem.measure.detect import AbstractDetector
+    pass
 
 
 class ComputableList(list):
@@ -130,7 +129,6 @@ class HasDaskArray:
 
         return dask.delayed(wrap)(self.array, self.__class__, self._copy_as_dict(copy_array=False))
 
-
     def apply_gufunc(self,
                      func,
                      signature,
@@ -234,3 +232,75 @@ class HasDaskArray:
 
     def visualize_graph(self, **kwargs):
         return self.array.visualize(**kwargs)
+
+
+def normalize_axes(axes, num_axes):
+    if isinstance(axes, int):
+        return num_axes + axes if axes < 1 else axes
+
+    return tuple(num_axes + axis if axis < 1 else axis for axis in axes)
+
+
+def blockwise(func, arrays, dropped_dims, new_dims, new_sizes, metas, **kwargs):
+    assert len(new_dims) == len(new_sizes) == len(metas)
+    nout = len(new_dims)
+
+    if isinstance(metas, list):
+        metas = tuple(metas)
+
+    last_used_symbol = 0
+    args = ()
+    loop_dims = ()
+    for dd, array in zip(dropped_dims, arrays):
+        dd = normalize_axes(dd, len(array.shape))
+
+        ind = tuple(j + last_used_symbol for j in range(len(array.shape)))
+        args += (array, ind)
+        loop_dims += tuple(j + last_used_symbol for j in range(len(array.shape)) if not j in dd)
+        last_used_symbol += len(ind)
+
+    tmp = da.blockwise(
+        func,
+        loop_dims,
+        *args,
+        meta=metas,
+        concatenate=True,
+        **kwargs
+    )
+
+    loop_output_shape = tmp.shape
+    loop_output_chunks = tmp.chunks
+    keys = list(flatten(tmp.__dask_keys__()))
+    name, token = keys[0][0].split("-")
+
+    leaf_arrs = []
+    for i, (nd, ns, meta) in enumerate(zip(new_dims, new_sizes, metas)):
+        normalized_nd = normalize_axes(nd, len(loop_output_shape) + len(nd))
+
+        leaf_name = "%s_%d-%s" % (name, i, token)
+        leaf_dsk = {}
+        for key in keys:
+            indices = list(key[1:])
+            output_shape = list(loop_output_shape)
+            output_chunks = list(loop_output_chunks)
+
+            for normalized_j, j in sorted(zip(normalized_nd, nd)):
+                indices.insert(normalized_j, 0)
+                output_shape.insert(normalized_j, ns[j])
+                output_chunks.insert(normalized_j, (ns[j],))
+
+            indices = tuple(indices)
+            output_shape = tuple(output_shape)
+            output_chunks = tuple(output_chunks)
+
+            leaf_dsk[(leaf_name,) + indices] = (getitem, key, i) if nout > 1 else key
+
+        graph = HighLevelGraph.from_collections(leaf_name, leaf_dsk, dependencies=[tmp])
+
+        leaf_arr = Array(
+            graph, leaf_name, chunks=output_chunks, shape=output_shape, meta=meta
+        )
+
+        leaf_arrs.append(leaf_arr)
+
+    return leaf_arrs #(*leaf_arrs,) if nout > 1 else leaf_arrs[0]

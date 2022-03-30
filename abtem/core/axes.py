@@ -27,6 +27,7 @@ class RealSpaceAxis(LinearAxis):
 class FourierSpaceAxis(LinearAxis):
     sampling: float = 1.
     units: str = 'pixels'
+    fftshift: bool = True
 
 
 @dataclass

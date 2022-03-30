@@ -200,6 +200,7 @@ def _lazy_multislice_and_detect(waves, potential, detectors):
 
 
 def multislice_and_detect(waves, potential, detectors):
+
     antialias_aperture = AntialiasAperture(device=get_array_module(waves.array))
     antialias_aperture.match_grid(waves)
 
@@ -229,12 +230,11 @@ def multislice_and_detect(waves, potential, detectors):
             if measurements[detector] is None and detector.detect_every is not None:
                 xp = get_array_module(measurement.array)
 
-                size, axes_metadata = detector.thickness_series_axes(potential)
+                axes_metadata = detector.thickness_series_axes_metadata(potential)
 
-                shape = measurement.extra_axes_shape + (size,) + measurement.base_shape
+                shape = measurement.extra_axes_shape + (len(axes_metadata.values),) + measurement.base_shape
+
                 array = xp.zeros(shape, dtype=measurement.array.dtype)
-
-                print(shape)
 
                 d = measurement._copy_as_dict(copy_array=False)
                 d['array'] = array
@@ -251,6 +251,8 @@ def multislice_and_detect(waves, potential, detectors):
             else:
 
                 measurements[detector] = measurement
+
+                #print(measurement.array.shape)
 
     return tuple(measurements.values())
 

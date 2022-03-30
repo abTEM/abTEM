@@ -1,5 +1,5 @@
 device: cpu
-fft: fftw
+fft: mkl
 progress_bar: false
 dask:
   lazy: true

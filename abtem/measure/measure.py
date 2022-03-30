@@ -12,7 +12,7 @@ from ase import Atom
 from matplotlib.axes import Axes
 
 from abtem.core.axes import HasAxes, RealSpaceAxis, AxisMetadata, FourierSpaceAxis, LinearAxis, axis_to_dict, \
-    axis_from_dict, OrdinalAxis, NonLinearAxis
+    axis_from_dict, OrdinalAxis, NonLinearAxis, ScanAxis
 from abtem.core.backend import cp, asnumpy, get_array_module, get_ndimage_module, copy_to_device, \
     device_name_from_array_module
 from abtem.core.complex import abs2
@@ -469,6 +469,12 @@ class Images(AbstractMeasurement):
                          allow_complex=True,
                          allow_base_axis_chunks=True)
 
+    @classmethod
+    def from_axes_metadata(cls, array, axes_metadata, metadata=None):
+        sampling = (axes_metadata[-2].sampling, axes_metadata[-1].sampling)
+        axes_metadata = axes_metadata[:-2]
+        return cls(array, sampling=sampling, extra_axes_metadata=axes_metadata, metadata=metadata)
+
     @property
     def sampling(self) -> Tuple[float, float]:
         """ Sampling of images in x and y [Å]. """
@@ -662,7 +668,7 @@ class Images(AbstractMeasurement):
         sampling = (self.extent[0] / gpts[0], self.extent[1] / gpts[1])
 
         def interpolate_spline(array, old_gpts, new_gpts, pad_mode, order, cval):
-            xp  = get_array_module(array)
+            xp = get_array_module(array)
             x = xp.linspace(0., old_gpts[0], new_gpts[0], endpoint=False)
             y = xp.linspace(0., old_gpts[1], new_gpts[1], endpoint=False)
             positions = xp.meshgrid(x, y, indexing='ij')
@@ -677,20 +683,20 @@ class Images(AbstractMeasurement):
             array = self.array.rechunk(chunks=self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],)))
             if method == 'fft':
                 array = array.map_blocks(fft2_interpolate,
-                                              new_shape=gpts,
-                                              normalization=normalization,
-                                              chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
-                                              meta=xp.array((), dtype=self.array.dtype))
+                                         new_shape=gpts,
+                                         normalization=normalization,
+                                         chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                                         meta=xp.array((), dtype=self.array.dtype))
 
             elif method == 'spline':
                 array = array.map_blocks(interpolate_spline,
-                                              old_gpts=self.shape[-2:],
-                                              new_gpts=gpts,
-                                              order=order,
-                                              cval=cval,
-                                              pad_mode=boundary,
-                                              chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
-                                              meta=xp.array((), dtype=self.array.dtype))
+                                         old_gpts=self.shape[-2:],
+                                         new_gpts=gpts,
+                                         order=order,
+                                         cval=cval,
+                                         pad_mode=boundary,
+                                         chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                                         meta=xp.array((), dtype=self.array.dtype))
 
         else:
             if method == 'fft':
@@ -1020,6 +1026,16 @@ class LineProfiles(AbstractMeasurement):
         super().__init__(array=array, extra_axes_metadata=extra_axes_metadata, metadata=metadata, allow_complex=True,
                          allow_base_axis_chunks=True)
 
+    @classmethod
+    def from_axes_metadata(cls, array, axes_metadata, metadata):
+        pass
+        # if measurement_type is LineProfiles:
+        #     return {'sampling': sampling,
+        #             'start': waves.scan_axes_metadata[0].start,
+        #             'end': waves.scan_axes_metadata[0].end,
+        #             'extra_axes_metadata': extra_axes_metadata,
+        #             'metadata': waves.metadata}
+
     @property
     def start(self) -> Tuple[float, float]:
         return self._linescan.start
@@ -1263,6 +1279,15 @@ class DiffractionPatterns(AbstractMeasurement):
         self._fftshift = fftshift
         self._sampling = float(sampling[0]), float(sampling[1])
         super().__init__(array=array, extra_axes_metadata=extra_axes_metadata, metadata=metadata)
+
+    @classmethod
+    def from_axes_metadata(cls, array, axes_metadata, metadata=None):
+
+        sampling = (axes_metadata[-2].sampling, axes_metadata[-1].sampling)
+        fftshift = axes_metadata[-1].fftshift
+        axes_metadata = axes_metadata[:-2]
+
+        return cls(array, sampling=sampling, extra_axes_metadata=axes_metadata, fftshift=fftshift, metadata=metadata)
 
     def poisson_noise(self, dose: float, samples: int = 1, seed: int = None, pixel_area: float = None):
 
