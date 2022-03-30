@@ -59,8 +59,6 @@ def _run_epie(object,
 
     center_of_mass = get_ndimage_module(xp).center_of_mass
 
-    #center_of_mass = get_scipy_module(xp).ndimage.center_of_mass
-
     while k < maxiter:
         indices = np.arange(len(positions))
         np.random.shuffle(indices)
@@ -165,17 +163,8 @@ def epie(diffraction_patterns: DiffractionPatterns,
 
     """
 
-    # diffraction_patterns = measurement.array.reshape((-1,) + measurement.array.shape[2:])
-
-    # if max_angle:
-    #     padding_x = int((max_angle / abs(measurement.calibrations[-2].offset) *
-    #                      diffraction_patterns.shape[-2]) // 2) - diffraction_patterns.shape[-2] // 2
-    #     padding_y = int((max_angle / abs(measurement.calibrations[-1].offset) *
-    #                      diffraction_patterns.shape[-1]) // 2) - diffraction_patterns.shape[-1] // 2
-    #     diffraction_patterns = np.pad(diffraction_patterns, ((0,) * 2, (padding_x,) * 2, (padding_y,) * 2))
-
-    #if probe_guess is None:
-    #probe = Probe()
+    if diffraction_patterns.is_lazy:
+        diffraction_patterns = diffraction_patterns.compute()
 
     probe_guess = probe_guess.copy()
     probe_guess.extent = diffraction_patterns.equivalent_real_space_extent
