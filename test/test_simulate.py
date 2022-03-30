@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 from hypothesis import given, settings, assume, reproduce_failure
 
-from abtem import Probe, SMatrix, GridScan, PlaneWave, LineScan, CustomScan, ParameterSeries
+from abtem import Probe, SMatrix, GridScan, PlaneWave, LineScan, CustomScan
 from strategies import atoms as atoms_st
 from strategies import core as core_st
 from strategies import detectors as detector_st
@@ -52,44 +52,18 @@ def test_probe_scan(data, detector, lazy, scan, device, frozen_phonons):
 @pytest.mark.parametrize('detector', ['pixelated_detector', 'segmented_detector', 'flexible_annular_detector',
                                       'waves_detector'])
 @pytest.mark.parametrize('frozen_phonons', [True, False])
-@pytest.mark.parametrize('defocus', [0., ParameterSeries(np.linspace(0, 100, 2))])
-def test_cbed(data, detector, lazy, device, frozen_phonons, defocus):
+@pytest.mark.parametrize('wave_cls, wave_cls_kwargs', [(PlaneWave, {}), (Probe, {'semiangle_cutoff': 10})])
+def test_planewave_detect(data, wave_cls, wave_cls_kwargs, detector, lazy, device, frozen_phonons):
     if frozen_phonons:
         atoms = data.draw(atoms_st.random_atoms(min_side_length=5, max_side_length=10))
     else:
         atoms = data.draw(atoms_st.random_frozen_phonons(min_side_length=5, max_side_length=10))
 
-    wave = Probe(gpts=data.draw(core_st.gpts(min_value=32, max_value=64)),
-                 energy=data.draw(core_st.energy()),
-                 extent=np.diag(atoms.cell)[:2],
-                 device=device,
-                 semiangle_cutoff=10.,
-                 defocus=defocus)
-
-    detectors = [data.draw(all_detectors[detector](max_angle=min(wave.cutoff_angles), allow_detect_every=False))]
-
-    measurements = wave.multislice(potential=atoms, detectors=detectors, lazy=lazy)
-    measurements.compute()
-
-    assert_scanned_measurement_as_expected(measurements, atoms, wave, detectors, scan=None, parameter_series=defocus)
-
-
-@given(data=st.data())
-@pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('device', ['cpu', gpu])
-@pytest.mark.parametrize('detector', ['pixelated_detector', 'segmented_detector', 'flexible_annular_detector',
-                                      'waves_detector'])
-@pytest.mark.parametrize('frozen_phonons', [True, False])
-def test_hrtem(data, detector, lazy, device, frozen_phonons):
-    if frozen_phonons:
-        atoms = data.draw(atoms_st.random_atoms(min_side_length=5, max_side_length=10))
-    else:
-        atoms = data.draw(atoms_st.random_frozen_phonons(min_side_length=5, max_side_length=10))
-
-    wave = PlaneWave(gpts=data.draw(core_st.gpts(min_value=32, max_value=64)),
-                     energy=data.draw(core_st.energy()),
-                     extent=np.diag(atoms.cell)[:2],
-                     device=device)
+    wave = wave_cls(gpts=data.draw(core_st.gpts(min_value=32, max_value=64)),
+                    energy=data.draw(core_st.energy()),
+                    extent=np.diag(atoms.cell)[:2],
+                    device=device,
+                    **wave_cls_kwargs)
 
     detectors = [data.draw(all_detectors[detector](max_angle=min(wave.cutoff_angles), allow_detect_every=False))]
 
@@ -99,7 +73,6 @@ def test_hrtem(data, detector, lazy, device, frozen_phonons):
     assert_scanned_measurement_as_expected(measurements, atoms, wave, detectors, scan=None)
 
 
-@settings(print_blob=True)
 @given(data=st.data(),
        gpts=core_st.gpts(min_value=32, max_value=64),
        planewave_cutoff=st.floats(5, 10),

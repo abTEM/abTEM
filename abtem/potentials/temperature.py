@@ -9,7 +9,8 @@ import numpy as np
 from ase import Atoms
 from ase.data import chemical_symbols
 import dask.array as da
-
+from dask.graph_manipulation import clone
+from dask.delayed import Delayed
 from abtem.core.axes import FrozenPhononsAxis
 from abtem.measure.detect import stack_measurements
 
@@ -23,11 +24,89 @@ def stack_frozen_phonons(measurements, detectors):
     return stacked
 
 
+class LazyAtoms:
+
+    def __init__(self, atoms: Union[Atoms, Delayed], cell: np.ndarray = None, numbers: np.ndarray = None):
+        self._atoms = atoms
+
+        if cell is None:
+            if self.is_lazy:
+                raise RuntimeError('cannot infer cell from lazy atoms')
+            cell = atoms.cell
+
+        if numbers is None:
+            if self.is_lazy:
+                raise RuntimeError('cannot atomic numbers cell from lazy atoms')
+            numbers = np.unique(atoms.numbers)
+
+        self._cell = cell
+        self._numbers = numbers
+
+    @property
+    def is_lazy(self):
+        if hasattr(self.atoms, 'compute'):
+            return True
+
+        return False
+
+    @property
+    def numbers(self):
+        return self._numbers
+
+    @property
+    def cell(self):
+        return self._cell
+
+    @property
+    def atoms(self):
+        return self._atoms
+
+    def compute(self, **kwargs):
+        if self.is_lazy:
+            self._atoms = self.atoms.compute(**kwargs)
+
+        return self._atoms
+
+    def delay_atoms(self):
+        if self.is_lazy:
+            return self
+
+        def delay_atoms(atoms):
+            return atoms
+
+        atoms = dask.delayed(delay_atoms)(self.atoms)
+        return self.__class__(atoms.copy(), cell=copy(self.cell), numbers=copy(self.numbers))
+
+    def apply_transformation(self, func, new_cell=None, new_numbers=None, **kwargs):
+        if new_cell is None:
+            new_cell = self._cell
+
+        if new_numbers is None:
+            new_numbers = self._numbers
+
+        if self.is_lazy:
+            atoms = dask.delayed(func)(atoms=self.atoms, **kwargs)
+        else:
+            atoms = func(atoms=self.atoms, **kwargs)
+        return self.__class__(atoms, cell=new_cell, numbers=new_numbers)
+
+    def clone(self):
+        if not self.is_lazy:
+            return self
+
+        atoms = clone(self.atoms.copy(), assume_layers=False)
+        return self.__class__(atoms, cell=copy(self.cell), numbers=copy(self.numbers))
+
+
 class AbstractFrozenPhonons(metaclass=ABCMeta):
     """Abstract base class for frozen phonons objects."""
 
     def __init__(self, ensemble_mean: bool = True):
         self._ensemble_mean = ensemble_mean
+
+    @abstractmethod
+    def apply_transformation(self, func=None, *args, **kwargs):
+        pass
 
     @property
     def axes_metadata(self):
@@ -47,11 +126,11 @@ class AbstractFrozenPhonons(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def get_frozen_phonon_atoms(self, lazy: bool = True):
+    def get_configurations(self):
         pass
 
     def __getitem__(self, item):
-        configurations = self.get_frozen_phonon_atoms(lazy=False)
+        configurations = self.get_configurations()
         return configurations[item]
 
     @abstractmethod
@@ -74,7 +153,7 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
     def cell(self):
         return None
 
-    def get_frozen_phonon_atoms(self, lazy: bool = True):
+    def get_configurations(self, lazy: bool = True):
         return [None]
 
     def __len__(self):
@@ -83,30 +162,8 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
     def __copy__(self):
         return self.__class__()
 
-
-class DelayedAtoms:
-
-    def __init__(self, atoms, cell, num_atoms, numbers):
-        self._atoms = atoms
-        self._cell = cell
-        self._num_atoms = num_atoms
-        self._numbers = numbers
-
-    @property
-    def numbers(self):
-        return self._numbers
-
-    @property
-    def __len__(self):
-        return self._num_atoms
-
-    @property
-    def cell(self):
-        return self._cell
-
-    @property
-    def atoms(self):
-        return self._atoms
+    def apply_transformation(self, func=None, *args, **kwargs):
+        return self
 
 
 class FrozenPhonons(AbstractFrozenPhonons):
@@ -136,7 +193,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
     """
 
     def __init__(self,
-                 atoms: Atoms,
+                 atoms: Union[Atoms, LazyAtoms],
                  num_configs: int,
                  sigmas: Union[float, Mapping[Union[str, int], float], Sequence[float]],
                  directions: str = 'xyz',
@@ -145,6 +202,11 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
         self._unique_numbers = np.unique(atoms.numbers)
         unique_symbols = [chemical_symbols[number] for number in self._unique_numbers]
+
+        if not hasattr(atoms, 'compute'):
+            atoms = LazyAtoms(atoms)
+
+        self._atoms = atoms
 
         if isinstance(sigmas, Number):
             new_sigmas = {}
@@ -166,11 +228,24 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
         self._sigmas = sigmas
         self._directions = directions
-        self._atoms = atoms
         self._num_configs = num_configs
         self._seed = seed
 
         super().__init__(ensemble_mean)
+
+    def apply_transformation(self, func, *args, **kwargs):
+        atoms = self._atoms.apply_transformation(func, *args, **kwargs)
+        return self.__class__(atoms, num_configs=len(self), sigmas=copy(self.sigmas), seed=self.seed,
+                              directions=self.directions)
+
+    def delay_atoms(self):
+        atoms = self._atoms.delay_atoms()
+        return self.__class__(atoms, num_configs=len(self), sigmas=copy(self.sigmas),
+                              seed=self.seed, directions=self.directions)
+
+    @property
+    def is_lazy(self):
+        return self._atoms.is_lazy
 
     @property
     def num_configs(self) -> int:
@@ -213,51 +288,53 @@ class FrozenPhonons(AbstractFrozenPhonons):
                 raise RuntimeError('Directions must be "x", "y" or "z" not {}.')
         return axes
 
-    def get_frozen_phonon_atoms(self, lazy: bool = True):
+    def get_random_state(self):
         if self.seed is not False and self.seed is not None:
-            if lazy:
+            if self.is_lazy:
                 random_state = dask.delayed(np.random.RandomState)(seed=self.seed)
             else:
                 random_state = np.random.RandomState(seed=self.seed)
         else:
             random_state = None
 
-        def load_atoms():
-            return self.atoms
+        return random_state
 
-        def jiggle_atoms(atoms, sigmas, directions, random_state):
+    @staticmethod
+    def _jiggle_atoms(atoms, sigmas, axes, random_state):
 
-            if isinstance(sigmas, Mapping):
-                temp = np.zeros(len(atoms.numbers), dtype=np.float32)
-                for unique in np.unique(atoms.numbers):
-                    temp[atoms.numbers == unique] = np.float32(sigmas[chemical_symbols[unique]])
-                sigmas = temp
+        if isinstance(sigmas, Mapping):
+            temp = np.zeros(len(atoms.numbers), dtype=np.float32)
+            for unique in np.unique(atoms.numbers):
+                temp[atoms.numbers == unique] = np.float32(sigmas[chemical_symbols[unique]])
+            sigmas = temp
 
-            elif not isinstance(sigmas, np.ndarray):
-                raise RuntimeError()
+        elif not isinstance(sigmas, np.ndarray):
+            raise RuntimeError()
 
-            atoms = atoms.copy()
+        atoms = atoms.copy()
 
-            if random_state:
-                r = random_state.normal(size=(len(atoms), 3))
-            else:
-                r = np.random.normal(size=(len(atoms), 3))
+        if random_state:
+            r = random_state.normal(size=(len(atoms), 3))
+        else:
+            r = np.random.normal(size=(len(atoms), 3))
 
-            for direction in directions:
-                atoms.positions[:, direction] += sigmas * r[:, direction]
+        for axis in axes:
+            atoms.positions[:, axis] += sigmas * r[:, axis]
 
-            return atoms
+        return atoms
 
-        unique_numbers = np.unique(self.atoms.numbers)
+    def get_configurations(self):
+        random_state = self.get_random_state()
+
         configurations = []
         for i in range(self.num_configs):
+            configuration = self._atoms.clone()
+            configuration = configuration.apply_transformation(self._jiggle_atoms,
+                                                               sigmas=self.sigmas,
+                                                               axes=self.axes,
+                                                               random_state=random_state)
 
-            if lazy:
-                atoms = dask.delayed(load_atoms)()
-                atoms = dask.delayed(jiggle_atoms)(atoms, self.sigmas, self.axes, random_state)
-                configurations.append(DelayedAtoms(atoms, self.atoms.cell, len(self.atoms), unique_numbers))
-            else:
-                configurations.append(jiggle_atoms(self.atoms, self.sigmas, self.axes, random_state))
+            configurations.append(configuration)
 
         return configurations
 

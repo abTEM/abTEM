@@ -5,8 +5,8 @@ from abtem.potentials import Potential
 from abtem.waves.waves import PlaneWave
 import pytest
 
-@pytest.mark.parametrize('lazy', [False, True])
-@pytest.mark.parametrize('projection', ['finite', 'infinite'])
+@pytest.mark.parametrize('lazy', [False])
+@pytest.mark.parametrize('projection', ['infinite'])
 def test_fig_5_12(projection, lazy):
     atoms = Atoms('CSiCuAuU', positions=[(x, 25, 4) for x in np.linspace(5, 45, 5)], cell=(50, 50, 8))
 

@@ -262,7 +262,10 @@ class LineScan(AbstractScan):
 
     @property
     def axes_metadata(self):
-        return [ScanAxis(label='x', sampling=self.sampling, units='Å', start=self.start, end=self.end)]
+
+
+
+        return [ScanAxis(label='x', sampling=float(self.sampling), units='Å', start=start, end=self.end)]
 
     @property
     def start(self) -> Union[Tuple[float, float], None]:
@@ -273,6 +276,9 @@ class LineScan(AbstractScan):
 
     @start.setter
     def start(self, start: Tuple[float, float]):
+        if start is not None:
+            start = (float(start[0]), float(start[1]))
+
         self._start = start
         self._adjust_gpts()
 
@@ -285,6 +291,8 @@ class LineScan(AbstractScan):
 
     @end.setter
     def end(self, end: Tuple[float, float]):
+        if end is not None:
+            end = (float(end[0]), float(end[1]))
         self._end = end
         self._adjust_gpts()
 
@@ -370,8 +378,8 @@ class GridScan(HasGridMixin, AbstractScan):
             extent = None
         else:
             try:
-                self._start = np.array(start)[:2]
-                end = np.array(end)[:2]
+                self._start = np.array(start, dtype=float)[:2]
+                end = np.array(end, dtype=float)[:2]
                 assert (self._start.shape == (2,)) & (end.shape == (2,))
             except AssertionError:
                 raise ValueError('Scan start/end has incorrect shape')
@@ -399,7 +407,10 @@ class GridScan(HasGridMixin, AbstractScan):
 
     @start.setter
     def start(self, start: Sequence[float]):
+        if start is not None:
+            start = (float(start[0]), float(start[1]))
         self._start = np.array(start)
+
         if self.end is not None:
             self.extent = self.end - self._start
 

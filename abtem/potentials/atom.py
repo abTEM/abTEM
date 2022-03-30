@@ -51,6 +51,19 @@ def interpolate_radial_functions(array: np.ndarray,
                     array[k, m] += radial_functions[i, idx] + (r_interp - radial_gpts[idx]) * slope
 
 
+def validate_parametrization(parametrization):
+    if isinstance(parametrization, str):
+        parametrization = parametrizations[parametrization]()
+
+    return parametrization
+
+
+def cutoff_distance(symbol, parametrization, tolerance: float = 1e-3):
+    parametrization = validate_parametrization(parametrization)
+    potential = parametrization.potential(symbol)
+    return brentq(f=lambda r: potential(r) - tolerance, a=1e-3, b=1e3)
+
+
 class AtomicPotential:
 
     def __init__(self,
@@ -65,9 +78,7 @@ class AtomicPotential:
 
         self._symbol = symbol
 
-        if isinstance(parametrization, str):
-            parametrization = parametrizations[parametrization]()
-
+        parametrization = validate_parametrization(parametrization)
         self._potential = parametrization.potential(symbol)
 
         self._cutoff_tolerance = cutoff_tolerance
@@ -154,6 +165,8 @@ class AtomicPotential:
         radial_potential_derivative = xp.zeros_like(radial_potential)
         radial_potential_derivative[:, :-1] = xp.diff(radial_potential, axis=1) / xp.diff(self.radial_gpts)[None]
 
+
+
         if xp is cp:
             interpolate_radial_functions_cuda(array=array,
                                               positions=positions,
@@ -167,7 +180,6 @@ class AtomicPotential:
                                          positions=positions,
                                          disk_indices=disk_indices,
                                          sampling=sampling,
-
                                          radial_gpts=self.radial_gpts,
                                          radial_functions=radial_potential,
                                          radial_derivative=radial_potential_derivative)

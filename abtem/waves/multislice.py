@@ -96,8 +96,8 @@ class FresnelPropagator(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, Has
         array *= antialias_aperture.array
         return array
 
-    def propagate(self, waves: Union['Waves']):
-        waves._array = fft2_convolve(waves.array, self.array, overwrite_x=True)
+    def propagate(self, waves: Union['Waves'], overwrite_x: bool = False, **kwargs):
+        waves._array = fft2_convolve(waves.array, self.array, overwrite_x=overwrite_x, **kwargs)
         return waves
 
 
@@ -117,7 +117,7 @@ def multislice_and_detect_with_frozen_phonons(waves: 'Waves',
     detectors = validate_detectors(detectors)
 
     measurements = []
-    for frozen_phonon_potential in potential.get_frozen_phonon_potentials(lazy=True):
+    for frozen_phonon_potential in potential.get_configurations(lazy=True):
         cloned_waves = waves.clone()
 
         frozen_phonon_potential = frozen_phonon_potential.to_delayed()

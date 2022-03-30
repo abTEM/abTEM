@@ -369,11 +369,13 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
             else:
                 measurement = self
 
+            array = measurement.array
+
             if not measurement.is_lazy:
-                measurement._array = da.from_array(measurement.array)
+                array = da.from_array(array)
 
             # if measurement.is_lazy:
-            array = measurement.array.to_zarr(url, compute=compute, component='array', overwrite=overwrite)
+            array = array.to_zarr(url, compute=compute, component='array', overwrite=overwrite)
             # else:
             #    array = zarr.save(url, array=measurement.array, chunks=None)
 

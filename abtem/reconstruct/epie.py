@@ -5,7 +5,7 @@ import numpy as np
 # from abtem.utils import ProgressBar, fft_shift
 from abtem.core.diagnostics import ProgressBar
 from abtem.waves import Probe
-from abtem.core.backend import get_scipy_module, get_array_module
+from abtem.core.backend import get_scipy_module, get_array_module, get_ndimage_module
 from abtem.measure.measure import DiffractionPatterns, Images
 from abtem.core.fft import fft_shift
 
@@ -56,6 +56,8 @@ def _run_epie(object,
     k = 0
     outer_pbar = ProgressBar(total=maxiter)
     inner_pbar = ProgressBar(total=len(positions))
+
+    center_of_mass = get_ndimage_module(xp).center_of_mass
 
     #center_of_mass = get_scipy_module(xp).ndimage.center_of_mass
 

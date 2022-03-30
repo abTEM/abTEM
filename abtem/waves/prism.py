@@ -936,7 +936,7 @@ class SMatrix(AbstractSMatrix):
 
         gpts = self._gpts_within_angle(downsample) if downsample else self.gpts
 
-        for potential in [None] if self.potential is None else self.potential.get_frozen_phonon_potentials(lazy=lazy):
+        for potential in [None] if self.potential is None else self.potential.get_configurations(lazy=lazy):
 
             arrays = []
             for chunk_start, chunk_stop in generate_chunks(len(self), chunks=self.chunks):
@@ -950,6 +950,7 @@ class SMatrix(AbstractSMatrix):
                                             meta=storage_xp.array((), dtype=storage_xp.complex64))
 
                 else:
+
                     array = self._build_chunk(chunk_start, chunk_stop, start, stop, potential, downsample)
 
                 arrays.append(array)
@@ -1007,6 +1008,7 @@ class SMatrix(AbstractSMatrix):
         -------
         SMatrixArray
         """
+
 
         generator = self.generate_distribution(lazy=lazy, start=start, stop=stop, downsample=downsample)
         s_matrices = [s_matrix for s_matrix in generator]

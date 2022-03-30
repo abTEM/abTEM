@@ -96,3 +96,22 @@ def test_finite_projected_match(Z, slice_thickness, parametrization, sampling):
 
     potential = potential.build(lazy=False).project().array[0, 1:]
     assert array_is_close(potential, analytical_potential, rel_tol=.01, check_above_rel=.01)
+
+
+# def test_atom_position():
+#     from ase import Atoms
+#
+#     L = 8.0
+#     z1 = 0
+#     z2 = L / 2
+#
+#     atoms1 = Atoms('C', [(L / 2, L / 2, z1)], cell=(L,) * 3)
+#     atoms2 = Atoms('C', [(L / 2, L / 2, z2)], cell=(L,) * 3)
+#
+#     potential1 = Potential(atoms1, sampling=.1, projection='finite', slice_thickness=L)
+#     potential2 = Potential(atoms2, sampling=.1, projection='finite', slice_thickness=L)
+#
+#     # print(potential1.num_slices, potential2.num_slices)
+#
+#     potential1 = potential1.build(lazy=False)
+#     potential2 = potential2.build(lazy=False)
