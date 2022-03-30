@@ -372,7 +372,8 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
             array = measurement.array
 
             if not measurement.is_lazy:
-                array = da.from_array(array)
+                chunks = ('auto',) * self.num_extra_axes + (-1,) * self.num_base_axes
+                array = da.from_array(array, chunks=chunks)
 
             # if measurement.is_lazy:
             array = array.to_zarr(url, compute=compute, component='array', overwrite=overwrite)
@@ -664,7 +665,7 @@ class Images(AbstractMeasurement):
         sampling = (self.extent[0] / gpts[0], self.extent[1] / gpts[1])
 
         def interpolate_spline(array, old_gpts, new_gpts, pad_mode, order, cval):
-            xp  = get_array_module(array)
+            xp = get_array_module(array)
             x = xp.linspace(0., old_gpts[0], new_gpts[0], endpoint=False)
             y = xp.linspace(0., old_gpts[1], new_gpts[1], endpoint=False)
             positions = xp.meshgrid(x, y, indexing='ij')
@@ -679,20 +680,20 @@ class Images(AbstractMeasurement):
             array = self.array.rechunk(chunks=self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],)))
             if method == 'fft':
                 array = array.map_blocks(fft2_interpolate,
-                                              new_shape=gpts,
-                                              normalization=normalization,
-                                              chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
-                                              meta=xp.array((), dtype=self.array.dtype))
+                                         new_shape=gpts,
+                                         normalization=normalization,
+                                         chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                                         meta=xp.array((), dtype=self.array.dtype))
 
             elif method == 'spline':
                 array = array.map_blocks(interpolate_spline,
-                                              old_gpts=self.shape[-2:],
-                                              new_gpts=gpts,
-                                              order=order,
-                                              cval=cval,
-                                              pad_mode=boundary,
-                                              chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
-                                              meta=xp.array((), dtype=self.array.dtype))
+                                         old_gpts=self.shape[-2:],
+                                         new_gpts=gpts,
+                                         order=order,
+                                         cval=cval,
+                                         pad_mode=boundary,
+                                         chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                                         meta=xp.array((), dtype=self.array.dtype))
 
         else:
             if method == 'fft':
