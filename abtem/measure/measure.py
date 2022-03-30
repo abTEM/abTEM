@@ -74,7 +74,7 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
     return hyperspy_axes
 
 
-def from_zarr(url):
+def from_zarr(url, **kwargs):
     with zarr.open(url, mode='r') as f:
         d = {}
 
@@ -86,10 +86,7 @@ def from_zarr(url):
             else:
                 d[key] = value
 
-    array = da.from_zarr(url, component='array', chunks=None)
-
-
-
+    array = da.from_zarr(url, component='array', **kwargs)
     return cls(array, extra_axes_metadata=extra_axes_metadata, **d)
 
 
@@ -395,8 +392,8 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
         return array
 
     @staticmethod
-    def from_zarr(url) -> 'T':
-        return from_zarr(url)
+    def from_zarr(url, **kwargs) -> 'T':
+        return from_zarr(url, **kwargs)
 
     @abstractmethod
     def to_hyperspy(self):
