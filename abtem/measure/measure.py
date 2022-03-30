@@ -87,6 +87,9 @@ def from_zarr(url):
                 d[key] = value
 
     array = da.from_zarr(url, component='array', chunks=None)
+
+
+
     return cls(array, extra_axes_metadata=extra_axes_metadata, **d)
 
 
@@ -155,7 +158,8 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
 
         if not allow_base_axis_chunks:
             if self.is_lazy and (not all(len(chunks) == 1 for chunks in array.chunks[-2:])):
-                raise RuntimeError(f'chunks not allowed in base axes of {self.__class__}')
+                chunks = ('auto',) * self.num_extra_axes + (-1,) * self.num_base_axes
+                self.rechunk(chunks=chunks)
 
     @property
     def device(self):
