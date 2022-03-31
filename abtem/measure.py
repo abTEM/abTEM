@@ -240,7 +240,7 @@ class Measurement(AbstractMeasurement):
             name = measurement.name
 
         if not isinstance(calibrations, Iterable):
-            calibrations = [calibrations] * len(array.shape)
+            calibrations = (calibrations,) * len(array.shape)
 
         if len(calibrations) != len(array.shape):
             raise RuntimeError(
@@ -339,7 +339,7 @@ class Measurement(AbstractMeasurement):
         self._array[:] = array
 
     @property
-    def calibrations(self) -> List[Union[Calibration, None]]:
+    def calibrations(self) -> Tuple[Union[Calibration, None]]:
         """
         The measurement calibrations.
         """
@@ -419,7 +419,7 @@ class Measurement(AbstractMeasurement):
         array = reduction_function(self.array, axis=axis)
 
         axis = [d % len(self.calibrations) for d in axis]
-        calibrations = [self.calibrations[i] for i in range(len(self.calibrations)) if i not in axis]
+        calibrations = tuple(self.calibrations[i] for i in range(len(self.calibrations)) if i not in axis)
 
         return self.__class__(array, calibrations)
 

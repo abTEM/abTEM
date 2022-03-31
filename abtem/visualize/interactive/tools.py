@@ -3,7 +3,7 @@ from abc import abstractmethod, ABC
 import numpy as np
 from bqplot.interacts import BrushSelector, PanZoom
 from bqplot_image_gl.interacts import MouseInteraction
-from traitlets import HasTraits, Int, default, Bool, List, Float, Instance, observe
+from traitlets import HasTraits, default, Bool, List, Float, Instance, observe
 from traittypes import Array
 
 from abtem.visualize.interactive.artists import ScatterArtist, CircleArtist, LinesArtist
@@ -65,8 +65,6 @@ class SelectPixelTool(HasTraits):
     __metaclass__ = Tool
 
     indices = List()
-
-    # index_y = Int()
 
     def __init__(self, image_artist, **kwargs):
         self._image_artist = image_artist
@@ -217,6 +215,49 @@ class DragPointTool(HasTraits):
 
     def deactivate(self, canvas):
         self.artist._mark.enable_move = False
+
+
+class SelectPositionTool(HasTraits):
+    position = Array()
+    marker = Bool()
+
+    def __init__(self, allow_drag=True, **kwargs):
+        self._point_artist = ScatterArtist()
+        self._allow_drag = allow_drag
+        self._interaction = MouseInteraction()
+        super().__init__(**kwargs)
+
+    @default('position')
+    def _default_position(self):
+        return np.array((0., 0.))
+
+    def activate(self, canvas):
+        if self.marker:
+            canvas._tool_artists = [self._point_artist]
+
+        self._interaction.x_scale = canvas.figure.axes[0].scale
+        self._interaction.y_scale = canvas.figure.axes[1].scale
+
+        def on_mouse_msg(_, change, __):
+            if change['event'] in ('dragmove', 'click'):
+                self.position = np.array([change['domain']['x'], change['domain']['y']])
+
+                if self.marker:
+                    self._point_artist.x = [self.position[0]]
+                    self._point_artist.y = [self.position[1]]
+
+        canvas.figure.interaction = self._interaction
+
+        events = ['click']
+        if self._allow_drag:
+            events += ['dragmove']
+
+        self._interaction.events = events
+        self._interaction.on_msg(on_mouse_msg)
+
+    def deactivate(self, canvas):
+        canvas._tool_artists = []
+        canvas.figure.interaction = None
 
 
 class SelectRadiusTool(HasTraits):
