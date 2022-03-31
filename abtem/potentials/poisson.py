@@ -6,11 +6,16 @@ from ase import units
 from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import map_coordinates
 
-from abtem.core.backend import copy_to_device
+from abtem.core import dask
+from abtem.core.backend import copy_to_device, get_array_module, _validate_device
 from abtem.core.fft import fft_crop
+from abtem.core.grid import Grid
+from abtem.core.utils import generate_chunks
 from abtem.potentials.parametrizations import EwaldParametrization
-from abtem.potentials.potentials import AbstractPotentialFromAtoms, Potential
-from abtem.potentials.temperature import MDFrozenPhonons
+from abtem.potentials.potentials import AbstractPotential, Potential, PotentialArray
+from abtem.potentials.temperature import MDFrozenPhonons, LazyAtoms
+from abtem.structures.slicing import _validate_slice_thickness
+import dask.array as da
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
@@ -79,16 +84,14 @@ def solve_point_charges(atoms, shape=None, array=None, width=0.):
 
     kx, ky, kz = spatial_frequencies(array.shape, atoms.cell)
 
-
-
     pixel_volume = np.prod(np.diag(atoms.cell)) / np.prod(array.shape)
 
     compensation = np.zeros_like(array)
     for number in np.unique(atoms.numbers):
         superpose_deltas(atoms[atoms.numbers == number].positions, compensation, atoms.cell, scale=number)
-        #import matplotlib.pyplot as plt
-        #plt.imshow(compensation.sum(-1))
-        #plt.show()
+        # import matplotlib.pyplot as plt
+        # plt.imshow(compensation.sum(-1))
+        # plt.show()
     g = fourier_gaussian(kx, ky, kz)
     array = np.fft.fftn(array) + np.fft.fftn(compensation) * g / pixel_volume
 
@@ -132,7 +135,7 @@ def interpolate_between_cells(array, new_shape, old_cell, new_cell, offset=(0., 
     return interpolated
 
 
-class ChargeDensityPotential(AbstractPotentialFromAtoms):
+class ChargeDensityPotential(AbstractPotential):
 
     def __init__(self,
                  atoms: Union[Atoms, MDFrozenPhonons],
@@ -140,8 +143,9 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
                  slice_thickness: float = .5,
-                 plane: str = 'xy',
                  box: Tuple[float, float, float] = None,
+                 x_vector: str = 'x',
+                 y_vector: str = 'y',
                  origin: Tuple[float, float, float] = (0., 0., 0.),
                  chunks: int = 1,
                  device: str = None,
@@ -151,35 +155,94 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
         self._atoms = atoms
         self._fft_singularities = fft_singularities
         self._chunks = chunks
+        self._device = _validate_device(device)
 
-        if fft_singularities and ((box is not None) or (origin != (0., 0., 0.)) or (plane != 'xy')):
-            raise NotImplementedError()
+        box = tuple(np.diag(atoms.cell))
 
-        super().__init__(atoms=atoms,
-                         gpts=gpts,
-                         sampling=sampling,
-                         slice_thickness=slice_thickness,
-                         plane=plane,
-                         box=box,
-                         origin=origin,
-                         chunks=chunks,
-                         device=device)
+        self._grid = Grid(extent=box[:2], gpts=gpts, sampling=sampling, lock_extent=True)
+
+        #if fft_singularities and ((box is not None) or (origin != (0., 0., 0.)) or (plane != 'xy')):
+        #   raise NotImplementedError()
+
+        # super().__init__(atoms=atoms,
+        #                  gpts=gpts,
+        #                  sampling=sampling,
+        #                  slice_thickness=slice_thickness,
+        #                  plane=plane,
+        #                  box=box,
+        #                  origin=origin,
+        #                  chunks=chunks,
+        #                  device=device)
+
+        slice_thickness = _validate_slice_thickness(slice_thickness, thickness=box[2])
+
+        super().__init__(slice_thickness=slice_thickness)
 
         self._ewald_parametrization = EwaldParametrization(width=1)
 
-        self._ewald_potential = Potential(atoms=self.atoms,
-                                          gpts=self.gpts,
+        atoms = LazyAtoms(atoms)
+
+        self._ewald_potential = Potential(atoms=atoms,
+                                          gpts=gpts,
+                                          sampling=sampling,
                                           parametrization=self._ewald_parametrization,
-                                          slice_thickness=self.slice_thickness,
+                                          slice_thickness=slice_thickness,
                                           projection='finite',
-                                          plane=self.plane,
-                                          box=self.box,
-                                          origin=self.origin)
+                                          x_vector=x_vector,
+                                          y_vector=y_vector,
+                                          box=box,
+                                          origin=origin)
 
         self._electron_potential = None
 
-    def get_frozen_phonon_potentials(self, lazy=False):
+    @property
+    def atoms(self):
+        return self._atoms
+
+    @property
+    def device(self):
+        return self._device
+
+    def build(self) -> 'PotentialArray':
+        self.grid.check_is_defined()
+        xp = get_array_module(self.device)
+
+        def get_chunk(potential, first_slice, last_slice):
+            return potential.get_chunk(first_slice, last_slice).array
+
+        array = []
+        if hasattr(self.atoms, 'compute'):
+            potential = self.to_delayed()
+        else:
+            potential = self
+
+        for first_slice, last_slice in generate_chunks(len(self), chunks=self._chunks):
+            shape = (last_slice - first_slice,) + self.gpts
+
+            if hasattr(potential, 'compute'):
+                new_chunk = dask.delayed(get_chunk)(potential, first_slice, last_slice)
+                new_chunk = da.from_delayed(new_chunk, shape=shape, meta=xp.array((), dtype=np.float32))
+            else:
+                new_chunk = get_chunk(potential, first_slice, last_slice)
+
+            array.append(new_chunk)
+
+        # if lazy:
+        array = da.concatenate(array)
+        # else:
+        #    array = np.concatenate(array)
+
+        return PotentialArray(array, self.slice_thickness, extent=self.extent)
+
+    @property
+    def frozen_phonons(self):
+        pass
+
+    def get_configurations(self, lazy=False):
         return [self]
+
+    #def get_frozen_phonon_potentials(self, lazy=False):
+    #    return [self]
 
     def _get_compensated_potential(self):
         if self._electron_potential is not None:
@@ -249,8 +312,6 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
         #                           new_cell,
         #                           interpolator)
 
-
-
         array = self._get_compensated_potential()
 
         chunk = np.zeros((last_slice - first_slice,) + self.gpts, dtype=np.float32)
@@ -268,7 +329,6 @@ class ChargeDensityPotential(AbstractPotentialFromAtoms):
                                                  new_cell,
                                                  offset
                                                  ).sum(-1) * dz
-
 
         potential = self._ewald_potential.get_chunk(first_slice, last_slice)
         potential._array = potential._array + copy_to_device(chunk, potential._array)
