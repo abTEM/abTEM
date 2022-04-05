@@ -380,6 +380,36 @@ class Waves(HasDaskArray, WavesLikeMixin):
         d['extra_axes_metadata'] = axes_metadata + d['extra_axes_metadata']
         return self.__class__(**d)
 
+    def apply_detector_func(self, func, detectors, scan=None, **kwargs):
+        detectors = validate_detectors(detectors)
+
+        new_cls = [detector.measurement_type(self) for detector in detectors]
+        new_cls_kwargs = [detector.measurement_kwargs(self) for detector in detectors]
+
+        signatures = []
+        output_sizes = {}
+        meta = []
+        i = 2
+        for detector in detectors:
+            shape = detector.measurement_shape(self)[self.num_extra_axes:]
+            signatures.append(f'({",".join([str(i) for i in range(i, i + len(shape))])})')
+            output_sizes.update({str(index): n for index, n in zip(range(i, i + len(shape)), shape)})
+            meta.append(np.array((), dtype=detector.measurement_dtype))
+            i += len(shape)
+
+        signature = '(0,1)->' + ','.join(signatures)
+
+        measurements = self.apply_gufunc(func,
+                                         detectors=detectors,
+                                         new_cls=new_cls,
+                                         new_cls_kwargs=new_cls_kwargs,
+                                         signature=signature,
+                                         output_sizes=output_sizes,
+                                         meta=meta,
+                                         **kwargs)
+
+        return measurements
+
     def transition_multislice(self, potential: AbstractPotential, transitions, detectors=None, ctf=None):
         potential = validate_potential(potential, self)
         detectors = validate_detectors(detectors)
@@ -394,7 +424,9 @@ class Waves(HasDaskArray, WavesLikeMixin):
                 transitions = transitions.get_transition_potentials()
 
         measurements = []
-        for potential_config in potential.get_distribution(lazy=self.is_lazy):
+        for potential_config in potential.get_configurations(lazy=self.is_lazy):
+            #potential_config = potential_config.to_delayed()
+
             config_measurements = self.copy().apply_detector_func(transition_potential_multislice,
                                                                   potential=potential_config,
                                                                   detectors=detectors,
@@ -406,9 +438,9 @@ class Waves(HasDaskArray, WavesLikeMixin):
         measurements = list(map(list, zip(*measurements)))
         measurements = [stack_measurements(measurements, FrozenPhononsAxis()) for measurements in measurements]
 
-        for i, (detector, measurement) in enumerate(zip(detectors, measurements)):
-            if detector.ensemble_mean:
-                measurements[i] = measurement.mean(0)
+        #for i, (detector, measurement) in enumerate(zip(detectors, measurements)):
+        #    if detector.ensemble_mean:
+        #        measurements[i] = measurement.mean(0)
 
         return measurements[0] if len(measurements) == 1 else measurements
 

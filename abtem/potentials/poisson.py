@@ -180,8 +180,6 @@ class ChargeDensityPotential(AbstractPotential):
 
         self._ewald_parametrization = EwaldParametrization(width=1)
 
-        atoms = LazyAtoms(atoms)
-
         self._ewald_potential = Potential(atoms=atoms,
                                           gpts=gpts,
                                           sampling=sampling,

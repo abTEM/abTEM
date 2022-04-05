@@ -457,7 +457,7 @@ class Images(AbstractMeasurement):
             Lateral sampling of images in x and y [Å].
         extra_axes_metadata : list of AxesMetadata
         metadata : dict
-            Metadata
+            Metadata . The keys and valuues must be json serializable.
         """
 
         if np.isscalar(sampling):
@@ -947,47 +947,58 @@ class Images(AbstractMeasurement):
              power: float = 1.,
              vmin: float = None,
              vmax: float = None,
+             plot_grid: bool = False,
              **kwargs):
-        """
-
-        Parameters
-        ----------
-        ax :
-        cbar :
-        figsize :
-        title :
-        power :
-        vmin :
-        vmax :
-        kwargs :
-
-        Returns
-        -------
-
-        """
 
         self.compute()
 
-        if ax is None:
+        if ax is None and not plot_grid:
             fig, ax = plt.subplots(figsize=figsize)
 
-        if title is not None:
-            ax.set_title(title)
+        if plot_grid:
+            array = self.array[(0,) * max(self.num_extra_axes - 2, 0)]
+        else:
+            array = self.array[(0,) * self.num_extra_axes]
 
-        ax.set_title(title)
+        array = np.swapaxes(array, -1, -2)
 
-        array = asnumpy(self.array)[(0,) * self.num_extra_axes].T ** power
+        if power != 1.:
+            array = array ** power
 
         if np.iscomplexobj(array):
             colored_array = domain_coloring(array, vmin=vmin, vmax=vmax)
         else:
             colored_array = array
 
-        im = ax.imshow(colored_array, extent=[0, self.extent[0], 0, self.extent[1]], origin='lower', vmin=vmin,
-                       vmax=vmax, **kwargs)
+        def add_imshow(ax, arr):
+            im = ax.imshow(arr,
+                           extent=[0, self.extent[0], 0, self.extent[1]],
+                           origin='lower',
+                           vmin=vmin,
+                           vmax=vmax,
+                           **kwargs)
+            return im
 
-        ax.set_xlabel('x [Å]')
-        ax.set_ylabel('y [Å]')
+        if plot_grid:
+            nrows = array.shape[1]
+            ncols = array.shape[0]
+            fig, axes = plt.subplots(nrows=nrows,
+                                     ncols=ncols,
+                                     sharex=True,
+                                     sharey=True,
+                                     figsize=figsize)
+
+            for ax, index in zip(axes.T.ravel(), np.ndindex(array.shape[:-2])):
+                im = add_imshow(ax, colored_array[index])
+
+            fig.supxlabel('x [Å]')
+            fig.supylabel('y [Å]')
+            fig.suptitle(title)
+        else:
+            add_imshow(ax, colored_array)
+            ax.set_xlabel('x [Å]')
+            ax.set_ylabel('y [Å]')
+            im = ax.set_title(title)
 
         if cbar:
             if np.iscomplexobj(array):
@@ -997,6 +1008,7 @@ class Images(AbstractMeasurement):
             else:
                 plt.colorbar(im, ax=ax)
 
+        plt.tight_layout()
         return ax, im
 
 

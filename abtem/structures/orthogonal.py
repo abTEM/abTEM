@@ -118,7 +118,7 @@ def rotation_matrix_to_euler(R, axes='sxyz', eps=1e-6):
     return ax, ay, az
 
 
-def decompose_affine_transform(A):
+def decompose_affine_transform(A: np.ndarray):
     ZS = np.linalg.cholesky(np.dot(A.T, A)).T
 
     zoom = np.diag(ZS)
@@ -148,7 +148,20 @@ def label_to_index_generator(labels, first_label=0):
         yield indices[l:h]
 
 
-def merge_close_atoms(atoms, tol=1e-7):
+def _merge_close_atoms(atoms, tol: float = 1e-7):
+    """
+    Merge atoms within a given tolerance. If atoms of different species are within
+
+    Parameters
+    ----------
+    atoms :
+    tol :
+
+    Returns
+    -------
+
+    """
+
     if len(atoms) < 2:
         return atoms
 
@@ -170,20 +183,34 @@ def merge_close_atoms(atoms, tol=1e-7):
     return new_atoms
 
 
-def shrink_cell(atoms, n):
+def shrink_cell(atoms, factor: int, tol: float = 1e-6):
+    """
+    Shrink a repeated cell by a factor, if the cell
+
+    Parameters
+    ----------
+    atoms : Atoms
+        A repeated supercell
+    n :
+
+    Returns
+    -------
+
+    """
+
     for i in range(3):
         while True:
             try:
                 atoms_copy = atoms.copy()
                 new_positions = atoms_copy.positions
-                new_positions[:, i] = new_positions[:, i] % (atoms_copy.cell[i, i] / n)
+                new_positions[:, i] = new_positions[:, i] % (atoms_copy.cell[i, i] / factor)
                 atoms_copy.positions[:] = new_positions
 
                 old_len = len(atoms_copy)
-                atoms_copy = merge_close_atoms(atoms_copy, 1e-5)
+                atoms_copy = _merge_close_atoms(atoms_copy, tol=tol)
 
-                assert len(atoms_copy) == old_len // n
-                atoms_copy.cell[i] = atoms_copy.cell[i] / n
+                assert len(atoms_copy) == old_len // factor
+                atoms_copy.cell[i] = atoms_copy.cell[i] / factor
 
                 atoms = atoms_copy
             except AssertionError:
