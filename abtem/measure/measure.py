@@ -644,6 +644,7 @@ class Images(AbstractMeasurement):
         -------
         interpolated_images : Images
         """
+
         if method == 'fft' and boundary != 'periodic':
             raise ValueError('only periodic boundaries available for FFT interpolation')
 
@@ -986,13 +987,15 @@ class Images(AbstractMeasurement):
                                      ncols=ncols,
                                      sharex=True,
                                      sharey=True,
+                                     constrained_layout=True,
+                                     gridspec_kw={'hspace': 0.05, 'wspace': 0.05},
                                      figsize=figsize)
 
             for ax, index in zip(axes.T.ravel(), np.ndindex(array.shape[:-2])):
                 im = add_imshow(ax, colored_array[index])
 
-            fig.supxlabel('x [Å]')
-            fig.supylabel('y [Å]')
+            fig.supxlabel(self.extra_axes_metadata[-2].label)
+            fig.supylabel(self.extra_axes_metadata[-1].label)
             fig.suptitle(title)
         else:
             add_imshow(ax, colored_array)
@@ -1008,7 +1011,7 @@ class Images(AbstractMeasurement):
             else:
                 plt.colorbar(im, ax=ax)
 
-        plt.tight_layout()
+        # plt.tight_layout()
         return ax, im
 
 

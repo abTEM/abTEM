@@ -43,7 +43,7 @@ class NonLinearAxis(AxisMetadata):
 
 @dataclass
 class ThicknessSeriesAxis(NonLinearAxis):
-    label: str = 'Thickness'
+    label: str = 'thickness'
     units: str = 'Å'
 
 
