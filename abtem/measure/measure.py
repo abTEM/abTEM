@@ -949,6 +949,7 @@ class Images(AbstractMeasurement):
              vmin: float = None,
              vmax: float = None,
              plot_grid: bool = False,
+             axes_labels: bool = True,
              **kwargs):
 
         self.compute()
@@ -994,13 +995,18 @@ class Images(AbstractMeasurement):
             for ax, index in zip(axes.T.ravel(), np.ndindex(array.shape[:-2])):
                 im = add_imshow(ax, colored_array[index])
 
-            fig.supxlabel(self.extra_axes_metadata[-2].label)
-            fig.supylabel(self.extra_axes_metadata[-1].label)
+            if axes_labels:
+                fig.supxlabel(self.extra_axes_metadata[-2].label)
+                fig.supylabel(self.extra_axes_metadata[-1].label)
+
             fig.suptitle(title)
         else:
             add_imshow(ax, colored_array)
-            ax.set_xlabel('x [Å]')
-            ax.set_ylabel('y [Å]')
+
+            if axes_labels:
+                ax.set_xlabel('x [Å]')
+                ax.set_ylabel('y [Å]')
+
             im = ax.set_title(title)
 
         if cbar:
