@@ -950,6 +950,7 @@ class Images(AbstractMeasurement):
              vmax: float = None,
              plot_grid: bool = False,
              axes_labels: bool = True,
+             axes_ticks: bool = True,
              **kwargs):
 
         self.compute()
@@ -994,6 +995,10 @@ class Images(AbstractMeasurement):
 
             for ax, index in zip(axes.T.ravel(), np.ndindex(array.shape[:-2])):
                 im = add_imshow(ax, colored_array[index])
+
+                if not axes_ticks:
+                    ax.set_xticks([])
+                    ax.set_yticks([])
 
             if axes_labels:
                 fig.supxlabel(self.extra_axes_metadata[-2].label)
