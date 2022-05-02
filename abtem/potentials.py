@@ -1311,8 +1311,18 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
         self.accelerator.check_match(waves)
         xp = get_array_module(waves._array)
 
-        if conjugate:
-            waves._array *= xp.conjugate(copy_to_device(self.array, xp))
+        if len(waves.array.shape) == 2:
+
+            if self.array.shape[0] == 1:
+                array = self.array[0]
+            else:
+                raise RuntimeError()
+
         else:
-            waves._array *= copy_to_device(self.array, xp)
+            array = self.array
+
+        if conjugate:
+            waves._array *= xp.conjugate(copy_to_device(array, xp))
+        else:
+            waves._array *= copy_to_device(array, xp)
         return waves
