@@ -851,6 +851,8 @@ class Probe(_Scanable, HasEventMixin):
 
         array = array / xp.sqrt((xp.abs(array[0]) ** 2).sum()) / xp.sqrt(np.prod(array.shape[1:]).astype(np.float32))
 
+        array = np.squeeze(array)
+
         return Waves(array, extent=self.extent, energy=self.energy, tilt=self.tilt,
                      antialias_aperture=self.antialias_aperture)
 
