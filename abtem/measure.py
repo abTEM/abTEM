@@ -229,7 +229,8 @@ class Measurement(AbstractMeasurement):
                  array: Union[np.ndarray, 'Measurement'],
                  calibrations: Union[Calibration, Sequence[Union[Calibration, None]]] = None,
                  units: str = '',
-                 name: str = ''):
+                 name: str = '',
+                 base_dimensions: int = 2):
 
         if issubclass(array.__class__, self.__class__):
             measurement = array
@@ -247,6 +248,7 @@ class Measurement(AbstractMeasurement):
                 'The number of calibrations must equal the number of array dimensions. For undefined use None.')
 
         self._calibrations = calibrations
+        self._base_dimensions = base_dimensions
         super().__init__(array=array, name=name, units=units)
 
     def __getitem__(self, args):
@@ -534,6 +536,9 @@ class Measurement(AbstractMeasurement):
         if not (self.calibrations[-1].units == self.calibrations[-2].units):
             raise RuntimeError('the units of the blurred dimensions must match')
 
+        if np.isscalar(sigma):
+            sigma = (sigma,) * self._base_dimensions
+
         # sigma = (sigma / self.calibrations[-2].sampling, sigma / self.calibrations[-1].sampling)
 
         sigma = [s / calibration.sampling for s, calibration in zip(sigma, self.calibrations)]
@@ -609,7 +614,27 @@ class Measurement(AbstractMeasurement):
             calibrations.append(copy(calibration))
             calibrations[-1].sampling = d
 
-        return self.__class__(new_array, calibrations, name=self.name, units=self.units)
+        return self.__class__(new_array, tuple(calibrations), name=self.name, units=self.units)
+
+    def _as_integrated_images(self, sampling):
+        interpolated = self._rollaxis().interpolate(sampling)
+        array = np.cumsum(interpolated.array, axis=-0)
+        array = array[None] - array[:, None]
+        inner_calibration = interpolated.calibrations[2].copy()
+        outer_calibration = interpolated.calibrations[2].copy()
+        inner_calibration.name = 'inner'
+        outer_calibration.name = 'outer'
+        calibrations = (inner_calibration, outer_calibration) + interpolated.calibrations[:2]
+        return self.__class__(array=array, calibrations=calibrations)
+
+    def _rollaxis(self):
+        def shift(seq, n):
+            n = n % len(seq)
+            return seq[n:] + seq[:n]
+
+        array = np.rollaxis(self.array, axis=-1)
+        calibrations = shift(self.calibrations, -1)
+        return self.__class__(array=array, calibrations=calibrations)
 
     def interpolate(self,
                     new_sampling: Union[float, Tuple[float, float]] = None,
@@ -641,6 +666,18 @@ class Measurement(AbstractMeasurement):
 
         if self.dimensions == 2:
             return self._interpolate_2d(new_sampling=new_sampling, new_gpts=new_gpts, padding=padding, kind=kind)
+
+        else:
+            for i in np.ndindex(self.shape[:-2]):
+                interpolated = self[i]._interpolate_2d(new_sampling=new_sampling, new_gpts=new_gpts, padding=padding, kind=kind)
+                if all(i) == 0:
+                    array = np.zeros(self.shape[:-2] + interpolated.shape)
+
+                array[i] = interpolated.array
+
+            calibrations = self.calibrations[:-2] + interpolated.calibrations[-2:]
+            return self.__class__(array, calibrations)
+
 
     def tile(self, multiples: Sequence[int]) -> 'Measurement':
         """
@@ -694,6 +731,12 @@ class Measurement(AbstractMeasurement):
         """
         from hyperspy._signals.signal2d import Signal2D
         from hyperspy._signals.signal1d import Signal1D
+
+        #array = np.transpose(self.array, (-2,-1))
+        # The index in the array corresponding to each axis is determine from
+        # the index in the axis list
+        #s = Signal2D(array, axes=axes_extra[::-1] + axes_base[::-1])
+
         signal_shape = np.shape(self.array)
         axes = []
         for i, size in zip(self.calibrations, signal_shape):
@@ -709,13 +752,17 @@ class Measurement(AbstractMeasurement):
                              "units": i.units,
                              "name": i.name,
                              "size": size})
-        if len(signal_shape) == 3:
+        if self._base_dimensions == 1:
             # This could change depending on the type of measurement
             sig = Signal1D(self.array, axes=axes)
-        else:
+        elif self._base_dimensions == 2:
             sig = Signal2D(self.array, axes=axes)
+        else:
+            raise RuntimeError()
+
         if signal_type is not None:
             sig.set_signal_type(signal_type)
+
         return sig
 
     def write(self, path, mode='w', format="hdf5", **kwargs):
