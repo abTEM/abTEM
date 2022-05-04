@@ -686,8 +686,10 @@ class PlaneWave(_WavesLike):
         """Build the plane wave function as a Waves object."""
         xp = get_array_module_from_device(self._device)
         self.grid.check_is_defined()
-        array = xp.ones((1, self.gpts[0], self.gpts[1]), dtype=xp.complex64)
+        array = xp.ones((self.gpts[0], self.gpts[1]), dtype=xp.complex64)
         # array = array / np.sqrt(np.prod(array.shape))
+
+
         return Waves(array, extent=self.extent, energy=self.energy)
 
     def __copy__(self, a) -> 'PlaneWave':
