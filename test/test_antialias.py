@@ -24,16 +24,16 @@ def test_bandlimit():
     waves = probe.multislice((0, 0), atoms, pbar=False)
     diffraction_pattern = waves.diffraction_pattern(max_angle=30)
 
-    assert diffraction_pattern.shape == (1, 33, 33)
+    assert diffraction_pattern.shape == (33, 33)
 
     probe = Probe(energy=300e3, semiangle_cutoff=1e3, rolloff=0.0, gpts=100)
     waves = probe.multislice((0, 0), atoms, pbar=False)
 
     diffraction_pattern = waves.diffraction_pattern('limit')
     assert not np.allclose(diffraction_pattern.array / diffraction_pattern.array.max(), 1.)
-    assert diffraction_pattern.shape == (1, 66, 66)
+    assert diffraction_pattern.shape == (66, 66)
 
     diffraction_pattern = waves.diffraction_pattern('valid')
 
-    assert diffraction_pattern.shape == (1, 45, 45)
+    assert diffraction_pattern.shape == (45, 45)
     assert np.allclose(diffraction_pattern.array / diffraction_pattern.array.max(), 1.)

@@ -142,7 +142,7 @@ def test_create_probe_waves():
 
     waves = probe_waves.build()
 
-    assert waves.array.shape == (1, 10, 10)
+    assert waves.array.shape == (10, 10)
 
     waves = probe_waves.build([[0, 0], [1, 1]])
 

@@ -49,7 +49,7 @@ def test_resample_diffraction_patterns():
             measurement2 = detector.detect(wave)
             measurement2 /= measurement2.max()
 
-            s1 = (measurement2.shape[1] - measurement.shape[1]) // 2
-            s2 = (measurement2.shape[2] - measurement.shape[2]) // 2
-            measurement2 = measurement2[:, s1:s1 + measurement.shape[2], s2:s2 + measurement.shape[2]]
+            s1 = (measurement2.shape[-2] - measurement.shape[-2]) // 2
+            s2 = (measurement2.shape[-1] - measurement.shape[-1]) // 2
+            measurement2 = measurement2[..., s1:s1 + measurement.shape[-2], s2:s2 + measurement.shape[-1]]
             assert np.all(np.abs(measurement2[0] - measurement[0]) < .5)
