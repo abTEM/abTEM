@@ -1,6 +1,6 @@
 Visualize
 =========
 
-.. automodule:: abtem.visualize
+.. automodule:: abtem.visualize.mpl
     :members:
     :inherited-members:
