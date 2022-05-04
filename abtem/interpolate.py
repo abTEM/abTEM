@@ -20,7 +20,14 @@ def _infer_lines(B, H, W, out_H, out_W, kH, kW):
 
 
 def interpolate_bilinear_cpu(x, v, u, vw, uw):
-    B, H, W = x.shape
+    if len(x.shape) == 3:
+        B, H, W = x.shape
+        batch = True
+    else:
+        H, W = x.shape
+        B = 1
+        batch = False
+
     out_H, out_W = v.shape
 
     # Interpolation is done by each output panel (i.e. multi lines)
@@ -54,7 +61,7 @@ def interpolate_bilinear_cpu(x, v, u, vw, uw):
         wcol[0] -= wcol[1]
 
         # packing to the panel whose shape is (B, C, 2, 2, l, out_W)
-        panel = x[:, vcol[:, None], ucol[None, :]]
+        panel = x[..., vcol[:, None], ucol[None, :]]
 
         # interpolation
         panel = panel.reshape((B, 4, l * out_W))
@@ -64,7 +71,12 @@ def interpolate_bilinear_cpu(x, v, u, vw, uw):
         np.einsum('ijk,jk->ik', panel, weights, out=y[:, iout:iout_end])
         del panel, weights
 
-    return y.reshape((B, out_H, out_W))
+    y = y.reshape((B, out_H, out_W))
+
+    if not batch:
+        y = y[0]
+
+    return y
 
 
 def compute_indices_and_weights(out_size, in_size, align_corners, xp):
