@@ -669,7 +669,8 @@ class Measurement(AbstractMeasurement):
 
         else:
             for i in np.ndindex(self.shape[:-2]):
-                interpolated = self[i]._interpolate_2d(new_sampling=new_sampling, new_gpts=new_gpts, padding=padding, kind=kind)
+                interpolated = self[i]._interpolate_2d(new_sampling=new_sampling, new_gpts=new_gpts, padding=padding,
+                                                       kind=kind)
                 if all(i) == 0:
                     array = np.zeros(self.shape[:-2] + interpolated.shape)
 
@@ -677,7 +678,6 @@ class Measurement(AbstractMeasurement):
 
             calibrations = self.calibrations[:-2] + interpolated.calibrations[-2:]
             return self.__class__(array, calibrations)
-
 
     def tile(self, multiples: Sequence[int]) -> 'Measurement':
         """
@@ -732,10 +732,10 @@ class Measurement(AbstractMeasurement):
         from hyperspy._signals.signal2d import Signal2D
         from hyperspy._signals.signal1d import Signal1D
 
-        #array = np.transpose(self.array, (-2,-1))
+        # array = np.transpose(self.array, (-2,-1))
         # The index in the array corresponding to each axis is determine from
         # the index in the axis list
-        #s = Signal2D(array, axes=axes_extra[::-1] + axes_base[::-1])
+        # s = Signal2D(array, axes=axes_extra[::-1] + axes_base[::-1])
 
         signal_shape = np.shape(self.array)
         axes = []
@@ -922,15 +922,24 @@ class Measurement(AbstractMeasurement):
         else:
             return new_measurement
 
-    def crop(self, extent):
+    def crop(self, extent=None, origin=None, margin=None):
 
         old_extent = (self.calibration_limits[0][1] - self.calibration_limits[0][0],
                       self.calibration_limits[1][1] - self.calibration_limits[1][0])
 
+        if margin is not None:
+            origin = margin
+            extent = (old_extent[0] - margin[0], old_extent[1] - margin[1])
+
+        offset = (int(np.floor(origin[0] / old_extent[0] * self.shape[0])),
+                  int(np.floor(origin[1] / old_extent[1] * self.shape[1])))
+
         new_shape = (int(np.floor(extent[0] / old_extent[0] * self.shape[0])),
                      int(np.floor(extent[1] / old_extent[1] * self.shape[1])))
 
-        return self[:new_shape[0], :new_shape[1]]
+        array = self.array[..., offset[0]:new_shape[0], offset[1]:new_shape[1]]
+
+        return self.__class__(array, calibrations=self.calibrations)
 
     def interpolate_line(self,
                          start: Union[Tuple[float, float], Atom],
