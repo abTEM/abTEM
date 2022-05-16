@@ -328,9 +328,11 @@ class PotentialConfiguration(AbstractPotential):
     def parametrization(self):
         return self._parametrization
 
-    def build(self) -> 'PotentialArray':
+    def build(self, lazy=None) -> 'PotentialArray':
         self.grid.check_is_defined()
         xp = get_array_module(self.device)
+
+        lazy = validate_lazy(lazy)
 
         def get_chunk(potential, first_slice, last_slice):
             return potential.get_chunk(first_slice, last_slice).array
@@ -352,10 +354,10 @@ class PotentialConfiguration(AbstractPotential):
 
             array.append(new_chunk)
 
-        # if lazy:
-        array = da.concatenate(array)
-        # else:
-        #    array = np.concatenate(array)
+        if lazy:
+            array = da.concatenate(array)
+        else:
+            array = np.concatenate(array)
 
         return PotentialArray(array, self.slice_thickness, extent=self.extent)
 
@@ -516,6 +518,7 @@ class Potential(AbstractPotential):
     ----------
     atoms : Atoms or FrozenPhonons
         Atoms or FrozenPhonons defining the atomic configuration(s) used in the IAM of the electrostatic potential(s).
+        The atoms are assumed to be periodic.
     gpts : one or two int, optional
         Number of grid points describing each slice of the potential.
     sampling : one or two float, optional
@@ -533,6 +536,17 @@ class Potential(AbstractPotential):
     projection : 'finite' or 'infinite'
         If 'finite' the 3d potential is numerically integrated between the slice boundaries. If 'infinite' the infinite
         potential projection of each atom will be assigned to a single slice.
+    x_vector : {'x', 'y', 'z'} or three float, optional
+        Vector defining the direction of the x-axis of the plane defining the plane perpendicular to the propagation
+        direction.
+    y_vector : {'x', 'y', 'z'} or three float, optional
+        Vector defining the direction of the x-axis of the plane defining the plane perpendicular to the propagation
+        direction.
+    origin : three float, optional
+    box : three float, optional
+
+    periodic : bool, optional
+        If True (default),
     chunks : int, optional
         Number of potential slices in each chunk of a lazy calculation. Default is 1.
     device : str, optional
@@ -721,8 +735,9 @@ class Potential(AbstractPotential):
         return self._cutoff_tolerance
 
     def build(self, lazy=True) -> 'PotentialArray':
+        lazy = validate_lazy(lazy)
         configuration = self.get_configurations(lazy=lazy)[0]
-        return configuration.build()
+        return configuration.build(lazy=lazy)
 
     def get_chunk(self, first_slice: int, last_slice: int) -> 'PotentialArray':
         configuration = self.get_configurations(lazy=False)[0]
@@ -738,7 +753,6 @@ class Potential(AbstractPotential):
             Generator of potentials.
         """
         lazy = validate_lazy(lazy)
-
         frozen_phonons = self.frozen_phonons
 
         if lazy:

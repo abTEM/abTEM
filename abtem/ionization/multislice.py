@@ -56,10 +56,10 @@ def transition_potential_multislice(waves,
     antialias_aperture = AntialiasAperture(device=get_array_module(waves.array)).match_grid(waves)
     propagator = FresnelPropagator(device=get_array_module(waves.array)).match_waves(waves)
 
-    transmission_function = potential.build().transmission_function(energy=waves.energy)
+    transmission_function = potential.build(lazy=waves.is_lazy).transmission_function(energy=waves.energy)
     transmission_function = antialias_aperture.bandlimit(transmission_function)
 
-    measurements = [detector.allocate_measurement(waves, scan=scan) for detector in detectors]
+    measurements = [detector.allocate_measurement(waves) for detector in detectors]
 
     for i, (transmission_function_slice, sites_slice) in enumerate(zip(transmission_function, sites)):
         sites_slice = transition_potentials.validate_sites(sites_slice)
@@ -80,7 +80,7 @@ def transition_potential_multislice(waves,
                 else:
                     measurement = detector.detect(scattered_waves).sum(0)
 
-                measurements[j].add(measurement, in_place=True)
+                measurements[j] += measurement
 
         propagator.thickness = transmission_function_slice.thickness
         waves = transmission_function_slice.transmit(waves)

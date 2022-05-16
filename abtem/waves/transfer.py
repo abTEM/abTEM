@@ -646,11 +646,20 @@ class CTF(HasAcceleratorMixin):
         shape = ()
         chunks = ()
         axes_metadata = []
+
+        reverse_aliases = {value: key for key, value in polar_aliases.items()}
+
         for parameter, values in self._parameters.items():
             if isinstance(values, Distribution):
                 chunks += (values.chunks,)
                 ctf_parameter_distribution[parameter] = values
                 shape += (len(values),)
+
+                try:
+                    parameter = reverse_aliases[parameter]
+                except KeyError:
+                    pass
+
                 axes_metadata += [ParameterSeriesAxis(label=parameter,
                                                       values=tuple(values.values),
                                                       units='Å',

@@ -74,7 +74,7 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
     return hyperspy_axes
 
 
-def from_zarr(url):
+def from_zarr(url, **kwargs):
     with zarr.open(url, mode='r') as f:
         d = {}
 
@@ -86,7 +86,7 @@ def from_zarr(url):
             else:
                 d[key] = value
 
-    array = da.from_zarr(url, component='array', chunks=None)
+    array = da.from_zarr(url, component='array', **kwargs)
     return cls(array, extra_axes_metadata=extra_axes_metadata, **d)
 
 
@@ -155,7 +155,8 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
 
         if not allow_base_axis_chunks:
             if self.is_lazy and (not all(len(chunks) == 1 for chunks in array.chunks[-2:])):
-                raise RuntimeError(f'chunks not allowed in base axes of {self.__class__}')
+                chunks = ('auto',) * self.num_extra_axes + (-1,) * self.num_base_axes
+                self.rechunk(chunks=chunks)
 
     @property
     def device(self):
@@ -372,7 +373,8 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
             array = measurement.array
 
             if not measurement.is_lazy:
-                array = da.from_array(array)
+                chunks = ('auto',) * self.num_extra_axes + (-1,) * self.num_base_axes
+                array = da.from_array(array, chunks=chunks)
 
             # if measurement.is_lazy:
             array = array.to_zarr(url, compute=compute, component='array', overwrite=overwrite)
@@ -390,8 +392,8 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
         return array
 
     @staticmethod
-    def from_zarr(url) -> 'T':
-        return from_zarr(url)
+    def from_zarr(url, **kwargs) -> 'T':
+        return from_zarr(url, **kwargs)
 
     @abstractmethod
     def to_hyperspy(self):
@@ -455,7 +457,7 @@ class Images(AbstractMeasurement):
             Lateral sampling of images in x and y [Å].
         extra_axes_metadata : list of AxesMetadata
         metadata : dict
-            Metadata
+            Metadata . The keys and valuues must be json serializable.
         """
 
         if np.isscalar(sampling):
@@ -648,6 +650,7 @@ class Images(AbstractMeasurement):
         -------
         interpolated_images : Images
         """
+
         if method == 'fft' and boundary != 'periodic':
             raise ValueError('only periodic boundaries available for FFT interpolation')
 
@@ -951,47 +954,71 @@ class Images(AbstractMeasurement):
              power: float = 1.,
              vmin: float = None,
              vmax: float = None,
+             plot_grid: bool = False,
+             axes_labels: bool = True,
+             axes_ticks: bool = True,
              **kwargs):
-        """
-
-        Parameters
-        ----------
-        ax :
-        cbar :
-        figsize :
-        title :
-        power :
-        vmin :
-        vmax :
-        kwargs :
-
-        Returns
-        -------
-
-        """
 
         self.compute()
 
-        if ax is None:
+        if ax is None and not plot_grid:
             fig, ax = plt.subplots(figsize=figsize)
 
-        if title is not None:
-            ax.set_title(title)
+        if plot_grid:
+            array = self.array[(0,) * max(self.num_extra_axes - 2, 0)]
+        else:
+            array = self.array[(0,) * self.num_extra_axes]
 
-        ax.set_title(title)
+        array = np.swapaxes(array, -1, -2)
 
-        array = asnumpy(self.array)[(0,) * self.num_extra_axes].T ** power
+        if power != 1.:
+            array = array ** power
 
         if np.iscomplexobj(array):
             colored_array = domain_coloring(array, vmin=vmin, vmax=vmax)
         else:
             colored_array = array
 
-        im = ax.imshow(colored_array, extent=[0, self.extent[0], 0, self.extent[1]], origin='lower', vmin=vmin,
-                       vmax=vmax, **kwargs)
+        def add_imshow(ax, arr):
+            im = ax.imshow(arr,
+                           extent=[0, self.extent[0], 0, self.extent[1]],
+                           origin='lower',
+                           vmin=vmin,
+                           vmax=vmax,
+                           **kwargs)
+            return im
 
-        ax.set_xlabel('x [Å]')
-        ax.set_ylabel('y [Å]')
+        if plot_grid:
+            nrows = array.shape[1]
+            ncols = array.shape[0]
+            fig, axes = plt.subplots(nrows=nrows,
+                                     ncols=ncols,
+                                     sharex=True,
+                                     sharey=True,
+                                     constrained_layout=True,
+                                     gridspec_kw={'hspace': 0.05, 'wspace': 0.05},
+                                     figsize=figsize)
+
+            for ax, index in zip(axes.T.ravel(), np.ndindex(array.shape[:-2])):
+                im = add_imshow(ax, colored_array[index])
+
+                if not axes_ticks:
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+
+            if axes_labels:
+                fig.supxlabel(self.extra_axes_metadata[-2].label)
+                fig.supylabel(self.extra_axes_metadata[-1].label)
+
+            fig.suptitle(title)
+        else:
+            add_imshow(ax, colored_array)
+
+            if axes_labels:
+                ax.set_xlabel('x [Å]')
+                ax.set_ylabel('y [Å]')
+
+            im = ax.set_title(title)
 
         if cbar:
             if np.iscomplexobj(array):
@@ -1001,6 +1028,7 @@ class Images(AbstractMeasurement):
             else:
                 plt.colorbar(im, ax=ax)
 
+        # plt.tight_layout()
         return ax, im
 
 
