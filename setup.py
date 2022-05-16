@@ -32,6 +32,7 @@ setup(
         'numba',
         'imageio',
         'zarr',
+        'dask',
         'matplotlib',
         'ase',
         'tqdm',
