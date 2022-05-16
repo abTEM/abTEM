@@ -56,7 +56,7 @@ def assume_valid_probe_and_detectors(probe, detectors):
     assume(outer_limit <= min(probe.cutoff_angles))
 
 
-def assert_scanned_measurement_as_expected(measurements, atoms, waves, detectors, scan=None):
+def assert_scanned_measurement_as_expected(measurements, atoms, waves, detectors, scan=None, parameter_series=None):
     if not isinstance(measurements, list):
         measurements = [measurements]
 
@@ -69,6 +69,10 @@ def assert_scanned_measurement_as_expected(measurements, atoms, waves, detectors
         if isinstance(atoms, AbstractFrozenPhonons):
             if (not atoms.ensemble_mean) or isinstance(measurement, Waves):
                 expected_shape = (len(atoms),)
+
+        if parameter_series is not None:
+            if hasattr(parameter_series, '__len__') and not parameter_series.ensemble_mean:
+                expected_shape += (len(parameter_series),)
 
         if detector.detect_every:
             num_detect_thicknesses = len(Potential(atoms)) // detector.detect_every

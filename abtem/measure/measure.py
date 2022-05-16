@@ -12,7 +12,7 @@ from ase import Atom
 from matplotlib.axes import Axes
 
 from abtem.core.axes import HasAxes, RealSpaceAxis, AxisMetadata, FourierSpaceAxis, LinearAxis, axis_to_dict, \
-    axis_from_dict, OrdinalAxis, NonLinearAxis
+    axis_from_dict, OrdinalAxis, NonLinearAxis, ScanAxis
 from abtem.core.backend import cp, asnumpy, get_array_module, get_ndimage_module, copy_to_device, \
     device_name_from_array_module
 from abtem.core.complex import abs2
@@ -473,6 +473,12 @@ class Images(AbstractMeasurement):
                          allow_complex=True,
                          allow_base_axis_chunks=True)
 
+    @classmethod
+    def from_axes_metadata(cls, array, axes_metadata, metadata=None):
+        sampling = (axes_metadata[-2].sampling, axes_metadata[-1].sampling)
+        axes_metadata = axes_metadata[:-2]
+        return cls(array, sampling=sampling, extra_axes_metadata=axes_metadata, metadata=metadata)
+
     @property
     def sampling(self) -> Tuple[float, float]:
         """ Sampling of images in x and y [Å]. """
@@ -493,7 +499,7 @@ class Images(AbstractMeasurement):
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
         return [RealSpaceAxis(label='x', sampling=self.sampling[0], units='Å'),
-                RealSpaceAxis(label='y', sampling=self.sampling[0], units='Å')]
+                RealSpaceAxis(label='y', sampling=self.sampling[1], units='Å')]
 
     def _check_is_complex(self):
         if not np.iscomplexobj(self.array):
@@ -1050,6 +1056,16 @@ class LineProfiles(AbstractMeasurement):
         super().__init__(array=array, extra_axes_metadata=extra_axes_metadata, metadata=metadata, allow_complex=True,
                          allow_base_axis_chunks=True)
 
+    @classmethod
+    def from_axes_metadata(cls, array, axes_metadata, metadata):
+        pass
+        # if measurement_type is LineProfiles:
+        #     return {'sampling': sampling,
+        #             'start': waves.scan_axes_metadata[0].start,
+        #             'end': waves.scan_axes_metadata[0].end,
+        #             'extra_axes_metadata': extra_axes_metadata,
+        #             'metadata': waves.metadata}
+
     @property
     def start(self) -> Tuple[float, float]:
         return self._linescan.start
@@ -1293,6 +1309,15 @@ class DiffractionPatterns(AbstractMeasurement):
         self._fftshift = fftshift
         self._sampling = float(sampling[0]), float(sampling[1])
         super().__init__(array=array, extra_axes_metadata=extra_axes_metadata, metadata=metadata)
+
+    @classmethod
+    def from_axes_metadata(cls, array, axes_metadata, metadata=None):
+
+        sampling = (axes_metadata[-2].sampling, axes_metadata[-1].sampling)
+        fftshift = axes_metadata[-1].fftshift
+        axes_metadata = axes_metadata[:-2]
+
+        return cls(array, sampling=sampling, extra_axes_metadata=axes_metadata, fftshift=fftshift, metadata=metadata)
 
     def poisson_noise(self, dose: float, samples: int = 1, seed: int = None, pixel_area: float = None):
 

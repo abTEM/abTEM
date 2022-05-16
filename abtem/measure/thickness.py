@@ -4,6 +4,7 @@ from abtem.core.axes import ThicknessSeriesAxis
 from abtem.measure.detect import stack_measurements
 import numpy as np
 
+
 def thickness_series_precursor(detectors, potential):
     detect_every = defaultdict(list)
     all_detect_at = []

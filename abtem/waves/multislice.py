@@ -5,7 +5,6 @@ import dask
 import dask.array as da
 import numpy as np
 
-from abtem.core import config
 from abtem.core.antialias import AntialiasAperture
 from abtem.core.axes import FrozenPhononsAxis, OrdinalAxis
 from abtem.core.backend import get_array_module
@@ -120,7 +119,13 @@ def multislice_and_detect_with_frozen_phonons(waves: 'Waves',
     measurements = []
     for frozen_phonon_potential in potential.get_configurations(lazy=True):
         cloned_waves = waves.clone()
-        new_measurements = _lazy_multislice_and_detect(cloned_waves, frozen_phonon_potential, detectors)
+
+        frozen_phonon_potential = frozen_phonon_potential.to_delayed()
+
+        new_measurements = cloned_waves.apply_detector_func(multislice_and_detect,
+                                                            detectors=detectors,
+                                                            potential=frozen_phonon_potential)
+
         measurements.append(new_measurements)
 
     measurements = list(map(list, zip(*measurements)))
@@ -134,10 +139,7 @@ def multislice_and_detect_with_frozen_phonons(waves: 'Waves',
         if hasattr(measurements[i], '_reduce_ensemble'):
             measurements[i] = measurements[i]._reduce_ensemble()
 
-    if len(measurements) == 1:
-        return measurements[0]
-    else:
-        return ComputableList(measurements)
+    return measurements[0] if len(measurements) == 1 else ComputableList(measurements)
 
 
 def concatenate_last_axis_recursively(arrays, axis=-1):
@@ -198,6 +200,7 @@ def _lazy_multislice_and_detect(waves, potential, detectors):
 
 
 def multislice_and_detect(waves, potential, detectors):
+
     antialias_aperture = AntialiasAperture(device=get_array_module(waves.array))
     antialias_aperture.match_grid(waves)
 
@@ -222,25 +225,36 @@ def multislice_and_detect(waves, potential, detectors):
 
         new_measurements = [detector.detect(waves) for detector in detectors_at]
 
-        for detector, new_measurement in zip(detectors_at, new_measurements):
+        for detector, measurement in zip(detectors_at, new_measurements):
 
-            if measurements[detector] is None:
-                xp = get_array_module(new_measurement.array)
+            if measurements[detector] is None and detector.detect_every is not None:
+                xp = get_array_module(measurement.array)
 
-                extra_axes_shape = (detector.num_detections(potential),)
-                array = xp.zeros(extra_axes_shape + new_measurement.shape, dtype=new_measurement.array.dtype)
+                axes_metadata = detector.thickness_series_axes_metadata(potential)
 
-                d = new_measurement._copy_as_dict(copy_array=False)
+                shape = measurement.extra_axes_shape + (len(axes_metadata.values),) + measurement.base_shape
+
+                array = xp.zeros(shape, dtype=measurement.array.dtype)
+
+                d = measurement._copy_as_dict(copy_array=False)
                 d['array'] = array
-                d['extra_axes_metadata'] = [OrdinalAxis()] + d['extra_axes_metadata']
+                d['extra_axes_metadata'] = [axes_metadata] + d['extra_axes_metadata']
 
-                measurements[detector] = new_measurement.__class__(**d)
+                measurements[detector] = measurement.__class__(**d)
 
-            j = -1 if stop == len(potential) else stop // detector.detect_every - 1
+            if measurements[detector] is not None:
+                j = -1 if stop == len(potential) else stop // detector.detect_every - 1
 
-            measurements[detector].array[j] = new_measurement.array
+                slic = (slice(None),) * measurement.num_extra_axes + (j,) + (slice(None),) * measurement.num_base_axes
 
-    return measurements.values()
+                measurements[detector].array[slic] = measurement.array
+            else:
+
+                measurements[detector] = measurement
+
+                #print(measurement.array.shape)
+
+    return tuple(measurements.values())
 
 
 def multislice(waves: 'Waves',

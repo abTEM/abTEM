@@ -31,6 +31,7 @@ setup(
         'scipy',
         'numba',
         'imageio',
+        'dask',
         'zarr',
         'dask',
         'matplotlib',

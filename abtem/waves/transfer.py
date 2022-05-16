@@ -2,15 +2,17 @@
 import copy
 import itertools
 from collections import defaultdict
-from typing import Mapping, Union, TYPE_CHECKING, Dict
+from typing import Mapping, Union, TYPE_CHECKING, Dict, Tuple
 
+import dask.array as da
+import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
-import matplotlib.pyplot as plt
 
-from abtem.core.axes import NonLinearAxis, ParameterSeriesAxis
+from abtem.core.axes import ParameterSeriesAxis
 from abtem.core.backend import get_array_module
-from abtem.core.complex import complex_exponential
+from abtem.core.complex import complex_exponential, abs2
+from abtem.core.dask import validate_lazy
 from abtem.core.distributions import Distribution
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
 from abtem.core.grid import Grid, polar_spatial_frequencies
@@ -94,6 +96,8 @@ class CTF(HasAcceleratorMixin):
     parameters: dict
         Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in Å
         and angles should be given in radians.
+    normalize : {'values', 'amplitude', 'intensity'}
+    weight : float
     kwargs:
         Provide the aberration coefficients as keyword arguments.
 
@@ -111,6 +115,8 @@ class CTF(HasAcceleratorMixin):
                  gaussian_spread: float = 0.,
                  energy: float = None,
                  parameters: Mapping[str, float] = None,
+                 normalize: str = 'values',
+                 weight: float = 1.,
                  **kwargs):
 
         for key in kwargs.keys():
@@ -124,6 +130,8 @@ class CTF(HasAcceleratorMixin):
         self._angular_spread = angular_spread
         self._gaussian_spread = gaussian_spread
         self._parameters = dict(zip(polar_symbols, [0.] * len(polar_symbols)))
+        self._normalize = normalize
+        self._weight = weight
 
         if parameters is None:
             parameters = {}
@@ -147,6 +155,14 @@ class CTF(HasAcceleratorMixin):
         for key, value in polar_aliases.items():
             if key != 'defocus':
                 setattr(self.__class__, key, parametrization_property(value))
+
+    @property
+    def normalize(self):
+        return self._normalize
+
+    @property
+    def weight(self):
+        return self._weight
 
     @property
     def nyquist_sampling(self) -> float:
@@ -355,12 +371,176 @@ class CTF(HasAcceleratorMixin):
         if self.gaussian_spread > 0.:
             array *= self.evaluate_gaussian_envelope(alpha)
 
+        xp = get_array_module(array)
+
+        if self.normalize == 'intensity':
+            array /= xp.sqrt(abs2(array).sum((-2, -1), keepdims=True))
+        elif self.normalize == 'amplitude':
+            array /= xp.abs(array).sum((-2, -1), keepdims=True)
+        elif not self.normalize == 'values':
+            raise RuntimeError()
+
         return array
 
-    def evaluate_on_grid(self, gpts=None, extent=None, sampling=None, xp=np):
+    def evaluate_on_grid(self,
+                         gpts: Union[int, Tuple[int, int]] = None,
+                         extent: Union[float, Tuple[float, float]] = None,
+                         sampling: Union[float, Tuple[float, float]] = None,
+                         device: str = 'cpu',
+                         lazy: bool = None) -> np.ndarray:
+
+        # lazy = validate_lazy(lazy)
+
+        # if self.is_distribution:
+        #     return self._evaluate_distribution(gpts, extent, sampling, device=device, lazy=lazy)
+
+        xp = get_array_module(device)
         grid = Grid(gpts=gpts, extent=extent, sampling=sampling)
         alpha, phi = polar_spatial_frequencies(grid.gpts, grid.sampling, xp=xp)
         return self.evaluate(alpha * self.wavelength, phi)
+
+    def axes_metadata(self):
+        axes_metadata = []
+        for parameter, value in self._parameters.items():
+            if isinstance(value, Distribution):
+                axes_metadata += [ParameterSeriesAxis(label=parameter,
+                                                      values=tuple(value.values),
+                                                      units='Å',
+                                                      ensemble_mean=value.ensemble_mean)]
+        return axes_metadata
+
+    def evaluate_parameter_grid(self,
+                                parameter_grid,
+                                gpts: Union[int, Tuple[int, int]] = None,
+                                extent: Union[float, Tuple[float, float]] = None,
+                                sampling: Union[float, Tuple[float, float]] = None,
+                                device: str = 'cpu'):
+
+
+        kwargs = self._copy_as_dict()
+
+        xp = get_array_module(device)
+        grid = Grid(gpts=gpts, extent=extent, sampling=sampling)
+        ctf_array = xp.zeros(parameter_grid.shape + grid.gpts, dtype=xp.complex64)
+        xp = get_array_module(device)
+        alpha, phi = polar_spatial_frequencies(grid.gpts, grid.sampling, xp=xp)
+        for i in np.ndindex(parameter_grid.shape):
+            kwargs.update(parameter_grid[i])
+            ctf = self.__class__(**kwargs)
+            ctf_array[i] = ctf.evaluate(alpha * ctf.wavelength, phi)
+        return ctf_array
+
+    def parameter_grid(self, lazy=True):
+        parameters = {}
+        weights = {}
+        shape = ()
+        chunks = ()
+        for parameter, value in self._parameters.items():
+            if isinstance(value, Distribution):
+                parameters[parameter] = value.values
+                weights[parameter] = value.weights
+                shape += (len(parameters[parameter]),)
+                chunks += (value.chunks,)
+
+        parameter_grid = np.zeros(shape, dtype=object)
+        for i, (value, weight) in enumerate(zip(itertools.product(*parameters.values()),
+                                                itertools.product(*weights.values()))):
+
+            parameter_grid[np.unravel_index(i, shape)] = dict(zip(parameters.keys(), value))
+            parameter_grid[np.unravel_index(i, shape)]['weight'] = np.prod(weight)
+
+        if lazy:
+            parameter_grid = da.from_array(parameter_grid, chunks=chunks, inline_array=True)
+
+        return parameter_grid
+
+    def _evaluate_distribution(self, gpts=None, extent=None, sampling=None, device='cpu', lazy=True):
+
+        ctfs, axes_metadata = self._ctf_grid()
+
+        def evaluate_ctf_blocks(ctf_block, gpts, sampling, wavelength, device):
+            xp = get_array_module(device)
+
+            alpha, phi = polar_spatial_frequencies(gpts, sampling, xp=xp)
+            new_array = xp.zeros(ctf_block.shape + gpts, dtype=xp.complex64)
+
+            for i in np.ndindex(ctf_block.shape):
+                new_array[i] = ctf_block[i].evaluate(alpha * wavelength, phi)
+
+            return new_array
+
+        xp = get_array_module(device)
+        grid = Grid(gpts=gpts, extent=extent, sampling=sampling)
+        ctf_array = ctfs.map_blocks(evaluate_ctf_blocks,
+                                    gpts=grid.gpts,
+                                    sampling=grid.sampling,
+                                    wavelength=self.wavelength,
+                                    device=device,
+                                    chunks=ctfs.chunks + ((grid.gpts[0],), (grid.gpts[1],)),
+                                    new_axis=tuple(range(len(ctfs.shape), len(ctfs.shape) + 2)),
+                                    meta=xp.array((), dtype=xp.complex64))
+
+        return ctf_array, axes_metadata
+
+    def divide(self):
+        kwargs = {'semiangle_cutoff': self.semiangle_cutoff,
+                  'rolloff': self.rolloff,
+                  'focal_spread': self.focal_spread,
+                  'angular_spread': self.angular_spread,
+                  'gaussian_spread': self.gaussian_spread,
+                  'energy': self.energy,
+                  'parameters': {}}
+
+        parameter_distributions = {}
+        shape = ()
+        chunks = ()
+        axes_metadata = []
+        for parameter, values in self._parameters.items():
+            if isinstance(values, Distribution):
+                parameter_distributions[parameter] = values.divide()
+                shape += (len(parameter_distributions[parameter]),)
+                chunks += (values.chunks,)
+                axes_metadata += [ParameterSeriesAxis(label=parameter,
+                                                      values=tuple(values.values),
+                                                      units='Å',
+                                                      ensemble_mean=values.ensemble_mean)]
+
+            else:
+                kwargs['parameters'][parameter] = values
+
+        ctfs = np.zeros(shape, dtype=object)
+
+        for i, value in enumerate(itertools.product(*parameter_distributions.values())):
+            ctf = self.__class__(**kwargs, **dict(zip(parameter_distributions.keys(), value)))
+            ctfs[np.unravel_index(i, shape)] = ctf
+
+        print(chunks)
+
+        # ctfs = da.from_array(ctfs, chunks=chunks)
+        #
+        # def evaluate_ctf_blocks(ctf_block, gpts, sampling, wavelength, device):
+        #     xp = get_array_module(device)
+        #
+        #     alpha, phi = polar_spatial_frequencies(gpts, sampling, xp=xp)
+        #     new_array = xp.zeros(ctf_block.shape + gpts, dtype=xp.complex64)
+        #
+        #     for i in np.ndindex(ctf_block.shape):
+        #         new_array[i] = ctf_block[i].evaluate(alpha * wavelength, phi)
+        #
+        #     return new_array
+        #
+        # xp = get_array_module(device)
+        # grid = Grid(gpts=gpts, extent=extent, sampling=sampling)
+        # ctf_array = ctfs.map_blocks(evaluate_ctf_blocks,
+        #                             gpts=grid.gpts,
+        #                             sampling=grid.sampling,
+        #                             wavelength=self.wavelength,
+        #                             device=device,
+        #                             chunks=ctfs.chunks + ((grid.gpts[0],), (grid.gpts[1],)),
+        #                             new_axis=tuple(range(len(ctfs.shape), len(ctfs.shape) + 2)),
+        #                             meta=xp.array((), dtype=xp.complex64))
+        #
+        # return ctf_array, axes_metadata
 
     def profiles(self, max_semiangle: float = None, phi: float = 0., units='mrad'):
         if max_semiangle is None:
@@ -394,6 +574,18 @@ class CTF(HasAcceleratorMixin):
         profiles['gaussian_envelope'] = RadialFourierSpaceLineProfiles(gaussian_envelope, sampling=sampling,
                                                                        energy=self.energy)
         return profiles
+
+    def _copy_as_dict(self):
+        d = {'semiangle_cutoff': self.semiangle_cutoff,
+             'focal_spread': self.focal_spread,
+             'angular_spread': self.angular_spread,
+             'gaussian_spread': self.gaussian_spread,
+             'weight': self.weight,
+             'energy': self.energy,
+             'normalize': self.normalize,
+             'parameters': copy.copy(self._parameters)
+             }
+        return d
 
     def apply(self, waves: 'Waves'):
         return waves.apply_ctf(self)
@@ -440,15 +632,26 @@ class CTF(HasAcceleratorMixin):
     def is_distribution(self):
         return any(isinstance(parameter, Distribution) for parameter in self._parameters.values())
 
-    def parameter_series(self):
+    def evaluate_weights(self):
+        weights = []
+        for parameter, values in self._parameters.items():
+            if isinstance(values, Distribution):
+                weights.append(values.weights)
+
+        weights = np.prod(np.meshgrid(*weights), 0)
+        return weights
+
+    def parameter_series(self, lazy: bool = True):
         ctf_parameter_distribution = {}
         shape = ()
+        chunks = ()
         axes_metadata = []
 
         reverse_aliases = {value: key for key, value in polar_aliases.items()}
 
         for parameter, values in self._parameters.items():
             if isinstance(values, Distribution):
+                chunks += (values.chunks,)
                 ctf_parameter_distribution[parameter] = values
                 shape += (len(values),)
 
@@ -472,7 +675,13 @@ class CTF(HasAcceleratorMixin):
         values = values.reshape(shape)
         weights = weights.reshape(shape)
 
+        if lazy:
+            values = da.from_array(values, chunks=chunks)
+            weights = da.from_array(weights, chunks=chunks)
+
         return values, weights, axes_metadata
+
+    # def _copy_as_dict(self, copy_parameters=True):
 
     def copy(self):
         parameters = self.parameters.copy()

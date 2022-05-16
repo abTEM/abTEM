@@ -18,8 +18,8 @@ from abtem.core.backend import cp
        gpts=core_st.gpts(min_value=32, max_value=64),
        planewave_cutoff=st.floats(10, 15),
        energy=st.floats(100e3, 200e3))
-@pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('device', ['cpu', gpu])
+@pytest.mark.parametrize('lazy', [True])
+@pytest.mark.parametrize('device', ['cpu'])
 def test_multislice_matches_prism(data, atoms, gpts, planewave_cutoff, energy, lazy, device):
     detectors = data.draw(detector_st.detectors(allow_detect_every=lazy, max_detectors=1))
 

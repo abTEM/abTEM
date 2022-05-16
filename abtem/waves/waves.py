@@ -18,12 +18,12 @@ from abtem.core.complex import abs2
 from abtem.core.dask import HasDaskArray, validate_lazy, ComputableList
 from abtem.core.energy import Accelerator
 from abtem.core.fft import fft2, ifft2, fft2_convolve, fft_crop, fft2_interpolate, fft_shift_kernel
-from abtem.core.grid import Grid
+from abtem.core.grid import Grid, polar_spatial_frequencies
 from abtem.ionization.multislice import transition_potential_multislice
 from abtem.ionization.transitions import AbstractTransitionCollection, AbstractTransitionPotential
 from abtem.measure.detect import AbstractDetector, validate_detectors, PixelatedDetector, WavesDetector, \
     FlexibleAnnularDetector
-from abtem.measure.measure import DiffractionPatterns, Images, AbstractMeasurement, stack_measurements
+from abtem.measure.measure import DiffractionPatterns, Images, AbstractMeasurement, stack_measurements, LineProfiles
 from abtem.potentials.potentials import Potential, AbstractPotential, validate_potential
 from abtem.waves.base import WavesLikeMixin
 from abtem.waves.multislice import multislice, multislice_and_detect_with_frozen_phonons, multislice_and_detect
@@ -31,6 +31,7 @@ from abtem.waves.scan import AbstractScan, GridScan, validate_scan
 from abtem.waves.tilt import BeamTilt
 from abtem.waves.transfer import CTF
 from dask.graph_manipulation import clone
+from abtem.core.dask import blockwise
 
 
 def stack_waves(waves, axes_metadata):
@@ -223,6 +224,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
         dwrap_array = dask.delayed(wrap_array)
 
         arrays = self.array.to_delayed()
+
         arrays = arrays.reshape(arrays.shape[:-2])
 
         waves = np.empty_like(arrays, dtype=object)
@@ -230,6 +232,85 @@ class Waves(HasDaskArray, WavesLikeMixin):
             waves[index] = dwrap_array(array)
 
         return waves
+
+    def apply_detector_func(self, func, detectors, extra_axes_sizes=None, extra_axes_metadata=None, **kwargs):
+
+        detectors = validate_detectors(detectors)
+
+        if not self.is_lazy:
+            return func(self, detectors=detectors, **kwargs)
+
+        extra_axes_sizes = {} if extra_axes_sizes is None else extra_axes_sizes
+        extra_axes_metadata = {} if extra_axes_metadata is None else extra_axes_metadata
+
+        assert extra_axes_sizes.keys() == extra_axes_metadata.keys()
+
+        measurement_cls = []
+        measurement_kwargs = []
+        roll_last_axis = []
+        signatures = []
+        output_sizes = {}
+        meta = []
+        i = 2
+        for detector in detectors:
+            measurement_cls.append(detector.measurement_type(self))
+            measurement_kwargs.append(detector.measurement_kwargs(self))
+
+            if detector.detect_every:
+                roll_last_axis.append(-detector._consumed_scan_axes(self))
+            else:
+                roll_last_axis.append(0)
+
+            shape = detector.measurement_shape(self)[self.num_extra_axes:]
+
+            if detector in extra_axes_sizes:
+                shape = (extra_axes_sizes[detector],) + shape
+                measurement_kwargs[-1]['extra_axes_metadata'].append(extra_axes_metadata[detector])
+
+            signatures.append(f'({",".join([str(i) for i in range(i, i + len(shape))])})')
+
+            output_sizes.update({str(index): n for index, n in zip(range(i, i + len(shape)), shape)})
+
+            meta.append(np.array((), dtype=detector.measurement_dtype))
+            i += len(shape)
+
+        signature = '(0,1)->' + ','.join(signatures)
+
+        def apply_detector_func(array, waves_kwargs, **kwargs):
+            waves = Waves(array=array, **waves_kwargs)
+            outputs = func(waves, **kwargs)
+
+            if len(outputs) == 1:
+                return outputs[0].array
+
+            return [output.array for output in outputs]
+
+        waves_kwargs = self._copy_as_dict(copy_array=False)
+
+        kwargs['detectors'] = detectors
+
+        arrays = da.apply_gufunc(
+            apply_detector_func,
+            signature,
+            self.array,
+            output_sizes=output_sizes,
+            meta=meta,
+            waves_kwargs=waves_kwargs,
+            **kwargs,
+        )
+
+        if len(measurement_cls) == 1:
+            arrays = [arrays]
+
+        for array, rla in zip(arrays, roll_last_axis):
+            if rla:
+                array._chunks = array._chunks[:rla - 1] + (array._chunks[-1],) + array._chunks[rla - 1:-1]
+
+        measurement_kwargs = [{**kwargs, 'array': array} for kwargs, array in zip(measurement_kwargs, arrays)]
+
+        measurements = tuple(cls(**kwargs) for cls, kwargs in zip(measurement_cls, measurement_kwargs))
+
+        return measurements
 
     def diffraction_patterns(self,
                              max_angle: Union[str, float, None] = 'valid',
@@ -366,6 +447,8 @@ class Waves(HasDaskArray, WavesLikeMixin):
                                  ctf=ctf,
                                  concatenate=True,
                                  meta=xp.array((), dtype=np.complex64), )
+
+
         else:
             array = self.array.map_blocks(apply_ctf,
                                           ctf=ctf,
@@ -727,6 +810,57 @@ class PlaneWave(WavesLikeMixin):
         return Waves(array, extent=self.extent, energy=self.energy)
 
 
+def _calculate_probe(positions: np.ndarray,
+                     parameters: np.ndarray = None,
+                     ctf: CTF = None,
+                     sampling: Tuple[float, float] = None,
+                     gpts: Tuple[int, int] = None,
+                     device: str = None) -> np.ndarray:
+    xp = get_array_module(device)
+    positions = xp.asarray(positions)
+    positions = positions / xp.array(sampling).astype(np.float32)
+    array = fft_shift_kernel(positions, shape=gpts)
+
+    if parameters is None:
+        array = ctf.evaluate_on_grid(gpts=gpts, sampling=sampling, device=device)
+
+    else:
+        ctf_array = ctf.evaluate_parameter_grid(parameters, gpts=gpts, sampling=sampling, device=device)
+        dims = tuple(range(len(parameters.shape), len(positions.shape) + len(parameters.shape) - 1))
+        ctf_array = xp.expand_dims(ctf_array, dims)
+        array = array * ctf_array
+
+    return ifft2(array)
+
+
+def _build_multislice_detect(parameters: np.ndarray = None,
+                             positions: np.ndarray = None,
+                             ctf: CTF = None,
+                             sampling: Tuple[float, float] = None,
+                             gpts: Tuple[int, int] = None,
+                             device: str = None,
+                             potential=None,
+                             detectors=None,
+                             axes_metadata=None,
+                             ):
+    array = _calculate_probe(positions, parameters, ctf, sampling, gpts, device)
+
+    waves = Waves(array, sampling=sampling, energy=ctf.energy, extra_axes_metadata=axes_metadata)
+
+    if potential is not None:
+        measurements = multislice_and_detect(waves, potential, detectors)
+        arrays = [measurement.array for measurement in measurements]
+        return tuple(arrays) if len(arrays) > 1 else arrays[0]
+
+    if detectors is not None:
+        out = [detector.detect(waves).array for detector in detectors]
+        out = tuple(out) if len(out) > 1 else out[0]
+    else:
+        out = waves.array
+
+    return out
+
+
 class Probe(WavesLikeMixin):
     """
     Probe wave function
@@ -769,7 +903,7 @@ class Probe(WavesLikeMixin):
                  **kwargs):
 
         if ctf is None:
-            ctf = CTF(energy=energy, **kwargs)
+            ctf = CTF(energy=energy, normalize='intensity', **kwargs)
         else:
             ctf = ctf.copy()
 
@@ -841,28 +975,76 @@ class Probe(WavesLikeMixin):
 
         return positions
 
-    def _calculate_probe(self, positions, ctf_parameters=None, weights=None, sampling=None, gpts=None):
+    def _build_multislice_detect(self, positions, potential, detectors, chunks: int = None, lazy: bool = None):
+        self.grid.check_is_defined()
+        self.accelerator.check_is_defined()
+
+        lazy = validate_lazy(lazy)
+
+        validated_positions = self._validate_positions(positions, lazy=lazy, chunks=chunks)
         xp = get_array_module(self._device)
 
-        if ctf_parameters is not None:
-            ctf = self.ctf.copy()
-            ctf.set_parameters(ctf_parameters.item())
+        parameters = self.ctf.parameter_grid()
+
+        if hasattr(positions, 'axes_metadata'):
+            axes_metadata = positions.axes_metadata
         else:
-            ctf = self.ctf
+            axes_metadata = [PositionsAxis()] * (len(validated_positions.shape) - 1)
 
-        positions = xp.asarray(positions)
-        xp = get_array_module(positions)
-        positions = positions / xp.array(sampling).astype(np.float32)
-        array = fft_shift_kernel(positions, shape=gpts)
-        array *= ctf.evaluate_on_grid(gpts=gpts, sampling=sampling, xp=xp)
+        axes_metadata = self.ctf.axes_metadata() + axes_metadata
 
-        array /= xp.sqrt(abs2(array).sum((-2, -1), keepdims=True))
+        arrays = [parameters, validated_positions]
+        dropped_dims = [(), (-1,)]
 
-        if ctf_parameters is not None:
-            array *= weights.item()
-            array = np.expand_dims(array, axis=tuple(range(len(weights.shape))))
+        if detectors is None:
+            new_dims = [(-2, -1)]
+            new_sizes = [{-2: self.gpts[0], -1: self.gpts[1]}]
+            metas = [xp.array((), xp.complex64)]
+        else:
+            new_dims = []
+            new_sizes = []
+            metas = []
+            for detector in detectors:
+                shape = detector.measurement_shape(self)
 
-        return ifft2(array)
+                if detector.detect_every:
+                    shape += (len(detector.detect_at_slices(potential)),)
+
+                dropped_axes = detector.dropped_scan_axes(self)
+
+                new_dims.append(tuple(range(-len(shape) - dropped_axes, -dropped_axes)))
+                new_sizes.append({i: n for i, n in zip(range(-len(shape) - dropped_axes, -dropped_axes), shape)})
+                metas.append(detector.measurement_meta(self))
+
+        arrays = blockwise(_build_multislice_detect,
+                           arrays,
+                           dropped_dims,
+                           new_dims,
+                           new_sizes,
+                           metas,
+                           ctf=self.ctf,
+                           sampling=self.sampling,
+                           gpts=self.gpts,
+                           device=self._device,
+                           potential=potential,
+                           detectors=detectors,
+                           axes_metadata=axes_metadata
+                           )
+
+        measurements = []
+        for detector, array in zip(detectors, arrays):
+            dropped_axes = detector.dropped_scan_axes(self)
+
+            if detector.detect_every:
+                axes_metadata.insert(-dropped_axes, detector.thickness_series_axes_metadata(potential))
+
+            cls = detector.measurement_type(positions)
+            axes_metadata = axes_metadata + detector.measurement_axes_metadata(self)
+
+            measurement = cls.from_axes_metadata(array, axes_metadata=axes_metadata)
+            measurements.append(measurement)
+
+        return ComputableList(measurements) if len(measurements) > 1 else measurements[0]
 
     def build(self,
               positions: Union[AbstractScan, Sequence] = None,
@@ -897,26 +1079,26 @@ class Probe(WavesLikeMixin):
         xp = get_array_module(self._device)
 
         if lazy and self.ctf.is_distribution:
-            values, weights, axes_metadata = self.ctf.parameter_series()
+            parameters = self.ctf.parameter_grid()
+            axes_metadata = self.ctf.axes_metadata()
 
-            values = da.from_array(values, chunks=(1,) * len(values.shape))
-            weights = da.from_array(weights, chunks=(1,) * len(weights.shape))
+            arrays = [validated_positions, parameters]
+            dropped_dims = [(-1,), ()]
+            new_dims = [(-2, -1)]
+            new_sizes = [{-2: self.gpts[0], -1: self.gpts[1]}]
+            metas = [xp.array((), xp.complex64)]
 
-            n = tuple(range(len(values.shape)))
-            m = tuple(range(len(n), len(n) + len(validated_positions.shape)))
-            k = tuple(range(len(n) + len(m), len(n) + len(m) + 2))
-            new_axes = dict(zip(k, self.gpts))
-
-            array = da.blockwise(self._calculate_probe,
-                                 n + m[:-1] + k,
-                                 validated_positions, m,
-                                 values, n,
-                                 weights, n,
-                                 sampling=self.sampling,
-                                 gpts=self.gpts,
-                                 concatenate=True,
-                                 meta=xp.array((), dtype=np.complex64),
-                                 new_axes=new_axes)
+            array = blockwise(self._calculate_probe,
+                              arrays,
+                              dropped_dims,
+                              new_dims,
+                              new_sizes,
+                              metas,
+                              ctf=self.ctf,
+                              sampling=self.sampling,
+                              gpts=self.gpts,
+                              device=self._device,
+                              )
 
         elif lazy:
             drop_axis = len(validated_positions.shape) - 1
@@ -924,8 +1106,10 @@ class Probe(WavesLikeMixin):
 
             array = validated_positions.map_blocks(self._calculate_probe,
                                                    meta=xp.array((), dtype=np.complex64),
+                                                   ctf=self.ctf,
                                                    sampling=self.sampling,
                                                    gpts=self.gpts,
+                                                   device=self._device,
                                                    drop_axis=drop_axis,
                                                    new_axis=new_axis,
                                                    chunks=validated_positions.chunks[:-1] + (
@@ -937,7 +1121,7 @@ class Probe(WavesLikeMixin):
             if self.ctf.is_distribution:
                 raise NotImplementedError
 
-            array = self._calculate_probe(validated_positions, sampling=self.sampling, gpts=self.gpts)
+            array = self._calculate_probe(validated_positions, self.ctf, self.sampling, self.gpts, self._device)
             axes_metadata = []
 
         if hasattr(positions, 'axes_metadata'):
@@ -975,6 +1159,7 @@ class Probe(WavesLikeMixin):
         detectors : detector, list of detectors, optional
             A detector or a list of detectors defining how the wave functions should be converted to measurements after
             running the multislice algorithm. See abtem.measure.detect for a list of implemented detectors.
+            running the multislice algorithm. See abtem.measure.detect for a list of implemented detectors.
         chunks : int, optional
             Specifices the number of wave functions in each chunk of a the created dask array. If None, the number
             of chunks are automatically estimated based on the "dask.chunk-size" parameter in the configuration.
@@ -998,9 +1183,11 @@ class Probe(WavesLikeMixin):
         if detectors is None:
             detectors = [WavesDetector()]
 
-        waves = self.build(positions=positions, lazy=True, chunks=chunks)
+        #waves = self.build(positions=positions, lazy=True, chunks=chunks)
 
-        measurements = multislice_and_detect_with_frozen_phonons(waves, potential, detectors)
+        measurements = self._build_multislice_detect(positions, potential, detectors)
+
+        #measurements = multislice_and_detect_with_frozen_phonons(waves, potential, detectors)
 
         if not lazy:
             measurements.compute()
