@@ -1,5 +1,5 @@
 {
-    "extra_axes_metadata": [],
+    "ensemble_axes_metadata": [],
     "metadata": {
         "energy": 100000.0,
         "semiangle_cutoff": 20

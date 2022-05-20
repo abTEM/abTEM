@@ -67,7 +67,7 @@ def images(draw, lazy=False, device='cpu', **kwargs):
     metadata = {'energy': energy}
     axes = draw(axes_metadata())
     array = draw(measurement_array(len(axes) + 2, lazy, device, **kwargs))
-    return Images(array=array, sampling=sampling, extra_axes_metadata=axes, metadata=metadata)
+    return Images(array=array, sampling=sampling, ensemble_axes_metadata=axes, metadata=metadata)
 
 
 @st.composite
@@ -77,7 +77,7 @@ def diffraction_patterns(draw, lazy=False, device='cpu', **kwargs):
     axes = draw(axes_metadata())
     fftshift = draw(st.booleans())
     array = draw(measurement_array(len(axes) + 2, lazy, device, base_axes_chunks=False, **kwargs))
-    return DiffractionPatterns(array=array, sampling=sampling, extra_axes_metadata=axes, metadata=metadata,
+    return DiffractionPatterns(array=array, sampling=sampling, ensemble_axes_metadata=axes, metadata=metadata,
                                fftshift=fftshift)
 
 
@@ -94,7 +94,7 @@ def line_profiles(draw, lazy=False, device='cpu'):
                          core_st.sensible_floats(min_value=start[1] + 1., max_value=start[1] + 10.)))
 
     array = draw(measurement_array(len(axes) + 1, lazy, device))
-    return LineProfiles(start=start, end=end, array=array, sampling=sampling, extra_axes_metadata=axes,
+    return LineProfiles(start=start, end=end, array=array, sampling=sampling, ensemble_axes_metadata=axes,
                         metadata=metadata)
 
 
@@ -112,7 +112,7 @@ def polar_measurements(draw, lazy=False, device='cpu', **kwargs):
     array = draw(measurement_array(len(axes) + 2, lazy, device, base_axes_chunks=False, **kwargs))
     return PolarMeasurements(array=array, radial_sampling=radial_sampling, radial_offset=radial_offset,
                              azimuthal_sampling=azimuthal_sampling, azimuthal_offset=azimuthal_offset,
-                             extra_axes_metadata=axes, metadata=metadata)
+                             ensemble_axes_metadata=axes, metadata=metadata)
 
 
 @st.composite

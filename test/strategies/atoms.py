@@ -87,4 +87,4 @@ def random_frozen_phonons(draw,
                               max_atoms=max_atoms))
     num_configs = draw(st.integers(min_value=1, max_value=max_configs))
     sigmas = draw(st.floats(min_value=0., max_value=.2))
-    return FrozenPhonons(atoms, num_configs=num_configs, sigmas=sigmas, seed=13)
+    return FrozenPhonons(atoms, num_configs=num_configs, sigmas=sigmas)

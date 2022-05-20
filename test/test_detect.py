@@ -1,7 +1,7 @@
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given
+from hypothesis import given, settings, reproduce_failure
 
 from abtem import Probe, AnnularDetector, FlexibleAnnularDetector, PixelatedDetector
 from strategies import atoms as atoms_st
@@ -15,10 +15,10 @@ from utils import assume_valid_probe_and_detectors, gpu
        inner=st.floats(0, 50),
        outer=st.floats(50, 100),
        energy=st.floats(100e3, 200e3))
-@pytest.mark.parametrize('lazy', [False, True])
+@pytest.mark.parametrize('lazy', [True, False])
 def test_integrate_consistent(atoms, gpts, semiangle_cutoff, energy, lazy, inner, outer):
     probe = Probe(gpts=gpts,
-                  semiangle_cutoff=semiangle_cutoff,
+                  aperture=semiangle_cutoff,
                   energy=energy,
                   extent=np.diag(atoms.cell)[:2])
 
@@ -42,8 +42,8 @@ def test_integrate_consistent(atoms, gpts, semiangle_cutoff, energy, lazy, inner
        extent=st.floats(min_value=5, max_value=10))
 @pytest.mark.parametrize('device', ['cpu', gpu])
 def test_interpolate_diffraction_patterns(gpts, extent, device):
-    probe1 = Probe(energy=100e3, semiangle_cutoff=30, extent=(extent * 2, extent), gpts=(gpts * 2, gpts), device=device)
-    probe2 = Probe(energy=100e3, semiangle_cutoff=30, extent=extent, gpts=gpts, device=device)
+    probe1 = Probe(energy=100e3, aperture=30, extent=(extent * 2, extent), gpts=(gpts * 2, gpts), device=device)
+    probe2 = Probe(energy=100e3, aperture=30, extent=extent, gpts=gpts, device=device)
 
     measurement1 = probe1.build(lazy=False).diffraction_patterns(max_angle=None).interpolate('uniform')
     measurement2 = probe2.build(lazy=False).diffraction_patterns(max_angle=None)

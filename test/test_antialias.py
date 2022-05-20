@@ -6,7 +6,7 @@ from abtem import Probe
 
 
 @given(gpts=core_st.gpts(min_value=32, max_value=64),
-       sampling=core_st.sampling(min_value=.01, max_value=.2),
+       sampling=core_st.sampling(min_value=.01, max_value=.1),
        downsample=st.just('valid') | st.just('cutoff') | st.floats(min_value=10, max_value=100),
        energy=st.floats(100e3, 200e3, width=32))
 def test_downsample(gpts, sampling, energy, downsample):

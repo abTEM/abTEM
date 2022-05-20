@@ -29,7 +29,7 @@ all_measurements = {'images': measurements_st.images,
 @pytest.mark.parametrize('measurement', list(all_measurements.keys()))
 def test_indexing(data, measurement, lazy, device):
     measurement = data.draw(all_measurements[measurement](lazy=lazy, device=device))
-    indices = data.draw(numpy_st.basic_indices(measurement.extra_axes_shape, allow_newaxis=False, allow_ellipsis=False))
+    indices = data.draw(numpy_st.basic_indices(measurement.ensemble_shape, allow_newaxis=False, allow_ellipsis=False))
 
     if isinstance(indices, Number):
         num_lost_axes = 1
@@ -51,7 +51,7 @@ def test_copy_equals_measurement(data, measurement, lazy, device):
     measurement_copy = measurement.copy()
     assert measurement_copy == measurement
     assert measurement_copy.array is not measurement.array
-    assert measurement_copy._extra_axes_metadata is not measurement._extra_axes_metadata
+    assert measurement_copy.ensemble_axes_metadata is not measurement.ensemble_axes_metadata
     assert measurement_copy.metadata is not measurement.metadata
 
 
@@ -62,7 +62,7 @@ def test_copy_equals_measurement(data, measurement, lazy, device):
 def test_squeeze(data, measurement, lazy, device):
     measurement = data.draw(all_measurements[measurement](lazy=lazy, device=device))
     squeezed_measurement = measurement.squeeze()
-    assert all(tuple(n > 1 for n in squeezed_measurement.extra_axes_shape))
+    assert all(tuple(n > 1 for n in squeezed_measurement.ensemble_shape))
 
 
 @given(data=st.data())
@@ -93,11 +93,11 @@ def test_inplace_add_subtract(data, measurement, method, device):
 def test_reduce(data, measurement, method, device):
     measurement = data.draw(all_measurements[measurement](lazy=False, device=device))
 
-    axes_indices = st.integers(min_value=0, max_value=max(len(measurement.extra_axes) - 1, 0))
-    axes_indices = st.lists(elements=axes_indices, min_size=0, max_size=len(measurement.extra_axes), unique=True)
+    axes_indices = st.integers(min_value=0, max_value=max(len(measurement.ensemble_axes) - 1, 0))
+    axes_indices = st.lists(elements=axes_indices, min_size=0, max_size=len(measurement.ensemble_axes), unique=True)
     axes_indices = data.draw(axes_indices)
 
-    axes = tuple(measurement.extra_axes[i] for i in axes_indices)
+    axes = tuple(measurement.ensemble_axes[i] for i in axes_indices)
     num_lost_dims = len(axes)
     new_measurement = getattr(measurement, method)(axes)
     assert len(new_measurement.shape) == len(measurement.shape) - num_lost_dims
@@ -118,8 +118,8 @@ def test_to_cpu(data, measurement, url, lazy):
 
 
 @given(data=st.data(), url=detectors_st.temporary_path(allow_none=False))
-@pytest.mark.parametrize('lazy', [False, True])
-@pytest.mark.parametrize('device', ['cpu', gpu])
+@pytest.mark.parametrize('lazy', [True, False])
+@pytest.mark.parametrize('device', [gpu, 'cpu'])
 @pytest.mark.parametrize('measurement', list(all_measurements.keys()))
 def test_to_zarr_from_zarr(data, measurement, url, lazy, device):
     measurement = data.draw(all_measurements[measurement](lazy=lazy, device=device))
@@ -208,11 +208,11 @@ def test_diffractograms(data, lazy, device):
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('device', ['cpu', gpu])
 def test_images_interpolate_line(data, lazy, device):
-    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=20, gpts=256, device=device)
+    wave = Probe(energy=100e3, aperture=30, extent=20, gpts=256, device=device)
     image = wave.build((0, 0), lazy=False).intensity()
 
     line = image.interpolate_line(start=(0, 0), end=(0, wave.extent[1]), width=0.)
-    assert np.allclose(image.array[0], line.array)
+    assert np.allclose(image.array[0], line.array, rtol=1e-6, atol=1e-6)
 
     coordinate = st.floats(min_value=0, max_value=wave.extent[0])
     center = data.draw(st.tuples(coordinate, coordinate))
@@ -241,11 +241,11 @@ def test_poisson_noise(data, measurement, dose, lazy, device):
 
     if isinstance(measurement, Images):
         area = np.prod(measurement.extent)
-        expected_total_dose = area * dose * np.prod(measurement.extra_axes_shape)
+        expected_total_dose = area * dose * np.prod(measurement.ensemble_shape)
         actual_total_dose = (noisy.array.mean(axis=0)).sum() / measurement.array.mean()
     else:
         area = np.prod(measurement.scan_extent)
-        expected_total_dose = area * dose * np.prod(measurement.extra_axes_shape[:-2])
+        expected_total_dose = area * dose * np.prod(measurement.ensemble_shape[:-2])
         actual_total_dose = (noisy.array.mean(axis=0) / measurement.array.sum((-2, -1), keepdims=True)).sum()
 
     assert np.allclose(expected_total_dose, actual_total_dose, rtol=0.1)
@@ -435,7 +435,7 @@ def test_interpolate_periodic_spline_and_fft():
 
 @given(gpts=st.integers(min_value=16, max_value=32), extent=st.floats(min_value=5, max_value=10))
 def test_diffraction_patterns_interpolate_uniform(gpts, extent):
-    probe = Probe(energy=100e3, semiangle_cutoff=20, extent=extent, gpts=gpts)
+    probe = Probe(energy=100e3, aperture=20, extent=extent, gpts=gpts)
     diffraction_patterns = probe.build().diffraction_patterns(max_angle=None)
     probe.gpts = (gpts * 2, gpts)
     probe.extent = (extent * 2, extent)
