@@ -282,8 +282,9 @@ def plane_to_axes(plane):
     return axes + (last_axis[0],)
 
 
-def rotation_matrix_from_plane(x_vector: Union[str, Tuple[float, float, float]] = 'x',
-                               y_vector: Union[str, Tuple[float, float, float]] = 'y'):
+def rotation_matrix_from_plane(plane: Union[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = 'xy'):
+    x_vector, y_vector = plane
+
     if isinstance(x_vector, str):
         x_vector = np.array(axis_mapping[x_vector])
 
@@ -300,13 +301,13 @@ def rotation_matrix_from_plane(x_vector: Union[str, Tuple[float, float, float]] 
 
 
 def rotate_atoms_to_plane(atoms: Atoms,
-                          x_vector: Union[str, Tuple[float, float, float]] = 'x',
-                          y_vector: Union[str, Tuple[float, float, float]] = 'y') -> Atoms:
-    if x_vector == 'x' and y_vector == 'y':
+                          plane: Union[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = 'xy',
+                          ) -> Atoms:
+    if plane == 'xy':
         return atoms
 
     atoms = atoms.copy()
-    R = rotation_matrix_from_plane(x_vector, y_vector)
+    R = rotation_matrix_from_plane(plane)
 
     atoms.positions[:] = np.dot(atoms.positions[:], R.T)
     atoms.cell[:] = np.dot(atoms.cell[:], R.T)
@@ -364,6 +365,8 @@ def orthogonalize_cell(atoms: Atoms,
                        max_repetitions: int = 5,
                        return_transform: bool = False,
                        allow_transform: bool = True,
+                       origin: Tuple[float, float, float] = (0., 0., 0.),
+                       plane: Union[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = 'xy',
                        tolerance: float = 0.01):
     """
     Make the cell of an ASE atoms object orthogonal. This is accomplished by repeating the cell until lattice vectors
@@ -389,6 +392,13 @@ def orthogonalize_cell(atoms: Atoms,
     transform : tuple of arrays
         The applied transform in the form the euler angles
     """
+
+    if origin != (0., 0., 0.):
+        atoms.translate(-np.array(origin))
+        atoms.wrap()
+
+    if plane != 'xy':
+        atoms = rotate_atoms_to_plane(atoms, plane)
 
     if box is None:
         box = best_orthogonal_box(atoms.cell, max_repetitions=max_repetitions)
@@ -513,8 +523,7 @@ def atoms_in_box(atoms: Atoms,
 
 def cut_box(atoms: Atoms,
             box: Tuple[float, float, float] = None,
-            x_vector: Union[str, Tuple[float, float, float]] = 'x',
-            y_vector: Union[str, Tuple[float, float, float]] = 'y',
+            plane: Union[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = 'xy',
             origin: Tuple[float, float, float] = (0., 0., 0.),
             margin: Union[float, Tuple[float, float, float]] = 0.) -> Atoms:
     if box is None:
@@ -528,7 +537,7 @@ def cut_box(atoms: Atoms,
         atoms.positions[:] = atoms.positions - origin
         atoms.wrap()
 
-    atoms = rotate_atoms_to_plane(atoms, x_vector=x_vector, y_vector=y_vector)
+    atoms = rotate_atoms_to_plane(atoms, plane)
 
     new_cell = np.diag(np.array(box) + 2 * np.array(margin))
     new_cell = np.dot(atoms.cell.scaled_positions(new_cell), atoms.cell)
@@ -557,22 +566,8 @@ def cut_box(atoms: Atoms,
     # new_atoms = wrap_with_tolerance(new_atoms)
     return new_atoms
 
-#
-# def fill_box(atoms: Atoms,
-#              box: Tuple[float, float, float] = None,
-#              x_vector: Union[str, Tuple[float, float, float]] = 'x',
-#              y_vector: Union[str, Tuple[float, float, float]] = 'y',
-#              origin: Tuple[float, float, float] = (0., 0., 0.)):
-#     if not np.all(np.isclose(origin, (0., 0., 0.))):
-#         atoms.positions[:] = atoms.positions - origin
-#         atoms.wrap()
-#
-#     atoms = rotate_atoms_to_plane(atoms, x_vector, y_vector)
-#     atoms = orthogonalize_cell(atoms, target_box=box)
-#     return atoms
 
-
-def pad_atoms(atoms: Atoms, margins: Union[float, Tuple[float, float, float]], directions: str = 'xyz'):
+def pad_atoms(atoms: Atoms, margins: Union[float, Tuple[float, float, float]], directions: str = 'xyz') -> Atoms:
     """
     Repeat the atoms in x and y, retaining only the repeated atoms within the margin distance from the cell boundary.
 
@@ -612,33 +607,3 @@ def pad_atoms(atoms: Atoms, margins: Union[float, Tuple[float, float, float]], d
     atoms = atoms_in_box(atoms, np.diag(atoms.cell), margins)
 
     return atoms
-
-
-# def atoms_require_preparation(atoms, box=None, x_vector='x', y_vector='y', origin=(0., 0., 0.)):
-#     if not is_cell_orthogonal(atoms):
-#         return True
-#
-#     if box is not None:
-#         return True
-#
-#     if x_vector != 'x':
-#         return True
-#
-#     if y_vector != 'y':
-#         return True
-#
-#     if origin != (0., 0., 0.):
-#         return True
-#
-#     return False
-#
-#
-# def prepare_atoms_for_multislice(atoms, box=None, x_vector='x', y_vector='y', origin=(0., 0., 0.), periodic=True,
-#                                  margin=0.):
-#     if not atoms_require_preparation(atoms, box=box, x_vector=x_vector, y_vector=y_vector, origin=origin):
-#         return atoms
-#
-#     if periodic:
-#         return fill_box(atoms, box=box, x_vector=x_vector, y_vector=y_vector, origin=origin)
-#
-#     return cut_box(atoms, box=box, x_vector=x_vector, y_vector=y_vector, origin=origin, margin=margin)

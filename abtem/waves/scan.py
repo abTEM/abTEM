@@ -1,8 +1,8 @@
 """Module for describing different types of scans."""
 from abc import ABCMeta, abstractmethod
-from copy import copy, deepcopy
-from numbers import Number
-from typing import Union, Sequence, Tuple
+from copy import deepcopy
+from functools import partial
+from typing import Union, Tuple, TYPE_CHECKING
 
 import dask
 import dask.array as da
@@ -13,8 +13,15 @@ from matplotlib.axes import Axes
 from matplotlib.patches import Rectangle
 
 from abtem.core.axes import ScanAxis, PositionsAxis
+from abtem.core.backend import get_array_module, validate_device
+from abtem.core.blockwise import Ensemble
+from abtem.core.dask import validate_chunks
+from abtem.core.distributions import MultidimensionalAxisAlignedDistribution
+from abtem.core.fft import fft_shift_kernel, ifft2
 from abtem.core.grid import Grid, HasGridMixin
-from abtem.core.utils import subdivide_into_chunks, generate_chunks
+
+if TYPE_CHECKING:
+    from abtem.waves import Waves
 
 
 def validate_scan(scan, probe=None):
@@ -30,11 +37,8 @@ def validate_scan(scan, probe=None):
     return scan
 
 
-class AbstractScan(metaclass=ABCMeta):
+class AbstractScan(Ensemble, metaclass=ABCMeta):
     """Abstract class to describe scans."""
-
-    def __init__(self):
-        pass
 
     def __len__(self):
         return self.num_positions
@@ -50,9 +54,12 @@ class AbstractScan(metaclass=ABCMeta):
         pass
 
     @property
-    @abstractmethod
-    def axes_metadata(self):
-        pass
+    def ensemble_shape(self):
+        return self.shape
+
+    @property
+    def default_ensemble_chunks(self):
+        return ('auto',) * len(self.ensemble_shape)
 
     @abstractmethod
     def get_positions(self, *args, **kwargs):
@@ -64,15 +71,141 @@ class AbstractScan(metaclass=ABCMeta):
     def limits(self):
         pass
 
+    def apply_fft_shift(self, waves, out_space: 'str' = 'in_space'):
+        kernel = self.fft_shift(extent=waves.extent, gpts=waves.gpts, device=waves.device)
+
+        if out_space == 'in_space':
+            fourier_space_out = waves.fourier_space
+        else:
+            fourier_space_out = out_space == 'fourier_space'
+
+        waves = waves.ensure_fourier_space()
+
+        kernel = kernel[(slice(None),) * len(self.shape) + (None,) * len(waves.ensemble_shape)]
+
+        array = waves.array[(None,) * len(self.shape)] * kernel
+
+        if not fourier_space_out:
+            array = ifft2(array, overwrite_x=True)
+
+        d = waves._copy_as_dict(copy_array=False)
+        d['array'] = array
+        d['ensemble_axes_metadata'] = self.ensemble_axes_metadata + d['ensemble_axes_metadata']
+        return waves.__class__(**d)
+
+    def fft_shift(self, extent=None, gpts=None, sampling=None, device=None):
+        device = validate_device(device)
+        xp = get_array_module(device)
+
+        grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
+        grid.check_is_defined()
+
+        positions = xp.asarray(self.get_positions()) / xp.asarray(grid.sampling).astype(np.float32)
+        return fft_shift_kernel(positions, shape=grid.gpts)
+
     def copy(self):
         """Make a copy."""
         return deepcopy(self)
 
 
-class CustomScan(AbstractScan):
-    _num_scan_axes = 0
+class SourceOffset(AbstractScan):
 
-    def __init__(self, positions=None):
+    def __init__(self, distribution):
+        self._distribution = distribution
+
+    @property
+    def shape(self):
+        return self._distribution.shape
+
+    def get_positions(self):
+        xi = [factor.values for factor in self._distribution.factors]
+        return np.stack(np.meshgrid(*xi, indexing='ij'), axis=-1)
+
+    @property
+    def ensemble_axes_metadata(self):
+        return [PositionsAxis()] * len(self.shape)
+
+    def ensemble_blocks(self, chunks=None):
+        if chunks is None:
+            chunks = self.default_ensemble_chunks
+
+        chunks = validate_chunks(self.ensemble_shape, chunks, limit=None)
+
+        blocks = ()
+        for parameter, n in zip(self._distribution.factors, chunks):
+            blocks += (parameter.divide(n, lazy=True),)
+
+        return blocks
+
+    def ensemble_partial(self):
+        def distribution(*args):
+            factors = [arg.item() for arg in args]
+            dist = MultidimensionalAxisAlignedDistribution(factors)
+            arr = np.empty((1,) * len(args), dtype=object)
+            arr.itemset(dist)
+            return arr
+
+        return distribution
+
+    @property
+    def limits(self):
+        pass
+
+
+class CompoundScan(AbstractScan):
+
+    def __init__(self, scans):
+        self._scans = scans
+
+    @property
+    def shape(self):
+        shape = ()
+        for scan in self._scans:
+            shape += scan.shape
+        return shape
+
+    def get_positions(self):
+        positions = self._scans.get_positions()
+        for scan in self._scans[1:]:
+            positions = np.add.outer(positions, scan.get_positions())
+
+        return positions
+
+    @property
+    def ensemble_axes_metadata(self):
+        return [PositionsAxis()] * len(self.shape)
+
+    def ensemble_blocks(self, chunks=None):
+        if chunks is None:
+            chunks = self.default_ensemble_chunks
+
+        chunks = validate_chunks(self.ensemble_shape, chunks, limit=None)
+
+        blocks = ()
+        for parameter, n in zip(self._distribution.factors, chunks):
+            blocks += (parameter.divide(n, lazy=True),)
+
+        return blocks
+
+    def ensemble_partial(self):
+        def distribution(*args):
+            factors = [arg.item() for arg in args]
+            dist = MultidimensionalAxisAlignedDistribution(factors)
+            arr = np.empty((1,) * len(args), dtype=object)
+            arr.itemset(dist)
+            return arr
+
+        return distribution
+
+    @property
+    def limits(self):
+        pass
+
+
+
+class CustomScan(AbstractScan):
+
+    def __init__(self, positions: np.ndarray = None):
         if positions is None:
             positions = np.zeros((0, 2), dtype=np.float32)
         else:
@@ -89,8 +222,23 @@ class CustomScan(AbstractScan):
             self._positions = np.array(probe.extent, dtype=np.float32)[None] / 2.
 
     @property
+    def ensemble_axes_metadata(self):
+        return [PositionsAxis()]
+
+    def ensemble_blocks(self, chunks):
+        chunks = validate_chunks(self.ensemble_shape, chunks)
+        cumchunks = tuple(np.cumsum(chunks[0]))
+        positions = np.empty(len(chunks[0]), dtype=object)
+        for i, (start_chunk, chunk) in enumerate(zip((0,) + cumchunks, chunks[0])):
+            positions[i] = CustomScan(self._positions[start_chunk:start_chunk + chunk])
+        return da.from_array(positions, chunks=1),
+
+    def ensemble_partial(self):
+        return lambda x: x
+
+    @property
     def shape(self):
-        return self._positions.shape[:-1]
+        return self.positions.shape[:-1]
 
     @property
     def positions(self):
@@ -101,40 +249,8 @@ class CustomScan(AbstractScan):
         return [(np.min(self.positions[:, 0]), np.min(self.positions[:, 1])),
                 (np.max(self.positions[:, 0]), np.max(self.positions[:, 1]))]
 
-    def divide(self, num_chunks):
-        return [CustomScan(self._positions)]
-
-    def get_positions(self, chunks: int = None, lazy: bool = False) -> np.ndarray:
-        if chunks is None:
-            chunks = (len(self._positions), 2)
-        else:
-            chunks = (min(chunks, len(self._positions)), 2)
-
-        if lazy:
-            return da.from_array(self._positions, chunks=chunks)
-        else:
-            return self._positions
-
-    def generate_positions(self, chunks):
-        # if isinstance(chunks, Number):
-        #    chunks = (int(np.floor(np.sqrt(chunks))),) * 2
-
-        # positions = self.get_positions(lazy=False)
-
-        if len(self.positions.shape) > 1:
-            yield (slice(0, 1),), self._positions
-        else:
-            yield (), self._positions
-
-    @property
-    def axes_metadata(self):
-        return [PositionsAxis() for i in range(len(self.positions.shape) - 1)]
-
-
-def linescan_positions(start, end, gpts, endpoint):
-    x = np.linspace(start[0], end[0], gpts, endpoint=endpoint, dtype=np.float32)
-    y = np.linspace(start[1], end[1], gpts, endpoint=endpoint, dtype=np.float32)
-    return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
+    def get_positions(self) -> np.ndarray:
+        return self._positions
 
 
 class LineScan(AbstractScan):
@@ -206,7 +322,7 @@ class LineScan(AbstractScan):
             self.end = (0., probe.extent[1])
 
         if self.sampling is None:
-            self.sampling = .9 * probe.ctf.nyquist_sampling
+            self.sampling = .9 * probe.aperture.nyquist_sampling
 
     @property
     def extent(self) -> Union[float, None]:
@@ -228,7 +344,10 @@ class LineScan(AbstractScan):
         if self.extent is None or self.gpts is None:
             return
 
-        self._sampling = self.extent / self.gpts
+        if self.endpoint:
+            self._sampling = self.extent / (self.gpts - 1)
+        else:
+            self._sampling = self.extent / self.gpts
 
     @property
     def endpoint(self) -> bool:
@@ -263,8 +382,6 @@ class LineScan(AbstractScan):
     @property
     def axes_metadata(self):
 
-
-
         return [ScanAxis(label='x', sampling=float(self.sampling), units='Å', start=start, end=self.end)]
 
     @property
@@ -296,21 +413,50 @@ class LineScan(AbstractScan):
         self._end = end
         self._adjust_gpts()
 
-    def get_positions(self, chunks: int = None, lazy: bool = False) -> np.ndarray:
+    @property
+    def ensemble_axes_metadata(self):
+        return [ScanAxis(label='x', sampling=self.sampling, offset=0., units='Å', endpoint=self.endpoint)]
+
+    @property
+    def ensemble_shape(self):
+        return self.shape
+
+    @property
+    def default_ensemble_chunks(self):
+        return 'auto', 'auto'
+
+    def ensemble_partial(self):
+        return lambda x: x
+
+    def ensemble_blocks(self, chunks=None):
+
+        # self.grid.check_is_defined()
 
         if chunks is None:
-            return linescan_positions(self.start, self.end, self.gpts, self.endpoint)
+            chunks = self.default_ensemble_chunks
 
-        chunks = (chunks,)
+        chunks = validate_chunks(self.ensemble_shape, chunks)
 
-        if lazy:
-            positions = dask.delayed(linescan_positions)(self.start, self.end, self.gpts, self.endpoint)
-            positions = da.from_delayed(positions, shape=(self.gpts, 2), dtype=np.float32)
-            positions = positions.rechunk(chunks + (2,))
-        else:
-            positions = linescan_positions(self.start, self.end, self.gpts, self.endpoint)
+        direction = np.array(self.end) - np.array(self.start)
+        direction = direction / np.linalg.norm(direction, axis=0)
 
-        return positions
+        cumchunks = tuple(np.cumsum(chunks[0]))
+
+        block = np.empty(len(chunks[0]), dtype=object)
+        for i, (start_chunk, chunk) in enumerate(zip((0,) + cumchunks, chunks[0])):
+            start = np.array(self.start) + start_chunk * self.sampling * direction
+
+            end = start + self.sampling * chunk * direction
+            block[i] = LineScan(start=start, end=end, gpts=chunk, endpoint=False)
+
+        block = da.from_array(block, chunks=1)
+
+        return block,
+
+    def get_positions(self, chunks: int = None, lazy: bool = False) -> np.ndarray:
+        x = np.linspace(self.start[0], self.end[0], self.gpts, endpoint=self.endpoint, dtype=np.float32)
+        y = np.linspace(self.start[1], self.end[1], self.gpts, endpoint=self.endpoint, dtype=np.float32)
+        return np.stack((np.reshape(x, (-1,)), np.reshape(y, (-1,))), axis=1)
 
     def add_to_plot(self, ax: Axes, linestyle: str = '-', color: str = 'r', **kwargs):
         """
@@ -328,17 +474,6 @@ class LineScan(AbstractScan):
             Additional options for matplotlib.pyplot.plot as keyword arguments.
         """
         ax.plot([self.start[0], self.end[0]], [self.start[1], self.end[1]], linestyle=linestyle, color=color, **kwargs)
-
-
-def split_array_2d(array, chunks):
-    return [np.split(p, np.cumsum(chunks[1][:-1]), axis=1) for p in np.split(array, np.cumsum(chunks[0][:-1]), axis=0)]
-
-
-def gridscan_positions(start, end, gpts, endpoint):
-    x = np.linspace(start[0], end[0], gpts[0], endpoint=endpoint[0], dtype=np.float32)
-    y = np.linspace(start[1], end[1], gpts[1], endpoint=endpoint[1], dtype=np.float32)
-    x, y = np.meshgrid(x, y, indexing='ij')
-    return np.stack((x, y), axis=-1)
 
 
 class GridScan(HasGridMixin, AbstractScan):
@@ -361,8 +496,6 @@ class GridScan(HasGridMixin, AbstractScan):
         If True, end is the last position. Otherwise, it is not included. Default is False.
     """
 
-    _num_scan_axes = 2
-
     def __init__(self,
                  start: Tuple[float, float] = None,
                  end: Tuple[float, float] = None,
@@ -372,47 +505,71 @@ class GridScan(HasGridMixin, AbstractScan):
 
         super().__init__()
 
-        if (start is None) and (end is None):
-            self._start = None
-            self._end = None
-            extent = None
+        if start is not None:
+            if np.isscalar(start):
+                start = (start,) * 2
+
+            start = tuple(map(float, start))
+            assert len(start) == 2
+
+        if end is not None:
+            if np.isscalar(end):
+                end = (end,) * 2
+
+            end = tuple(map(float, end))
+
+            assert len(end) == 2
+
+        if start is not None and end is not None:
+            extent = np.array(end, dtype=float) - start
         else:
-            try:
-                self._start = np.array(start, dtype=float)[:2]
-                end = np.array(end, dtype=float)[:2]
-                assert (self._start.shape == (2,)) & (end.shape == (2,))
-            except AssertionError:
-                raise ValueError('Scan start/end has incorrect shape')
+            extent = None
 
-            extent = end - start
-
+        self._start = start
+        self._end = end
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint)
+
+    @property
+    def dimensions(self):
+        return self.grid.dimensions
 
     @property
     def limits(self):
         return [self.start, self.end]
 
     @property
-    def endpoint(self) -> Tuple[bool, bool]:
-        return self.grid.endpoint[0], self.grid.endpoint[1]
+    def endpoint(self) -> Tuple[bool, ...]:
+        return self.grid.endpoint
 
     @property
-    def shape(self) -> Tuple[int, int]:
+    def shape(self) -> Tuple[int, ...]:
         return self.gpts
 
     @property
-    def start(self) -> Union[np.ndarray, None]:
+    def start(self) -> Union[Tuple[float, ...], None]:
         """Start corner of the scan [Å]."""
         return self._start
 
     @start.setter
-    def start(self, start: Sequence[float]):
-        if start is not None:
-            start = (float(start[0]), float(start[1]))
-        self._start = np.array(start)
+    def start(self, start: Tuple[float, ...]):
+        self._start = start
+        self._adjust_extent()
 
-        if self.end is not None:
-            self.extent = self.end - self._start
+    @property
+    def end(self) -> Union[Tuple[float, ...], None]:
+        """End corner of the scan [Å]."""
+        return self._end
+
+    @end.setter
+    def end(self, end: Tuple[float, ...]):
+        self._end = end
+        self._adjust_extent()
+
+    def _adjust_extent(self):
+        if self.start is None or self.end is None:
+            return
+
+        self.extent = np.array(self.end) - self.start
 
     def match_probe(self, probe):
         if self.start is None:
@@ -422,119 +579,70 @@ class GridScan(HasGridMixin, AbstractScan):
             self.end = probe.extent
 
         if self.sampling is None:
-            self.sampling = .9 * probe.ctf.nyquist_sampling
+            self.sampling = .9 * probe.aperture.nyquist_sampling
+
+    def get_positions(self) -> np.ndarray:
+        xi = []
+        for start, end, gpts, endpoint in zip(self.start, self.end, self.gpts, self.endpoint):
+            xi.append(np.linspace(start, end, gpts, endpoint=endpoint, dtype=np.float32))
+
+        if len(xi) == 1:
+            return xi[0]
+
+        return np.stack(np.meshgrid(*xi, indexing='ij'), axis=-1)
 
     @property
-    def end(self) -> Union[np.ndarray, None]:
-        """End corner of the scan [Å]."""
-        if self.extent is None:
-            return
-
-        return self.start + self.extent
-
-    @end.setter
-    def end(self, end: Sequence[float]):
-        if self.start is not None:
-            self.extent = np.array(end) - self.start
+    def ensemble_axes_metadata(self):
+        axes_metadata = []
+        labels = ('x', 'y', 'z')
+        for label, sampling, offset, endpoint in zip(labels, self.sampling, self.start, self.endpoint):
+            axes_metadata.append(ScanAxis(label=label, sampling=sampling, offset=offset, units='Å', endpoint=endpoint))
+        return axes_metadata
 
     @property
-    def area(self) -> float:
-        """Get the area of the scan."""
-        return abs(self.start[0] - self.end[0]) * abs(self.start[1] - self.end[1])
+    def ensemble_shape(self):
+        return self.shape
 
     @property
-    def axes_metadata(self):
-        return [
-            ScanAxis(label='x', sampling=self.sampling[0], offset=self.start[0], units='Å', endpoint=self.endpoint[0]),
-            ScanAxis(label='y', sampling=self.sampling[1], offset=self.start[1], units='Å', endpoint=self.endpoint[1])]
+    def default_ensemble_chunks(self):
+        return 'auto', 'auto'
 
-    def generate_positions(self, chunks):
-        if isinstance(chunks, Number):
-            chunks = (int(np.floor(np.sqrt(chunks))),) * 2
+    def ensemble_partial(self):
 
-        positions = self.get_positions(lazy=False)
+        def scan(x_scan, y_scan):
+            x_scan, y_scan = x_scan.item(), y_scan.item()
+            start = (x_scan['start'], y_scan['start'])
+            end = (x_scan['end'], y_scan['end'])
+            gpts = (x_scan['gpts'], y_scan['gpts'])
+            endpoint = (x_scan['endpoint'], y_scan['endpoint'])
+            arr = np.empty((1, 1), dtype=object)
+            arr[0] = GridScan(start=start, end=end, gpts=gpts, endpoint=endpoint)
+            return arr
 
-        for start_x, end_x in generate_chunks(positions.shape[0], chunks=chunks[0]):
-            for start_y, end_y in generate_chunks(positions.shape[1], chunks=chunks[1]):
-                slice_x = slice(start_x, end_x)
-                slice_y = slice(start_y, end_y)
-                yield (slice_x, slice_y), positions[slice_x, slice_y]
+        return scan
 
-    def get_positions(self, chunks: Union[int, Tuple[int, int]] = None, lazy: bool = False) -> np.ndarray:
+    def ensemble_blocks(self, chunks=None):
 
-        if isinstance(chunks, Number):
-            chunks = (int(np.floor(np.sqrt(chunks))),) * 2
+        self.grid.check_is_defined()
 
-        if chunks is not None:
-            chunks = (subdivide_into_chunks(self.gpts[0], chunks=chunks[0]),
-                      subdivide_into_chunks(self.gpts[1], chunks=chunks[1]), 2)
+        if chunks is None:
+            chunks = self.default_ensemble_chunks
 
-            assert len(chunks) == 3
+        chunks = validate_chunks(self.ensemble_shape, chunks)
 
-        if lazy:
-            #positions = dask.delayed(gridscan_positions, pure=False)(self.start, self.end, self.gpts, self.grid.endpoint)
+        blocks = ()
+        for i in range(2):
+            cumchunks = tuple(np.cumsum(chunks[i]))
 
-            positions = gridscan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
-            positions = da.from_array(positions, chunks=chunks)
+            block = np.empty(len(chunks[i]), dtype=object)
+            for j, (start_chunk, chunk) in enumerate(zip((0,) + cumchunks, chunks[i])):
+                start = self.start[i] + start_chunk * self.sampling[i]
+                end = start + self.sampling[i] * chunk
+                block[j] = {'start': start, 'end': end, 'gpts': chunk, 'endpoint': False}
 
-            #gridscan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
+            blocks += da.from_array(block, chunks=1),
 
-            #positions = da.from_delayed(positions, shape=self.gpts + (2,), chunks=chunks, dtype=np.float32)
-
-            #if chunks:
-            #    positions = positions.rechunk(chunks)
-        else:
-            positions = gridscan_positions(self.start, self.end, self.gpts, self.grid.endpoint)
-            if chunks:
-                positions = split_array_2d(positions, chunks)
-
-        return positions
-
-    def divide(self, divisions: Union[int, Tuple[int, int]]):
-        """
-        Partition the scan into smaller grid scans
-
-        Parameters
-        ----------
-        divisions : two int
-            The number of partitions to create in x and y.
-
-        Returns
-        -------
-        List of GridScan objects
-        """
-
-        if isinstance(divisions, Number):
-            divisions = (int(np.round(np.sqrt(divisions))),) * 2
-
-        Nx = subdivide_into_chunks(self.gpts[0], divisions[0])
-        Ny = subdivide_into_chunks(self.gpts[1], divisions[1])
-        Sx = np.concatenate(([0], np.cumsum(Nx)))
-        Sy = np.concatenate(([0], np.cumsum(Ny)))
-
-        scans = []
-        for i, nx in enumerate(Nx):
-            inner_scans = []
-            for j, ny in enumerate(Ny):
-                start = (Sx[i] * self.sampling[0], Sy[j] * self.sampling[1])
-                end = (start[0] + nx * self.sampling[0], start[1] + ny * self.sampling[1])
-                endpoint = False
-
-                if i + 1 == divisions[0]:
-                    endpoint = self.grid.endpoint[0]
-                    if endpoint:
-                        end[0] -= self.sampling[0]
-
-                if j + 1 == divisions[1]:
-                    endpoint = self.grid.endpoint[1]
-                    if endpoint:
-                        end[1] -= self.sampling[1]
-
-                scan = self.__class__(start, end, gpts=(nx, ny), endpoint=endpoint)
-
-                inner_scans.append(scan)
-            scans.append(inner_scans)
-        return scans
+        return blocks
 
     def add_to_plot(self, ax, alpha: float = .33, facecolor: str = 'r', edgecolor: str = 'r', **kwargs):
         """

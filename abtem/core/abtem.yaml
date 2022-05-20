@@ -4,7 +4,7 @@ progress_bar: false
 dask:
   lazy: true
   scheduler: threads
-  chunk-size: 128
+  chunk-size: 128 MB
 fftw:
   threads: 1
   planning_effort: FFTW_MEASURE

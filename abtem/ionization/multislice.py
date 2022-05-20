@@ -9,7 +9,7 @@ from abtem.core.complex import complex_exponential
 from abtem.measure.measure import Images
 from abtem.potentials.potentials import validate_potential
 from abtem.structures.slicing import SliceIndexedAtoms
-from abtem.waves.multislice import FresnelPropagator, multislice
+from abtem.waves.multislice import FresnelPropagator
 
 if TYPE_CHECKING:
     from abtem.waves.prism import SMatrix, SMatrixArray

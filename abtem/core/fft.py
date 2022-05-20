@@ -96,7 +96,10 @@ def ifft2(x, overwrite_x=False):
 
 def _fft2_convolve(x, kernel, overwrite_x: bool = False):
     x = fft2(x, overwrite_x=overwrite_x)
-    x *= kernel
+    try:
+        x *= kernel
+    except ValueError:
+        x = x * kernel
     return ifft2(x, overwrite_x=overwrite_x)
 
 

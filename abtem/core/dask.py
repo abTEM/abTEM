@@ -1,13 +1,18 @@
 from abc import abstractmethod
 from contextlib import nullcontext
+from functools import reduce
+from operator import mul
 from typing import TYPE_CHECKING
 
 import dask
 import dask.array as da
+import numpy as np
 from dask.array.core import Array, getitem
 from dask.core import flatten
 from dask.diagnostics import ProgressBar
 from dask.highlevelgraph import HighLevelGraph
+from dask.array.core import normalize_chunks as dask_normalize_chunks
+from dask.utils import parse_bytes
 
 from abtem.core import config
 
@@ -40,7 +45,7 @@ class ComputableList(list):
         for array, wrapper in zip(arrays, self):
             wrapper._array = array
 
-        return
+        return self
 
     def visualize_graph(self, **kwargs):
         return dask.visualize(self._get_computables(), **kwargs)
@@ -96,6 +101,90 @@ def validate_lazy(lazy):
         return config.get('dask.lazy')
 
     return lazy
+
+
+def validate_chunks(shape, chunks, limit=None, dtype=None):
+    if isinstance(chunks, int):
+        limit = chunks
+        chunks = ('auto',) * len(shape)
+
+    if any(isinstance(c, str) for c in chunks):
+        return auto_chunks(shape, chunks, limit, dtype)
+
+    validated_chunks = ()
+    for s, c in zip(shape, chunks):
+
+        if isinstance(c, tuple):
+            if sum(c) != s:
+                raise RuntimeError()
+
+            validated_chunks += (c,)
+
+        elif isinstance(c, int):
+            if c == -1:
+                validated_chunks += ((s,),)
+            elif s % c:
+                validated_chunks += ((c,) * (s // c) + (s - c * (s // c),),)
+            else:
+                validated_chunks += ((c,) * (s // c),)
+        else:
+            raise RuntimeError()
+
+    return validated_chunks
+
+
+def auto_chunks(shape, chunks, limit=None, dtype=None):
+
+    # chunks must be tuple of int
+
+    if limit is None or limit == 'auto':
+        if dtype is None:
+            raise ValueError
+
+        limit = int(np.floor(parse_bytes(config.get("dask.chunk-size")) / dtype.itemsize))
+
+    elif isinstance(limit, str):
+        limit = int(np.floor(parse_bytes(limit) / dtype.itemsize))
+
+    elif not isinstance(limit, int):
+        raise ValueError
+
+    normalized_chunks = tuple(s if c == -1 else c for s, c in zip(shape, chunks))
+
+    minimum_chunks = tuple(1 if c == 'auto' else c for s, c in zip(shape, normalized_chunks))
+    maximum_chunks = tuple(s if c == 'auto' else c for s, c in zip(shape, normalized_chunks))
+
+    current_chunks = list(minimum_chunks)
+
+    auto = [i for i, c in enumerate(normalized_chunks) if c == 'auto']
+
+    j = 0
+    while len(auto):
+        auto = [i for i in auto if current_chunks[i] != maximum_chunks[i]]
+        if len(auto) == 0:
+            break
+
+        j = j % len(auto)
+
+        current_chunks[auto[j]] += 1
+
+        total = reduce(mul, current_chunks)
+
+        if total > limit:
+            current_chunks[auto[j]] -= 1
+            break
+
+        j += 1
+
+    chunks = validate_chunks(shape, current_chunks, limit, dtype)
+    return chunks
+
+
+def normalize_chunks(chunks, shape, limit, dtype):
+    if limit is None:
+        limit = config.get("dask.chunk-size")
+
+    return dask_normalize_chunks(chunks, shape, limit, dtype)
 
 
 class HasDaskArray:
@@ -234,14 +323,48 @@ class HasDaskArray:
         return self.array.visualize(**kwargs)
 
 
+class Blocks:
+
+    def __init__(self, shape, chunks, axes_metadata=None):
+        self._array = np.empty(shape, dtype=object)
+        self._chunks = chunks
+
+        if axes_metadata is not None:
+            assert len(axes_metadata) == len(shape)
+
+        self._axes_metadata = axes_metadata
+
+    @property
+    def shape(self):
+        return self._array.shape
+
+    @property
+    def array(self):
+        return self._array
+
+    @property
+    def dask_array(self):
+        return da.from_array(self._array, chunks=self._array.shape)
+
+    @property
+    def chunks(self):
+        return self._chunks
+
+    def __getitem__(self, item):
+        return self._array[item]
+
+    def __setitem__(self, key, value):
+        self._array[key] = value
+
+
 def normalize_axes(axes, num_axes):
     if isinstance(axes, int):
-        return num_axes + axes if axes < 1 else axes
+        return num_axes + axes if axes < 0 else axes
 
-    return tuple(num_axes + axis if axis < 1 else axis for axis in axes)
+    return tuple(num_axes + axis if axis < 0 else axis for axis in axes)
 
 
-def blockwise(func, arrays, dropped_dims, new_dims, new_sizes, metas, **kwargs):
+def blockwise(func, arrays, loop_dims, new_dims, new_sizes, metas, **kwargs):
     assert len(new_dims) == len(new_sizes) == len(metas)
     nout = len(new_dims)
 
@@ -250,18 +373,18 @@ def blockwise(func, arrays, dropped_dims, new_dims, new_sizes, metas, **kwargs):
 
     last_used_symbol = 0
     args = ()
-    loop_dims = ()
-    for dd, array in zip(dropped_dims, arrays):
-        dd = normalize_axes(dd, len(array.shape))
+    out_ind = ()
+    for dims, array in zip(loop_dims, arrays):
+        dims = normalize_axes(dims, len(array.shape))
 
         ind = tuple(j + last_used_symbol for j in range(len(array.shape)))
         args += (array, ind)
-        loop_dims += tuple(j + last_used_symbol for j in range(len(array.shape)) if not j in dd)
+        out_ind += tuple(j + last_used_symbol for j in range(len(array.shape)) if j in dims)
         last_used_symbol += len(ind)
 
     tmp = da.blockwise(
         func,
-        loop_dims,
+        out_ind,
         *args,
         meta=metas,
         concatenate=True,
@@ -303,4 +426,4 @@ def blockwise(func, arrays, dropped_dims, new_dims, new_sizes, metas, **kwargs):
 
         leaf_arrs.append(leaf_arr)
 
-    return leaf_arrs #(*leaf_arrs,) if nout > 1 else leaf_arrs[0]
+    return leaf_arrs  # (*leaf_arrs,) if nout > 1 else leaf_arrs[0]

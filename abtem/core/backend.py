@@ -34,7 +34,7 @@ def xp_to_str(xp):
     raise ValueError(f'array module must be NumPy or CuPy')
 
 
-def _validate_device(device):
+def validate_device(device):
     if device is None:
         return config.get('device')
 

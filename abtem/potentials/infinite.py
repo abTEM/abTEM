@@ -26,7 +26,7 @@ def calculate_scattering_factor(gpts: Tuple[int, int],
     # parameters = parametrization.load_parameters()
 
     k, _ = polar_spatial_frequencies(gpts, sampling, xp=xp)
-    #scattering_factors = xp.zeros(gpts, dtype=np.float32)
+    # scattering_factors = xp.zeros(gpts, dtype=np.float32)
 
     # for i, number in enumerate(atomic_numbers):
     f = parametrization.projected_scattering_factor(chemical_symbols[number])(k)
@@ -36,8 +36,10 @@ def calculate_scattering_factor(gpts: Tuple[int, int],
 
 
 def superpose_deltas(positions: np.ndarray, array: np.ndarray, slice_index) -> np.ndarray:
-    xp = get_array_module(positions)
+    xp = get_array_module(array)
     shape = array.shape
+
+    positions = xp.array(positions)
 
     rounded = xp.floor(positions).astype(xp.int32)
     rows, cols = rounded[:, 0], rounded[:, 1]
@@ -47,8 +49,8 @@ def superpose_deltas(positions: np.ndarray, array: np.ndarray, slice_index) -> n
     xy = x * y
 
     if slice_index is None:
-        i = xp.array([rows, (rows + 1) % shape[0]] * 2)
-        j = xp.array([cols] * 2 + [(cols + 1) % shape[1]] * 2)
+        i = xp.array([rows % shape[0], (rows + 1) % shape[0]] * 2)
+        j = xp.array([cols % shape[1]] * 2 + [(cols + 1) % shape[1]] * 2)
         v = xp.array([1 + xy - y - x, x - xy, y - xy, xy])
         array[i, j] += v
     else:
@@ -72,7 +74,7 @@ def infinite_potential_projections(atoms, shape, sampling, scattering_factors, s
         shape = shape[1:]
 
     array = xp.zeros(shape, dtype=xp.complex64)
-    positions = xp.asarray(atoms.positions[:, :2] / sampling, dtype=xp.float32)
+    positions = (atoms.positions[:, :2] / sampling).astype(xp.float32)
 
     unique = np.unique(atoms.numbers)
     if len(unique) > 1:

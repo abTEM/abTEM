@@ -52,33 +52,11 @@ def subdivide_into_chunks(num_items: int, num_chunks: int = None, chunks: int = 
         return tuple(v)
 
 
-def generate_chunks(num_items: int, num_chunks: int = None, chunks: int = None, start=0):
+def generate_chunks(num_items: int, num_chunks: int = None, chunks: int = None, start: int = 0):
     for batch in subdivide_into_chunks(num_items, num_chunks, chunks):
         end = start + batch
         yield start, end
         start = end
-
-
-def generate_array_chunks(array, chunks):
-    if len(chunks) != len(array.shape):
-        raise ValueError()
-
-    def _recursive_generate_array_chunks(array, chunks):
-
-        i = len(chunks) - 1
-
-        for start, end in generate_chunks(array.shape[i], chunks=chunks[-1]):
-            slc = [slice(None)] * len(array.shape)
-            slc[i] = slice(start, end)
-
-            chunk = array[tuple(slc)]
-
-            if len(chunks) > 1:
-                yield from _recursive_generate_array_chunks(chunk, chunks[:-1])
-            else:
-                yield chunk
-
-    return _recursive_generate_array_chunks(array, chunks)
 
 
 def label_to_index(labels, max_label=None):

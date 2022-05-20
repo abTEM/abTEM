@@ -165,6 +165,11 @@ class Grid(HasEventsMixin):
         else:
             self._adjust_sampling(self.extent, self.gpts)
 
+    @property
+    def fourier_space_sampling(self) -> Tuple[float, float]:
+        self.check_is_defined()
+        return 1 / (self.gpts[0] * self.sampling[0]), 1 / (self.gpts[1] * self.sampling[1])
+
     def _adjust_extent(self, gpts: tuple, sampling: tuple):
         if (gpts is not None) & (sampling is not None):
             self._extent = tuple((n - 1) * d if e else n * d for n, d, e in zip(gpts, sampling, self._endpoint))
@@ -295,6 +300,10 @@ class HasGridMixin:
     @sampling.setter
     def sampling(self, sampling):
         self.grid.sampling = sampling
+
+    @property
+    def fourier_space_sampling(self):
+        return self.grid.fourier_space_sampling
 
     def match_grid(self, other, check_match=False):
         self.grid.match(other, check_match=check_match)

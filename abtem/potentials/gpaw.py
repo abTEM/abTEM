@@ -16,7 +16,7 @@ from abtem.core.electron_configurations import electron_configurations, config_s
 from abtem.potentials.poisson import ChargeDensityPotential
 from abtem.potentials.utils import eps0
 from abtem.potentials.potentials import AbstractPotential
-from abtem.potentials.temperature import DelayedAtoms, AbstractFrozenPhonons, MDFrozenPhonons
+from abtem.potentials.temperature import AbstractFrozenPhonons, MDFrozenPhonons, LazyAtoms
 
 try:
     from gpaw import GPAW
@@ -28,13 +28,13 @@ except ImportError:
 class GPAWPotential(ChargeDensityPotential):
 
     def __init__(self,
-                 calc: Union[GPAW, str, List[str]],
+                 calculators: Union[List[GPAW], List[str]],
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
                  slice_thickness: float = .5,
-                 chunks: int = 1,
                  plane: str = 'xy',
                  box: Tuple[float, float, float] = None,
+                 gridrefinement: int = 2,
                  origin: Tuple[float, float, float] = (0., 0., 0.)):
 
         """
@@ -63,39 +63,56 @@ class GPAWPotential(ChargeDensityPotential):
             Number of potential slices in each chunk of a lazy calculation. Default is 1.
         """
 
-        gridrefinement = 1
-
         def load_gpw(path):
             calc = GPAW(path)
             n = calc.get_all_electron_density(gridrefinement=gridrefinement)
             atoms = calc.atoms
             return n.astype(np.float32), atoms
 
-        def lazy_load_gpw(path, shape, num_atoms, cell, numbers):
-            charge_density, atoms = dask.delayed(load_gpw, nout=2)(path)
-            atoms = DelayedAtoms(atoms, cell, num_atoms, numbers)
-            return da.from_delayed(charge_density, shape=shape, dtype=np.float32), atoms
+        if not isinstance(calculators, list):
+            calculators = [calculators]
 
-        if isinstance(calc, list):
-            paths = calc
-            calc = GPAW(calc[0])
+        if isinstance(calculators[0], GPAW):
 
-            shape = calc.wfs.gd.N_c * gridrefinement
-            num_atoms = len(calc.atoms)
-            cell = calc.atoms.cell
-            numbers = np.unique(calc.atoms.numbers)
+            frozen_phonons = []
+            charge_densities = []
+            for calculator in calculators:
+                if not isinstance(calculator, GPAW):
+                    raise ValueError()
 
-            data = [lazy_load_gpw(path, shape, num_atoms, cell, numbers) for path in paths]
-            charge_density, atoms = list(map(list, zip(*data)))
+                shape = calculator.wfs.gd.N_c * gridrefinement
+                frozen_phonons.append(calculator.atoms)
+                charge_density = dask.delayed(calculator.get_all_electron_density)(gridrefinement=gridrefinement)
+                charge_density = da.from_delayed(charge_density, shape=shape, meta=np.array((), dtype=float))
+                charge_densities.append(charge_density)
 
-            charge_density = da.stack(charge_density)
-            atoms = MDFrozenPhonons(atoms)
         else:
-            raise NotImplementedError
+            paths = calculators
+            calculator = GPAW(calculators[0])
+            shape = calculator.wfs.gd.N_c * gridrefinement
+
+            cell = calculator.atoms.cell
+            numbers = np.unique(calculator.atoms.numbers)
+
+            frozen_phonons = []
+            charge_densities = []
+            for path in paths:
+                if not isinstance(path, str):
+                    raise ValueError()
+
+                charge_density, atoms = dask.delayed(load_gpw, nout=2)(path)
+                atoms = LazyAtoms(atoms, numbers=numbers, cell=cell)
+
+                charge_density = da.from_delayed(charge_density, shape=shape, meta=np.array((), dtype=float))
+
+                frozen_phonons.append(atoms)
+                charge_densities.append(charge_density)
+
+        charge_density = da.stack(charge_densities)
+        atoms = MDFrozenPhonons(frozen_phonons)
 
         super().__init__(charge_density=charge_density, atoms=atoms, gpts=gpts, sampling=sampling,
-                         slice_thickness=slice_thickness, plane=plane, box=box, origin=origin, chunks=chunks,
-                         fft_singularities=False)
+                         slice_thickness=slice_thickness, plane=plane, box=box, origin=origin)
 
 
 class GPAWParametrization:

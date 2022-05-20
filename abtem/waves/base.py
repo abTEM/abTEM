@@ -18,13 +18,14 @@ def safe_floor_int(n: float, tol: int = 7):
 
 
 class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAxes, HasDevice):
+    _base_axes = (-2, -1)
     _antialias_cutoff_gpts: Union[Tuple[int, int], None] = None
 
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
         self.grid.check_is_defined()
         return [RealSpaceAxis(label='x', sampling=self.sampling[0], units='Å', endpoint=False),
-                RealSpaceAxis(label='y', sampling=self.sampling[0], units='Å', endpoint=False)]
+                RealSpaceAxis(label='y', sampling=self.sampling[1], units='Å', endpoint=False)]
 
     @property
     def fourier_space_axes_metadata(self) -> List[AxisMetadata]:
@@ -80,11 +81,6 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAxe
     def full_cutoff_angles(self) -> Tuple[float, float]:
         return (self.gpts[0] // 2 * self.angular_sampling[0],
                 self.gpts[1] // 2 * self.angular_sampling[1])
-
-    @property
-    def fourier_space_sampling(self) -> Tuple[float, float]:
-        self.grid.check_is_defined()
-        return 1 / (self.gpts[0] * self.sampling[0]), 1 / (self.gpts[1] * self.sampling[1])
 
     @property
     def angular_sampling(self) -> Tuple[float, float]:

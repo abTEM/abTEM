@@ -1,54 +1,17 @@
 """Module for describing the detection of transmitted waves and different detector types."""
 from abc import ABCMeta, abstractmethod
-from copy import copy, deepcopy
+from copy import deepcopy
 from typing import Tuple, Any, Union, List, TYPE_CHECKING
 
-import dask.array as da
 import matplotlib.pyplot as plt
 import numpy as np
 
-from abtem.core.axes import ScanAxis, FrozenPhononsAxis, OrdinalAxis, AxisMetadata, ThicknessSeriesAxis, \
-    FourierSpaceAxis, LinearAxis, RealSpaceAxis
+from abtem.core.axes import FourierSpaceAxis, RealSpaceAxis, LinearAxis
 from abtem.core.backend import get_array_module
 from abtem.measure.measure import DiffractionPatterns, PolarMeasurements, Images, LineProfiles
 
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves
-    from abtem.potentials.potentials import AbstractPotential
-
-
-def stack_measurements(measurements, axes_metadata):
-    array = np.stack([measurement.array for measurement in measurements])
-    cls = measurements[0].__class__
-    d = measurements[0]._copy_as_dict(copy_array=False)
-    d['array'] = array
-    d['extra_axes_metadata'] = [axes_metadata] + d['extra_axes_metadata']
-    return cls(**d)
-
-
-def allocate_measurements(waves, scan, detectors, potential: 'AbstractPotential'):
-    measurements = []
-    for detector in detectors:
-
-        extra_axes_shape = ()
-        extra_axes_metadata = []
-
-        if potential.num_frozen_phonons > 1 and not potential.ensemble_mean:
-            extra_axes_shape = (potential.num_frozen_phonons,)
-            extra_axes_metadata = [FrozenPhononsAxis()]
-
-        if detector.detect_every:
-            extra_axes_shape = (detector.num_detections(potential),)
-            extra_axes_metadata = [OrdinalAxis()]
-
-        measurement = detector.allocate_measurement(waves,
-                                                    scan,
-                                                    extra_axes_shape=extra_axes_shape,
-                                                    extra_axes_metadata=extra_axes_metadata)
-
-        measurements.append(measurement)
-
-    return measurements
 
 
 def validate_detectors(detectors: Union['AbstractDetector', List['AbstractDetector']]) -> List['AbstractDetector']:
@@ -65,12 +28,9 @@ def validate_detectors(detectors: Union['AbstractDetector', List['AbstractDetect
     return detectors
 
 
-# def measurement_from_array()
-
-
 class AbstractDetector(metaclass=ABCMeta):
 
-    def __init__(self, to_cpu: bool = True, url: str = None, detect_every: int = None):
+    def __init__(self, to_cpu: bool = True, url: str = None):
         """
         Abstract base detector class
 
@@ -83,74 +43,23 @@ class AbstractDetector(metaclass=ABCMeta):
             If this parameter is set the measurement data is saved at the specified location, typically a path to a
             local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
             the data stays in memory.
-        detect_every : int, optional
-            If this parameter is set the 'detect' method of the detector is applied after every 'detect_every' step of
-            the multislice algorithm, in addition to after the last step.
-            If not set (default), the detector is only applied after the last step.
         """
         self._to_cpu = to_cpu
         self._url = url
-        self._detect_every = detect_every
-
-    def detect_at_slices(self, potential):
-        detect_at = list(range(0, len(potential), self.detect_every))
-        if len(potential) % self.detect_every:
-            detect_at += [len(potential)]
-
-        return detect_at
-
-    def thickness_series_axes_metadata(self, potential):
-        if self.detect_every:
-            detect_at = self.detect_at_slices(potential)
-            multislice_start_stop = [(detect_at[i], detect_at[i + 1]) for i in range(len(detect_at) - 1)]
-            domain = np.cumsum([potential.slice_thickness[start:stop].sum() for start, stop in multislice_start_stop])
-            return ThicknessSeriesAxis(values=tuple(domain))
-
-        return ThicknessSeriesAxis(values=(potential.thickness,))
 
     @property
     def url(self):
         return self._url
 
     @property
-    def detect_every(self):
-        return self._detect_every
-
-    @property
     def to_cpu(self):
         return self._to_cpu
 
-    def allocate_measurement(self,
-                             waves,
-                             extra_axes_shape: Tuple[int, ...] = None,
-                             extra_axes_metadata: List[AxisMetadata] = None,
-                             lazy: bool = False):
-
-        d = self.measurement_kwargs(waves)
-        shape = self.measurement_shape(waves)
-
-        if extra_axes_shape:
-            assert len(extra_axes_metadata) == len(extra_axes_shape)
-            shape = extra_axes_shape + shape
-            d['extra_axes_metadata'] = extra_axes_metadata + d['extra_axes_metadata']
-
-        if self.to_cpu:
-            xp = np
-        else:
-            xp = get_array_module(waves.device)
-
-        if lazy:
-            d['array'] = da.zeros(shape, dtype=self.measurement_dtype)
-        else:
-            d['array'] = xp.zeros(shape, dtype=self.measurement_dtype)
-
-        return self.measurement_type(waves)(**d)
-
-    def measurement_meta(self, waves):
+    def measurement_meta(self, waves: 'Waves'):
         if self.to_cpu:
             return np.array((), dtype=self.measurement_dtype)
         else:
-            xp = get_array_module(waves.array)
+            xp = get_array_module(waves.device)
             return xp.array((), dtype=self.measurement_dtype)
 
     @property
@@ -159,23 +68,23 @@ class AbstractDetector(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def measurement_shape(self, waves, potential=None) -> Tuple:
+    def measurement_shape(self, waves: 'Waves') -> Tuple:
         pass
 
     @abstractmethod
-    def measurement_type(self, scan):
+    def measurement_type(self, waves: 'Waves'):
         pass
 
     @abstractmethod
-    def measurement_axes_metadata(self, waves):
+    def measurement_axes_metadata(self, waves: 'Waves'):
         pass
 
     @abstractmethod
-    def detect(self, waves) -> Any:
+    def detect(self, waves: 'Waves') -> Any:
         pass
 
     @abstractmethod
-    def angular_limits(self, waves) -> Tuple[float, float]:
+    def angular_limits(self, waves: 'Waves') -> Tuple[float, float]:
         pass
 
     def copy(self):
@@ -205,10 +114,6 @@ class AnnularDetector(AbstractDetector):
         If this parameter is set the measurement data is saved at the specified location, typically a path to a
         local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
         the data stays in memory.
-    detect_every : int, optional
-        If this parameter is set the 'detect' method of the detector is applied after every 'detect_every' step of
-        the multislice algorithm, in addition to after the last step.
-        If not set (default), the detector is only applied after the last step.
     """
 
     def __init__(self,
@@ -216,13 +121,12 @@ class AnnularDetector(AbstractDetector):
                  outer: float,
                  offset: Tuple[float, float] = None,
                  to_cpu: bool = True,
-                 url: str = None,
-                 detect_every: int = None):
+                 url: str = None):
 
         self._inner = inner
         self._outer = outer
         self._offset = offset
-        super().__init__(to_cpu=to_cpu, url=url, detect_every=detect_every)
+        super().__init__(to_cpu=to_cpu, url=url)
 
     @property
     def inner(self) -> float:
@@ -246,7 +150,7 @@ class AnnularDetector(AbstractDetector):
     def offset(self):
         return self._offset
 
-    def angular_limits(self, waves) -> Tuple[float, float]:
+    def angular_limits(self, waves: 'Waves') -> Tuple[float, float]:
         if self.inner is not None:
             inner = self.inner
         else:
@@ -259,32 +163,33 @@ class AnnularDetector(AbstractDetector):
 
         return inner, outer
 
-    def dropped_scan_axes(self, waves):
-        return 2
-
-    def measurement_axes_metadata(self, waves, potential=None):
-        if self.detect_every and potential:
-            return self.thickness_series_axes_metadata(potential)
-
+    def measurement_axes_metadata(self, waves: 'Waves'):
         return []
+        # scan_axes = waves.scan_axes[-2:]
+        # other_axes = [metadata for i, metadata in enumerate(waves.ensemble_axes_metadata) if i not in scan_axes]
+        # scan_axes = [metadata for i, metadata in enumerate(waves.ensemble_axes_metadata) if i in scan_axes]
+        # return other_axes + scan_axes
 
-    def measurement_shape(self, waves, potential=None) -> Tuple:
-        if self.detect_every and potential:
-            return (len(self.detect_at_slices(potential)),)
 
+    def measurement_shape(self, waves: 'Waves') -> Tuple:
         return ()
+        # scan_axes = waves.scan_axes[-2:]
+        # other_shape = tuple(n for i, n in enumerate(waves.ensemble_axes_shape) if i not in scan_axes)
+        # scan_shape = tuple(n for i, n in enumerate(waves.ensemble_axes_shape) if i in scan_axes)
+        # return other_shape + scan_shape
 
     @property
     def measurement_dtype(self) -> type(np.float32):
         return np.float32
 
-    def measurement_type(self, scan) -> Union[type(LineProfiles), type(Images)]:
-        if scan._num_scan_axes == 1:
+    def measurement_type(self, waves: 'Waves') -> Union[type(LineProfiles), type(Images)]:
+
+        if waves.num_scan_axes == 1:
             return LineProfiles
-        elif scan._num_scan_axes == 2:
+        elif waves.num_scan_axes == 2:
             return Images
         else:
-            raise RuntimeError(f'no measurement type for AnnularDetector and scan with {scan._num_scan_axes} scan axes')
+            raise RuntimeError(f'no measurement type for AnnularDetector and scan with {waves.num_scan_axes} scan axes')
 
     def detect(self, waves: 'Waves') -> Images:
 
@@ -333,13 +238,12 @@ class AbstractRadialDetector(AbstractDetector):
                  rotation: float,
                  offset: Tuple[float, float],
                  to_cpu: bool = True,
-                 url: str = None,
-                 detect_every: int = None):
+                 url: str = None):
         self._inner = inner
         self._outer = outer
         self._rotation = rotation
         self._offset = offset
-        super().__init__(to_cpu=to_cpu, url=url, detect_every=detect_every)
+        super().__init__(to_cpu=to_cpu, url=url)
 
     @property
     def inner(self) -> float:
@@ -360,6 +264,10 @@ class AbstractRadialDetector(AbstractDetector):
         self._outer = value
 
     @property
+    def rotation(self):
+        return self._rotation
+
+    @property
     @abstractmethod
     def radial_sampling(self):
         pass
@@ -377,33 +285,24 @@ class AbstractRadialDetector(AbstractDetector):
     def _calculate_nbins_azimuthal(self, waves):
         pass
 
-    def _consumed_scan_axes(self, waves):
-        return 0
-
     @property
     def measurement_dtype(self):
         return np.float32
 
-    def measurement_shape(self, waves):
-
+    def measurement_shape(self, waves: 'Waves'):
         shape = self._calculate_nbins_radial(waves), self._calculate_nbins_azimuthal(waves)
-
-        shape = waves.shape[:-len(waves.base_axes)] + shape
-
         return shape
 
-    def measurement_kwargs(self, waves):
-        extra_axes_metadata = waves.extra_axes_metadata
+    def measurement_type(self, waves: 'Waves'):
+        return PolarMeasurements
 
-        d = {'radial_sampling': self.radial_sampling,
-             'azimuthal_sampling': self.azimuthal_sampling,
-             'radial_offset': self.inner,
-             'azimuthal_offset': self._rotation,
-             'extra_axes_metadata': extra_axes_metadata,
-             }
-        return d
+    def measurement_axes_metadata(self, waves: 'Waves'):
+        return [
+            LinearAxis(label='Radial scattering angle', offset=self.inner, sampling=self.radial_sampling, units='mrad'),
+            LinearAxis(label='Azimuthal scattering angle', offset=self.rotation, sampling=self.azimuthal_sampling,
+                       units='rad')]
 
-    def angular_limits(self, waves) -> Tuple[float, float]:
+    def angular_limits(self, waves: 'Waves') -> Tuple[float, float]:
         if self.inner is not None:
             inner = self.inner
         else:
@@ -416,7 +315,7 @@ class AbstractRadialDetector(AbstractDetector):
 
         return inner, outer
 
-    def detect(self, waves):
+    def detect(self, waves: 'Waves'):
         inner, outer = self.angular_limits(waves)
 
         measurement = waves.diffraction_patterns(max_angle='cutoff')
@@ -432,9 +331,6 @@ class AbstractRadialDetector(AbstractDetector):
             measurement = measurement.to_cpu()
 
         return measurement
-
-    def measurement_type(self, waves):
-        return PolarMeasurements
 
     def show(self, waves=None, ax=None, cmap='prism'):
         bins = np.arange(0, self._calculate_nbins_radial(waves) * self._calculate_nbins_azimuthal(waves))
@@ -479,10 +375,6 @@ class FlexibleAnnularDetector(AbstractRadialDetector):
         If this parameter is set the measurement data is saved at the specified location, typically a path to a
         local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
         the data stays in memory.
-    detect_every : int, optional
-        If this parameter is set the 'detect' method of the detector is applied after every 'detect_every' step of
-        the multislice algorithm, in addition to after the last step.
-        If not set (default), the detector is only applied after the last step.
     """
 
     def __init__(self,
@@ -490,11 +382,9 @@ class FlexibleAnnularDetector(AbstractRadialDetector):
                  inner: float = 0.,
                  outer: float = None,
                  to_cpu: bool = True,
-                 url: str = None,
-                 detect_every: int = None):
+                 url: str = None):
         self._step_size = step_size
-        super().__init__(inner=inner, outer=outer, rotation=0., offset=(0., 0.), to_cpu=to_cpu, url=url,
-                         detect_every=detect_every)
+        super().__init__(inner=inner, outer=outer, rotation=0., offset=(0., 0.), to_cpu=to_cpu, url=url)
 
     @property
     def step_size(self) -> float:
@@ -530,8 +420,7 @@ class SegmentedDetector(AbstractRadialDetector):
                  rotation: float = 0.,
                  offset: Tuple[float, float] = (0., 0.),
                  to_cpu: bool = False,
-                 url: str = None,
-                 detect_every: int = None):
+                 url: str = None):
         """
         Segmented detector.
 
@@ -560,16 +449,11 @@ class SegmentedDetector(AbstractRadialDetector):
             If this parameter is set the measurement data is saved at the specified location, typically a path to a
             local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
             the data stays in memory.
-        detect_every : int, optional
-            If this parameter is set the 'detect' method of the detector is applied after every 'detect_every' step of
-            the multislice algorithm, in addition to after the last step.
-            If not set (default), the detector is only applied after the last step.
         """
 
         self._nbins_radial = nbins_radial
         self._nbins_azimuthal = nbins_azimuthal
-        super().__init__(inner=inner, outer=outer, rotation=rotation, offset=offset, to_cpu=to_cpu, url=url,
-                         detect_every=detect_every)
+        super().__init__(inner=inner, outer=outer, rotation=rotation, offset=offset, to_cpu=to_cpu, url=url)
 
     @property
     def rotation(self):
@@ -601,10 +485,10 @@ class SegmentedDetector(AbstractRadialDetector):
     def nbins_azimuthal(self, value: float):
         self._nbins_azimuthal = value
 
-    def _calculate_nbins_radial(self, waves=None):
+    def _calculate_nbins_radial(self, waves: 'Waves' = None):
         return self.nbins_radial
 
-    def _calculate_nbins_azimuthal(self, waves=None):
+    def _calculate_nbins_azimuthal(self, waves: 'Waves' = None):
         return self.nbins_azimuthal
 
 
@@ -615,8 +499,7 @@ class PixelatedDetector(AbstractDetector):
                  resample: bool = False,
                  fourier_space: bool = True,
                  to_cpu: bool = True,
-                 url: str = None,
-                 detect_every: int = None):
+                 url: str = None):
         """
         Pixelated detector.
 
@@ -628,7 +511,8 @@ class PixelatedDetector(AbstractDetector):
         max_angle : str or float or None
             The diffraction patterns will be detected up to this angle. If set to a string it must be 'limit' or 'valid'
         resample : 'uniform' or False
-            If 'uniform', the diffraction patterns from rectangular cells will be downsampled to a uniform angular sampling.
+            If 'uniform', the diffraction patterns from rectangular cells will be downsampled to a uniform angular
+            sampling.
         max_angle : {'cutoff', 'valid'} or float
             Maximum detected scattering angle of the diffraction patterns. If str, it must be one of:
             ``cutoff`` :
@@ -644,15 +528,11 @@ class PixelatedDetector(AbstractDetector):
             If this parameter is set the measurement data is saved at the specified location, typically a path to a
             local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
             the data stays in memory.
-        detect_every : int, optional
-            If this parameter is set the 'detect' method of the detector is applied after every 'detect_every' step of
-            the multislice algorithm, in addition to after the last step.
-            If not set (default), the detector is only applied after the last step.
         """
         self._resample = resample
         self._max_angle = max_angle
         self._fourier_space = fourier_space
-        super().__init__(to_cpu=to_cpu, url=url, detect_every=detect_every)
+        super().__init__(to_cpu=to_cpu, url=url)
 
     @property
     def max_angle(self):
@@ -666,7 +546,7 @@ class PixelatedDetector(AbstractDetector):
     def resample(self):
         return self._resample
 
-    def angular_limits(self, waves) -> Tuple[float, float]:
+    def angular_limits(self, waves: 'Waves') -> Tuple[float, float]:
 
         if isinstance(self.max_angle, str):
             if self.max_angle == 'valid':
@@ -682,20 +562,19 @@ class PixelatedDetector(AbstractDetector):
 
         return 0., outer
 
-    def measurement_shape(self, waves):
+    def measurement_shape(self, waves: 'Waves') -> Tuple[int, int]:
         if self.fourier_space:
             shape = waves._gpts_within_angle(self.max_angle)
         else:
             shape = waves.gpts
 
-        shape = waves.extra_axes_shape + shape
         return shape
 
     @property
     def measurement_dtype(self):
         return np.float32
 
-    def measurement_axes_metadata(self, waves):
+    def measurement_axes_metadata(self, waves: 'Waves'):
         if self.fourier_space:
             sampling = waves.fourier_space_sampling
             return [FourierSpaceAxis(sampling=sampling[0], label='x', units='mrad', fftshift=True),
@@ -704,27 +583,27 @@ class PixelatedDetector(AbstractDetector):
             return [RealSpaceAxis(label='x', sampling=waves.sampling[0], units='Å'),
                     RealSpaceAxis(label='y', sampling=waves.sampling[1], units='Å')]
 
-    def measurement_type(self, scan):
+    def measurement_type(self, waves: 'Waves'):
         if self.fourier_space:
             return DiffractionPatterns
         else:
             return Images
 
-    def detect(self, waves) -> np.ndarray:
-        # """
-        # Calculate the far field intensity of the wave functions. The output is cropped to include the non-suppressed
-        # frequencies from the antialiased 2D fourier spectrum.
-        #
-        # Parameters
-        # ----------
-        # waves: Waves object
-        #     The batch of wave functions to detect.
-        #
-        # Returns
-        # -------
-        #     Detected values. The first dimension indexes the batch size, the second and third indexes the two components
-        #     of the spatial frequency.
-        # """
+    def detect(self, waves: 'Waves') -> 'PixelatedDetector':
+        """
+        Calculate the far field intensity of the wave functions. The output is cropped to include the non-suppressed
+        frequencies from the antialiased 2D fourier spectrum.
+
+        Parameters
+        ----------
+        waves: Waves object
+            The batch of wave functions to detect.
+
+        Returns
+        -------
+            Detected values. The first dimension indexes the batch size, the second and third indexes the two components
+            of the spatial frequency.
+        """
 
         if self.fourier_space:
             measurements = waves.diffraction_patterns(max_angle=self.max_angle)
@@ -740,37 +619,36 @@ class PixelatedDetector(AbstractDetector):
 
 class WavesDetector(AbstractDetector):
 
-    def __init__(self, to_cpu: bool = False, url: str = None, detect_every: int = None):
-        super().__init__(to_cpu=to_cpu, url=url, detect_every=detect_every)
+    def __init__(self, to_cpu: bool = False, url: str = None):
+        super().__init__(to_cpu=to_cpu, url=url)
 
-    def detect(self, waves):
+    def detect(self, waves: 'Waves') -> 'Waves':
         if self.to_cpu:
             waves = waves.copy(device='cpu')
         return waves
 
-    def angular_limits(self, waves) -> Tuple[float, float]:
+    def angular_limits(self, waves: 'Waves') -> Tuple[float, float]:
         return 0., min(waves.full_cutoff_angles)
-
-    def _consumed_scan_axes(self, waves):
-        return 0
 
     @property
     def measurement_dtype(self):
         return np.complex64
 
-    def measurement_shape(self, waves) -> Tuple:
-        shape = waves.extra_axes_shape + waves.gpts
-        return shape
+    def measurement_shape(self, waves: 'Waves') -> Tuple[int, int]:
+        return waves.gpts
 
-    def measurement_type(self, waves):
+    def measurement_type(self, waves: 'Waves'):
         from abtem.waves import Waves
         return Waves
 
-    def measurement_kwargs(self, waves):
-        extra_axes_metadata = waves.extra_axes_metadata
-        return {'sampling': waves.sampling,
-                'energy': waves.energy,
-                'antialias_cutoff_gpts': waves.antialias_cutoff_gpts,
-                'tilt': waves.tilt,
-                'extra_axes_metadata': deepcopy(extra_axes_metadata),
-                'metadata': waves.metadata}
+    def measurement_axes_metadata(self, waves: 'Waves'):
+        return waves.base_axes_metadata
+
+    # def measurement_kwargs(self, waves):
+    #     extra_axes_metadata = waves.extra_axes_metadata
+    #     return {'sampling': waves.sampling,
+    #             'energy': waves.energy,
+    #             'antialias_cutoff_gpts': waves.antialias_cutoff_gpts,
+    #             'tilt': waves.tilt,
+    #             'extra_axes_metadata': deepcopy(extra_axes_metadata),
+    #             'metadata': waves.metadata}

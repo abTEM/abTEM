@@ -9,19 +9,17 @@ import numpy as np
 from ase import Atoms
 
 from abtem.core.axes import FrozenPhononsAxis, OrdinalAxis, RealSpaceAxis, AxisMetadata, PrismPlaneWavesAxis
-from abtem.core.backend import get_array_module, cp, copy_to_device, _validate_device
+from abtem.core.backend import get_array_module, cp, copy_to_device, validate_device
 from abtem.core.complex import complex_exponential
 from abtem.core.dask import HasDaskArray, validate_lazy, ComputableList
 from abtem.core.energy import Accelerator
 from abtem.core.grid import Grid
 from abtem.core.utils import generate_chunks
-from abtem.measure.detect import AbstractDetector, validate_detectors, stack_measurements
-from abtem.measure.measure import AbstractMeasurement
-from abtem.measure.thickness import thickness_series_precursor, detectors_at_stop_slice, stack_thickness_series
+from abtem.measure.detect import AbstractDetector, validate_detectors
+from abtem.measure.measure import AbstractMeasurement, stack_measurements
 from abtem.potentials.potentials import AbstractPotential, validate_potential
-from abtem.potentials.temperature import stack_frozen_phonons
 from abtem.waves.base import WavesLikeMixin
-from abtem.waves.multislice import multislice
+# from abtem.waves.multislice import multislice
 from abtem.waves.prism_utils import prism_wave_vectors, partitioned_prism_wave_vectors, plane_waves, \
     wrapped_crop_2d
 from abtem.waves.scan import AbstractScan, GridScan, LineScan, CustomScan, validate_scan
@@ -299,7 +297,7 @@ class SMatrixArray(HasDaskArray, AbstractSMatrix):
         self._beam_tilt = BeamTilt(tilt=tilt)
         self._antialias_cutoff_gpts = antialias_cutoff_gpts
         self._accelerator = Accelerator(energy=energy)
-        self._device = _validate_device(device)
+        self._device = validate_device(device)
 
         self._array = array
         self._wave_vectors = wave_vectors
@@ -674,8 +672,6 @@ class SMatrixArray(HasDaskArray, AbstractSMatrix):
                                                              ctf=ctf,
                                                              probes_per_reduction=probes_per_reduction)
 
-
-
             measurements.append(measurement)
 
         measurements = list(map(list, zip(*measurements)))
@@ -778,7 +774,7 @@ class SMatrix(AbstractSMatrix):
                  device: str = None,
                  store_on_host: bool = False):
 
-        self._device = _validate_device(device)
+        self._device = validate_device(device)
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
 
         self._potential = validate_potential(potential, self)
@@ -1008,7 +1004,6 @@ class SMatrix(AbstractSMatrix):
         -------
         SMatrixArray
         """
-
 
         generator = self.generate_distribution(lazy=lazy, start=start, stop=stop, downsample=downsample)
         s_matrices = [s_matrix for s_matrix in generator]

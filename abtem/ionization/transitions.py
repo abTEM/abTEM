@@ -37,6 +37,54 @@ class AbstractTransitionCollection(metaclass=ABCMeta):
     def get_transition_potentials(self):
         pass
 
+def transition_multislice(self,
+                          potential: Union[Atoms, AbstractPotential],
+                          transitions: Union[AbstractTransitionCollection, AbstractTransitionPotential],
+                          detectors: Union[AbstractDetector, List[AbstractDetector]] = None,
+                          ctf: CTF = None,
+                          lazy: bool = None):
+
+    lazy = validate_lazy(lazy)
+    potential = validate_potential(potential, self)
+
+    if detectors is None:
+        detectors = PixelatedDetector(fourier_space=False)
+
+    measurements = self.build(lazy=lazy).transition_multislice(potential, transitions, detectors, ctf=ctf)
+    return measurements
+
+def transition_multislice(self, potential: AbstractPotential, transitions, detectors=None, ctf=None):
+    potential = validate_potential(potential, self)
+    detectors = validate_detectors(detectors)
+
+    self.grid.check_is_defined()
+    self.accelerator.check_is_defined()
+
+    if hasattr(transitions, 'get_transition_potentials'):
+        if self.is_lazy:
+            transitions = dask.delayed(transitions.get_transition_potentials)()
+        else:
+            transitions = transitions.get_transition_potentials()
+
+    measurements = []
+    for potential_config in potential.get_distribution(lazy=self.is_lazy):
+        config_measurements = self.copy().apply_detector_func(transition_potential_multislice,
+                                                              potential=potential_config,
+                                                              detectors=detectors,
+                                                              transition_potentials=transitions,
+                                                              ctf=ctf)
+
+        measurements.append(config_measurements)
+
+    measurements = list(map(list, zip(*measurements)))
+    measurements = [stack_measurements(measurements, FrozenPhononsAxis()) for measurements in measurements]
+
+    for i, (detector, measurement) in enumerate(zip(detectors, measurements)):
+        if detector.ensemble_mean:
+            measurements[i] = measurement.mean(0)
+
+    return measurements[0] if len(measurements) == 1 else measurements
+
 
 class SubshellTransitions(AbstractTransitionCollection):
 
