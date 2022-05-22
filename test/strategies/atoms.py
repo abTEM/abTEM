@@ -1,7 +1,7 @@
 import hypothesis.strategies as st
 from ase import Atoms
 
-from abtem import FrozenPhonons
+from abtem.potentials.temperature import FrozenPhonons
 from hypothesis.extra import numpy as numpy_st
 from .core import sensible_floats
 

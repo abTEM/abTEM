@@ -3,7 +3,9 @@ import numpy as np
 import pytest
 from hypothesis import given, settings, assume, reproduce_failure
 
-from abtem import Probe, SMatrix, GridScan, PlaneWave, LineScan, CustomScan, Potential
+from abtem.waves.waves import Probe, PlaneWave
+from abtem.waves.scan import CustomScan, LineScan, GridScan
+from abtem.potentials.potentials import Potential
 from strategies import atoms as atoms_st
 from strategies import core as core_st
 from strategies import detectors as detector_st
@@ -53,7 +55,7 @@ def test_probe_scan(data, detector, lazy, scan, device, frozen_phonons):
 
     potential = Potential(atoms)
 
-    probe = Probe(gpts=data.draw(core_st.gpts(min_value=32, max_value=64)),
+    probe = Probe(gpts=data.draw(core_st.gpts(min_value=32, max_value=64, allow_none=False)),
                   aperture=data.draw(st.floats(5, 10)),
                   energy=data.draw(core_st.energy()),
                   extent=np.diag(atoms.cell)[:2],
@@ -64,7 +66,7 @@ def test_probe_scan(data, detector, lazy, scan, device, frozen_phonons):
     if isinstance(scan, CustomScan) and detector == 'annular_detector':
         return
 
-    measurements = probe.scan(potential=atoms, scan=scan, detectors=detectors, lazy=lazy)
+    measurements = probe.scan(potential=potential, scan=scan, detectors=detectors, lazy=lazy)
     measurements.compute()
 
     if hasattr(measurements, 'array'):

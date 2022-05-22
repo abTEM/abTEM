@@ -1,6 +1,6 @@
 from ase import Atoms
 
-from abtem import Potential
+from abtem.potentials.potentials import Potential
 from utils import array_is_close
 import pytest
 import sys

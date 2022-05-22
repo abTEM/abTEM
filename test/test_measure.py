@@ -7,7 +7,7 @@ import pytest
 from hypothesis import given, settings, assume, HealthCheck, reproduce_failure
 from hypothesis.strategies import composite
 
-from abtem import Probe
+from abtem.waves.waves import Probe
 from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import cp
 from abtem.measure.measure import stack_measurements, Images, from_zarr

@@ -2,7 +2,7 @@ import hypothesis.strategies as st
 from hypothesis import given, assume
 
 from strategies import core as core_st
-from abtem import Probe
+from abtem.waves.waves import Probe
 
 
 @given(gpts=core_st.gpts(min_value=32, max_value=64),

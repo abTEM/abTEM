@@ -4,10 +4,10 @@ import pytest
 from ase import Atoms
 from hypothesis import given, assume, settings
 
-
 from strategies import core as core_st
 from strategies import atoms as atoms_st
-from abtem import Probe, PlaneWave, SMatrix, Waves
+from abtem.waves.waves import Probe, PlaneWave, Waves
+from abtem.waves.prism import SMatrix
 from abtem.core.backend import get_array_module
 from abtem.core.energy import EnergyUndefinedError, energy2wavelength
 from abtem.core.grid import GridUndefinedError
@@ -101,7 +101,7 @@ def test_can_build(grid_data, energy, builder, device, lazy):
 def test_normalized(grid_data, energy, lazy, builder):
     builder = builder(**grid_data, energy=energy)
 
-    #if hasattr(builder, '_normalize'):
+    # if hasattr(builder, '_normalize'):
     #    builder._normalize = True
 
     wave = builder.build(lazy=lazy)
@@ -126,7 +126,7 @@ def test_planewave_empty_multislice(atom_data, energy, gpts, lazy):
     atoms = Atoms(**atom_data)
     plane_wave = PlaneWave(gpts=gpts, energy=energy)
     wave = plane_wave.multislice(atoms, lazy=lazy).compute()
-    #check_is_normalized(wave.array)
+    # check_is_normalized(wave.array)
 
 
 def antialias_cutoff_angle(sampling, energy):
@@ -141,7 +141,7 @@ def antialias_cutoff_angle(sampling, energy):
 def test_probe_empty_multislice(atom_data, energy, sampling, lazy):
     atoms = Atoms(**atom_data)
     cutoff = 0.9 * antialias_cutoff_angle(max(ensure_is_tuple(sampling, 2)), energy)
-    plane_wave = Probe(semiangle_cutoff=cutoff, sampling=sampling, energy=energy)
+    plane_wave = Probe(aperture=cutoff, sampling=sampling, energy=energy)
     wave = plane_wave.multislice(atoms, lazy=lazy).compute()
     check_is_normalized(wave.array)
 

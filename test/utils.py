@@ -5,9 +5,10 @@ import numpy as np
 import pytest
 from hypothesis import assume
 
-from abtem import Potential, Waves
 from abtem.core.backend import get_array_module, cp
+from abtem.potentials.potentials import Potential
 from abtem.potentials.temperature import AbstractFrozenPhonons
+from abtem.waves.waves import Waves
 
 
 def check_array_matches_device(array, device):
@@ -89,7 +90,7 @@ def assert_scanned_measurement_as_expected(measurements, atoms, waves, detectors
         expected_shape += detector.measurement_shape(waves)
 
         assert expected_shape == measurement.shape
-        #assert not np.all(measurement.array == 0.)
+        # assert not np.all(measurement.array == 0.)
 
         if detector.to_cpu:
             assert isinstance(measurement.array, np.ndarray)

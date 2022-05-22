@@ -1,9 +1,10 @@
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given, settings, reproduce_failure
+from hypothesis import given
 
-from abtem import Probe, AnnularDetector, FlexibleAnnularDetector, PixelatedDetector
+from abtem.measure.detect import AnnularDetector, FlexibleAnnularDetector, PixelatedDetector
+from abtem.waves.waves import Probe
 from strategies import atoms as atoms_st
 from strategies import core as core_st
 from utils import assume_valid_probe_and_detectors, gpu
