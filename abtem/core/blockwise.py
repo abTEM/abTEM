@@ -40,8 +40,9 @@ class Ensemble(metaclass=ABCMeta):
         pass
 
     def _ensemble_blockwise(self, max_batch):
+        chunks = validate_chunks(self.ensemble_shape, self.default_ensemble_chunks, limit=max_batch)
         partial = self.ensemble_partial()
-        blocks = self.ensemble_blocks(max_batch)
+        blocks = self.ensemble_blocks(chunks)
         return ensemble_blockwise(partial, blocks)
 
 

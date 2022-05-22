@@ -3,20 +3,19 @@ import contextlib
 import os
 import warnings
 from collections import defaultdict
-from typing import Tuple, Union, List, Iterable
+from typing import Tuple, Union, List
 
+import dask
+import dask.array as da
 import numpy as np
 from ase import units
 from ase.data import chemical_symbols, atomic_numbers
 from scipy.interpolate import interp1d
-import dask.array as da
 
-import dask
 from abtem.core.electron_configurations import electron_configurations, config_str_to_config_tuples
 from abtem.potentials.poisson import ChargeDensityPotential
+from abtem.potentials.temperature import MDFrozenPhonons, LazyAtoms
 from abtem.potentials.utils import eps0
-from abtem.potentials.potentials import AbstractPotential
-from abtem.potentials.temperature import AbstractFrozenPhonons, MDFrozenPhonons, LazyAtoms
 
 try:
     from gpaw import GPAW
@@ -35,6 +34,7 @@ class GPAWPotential(ChargeDensityPotential):
                  plane: str = 'xy',
                  box: Tuple[float, float, float] = None,
                  gridrefinement: int = 2,
+                 exit_planes=None,
                  origin: Tuple[float, float, float] = (0., 0., 0.)):
 
         """
@@ -96,9 +96,10 @@ class GPAWPotential(ChargeDensityPotential):
 
             frozen_phonons = []
             charge_densities = []
+
             for path in paths:
-                if not isinstance(path, str):
-                    raise ValueError()
+                # if not isinstance(calculator, str):
+                #    raise ValueError()
 
                 charge_density, atoms = dask.delayed(load_gpw, nout=2)(path)
                 atoms = LazyAtoms(atoms, numbers=numbers, cell=cell)
@@ -112,7 +113,7 @@ class GPAWPotential(ChargeDensityPotential):
         atoms = MDFrozenPhonons(frozen_phonons)
 
         super().__init__(charge_density=charge_density, atoms=atoms, gpts=gpts, sampling=sampling,
-                         slice_thickness=slice_thickness, plane=plane, box=box, origin=origin)
+                         slice_thickness=slice_thickness, plane=plane, box=box, origin=origin, exit_planes=exit_planes)
 
 
 class GPAWParametrization:

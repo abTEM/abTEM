@@ -49,7 +49,7 @@ class NonLinearAxis(AxisMetadata):
 
 
 @dataclass
-class ThicknessSeriesAxis(NonLinearAxis):
+class ThicknessAxis(NonLinearAxis):
     label: str = 'thickness'
     units: str = 'Å'
 
@@ -94,13 +94,10 @@ def axis_from_dict(d):
 
 
 class HasAxes:
-    shape: Tuple[int, ...]
+    base_shape: Tuple[int, ...]
+    ensemble_shape: Tuple[int, ...]
     base_axes_metadata: List[AxisMetadata]
-    _ensemble_axes_metadata: List[AxisMetadata]
-
-    @property
-    def ensemble_axes_metadata(self):
-        return self._ensemble_axes_metadata
+    ensemble_axes_metadata: List[AxisMetadata]
 
     @property
     def axes_metadata(self):
@@ -127,12 +124,16 @@ class HasAxes:
         return tuple(range(self.num_ensemble_axes))
 
     @property
-    def base_shape(self):
-        return tuple(self.shape[i] for i in self.base_axes)
+    def shape(self):
+        return self.ensemble_shape + self.base_shape
 
-    @property
-    def ensemble_shape(self):
-        return tuple(self.shape[i] for i in self.ensemble_axes)
+    # @property
+    # def base_shape(self):
+    #     return tuple(self.shape[i] for i in self.base_axes)
+    #
+    # @property
+    # def ensemble_shape(self):
+    #     return tuple(self.shape[i] for i in self.ensemble_axes)
 
     def find_axes_type(self, cls):
         indices = ()

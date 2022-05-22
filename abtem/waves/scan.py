@@ -165,6 +165,7 @@ class CompoundScan(AbstractScan):
         return shape
 
     def get_positions(self):
+
         positions = self._scans.get_positions()
         for scan in self._scans[1:]:
             positions = np.add.outer(positions, scan.get_positions())

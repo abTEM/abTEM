@@ -21,6 +21,10 @@ class AbstractFrozenPhonons(Ensemble, metaclass=ABCMeta):
     def __init__(self, ensemble_mean: bool = True):
         self._ensemble_mean = ensemble_mean
 
+    @abstractmethod
+    def generate_configurations(self):
+        pass
+
     @property
     def ensemble_mean(self):
         return self._ensemble_mean
@@ -67,21 +71,31 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
     def __init__(self):
         super().__init__(ensemble_mean=True)
 
+    def ensemble_blocks(self, chunks):
+        raise NotImplementedError
+
+    def ensemble_partial(self):
+        raise NotImplementedError
+
+    def generate_configurations(self):
+        raise NotImplementedError
+
+    def randomize(self, atoms):
+        raise NotImplementedError
+
+    @property
+    def atoms(self):
+        return None
+
     @property
     def cell(self):
         return None
-
-    def get_configurations(self, lazy: bool = True):
-        return [None]
 
     def __len__(self):
         return 1
 
     def __copy__(self):
         return self.__class__()
-
-    def apply_transformation(self, func=None, *args, **kwargs):
-        return self
 
 
 class FrozenPhonons(AbstractFrozenPhonons):
@@ -212,6 +226,13 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
         return atoms
 
+    def generate_configurations(self):
+        kwargs = self._copy_as_dict()
+        kwargs['num_configs'] = 1
+
+        for i in range(self.num_configs):
+            yield FrozenPhonons(**kwargs)
+
     def ensemble_partial(self):
         return lambda x: x
 
@@ -239,12 +260,18 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
         return da.concatenate(array),
 
-    def copy(self) -> 'FrozenPhonons':
-        return self.__class__(atoms=self.atoms.copy(),
-                              num_configs=len(self),
-                              sigmas=copy(self.sigmas),
-                              random_state=copy(self.random_state),
-                              directions=self.directions)
+    def _copy_as_dict(self, copy_atoms: bool = True) -> dict:
+
+        kwargs = {'num_configs': len(self),
+                  'sigmas': copy(self.sigmas),
+                  'random_state': copy(self.random_state),
+                  'ensemble_mean': self.ensemble_mean,
+                  'directions': self.directions}
+
+        if copy_atoms:
+            kwargs['atoms'] = self.atoms.copy()
+
+        return kwargs
 
 
 class LazyAtoms:
@@ -285,6 +312,10 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
         self._trajectory = trajectory
 
         super().__init__(ensemble_mean=ensemble_mean)
+
+    def generate_configurations(self):
+        for frozen_phonon in self:
+            yield MDFrozenPhonons([frozen_phonon])
 
     def __len__(self) -> int:
         return len(self._trajectory)
