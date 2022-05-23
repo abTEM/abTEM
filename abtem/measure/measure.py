@@ -412,6 +412,7 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
                     root.attrs[key] = value
 
             root.attrs['type'] = measurement.__class__.__name__
+
         return array
 
     @staticmethod

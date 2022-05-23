@@ -56,8 +56,8 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAxe
             return self.gpts
 
         elif not isinstance(angle, str):
-            return (int(2 * np.ceil(angle / self.angular_sampling[0])),
-                    int(2 * np.ceil(angle / self.angular_sampling[1])))
+            return (int(2 * np.ceil(angle / self.angular_sampling[0])) + 1,
+                    int(2 * np.ceil(angle / self.angular_sampling[1])) + 1)
 
         elif angle == 'cutoff':
             return self.antialias_cutoff_gpts

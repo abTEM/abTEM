@@ -217,6 +217,12 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
         return waves
 
+    def tile(self, repetitions):
+        d = self._copy_as_dict(copy_array=False)
+        xp = get_array_module(self.device)
+        d['array'] = xp.tile(self.array, (1,) * len(self.ensemble_shape) + repetitions)
+        return self.__class__(**d)
+
     def ensure_lazy(self):
         if self.is_lazy:
             return self
@@ -551,7 +557,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
         with zarr.open(url, mode='r') as f:
             energy = f.attrs['energy']
-            extent = f.attrs['extent']
+            extent = f.attrs['sampling']
             tilt = f.attrs['tilt']
             antialias_cutoff_gpts = f.attrs['antialias_cutoff_gpts']
             ensemble_axes_metadata = [axis_from_dict(d) for d in f.attrs['ensemble_axes_metadata']]
