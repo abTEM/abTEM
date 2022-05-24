@@ -33,8 +33,9 @@ else:
 try:
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=DeprecationWarning)
-        from hyperspy._signals.signal2d import Signal2D
-        from hyperspy._signals.signal2d import Signal1D
+        import hyperspy.api as hs
+        Signal2D = hs.signals.Signal2D
+        Signal1D = hs.signals.Signal1D
 except ImportError:
     Signal2D = None
     Signal1D = None
