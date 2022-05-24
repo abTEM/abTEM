@@ -72,12 +72,11 @@ class GPAWPotential(ChargeDensityPotential):
         if not isinstance(calculators, list):
             calculators = [calculators]
 
-        if isinstance(calculators[0], GPAW):
-
+        if hasattr(calculators[0], 'get_all_electron_density'):
             frozen_phonons = []
             charge_densities = []
             for calculator in calculators:
-                if not isinstance(calculator, GPAW):
+                if not hasattr(calculator, 'get_all_electron_density'):
                     raise ValueError()
 
                 shape = calculator.wfs.gd.N_c * gridrefinement
