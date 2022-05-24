@@ -643,7 +643,7 @@ class CrystalPotential(AbstractPotential):
     def ensemble_axes_metadata(self):
         axes_metadata = []
         axes_metadata += self.frozen_phonons.ensemble_axes_metadata
-        axes_metadata += [ThicknessAxis(values=self.exit_planes)]
+        axes_metadata += [ThicknessAxis(values=self.exit_thicknesses)]
         return axes_metadata
 
     def ensemble_blocks(self, chunks=(1, -1)):
