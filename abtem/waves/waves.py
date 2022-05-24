@@ -557,7 +557,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
         with zarr.open(url, mode='r') as f:
             energy = f.attrs['energy']
-            extent = f.attrs['sampling']
+            sampling = f.attrs['sampling']
             tilt = f.attrs['tilt']
             antialias_cutoff_gpts = f.attrs['antialias_cutoff_gpts']
             ensemble_axes_metadata = [axis_from_dict(d) for d in f.attrs['ensemble_axes_metadata']]
@@ -568,7 +568,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
             chunks = (-1,) * (len(shape) - 2)
 
         array = da.from_zarr(url, component='array', chunks=chunks + (-1, -1))
-        return cls(array=array, energy=energy, extent=extent, tilt=tilt, antialias_cutoff_gpts=antialias_cutoff_gpts,
+        return cls(array=array, energy=energy, sampling=sampling, tilt=tilt, antialias_cutoff_gpts=antialias_cutoff_gpts,
                    ensemble_axes_metadata=ensemble_axes_metadata, metadata=metadata)
 
     def __getitem__(self, items) -> 'Waves':
