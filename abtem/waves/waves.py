@@ -217,10 +217,12 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
         return waves
 
-    def tile(self, repetitions):
+    def tile(self, repetitions, keep_normalization: bool = True):
         d = self._copy_as_dict(copy_array=False)
         xp = get_array_module(self.device)
         d['array'] = xp.tile(self.array, (1,) * len(self.ensemble_shape) + repetitions)
+        if keep_normalization:
+            d['array'] /= xp.prod(repetitions)
         return self.__class__(**d)
 
     def ensure_lazy(self):
@@ -568,7 +570,8 @@ class Waves(HasDaskArray, WavesLikeMixin):
             chunks = (-1,) * (len(shape) - 2)
 
         array = da.from_zarr(url, component='array', chunks=chunks + (-1, -1))
-        return cls(array=array, energy=energy, sampling=sampling, tilt=tilt, antialias_cutoff_gpts=antialias_cutoff_gpts,
+        return cls(array=array, energy=energy, sampling=sampling, tilt=tilt,
+                   antialias_cutoff_gpts=antialias_cutoff_gpts,
                    ensemble_axes_metadata=ensemble_axes_metadata, metadata=metadata)
 
     def __getitem__(self, items) -> 'Waves':
@@ -994,7 +997,7 @@ class Probe(WavesBuilder):
         if self.source_offset is not None:
             del kwargs['source_offset']
             stop = start + self.source_offset.ensemble_dims
-            source_offset = (self.source_offset.ensemble_partial(), tuple(range(start, start + stop)))
+            source_offset = (self.source_offset.ensemble_partial(), tuple(range(start, stop)))
         else:
             source_offset = None
 
@@ -1088,7 +1091,11 @@ class Probe(WavesBuilder):
 
         array = xp.ones(probe.gpts, dtype=xp.complex64)
 
-        waves = Waves(array=array, energy=probe.energy, extent=probe.extent, fourier_space=True)
+        waves = Waves(array=array,
+                      energy=probe.energy,
+                      extent=probe.extent,
+                      tilt=probe.tilt,
+                      fourier_space=True)
 
         waves = probe.source_offset.apply_fft_shift(waves)
 
