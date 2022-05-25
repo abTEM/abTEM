@@ -287,7 +287,7 @@ class Potential(AbstractPotential):
     def ensemble_axes_metadata(self):
         axes_metadata = []
         axes_metadata += self.frozen_phonons.ensemble_axes_metadata
-        axes_metadata += [ThicknessAxis(values=self.exit_planes)]
+        axes_metadata += [ThicknessAxis(values=self.exit_thicknesses)]
         return axes_metadata
 
     @property
@@ -884,7 +884,7 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
 
     @property
     def base_axes_metadata(self):
-        return [ThicknessAxis(label='z', values=tuple(self.slice_thickness), units='Å'),
+        return [ThicknessAxis(label='z', values=tuple(self.exit_thicknesses), units='Å'),
                 RealSpaceAxis(label='x', sampling=self.sampling[0], units='Å', endpoint=False),
                 RealSpaceAxis(label='y', sampling=self.sampling[1], units='Å', endpoint=False)]
 
