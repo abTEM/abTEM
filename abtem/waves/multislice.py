@@ -18,13 +18,17 @@ if TYPE_CHECKING:
     from abtem.waves.waves import Waves
 
 
-def fresnel_propagator(gpts, sampling, dz, energy, xp):
+def fresnel_propagator(gpts, sampling, dz, energy, xp, tilt=(0., 0.)):
     wavelength = energy2wavelength(energy)
 
     kx, ky = spatial_frequencies(gpts, sampling, xp=xp)
 
     f = (complex_exponential(-(kx ** 2)[:, None] * np.pi * dz * wavelength) *
          complex_exponential(-(ky ** 2)[None] * np.pi * dz * wavelength))
+
+    if tilt != (0., 0.):
+        f *= (complex_exponential(-kx[:, None] * xp.tan(tilt[0] / 1e3) * dz * 2 * np.pi) *
+              complex_exponential(-ky[None] * xp.tan(tilt[1] / 1e3) * dz * 2 * np.pi))
 
     return f
 
@@ -85,7 +89,8 @@ class FresnelPropagator(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, Has
                                    self.sampling,
                                    self.thickness,
                                    self.energy,
-                                   get_array_module(self._device))
+                                   get_array_module(self._device),
+                                   tilt=self.tilt)
 
         array *= antialias_aperture.array
         return array
@@ -186,7 +191,7 @@ def multislice_and_detect(waves: 'Waves',
     antialias_aperture = AntialiasAperture(device=get_array_module(waves.array))
     antialias_aperture.match_grid(waves)
 
-    propagator = FresnelPropagator(device=get_array_module(waves.array))
+    propagator = FresnelPropagator(device=get_array_module(waves.array), tilt=waves.tilt)
     propagator.match_waves(waves)
 
     slice_generator = potential.generate_slices(first_slice=start)
