@@ -12,7 +12,7 @@ import dask
 from abtem.core.backend import copy_to_device, get_array_module
 from abtem.core.fft import fft_crop
 from abtem.potentials.parametrizations import EwaldParametrization
-from abtem.potentials.potentials import Potential, AbstractPotential, PotentialArray
+from abtem.potentials.potentials import Potential, AbstractPotential, PotentialArray, PotentialBuilder
 from abtem.potentials.temperature import MDFrozenPhonons, AbstractFrozenPhonons
 from abtem.structures.slicing import _validate_slice_thickness
 import dask.array as da
@@ -133,7 +133,7 @@ def interpolate_between_cells(array, new_shape, old_cell, new_cell, offset=(0., 
     return interpolated
 
 
-class ChargeDensityPotential(AbstractPotential):
+class ChargeDensityPotential(PotentialBuilder):
 
     def __init__(self,
                  atoms: Union[Atoms, MDFrozenPhonons],
@@ -287,47 +287,7 @@ class ChargeDensityPotential(AbstractPotential):
 
         return partial(charge_density_potential, **kwargs)
 
-    def build(self,
-              first_slice: int = 0,
-              last_slice: int = None,
-              chunks: int = 1,
-              lazy: bool = None,
-              keep_ensemble_dims: bool = False) -> 'PotentialArray':
 
-        if last_slice is None:
-            last_slice = len(self)
-
-        def build(potential):
-            potential = potential.item()
-            return potential.build().array[None, None]
-
-        if self.is_lazy or lazy:
-            blocks = self._ensemble_blockwise(1)
-            chunks = blocks.chunks + ((len(self),),) + ((self.gpts[0],), (self.gpts[0],))
-            array = blocks.map_blocks(build,
-                                      new_axis=(2, 3, 4),
-                                      chunks=chunks,
-                                      dtype=np.float32)
-
-        else:
-            xp = get_array_module(self.device)
-
-            array = xp.zeros((len(self),) + self.gpts, dtype=xp.float32)
-
-            for i, slic in enumerate(self.generate_slices(first_slice, last_slice)):
-                array[i] = slic.array
-
-        potential = PotentialArray(array,
-                                   sampling=self.sampling,
-                                   slice_thickness=self.slice_thickness,
-                                   ensemble_axes_metadata=self.ensemble_axes_metadata)
-
-        potential = potential.squeeze()
-
-        if not lazy:
-            potential = potential.compute()
-
-        return potential
 
     def generate_slices(self, first_slice: int = 0, last_slice: int = None):
 

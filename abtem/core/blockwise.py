@@ -40,17 +40,37 @@ class Ensemble(metaclass=ABCMeta):
         pass
 
     def ensemble_chunks(self, max_batch=None, base_shape=(), dtype=np.dtype('complex64')):
-        chunks = self.default_ensemble_chunks
 
         shape = self.ensemble_shape
+        chunks = self.default_ensemble_chunks
 
-        chunks = chunks + (-1, -1)
-        shape = shape + base_shape
+        if max_batch == 'auto':
+            max_batch = config.get("dask.chunk-size")
 
-        if isinstance(max_batch, int):
-            max_batch = max_batch * np.prod(base_shape)
+        if base_shape is not None:
+            shape += base_shape
+            chunks += (-1,) * len(base_shape)
 
-        return validate_chunks(shape, chunks, limit=max_batch, dtype=dtype)[:-2]
+            if isinstance(max_batch, int):
+                max_batch = max_batch * reduce(operator.mul, base_shape)
+
+        chunks = validate_chunks(shape, chunks, max_batch, dtype)
+
+        if base_shape is not None:
+            chunks = chunks[:-len(base_shape)]
+
+        return chunks
+        # chunks = self.default_ensemble_chunks
+        #
+        # shape = self.ensemble_shape
+        #
+        # chunks = chunks + (-1, -1)
+        # shape = shape + base_shape
+        #
+        # if isinstance(max_batch, int):
+        #     max_batch = max_batch * np.prod(base_shape)
+        #
+        # return validate_chunks(shape, chunks, limit=max_batch, dtype=dtype)[:-2]
 
     def _ensemble_blockwise(self, max_batch):
         chunks = validate_chunks(self.ensemble_shape, self.default_ensemble_chunks, limit=max_batch)

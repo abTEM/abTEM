@@ -133,28 +133,6 @@ def multislice_step(waves: 'Waves',
     return waves
 
 
-# def multislice_and_detect_with_frozen_phonons(waves, potential, detectors, start=0) -> Tuple[AbstractMeasurement]:
-#     measurements = {}
-#     for i in range(potential.num_frozen_phonons):
-#         new_measurements = multislice_and_detect(waves.copy(), potential, detectors, start=start)
-#
-#         for detector in detectors:
-#             new_measurement = new_measurements[detector]
-#
-#             if not detector in measurements.keys():
-#                 xp = get_array_module(new_measurement.array)
-#
-#                 shape = (potential.num_frozen_phonons,) + new_measurement.shape[1:]
-#
-#                 array = xp.zeros(shape, dtype=new_measurement.array.dtype)
-#                 kwargs = new_measurement._copy_as_dict(copy_array=False)
-#                 new_measurement[detector] = new_measurement.__class__(array=array, **kwargs)
-#
-#             if detector in measurements.keys():
-#                 measurements[detector][i] = new_measurement.array
-#
-#     return tuple(measurements.values())
-
 def allocate_multislice_measurements(waves: 'Waves',
                                      potential: AbstractPotential,
                                      detectors: List[AbstractDetector]) -> Dict[AbstractDetector, AbstractMeasurement]:
@@ -184,6 +162,35 @@ def multislice_and_detect(waves: 'Waves',
                           start: int = 0,
                           stop: int = None,
                           keep_ensemble_dims: bool = True) -> Tuple[AbstractMeasurement]:
+    #     """
+    #     Run the multislice algorithm given a batch of wave functions and a potential.
+    #
+    #     Parameters
+    #     ----------
+    #     waves : Waves
+    #         A batch of wave functions as a Waves type object.
+    #     potential : AbstractPotential
+    #         A potential as an AbstractPotential type object.
+    #     propagator : FresnelPropagator, optional
+    #         A fresnel propapgator type matching the wave functions. The main reason for using this argument is to reuse
+    #         a previously calculated propagator. If not provided a new propagator is created.
+    #     antialias_aperture : AntialiasAperture, optional
+    #         An antialias aperture type matching the wave functions. The main reason for using this argument is to reuse
+    #         a previously calculated antialias aperture. If not provided a new antialias aperture is created.
+    #     start : int
+    #         First slice index for running the multislice algorithm. Default is first slice of the potential.
+    #     stop : int
+    #         Last slice for running the multislice algorithm. If smaller than start the multislice algorithm will run
+    #         in the reverse direction. Default is last slice of the potential.
+    #     conjugate : bool
+    #         I True, run the multislice algorithm using the conjugate of the transmission function
+    #
+    #     Returns
+    #     -------
+    #     exit_waves : Waves
+    #     """
+
+
     if potential.num_frozen_phonons > 1:
         raise NotImplementedError
         # return multislice_and_detect_with_frozen_phonons(waves, potential, detectors, start=start)
@@ -199,7 +206,7 @@ def multislice_and_detect(waves: 'Waves',
     measurements = allocate_multislice_measurements(waves, potential, detectors)
 
     current_slice_index = start
-    for i, exit_slice in enumerate(potential.exit_planes):
+    for detect_index, exit_slice in enumerate(potential.exit_planes):
 
         while exit_slice != current_slice_index:
             potential_slice = next(slice_generator)
@@ -208,7 +215,7 @@ def multislice_and_detect(waves: 'Waves',
 
         for detector in detectors:
             new_measurement = detector.detect(waves)
-            measurements[detector].array[(0, i)] = new_measurement.array
+            measurements[detector].array[(0, detect_index)] = new_measurement.array
 
     measurements = tuple(measurements.values())
 
@@ -216,66 +223,3 @@ def multislice_and_detect(waves: 'Waves',
         measurements = tuple(measurement[0, 0] for measurement in measurements)
 
     return measurements
-
-# def multislice(waves: 'Waves',
-#                potential: AbstractPotential,
-#                propagator: FresnelPropagator = None,
-#                antialias_aperture: AntialiasAperture = None,
-#                stop: int = None,
-#                transpose: bool = True,
-#                conjugate: bool = False):
-#     """
-#     Run the multislice algorithm given a batch of wave functions and a potential.
-#
-#     Parameters
-#     ----------
-#     waves : Waves
-#         A batch of wave functions as a Waves type object.
-#     potential : AbstractPotential
-#         A potential as an AbstractPotential type object.
-#     propagator : FresnelPropagator, optional
-#         A fresnel propapgator type matching the wave functions. The main reason for using this argument is to reuse
-#         a previously calculated propagator. If not provided a new propagator is created.
-#     antialias_aperture : AntialiasAperture, optional
-#         An antialias aperture type matching the wave functions. The main reason for using this argument is to reuse
-#         a previously calculated antialias aperture. If not provided a new antialias aperture is created.
-#     start : int
-#         First slice index for running the multislice algorithm. Default is first slice of the potential.
-#     stop : int
-#         Last slice for running the multislice algorithm. If smaller than start the multislice algorithm will run
-#         in the reverse direction. Default is last slice of the potential.
-#     conjugate : bool
-#         I True, run the multislice algorithm using the conjugate of the transmission function
-#
-#     Returns
-#     -------
-#     exit_waves : Waves
-#     """
-#
-#     if stop is None:
-#         stop = len(potential)
-#
-#     if sum(potential.block_shape) > 1:
-#         raise RuntimeError()
-#
-#     if antialias_aperture is None:
-#         antialias_aperture = AntialiasAperture(device=get_array_module(waves.array))
-#
-#     antialias_aperture.match_grid(waves)
-#
-#     if propagator is None:
-#         propagator = FresnelPropagator(device=get_array_module(waves.array))
-#
-#     propagator.match_waves(waves)
-#     for i, potential_slices in enumerate(potential):
-#
-#         if isinstance(potential_slices, TransmissionFunction):
-#             transmission_functions = potential_slices
-#
-#         else:
-#             transmission_functions = potential_slices.transmission_function(energy=waves.energy)
-#             transmission_functions = antialias_aperture.bandlimit(transmission_functions)
-#
-#         # for transmission_function in transmission_functions:
-#
-#     return waves

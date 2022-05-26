@@ -159,7 +159,52 @@ def validate_exit_planes(exit_planes, num_slices):
     return exit_planes
 
 
-class Potential(AbstractPotential):
+class PotentialBuilder(AbstractPotential):
+
+    def build(self,
+              first_slice: int = 0,
+              last_slice: int = None,
+              chunks: int = 1,
+              lazy: bool = None,
+              keep_ensemble_dims: bool = False) -> 'PotentialArray':
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        def build(potential):
+            potential = potential.item()
+            return potential.build().array[None, None]
+
+        if lazy:
+            blocks = self._ensemble_blockwise(1)
+            chunks = blocks.chunks + ((len(self),),) + ((self.gpts[0],), (self.gpts[1],))
+            array = blocks.map_blocks(build,
+                                      new_axis=(2, 3, 4),
+                                      chunks=chunks,
+                                      dtype=np.float32)
+
+        else:
+            xp = get_array_module(self.device)
+
+            array = xp.zeros((len(self),) + self.gpts, dtype=xp.float32)
+
+            for i, slic in enumerate(self.generate_slices(first_slice, last_slice)):
+                array[i] = slic.array
+
+        potential = PotentialArray(array,
+                                   sampling=self.sampling,
+                                   slice_thickness=self.slice_thickness,
+                                   ensemble_axes_metadata=self.ensemble_axes_metadata)
+
+        potential = potential.squeeze()
+
+        if not lazy:
+            potential = potential.compute()
+
+        return potential
+
+
+class Potential(PotentialBuilder):
     """
     Potential object.
 
@@ -255,25 +300,9 @@ class Potential(AbstractPotential):
         self._slice_thickness = _validate_slice_thickness(slice_thickness, thickness=box[2])
         self._exit_planes = validate_exit_planes(exit_planes, len(self._slice_thickness))
 
+        self._sliced_atoms = None
+
         super().__init__()
-
-    def build(self,
-              first_slice: int = 0,
-              last_slice: int = None,
-              chunks: int = 1,
-              lazy: bool = None) -> 'PotentialArray':
-
-        if last_slice is None:
-            last_slice = len(self)
-
-        xp = get_array_module(self.device)
-
-        array = xp.zeros((len(self),) + self.gpts, dtype=xp.float32)
-
-        for i, slic in enumerate(self.generate_slices(first_slice, last_slice)):
-            array[i] = slic.array
-
-        return PotentialArray(array, sampling=self.sampling, slice_thickness=self.slice_thickness)
 
     @property
     def frozen_phonons(self) -> AbstractFrozenPhonons:
@@ -351,19 +380,7 @@ class Potential(AbstractPotential):
         """The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]."""
         return self._cutoff_tolerance
 
-    def _generate_slices_finite(self, start: int, stop: int) -> 'PotentialArray':
-        xp = get_array_module(self._device)
-
-        atomic_potentials = {}
-        for Z in np.unique(self.frozen_phonons.atoms.numbers):
-            atomic_potentials[Z] = AtomicPotential(symbol=Z,
-                                                   parametrization=self.parametrization,
-                                                   inner_cutoff=min(self.sampling) / 2,
-                                                   cutoff_tolerance=self.cutoff_tolerance)
-            atomic_potentials[Z].build_integral_table()
-
-        cutoffs = {Z: atomic_potential.cutoff for Z, atomic_potential in atomic_potentials.items()}
-
+    def _prepare_atoms_finite(self, cutoffs):
         atoms = self.frozen_phonons.atoms
 
         if tuple(np.diag(atoms.cell)) != self.box:
@@ -385,7 +402,27 @@ class Potential(AbstractPotential):
         atoms = self.frozen_phonons.randomize(atoms)
 
         z_padding = max(cutoffs.values()) if cutoffs.values() else 0.
-        sliced_atoms = SlicedAtoms(atoms=atoms, slice_thickness=self.slice_thickness, z_padding=z_padding)
+
+        self._sliced_atoms = SlicedAtoms(atoms=atoms, slice_thickness=self.slice_thickness, z_padding=z_padding)
+        return self._sliced_atoms
+
+    def _generate_slices_finite(self, start: int, stop: int) -> 'PotentialArray':
+        xp = get_array_module(self._device)
+
+        atomic_potentials = {}
+        for Z in np.unique(self.frozen_phonons.atoms.numbers):
+            atomic_potentials[Z] = AtomicPotential(symbol=Z,
+                                                   parametrization=self.parametrization,
+                                                   inner_cutoff=min(self.sampling) / 2,
+                                                   cutoff_tolerance=self.cutoff_tolerance)
+            atomic_potentials[Z].build_integral_table()
+
+        cutoffs = {Z: atomic_potential.cutoff for Z, atomic_potential in atomic_potentials.items()}
+
+        if self._sliced_atoms is None:
+            self._prepare_atoms_finite(cutoffs)
+
+        sliced_atoms = self._sliced_atoms
 
         for start, stop in generate_chunks(stop - start, chunks=1, start=start):
             array = xp.zeros((stop - start,) + self.gpts, dtype=np.float32)
@@ -404,7 +441,7 @@ class Potential(AbstractPotential):
                                  slice_thickness=self.slice_thickness[start:stop],
                                  extent=self.extent)
 
-    def _generate_slices_infinite(self, start: int, stop: int) -> 'PotentialArray':
+    def _prepare_atoms_infinite(self):
         atoms = self.frozen_phonons.atoms
 
         if tuple(np.diag(atoms.cell)) != self.box:
@@ -418,11 +455,20 @@ class Potential(AbstractPotential):
         atoms = self.frozen_phonons.randomize(atoms)
         atoms.wrap()
 
-        sliced_atoms = SliceIndexedAtoms(atoms=atoms, slice_thickness=self.slice_thickness)
+        self._sliced_atoms = SliceIndexedAtoms(atoms=atoms, slice_thickness=self.slice_thickness)
+        return self._sliced_atoms
+
+
+    def _generate_slices_infinite(self, start: int, stop: int) -> 'PotentialArray':
+
+        if self._sliced_atoms is None:
+            self._prepare_atoms_infinite()
+
+        sliced_atoms = self._sliced_atoms
 
         xp = get_array_module(self.device)
         scattering_factors = {}
-        for number in np.unique(atoms.numbers):
+        for number in np.unique(self.frozen_phonons.atoms.numbers):
             f = calculate_scattering_factor(self.gpts,
                                             self.sampling,
                                             number,
