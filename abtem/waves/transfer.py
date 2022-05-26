@@ -40,7 +40,7 @@ polar_aliases = {'defocus': 'C10', 'astigmatism': 'C12', 'astigmatism_angle': 'p
 
 class WaveTransform(Ensemble):
 
-    def __mul__(self, other):
+    def __add__(self, other):
         wave_transforms = []
 
         for wave_transform in (self, other):
@@ -153,23 +153,10 @@ class CompositeWaveTransform(WaveTransform):
     def apply(self, waves: 'WavesLikeMixin'):
         waves.grid.check_is_defined()
 
-        # alpha, phi = self._get_polar_spatial_frequencies(waves)
-
         for wave_transform in reversed(self.wave_transforms):
             waves = wave_transform.apply(waves)
 
-        return  waves
-        # array = self.wave_transforms[0].evaluate(waves)
-        # for wave_transform in self.wave_transforms[1:]:
-        #     new_array = wave_transform.evaluate(waves)
-        #
-        #     new_dims = len(new_array.shape) - 2
-        #     old_dims = len(array.shape) - 2
-        #
-        #     new_array = np.expand_dims(new_array, axis=tuple(range(old_dims)))
-        #     array = new_array * np.expand_dims(array, axis=tuple(range(old_dims, old_dims + new_dims)))
-        #
-        # return array
+        return waves
 
     def ensemble_partial(self):
         def ctf(*args, partials):
@@ -189,6 +176,10 @@ class CompositeWaveTransform(WaveTransform):
             i += len(indices)
 
         return partial(ctf, partials=partials)
+
+    def copy(self):
+        wave_transforms = [wave_transform.copy() for wave_transform in self.wave_transforms]
+        return self.__class__(wave_transforms)
 
 
 def ensemble_axes_metadata_from_parameters(parameters):
