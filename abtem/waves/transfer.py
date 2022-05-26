@@ -209,7 +209,7 @@ class Aperture(ArrayWaveTransform, HasAcceleratorMixin):
     def __init__(self,
                  semiangle_cutoff: Union[float, Distribution],
                  energy: float = None,
-                 normalize:bool=False,
+                 normalize: bool = False,
                  taper: float = 0.):
 
         self._semiangle_cutoff = semiangle_cutoff
@@ -310,6 +310,7 @@ class Aperture(ArrayWaveTransform, HasAcceleratorMixin):
     def _copy_as_dict(self):
         d = {'energy': self.energy,
              'semiangle_cutoff': copy.copy(self.semiangle_cutoff),
+             'normalize': self._normalize,
              'taper': copy.copy(self.taper),
              }
         return d
@@ -376,20 +377,20 @@ class Aberrations(ArrayWaveTransform, HasAcceleratorMixin):
         xp = get_array_module(alpha)
 
         p = {key: value for key, value in self.parameters.items()}
-        weights = []
 
         num_new_axes = 0
         for key, parameter in self.ensemble_parameters.items():
             num_new_axes += len(parameter.values.shape)
 
+        weights = None
         for i, (key, parameter) in enumerate(self.ensemble_parameters.items()):
             axis = list(range(num_new_axes))
             del axis[i]
             axis = tuple(axis) + tuple(range(num_new_axes, num_new_axes + len(alpha.shape)))
             p[key] = xp.expand_dims(parameter.values, axis=axis)
-            weights.append(xp.expand_dims(parameter.weights, axis=axis))
 
-        weights = np.prod(weights, axis=0)
+            new_weights = xp.expand_dims(parameter.weights, axis=axis)
+            weights = new_weights if weights is None else weights * new_weights
 
         axis = tuple(range(0, num_new_axes))
         alpha = xp.array(alpha)
@@ -429,7 +430,13 @@ class Aberrations(ArrayWaveTransform, HasAcceleratorMixin):
                               p['C56'] * xp.cos(6 * (phi - p['phi56']))))
 
         array = np.float32(2 * xp.pi / self.wavelength) * array
-        return complex_exponential(-array) * weights
+
+        array = complex_exponential(-array)
+
+        if weights is not None:
+            array = array * weights
+
+        return array
 
     def evaluate(self, waves):
         self.accelerator.match(waves)
