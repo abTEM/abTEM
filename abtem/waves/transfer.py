@@ -209,10 +209,12 @@ class Aperture(ArrayWaveTransform, HasAcceleratorMixin):
     def __init__(self,
                  semiangle_cutoff: Union[float, Distribution],
                  energy: float = None,
+                 normalize:bool=False,
                  taper: float = 0.):
 
         self._semiangle_cutoff = semiangle_cutoff
         self._taper = taper
+        self._normalize = normalize
         self._accelerator = Accelerator(energy=energy)
 
     @property
@@ -294,7 +296,8 @@ class Aperture(ArrayWaveTransform, HasAcceleratorMixin):
 
             array = xp.array(alpha <= parameters['semiangle_cutoff']).astype(xp.float32)
 
-        array = array / xp.sqrt(array.sum((-2, -1), keepdims=True))
+        if self._normalize:
+            array = array / xp.sqrt(array.sum((-2, -1), keepdims=True))
 
         return array
 

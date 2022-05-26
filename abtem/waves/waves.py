@@ -1041,19 +1041,20 @@ class Probe(WavesBuilder):
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
                  energy: float = None,
-                 normalize: str = 'intensity',
+                 normalize: bool = True,
                  source_offset=None,
                  tilt: Tuple[float, float] = (0., 0.),
                  device: str = None,
-                 aperture: float = 30.,
+                 semiangle_cutoff: float = 30.,
+                 aperture=None,
                  aberrations: Union[Aberrations, dict] = None,
                  extra_transforms=None,
                  **kwargs):
 
         self._accelerator = Accelerator(energy=energy)
 
-        if np.isscalar(aperture):
-            aperture = Aperture(semiangle_cutoff=aperture)
+        if aperture is None:
+            aperture = Aperture(semiangle_cutoff=semiangle_cutoff, normalize=normalize)
 
         aperture._accelerator = self._accelerator
 
