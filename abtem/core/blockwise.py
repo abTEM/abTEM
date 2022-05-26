@@ -39,6 +39,19 @@ class Ensemble(metaclass=ABCMeta):
     def ensemble_partial(self):
         pass
 
+    def ensemble_chunks(self, max_batch=None, base_shape=(), dtype=np.dtype('complex64')):
+        chunks = self.default_ensemble_chunks
+
+        shape = self.ensemble_shape
+
+        chunks = chunks + (-1, -1)
+        shape = shape + base_shape
+
+        if isinstance(max_batch, int):
+            max_batch = max_batch * np.prod(base_shape)
+
+        return validate_chunks(shape, chunks, limit=max_batch, dtype=dtype)[:-2]
+
     def _ensemble_blockwise(self, max_batch):
         chunks = validate_chunks(self.ensemble_shape, self.default_ensemble_chunks, limit=max_batch)
         partial = self.ensemble_partial()

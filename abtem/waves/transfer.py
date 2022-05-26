@@ -20,6 +20,7 @@ from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2wavelengt
 from abtem.core.fft import ifft2, fft2
 from abtem.core.grid import Grid, polar_spatial_frequencies
 from abtem.measure.measure import LineProfiles
+import dask.array as da
 
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves, WavesLikeMixin
@@ -511,17 +512,17 @@ class Aberrations(ArrayWaveTransform, HasAcceleratorMixin):
 #            Aberrations(parameters=parameters, **kwargs)
 
 
-class CTF(WaveTransform):
+class CTF(CompositeWaveTransform, HasAcceleratorMixin):
 
     def __init__(self, energy=None, aperture=np.inf, taper=0., parameters=None, **kwargs):
         self._aberrations = Aberrations(energy=energy, parameters=parameters, **kwargs)
         self._aperture = Aperture(energy=energy, semiangle_cutoff=aperture, taper=taper)
 
-        self._compund_wave_transfer_function = self._aberrations * self._aperture
+        transforms = [self._aberrations, self._aperture]
 
-        super().__init__()
+        super().__init__(wave_transforms=transforms)
 
-        self._accelerator = self._compund_wave_transfer_function.accelerator
+        self._accelerator = self._aberrations._accelerator = self._aperture._accelerator
 
 
 #

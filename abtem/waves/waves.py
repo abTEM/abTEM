@@ -29,7 +29,7 @@ from abtem.waves.base import WavesLikeMixin
 from abtem.waves.multislice import multislice_and_detect
 from abtem.waves.scan import AbstractScan, GridScan, validate_scan
 from abtem.waves.tilt import BeamTilt
-from abtem.waves.transfer import Aperture, Aberrations, WaveTransform, CompositeWaveTransform
+from abtem.waves.transfer import Aperture, Aberrations, WaveTransform, CompositeWaveTransform, CTF
 
 
 def stack_waves(waves, axes_metadata):
@@ -389,6 +389,51 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
         return diffraction_patterns
 
+    def apply_transform(self,
+                        transform: WaveTransform,
+                        max_batch: str = 'auto'):
+
+        self.grid.check_is_defined()
+
+        if self.is_lazy:
+            def apply_wave_transform(*args, transform_partial, waves_kwargs, transform_ensemble_dims):
+                transform = transform_partial(*args[:transform_ensemble_dims]).item()
+                waves = Waves(args[transform_ensemble_dims], **waves_kwargs)
+                waves = transform.apply(waves)
+                return waves.array
+
+            if isinstance(max_batch, int):
+                max_batch = max_batch * self.gpts[0] * self.gpts[1]
+
+            chunks = validate_chunks(transform.ensemble_shape + self.shape,
+                                     transform.default_ensemble_chunks + tuple(
+                                         max(chunk) for chunk in self.array.chunks),
+                                     limit=max_batch,
+                                     dtype=np.dtype('complex64'))
+
+            blocks = tuple(
+                (block, (i,)) for i, block in enumerate(transform.ensemble_blocks(chunks[:-len(self.shape)])))
+
+            xp = get_array_module(self.device)
+
+            array = da.blockwise(apply_wave_transform,
+                                 tuple(range(len(blocks) + len(self.shape))),
+                                 *tuple(itertools.chain(*blocks)),
+                                 self.array,
+                                 tuple(range(len(blocks), len(blocks) + len(self.shape))),
+                                 adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
+                                 transform_partial=transform.ensemble_partial(),
+                                 transform_ensemble_dims=len(transform.ensemble_shape),
+                                 waves_kwargs=self._copy_as_dict(copy_array=False),
+                                 meta=xp.array((), dtype=np.complex64))
+
+            d = self._copy_as_dict(copy_array=False)
+            d['array'] = array
+            d['ensemble_axes_metadata'] = transform.ensemble_axes_metadata + d['ensemble_axes_metadata']
+            return self.__class__(**d)
+        else:
+            return transform.apply(self)
+
     def apply_ctf(self,
                   ctf: WaveTransform = None,
                   max_batch: str = 'auto',
@@ -418,43 +463,8 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
         self.accelerator.match(ctf.accelerator, check_match=True)
         self.accelerator.check_is_defined()
-        self.grid.check_is_defined()
 
-        if self.is_lazy:
-            def apply_ctf(*args, ctf, waves_kwargs, ctf_ensemble_dims):
-                ctf = ctf(*args[:ctf_ensemble_dims]).item()
-                waves = Waves(args[ctf_ensemble_dims], **waves_kwargs)
-                waves = ctf.apply(waves)
-                return waves.array
-
-            if isinstance(max_batch, int):
-                max_batch = max_batch * self.gpts[0] * self.gpts[1]
-
-            chunks = validate_chunks(ctf.ensemble_shape + self.shape,
-                                     ctf.default_ensemble_chunks + tuple(max(chunk) for chunk in self.array.chunks),
-                                     limit=max_batch,
-                                     dtype=np.dtype('complex64'))
-
-            blocks = tuple((block, (i,)) for i, block in enumerate(ctf.ensemble_blocks(chunks[:-len(self.shape)])))
-
-            array = da.blockwise(apply_ctf,
-                                 tuple(range(len(blocks) + len(self.shape))),
-                                 *tuple(itertools.chain(*blocks)),
-                                 self.array,
-                                 tuple(range(len(blocks), len(blocks) + len(self.shape))),
-                                 adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
-                                 ctf=ctf.ensemble_partial(),
-                                 ctf_ensemble_dims=len(ctf.ensemble_shape),
-                                 waves_kwargs=self._copy_as_dict(copy_array=False),
-                                 meta=np.array((), dtype=np.complex64))
-
-            d = self._copy_as_dict(copy_array=False)
-            d['array'] = array
-            d['ensemble_axes_metadata'] = ctf.ensemble_axes_metadata + d['ensemble_axes_metadata']
-            return self.__class__(**d)
-
-        else:
-            return ctf.apply(self)
+        return self.apply_transform(ctf, max_batch=max_batch)
 
     def multislice(self,
                    potential: AbstractPotential,
@@ -508,8 +518,6 @@ class Waves(HasDaskArray, WavesLikeMixin):
                                   waves_kwargs=self._copy_as_dict(copy_array=False),
                                   concatenate=True,
                                   meta=np.array((), dtype=np.complex64))
-
-            print(arrays)
 
             return _get_lazy_measurements_from_arrays(arrays, self, detectors, potential=potential)
         else:
