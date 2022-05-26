@@ -15,6 +15,7 @@ def test_fig_5_12(projection, lazy):
     waves = PlaneWave(energy=200e3, normalize=False)
 
     waves = waves.multislice(potential, lazy=lazy)
+
     waves = waves.apply_ctf(defocus=700, Cs=1.3e7, aperture=10.37, taper=0.)
 
     intensity = waves.intensity().compute().array

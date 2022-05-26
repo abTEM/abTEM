@@ -208,7 +208,7 @@ def test_diffractograms(data, lazy, device):
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('device', ['cpu', gpu])
 def test_images_interpolate_line(data, lazy, device):
-    wave = Probe(energy=100e3, aperture=30, extent=20, gpts=256, device=device)
+    wave = Probe(energy=100e3, semiangle_cutoff=30, extent=20, gpts=256, device=device)
     image = wave.build((0, 0), lazy=False).intensity()
 
     line = image.interpolate_line(start=(0, 0), end=(0, wave.extent[1]), width=0.)
@@ -435,7 +435,7 @@ def test_interpolate_periodic_spline_and_fft():
 
 @given(gpts=st.integers(min_value=16, max_value=32), extent=st.floats(min_value=5, max_value=10))
 def test_diffraction_patterns_interpolate_uniform(gpts, extent):
-    probe = Probe(energy=100e3, aperture=20, extent=extent, gpts=gpts)
+    probe = Probe(energy=100e3, semiangle_cutoff=20, extent=extent, gpts=gpts)
     diffraction_patterns = probe.build().diffraction_patterns(max_angle=None)
     probe.gpts = (gpts * 2, gpts)
     probe.extent = (extent * 2, extent)

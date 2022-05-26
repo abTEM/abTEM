@@ -141,7 +141,7 @@ def antialias_cutoff_angle(sampling, energy):
 def test_probe_empty_multislice(atom_data, energy, sampling, lazy):
     atoms = Atoms(**atom_data)
     cutoff = 0.9 * antialias_cutoff_angle(max(ensure_is_tuple(sampling, 2)), energy)
-    plane_wave = Probe(aperture=cutoff, sampling=sampling, energy=energy)
+    plane_wave = Probe(semiangle_cutoff=cutoff, sampling=sampling, energy=energy)
     wave = plane_wave.multislice(atoms, lazy=lazy).compute()
     check_is_normalized(wave.array)
 

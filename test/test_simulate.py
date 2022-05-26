@@ -27,7 +27,7 @@ def expected_shape(measurement, waves, potential=None, scan=None, detector=None)
         else:
             shape += potential.ensemble_shape
 
-    shape += waves.ensemble_shape
+    shape += waves.transforms.ensemble_shape
 
     if scan is not None:
         shape += scan.ensemble_shape
@@ -56,7 +56,7 @@ def test_probe_scan(data, detector, lazy, scan, device, frozen_phonons):
     potential = Potential(atoms)
 
     probe = Probe(gpts=data.draw(core_st.gpts(min_value=32, max_value=64, allow_none=False)),
-                  aperture=data.draw(st.floats(5, 10)),
+                  semiangle_cutoff=data.draw(st.floats(5, 10)),
                   energy=data.draw(core_st.energy()),
                   extent=np.diag(atoms.cell)[:2],
                   device=device)
