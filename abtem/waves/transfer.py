@@ -293,7 +293,7 @@ class Aperture(ArrayWaveTransform, HasAcceleratorMixin):
 
             array = xp.array(alpha <= parameters['semiangle_cutoff']).astype(xp.float32)
 
-        array = array / xp.sqrt(array.sum())
+        array = array / xp.sqrt(array.sum((-2, -1), keepdims=True))
 
         return array
 
