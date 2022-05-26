@@ -1,6 +1,7 @@
 """Module to describe the contrast transfer function."""
 import copy
 import itertools
+from abc import abstractmethod
 from collections import defaultdict
 from functools import partial
 from typing import Mapping, Union, TYPE_CHECKING, Dict, Tuple
@@ -37,60 +38,46 @@ polar_aliases = {'defocus': 'C10', 'astigmatism': 'C12', 'astigmatism_angle': 'p
                  'C5': 'C50'}
 
 
-class RadialFourierSpaceLineProfiles(LineProfiles):
-
-    def __init__(self,
-                 array,
-                 sampling,
-                 energy,
-                 extra_axes_metadata=None,
-                 metadata=None):
-        self._energy = energy
-
-        super().__init__(array=array, start=(0., 0.), end=(0., array.shape[-1] * sampling), sampling=sampling,
-                         extra_axes_metadata=extra_axes_metadata, metadata=metadata)
-
-    def show(self, ax=None, title='', angular_units=True, **kwargs):
-        if ax is None:
-            ax = plt.subplot()
-
-        if angular_units:
-            x = np.linspace(0., len(self.array) * self.sampling * 1000. * energy2wavelength(self._energy),
-                            len(self.array))
-        else:
-            x = np.linspace(0., len(self.array) * self.sampling, len(self.array))
-
-        p = ax.plot(x, self.array, **kwargs)
-        ax.set_xlabel('Scattering angle [mrad]')
-        ax.set_title(title)
-        return ax, p
-
-
-class WaveTransferFunction(HasAcceleratorMixin, Ensemble):
-
-    def __init__(self, energy=None):
-        self._accelerator = Accelerator(energy=energy)
+class WaveTransform(Ensemble):
 
     def __mul__(self, other):
-        return CompoundWaveTransferFunction([self, other])
+        wave_transforms = []
 
-    def _get_polar_spatial_frequencies(self, gpts, extent, device):
+        for wave_transform in (self, other):
+
+            if hasattr(wave_transform, 'wave_transforms'):
+                wave_transforms += wave_transform.wave_transforms
+            else:
+                wave_transforms += [wave_transform]
+
+        return CompositeWaveTransform(wave_transforms)
+
+    @abstractmethod
+    def apply(self, waves):
+        pass
+
+
+class ArrayWaveTransform(WaveTransform):
+
+    def _get_polar_spatial_frequencies(self, waves):
+        gpts = waves.gpts
+        extent = waves.extent
+        device = waves.device
+
         xp = get_array_module(device)
         grid = Grid(gpts=gpts, extent=extent)
         alpha, phi = polar_spatial_frequencies(grid.gpts, grid.sampling, xp=xp)
-        alpha *= self.wavelength
+        alpha *= waves.wavelength
         return alpha, phi
 
-    def evaluate(self, alpha, phi):
+    def evaluate_with_alpha_and_phi(self, alpha, phi):
         raise NotImplementedError
 
-    def evaluate_for_waves(self, waves: 'WavesLikeMixin'):
-        self.accelerator.match(waves)
-        alpha, phi = self._get_polar_spatial_frequencies(gpts=waves.gpts, extent=waves.extent, device=waves.device)
-        return self.evaluate(alpha, phi)
+    @abstractmethod
+    def evaluate(self, waves: 'WavesLikeMixin'):
+        raise NotImplementedError
 
     def apply(self, waves: 'Waves', out_space: 'str' = 'in_space'):
-
         if out_space == 'in_space':
             fourier_space_out = waves.fourier_space
         elif out_space in ('fourier_space', 'real_space'):
@@ -100,9 +87,8 @@ class WaveTransferFunction(HasAcceleratorMixin, Ensemble):
 
         xp = get_array_module(waves.device)
 
-        self.energy = waves.energy
+        kernel = self.evaluate(waves)
 
-        kernel = self.evaluate_for_waves(waves)
         waves = waves.ensure_fourier_space()
 
         waves_dims = tuple(range(len(kernel.shape) - 2))
@@ -119,27 +105,35 @@ class WaveTransferFunction(HasAcceleratorMixin, Ensemble):
         d['ensemble_axes_metadata'] = self.ensemble_axes_metadata + d['ensemble_axes_metadata']
         return waves.__class__(**d)
 
+
+class CompositeWaveTransform(WaveTransform):
+
+    def __init__(self, wave_transforms=None):
+
+        if wave_transforms is None:
+            wave_transforms = []
+
+        self._wave_transforms = wave_transforms
+        super().__init__()
+
     @property
-    def ensemble_parameters(self):
-        raise NotImplementedError
+    def wave_transforms(self):
+        return self._wave_transforms
 
     @property
     def ensemble_axes_metadata(self):
-        axes_metadata = []
-        for parameter_name, parameter in self.ensemble_parameters.items():
-            axes_metadata += [ParameterSeriesAxis(label=parameter_name,
-                                                  values=tuple(parameter.values),
-                                                  units='Å',
-                                                  _ensemble_mean=parameter.ensemble_mean)]
-        return axes_metadata
+        ensemble_axes_metadata = [wave_transform.ensemble_axes_metadata for wave_transform in self.wave_transforms]
+        return list(itertools.chain(*ensemble_axes_metadata))
 
     @property
     def default_ensemble_chunks(self):
-        return ('auto',) * len(self.ensemble_shape)
+        default_ensemble_chunks = [wave_transform.default_ensemble_chunks for wave_transform in self.wave_transforms]
+        return tuple(itertools.chain(*default_ensemble_chunks))
 
     @property
     def ensemble_shape(self):
-        return tuple(map(sum, tuple(parameter.shape for parameter in self.ensemble_parameters.values())))
+        ensemble_shape = [wave_transform.ensemble_shape for wave_transform in self.wave_transforms]
+        return tuple(itertools.chain(*ensemble_shape))
 
     def ensemble_blocks(self, chunks=None):
         if chunks is None:
@@ -148,50 +142,34 @@ class WaveTransferFunction(HasAcceleratorMixin, Ensemble):
         chunks = validate_chunks(self.ensemble_shape, chunks, limit=None)
 
         blocks = ()
-        for parameter, n in zip(self.ensemble_parameters.values(), chunks):
-            blocks += (parameter.divide(n, lazy=True),)
+        start = 0
+        for wave_transform in self.wave_transforms:
+            stop = start + wave_transform.ensemble_dims
+            blocks += wave_transform.ensemble_blocks(chunks[start:stop])
+            start = stop
 
         return blocks
 
-    def _copy_as_dict(self):
-        raise NotImplementedError
+    def apply(self, waves: 'WavesLikeMixin'):
+        waves.grid.check_is_defined()
 
+        # alpha, phi = self._get_polar_spatial_frequencies(waves)
 
-class CompoundWaveTransferFunction(WaveTransferFunction):
+        for wave_transform in reversed(self.wave_transforms):
+            waves = wave_transform.apply(waves)
 
-    def __init__(self, wave_transfer_functions):
-
-        accelerator = wave_transfer_functions[0].accelerator
-        ensemble_axes_metadata = wave_transfer_functions[0].ensemble_axes_metadata
-        for wave_transfer_function in wave_transfer_functions[1:]:
-            wave_transfer_function._accelerator = accelerator
-            ensemble_axes_metadata += wave_transfer_function.ensemble_axes_metadata
-
-        self._wave_transfer_functions = wave_transfer_functions
-
-        super().__init__()
-
-        self._accelerator = accelerator
-
-    @property
-    def ensemble_parameters(self):
-        ensemble_parameters = {}
-        for wave_transfer_function in self._wave_transfer_functions:
-            ensemble_parameters.update(wave_transfer_function.ensemble_parameters)
-        return ensemble_parameters
-
-    def evaluate(self, alpha, phi):
-        array = self._wave_transfer_functions[0].evaluate(alpha, phi)
-        for wave_transfer_function in self._wave_transfer_functions[1:]:
-            new_array = wave_transfer_function.evaluate(alpha, phi)
-
-            new_dims = len(new_array.shape) - 2
-            old_dims = len(array.shape) - 2
-
-            new_array = np.expand_dims(new_array, axis=tuple(range(old_dims)))
-            array = new_array * np.expand_dims(array, axis=tuple(range(old_dims, old_dims + new_dims)))
-
-        return array
+        return  waves
+        # array = self.wave_transforms[0].evaluate(waves)
+        # for wave_transform in self.wave_transforms[1:]:
+        #     new_array = wave_transform.evaluate(waves)
+        #
+        #     new_dims = len(new_array.shape) - 2
+        #     old_dims = len(array.shape) - 2
+        #
+        #     new_array = np.expand_dims(new_array, axis=tuple(range(old_dims)))
+        #     array = new_array * np.expand_dims(array, axis=tuple(range(old_dims, old_dims + new_dims)))
+        #
+        # return array
 
     def ensemble_partial(self):
         def ctf(*args, partials):
@@ -200,20 +178,41 @@ class CompoundWaveTransferFunction(WaveTransferFunction):
                 wave_transfer_functions += [p[0](*[args[i] for i in p[1]]).item()]
 
             arr = np.zeros((1,) * len(args), dtype=object)
-            arr.itemset(CompoundWaveTransferFunction(wave_transfer_functions))
+            arr.itemset(CompositeWaveTransform(wave_transfer_functions))
             return arr
 
         partials = ()
         i = 0
-        for wave_transfer_function in self._wave_transfer_functions:
-            indices = tuple(range(i, i + len(wave_transfer_function.ensemble_shape)))
-            partials += ((wave_transfer_function.ensemble_partial(), indices),)
+        for wave_transform in self.wave_transforms:
+            indices = tuple(range(i, i + len(wave_transform.ensemble_shape)))
+            partials += ((wave_transform.ensemble_partial(), indices),)
             i += len(indices)
 
         return partial(ctf, partials=partials)
 
 
-class Aperture(WaveTransferFunction):
+def ensemble_axes_metadata_from_parameters(parameters):
+    axes_metadata = []
+    for parameter_name, parameter in parameters.items():
+        axes_metadata += [ParameterSeriesAxis(label=parameter_name,
+                                              values=tuple(parameter.values),
+                                              units='Å',
+                                              _ensemble_mean=parameter.ensemble_mean)]
+    return axes_metadata
+
+
+def ensemble_shape_from_parameters(parameters):
+    return tuple(map(sum, tuple(parameter.shape for parameter in parameters.values())))
+
+
+def ensemble_blocks_from_parameters(parameters, chunks):
+    blocks = ()
+    for parameter, n in zip(parameters.values(), chunks):
+        blocks += (parameter.divide(n, lazy=True),)
+    return blocks
+
+
+class Aperture(ArrayWaveTransform, HasAcceleratorMixin):
 
     def __init__(self,
                  semiangle_cutoff: Union[float, Distribution],
@@ -223,7 +222,6 @@ class Aperture(WaveTransferFunction):
         self._semiangle_cutoff = semiangle_cutoff
         self._taper = taper
         self._accelerator = Accelerator(energy=energy)
-        super().__init__(energy=energy)
 
     @property
     def ensemble_parameters(self):
@@ -231,6 +229,21 @@ class Aperture(WaveTransferFunction):
         if hasattr(self.semiangle_cutoff, 'values'):
             ensemble_parameters['semiangle_cutoff'] = self.semiangle_cutoff
         return ensemble_parameters
+
+    @property
+    def ensemble_shape(self):
+        return ensemble_shape_from_parameters(self.ensemble_parameters)
+
+    @property
+    def ensemble_axes_metadata(self):
+        return ensemble_axes_metadata_from_parameters(self.ensemble_parameters)
+
+    def ensemble_blocks(self, chunks):
+        return ensemble_blocks_from_parameters(self.ensemble_parameters, chunks)
+
+    @property
+    def default_ensemble_chunks(self):
+        return ('auto',) * len(self.ensemble_shape)
 
     def ensemble_partial(self):
         def ctf(*args, keys, **kwargs):
@@ -255,7 +268,7 @@ class Aperture(WaveTransferFunction):
     def taper(self):
         return self._taper
 
-    def evaluate(self, alpha: Union[float, np.ndarray], phi) -> Union[float, np.ndarray]:
+    def evaluate_with_alpha_and_phi(self, alpha: Union[float, np.ndarray], phi) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
 
         parameters = {'semiangle_cutoff': self.semiangle_cutoff}
@@ -288,7 +301,16 @@ class Aperture(WaveTransferFunction):
         else:
 
             array = xp.array(alpha <= parameters['semiangle_cutoff']).astype(xp.float32)
+
+        array = array / xp.sqrt(array.sum())
+
         return array
+
+    def evaluate(self, waves):
+        self.accelerator.match(waves)
+        waves.grid.check_is_defined()
+        alpha, phi = self._get_polar_spatial_frequencies(waves)
+        return self.evaluate_with_alpha_and_phi(alpha, phi)
 
     def _copy_as_dict(self):
         d = {'energy': self.energy,
@@ -301,7 +323,7 @@ class Aperture(WaveTransferFunction):
         return self.__class__(**self._copy_as_dict())
 
 
-class Aberrations(WaveTransferFunction):
+class Aberrations(ArrayWaveTransform, HasAcceleratorMixin):
 
     def __init__(self,
                  energy: float = None,
@@ -337,7 +359,7 @@ class Aberrations(WaveTransferFunction):
             if key != 'defocus':
                 setattr(self.__class__, key, parametrization_property(value))
 
-        super().__init__(energy=energy)
+        self._accelerator = Accelerator(energy=energy)
 
     @property
     def parameters(self) -> Dict[str, Union[float, ParameterSeries]]:
@@ -353,10 +375,13 @@ class Aberrations(WaveTransferFunction):
     def defocus(self, value: float):
         self.C10 = -value
 
-    def evaluate(self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+    def evaluate_with_alpha_and_phi(self,
+                                    alpha: Union[float, np.ndarray],
+                                    phi: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
 
         p = {key: value for key, value in self.parameters.items()}
+        weights = []
 
         num_new_axes = 0
         for key, parameter in self.ensemble_parameters.items():
@@ -367,6 +392,9 @@ class Aberrations(WaveTransferFunction):
             del axis[i]
             axis = tuple(axis) + tuple(range(num_new_axes, num_new_axes + len(alpha.shape)))
             p[key] = xp.expand_dims(parameter.values, axis=axis)
+            weights.append(xp.expand_dims(parameter.weights, axis=axis))
+
+        weights = np.prod(weights, axis=0)
 
         axis = tuple(range(0, num_new_axes))
         alpha = xp.array(alpha)
@@ -406,7 +434,13 @@ class Aberrations(WaveTransferFunction):
                               p['C56'] * xp.cos(6 * (phi - p['phi56']))))
 
         array = np.float32(2 * xp.pi / self.wavelength) * array
-        return complex_exponential(-array)
+        return complex_exponential(-array) * weights
+
+    def evaluate(self, waves):
+        self.accelerator.match(waves)
+        waves.grid.check_is_defined()
+        alpha, phi = self._get_polar_spatial_frequencies(waves)
+        return self.evaluate_with_alpha_and_phi(alpha, phi)
 
     def set_parameters(self, parameters: Dict[str, float]):
         """
@@ -457,6 +491,21 @@ class Aberrations(WaveTransferFunction):
                 ensemble_parameters[parameter_name] = parameter
         return ensemble_parameters
 
+    @property
+    def ensemble_shape(self):
+        return ensemble_shape_from_parameters(self.ensemble_parameters)
+
+    @property
+    def ensemble_axes_metadata(self):
+        return ensemble_axes_metadata_from_parameters(self.ensemble_parameters)
+
+    def ensemble_blocks(self, chunks):
+        return ensemble_blocks_from_parameters(self.ensemble_parameters, chunks)
+
+    @property
+    def default_ensemble_chunks(self):
+        return ('auto',) * len(self.ensemble_shape)
+
     def _copy_as_dict(self):
         d = {'energy': self.energy,
              'parameters': copy.copy(self._parameters)}
@@ -471,7 +520,7 @@ class Aberrations(WaveTransferFunction):
 #            Aberrations(parameters=parameters, **kwargs)
 
 
-class CTF(WaveTransferFunction):
+class CTF(WaveTransform):
 
     def __init__(self, energy=None, aperture=np.inf, taper=0., parameters=None, **kwargs):
         self._aberrations = Aberrations(energy=energy, parameters=parameters, **kwargs)
@@ -483,44 +532,50 @@ class CTF(WaveTransferFunction):
 
         self._accelerator = self._compund_wave_transfer_function.accelerator
 
-    @property
-    def aberrations(self):
-        return self._aberrations
 
-    @property
-    def aperture(self):
-        return self._aperture
-
-    def ensemble_blocks(self, chunks=None):
-        return self._compund_wave_transfer_function.ensemble_blocks(chunks)
-
-    def ensemble_partial(self):
-        return self._compund_wave_transfer_function.ensemble_partial()
-
-    @property
-    def ensemble_shape(self):
-        return self._compund_wave_transfer_function.ensemble_shape
-
-    @property
-    def default_ensemble_chunks(self):
-        return self._aberrations.default_ensemble_chunks
-
-    @property
-    def ensemble_axes_metadata(self):
-        return self._aberrations.ensemble_axes_metadata
-
-    def evaluate(self, alpha, phi):
-        return self._compund_wave_transfer_function.evaluate(alpha, phi)
-
-    def _copy_as_dict(self):
-        d = {'energy': self.energy,
-             'aperture': self._aperture.copy(),
-             'parameters': copy.copy(self._aberrations._parameters),
-             }
-        return d
-
-    def copy(self):
-        return self.__class__(**self._copy_as_dict())
+#
+#     @property
+#     def compound_wave_transfer_function(self):
+#         return self._compund_wave_transfer_function
+#
+#     @property
+#     def aberrations(self):
+#         return self._aberrations
+#
+#     @property
+#     def aperture(self):
+#         return self._aperture
+#
+#     def ensemble_blocks(self, chunks=None):
+#         return self.compound_wave_transfer_function.ensemble_blocks(chunks)
+#
+#     def ensemble_partial(self):
+#         return self.compound_wave_transfer_function.ensemble_partial()
+#
+#     @property
+#     def ensemble_shape(self):
+#         return self.compound_wave_transfer_function.ensemble_shape
+#
+#     @property
+#     def default_ensemble_chunks(self):
+#         return self._aberrations.default_ensemble_chunks
+#
+#     @property
+#     def ensemble_axes_metadata(self):
+#         return self._aberrations.ensemble_axes_metadata
+#
+#     def evaluate_for_waves(self, waves):
+#         return self.compound_wave_transfer_function.evaluate_for_waves(waves)
+#
+#     def _copy_as_dict(self):
+#         d = {'energy': self.energy,
+#              'aperture': self._aperture.copy(),
+#              'parameters': copy.copy(self._aberrations._parameters),
+#              }
+#         return d
+#
+#     def copy(self):
+#         return self.__class__(**self._copy_as_dict())
 
 
 #

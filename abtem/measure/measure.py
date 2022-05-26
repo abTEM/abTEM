@@ -308,6 +308,11 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
     __rmul__ = __mul__
     __rtruediv__ = __truediv__
 
+    def power(self, number):
+        d = self._copy_as_dict(copy_array=False)
+        d['array'] = self.array ** number
+        return self.__class__(**d)
+
     def _arithmetic(self, other, func) -> 'T':
         self.check_is_compatible(other)
         d = self._copy_as_dict(copy_array=False)
@@ -1371,7 +1376,7 @@ class DiffractionPatterns(AbstractMeasurement):
         # the index in the axis list
         s = Signal2D(array, axes=axes_extra[::-1] + axes_base[::-1])
 
-        s.set_signal_type('electron_diffraction')
+        #s.set_signal_type('electron_diffraction')
         for axis in s.axes_manager.signal_axes:
             axis.offset = -int(axis.size / 2) * axis.scale
         if self.is_lazy:

@@ -286,7 +286,7 @@ class GaussianDistribution(Distribution):
 
     @property
     def values(self):
-        return MultidimensionalAxisAlignedDistribution(self._distributions).weights
+        return MultidimensionalAxisAlignedDistribution(self._distributions).values
 
     @property
     def ensemble_mean(self):

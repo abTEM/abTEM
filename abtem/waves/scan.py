@@ -19,6 +19,7 @@ from abtem.core.dask import validate_chunks
 from abtem.core.distributions import MultidimensionalAxisAlignedDistribution
 from abtem.core.fft import fft_shift_kernel, ifft2
 from abtem.core.grid import Grid, HasGridMixin
+from abtem.waves.transfer import ArrayWaveTransform
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -37,7 +38,7 @@ def validate_scan(scan, probe=None):
     return scan
 
 
-class AbstractScan(Ensemble, metaclass=ABCMeta):
+class AbstractScan(ArrayWaveTransform, metaclass=ABCMeta):
     """Abstract class to describe scans."""
 
     def __len__(self):
@@ -66,42 +67,51 @@ class AbstractScan(Ensemble, metaclass=ABCMeta):
         """Get the scan positions as numpy array."""
         pass
 
+    def get_weights(self):
+        raise NotImplementedError
+
     @property
     @abstractmethod
     def limits(self):
         pass
 
-    def apply_fft_shift(self, waves, out_space: 'str' = 'in_space'):
-        kernel = self.fft_shift(extent=waves.extent, gpts=waves.gpts, device=waves.device)
+    # def apply_fft_shift(self, waves, out_space: 'str' = 'in_space'):
+    #     kernel = self.evaluate(waves)
+    #
+    #     if out_space == 'in_space':
+    #         fourier_space_out = waves.fourier_space
+    #     else:
+    #         fourier_space_out = out_space == 'fourier_space'
+    #
+    #     waves = waves.ensure_fourier_space()
+    #
+    #     kernel = kernel[(slice(None),) * len(self.shape) + (None,) * len(waves.ensemble_shape)]
+    #
+    #     array = waves.array[(None,) * len(self.shape)] * kernel
+    #
+    #     if not fourier_space_out:
+    #         array = ifft2(array, overwrite_x=True)
+    #
+    #     d = waves._copy_as_dict(copy_array=False)
+    #     d['array'] = array
+    #     d['ensemble_axes_metadata'] = self.ensemble_axes_metadata + d['ensemble_axes_metadata']
+    #     return waves.__class__(**d)
 
-        if out_space == 'in_space':
-            fourier_space_out = waves.fourier_space
-        else:
-            fourier_space_out = out_space == 'fourier_space'
-
-        waves = waves.ensure_fourier_space()
-
-        kernel = kernel[(slice(None),) * len(self.shape) + (None,) * len(waves.ensemble_shape)]
-
-        array = waves.array[(None,) * len(self.shape)] * kernel
-
-        if not fourier_space_out:
-            array = ifft2(array, overwrite_x=True)
-
-        d = waves._copy_as_dict(copy_array=False)
-        d['array'] = array
-        d['ensemble_axes_metadata'] = self.ensemble_axes_metadata + d['ensemble_axes_metadata']
-        return waves.__class__(**d)
-
-    def fft_shift(self, extent=None, gpts=None, sampling=None, device=None):
-        device = validate_device(device)
+    def evaluate(self, waves):
+        device = validate_device(waves.device)
         xp = get_array_module(device)
 
-        grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
-        grid.check_is_defined()
+        waves.grid.check_is_defined()
 
-        positions = xp.asarray(self.get_positions()) / xp.asarray(grid.sampling).astype(np.float32)
-        return fft_shift_kernel(positions, shape=grid.gpts)
+        positions = xp.asarray(self.get_positions()) / xp.asarray(waves.sampling).astype(np.float32)
+        kernel = fft_shift_kernel(positions, shape=waves.gpts)
+
+        try:
+            kernel *= self.get_weights()
+        except NotImplementedError:
+            pass
+
+        return kernel
 
     def copy(self):
         """Make a copy."""
@@ -156,6 +166,7 @@ class CompoundScan(AbstractScan):
 
     def __init__(self, scans):
         self._scans = scans
+        super().__init__()
 
     @property
     def shape(self):
@@ -165,11 +176,9 @@ class CompoundScan(AbstractScan):
         return shape
 
     def get_positions(self):
-
         positions = self._scans.get_positions()
         for scan in self._scans[1:]:
             positions = np.add.outer(positions, scan.get_positions())
-
         return positions
 
     @property
@@ -201,7 +210,6 @@ class CompoundScan(AbstractScan):
     @property
     def limits(self):
         pass
-
 
 
 class CustomScan(AbstractScan):

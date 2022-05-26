@@ -1,28 +1,38 @@
-from typing import Union, Tuple
+from typing import Union, Tuple, TYPE_CHECKING
 
 from scipy.sparse.linalg import eigsh
 
+
+from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import validate_device, get_array_module
 from abtem.core.energy import HasAcceleratorMixin, Accelerator
-from abtem.core.fft import fft_crop
+from abtem.core.fft import fft_crop, ifft2
 from abtem.core.grid import spatial_frequencies, Grid
 import numpy as np
+from abtem.waves.transfer import WaveTransform
 
 import math
 import matplotlib.pyplot as plt
 
+if TYPE_CHECKING:
+    from abtem.waves.waves import Waves
 
-class MCF(HasAcceleratorMixin):
+
+class DiagonalizedMCF(WaveTransform, HasAcceleratorMixin):
 
     def __init__(self,
                  energy: float,
                  focal_spread: float,
                  source_diameter: float,
-                 semiangle_cutoff: float):
+                 semiangle_cutoff: float,
+                 num_eigenvectors: int):
         self._focal_spread = focal_spread
         self._source_diameter = source_diameter
         self._semiangle_cutoff = semiangle_cutoff
+        self._num_eigenvectors = num_eigenvectors
+
         self._accelerator = Accelerator(energy=energy)
+        super().__init__(from_alpha_and_phi=False)
 
     @property
     def semiangle_cutoff(self):
@@ -36,25 +46,23 @@ class MCF(HasAcceleratorMixin):
     def source_diameter(self):
         return self._source_diameter
 
+    @property
+    def num_eigenvectors(self):
+        return self._num_eigenvectors
+
     def _cropped_shape(self, extent):
         fourier_space_sampling = 1 / extent[0], 1 / extent[1]
         return (int(np.ceil(2 * self.semiangle_cutoff / (fourier_space_sampling[0] * self.wavelength * 1e3))),
                 int(np.ceil(2 * self.semiangle_cutoff / (fourier_space_sampling[1] * self.wavelength * 1e3))))
 
-    def evaluate(self,
-                 extent: Union[float, Tuple[float, float]],
-                 gpts: Union[int, Tuple[int, int]],
-                 device: str = None) -> np.ndarray:
-        device = validate_device(device)
-        xp = get_array_module(device)
+    def _evaluate_flat_cropped_mcf(self, waves) -> np.ndarray:
+        xp = get_array_module(waves.device)
 
-        grid = Grid(extent=extent, gpts=gpts)
-        grid.check_is_defined()
+        waves.grid.check_is_defined()
 
-        gpts = self._cropped_shape(grid.extent)
-        grid = Grid(extent=grid.extent, gpts=gpts)
+        grid = Grid(extent=waves.extent, gpts=self._cropped_shape(waves.extent))
 
-        kx, ky = spatial_frequencies(gpts=gpts, sampling=grid.sampling, xp=xp)
+        kx, ky = spatial_frequencies(gpts=grid.gpts, sampling=grid.sampling, xp=xp)
         # kx, ky = np.fft.fftshift(kx), np.fft.fftshift(ky)
 
         k2 = kx[:, None] ** 2 + ky[None] ** 2
@@ -69,37 +77,64 @@ class MCF(HasAcceleratorMixin):
         ky = xp.subtract.outer(ky, ky)
         k2 = xp.subtract.outer(k2, k2)
 
-        Ec = xp.exp(-0.5 * (np.pi * self.wavelength * self._focal_spread) ** 2 * k2 ** 2)  # Temporal MCF
-        # Es = np.exp(-2 * (math.pi * sigmas) ** 2 * (np.power(qx, 2) + np.power(qy, 2)))  # Spatial MCF
-        E = Ec * A  # Total MCF including aperture function
-
+        Ec = xp.exp(-(0.5 * np.pi * self.wavelength * self._focal_spread) ** 2 * k2 ** 2)
+        Es = np.exp(-2 * (np.pi * self.source_diameter) ** 2 * (kx ** 2 + ky ** 2))
+        E = Es * Ec * A
         return E
 
-    def apply(self, waves):
-        pass
+    def evaluate_for_waves(self, waves, apply_weights=True, return_correlation: bool = False):
+        E = self._evaluate_flat_cropped_mcf(waves)
 
-    def diagonalize(self,
-                    extent: Union[float, Tuple[float, float]],
-                    gpts: Union[int, Tuple[int, int]],
-                    num_eigenvectors: int,
-                    device: str = None,
-                    return_correlation: bool = False):
-
-        E = self.evaluate(extent=extent, gpts=gpts, device=device)
-
-        values, vectors = eigsh(E, k=num_eigenvectors)
+        values, vectors = eigsh(E, k=self.num_eigenvectors)
         order = np.argsort(-values)
 
-        order = order[:num_eigenvectors]
-        vectors = vectors[:, order].T.reshape((num_eigenvectors,) + self._cropped_shape(extent))
+        order = order[:self.num_eigenvectors]
+        vectors = vectors[:, order].T.reshape((self.num_eigenvectors,) + self._cropped_shape(waves.extent))
         values = values[order]
 
-        vectors = fft_crop(vectors, gpts)
+        vectors = fft_crop(vectors, waves.gpts)
 
         if return_correlation:
             raise NotImplementedError
 
-        return values, vectors
+        return np.abs(values[:, None, None]) ** .5 * vectors
+
+    @property
+    def ensemble_axes_metadata(self):
+        return [OrdinalAxis()]
+
+    def apply(self, waves: 'Waves', out_space: 'str' = 'in_space'):
+
+        if out_space == 'in_space':
+            fourier_space_out = waves.fourier_space
+        elif out_space in ('fourier_space', 'real_space'):
+            fourier_space_out = out_space == 'fourier_space'
+        else:
+            raise ValueError
+
+        xp = get_array_module(waves.device)
+        self.energy = waves.energy
+
+        kernel = self.evaluate_for_waves(waves)
+
+        waves = waves.ensure_fourier_space()
+
+        waves_dims = tuple(range(len(kernel.shape) - 2))
+        kernel_dims = tuple(range(len(kernel.shape) - 2, len(waves.array.shape) - 2 + len(kernel.shape) - 2))
+
+        array = xp.expand_dims(waves.array, axis=waves_dims) * xp.expand_dims(kernel, axis=kernel_dims)
+
+        if not fourier_space_out:
+            array = ifft2(array, overwrite_x=False)
+
+        d = waves._copy_as_dict(copy_array=False)
+        d['fourier_space'] = fourier_space_out
+        d['array'] = array
+        d['ensemble_axes_metadata'] = self.ensemble_axes_metadata + d['ensemble_axes_metadata']
+        return waves.__class__(**d)
+
+    def ensemble_partial(self):
+        pass
 
         # W = np.zeros((num_eigenvectors,) + self._cropped_shape(extent), dtype=float)
 
