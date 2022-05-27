@@ -21,7 +21,7 @@ def format_label(calibration):
 
 def add_domain_coloring_cbar(ax, vmin, vmax, aspect=2):
     divider = make_axes_locatable(ax)
-    cax = divider.append_axes("right", size="50%", pad=0.3, aspect=aspect)
+    cax = divider.append_axes("right", size="60%", pad=0.3, aspect=aspect)
     cax.yaxis.tick_right()
     cax.yaxis.set_label_position('right')
 
@@ -39,20 +39,19 @@ def add_domain_coloring_cbar(ax, vmin, vmax, aspect=2):
     cax.imshow(domain_coloring(cbar_array, vmin=vmin, vmax=vmax), aspect=aspect, origin='lower')
 
 
-def domain_coloring(z, vmin=None, vmax=None):
+def domain_coloring(z: np.ndarray, vmin: float = None, vmax: float = None):
     """
     Domain coloring function.
 
-    Function to color a complex domain.
+    Function to color a complex values.
 
     Parameters
     ----------
     z : ndarray, complex
         Complex number to be colored.
-    saturation : float, optional
-        RGB color saturation. Default is 1.0.
-    k : float, optional
-        Scaling factor for the coloring. Default is 0.5.
+    vmin, vmax : scalar, optional
+        Define the range of absolute values that the colormap covers. By default, the colormap covers the complete
+        value range of the absolute values.
     """
 
     phase = (np.angle(z) + np.pi) / (2 * np.pi)

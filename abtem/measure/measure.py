@@ -34,6 +34,7 @@ try:
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=DeprecationWarning)
         import hyperspy.api as hs
+
         Signal2D = hs.signals.Signal2D
         Signal1D = hs.signals.Signal1D
 except ImportError:
@@ -1056,7 +1057,8 @@ class LineProfiles(AbstractMeasurement):
                  sampling: float = None,
                  endpoint: bool = True,
                  ensemble_axes_metadata: List[AxisMetadata] = None,
-                 metadata: dict = None):
+                 metadata: dict = None,
+                 fourier_space: bool = False):
 
         from abtem.waves.scan import LineScan
 
@@ -1068,6 +1070,8 @@ class LineProfiles(AbstractMeasurement):
 
         self._linescan = LineScan(start=start, end=end, gpts=array.shape[-1], endpoint=endpoint)
 
+        self._fourier_space = fourier_space
+
         super().__init__(array=array, ensemble_axes_metadata=ensemble_axes_metadata, metadata=metadata,
                          allow_complex=True,
                          allow_base_axis_chunks=True)
@@ -1077,6 +1081,10 @@ class LineProfiles(AbstractMeasurement):
         sampling = axes_metadata[-1].sampling
         axes_metadata = axes_metadata[:-1]
         return cls(array, sampling=sampling, ensemble_axes_metadata=axes_metadata, metadata=metadata)
+
+    @property
+    def fourier_space(self):
+        return self._fourier_space
 
     @property
     def start(self) -> Tuple[float, float]:
@@ -1100,7 +1108,10 @@ class LineProfiles(AbstractMeasurement):
 
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
-        return [RealSpaceAxis(label='x', sampling=self.sampling, units='Å')]
+        if self.fourier_space:
+            return [RealSpaceAxis(label='r', sampling=self.sampling, units='Å')]
+        else:
+            return [RealSpaceAxis(label='k', sampling=self.sampling, units='1 / Å')]
 
     def interpolate(self,
                     sampling: float = None,
@@ -1376,7 +1387,7 @@ class DiffractionPatterns(AbstractMeasurement):
         # the index in the axis list
         s = Signal2D(array, axes=axes_extra[::-1] + axes_base[::-1])
 
-        #s.set_signal_type('electron_diffraction')
+        # s.set_signal_type('electron_diffraction')
         for axis in s.axes_manager.signal_axes:
             axis.offset = -int(axis.size / 2) * axis.scale
         if self.is_lazy:

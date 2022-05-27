@@ -75,28 +75,6 @@ class AbstractScan(ArrayWaveTransform, metaclass=ABCMeta):
     def limits(self):
         pass
 
-    # def apply_fft_shift(self, waves, out_space: 'str' = 'in_space'):
-    #     kernel = self.evaluate(waves)
-    #
-    #     if out_space == 'in_space':
-    #         fourier_space_out = waves.fourier_space
-    #     else:
-    #         fourier_space_out = out_space == 'fourier_space'
-    #
-    #     waves = waves.ensure_fourier_space()
-    #
-    #     kernel = kernel[(slice(None),) * len(self.shape) + (None,) * len(waves.ensemble_shape)]
-    #
-    #     array = waves.array[(None,) * len(self.shape)] * kernel
-    #
-    #     if not fourier_space_out:
-    #         array = ifft2(array, overwrite_x=True)
-    #
-    #     d = waves._copy_as_dict(copy_array=False)
-    #     d['array'] = array
-    #     d['ensemble_axes_metadata'] = self.ensemble_axes_metadata + d['ensemble_axes_metadata']
-    #     return waves.__class__(**d)
-
     def evaluate(self, waves):
         device = validate_device(waves.device)
         xp = get_array_module(device)
@@ -107,7 +85,7 @@ class AbstractScan(ArrayWaveTransform, metaclass=ABCMeta):
         kernel = fft_shift_kernel(positions, shape=waves.gpts)
 
         try:
-            kernel *= self.get_weights()
+            kernel *= self.get_weights()[..., None, None]
         except NotImplementedError:
             pass
 
@@ -130,6 +108,9 @@ class SourceOffset(AbstractScan):
     def get_positions(self):
         xi = [factor.values for factor in self._distribution.factors]
         return np.stack(np.meshgrid(*xi, indexing='ij'), axis=-1)
+
+    def get_weights(self):
+        return self._distribution.weights
 
     @property
     def ensemble_axes_metadata(self):
@@ -537,6 +518,20 @@ class GridScan(HasGridMixin, AbstractScan):
         self._start = start
         self._end = end
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling, dimensions=2, endpoint=endpoint)
+
+    @classmethod
+    def from_fractional_coordinates(cls, potential, start=(0., 0.), end=(1., 1.), sampling=None, endpoint=False):
+
+        if np.isscalar(start):
+            start = (start, start)
+
+        if np.isscalar(end):
+            end = (end, end)
+
+        start = (potential.extent[0] * start[0], potential.extent[1] * start[1])
+        end = (potential.extent[0] * end[0], potential.extent[1] * end[1])
+
+        return cls(start=start, end=end, sampling=sampling, endpoint=endpoint)
 
     @property
     def dimensions(self):

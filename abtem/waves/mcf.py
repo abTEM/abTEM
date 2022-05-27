@@ -2,14 +2,13 @@ from typing import Union, Tuple, TYPE_CHECKING
 
 from scipy.sparse.linalg import eigsh
 
-
 from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import validate_device, get_array_module
 from abtem.core.energy import HasAcceleratorMixin, Accelerator
 from abtem.core.fft import fft_crop, ifft2
 from abtem.core.grid import spatial_frequencies, Grid
 import numpy as np
-from abtem.waves.transfer import WaveTransform
+from abtem.waves.transfer import WaveTransform, ArrayWaveTransform
 
 import math
 import matplotlib.pyplot as plt
@@ -18,21 +17,21 @@ if TYPE_CHECKING:
     from abtem.waves.waves import Waves
 
 
-class DiagonalizedMCF(WaveTransform, HasAcceleratorMixin):
+class DiagonalizedMCF(ArrayWaveTransform, HasAcceleratorMixin):
 
     def __init__(self,
-                 energy: float,
                  focal_spread: float,
                  source_diameter: float,
-                 semiangle_cutoff: float,
-                 num_eigenvectors: int):
+                 num_eigenvectors: int,
+                 energy: float = None,
+                 semiangle_cutoff: float = None, ):
         self._focal_spread = focal_spread
         self._source_diameter = source_diameter
         self._semiangle_cutoff = semiangle_cutoff
         self._num_eigenvectors = num_eigenvectors
 
         self._accelerator = Accelerator(energy=energy)
-        super().__init__(from_alpha_and_phi=False)
+        super().__init__()
 
     @property
     def semiangle_cutoff(self):
@@ -82,7 +81,7 @@ class DiagonalizedMCF(WaveTransform, HasAcceleratorMixin):
         E = Es * Ec * A
         return E
 
-    def evaluate_for_waves(self, waves, apply_weights=True, return_correlation: bool = False):
+    def evaluate(self, waves, apply_weights=True, return_correlation: bool = False):
         E = self._evaluate_flat_cropped_mcf(waves)
 
         values, vectors = eigsh(E, k=self.num_eigenvectors)
@@ -103,38 +102,19 @@ class DiagonalizedMCF(WaveTransform, HasAcceleratorMixin):
     def ensemble_axes_metadata(self):
         return [OrdinalAxis()]
 
-    def apply(self, waves: 'Waves', out_space: 'str' = 'in_space'):
-
-        if out_space == 'in_space':
-            fourier_space_out = waves.fourier_space
-        elif out_space in ('fourier_space', 'real_space'):
-            fourier_space_out = out_space == 'fourier_space'
-        else:
-            raise ValueError
-
-        xp = get_array_module(waves.device)
-        self.energy = waves.energy
-
-        kernel = self.evaluate_for_waves(waves)
-
-        waves = waves.ensure_fourier_space()
-
-        waves_dims = tuple(range(len(kernel.shape) - 2))
-        kernel_dims = tuple(range(len(kernel.shape) - 2, len(waves.array.shape) - 2 + len(kernel.shape) - 2))
-
-        array = xp.expand_dims(waves.array, axis=waves_dims) * xp.expand_dims(kernel, axis=kernel_dims)
-
-        if not fourier_space_out:
-            array = ifft2(array, overwrite_x=False)
-
-        d = waves._copy_as_dict(copy_array=False)
-        d['fourier_space'] = fourier_space_out
-        d['array'] = array
-        d['ensemble_axes_metadata'] = self.ensemble_axes_metadata + d['ensemble_axes_metadata']
-        return waves.__class__(**d)
-
     def ensemble_partial(self):
         pass
+
+    def default_ensemble_chunks(self):
+        return ('auto',)
+
+    def ensemble_blocks(self, chunks):
+        pass
+
+    @property
+    def ensemble_shape(self):
+        return (self.num_eigenvectors,)
+
 
         # W = np.zeros((num_eigenvectors,) + self._cropped_shape(extent), dtype=float)
 

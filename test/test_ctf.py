@@ -27,8 +27,6 @@ def test_point_resolution():
     assert np.round(numerical_point_resolution1, 1) == np.round(analytical_point_resolution, 1)
 
 
-#@settings(print_blob=True, max_examples=200)
-#@reproduce_failure('6.29.3', b'AXicY2VkwAEAALUABw==')
 @given(data=st.data(), chunks=st.integers(min_value=1, max_value=10))
 def test_aberrations_ensemble(data, chunks):
     n = data.draw(st.integers(min_value=1, max_value=3))
