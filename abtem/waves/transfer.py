@@ -86,7 +86,7 @@ class ArrayWaveTransform(WaveTransform):
 
         kernel = self.evaluate(waves)
 
-        waves = waves.ensure_fourier_space()
+        waves = waves.ensure_fourier_space(in_place=False)
 
         waves_dims = tuple(range(len(kernel.shape) - 2))
         kernel_dims = tuple(range(len(kernel.shape) - 2, len(waves.array.shape) - 2 + len(kernel.shape) - 2))

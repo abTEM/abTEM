@@ -236,21 +236,21 @@ class Waves(HasDaskArray, WavesLikeMixin):
         d['array'] = da.from_array(self.array)
         return self.__class__(**d)
 
-    def ensure_fourier_space(self):
+    def ensure_fourier_space(self, in_place: bool = False):
         if self.fourier_space:
             return self
 
         d = self._copy_as_dict(copy_array=False)
-        d['array'] = fft2(self.array, overwrite_x=True)
+        d['array'] = fft2(self.array, overwrite_x=in_place)
         d['fourier_space'] = True
         return self.__class__(**d)
 
-    def ensure_real_space(self):
+    def ensure_real_space(self, in_place: bool = False):
         if not self.fourier_space:
             return self
 
         d = self._copy_as_dict(copy_array=False)
-        d['array'] = ifft2(self.array, overwrite_x=True)
+        d['array'] = ifft2(self.array, overwrite_x=in_place)
         d['fourier_space'] = False
         return self.__class__(**d)
 
@@ -1005,7 +1005,7 @@ class Probe(WavesBuilder):
 
     @property
     def metadata(self):
-        return {'energy': self.energy}
+        return {'energy': self.energy, 'semiangle_cutoff': self.aperture.semiangle_cutoff}
 
     @property
     def shape(self):
@@ -1014,16 +1014,17 @@ class Probe(WavesBuilder):
 
     def base_waves_partial(self):
 
-        def base_probe(gpts, extent, energy, device):
+        def base_probe(gpts, extent, energy, device, metadata):
             xp = get_array_module(device)
 
             array = xp.ones(gpts, dtype=xp.complex64)
 
-            return Waves(array=array, energy=energy, extent=extent, fourier_space=True)
+            return Waves(array=array, energy=energy, extent=extent, fourier_space=True, metadata=metadata)
 
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
-        return partial(base_probe, gpts=self.gpts, extent=self.extent, energy=self.energy, device=self.device)
+        return partial(base_probe, gpts=self.gpts, extent=self.extent, energy=self.energy, device=self.device,
+                       metadata=self.metadata)
 
     def build(self,
               scan: Union[tuple, str, AbstractScan] = 'center',

@@ -131,7 +131,7 @@ class SourceOffset(AbstractScan):
     def ensemble_partial(self):
         def distribution(*args):
             factors = [arg.item() for arg in args]
-            dist = MultidimensionalAxisAlignedDistribution(factors)
+            dist = SourceOffset(MultidimensionalAxisAlignedDistribution(factors))
             arr = np.empty((1,) * len(args), dtype=object)
             arr.itemset(dist)
             return arr
