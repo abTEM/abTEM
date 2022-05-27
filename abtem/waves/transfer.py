@@ -4,23 +4,19 @@ import itertools
 from abc import abstractmethod
 from collections import defaultdict
 from functools import partial
-from typing import Mapping, Union, TYPE_CHECKING, Dict, Tuple
+from typing import Mapping, Union, TYPE_CHECKING, Dict
 
-import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.axes import Axes
 
 from abtem.core.axes import ParameterSeriesAxis
 from abtem.core.backend import get_array_module
 from abtem.core.blockwise import Ensemble
-from abtem.core.complex import complex_exponential, abs2
+from abtem.core.complex import complex_exponential
 from abtem.core.dask import validate_chunks
 from abtem.core.distributions import ParameterSeries, Distribution
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
-from abtem.core.fft import ifft2, fft2
+from abtem.core.fft import ifft2
 from abtem.core.grid import Grid, polar_spatial_frequencies
-from abtem.measure.measure import LineProfiles
-import dask.array as da
 
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves, WavesLikeMixin
@@ -524,9 +520,13 @@ class Aberrations(ArrayWaveTransform, HasAcceleratorMixin):
 
 class CTF(CompositeWaveTransform, HasAcceleratorMixin):
 
-    def __init__(self, energy=None, aperture=np.inf, taper=0., parameters=None, **kwargs):
+    def __init__(self, energy=None, semiangle_cutoff=np.inf, taper=0., parameters=None, aperture=None, **kwargs):
         self._aberrations = Aberrations(energy=energy, parameters=parameters, **kwargs)
-        self._aperture = Aperture(energy=energy, semiangle_cutoff=aperture, taper=taper)
+
+        if aperture is None:
+            aperture = Aperture(energy=energy, semiangle_cutoff=semiangle_cutoff, taper=taper)
+
+        self._aperture = aperture
 
         transforms = [self._aberrations, self._aperture]
 

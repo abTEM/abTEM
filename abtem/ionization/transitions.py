@@ -22,6 +22,7 @@ from abtem.ionization.utils import check_valid_quantum_number, config_str_to_con
     remove_electron_from_config_str
 from abtem.measure.measure import Images
 from abtem.core.utils import generate_chunks
+from abtem.potentials.potentials import AbstractPotential
 
 
 class AbstractTransitionCollection(metaclass=ABCMeta):
@@ -36,54 +37,6 @@ class AbstractTransitionCollection(metaclass=ABCMeta):
     @abstractmethod
     def get_transition_potentials(self):
         pass
-
-def transition_multislice(self,
-                          potential: Union[Atoms, AbstractPotential],
-                          transitions: Union[AbstractTransitionCollection, AbstractTransitionPotential],
-                          detectors: Union[AbstractDetector, List[AbstractDetector]] = None,
-                          ctf: CTF = None,
-                          lazy: bool = None):
-
-    lazy = validate_lazy(lazy)
-    potential = validate_potential(potential, self)
-
-    if detectors is None:
-        detectors = PixelatedDetector(fourier_space=False)
-
-    measurements = self.build(lazy=lazy).transition_multislice(potential, transitions, detectors, ctf=ctf)
-    return measurements
-
-def transition_multislice(self, potential: AbstractPotential, transitions, detectors=None, ctf=None):
-    potential = validate_potential(potential, self)
-    detectors = validate_detectors(detectors)
-
-    self.grid.check_is_defined()
-    self.accelerator.check_is_defined()
-
-    if hasattr(transitions, 'get_transition_potentials'):
-        if self.is_lazy:
-            transitions = dask.delayed(transitions.get_transition_potentials)()
-        else:
-            transitions = transitions.get_transition_potentials()
-
-    measurements = []
-    for potential_config in potential.get_distribution(lazy=self.is_lazy):
-        config_measurements = self.copy().apply_detector_func(transition_potential_multislice,
-                                                              potential=potential_config,
-                                                              detectors=detectors,
-                                                              transition_potentials=transitions,
-                                                              ctf=ctf)
-
-        measurements.append(config_measurements)
-
-    measurements = list(map(list, zip(*measurements)))
-    measurements = [stack_measurements(measurements, FrozenPhononsAxis()) for measurements in measurements]
-
-    for i, (detector, measurement) in enumerate(zip(detectors, measurements)):
-        if detector.ensemble_mean:
-            measurements[i] = measurement.mean(0)
-
-    return measurements[0] if len(measurements) == 1 else measurements
 
 
 class SubshellTransitions(AbstractTransitionCollection):
@@ -382,13 +335,13 @@ class SubshellTransitionPotentials(AbstractTransitionPotential):
 
         array = ifft2(self.array[None] * fft_shift_kernel(positions, self.gpts)[:, None])
 
-        #print(array.shape)
-        #sss
+        # print(array.shape)
+        # sss
         array = array.reshape((-1,) + (1,) * (len(waves.shape) - 2) + array.shape[-2:])
 
         d = waves._copy_as_dict(copy_array=False)
         d['array'] = array * waves.array[None]
-        d['extra_axes_metadata'] = [{'type': 'ensemble', 'label': 'core ionization'}] + d['extra_axes_metadata']
+        d['ensemble_axes_metadata'] = [{'type': 'ensemble', 'label': 'core ionization'}] + d['ensemble_axes_metadata']
         return waves.__class__(**d)
 
     def generate_scattered_waves(self, waves, sites, chunks=1):
@@ -477,8 +430,8 @@ class SubshellTransitionPotentials(AbstractTransitionPotential):
 
     def to_images(self):
         array = np.fft.fftshift(ifft2(self.array))
-        extra_axes_metadata = [OrdinalAxis()]
-        return Images(array, sampling=self.sampling, extra_axes_metadata=extra_axes_metadata)
+        ensemble_axes_metadata = [OrdinalAxis()]
+        return Images(array, sampling=self.sampling, ensemble_axes_metadata=ensemble_axes_metadata)
 
     def show(self, **kwargs):
         self.to_images().show(**kwargs)

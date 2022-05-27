@@ -3,13 +3,14 @@ from typing import TYPE_CHECKING
 import numpy as np
 from ase import Atoms
 
+from abtem import show_atoms
 from abtem.core.antialias import AntialiasAperture
 from abtem.core.backend import get_array_module, copy_to_device
 from abtem.core.complex import complex_exponential
 from abtem.measure.measure import Images
 from abtem.potentials.potentials import validate_potential
 from abtem.structures.slicing import SliceIndexedAtoms
-from abtem.waves.multislice import FresnelPropagator
+from abtem.waves.multislice import FresnelPropagator, multislice_step, allocate_multislice_measurements
 
 if TYPE_CHECKING:
     from abtem.waves.prism import SMatrix, SMatrixArray
@@ -17,8 +18,8 @@ if TYPE_CHECKING:
 
 def validate_sites(potential=None, sites=None):
     if sites is None:
-        if hasattr(potential, 'atoms'):
-            sites = potential.atoms
+        if hasattr(potential, 'frozen_phonons'):
+            sites = potential.frozen_phonons.atoms
         else:
             raise RuntimeError(f'transition sites cannot be inferred from potential of type {type(potential)}')
 
@@ -34,21 +35,15 @@ def validate_sites(potential=None, sites=None):
     return sites
 
 
-def transition_potential_multislice(waves,
-                                    potential,
-                                    detectors,
-                                    transition_potentials,
-                                    sites=None,
-                                    ctf=None,
-                                    scan=None):
-    if hasattr(waves, 'reduce') and scan is None:
-        raise RuntimeError()
-
-    if not hasattr(waves, 'reduce') and scan is not None:
-        raise RuntimeError()
-
+def transition_potential_multislice_and_detect(waves,
+                                               potential,
+                                               detectors,
+                                               transition_potentials,
+                                               ctf=None,
+                                               keep_ensemble_dims=False):
+    #print(potential.num_frozen_phonons)
     potential = validate_potential(potential)
-    sites = validate_sites(potential, sites)
+    #sites = validate_sites(potential, sites)
 
     transition_potentials.grid.match(waves)
     transition_potentials.accelerator.match(waves)
@@ -59,32 +54,42 @@ def transition_potential_multislice(waves,
     transmission_function = potential.build(lazy=waves.is_lazy).transmission_function(energy=waves.energy)
     transmission_function = antialias_aperture.bandlimit(transmission_function)
 
-    measurements = [detector.allocate_measurement(waves) for detector in detectors]
+    sites = potential._sliced_atoms
 
-    for i, (transmission_function_slice, sites_slice) in enumerate(zip(transmission_function, sites)):
+    measurements = allocate_multislice_measurements(waves, potential, detectors)
+
+    for scattering_index, (transmission_function_slice, sites_slice) in enumerate(zip(transmission_function, sites)):
         sites_slice = transition_potentials.validate_sites(sites_slice)
 
         for _, scattered_waves in transition_potentials.generate_scattered_waves(waves, sites_slice):
-            scattered_waves = multislice(scattered_waves,
-                                         transmission_function,
-                                         start=i,
-                                         propagator=propagator,
-                                         antialias_aperture=antialias_aperture)
 
-            if ctf is not None:
-                scattered_waves = scattered_waves.apply_ctf(ctf)
+            slice_generator = transmission_function.generate_slices(first_slice=scattering_index)
+            current_slice_index = scattering_index
 
-            for j, detector in enumerate(detectors):
-                if hasattr(scattered_waves, 'reduce'):
-                    measurement = scattered_waves.reduce(positions=scan, detectors=detector).sum(0)
-                else:
-                    measurement = detector.detect(scattered_waves).sum(0)
+            first_exit_slice = np.searchsorted(potential.exit_planes, current_slice_index)
 
-                measurements[j] += measurement
+            for detect_index, exit_slice in enumerate(potential.exit_planes[first_exit_slice:], first_exit_slice):
+
+                while exit_slice != current_slice_index:
+                    potential_slice = next(slice_generator)
+                    scattered_waves = multislice_step(scattered_waves, potential_slice, propagator, antialias_aperture)
+                    current_slice_index += 1
+
+                if ctf is not None:
+                    scattered_waves = scattered_waves.apply_ctf(ctf)
+
+                for detector, measurement in zip(detectors, measurements):
+                    new_measurement = detector.detect(scattered_waves).mean(0)
+                    measurements[detector].array[(0, detect_index)] += new_measurement.array
 
         propagator.thickness = transmission_function_slice.thickness
         waves = transmission_function_slice.transmit(waves)
         waves = propagator.propagate(waves)
+
+    measurements = tuple(measurements.values())
+
+    if not keep_ensemble_dims:
+        measurements = tuple(measurement[0, 0] for measurement in measurements)
 
     return measurements
 

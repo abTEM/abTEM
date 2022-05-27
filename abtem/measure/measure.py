@@ -1064,7 +1064,7 @@ class LineProfiles(AbstractMeasurement):
             start = (0., 0.)
 
         if end is None:
-            end = (start[0] + len(array) * sampling, start[1])
+            end = (start[0] + array.shape[-1] * sampling, start[1])
 
         self._linescan = LineScan(start=start, end=end, gpts=array.shape[-1], endpoint=endpoint)
 
