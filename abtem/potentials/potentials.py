@@ -282,7 +282,7 @@ class Potential(PotentialBuilder):
             cell = np.dot(self.frozen_phonons.atoms.cell, R.T)
             box = tuple(best_orthogonal_box(cell))
 
-            if periodic and projection == 'infinite':
+            if not periodic and projection == 'infinite':
                 raise RuntimeError()
 
         if box is None:
@@ -457,7 +457,6 @@ class Potential(PotentialBuilder):
 
         self._sliced_atoms = SliceIndexedAtoms(atoms=atoms, slice_thickness=self.slice_thickness)
         return self._sliced_atoms
-
 
     def _generate_slices_infinite(self, start: int, stop: int) -> 'PotentialArray':
 

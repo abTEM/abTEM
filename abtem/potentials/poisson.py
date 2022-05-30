@@ -14,6 +14,7 @@ from abtem.core.fft import fft_crop
 from abtem.potentials.parametrizations import EwaldParametrization
 from abtem.potentials.potentials import Potential, AbstractPotential, PotentialArray, PotentialBuilder
 from abtem.potentials.temperature import MDFrozenPhonons, AbstractFrozenPhonons
+from abtem.structures.orthogonal import plane_to_axes
 from abtem.structures.slicing import _validate_slice_thickness
 import dask.array as da
 
@@ -202,7 +203,6 @@ class ChargeDensityPotential(PotentialBuilder):
 
             yield ChargeDensityPotential(**kwargs)
 
-
     @property
     def ensemble_axes_metadata(self):
         return self.ewald_potential.ensemble_axes_metadata
@@ -291,8 +291,6 @@ class ChargeDensityPotential(PotentialBuilder):
 
         return partial(charge_density_potential, **kwargs)
 
-
-
     def generate_slices(self, first_slice: int = 0, last_slice: int = None):
 
         if last_slice is None:
@@ -311,13 +309,21 @@ class ChargeDensityPotential(PotentialBuilder):
         if hasattr(array, 'compute'):
             array = array.compute(scheduler='single-threaded')
 
+        potential = self.ewald_potential.build(first_slice, last_slice)
 
+        print(array.shape)
 
-        array = solve_point_charges(self.frozen_phonons.atoms,
+        if self.ewald_potential.plane != 'xy':
+            axes = plane_to_axes(self.ewald_potential.plane)
+            array = np.moveaxis(array, axes[:2], (0, 1))
+
+        print(array.shape)
+
+        print(self.ewald_potential._sliced_atoms.atoms.cell)
+
+        array = solve_point_charges(self.ewald_potential._sliced_atoms.atoms,
                                     array=-array,
                                     width=self.ewald_parametrization._width)
-
-        potential = self.ewald_potential.build(first_slice, last_slice)
 
         for i, ((a, b), slic) in enumerate(zip(self.slice_limits[first_slice:last_slice], potential)):
             slice_shape = self.gpts + (int((b - a) / min(self.sampling)),)
@@ -326,11 +332,12 @@ class ChargeDensityPotential(PotentialBuilder):
 
             slice_array = interpolate_between_cells(array,
                                                     slice_shape,
-                                                    self.frozen_phonons.atoms.cell,
+                                                    self.ewald_potential._sliced_atoms.atoms.cell,
                                                     slice_box,
                                                     (0, 0, a))
 
             integrated_slice_array = np.trapz(slice_array, axis=-1, dx=(b - a) / slice_shape[-1])
+
             slic._array = slic._array + copy_to_device(integrated_slice_array[None], slic.array)
             yield slic
 
