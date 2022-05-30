@@ -152,6 +152,15 @@ class Waves(HasDaskArray, WavesLikeMixin):
         self._metadata = metadata
         self._check_axes_metadata()
 
+    def fourier_space_measurements(self):
+        waves = self.ensure_fourier_space(in_place=False)
+        waves.array
+
+    def complex_images(self):
+        waves = self.ensure_real_space(in_place=False)
+        return Images(waves.array, sampling=self.sampling, ensemble_axes_metadata=self.ensemble_axes_metadata,
+                      metadata=self.metadata)
+
     @property
     def ensemble_axes_metadata(self):
         return self._ensemble_axes_metadata
@@ -965,6 +974,10 @@ class Probe(WavesBuilder):
         super().__init__(extra_transforms=extra_transforms)
 
     @property
+    def ctf(self):
+        return CTF(semiangle_cutoff=self.aperture.semiangle_cutoff, aberrations=self.aberrations, energy=self.energy)
+
+    @property
     def named_transforms(self):
         transforms = [self._aperture, self._aberrations]
 
@@ -1235,6 +1248,9 @@ class Probe(WavesBuilder):
         point2 = point1 + np.array([np.cos(np.pi * angle / 180), np.sin(np.pi * angle / 180)])
         point1, point2 = _line_intersect_rectangle(point1, point2, (0., 0.), self.extent)
         return measurement.interpolate_line(point1, point2)
+
+    def complex_images(self, lazy: bool = False):
+        return self.build(lazy=lazy).complex_images()
 
     def _copy_as_dict(self):
         new = {'extent': self.extent,

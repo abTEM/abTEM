@@ -7,7 +7,9 @@ from functools import partial
 from typing import Mapping, Union, TYPE_CHECKING, Dict
 
 import numpy as np
+from matplotlib.axes import Axes
 
+from abtem import LineProfiles
 from abtem.core.axes import ParameterSeriesAxis
 from abtem.core.backend import get_array_module
 from abtem.core.blockwise import Ensemble
@@ -17,6 +19,8 @@ from abtem.core.distributions import ParameterSeries, Distribution
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
 from abtem.core.fft import ifft2
 from abtem.core.grid import Grid, polar_spatial_frequencies
+from abtem.core.utils import expand_dims_to_match
+from abtem.measure.measure import FourierSpaceLineProfiles, DiffractionPatterns
 
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves, WavesLikeMixin
@@ -179,72 +183,108 @@ class CompositeWaveTransform(WaveTransform):
         return self.__class__(wave_transforms)
 
 
-def ensemble_axes_metadata_from_parameters(parameters):
-    axes_metadata = []
-    for parameter_name, parameter in parameters.items():
-        axes_metadata += [ParameterSeriesAxis(label=parameter_name,
-                                              values=tuple(parameter.values),
-                                              units='Å',
-                                              _ensemble_mean=parameter.ensemble_mean)]
-    return axes_metadata
-
-
-def ensemble_shape_from_parameters(parameters):
-    return tuple(map(sum, tuple(parameter.shape for parameter in parameters.values())))
-
-
-def ensemble_blocks_from_parameters(parameters, chunks):
-    blocks = ()
-    for parameter, n in zip(parameters.values(), chunks):
-        blocks += (parameter.divide(n, lazy=True),)
-    return blocks
-
-
-class Aperture(ArrayWaveTransform, HasAcceleratorMixin):
-
-    def __init__(self,
-                 semiangle_cutoff: Union[float, Distribution],
-                 energy: float = None,
-                 normalize: bool = False,
-                 taper: float = 0.):
-
-        self._semiangle_cutoff = semiangle_cutoff
-        self._taper = taper
-        self._normalize = normalize
-        self._accelerator = Accelerator(energy=energy)
+class HasParameters:
 
     @property
-    def ensemble_parameters(self):
-        ensemble_parameters = {}
-        if hasattr(self.semiangle_cutoff, 'values'):
-            ensemble_parameters['semiangle_cutoff'] = self.semiangle_cutoff
-        return ensemble_parameters
-
-    @property
-    def ensemble_shape(self):
-        return ensemble_shape_from_parameters(self.ensemble_parameters)
+    @abstractmethod
+    def parameters(self):
+        pass
 
     @property
     def ensemble_axes_metadata(self):
-        return ensemble_axes_metadata_from_parameters(self.ensemble_parameters)
+        parameters = self.ensemble_parameters
+        axes_metadata = []
+        for parameter_name, parameter in parameters.items():
+            axes_metadata += [ParameterSeriesAxis(label=parameter_name,
+                                                  values=tuple(parameter.values),
+                                                  units='Å',
+                                                  _ensemble_mean=parameter.ensemble_mean)]
+        return axes_metadata
+
+    @property
+    def ensemble_shape(self):
+        parameters = self.ensemble_parameters
+        return tuple(map(sum, tuple(parameter.shape for parameter in parameters.values())))
 
     def ensemble_blocks(self, chunks):
-        return ensemble_blocks_from_parameters(self.ensemble_parameters, chunks)
+        parameters = self.ensemble_parameters
+
+        blocks = ()
+        for parameter, n in zip(parameters.values(), chunks):
+            blocks += (parameter.divide(n, lazy=True),)
+        return blocks
 
     @property
     def default_ensemble_chunks(self):
         return ('auto',) * len(self.ensemble_shape)
 
+    @property
+    def num_new_axes(self):
+        num_new_axes = 0
+        for key, parameter in self.ensemble_parameters.items():
+            num_new_axes += len(parameter.values.shape)
+        return num_new_axes
+
+    def _reshaped_parameters(self, shape):
+        ensemble_parameters = self.ensemble_parameters
+        num_new_axes = self.num_new_axes
+
+        weights = None
+        for i, (key, parameter) in enumerate(self.ensemble_parameters.items()):
+            axis = list(range(num_new_axes))
+            del axis[i]
+            axis = tuple(axis) + tuple(range(num_new_axes, num_new_axes + len(shape)))
+            ensemble_parameters[key] = np.expand_dims(parameter.values, axis=axis)
+
+            new_weights = np.expand_dims(parameter.weights, axis=axis)
+            weights = new_weights if weights is None else weights * new_weights
+
+        parameters = {key: value for key, value in self.parameters.items()}
+        parameters.update(ensemble_parameters)
+        return parameters, weights
+
     def ensemble_partial(self):
-        def ctf(*args, keys, **kwargs):
+        def ctf(*args, keys, cls, **kwargs):
             assert len(args) == len(keys)
             kwargs.update({key: arg.item() for key, arg in zip(keys, args)})
             arr = np.zeros((1,) * len(args), dtype=object)
-            arr.itemset(Aperture(**kwargs))
+            arr.itemset(cls(**kwargs))
             return arr
 
         kwargs = self._copy_as_dict()
-        return partial(ctf, keys=tuple(self.ensemble_parameters.keys()), **kwargs)
+        keys = tuple(self.ensemble_parameters.keys())
+
+        return partial(ctf, keys=keys, cls=self.__class__, **kwargs)
+
+    @property
+    def ensemble_parameters(self) -> Dict:
+        ensemble_parameters = {}
+        for parameter_name, parameter in self.parameters.items():
+            if hasattr(parameter, 'values'):
+                ensemble_parameters[parameter_name] = parameter
+        return ensemble_parameters
+
+    @abstractmethod
+    def _copy_as_dict(self):
+        pass
+
+
+class Aperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
+
+    def __init__(self,
+                 semiangle_cutoff: Union[float, Distribution],
+                 energy: float = None,
+                 taper: float = 0.,
+                 normalize: bool = False):
+
+        self._taper = taper
+        self._normalize = normalize
+        self._accelerator = Accelerator(energy=energy)
+        self._parameters = {'semiangle_cutoff': semiangle_cutoff}
+
+    @property
+    def parameters(self):
+        return self._parameters
 
     @property
     def nyquist_sampling(self) -> float:
@@ -252,7 +292,11 @@ class Aperture(ArrayWaveTransform, HasAcceleratorMixin):
 
     @property
     def semiangle_cutoff(self):
-        return self._semiangle_cutoff
+        return self._parameters['semiangle_cutoff']
+
+    @semiangle_cutoff.setter
+    def semiangle_cutoff(self, value):
+        self._parameters['semiangle_cutoff'] = value
 
     @property
     def taper(self):
@@ -261,36 +305,24 @@ class Aperture(ArrayWaveTransform, HasAcceleratorMixin):
     def evaluate_with_alpha_and_phi(self, alpha: Union[float, np.ndarray], phi) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
 
-        parameters = {'semiangle_cutoff': self.semiangle_cutoff}
+        parameters, _ = self._reshaped_parameters(alpha.shape)
 
-        num_new_axes = 0
-        for key, parameter in self.ensemble_parameters.items():
-            num_new_axes += len(parameter.values.shape)
-
-        for i, (key, parameter) in enumerate(self.ensemble_parameters.items()):
-            axis = list(range(num_new_axes))
-            del axis[i]
-            axis = tuple(axis) + tuple(range(num_new_axes, num_new_axes + len(alpha.shape)))
-            parameters[key] = xp.expand_dims(parameter.values, axis=axis)
-
-        axis = tuple(range(0, num_new_axes))
         alpha = xp.array(alpha)
-        alpha = xp.expand_dims(alpha, axis=axis)
+        alpha = xp.expand_dims(alpha, axis=tuple(range(0, self.num_new_axes)))
 
-        parameters['semiangle_cutoff'] = parameters['semiangle_cutoff'] / 1000
+        semiangle_cutoff = parameters['semiangle_cutoff'] / 1000
 
         if self.semiangle_cutoff == xp.inf:
             return xp.ones_like(alpha)
 
         if self.taper > 0.:
-            rolloff = self.taper / 1000.
-            array = .5 * (1 + xp.cos(np.pi * (alpha - parameters['semiangle_cutoff'] + rolloff) / rolloff))
-            array[alpha > parameters['semiangle_cutoff']] = 0.
-            array = xp.where(alpha > parameters['semiangle_cutoff'] - rolloff, array,
-                             xp.ones_like(alpha, dtype=xp.float32))
+            taper = self.taper / 1000.
+            array = .5 * (1 + xp.cos(np.pi * (alpha - semiangle_cutoff + taper) / taper))
+            array[alpha > semiangle_cutoff] = 0.
+            array = xp.where(alpha > semiangle_cutoff - taper, array, xp.ones_like(alpha, dtype=xp.float32))
         else:
 
-            array = xp.array(alpha <= parameters['semiangle_cutoff']).astype(xp.float32)
+            array = xp.array(alpha <= semiangle_cutoff).astype(xp.float32)
 
         if self._normalize:
             array = array / xp.sqrt(array.sum((-2, -1), keepdims=True))
@@ -315,7 +347,153 @@ class Aperture(ArrayWaveTransform, HasAcceleratorMixin):
         return self.__class__(**self._copy_as_dict())
 
 
-class Aberrations(ArrayWaveTransform, HasAcceleratorMixin):
+class TemporalEnvelope(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
+
+    def __init__(self,
+                 focal_spread: Union[float, Distribution],
+                 energy: float = None,
+                 normalize: bool = False):
+        self._normalize = normalize
+        self._accelerator = Accelerator(energy=energy)
+        self._parameters = {'focal_spread': focal_spread}
+
+    @property
+    def parameters(self):
+        return self._parameters
+
+    @property
+    def focal_spread(self):
+        return self._parameters['focal_spread']
+
+    @focal_spread.setter
+    def focal_spread(self, value):
+        self._parameters['focal_spread'] = value
+
+    def evaluate_with_alpha_and_phi(self, alpha: Union[float, np.ndarray], phi) -> Union[float, np.ndarray]:
+        xp = get_array_module(alpha)
+
+        parameters, _ = self._reshaped_parameters(alpha.shape)
+
+        alpha = xp.array(alpha)
+        alpha = xp.expand_dims(alpha, axis=tuple(range(0, self.num_new_axes)))
+
+        array = xp.exp(- (.5 * xp.pi / self.wavelength * parameters['focal_spread'] * alpha ** 2) ** 2).astype(
+            xp.float32)
+
+        if self._normalize:
+            array = array / xp.sqrt(array.sum((-2, -1), keepdims=True))
+
+        return array
+
+    def evaluate(self, waves):
+        self.accelerator.match(waves)
+        waves.grid.check_is_defined()
+        alpha, phi = self._get_polar_spatial_frequencies(waves)
+        return self.evaluate_with_alpha_and_phi(alpha, phi)
+
+    def _copy_as_dict(self):
+        d = {'energy': self.energy,
+             'focal_spread': copy.copy(self.focal_spread),
+             'normalize': self._normalize,
+             }
+        return d
+
+    def copy(self):
+        return self.__class__(**self._copy_as_dict())
+
+
+class SpatialEnvelope(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
+
+    def __init__(self,
+                 angular_spread: Union[float, Distribution],
+                 energy: float = None,
+                 normalize: bool = False,
+                 aberrations=None):
+        self._normalize = normalize
+        self._accelerator = Accelerator(energy=energy)
+        self._parameters = {'angular_spread': angular_spread}
+
+        if aberrations is None:
+            aberrations = Aberrations()
+
+        self._aberrations = aberrations
+        self._aberrations._accelerator = self._accelerator
+
+    @property
+    def parameters(self):
+        return {**self._parameters, **self._aberrations.parameters}
+
+    @property
+    def angular_spread(self):
+        return self._parameters['angular_spread']
+
+    @angular_spread.setter
+    def angular_spread(self, value):
+        self._parameters['angular_spread'] = value
+
+    def evaluate_with_alpha_and_phi(self, alpha: Union[float, np.ndarray], phi) -> Union[float, np.ndarray]:
+        xp = get_array_module(alpha)
+
+        p, _ = self._reshaped_parameters(alpha.shape)
+
+        alpha = xp.array(alpha)
+        alpha = xp.expand_dims(alpha, axis=tuple(range(0, self.num_new_axes)))
+
+        xp = get_array_module(alpha)
+
+        dchi_dk = 2 * xp.pi / self.wavelength * (
+                (p['C12'] * xp.cos(2. * (phi - p['phi12'])) + p['C10']) * alpha +
+                (p['C23'] * xp.cos(3. * (phi - p['phi23'])) +
+                 p['C21'] * xp.cos(1. * (phi - p['phi21']))) * alpha ** 2 +
+                (p['C34'] * xp.cos(4. * (phi - p['phi34'])) +
+                 p['C32'] * xp.cos(2. * (phi - p['phi32'])) + p['C30']) * alpha ** 3 +
+                (p['C45'] * xp.cos(5. * (phi - p['phi45'])) +
+                 p['C43'] * xp.cos(3. * (phi - p['phi43'])) +
+                 p['C41'] * xp.cos(1. * (phi - p['phi41']))) * alpha ** 4 +
+                (p['C56'] * xp.cos(6. * (phi - p['phi56'])) +
+                 p['C54'] * xp.cos(4. * (phi - p['phi54'])) +
+                 p['C52'] * xp.cos(2. * (phi - p['phi52'])) + p['C50']) * alpha ** 5)
+
+        dchi_dphi = -2 * xp.pi / self.wavelength * (
+                1 / 2. * (2. * p['C12'] * xp.sin(2. * (phi - p['phi12']))) * alpha +
+                1 / 3. * (3. * p['C23'] * xp.sin(3. * (phi - p['phi23'])) +
+                          1. * p['C21'] * xp.sin(1. * (phi - p['phi21']))) * alpha ** 2 +
+                1 / 4. * (4. * p['C34'] * xp.sin(4. * (phi - p['phi34'])) +
+                          2. * p['C32'] * xp.sin(2. * (phi - p['phi32']))) * alpha ** 3 +
+                1 / 5. * (5. * p['C45'] * xp.sin(5. * (phi - p['phi45'])) +
+                          3. * p['C43'] * xp.sin(3. * (phi - p['phi43'])) +
+                          1. * p['C41'] * xp.sin(1. * (phi - p['phi41']))) * alpha ** 4 +
+                1 / 6. * (6. * p['C56'] * xp.sin(6. * (phi - p['phi56'])) +
+                          4. * p['C54'] * xp.sin(4. * (phi - p['phi54'])) +
+                          2. * p['C52'] * xp.sin(2. * (phi - p['phi52']))) * alpha ** 5)
+
+        array = xp.exp(-xp.sign(p['angular_spread']) * (p['angular_spread'] / 2 / 1000) ** 2 *
+                       (dchi_dk ** 2 + dchi_dphi ** 2))
+
+        if self._normalize:
+            array = array / xp.sqrt(array.sum((-2, -1), keepdims=True))
+
+        return array
+
+    def evaluate(self, waves):
+        self.accelerator.match(waves)
+        waves.grid.check_is_defined()
+        alpha, phi = self._get_polar_spatial_frequencies(waves)
+        return self.evaluate_with_alpha_and_phi(alpha, phi)
+
+    def _copy_as_dict(self):
+        d = {'energy': self.energy,
+             'angular_spread': copy.copy(self.angular_spread),
+             'normalize': self._normalize,
+             'aberrations': self._aberrations.copy()
+             }
+        return d
+
+    def copy(self):
+        return self.__class__(**self._copy_as_dict())
+
+
+class Aberrations(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
 
     def __init__(self,
                  energy: float = None,
@@ -372,23 +550,9 @@ class Aberrations(ArrayWaveTransform, HasAcceleratorMixin):
                                     phi: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
 
-        p = {key: value for key, value in self.parameters.items()}
+        p, weights = self._reshaped_parameters(alpha.shape)
 
-        num_new_axes = 0
-        for key, parameter in self.ensemble_parameters.items():
-            num_new_axes += len(parameter.values.shape)
-
-        weights = None
-        for i, (key, parameter) in enumerate(self.ensemble_parameters.items()):
-            axis = list(range(num_new_axes))
-            del axis[i]
-            axis = tuple(axis) + tuple(range(num_new_axes, num_new_axes + len(alpha.shape)))
-            p[key] = xp.expand_dims(parameter.values, axis=axis)
-
-            new_weights = xp.expand_dims(parameter.weights, axis=axis)
-            weights = new_weights if weights is None else weights * new_weights
-
-        axis = tuple(range(0, num_new_axes))
+        axis = tuple(range(0, self.num_new_axes))
         alpha = xp.array(alpha)
         alpha = xp.expand_dims(alpha, axis=axis)
         phi = xp.expand_dims(phi, axis=axis)
@@ -430,7 +594,7 @@ class Aberrations(ArrayWaveTransform, HasAcceleratorMixin):
         array = complex_exponential(-array)
 
         if weights is not None:
-            array = array * weights
+            array = weights * array
 
         return array
 
@@ -465,45 +629,6 @@ class Aberrations(ArrayWaveTransform, HasAcceleratorMixin):
 
         return parameters
 
-    def ensemble_partial(self):
-        def ctf(*args, keys, **kwargs):
-            assert len(args) == len(keys)
-            kwargs.update({key: arg.item() for key, arg in zip(keys, args)})
-            arr = np.zeros((1,) * len(args), dtype=object)
-            arr.itemset(Aberrations(**kwargs))
-            return arr
-
-        kwargs = self._copy_as_dict()
-        parameter_names = ()
-        for parameter_name in self.ensemble_parameters.keys():
-            del kwargs['parameters'][parameter_name]
-            parameter_names += (parameter_name,)
-
-        return partial(ctf, keys=parameter_names, **kwargs)
-
-    @property
-    def ensemble_parameters(self) -> Dict:
-        ensemble_parameters = {}
-        for parameter_name, parameter in self.parameters.items():
-            if hasattr(parameter, 'values'):
-                ensemble_parameters[parameter_name] = parameter
-        return ensemble_parameters
-
-    @property
-    def ensemble_shape(self):
-        return ensemble_shape_from_parameters(self.ensemble_parameters)
-
-    @property
-    def ensemble_axes_metadata(self):
-        return ensemble_axes_metadata_from_parameters(self.ensemble_parameters)
-
-    def ensemble_blocks(self, chunks):
-        return ensemble_blocks_from_parameters(self.ensemble_parameters, chunks)
-
-    @property
-    def default_ensemble_chunks(self):
-        return ('auto',) * len(self.ensemble_shape)
-
     def _copy_as_dict(self):
         d = {'energy': self.energy,
              'parameters': copy.copy(self._parameters)}
@@ -513,116 +638,277 @@ class Aberrations(ArrayWaveTransform, HasAcceleratorMixin):
         return self.__class__(**self._copy_as_dict())
 
 
-# def CTF(energy: float = None, aperture: float = np.inf, taper: float = 0., parameters: dict = None, **kwargs):
-#     return Aperture(energy=energy, semiangle_cutoff=aperture, taper=taper) * \
-#            Aberrations(parameters=parameters, **kwargs)
+class CTF(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
 
+    def __init__(self,
+                 energy: float = None,
+                 semiangle_cutoff: float = np.inf,
+                 taper: float = 0.,
+                 focal_spread: float = 0.,
+                 angular_spread: float = 0.,
+                 aberrations: Union[dict, Aberrations] = None,
+                 **kwargs):
 
-class CTF(CompositeWaveTransform, HasAcceleratorMixin):
+        """
+        Contrast transfer function object
 
-    def __init__(self, energy=None, semiangle_cutoff=np.inf, taper=0., parameters=None, aperture=None, **kwargs):
-        self._aberrations = Aberrations(energy=energy, parameters=parameters, **kwargs)
+        The Contrast Transfer Function (CTF) describes the aberrations of the objective lens in HRTEM and specifies how the
+        condenser system shapes the probe in STEM.
 
-        if aperture is None:
-            aperture = Aperture(energy=energy, semiangle_cutoff=semiangle_cutoff, taper=taper)
+        abTEM implements phase aberrations up to 5th order using polar coefficients. See Eq. 2.22 in the reference [1]_.
+        Cartesian coefficients can be converted to polar using the utility function abtem.transfer.cartesian2polar.
 
-        self._aperture = aperture
+        Partial coherence is included as an envelope in the quasi-coherent approximation. See Chapter 3.2 in reference [1]_.
 
-        transforms = [self._aberrations, self._aperture]
+        For a more detailed discussion with examples, see our `walkthrough
+        <https://abtem.readthedocs.io/en/latest/walkthrough/05_contrast_transfer_function.html>`_.
 
-        super().__init__(wave_transforms=transforms)
+        Parameters
+        ----------
+        semiangle_cutoff: float
+            The semiangle cutoff describes the sharp Fourier space cutoff due to the objective aperture [mrad].
+        rolloff: float
+            Tapers the cutoff edge over the given angular range [mrad].
+        focal_spread: float
+            The 1/e width of the focal spread due to chromatic aberration and lens current instability [Å].
+        angular_spread: float
+            The 1/e width of the angular deviations due to source size [Å].
+        gaussian_spread:
+            The 1/e width image deflections due to vibrations and thermal magnetic noise [Å].
+        energy: float
+            The electron energy of the wave functions this contrast transfer function will be applied to [eV].
+        parameters: dict
+            Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in Å
+            and angles should be given in radians.
+        normalize : {'values', 'amplitude', 'intensity'}
+        weight : float
+        kwargs:
+            Provide the aberration coefficients as keyword arguments.
 
-        self._accelerator = self._aberrations._accelerator = self._aperture._accelerator
+        References
+        ----------
+        .. [1] Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.). Springer.
 
+        """
 
-#
-#     @property
-#     def compound_wave_transfer_function(self):
-#         return self._compund_wave_transfer_function
-#
-#     @property
-#     def aberrations(self):
-#         return self._aberrations
-#
-#     @property
-#     def aperture(self):
-#         return self._aperture
-#
-#     def ensemble_blocks(self, chunks=None):
-#         return self.compound_wave_transfer_function.ensemble_blocks(chunks)
-#
-#     def ensemble_partial(self):
-#         return self.compound_wave_transfer_function.ensemble_partial()
-#
-#     @property
-#     def ensemble_shape(self):
-#         return self.compound_wave_transfer_function.ensemble_shape
-#
-#     @property
-#     def default_ensemble_chunks(self):
-#         return self._aberrations.default_ensemble_chunks
-#
-#     @property
-#     def ensemble_axes_metadata(self):
-#         return self._aberrations.ensemble_axes_metadata
-#
-#     def evaluate_for_waves(self, waves):
-#         return self.compound_wave_transfer_function.evaluate_for_waves(waves)
-#
-#     def _copy_as_dict(self):
-#         d = {'energy': self.energy,
-#              'aperture': self._aperture.copy(),
-#              'parameters': copy.copy(self._aberrations._parameters),
-#              }
-#         return d
-#
-#     def copy(self):
-#         return self.__class__(**self._copy_as_dict())
+        if aberrations is None:
+            aberrations = {}
+
+        if not isinstance(aberrations, Aberrations):
+            aberrations = Aberrations(**aberrations, **kwargs)
+
+        self._aberrations = aberrations
+        self._aperture = Aperture(energy=energy, semiangle_cutoff=semiangle_cutoff, taper=taper)
+        self._spatial_envelope = SpatialEnvelope(angular_spread=angular_spread, aberrations=self._aberrations)
+        self._temporal_envelope = TemporalEnvelope(focal_spread=focal_spread)
+        self._transforms = [self._aberrations, self._aperture, self._spatial_envelope, self._temporal_envelope]
+
+        super().__init__()
+
+        self._accelerator = Accelerator(energy=energy)
+
+        self._aberrations._accelerator = self._accelerator
+        self._aperture._accelerator = self._accelerator
+        self._spatial_envelope._accelerator = self._accelerator
+        self._temporal_envelope._accelerator = self._accelerator
+
+    @property
+    def scherzer_defocus(self):
+        self.accelerator.check_is_defined()
+
+        if self.aberrations.Cs == 0.:  # noqa
+            raise ValueError()
+
+        return scherzer_defocus(self.aberrations.Cs, self.energy)  # noqa
+
+    @property
+    def crossover_angle(self):
+        return 1e3 * energy2wavelength(self.energy) / self.point_resolution
+
+    @property
+    def point_resolution(self):
+        return point_resolution(self.aberrations.Cs, self.energy)  # noqa
+
+    @property
+    def parameters(self):
+        parameters = {**self.aberrations.parameters,
+                      **self.aperture.parameters,
+                      **self.spatial_envelope.parameters,
+                      **self.temporal_envelope.parameters}
+        return parameters
+
+    @property
+    def aberrations(self):
+        return self._aberrations
+
+    @property
+    def aperture(self):
+        return self._aperture
+
+    @property
+    def spatial_envelope(self):
+        return self._spatial_envelope
+
+    @property
+    def temporal_envelope(self):
+        return self._temporal_envelope
+
+    @property
+    def nyquist_sampling(self) -> float:
+        return 1 / (4 * self.semiangle_cutoff / self.wavelength * 1e-3)
+
+    @property
+    def defocus(self) -> float:
+        """The defocus [Å]."""
+        return self.aberrations.defocus
+
+    @defocus.setter
+    def defocus(self, value: float):
+        self.aberrations.defocus = value
+
+    @property
+    def semiangle_cutoff(self) -> float:
+        """The semi-angle cutoff [mrad]."""
+        return self.aperture.semiangle_cutoff
+
+    @semiangle_cutoff.setter
+    def semiangle_cutoff(self, value: float):
+        self.aperture.semiangle_cutoff = value
+
+    @property
+    def focal_spread(self) -> float:
+        """The focal spread [Å]."""
+        return self.temporal_envelope.focal_spread
+
+    @focal_spread.setter
+    def focal_spread(self, value: float):
+        """The angular spread [mrad]."""
+        self.temporal_envelope.focal_spread = value
+
+    @property
+    def angular_spread(self) -> float:
+        return self.spatial_envelope.angular_spread
+
+    @angular_spread.setter
+    def angular_spread(self, value: float):
+        self.spatial_envelope.angular_spread = value
+
+    def evaluate_with_alpha_and_phi(self, alpha, phi):
+        array = self.aberrations.evaluate_with_alpha_and_phi(alpha, phi)
+
+        if self.semiangle_cutoff != np.inf:
+            new_array = self.aperture.evaluate_with_alpha_and_phi(alpha, phi)
+            array, new_array = expand_dims_to_match(array, new_array, match_dims=[(-2, -1), (-2, -1)])
+            array = array * new_array
+
+        if self.focal_spread != 0.:
+            new_array = self.temporal_envelope.evaluate_with_alpha_and_phi(alpha, phi)
+            array, new_array = expand_dims_to_match(array, new_array, match_dims=[(-2, -1), (-2, -1)])
+            array = array * new_array
+
+        if self.angular_spread != 0.:
+            new_array = self.spatial_envelope.evaluate_with_alpha_and_phi(alpha, phi)
+            array, new_array = expand_dims_to_match(array, new_array, match_dims=[(-2, -1), (-2, -1)])
+            array = array * new_array
+
+        return array
+
+    def evaluate(self, waves):
+        self.accelerator.match(waves)
+        waves.grid.check_is_defined()
+        alpha, phi = self._get_polar_spatial_frequencies(waves)
+        return self.evaluate_with_alpha_and_phi(alpha, phi)
+
+    def fourier_space_image(self, waves):
+        array = np.fft.fftshift(self.evaluate(waves))
+        return DiffractionPatterns(array, sampling=waves.fourier_space_sampling, metadata={'energy': self.energy})
+
+    def profiles(self, max_semiangle: float = None, phi: float = 0.):
+        if max_semiangle is None:
+            if self.semiangle_cutoff == np.inf:
+                max_semiangle = 50
+            else:
+                max_semiangle = self.semiangle_cutoff * 1.6
+
+        sampling = max_semiangle / 1000. / 1000.
+        alpha = np.arange(0, max_semiangle / 1000., sampling)
+
+        aberrations = self.aberrations.evaluate_with_alpha_and_phi(alpha, phi)
+        aperture = self.aperture.evaluate_with_alpha_and_phi(alpha, phi)
+        temporal_envelope = self.temporal_envelope.evaluate_with_alpha_and_phi(alpha, phi)
+        spatial_envelope = self.spatial_envelope.evaluate_with_alpha_and_phi(alpha, phi)
+        # gaussian_envelope = self.evaluate_gaussian_envelope(alpha)
+        envelope = aperture * temporal_envelope * spatial_envelope  # * gaussian_envelope
+
+        sampling = alpha[1] / energy2wavelength(self.energy)
+
+        profiles = {}
+        profiles['ctf'] = FourierSpaceLineProfiles(-aberrations.imag * envelope,
+                                                   sampling=sampling,
+                                                   metadata={'energy': self.energy})
+        profiles['aperture'] = FourierSpaceLineProfiles(aperture,
+                                                        sampling=sampling,
+                                                        metadata={'energy': self.energy})
+        # profiles['aperture'] = LineProfiles(aperture, sampling=sampling, energy=self.energy)
+        profiles['envelope'] = FourierSpaceLineProfiles(envelope, sampling=sampling, metadata={'energy': self.energy})
+        profiles['temporal_envelope'] = FourierSpaceLineProfiles(temporal_envelope, sampling=sampling,
+                                                                 metadata={'energy': self.energy})
+        profiles['spatial_envelope'] = FourierSpaceLineProfiles(spatial_envelope, sampling=sampling,
+                                                                metadata={'energy': self.energy})
+        # profiles['gaussian_envelope'] = RadialFourierSpaceLineProfiles(gaussian_envelope, sampling=sampling,
+        #                                                                energy=self.energy)
+        return profiles
+
+    def show(self,
+             max_semiangle: float = None,
+             phi: float = 0,
+             ax: Axes = None,
+             angular_units: bool = True,
+             legend: bool = True, **kwargs):
+        """
+        Show the contrast transfer function.
+
+        Parameters
+        ----------
+        max_semiangle: float
+            Maximum semiangle to display in the plot.
+        ax: matplotlib Axes, optional
+            If given, the plot will be added to this matplotlib axes.
+        phi: float, optional
+            The contrast transfer function will be plotted along this angle. Default is 0.
+        n: int, optional
+            Number of evaluation points to use in the plot. Default is 1000.
+        title: str, optional
+            The title of the plot. Default is 'None'.
+        kwargs:
+            Additional keyword arguments for the line plots.
+        """
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            ax = plt.subplot()
+
+        for key, profile in self.profiles(max_semiangle, phi).items():
+            if not np.all(profile.array == 1.):
+                ax, lines = profile.show(ax=ax, label=key, angular_units=angular_units, **kwargs)
+
+        if legend:
+            ax.legend()
+
+        return ax
+
+    def _copy_as_dict(self):
+        d = {'energy': self.energy,
+             **self.parameters}
+        return d
+
+    def copy(self):
+        return self.__class__(**self._copy_as_dict())
 
 
 #
 # class CTF(HasAcceleratorMixin, Ensemble):
-#     """
-#     Contrast transfer function object
-#
-#     The Contrast Transfer Function (CTF) describes the aberrations of the objective lens in HRTEM and specifies how the
-#     condenser system shapes the probe in STEM.
-#
-#     abTEM implements phase aberrations up to 5th order using polar coefficients. See Eq. 2.22 in the reference [1]_.
-#     Cartesian coefficients can be converted to polar using the utility function abtem.transfer.cartesian2polar.
-#
-#     Partial coherence is included as an envelope in the quasi-coherent approximation. See Chapter 3.2 in reference [1]_.
-#
-#     For a more detailed discussion with examples, see our `walkthrough
-#     <https://abtem.readthedocs.io/en/latest/walkthrough/05_contrast_transfer_function.html>`_.
-#
-#     Parameters
-#     ----------
-#     semiangle_cutoff: float
-#         The semiangle cutoff describes the sharp Fourier space cutoff due to the objective aperture [mrad].
-#     rolloff: float
-#         Tapers the cutoff edge over the given angular range [mrad].
-#     focal_spread: float
-#         The 1/e width of the focal spread due to chromatic aberration and lens current instability [Å].
-#     angular_spread: float
-#         The 1/e width of the angular deviations due to source size [Å].
-#     gaussian_spread:
-#         The 1/e width image deflections due to vibrations and thermal magnetic noise [Å].
-#     energy: float
-#         The electron energy of the wave functions this contrast transfer function will be applied to [eV].
-#     parameters: dict
-#         Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in Å
-#         and angles should be given in radians.
-#     normalize : {'values', 'amplitude', 'intensity'}
-#     weight : float
-#     kwargs:
-#         Provide the aberration coefficients as keyword arguments.
-#
-#     References
-#     ----------
-#     .. [1] Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.). Springer.
-#
-#     """
+
 #
 #     def __init__(self,
 #                  semiangle_cutoff: float = np.inf,
@@ -693,60 +979,7 @@ class CTF(CompositeWaveTransform, HasAcceleratorMixin):
 #     def weight(self):
 #         return self._weight
 #
-#     @property
-#     def nyquist_sampling(self) -> float:
-#         return 1 / (4 * self.semiangle_cutoff / self.wavelength * 1e-3)
-#
-#     @property
-#     def parameters(self) -> Dict[str, Union[float, ParameterSeries]]:
-#         """The parameters."""
-#         return self._parameters
-#
-#     @property
-#     def defocus(self) -> float:
-#         """The defocus [Å]."""
-#         return - self._parameters['C10']
-#
-#     @defocus.setter
-#     def defocus(self, value: float):
-#         self.C10 = -value
-#
-#     @property
-#     def semiangle_cutoff(self) -> float:
-#         """The semi-angle cutoff [mrad]."""
-#         return self._semiangle_cutoff
-#
-#     @semiangle_cutoff.setter
-#     def semiangle_cutoff(self, value: float):
-#         self._semiangle_cutoff = value
-#
-#     @property
-#     def rolloff(self) -> float:
-#         """The fraction of soft tapering of the cutoff."""
-#         return self._rolloff
-#
-#     @rolloff.setter
-#     def rolloff(self, value: float):
-#         self._rolloff = value
-#
-#     @property
-#     def focal_spread(self) -> float:
-#         """The focal spread [Å]."""
-#         return self._focal_spread
-#
-#     @focal_spread.setter
-#     def focal_spread(self, value: float):
-#         """The angular spread [mrad]."""
-#         self._focal_spread = value
-#
-#     @property
-#     def angular_spread(self) -> float:
-#         return self._angular_spread
-#
-#     @angular_spread.setter
-#     def angular_spread(self, value: float):
-#         self._angular_spread = value
-#
+
 #     @property
 #     def gaussian_spread(self) -> float:
 #         """The Gaussian spread [Å]."""
@@ -986,38 +1219,7 @@ class CTF(CompositeWaveTransform, HasAcceleratorMixin):
 #
 #         return blocks
 #
-#     def profiles(self, max_semiangle: float = None, phi: float = 0., units='mrad'):
-#         if max_semiangle is None:
-#             if self._semiangle_cutoff == np.inf:
-#                 max_semiangle = 50
-#             else:
-#                 max_semiangle = self._semiangle_cutoff * 1.6
-#
-#         sampling = max_semiangle / 1000. / 1000.
-#         alpha = np.arange(0, max_semiangle / 1000., sampling)
-#
-#         aberrations = self.evaluate_aberrations(alpha, phi)
-#         aperture = self.evaluate_aperture(alpha)
-#         temporal_envelope = self.evaluate_temporal_envelope(alpha)
-#         spatial_envelope = self.evaluate_spatial_envelope(alpha, phi)
-#         gaussian_envelope = self.evaluate_gaussian_envelope(alpha)
-#         envelope = aperture * temporal_envelope * spatial_envelope * gaussian_envelope
-#
-#         sampling = alpha[1] / energy2wavelength(self.energy)
-#
-#         profiles = {}
-#         profiles['ctf'] = RadialFourierSpaceLineProfiles(-aberrations.imag * envelope,
-#                                                          sampling=sampling,
-#                                                          energy=self.energy)
-#         profiles['aperture'] = RadialFourierSpaceLineProfiles(aperture, sampling=sampling, energy=self.energy)
-#         profiles['envelope'] = RadialFourierSpaceLineProfiles(envelope, sampling=sampling, energy=self.energy)
-#         profiles['temporal_envelope'] = RadialFourierSpaceLineProfiles(temporal_envelope, sampling=sampling,
-#                                                                        energy=self.energy)
-#         profiles['spatial_envelope'] = RadialFourierSpaceLineProfiles(spatial_envelope, sampling=sampling,
-#                                                                       energy=self.energy)
-#         profiles['gaussian_envelope'] = RadialFourierSpaceLineProfiles(gaussian_envelope, sampling=sampling,
-#                                                                        energy=self.energy)
-#         return profiles
+
 #
 #     def apply(self, waves: 'Waves', fourier_space_out: bool = False):
 #         kernel = self.evaluate_on_grid(extent=waves.extent,
@@ -1074,22 +1276,6 @@ class CTF(CompositeWaveTransform, HasAcceleratorMixin):
 #             ax.legend()
 #
 #         return ax
-#
-#     def _copy_as_dict(self):
-#         d = {'semiangle_cutoff': self.semiangle_cutoff,
-#              'focal_spread': self.focal_spread,
-#              'angular_spread': self.angular_spread,
-#              'gaussian_spread': self.gaussian_spread,
-#              'weight': self.weight,
-#              'energy': self.energy,
-#              'normalize': self.normalize,
-#              'parameters': copy.copy(self._parameters)
-#              }
-#         return d
-#
-#     def copy(self):
-#         new_dict = self._copy_as_dict()
-#         return self.__class__(**new_dict)
 
 
 def scherzer_defocus(Cs, energy):

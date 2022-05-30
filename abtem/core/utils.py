@@ -11,6 +11,60 @@ def array_row_intersection(a, b):
     return np.sum(np.cumsum(tmp, axis=0) * tmp == 1, axis=1).astype(bool)
 
 
+def insert_empty_axis(match_axis1, match_axis2):
+    for i, (a1, a2) in enumerate(zip(reversed(match_axis1), reversed(match_axis2))):
+        if a1 is True and a2 is False:
+            match_axis2.insert(len(match_axis2) - i, None)
+            break
+
+        if a1 is False and a2 is True:
+            match_axis1.insert(len(match_axis1) - i, None)
+            break
+
+        if a1 is True and a2 is True:
+            match_axis1.insert(len(match_axis1) - i, None)
+            break
+
+
+def normalize_dims(dims, shape):
+    num_dims = len(shape)
+    return tuple(dim if dim >= 0 else num_dims + dim for dim in dims)
+
+
+def expand_dims_to_match(arr1, arr2, match_dims):
+
+    assert len(match_dims) == 2
+    assert len(match_dims[0]) == len(match_dims[1])
+
+    match_dims[0] = normalize_dims(match_dims[0], arr1.shape)
+    match_dims[1] = normalize_dims(match_dims[1], arr2.shape)
+
+    match_axis1 = [not i in match_dims[0] for i in range(len(arr1.shape))]
+    match_axis2 = [not i in match_dims[1] for i in range(len(arr2.shape))]
+
+    last_length = len(match_axis1) + len(match_axis2)
+    for i in range(last_length):
+        insert_empty_axis(match_axis1, match_axis2)
+
+        if len(match_axis1) + len(match_axis2) == last_length:
+            break
+
+        last_length = len(match_axis1) + len(match_axis2)
+
+    if len(match_axis1) < len(match_axis2):
+        match_axis1 = [None] * (len(match_axis2) - len(match_axis1)) + match_axis1
+    elif len(match_axis1) > len(match_axis2):
+        match_axis2 = [None] * (len(match_axis1) - len(match_axis2)) + match_axis2
+
+    axis1 = tuple(i for i, a in enumerate(match_axis1) if a is None)
+    axis2 = tuple(i for i, a in enumerate(match_axis2) if a is None)
+
+    arr1 = np.expand_dims(arr1, axis=axis1)
+    arr2 = np.expand_dims(arr2, axis=axis2)
+
+    return arr1, arr2
+
+
 def subdivide_into_chunks(num_items: int, num_chunks: int = None, chunks: int = None):
     """
     Split an n integer into m (almost) equal integers, such that the sum of smaller integers equals n.

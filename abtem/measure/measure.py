@@ -872,8 +872,7 @@ class Images(AbstractMeasurement):
         if width:
             array = array.mean(-1)
 
-        return LineProfiles(array=array, start=scan.start, end=scan.end, endpoint=endpoint,
-                            ensemble_axes_metadata=self.ensemble_axes_metadata, metadata=self.metadata)
+        return LineProfiles(array=array, ensemble_axes_metadata=self.ensemble_axes_metadata, metadata=self.metadata)
 
     def tile(self, reps: Tuple[int, int]) -> 'Images':
         """
@@ -1048,76 +1047,46 @@ class Images(AbstractMeasurement):
         return ax, im
 
 
-class LineProfiles(AbstractMeasurement):
+class AbstractMeasurement1d(AbstractMeasurement):
 
     def __init__(self,
                  array: np.ndarray,
-                 start: Tuple[float, float] = None,
-                 end: Tuple[float, float] = None,
                  sampling: float = None,
-                 endpoint: bool = True,
                  ensemble_axes_metadata: List[AxisMetadata] = None,
-                 metadata: dict = None,
-                 fourier_space: bool = False):
+                 metadata: dict = None):
 
-        from abtem.waves.scan import LineScan
+        self._sampling = sampling
 
-        if start is None:
-            start = (0., 0.)
-
-        if end is None:
-            end = (start[0] + array.shape[-1] * sampling, start[1])
-
-        self._linescan = LineScan(start=start, end=end, gpts=array.shape[-1], endpoint=endpoint)
-
-        self._fourier_space = fourier_space
-
-        super().__init__(array=array, ensemble_axes_metadata=ensemble_axes_metadata, metadata=metadata,
+        super().__init__(array=array,
+                         ensemble_axes_metadata=ensemble_axes_metadata,
+                         metadata=metadata,
                          allow_complex=True,
                          allow_base_axis_chunks=True)
 
     @classmethod
-    def from_array_and_metadata(cls, array, axes_metadata, metadata=None) -> 'LineProfiles':
+    def from_array_and_metadata(cls, array, axes_metadata, metadata=None) -> 'T':
         sampling = axes_metadata[-1].sampling
         axes_metadata = axes_metadata[:-1]
         return cls(array, sampling=sampling, ensemble_axes_metadata=axes_metadata, metadata=metadata)
 
     @property
-    def fourier_space(self):
-        return self._fourier_space
-
-    @property
-    def start(self) -> Tuple[float, float]:
-        return self._linescan.start
-
-    @property
-    def end(self) -> Tuple[float, float]:
-        return self._linescan.end
-
-    @property
     def extent(self) -> float:
-        return self._linescan.extent
-
-    @property
-    def endpoint(self) -> bool:
-        return self._linescan.endpoint
+        return self.sampling * self.shape[-1]
 
     @property
     def sampling(self) -> float:
-        return self._linescan.sampling
+        return self._sampling
 
     @property
+    @abstractmethod
     def base_axes_metadata(self) -> List[AxisMetadata]:
-        if self.fourier_space:
-            return [RealSpaceAxis(label='r', sampling=self.sampling, units='Å')]
-        else:
-            return [RealSpaceAxis(label='k', sampling=self.sampling, units='1 / Å')]
+        pass
 
     def interpolate(self,
                     sampling: float = None,
                     gpts: int = None,
                     order: int = 3,
-                    endpoint: bool = False) -> 'LineProfiles':
+                    endpoint: bool = False) -> 'T':
 
         map_coordinates = get_ndimage_module(self.array).map_coordinates
         xp = get_array_module(self.array)
@@ -1159,17 +1128,6 @@ class LineProfiles(AbstractMeasurement):
         d['sampling'] = sampling
         return self.__class__(**d)
 
-    def tile(self, reps: int):
-        d = self._copy_as_dict(copy_array=False)
-        xp = get_array_module(self.array)
-        d['end'] = np.array(self.start) + (np.array(self.end) - np.array(self.start)) * reps
-        reps = (0,) * (len(self.array.shape) - 1) + (reps,)
-        if self.is_lazy:
-            d['array'] = da.tile(self.array, reps)
-        else:
-            d['array'] = xp.tile(self.array, reps)
-        return self.__class__(**d)
-
     def to_hyperspy(self):
         if Signal1D is None:
             raise RuntimeError(missing_hyperspy_message)
@@ -1196,10 +1154,7 @@ class LineProfiles(AbstractMeasurement):
 
     def _copy_as_dict(self, copy_array: bool = True) -> dict:
 
-        d = {'start': self.start,
-             'end': self.end,
-             'sampling': self.sampling,
-             'endpoint': self.endpoint,
+        d = {'sampling': self.sampling,
              'ensemble_axes_metadata': copy.deepcopy(self.ensemble_axes_metadata),
              'metadata': copy.deepcopy(self.metadata)}
 
@@ -1207,6 +1162,34 @@ class LineProfiles(AbstractMeasurement):
             d['array'] = self.array.copy()
 
         return d
+
+
+class LineProfiles(AbstractMeasurement1d):
+
+    def __init__(self,
+                 array: np.ndarray,
+                 sampling: float = None,
+                 ensemble_axes_metadata: List[AxisMetadata] = None,
+                 metadata: dict = None):
+
+        super().__init__(array=array,
+                         sampling=sampling,
+                         ensemble_axes_metadata=ensemble_axes_metadata,
+                         metadata=metadata)
+
+    @property
+    def base_axes_metadata(self) -> List[AxisMetadata]:
+        return [RealSpaceAxis(label='r', sampling=self.sampling, units='Å')]
+
+    def tile(self, reps: int) -> 'LineProfiles':
+        d = self._copy_as_dict(copy_array=False)
+        xp = get_array_module(self.array)
+        reps = (0,) * (len(self.array.shape) - 1) + (reps,)
+        if self.is_lazy:
+            d['array'] = da.tile(self.array, reps)
+        else:
+            d['array'] = xp.tile(self.array, reps)
+        return self.__class__(**d)
 
     def show(self, ax: Axes = None, title: str = None, label: str = None, **kwargs):
         if ax is None:
@@ -1219,7 +1202,7 @@ class LineProfiles(AbstractMeasurement):
 
         array = copy_to_device(self.array[slic], np)
 
-        x = np.linspace(0, self.extent, len(array), endpoint=self._linescan.endpoint)
+        x = np.linspace(0, self.extent, len(array))
 
         if np.iscomplexobj(self.array):
             if label is None:
@@ -1232,6 +1215,58 @@ class LineProfiles(AbstractMeasurement):
 
         ax.set_xlabel('x [Å]')
         return ax
+
+
+class FourierSpaceLineProfiles(AbstractMeasurement1d):
+
+    def __init__(self,
+                 array: np.ndarray,
+                 sampling: float = None,
+                 ensemble_axes_metadata: List[AxisMetadata] = None,
+                 metadata: dict = None):
+
+        super().__init__(array=array,
+                         sampling=sampling,
+                         ensemble_axes_metadata=ensemble_axes_metadata,
+                         metadata=metadata)
+
+    @property
+    def base_axes_metadata(self) -> List[AxisMetadata]:
+        return [RealSpaceAxis(label='k', sampling=self.sampling, units='1 / Å')]
+
+    def show(self,
+             ax: Axes = None,
+             title: str = None,
+             label: str = None,
+             angular_units: bool = False,
+             **kwargs):
+        if ax is None:
+            ax = plt.subplot()
+
+        if title is not None:
+            ax.set_title(title)
+
+        slic = (0,) * self.num_ensemble_axes
+
+        array = copy_to_device(self.array[slic], np)
+
+        x = np.linspace(0, self.extent, len(array))
+
+        if angular_units:
+            x *= energy2wavelength(self.energy) * 1e3
+
+        if np.iscomplexobj(self.array):
+            if label is None:
+                label = ''
+
+            line1 = ax.plot(x, array.real, label=f'Real {label}', **kwargs)
+            line2 = ax.plot(x, array.imag, label=f'Imag. {label}', **kwargs)
+            line = (line1, line2)
+        else:
+            line = ax.plot(x, array, label=label, **kwargs)
+
+        ax.set_xlabel('x [1 / Å]')
+        return ax, line
 
 
 def integrate_gradient_2d(gradient, sampling):
@@ -1294,8 +1329,6 @@ def _reduced_scanned_images_or_line_profiles(new_array, old_measurement):
 
         return LineProfiles(new_array,
                             sampling=old_measurement.axes_metadata[scan_axis].sampling,
-                            start=start,
-                            end=end,
                             ensemble_axes_metadata=ensemble_axes_metadata,
                             metadata=old_measurement.metadata)
 
@@ -1884,6 +1917,8 @@ class DiffractionPatterns(AbstractMeasurement):
              figsize: Tuple[float, float] = None,
              angular_units: bool = False,
              max_angle: float = None,
+             vmin=None,
+             vmax=None,
              **kwargs):
 
         if ax is None:
@@ -1903,9 +1938,27 @@ class DiffractionPatterns(AbstractMeasurement):
 
         slic = (0,) * self.num_ensemble_axes
 
-        array = asnumpy(self.array)[slic].T ** power
+        array = asnumpy(self.array)[slic].T
 
-        im = ax.imshow(array, extent=extent, origin='lower', **kwargs)
+        if np.iscomplexobj(array):
+            if power != 1.:
+                raise ValueError
+
+            colored_array = domain_coloring(array, vmin=vmin, vmax=vmax)
+        else:
+            colored_array = array ** power
+
+        im = ax.imshow(colored_array, origin='lower', vmin=vmin, extent=extent, vmax=vmax, **kwargs)
+
+        if cbar:
+            if np.iscomplexobj(array):
+                vmin = np.abs(array).min() if vmin is None else vmin
+                vmax = np.abs(array).max() if vmax is None else vmax
+                add_domain_coloring_cbar(ax, vmin, vmax)
+            else:
+                plt.colorbar(im, ax=ax)
+
+        # im = ax.imshow(array, extent=extent, origin='lower', **kwargs)
 
         if max_angle:
             ax.set_xlim([-max_angle, max_angle])

@@ -86,16 +86,15 @@ def line_profiles(draw, lazy=False, device='cpu'):
     sampling = draw(core_st.sensible_floats(min_value=0.01, max_value=0.1))
     metadata = {'energy': draw(core_st.energy())}
     axes = draw(axes_metadata())
-
-    start_floats = core_st.sensible_floats(min_value=-10., max_value=10.)
-    start = draw(st.tuples(start_floats, start_floats))
-
-    end = draw(st.tuples(core_st.sensible_floats(min_value=start[0] + 1., max_value=start[0] + 10.),
-                         core_st.sensible_floats(min_value=start[1] + 1., max_value=start[1] + 10.)))
+    #
+    # start_floats = core_st.sensible_floats(min_value=-10., max_value=10.)
+    # start = draw(st.tuples(start_floats, start_floats))
+    #
+    # end = draw(st.tuples(core_st.sensible_floats(min_value=start[0] + 1., max_value=start[0] + 10.),
+    #                      core_st.sensible_floats(min_value=start[1] + 1., max_value=start[1] + 10.)))
 
     array = draw(measurement_array(len(axes) + 1, lazy, device))
-    return LineProfiles(start=start, end=end, array=array, sampling=sampling, ensemble_axes_metadata=axes,
-                        metadata=metadata)
+    return LineProfiles(array=array, sampling=sampling, ensemble_axes_metadata=axes, metadata=metadata)
 
 
 @st.composite

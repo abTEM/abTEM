@@ -31,9 +31,11 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
         Parameters
         ----------
         focal_spread : float
-        source_diameter : float
+            The standard deviation of the gaussian focal spread assuming [Å].
+        source_size : float
+            The standard deviation of the size of the 2d gaussian shaped electron source [Å].
         eigenvectors : int, or tuple of int
-            The eigen
+            The subset of eigenvectors used to represent
         energy : float, optional
             Electron energy [eV]. If not given, this will be matched to a wavefunction.
         semiangle_cutoff : float, optional
@@ -73,19 +75,25 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
         return (int(np.ceil(2 * semiangle_cutoff / (fourier_space_sampling[0] * wavelength * 1e3))),
                 int(np.ceil(2 * semiangle_cutoff / (fourier_space_sampling[1] * wavelength * 1e3))))
 
-    def _evaluate_flat_cropped_mcf(self, waves) -> np.ndarray:
-        xp = get_array_module(waves.device)
-
-        waves.grid.check_is_defined()
-
+    def _safe_semiangle_cutoff(self, waves):
         if self.semiangle_cutoff is None:
-            semiangle_cutoff = waves.metadata['semiangle_cutoff']
+            try:
+                semiangle_cutoff = waves.metadata['semiangle_cutoff']
+            except KeyError:
+                raise RuntimeError('"semiangle_cutoff" could not be inferred from Waves, please provide as an argument')
         else:
             semiangle_cutoff = self.semiangle_cutoff
 
+        return semiangle_cutoff
+
+    def _evaluate_flat_cropped_mcf(self, waves) -> np.ndarray:
+        waves.grid.check_is_defined()
+
+        semiangle_cutoff = self._safe_semiangle_cutoff(waves)
+
         grid = Grid(extent=waves.extent, gpts=self._cropped_shape(waves.extent, semiangle_cutoff, waves.wavelength))
 
-        kx, ky = spatial_frequencies(gpts=grid.gpts, sampling=grid.sampling, xp=xp)
+        kx, ky = spatial_frequencies(gpts=grid.gpts, sampling=grid.sampling, xp=np)
         # kx, ky = np.fft.fftshift(kx), np.fft.fftshift(ky)
 
         k2 = kx[:, None] ** 2 + ky[None] ** 2
@@ -95,22 +103,19 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
 
         A, kx, ky, k2 = A.ravel(), kx.ravel(), ky.ravel(), k2.ravel()
 
-        A = xp.multiply.outer(A, A)
-        kx = xp.subtract.outer(kx, kx)
-        ky = xp.subtract.outer(ky, ky)
-        k2 = xp.subtract.outer(k2, k2)
+        A = np.multiply.outer(A, A)
+        kx = np.subtract.outer(kx, kx)
+        ky = np.subtract.outer(ky, ky)
+        k2 = np.subtract.outer(k2, k2)
 
-        Ec = xp.exp(-(0.5 * np.pi * waves.wavelength * self._focal_spread) ** 2 * k2 ** 2)
+        Ec = np.exp(-(0.5 * np.pi * waves.wavelength * self.focal_spread) ** 2 * k2 ** 2)
         Es = np.exp(-1 * (np.pi * self.source_diameter) ** 2 * (kx ** 2 + ky ** 2))
         E = Es * Ec * A
         return E
 
     def evaluate(self, waves, apply_weights=True, return_correlation: bool = False):
 
-        if self.semiangle_cutoff is None:
-            semiangle_cutoff = waves.metadata['semiangle_cutoff']
-        else:
-            semiangle_cutoff = self.semiangle_cutoff
+        semiangle_cutoff = self._safe_semiangle_cutoff(waves)
 
         E = self._evaluate_flat_cropped_mcf(waves)
 
@@ -129,7 +134,12 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
         if return_correlation:
             raise NotImplementedError
 
-        return np.abs(values[:, None, None]) ** .5 * vectors
+        xp = get_array_module(waves.device)
+
+        vectors = xp.array(vectors)
+        values = xp.array(values)
+
+        return xp.abs(values[:, None, None]) ** .5 * vectors
 
     @property
     def ensemble_axes_metadata(self):
