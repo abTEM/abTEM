@@ -311,15 +311,9 @@ class ChargeDensityPotential(PotentialBuilder):
 
         potential = self.ewald_potential.build(first_slice, last_slice)
 
-        print(array.shape)
-
         if self.ewald_potential.plane != 'xy':
             axes = plane_to_axes(self.ewald_potential.plane)
             array = np.moveaxis(array, axes[:2], (0, 1))
-
-        print(array.shape)
-
-        print(self.ewald_potential._sliced_atoms.atoms.cell)
 
         array = solve_point_charges(self.ewald_potential._sliced_atoms.atoms,
                                     array=-array,
