@@ -170,6 +170,10 @@ class ChargeDensityPotential(PotentialBuilder):
 
         self._grid = self._ewald_potential.grid
 
+    @property
+    def frozen_phonons(self):
+        return self.ewald_potential.frozen_phonons
+
     def _copy_as_dict(self, copy_atoms: bool = True, copy_charge_density: bool = True):
         kwargs = {'gpts': self.gpts,
                   'sampling': self.sampling,
