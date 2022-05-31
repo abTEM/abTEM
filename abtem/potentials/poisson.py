@@ -152,7 +152,6 @@ class ChargeDensityPotential(PotentialBuilder):
 
         # if fft_singularities and ((box is not None) or (origin != (0., 0., 0.)) or (plane != 'xy')):
         #    raise NotImplementedError()
-
         ewald_parametrization = EwaldParametrization(width=1)
 
         self._ewald_potential = Potential(atoms=atoms,
@@ -276,7 +275,10 @@ class ChargeDensityPotential(PotentialBuilder):
         def charge_density_potential(*args, **kwargs):
             kwargs.update(args[0])
             kwargs['exit_planes'] = args[1].item()
+            kwargs['slice_thickness'] = kwargs['slice_thickness'][0]
+
             potential = ChargeDensityPotential(**kwargs)
+
             arr = np.empty((1,), dtype=object)
             arr.itemset(potential)
             return arr
