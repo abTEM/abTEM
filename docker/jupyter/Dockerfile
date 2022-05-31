@@ -13,6 +13,8 @@ RUN /opt/conda/bin/pip install --upgrade setuptools
 RUN /opt/conda/bin/pip install -r requirements.txt
 RUN /opt/conda/bin/pip install .
 
+ENV GPAW_SETUP_PATH=/src/docker/jupyter/gpaw-setups-0.9.20000
+
 RUN jupyter labextension install dask-labextension
 
 USER ${NB_UID}
