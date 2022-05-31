@@ -941,6 +941,7 @@ class Probe(WavesBuilder):
                  tilt: Tuple[float, float] = (0., 0.),
                  device: str = None,
                  semiangle_cutoff: float = 30.,
+                 taper=0.,
                  aperture=None,
                  aberrations: Union[Aberrations, dict] = None,
                  extra_transforms=None,
@@ -949,7 +950,7 @@ class Probe(WavesBuilder):
         self._accelerator = Accelerator(energy=energy)
 
         if aperture is None:
-            aperture = Aperture(semiangle_cutoff=semiangle_cutoff, normalize=normalize)
+            aperture = Aperture(semiangle_cutoff=semiangle_cutoff, taper=taper, normalize=normalize)
 
         aperture._accelerator = self._accelerator
 
