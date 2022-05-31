@@ -178,7 +178,7 @@ class ChargeDensityPotential(PotentialBuilder):
     def _copy_as_dict(self, copy_atoms: bool = True, copy_charge_density: bool = True):
         kwargs = {'gpts': self.gpts,
                   'sampling': self.sampling,
-                  'slice_thickness': self.slice_thickness,
+                  'slice_thickness': self.ewald_potential.slice_thickness,
                   'plane': self.ewald_potential.plane,
                   'box': self.ewald_potential.box,
                   'origin': self.ewald_potential.origin,
@@ -187,7 +187,7 @@ class ChargeDensityPotential(PotentialBuilder):
                   }
 
         if copy_atoms:
-            kwargs['atoms'] = self.ewald_potential.frozen_phonons
+            kwargs['atoms'] = self.ewald_potential.frozen_phonons.atoms
 
         if copy_charge_density:
             kwargs['charge_density'] = self.charge_density
@@ -284,8 +284,8 @@ class ChargeDensityPotential(PotentialBuilder):
         kwargs = {'gpts': self.gpts,
                   'sampling': self.sampling,
                   'slice_thickness': self.slice_thickness,
-                  'plane': 'xy',
-                  'box': self.box,
+                  'plane': self.ewald_potential.plane,
+                  'box': self.ewald_potential.box,
                   'origin': self.ewald_potential.origin,
                   'device': self.device}
 
