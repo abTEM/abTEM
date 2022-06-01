@@ -689,11 +689,34 @@ class WavesBuilder(WavesLikeMixin):
     def ensemble_axes_metadata(self):
         return self.transforms.ensemble_axes_metadata
 
+    @staticmethod
+    def build_waves_multislice_detect(*args, probe_partial, transform_partial, potential_partial, multislice_func,
+                                      detectors):
+        waves = probe_partial()
+
+        transform = transform_partial[0](*[args[i] for i in transform_partial[1]]).item()
+        waves = transform.apply(waves)
+        waves = waves.ensure_real_space()
+
+        if potential_partial is not None:
+            potential = potential_partial[0](*[args[i] for i in potential_partial[1]]).item()
+            measurements = multislice_func(waves,
+                                           potential=potential,
+                                           detectors=detectors,
+                                           keep_ensemble_dims=True)
+        else:
+            measurements = tuple(detector.detect(waves) for detector in detectors)
+
+        arr = np.zeros((1,) * len(args), dtype=object)
+        arr.itemset(measurements)
+        return arr
+
     def lazy_build_multislice_detect(self,
                                      detectors,
                                      max_batch=None,
                                      potential=None,
                                      multislice_func=multislice_and_detect):
+
         chunks = self.transforms.ensemble_chunks(max_batch, base_shape=self.gpts)
         blocks = self.transforms.ensemble_blocks(chunks)
 
@@ -707,40 +730,19 @@ class WavesBuilder(WavesLikeMixin):
             potential_partial = None
             potential_ensemble_dims = 0
 
-        def build_probes(*args, probe_partial, transform_partial, potential_partial):
-            waves = probe_partial()
-
-            transform = transform_partial[0](*[args[i] for i in transform_partial[1]]).item()
-            waves = transform.apply(waves)
-            waves = waves.ensure_real_space()
-
-            if potential_partial is not None:
-                potential = potential_partial[0](*[args[i] for i in potential_partial[1]]).item()
-                measurements = multislice_func(waves,
-                                               potential=potential,
-                                               detectors=detectors,
-                                               keep_ensemble_dims=True)
-            else:
-                measurements = tuple(detector.detect(waves) for detector in detectors)
-
-            arr = np.zeros((1,) * len(args), dtype=object)
-            arr.itemset(measurements)
-            return arr
-
         transform_partial = self.transforms.ensemble_partial(), range(potential_ensemble_dims,
                                                                       potential_ensemble_dims +
                                                                       self.transforms.ensemble_dims)
 
-        partial_build_probes = partial(build_probes,
+        partial_build_probes = partial(self.build_waves_multislice_detect,
                                        probe_partial=self.base_waves_partial(),
                                        transform_partial=transform_partial,
                                        potential_partial=potential_partial,
+                                       multislice_func=multislice_func,
+                                       detectors=detectors
                                        )
 
-        array = ensemble_blockwise(partial_build_probes,
-                                   blocks,
-                                   chunks,
-                                   )
+        array = ensemble_blockwise(partial_build_probes, blocks, chunks)
 
         return _get_lazy_measurements_from_arrays(array, waves=self, detectors=detectors, potential=potential)
 
