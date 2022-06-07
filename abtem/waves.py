@@ -329,6 +329,17 @@ class Waves(_WavesLike):
         """Array representing the wave functions."""
         return self._array
 
+    def as_complex_image(self):
+        """
+        The wave function as a complex measurement.
+        """
+
+        calibrations = calibrations_from_grid(self.grid.gpts, self.grid.sampling, ['x', 'y'])
+        array = self.array
+
+        calibrations = (None,) * (len(array.shape) - 2) + calibrations
+        return Measurement(array, calibrations)
+
     def intensity(self) -> Measurement:
         """
         Calculate the intensity of the wave functions at the image plane.
@@ -688,7 +699,6 @@ class PlaneWave(_WavesLike):
         self.grid.check_is_defined()
         array = xp.ones((self.gpts[0], self.gpts[1]), dtype=xp.complex64)
         # array = array / np.sqrt(np.prod(array.shape))
-
 
         return Waves(array, extent=self.extent, energy=self.energy)
 

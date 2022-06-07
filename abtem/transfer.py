@@ -3,6 +3,8 @@ from collections import defaultdict
 from typing import Mapping, Union
 
 import numpy as np
+
+from abtem.measure import calibrations_from_grid
 from abtem.base_classes import HasAcceleratorMixin, HasEventMixin, Accelerator, watched_method, watched_property, Event, \
     Grid
 from abtem.device import get_array_module, get_device_function
@@ -428,6 +430,18 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
                 raise RuntimeError()
 
             return waves.apply_ctf(self)
+
+    def as_complex_image(self, grid: Grid) -> Measurement:
+        """ Return the Contrast transfer function as a complex image """
+
+        calibrations = calibrations_from_grid(grid.gpts,
+                                              grid.sampling,
+                                              names=['alpha_x', 'alpha_y'],
+                                              units='mrad',
+                                              scale_factor=self.wavelength * 1000,
+                                              fourier_space=True)
+        array = np.fft.fftshift(self.evaluate_on_grid(grid.gpts, grid.extent))
+        return Measurement(array, calibrations)
 
     def interact(self, max_semiangle: float = None, phi: float = 0., sliders=None, throttling=False):
         from abtem.visualize.interactive.utils import quick_sliders, throttle

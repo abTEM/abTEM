@@ -12,7 +12,7 @@ from matplotlib.patches import Circle
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import pdist
 
-from abtem.visualize.utils import domain_coloring
+from abtem.visualize.utils import domain_coloring, add_domain_coloring_cbar
 from abtem.visualize.utils import format_label
 
 #: Array to facilitate the display of cell boundaries.
@@ -296,7 +296,7 @@ def show_measurement_2d(measurement,
         array = measurement.array[:, :, :]
 
     if np.iscomplexobj(array):
-        array = domain_coloring(array)
+        array = domain_coloring(array, vmin=vmin, vmax=vmax)
 
     if power != 1:
         array = array ** power
@@ -327,12 +327,15 @@ def show_measurement_2d(measurement,
                    **kwargs)
 
     if cbar:
-        if cbar_label is None:
-            cbar_label = format_label(measurement)
+        if len(array.shape) == 3:
+            add_domain_coloring_cbar(ax, vmin=vmin, vmax=vmax)
+        else:
+            if cbar_label is None:
+                cbar_label = format_label(measurement)
 
-        cax = plt.colorbar(im, ax=ax, label=cbar_label)
-        if discrete_cmap:
-            cax.set_ticks(ticks=np.arange(np.min(array), np.max(array) + 1))
+            cax = plt.colorbar(im, ax=ax, label=cbar_label)
+            if discrete_cmap:
+                cax.set_ticks(ticks=np.arange(np.min(array), np.max(array) + 1))
 
     if x_label is None:
         x_label = format_label(calibrations[-2])
