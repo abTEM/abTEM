@@ -54,6 +54,8 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         The 1/e width image deflections due to vibrations and thermal magnetic noise [Å].
     energy: float
         The electron energy of the wave functions this contrast transfer function will be applied to [eV].
+    phase_shift : float, optional
+        A constant phase shift [radians].
     parameters: dict
         Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in Å
         and angles should be given in radians.
@@ -73,8 +75,8 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
                  angular_spread: float = 0.,
                  gaussian_spread: float = 0.,
                  energy: float = None,
+                 phase_shift: float = 0.,
                  parameters: Mapping[str, float] = None,
-                 aperture=None,
                  **kwargs):
 
         for key in kwargs.keys():
@@ -93,11 +95,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         self._gaussian_spread = gaussian_spread
 
         self._parameters = dict(zip(polar_symbols, [0.] * len(polar_symbols)))
-
-        self._aperture = aperture
-
-        if self._aperture is not None:
-            self._aperture.accelerator.match(self)
+        self._phase_shift = phase_shift
 
         if parameters is None:
             parameters = {}
@@ -222,9 +220,6 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
                           alpha: Union[float, np.ndarray],
                           phi: Union[float, np.ndarray] = None) -> Union[float, np.ndarray]:
 
-        if self._aperture is not None:
-            return self._aperture.evaluate(alpha, phi)
-
         xp = get_array_module(alpha)
         semiangle_cutoff = self.semiangle_cutoff / 1000
 
@@ -318,7 +313,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
                        p['C54'] * xp.cos(4 * (phi - p['phi54'])) +
                        p['C56'] * xp.cos(6 * (phi - p['phi56']))))
 
-        array = 2 * xp.pi / self.wavelength * array
+        array = 2 * xp.pi / self.wavelength * array + self._phase_shift
         return array
 
     def evaluate_aberrations(self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]) -> \
@@ -330,7 +325,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
     def evaluate(self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
         array = self.evaluate_aberrations(alpha, phi)
 
-        if (self.semiangle_cutoff < np.inf) or (self._aperture is not None):
+        if self.semiangle_cutoff < np.inf:
             array *= self.evaluate_aperture(alpha, phi)
 
         if self.focal_spread > 0.:
