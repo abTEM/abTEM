@@ -14,7 +14,7 @@ from abtem.core.fft import fft_crop
 from abtem.potentials.parametrizations import EwaldParametrization
 from abtem.potentials.potentials import Potential, AbstractPotential, PotentialArray, PotentialBuilder
 from abtem.potentials.temperature import MDFrozenPhonons, AbstractFrozenPhonons
-from abtem.structures.orthogonal import plane_to_axes
+from abtem.structures.structures import plane_to_axes
 from abtem.structures.slicing import _validate_slice_thickness
 import dask.array as da
 
@@ -275,8 +275,6 @@ class ChargeDensityPotential(PotentialBuilder):
         def charge_density_potential(*args, **kwargs):
             kwargs.update(args[0])
             kwargs['exit_planes'] = args[1].item()
-            kwargs['slice_thickness'] = kwargs['slice_thickness'][0]
-
             potential = ChargeDensityPotential(**kwargs)
 
             arr = np.empty((1,), dtype=object)
@@ -285,7 +283,7 @@ class ChargeDensityPotential(PotentialBuilder):
 
         kwargs = {'gpts': self.gpts,
                   'sampling': self.sampling,
-                  'slice_thickness': self.slice_thickness,
+                  'slice_thickness': self.ewald_potential.slice_thickness,
                   'plane': self.ewald_potential.plane,
                   'box': self.ewald_potential.box,
                   'origin': self.ewald_potential.origin,

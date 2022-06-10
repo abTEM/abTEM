@@ -94,30 +94,31 @@ def _get_lazy_measurements_from_arrays(arrays,
 
 class Waves(HasDaskArray, WavesLikeMixin):
     """
-    Waves object
-
-    The waves object can define a batch of arbitrary 2D wave functions defined by a complex numpy or cupy array.
+    The Waves can define a batch of arbitrary 2D wave functions defined by a complex numpy or cupy array.
 
     Parameters
     ----------
     array : array
-        Complex array defining the one or more 2d wave functions.
-    extent : one or two float
-        Lateral extent of wave function [Å].
-    sampling : one or two float
-        Lateral sampling of wave functions [1 / Å].
+        Complex array defining one or more 2d wave functions. The second-to-last and last dimensions are the wave
+        function y and x axis, respectively.
     energy : float
         Electron energy [eV].
-    tilt : two float
-        Small angle beam tilt [mrad].
+    extent : one or two float
+        Extent of wave functions in x and y [Å].
+    sampling : one or two float
+        Sampling of wave functions in x and y [1 / Å].
+    tilt : two float, optional
+        Small angle beam tilt [mrad]. Default is (0., 0.).
+    fourier_space : bool, optional
+        If True, the wave functions are assumed to be represented in Fourier space instead of real space.
     antialias_cutoff_gpts : two int, optional
         Shape of rectangle defining the maximum
-        Assumed antialiasing aperture as a fraction of the real space Nyquist frequency. Default is 2/3.
+
     metadata : dict
         A dictionary defining simulation metadata. All items will be added to the metadata of measurements derived from
         the waves.
     ensemble_axes_metadata : list of AxesMetadata
-        Metadata associated with an axis of
+        Metadata associated with an ensemble axis.
     """
 
     def __init__(self,

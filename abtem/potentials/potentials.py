@@ -206,33 +206,58 @@ class PotentialBuilder(AbstractPotential):
 
 class Potential(PotentialBuilder):
     """
-    Potential object.
-
-    The potential object is used to calculate the electrostatic potential of a set of atoms represented by an ASE atoms
+    The Potential is used to calculate the electrostatic potential of a set of atoms represented by an ASE atoms
     object. The potential is calculated with the Independent Atom Model (IAM) using a user-defined parametrization
     of the atomic potentials.
 
     Parameters
     ----------
     atoms : Atoms or FrozenPhonons
-        Atoms or FrozenPhonons defining the atomic configuration(s) used in the IAM of the electrostatic potential(s).
+        Atoms or FrozenPhonons defining the atomic configuration(s) used in the independent atom model for calculating
+        the electrostatic potential(s).
     gpts : one or two int, optional
-        Number of grid points describing each slice of the potential.
+        Number of grid points in x and y describing each slice of the potential. Provide either "sampling" or "gpts".
     sampling : one or two float, optional
-        Lateral sampling of the potential [1 / Å].
+        Sampling of the potential in x and y [1 / Å]. Provide either "sampling" or "gpts".
     slice_thickness : float or sequence of float, optional
         Thickness of the potential slices in Å. If given as a float the number of slices are calculated by dividing the
         slice thickness into the z-height of supercell.
-        The slice thickness may be as a sequence of values for each slice, in which case an error will be thrown is the
-        sum of slice thicknesses is not equal to the z-height of the supercell.
+        The slice thickness may be given as a sequence of values for each slice, in which case an error will be thrown
+        if the sum of slice thicknesses is not equal to the height of the atoms.
         Default is 0.5 Å.
     parametrization : 'lobato' or 'kirkland', optional
         The potential parametrization describes the radial dependence of the potential for each element. Two of the
         most accurate parametrizations are available by Lobato et. al. and Kirkland. The abTEM default is 'lobato'.
         See the citation guide for references.
-    projection : 'finite' or 'infinite'
+    projection : 'finite' or 'infinite', optional
         If 'finite' the 3d potential is numerically integrated between the slice boundaries. If 'infinite' the infinite
-        potential projection of each atom will be assigned to a single slice.
+        potential projection of each atom will be assigned to a single slice. Default is 'infinite'.
+    exit_planes : int or tuple of int, optional
+        The `exit_planes` argument can be used to calculate thickness series.
+        Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an
+        exit plane is desired, and hence during a multislice simulation a measurement is created. If `exit_planes` is
+        an integer a measurement will be collected every `exit_planes` number of slices.
+    plane : str or two tuples of three float, optional
+        The plane relative to the provided Atoms mapped to xy plane of the Potential, i.e. provided plane is
+        perpendicular to the propagation direction. If string, it must be a combination of two of 'x', 'y' and 'z',
+        the default value 'xy' indicates that potential slices are cuts the 'xy'-plane of the Atoms.
+        The plane may also be specified with two arbitrary 3d vectors, which are mapped to the x and y directions of
+        the potential, respectively. The length of the vectors has influence. If the vectors are not perpendicular,
+        the second vector is rotated in the plane to become perpendicular. Providing a value of
+        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
+    origin : three float, optional
+        The origin relative to the provided Atoms mapped to the origin of the Potential. This is equivalent to shifting
+        the atoms
+        The default is (0., 0., 0.).
+    box : three float, optional
+        The extent of the potential in x, y and z. If not given this is determined from the Atoms. If the box size does
+        not match an integer number of the atoms supercell, an affine transformation may be necessary to preserve
+        periodicity, determined by the `periodic` keyword.
+    periodic : bool, True
+        If a transformation of the atomic structure is required, `periodic` determines how the atomic structure is
+        transformed. If True, the periodicity of the Atoms is preserved, which may require applying a small affine
+        transformation to the atoms. If False, the transformed potential is effectively cut out of a larger repeated
+        potential, which may not preserve periodicity.
     device : str, optional
         The device used for calculating the potential. The default is determined by the user configuration file.
     cutoff_tolerance : float, optional
@@ -262,12 +287,12 @@ class Potential(PotentialBuilder):
             try:
                 parametrization = parametrizations[parametrization]()
             except KeyError:
-                raise RuntimeError()
+                raise ValueError()
 
         self._parametrization = parametrization
 
         if projection not in ('finite', 'infinite'):
-            raise RuntimeError('Projection must be "finite" or "infinite"')
+            raise ValueError('projection must be "finite" or "infinite"')
 
         if not hasattr(atoms, 'randomize'):
             self._frozen_phonons = FrozenPhonons(atoms, sigmas=0., num_configs=1)
@@ -283,7 +308,7 @@ class Potential(PotentialBuilder):
             box = tuple(best_orthogonal_box(cell))
 
             if not periodic and projection == 'infinite':
-                raise RuntimeError()
+                raise ValueError('non-periodic potentials are not available with infinite projection integrals')
 
         if box is None:
             box = tuple(np.diag(atoms.cell))
@@ -442,6 +467,7 @@ class Potential(PotentialBuilder):
                                  extent=self.extent)
 
     def _prepare_atoms_infinite(self):
+
         atoms = self.frozen_phonons.atoms
 
         if tuple(np.diag(atoms.cell)) != self.box:
@@ -709,7 +735,6 @@ class CrystalPotential(AbstractPotential):
         return blocks, self._exit_plane_blocks(chunks[1:])
 
     def ensemble_partial(self):
-
         def crystal_potential(*args, **kwargs):
             potential_unit = args[0].item()
             exit_planes = args[1].item()

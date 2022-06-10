@@ -43,6 +43,24 @@ class FresnelPropagator(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, Has
                  energy: float = None,
                  tilt: Tuple[float, float] = (0., 0.),
                  device: str = 'cpu'):
+        """
+        The FresnelPropagator is used for propagating Waves using the near-field approximation (Fresnel diffraction).
+
+        Parameters
+        ----------
+        extent : one or two float
+            Extent of Fresnel Propagator in x and y [Å]. Should match the propagated Waves.
+        gpts : one or two int, optional
+            Number of grid points in x and y describing the Fresnel Propagator. Should match the propagated Waves.
+        sampling : one or two float
+            Sampling of Fresnel Propagator in x and y [1 / Å]. Should match the propagated Waves.
+        thickness : float
+
+        energy :
+        tilt :
+        device :
+        """
+
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
         self._beam_tilt = BeamTilt(tilt=tilt)
@@ -106,6 +124,7 @@ def multislice_step(waves: 'Waves',
                     antialias_aperture: AntialiasAperture,
                     conjugate: bool = False,
                     transpose: bool = False):
+
     if waves.device != potential_slice.device:
         potential_slice = potential_slice.copy(device=waves.device)
 
@@ -162,33 +181,33 @@ def multislice_and_detect(waves: 'Waves',
                           start: int = 0,
                           stop: int = None,
                           keep_ensemble_dims: bool = True) -> Tuple[AbstractMeasurement]:
-    #     """
-    #     Run the multislice algorithm given a batch of wave functions and a potential.
-    #
-    #     Parameters
-    #     ----------
-    #     waves : Waves
-    #         A batch of wave functions as a Waves type object.
-    #     potential : AbstractPotential
-    #         A potential as an AbstractPotential type object.
-    #     propagator : FresnelPropagator, optional
-    #         A fresnel propapgator type matching the wave functions. The main reason for using this argument is to reuse
-    #         a previously calculated propagator. If not provided a new propagator is created.
-    #     antialias_aperture : AntialiasAperture, optional
-    #         An antialias aperture type matching the wave functions. The main reason for using this argument is to reuse
-    #         a previously calculated antialias aperture. If not provided a new antialias aperture is created.
-    #     start : int
-    #         First slice index for running the multislice algorithm. Default is first slice of the potential.
-    #     stop : int
-    #         Last slice for running the multislice algorithm. If smaller than start the multislice algorithm will run
-    #         in the reverse direction. Default is last slice of the potential.
-    #     conjugate : bool
-    #         I True, run the multislice algorithm using the conjugate of the transmission function
-    #
-    #     Returns
-    #     -------
-    #     exit_waves : Waves
-    #     """
+    """
+    Run the multislice algorithm given a batch of wave functions and a potential.
+
+    Parameters
+    ----------
+    waves : Waves
+        A batch of wave functions as a Waves type object.
+    potential : AbstractPotential
+        A potential as an AbstractPotential type object.
+    propagator : FresnelPropagator, optional
+        A fresnel propapgator type matching the wave functions. The main reason for using this argument is to reuse
+        a previously calculated propagator. If not provided a new propagator is created.
+    antialias_aperture : AntialiasAperture, optional
+        An antialias aperture type matching the wave functions. The main reason for using this argument is to reuse
+        a previously calculated antialias aperture. If not provided a new antialias aperture is created.
+    start : int
+        First slice index for running the multislice algorithm. Default is first slice of the potential.
+    stop : int
+        Last slice for running the multislice algorithm. If smaller than start the multislice algorithm will run
+        in the reverse direction. Default is last slice of the potential.
+    conjugate : bool
+        I True, run the multislice algorithm using the conjugate of the transmission function
+
+    Returns
+    -------
+    exit_waves : Waves
+    """
 
 
     if potential.num_frozen_phonons > 1:
