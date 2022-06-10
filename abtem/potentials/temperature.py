@@ -239,8 +239,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
     def ensemble_blocks(self, chunks: int = 1):
         chunks = validate_chunks(self.ensemble_shape, chunks)
 
-        random_state = dask.delayed(self.random_state)
-        atoms = dask.delayed(self.atoms)
+
 
         def frozen_phonons(**kwargs):
             arr = np.empty((1,), dtype=object)
@@ -249,6 +248,9 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
         array = []
         for chunk in chunks[0]:
+            random_state = dask.delayed(self.random_state)
+            atoms = dask.delayed(self.atoms)
+
             delayed_frozen_phonon = dask.delayed(frozen_phonons)(atoms=atoms,
                                                                  sigmas=self.sigmas,
                                                                  num_configs=chunk,

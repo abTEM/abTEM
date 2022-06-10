@@ -16,6 +16,7 @@ from abtem.core.antialias import AntialiasAperture
 from abtem.core.axes import AxisMetadata, axis_from_dict, axis_to_dict
 from abtem.core.backend import get_array_module, validate_device, copy_to_device, device_name_from_array_module
 from abtem.core.blockwise import Ensemble, ensemble_blockwise
+from abtem.core.intialize import initialize
 from abtem.ionization.multislice import transition_potential_multislice_and_detect
 from abtem.core.complex import abs2
 from abtem.core.dask import HasDaskArray, validate_lazy, ComputableList, validate_chunks
@@ -43,10 +44,10 @@ def stack_waves(waves, axes_metadata):
     return waves[0].__class__(**d)
 
 
-def _get_lazy_measurements_from_arrays(arrays,
-                                       waves,
-                                       detectors,
-                                       potential: AbstractPotential = None):
+def finalize_lazy_measurements(arrays,
+                               waves,
+                               detectors,
+                               extra_ensemble_axes_metadata=None):
     def extract_measurement(array, index):
         array = array.item()[index].array
         return array
@@ -71,8 +72,8 @@ def _get_lazy_measurements_from_arrays(arrays,
 
         axes_metadata = []
 
-        if potential is not None:
-            axes_metadata += potential.ensemble_axes_metadata
+        if extra_ensemble_axes_metadata is not None:
+            axes_metadata += extra_ensemble_axes_metadata
 
         axes_metadata += waves.ensemble_axes_metadata
 
@@ -151,6 +152,9 @@ class Waves(HasDaskArray, WavesLikeMixin):
         self._ensemble_axes_metadata = ensemble_axes_metadata
         self._metadata = metadata
         self._check_axes_metadata()
+
+    def rechunk(self, chunks):
+        self._array = self._array.rechunk(chunks)
 
     def fourier_space_measurements(self):
         waves = self.ensure_fourier_space(in_place=False)
@@ -294,7 +298,18 @@ class Waves(HasDaskArray, WavesLikeMixin):
         return Images(abs2(self.array), sampling=self.sampling, ensemble_axes_metadata=self.ensemble_axes_metadata,
                       metadata=self.metadata)
 
-    def downsample(self, max_angle: Union[str, float] = 'cutoff', normalization: str = 'values') -> 'Waves':
+    def _adjusted_antialias_cutoff_gpts(self, new_gpts):
+
+        if new_gpts == self.antialias_cutoff_gpts:
+            return new_gpts
+
+        else:
+            return (int(np.floor(self.antialias_cutoff_gpts[0] * new_gpts[0] / self.gpts[0])),
+                    int(np.floor(self.antialias_cutoff_gpts[1] * new_gpts[1] / self.gpts[1])))
+
+    def downsample(self,
+                   max_angle: Union[str, float] = 'cutoff',
+                   normalization: str = 'values') -> 'Waves':
         """
         Downsample the wave function to a lower maximum scattering angle.
 
@@ -335,6 +350,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
         d = self._copy_as_dict(copy_array=False)
         d['array'] = array
+        #d['antialias_cutoff_gpts'] = self._adjusted_antialias_cutoff_gpts(gpts)
         d['sampling'] = (self.extent[0] / gpts[0], self.extent[1] / gpts[1])
         return self.__class__(**d)
 
@@ -529,7 +545,10 @@ class Waves(HasDaskArray, WavesLikeMixin):
                                   concatenate=True,
                                   meta=np.array((), dtype=np.complex64))
 
-            return _get_lazy_measurements_from_arrays(arrays, self, detectors, potential=potential)
+            return finalize_lazy_measurements(arrays,
+                                              self,
+                                              detectors,
+                                              extra_ensemble_axes_metadata=potential.ensemble_shape)
         else:
 
             # if potential.num_frozen_phonons > 1:
@@ -689,6 +708,10 @@ class WavesBuilder(WavesLikeMixin):
     def ensemble_axes_metadata(self):
         return self.transforms.ensemble_axes_metadata
 
+    @property
+    def ensemble_shape(self):
+        return self.transforms.ensemble_shape
+
     @staticmethod
     def build_waves_multislice_detect(*args, probe_partial, transform_partial, potential_partial, multislice_func,
                                       detectors):
@@ -726,9 +749,11 @@ class WavesBuilder(WavesLikeMixin):
             chunks = potential.default_ensemble_chunks + chunks
             potential_ensemble_dims = potential.ensemble_dims
             potential_partial = potential_partial, range(potential_ensemble_dims)
+            extra_ensemble_axes_metadata = potential.ensemble_axes_metadata
         else:
             potential_partial = None
             potential_ensemble_dims = 0
+            extra_ensemble_axes_metadata = None
 
         transform_partial = self.transforms.ensemble_partial(), range(potential_ensemble_dims,
                                                                       potential_ensemble_dims +
@@ -744,7 +769,10 @@ class WavesBuilder(WavesLikeMixin):
 
         array = ensemble_blockwise(partial_build_probes, blocks, chunks)
 
-        return _get_lazy_measurements_from_arrays(array, waves=self, detectors=detectors, potential=potential)
+        return finalize_lazy_measurements(array,
+                                          waves=self,
+                                          detectors=detectors,
+                                          extra_ensemble_axes_metadata=extra_ensemble_axes_metadata)
 
 
 class PlaneWave(WavesBuilder):
@@ -1200,6 +1228,7 @@ class Probe(WavesBuilder):
         -------
         #list_of_measurements : measurement, wave functions, list of measurements
         """
+        initialize()
 
         if scan is None:
             scan = GridScan()

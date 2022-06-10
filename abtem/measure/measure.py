@@ -144,7 +144,7 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
 
     def __init__(self, array, ensemble_axes_metadata, metadata, allow_complex=False,
                  allow_base_axis_chunks=False):
-        self._array = array
+        #
 
         if ensemble_axes_metadata is None:
             ensemble_axes_metadata = []
@@ -156,7 +156,7 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
         self._metadata = metadata
 
         super().__init__(array)
-        self._check_axes_metadata()
+        #self._check_axes_metadata()
 
         # if len(array.shape) < len(self.base_shape):
         #     raise RuntimeError(f'array dim smaller than base dim of measurement type {self.__class__}')
@@ -513,6 +513,7 @@ class Images(AbstractMeasurement):
             raise RuntimeError()
 
         scan_axes_metadata = [axes_metadata[i] for i in real_space_axes[-2:]]
+
         other_axes_metadata = [axes_metadata[i] for i, metadata in enumerate(axes_metadata)
                                if i not in real_space_axes[-2:]]
 

@@ -1,135 +1,131 @@
-# def remove_tilt(self):
-#     xp = get_array_module(self.array)
-#     if self.is_lazy:
-#         array = self.array.map_blocks(remove_tilt,
-#                                       planewave_cutoff=self.planewave_cutoff,
-#                                       extent=self.extent,
-#                                       gpts=self.gpts,
-#                                       energy=self.energy,
-#                                       interpolation=self.interpolation,
-#                                       partitions=self.partitions,
-#                                       accumulated_defocus=self.accumulated_defocus,
-#                                       meta=xp.array((), dtype=xp.complex64))
-#     else:
-#         array = remove_tilt(self.array,
-#                             planewave_cutoff=self.planewave_cutoff,
-#                             extent=self.extent,
-#                             gpts=self.gpts,
-#                             energy=self.energy,
-#                             interpolation=self.interpolation,
-#                             partitions=self.partitions,
-#                             accumulated_defocus=self.accumulated_defocus)
-#
-#     self._array = array
-#     return self
-#
-#
-# def interpolate_full(self, chunks):
-#     xp = get_array_module(self.array)
-#     self.remove_tilt()
-#     self.rechunk()
-#
-#     wave_vectors = prism_wave_vectors(self.planewave_cutoff, self.extent, self.energy, self.interpolation)
-#
-#     arrays = []
-#     for start, end in generate_chunks(len(wave_vectors), chunks=chunks):
-#         array = dask.delayed(interpolate_full)(array=self.array,
-#                                                parent_wave_vectors=self.wave_vectors,
-#                                                wave_vectors=wave_vectors[start:end],
-#                                                extent=self.extent,
-#                                                gpts=self.gpts,
-#                                                energy=self.energy,
-#                                                defocus=self.accumulated_defocus)
-#
-#         array = da.from_delayed(array, shape=(end - start,) + self.gpts, dtype=xp.complex64)
-#         array = array * np.sqrt(len(self) / len(wave_vectors))
-#         arrays.append(array)
-#
-#     array = da.concatenate(arrays)
-#     d = self._copy_as_dict(copy_array=False)
-#     d['array'] = array
-#     d['wave_vectors'] = wave_vectors
-#     d['partitions'] = None
-#     return self.__class__(**d)
-#
-#
-# extent = (self.interpolated_gpts[0] * self.sampling[0],
-#           self.interpolated_gpts[1] * self.sampling[1])
-#
-# wave_vectors = prism_wave_vectors(self.planewave_cutoff, extent, self.energy, (1, 1))
-#
-# ctf = ctf.copy()
-# ctf.defocus = -self.accumulated_defocus
-#
-# basis = beamlet_basis(ctf,
-#                       self.wave_vectors,
-#                       wave_vectors,
-#                       self.interpolated_gpts,
-#                       self.sampling).astype(np.complex64)
-#
-# else:
-# wave_vectors = partitioned_prism_wave_vectors(self.planewave_cutoff, self.extent, self.energy,
-#                                               self.partitions, num_points_per_ring=6, xp=xp)
-#
-#
-#
-#
-# def _reduce_partitioned(s_matrix, basis, positions: np.ndarray, axes_metadata) -> Waves:
-#     if len(axes_metadata) != (len(positions.shape) - 1):
-#         raise RuntimeError()
-#
-#     shifts = np.round(positions.reshape((-1, 2)) / s_matrix.sampling).astype(int)
-#     shifts -= np.array(s_matrix.crop_offset)
-#     shifts -= (np.array(s_matrix.interpolated_gpts)) // 2
-#
-#     # basis = np.moveaxis(basis, 0, 2).copy()
-#     # array = np.moveaxis(s_matrix.array, 0, 2).copy()
-#
-#     import warnings
-#     warnings.simplefilter('ignore', category=NumbaPerformanceWarning)
-#
-#     waves = np.zeros((len(shifts),) + s_matrix.interpolated_gpts, dtype=np.complex64)
-#     reduce_beamlets_nearest_no_interpolation(waves, basis, s_matrix.array, shifts)
-#     waves = waves.reshape(positions.shape[:-1] + waves.shape[-2:])
-#
-#     waves = Waves(waves,
-#                   sampling=s_matrix.sampling,
-#                   energy=s_matrix.energy,
-#                   extra_axes_metadata=axes_metadata,
-#                   antialias_cutoff_gpts=s_matrix.antialias_cutoff_gpts)
-#
-#     return waves
-#
-# # if self.partitions:
-# #     extent = (self.interpolated_gpts[0] * self.sampling[0],
-# #               self.interpolated_gpts[1] * self.sampling[1])
-# #
-# #     wave_vectors = prism_wave_vectors(self.planewave_cutoff, extent, self.energy, (1, 1))
-# #
-# #     ctf = ctf.copy()
-# #     ctf.defocus = -self.accumulated_defocus
-# #
-# #     basis = beamlet_basis(ctf,
-# #                           self.wave_vectors,
-# #                           wave_vectors,
-# #                           self.interpolated_gpts,
-# #                           self.sampling).astype(np.complex64)
-#
-#
-# def linear_scaling_transition_scan(self, scan, collection_angle, transitions, ctf: CTF = None,
-#                                    reverse_multislice=False, lazy=False):
-#     d = self._copy_as_dict(copy_potential=False)
-#     d['potential'] = self.potential
-#     d['planewave_cutoff'] = collection_angle
-#     S2 = self.__class__(**d)
-#
-#     ctf = self._validate_ctf(ctf)
-#     scan = self._validate_positions(positions=scan, ctf=ctf)
-#
-#     if hasattr(transitions, 'get_transition_potentials'):
-#         if lazy:
-#             transitions = dask.delayed(transitions.get_transition_potentials)()
-#         else:
-#             transitions = transitions.get_transition_potentials()
-#
-#     return linear_scaling_transition_multislice(self, S2, scan, transitions, reverse_multislice=reverse_multislice)
+from typing import Tuple
+
+import numba as nb
+import numpy as np
+
+from abtem.core.backend import get_array_module
+from abtem.core.complex import complex_exponential
+from abtem.core.energy import energy2wavelength
+from abtem.core.fft import ifft2
+from abtem.core.grid import spatial_frequencies
+from abtem.waves.natural_neighbors import pairwise_weights
+from abtem.waves.transfer import CTF
+
+def beamlet_weights(parent_wave_vectors, wave_vectors, gpts, sampling):
+    kx, ky = spatial_frequencies(gpts, sampling)
+    kx, ky = np.meshgrid(kx, ky, indexing='ij')
+    k = np.asarray((kx.ravel(), ky.ravel())).T
+
+    # import matplotlib.pyplot as plt
+    # plt.figure(figsize=(12,12))
+    # plt.plot(*k.T,'r.')
+    # plt.plot(*wave_vectors.T, 'b.')
+    # plt.show()
+    # sss
+
+    indices = np.argmax(np.all(np.isclose(wave_vectors[:, None, :], k), axis=2), axis=1)
+    weights = np.zeros((len(parent_wave_vectors),) + kx.shape)
+
+    point_weights = pairwise_weights(parent_wave_vectors, wave_vectors)
+    for i, j in enumerate(indices):
+        k, m = np.unravel_index(j, kx.shape)
+        weights[:, k, m] = point_weights[:, i]
+
+    return weights
+
+
+def beamlet_basis(ctf, parent_wave_vectors, wave_vectors, gpts, sampling):
+    basis = ctf.evaluate_on_grid(gpts=gpts, sampling=sampling)
+    basis = beamlet_weights(parent_wave_vectors, wave_vectors, gpts, sampling) * basis / np.sqrt(len(wave_vectors))
+    basis = ifft2(basis)
+    basis = np.fft.fftshift(basis, axes=(1, 2))
+    return basis
+
+
+def remove_tilt(array, planewave_cutoff, extent, gpts, energy, interpolation, partitions, accumulated_defocus,
+                block_info=None):
+    xp = get_array_module(array)
+
+    if block_info is None:
+        start, end = 0, array.shape[-3]
+    else:
+        start, end = block_info[0]['array-location'][-3]
+
+    if partitions is None:
+        wave_vectors = prism_wave_vectors(planewave_cutoff, extent, energy, interpolation)
+    else:
+        wave_vectors = partitioned_prism_wave_vectors(planewave_cutoff, extent, energy, num_rings=partitions)
+
+    wave_vectors = wave_vectors[start:end]
+
+    wavelength = energy2wavelength(energy)
+
+    alpha = xp.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2) * wavelength
+    phi = xp.arctan2(wave_vectors[:, 0], wave_vectors[:, 1])
+
+    ctf_coefficients = CTF(defocus=accumulated_defocus, energy=energy).evaluate(alpha, phi)
+    ctf_coefficients = np.expand_dims(ctf_coefficients, tuple(range(len(array.shape) - 3)) + (-2, -1))
+
+    array = array * plane_waves(wave_vectors, extent, gpts, reverse=True) * ctf_coefficients
+    return array
+
+
+def interpolate_full(array, parent_wave_vectors, wave_vectors, extent, gpts, energy, defocus=0.):
+    interpolated_array = plane_waves(wave_vectors, extent, gpts)
+
+    weights = pairwise_weights(parent_wave_vectors, wave_vectors)
+
+    alpha = np.sqrt(wave_vectors[:, 0] ** 2 + wave_vectors[:, 1] ** 2) * energy2wavelength(energy)
+    phi = np.arctan2(wave_vectors[:, 0], wave_vectors[:, 1])
+
+    interpolated_array *= CTF(defocus=-defocus, energy=energy).evaluate(alpha, phi)[:, None, None]
+
+    for i, plane_wave in enumerate(interpolated_array):
+        plane_wave *= (array * weights[:, i, None, None]).sum(0)
+
+    return interpolated_array
+
+
+@nb.jit(nopython=True, nogil=True, parallel=True, fastmath=True)
+def reduce_beamlets_nearest_no_interpolation(waves, basis, parent_s_matrix, shifts):
+    assert waves.shape[0] == shifts.shape[0]
+    assert len(shifts.shape) == 2
+    # assert basis.shape == parent_s_matrix.shape
+    # assert waves.shape[1:] == parent_s_matrix.shape[:-1]
+
+    for i in nb.prange(waves.shape[0]):
+        for j in range(waves.shape[1]):
+            for k in range(waves.shape[2]):
+                # waves[i, j, k] = np.dot(basis[j, k, :],
+                #                         parent_s_matrix[
+                #                         (j + shifts[i, 0]) % parent_s_matrix.shape[0],
+                #                         (k + shifts[i, 1]) % parent_s_matrix.shape[1], :])
+                waves[i, j, k] = np.dot(basis[:, j, k],
+                                        parent_s_matrix[:,
+                                        (j + shifts[i, 0]) % parent_s_matrix.shape[1],
+                                        (k + shifts[i, 1]) % parent_s_matrix.shape[2]])
+    return waves
+
+
+
+def partitioned_prism_wave_vectors(cutoff, extent, energy, num_rings, num_points_per_ring=6, xp=np):
+    wavelength = energy2wavelength(energy)
+
+    rings = [xp.array((0., 0.))]
+    if num_rings == 1:
+        raise NotImplementedError()
+
+    n = num_points_per_ring
+    for r in np.linspace(cutoff / (num_rings - 1), cutoff, num_rings - 1):
+        angles = xp.arange(n, dtype=np.int32) * 2 * np.pi / n + np.pi / 2
+        kx = xp.round(r * xp.sin(angles) / 1000. / wavelength * extent[0]) / extent[0]
+        ky = xp.round(r * xp.cos(-angles) / 1000. / wavelength * extent[1]) / extent[1]
+        n += num_points_per_ring
+        rings.append(xp.array([kx, ky]).T)
+
+    return xp.vstack(rings).astype(xp.float32)
+
+
+def array_row_intersection(a, b):
+    tmp = np.all(np.isclose(np.swapaxes(a[:, :, None], 1, 2), b), axis=2)
+    return np.sum(np.cumsum(tmp, axis=0) * tmp == 1, axis=1).astype(bool)

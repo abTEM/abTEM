@@ -12,6 +12,7 @@ from abtem.core.grid import spatial_frequencies, HasGridMixin, Grid
 from abtem.measure.detect import AbstractDetector
 from abtem.measure.measure import AbstractMeasurement
 from abtem.potentials.potentials import AbstractPotential, TransmissionFunction, PotentialArray
+from abtem.waves.base import WavesLikeMixin
 from abtem.waves.tilt import HasBeamTiltMixin, BeamTilt
 
 if TYPE_CHECKING:
@@ -133,27 +134,50 @@ def multislice_step(waves: 'Waves',
     return waves
 
 
-def allocate_multislice_measurements(waves: 'Waves',
-                                     potential: AbstractPotential,
-                                     detectors: List[AbstractDetector]) -> Dict[AbstractDetector, AbstractMeasurement]:
+def allocate_multislice_measurements(waves: 'WavesLikeMixin',
+                                     detectors: List[AbstractDetector],
+                                     extra_ensemble_axes_shape=None,
+                                     extra_ensemble_axes_metadata=None) \
+        -> Dict[AbstractDetector, AbstractMeasurement]:
     measurements = {}
     for detector in detectors:
-        shape = potential.ensemble_shape + waves.ensemble_shape + detector.measurement_shape(waves)
-
         xp = get_array_module(detector.measurement_meta(waves))
-
-        array = xp.zeros(shape, dtype=detector.measurement_dtype)
-
-        axes_metadata = potential.ensemble_axes_metadata + waves.ensemble_axes_metadata + \
-                        detector.measurement_axes_metadata(waves)
 
         measurement_type = detector.measurement_type(waves)
 
+        axes_metadata = waves.ensemble_axes_metadata + detector.measurement_axes_metadata(waves)
+
+        shape = waves.ensemble_shape + detector.measurement_shape(waves)
+
+        if extra_ensemble_axes_shape is not None:
+            assert len(extra_ensemble_axes_shape) == len(extra_ensemble_axes_metadata)
+            shape = extra_ensemble_axes_shape + shape
+            axes_metadata = extra_ensemble_axes_metadata + axes_metadata
+
+        array = xp.zeros(shape, dtype=detector.measurement_dtype)
         measurements[detector] = measurement_type.from_array_and_metadata(array,
                                                                           axes_metadata=axes_metadata,
                                                                           metadata=waves.metadata)
 
     return measurements
+
+
+def multislice(waves, potential, start=0, stop=None):
+    if potential.num_frozen_phonons > 1:
+        raise NotImplementedError
+
+    antialias_aperture = AntialiasAperture(device=get_array_module(waves.array))
+    antialias_aperture.match_grid(waves)
+
+    propagator = FresnelPropagator(device=get_array_module(waves.array), tilt=waves.tilt)
+    propagator.match_waves(waves)
+
+    slice_generator = potential.generate_slices(first_slice=start, last_slice=stop)
+
+    for i, potential_slice in enumerate(slice_generator):
+        waves = multislice_step(waves, potential_slice, propagator, antialias_aperture)
+
+    return waves
 
 
 def multislice_and_detect(waves: 'Waves',
@@ -190,10 +214,8 @@ def multislice_and_detect(waves: 'Waves',
     #     exit_waves : Waves
     #     """
 
-
     if potential.num_frozen_phonons > 1:
         raise NotImplementedError
-        # return multislice_and_detect_with_frozen_phonons(waves, potential, detectors, start=start)
 
     antialias_aperture = AntialiasAperture(device=get_array_module(waves.array))
     antialias_aperture.match_grid(waves)
@@ -203,7 +225,19 @@ def multislice_and_detect(waves: 'Waves',
 
     slice_generator = potential.generate_slices(first_slice=start)
 
-    measurements = allocate_multislice_measurements(waves, potential, detectors)
+    if detectors is None and len(potential.exit_planes) == 1:
+        for i, potential_slice in enumerate(slice_generator):
+            waves = multislice_step(waves, potential_slice, propagator, antialias_aperture)
+
+            if i == potential.exit_planes[-1]:
+                break
+
+        return waves
+
+    measurements = allocate_multislice_measurements(waves,
+                                                    detectors,
+                                                    extra_ensemble_axes_shape=potential.ensemble_shape,
+                                                    extra_ensemble_axes_metadata=potential.ensemble_axes_metadata)
 
     current_slice_index = start
     for detect_index, exit_slice in enumerate(potential.exit_planes):
@@ -214,8 +248,10 @@ def multislice_and_detect(waves: 'Waves',
             current_slice_index += 1
 
         for detector in detectors:
+            indices = (0,) * (len(potential.ensemble_shape) - 1) + (detect_index,)
+
             new_measurement = detector.detect(waves)
-            measurements[detector].array[(0, detect_index)] = new_measurement.array
+            measurements[detector].array[indices] = new_measurement.array
 
     measurements = tuple(measurements.values())
 

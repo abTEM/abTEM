@@ -1,4 +1,5 @@
 """Module to describe electron waves and their propagation."""
+import numbers
 from typing import Union, Tuple, List
 
 import numpy as np
@@ -55,7 +56,7 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAxe
         if angle is None:
             return self.gpts
 
-        elif not isinstance(angle, str):
+        elif isinstance(angle, (numbers.Number, float)):
             return (int(2 * np.ceil(angle / self.angular_sampling[0])) + 1,
                     int(2 * np.ceil(angle / self.angular_sampling[1])) + 1)
 
@@ -65,7 +66,7 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAxe
         elif angle == 'valid':
             return self.antialias_valid_gpts
 
-        raise ValueError()
+        raise ValueError('angle must be a number or one of "cutoff" or "angle"')
 
     @property
     def cutoff_angles(self) -> Tuple[float, float]:

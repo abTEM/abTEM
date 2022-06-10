@@ -165,18 +165,9 @@ class AnnularDetector(AbstractDetector):
 
     def measurement_axes_metadata(self, waves: 'Waves'):
         return []
-        # scan_axes = waves.scan_axes[-2:]
-        # other_axes = [metadata for i, metadata in enumerate(waves.ensemble_axes_metadata) if i not in scan_axes]
-        # scan_axes = [metadata for i, metadata in enumerate(waves.ensemble_axes_metadata) if i in scan_axes]
-        # return other_axes + scan_axes
-
 
     def measurement_shape(self, waves: 'Waves') -> Tuple:
         return ()
-        # scan_axes = waves.scan_axes[-2:]
-        # other_shape = tuple(n for i, n in enumerate(waves.ensemble_axes_shape) if i not in scan_axes)
-        # scan_shape = tuple(n for i, n in enumerate(waves.ensemble_axes_shape) if i in scan_axes)
-        # return other_shape + scan_shape
 
     @property
     def measurement_dtype(self) -> type(np.float32):
@@ -623,6 +614,7 @@ class WavesDetector(AbstractDetector):
         super().__init__(to_cpu=to_cpu, url=url)
 
     def detect(self, waves: 'Waves') -> 'Waves':
+
         if self.to_cpu:
             waves = waves.copy(device='cpu')
         return waves

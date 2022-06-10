@@ -2,13 +2,12 @@ from abc import abstractmethod, ABCMeta
 from numbers import Number
 from typing import Sequence, Union, Tuple
 
+import dask.array as da
 import numpy as np
 
 from abtem.core.axes import LinearAxis
 from abtem.core.backend import validate_device, get_array_module
-from abtem.core.utils import generate_chunks, subdivide_into_chunks
-from abtem.core.dask import Blocks
-import dask.array as da
+from abtem.core.utils import subdivide_into_chunks
 
 
 class Distribution(metaclass=ABCMeta):
@@ -177,7 +176,7 @@ class OneDimensionalGaussianDistribution(OneDimensionalDistributionFromValues):
         xp = get_array_module(device)
         values = xp.linspace(-standard_deviation * sampling_limit,
                              standard_deviation * sampling_limit, num_samples) + center
-        weights = xp.exp(-.5 * values ** 2 / standard_deviation ** 2)
+        weights = xp.exp(-.5 * (values - center) ** 2 / standard_deviation ** 2)
 
         if normalize == 'intensity':
             weights /= np.sqrt((weights ** 2).sum())

@@ -10,6 +10,28 @@ from abtem.core import config
 from abtem.core.dask import validate_chunks
 
 
+def ensemble_chunks(ensembles, max_batch=None, base_shape=None, dtype=None):
+    shape = tuple(itertools.chain(*tuple(ensemble.ensemble_shape for ensemble in ensembles)))
+    chunks = tuple(itertools.chain(*tuple(ensemble.default_ensemble_chunks for ensemble in ensembles)))
+
+    if max_batch == 'auto':
+        max_batch = config.get("dask.chunk-size")
+
+    if base_shape is not None:
+        shape += base_shape
+        chunks += (-1,) * len(base_shape)
+
+        if isinstance(max_batch, int):
+            max_batch = max_batch * reduce(operator.mul, base_shape)
+
+    chunks = validate_chunks(shape, chunks, max_batch, dtype)
+
+    if base_shape is not None:
+        chunks = chunks[:-len(base_shape)]
+
+    return chunks
+
+
 class Ensemble(metaclass=ABCMeta):
 
     @property
@@ -32,7 +54,7 @@ class Ensemble(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def ensemble_blocks(self, chunks):
+    def ensemble_blocks(self, chunks=None):
         pass
 
     @abstractmethod
@@ -72,8 +94,12 @@ class Ensemble(metaclass=ABCMeta):
         #
         # return validate_chunks(shape, chunks, limit=max_batch, dtype=dtype)[:-2]
 
-    def _ensemble_blockwise(self, max_batch):
-        chunks = validate_chunks(self.ensemble_shape, self.default_ensemble_chunks, limit=max_batch)
+    def _ensemble_blockwise(self, chunks=None, max_batch=None):
+        if chunks is None:
+            chunks = validate_chunks(self.ensemble_shape, self.default_ensemble_chunks, limit=max_batch)
+        else:
+            chunks = validate_chunks(self.ensemble_shape, chunks, limit=max_batch)
+
         partial = self.ensemble_partial()
         blocks = self.ensemble_blocks(chunks)
         return ensemble_blockwise(partial, blocks)
@@ -117,28 +143,6 @@ def ensemble_blockwise(partial, blocks, ensemble_chunks=None, base_shape=None, d
                         adjust_chunks=adjust_chunks,
                         new_axes=new_axes,
                         meta=np.array((), dtype=dtype))
-
-
-def ensemble_chunks(ensembles, max_batch=None, base_shape=None, dtype=None):
-    shape = tuple(itertools.chain(*tuple(ensemble.ensemble_shape for ensemble in ensembles)))
-    chunks = tuple(itertools.chain(*tuple(ensemble.default_ensemble_chunks for ensemble in ensembles)))
-
-    if max_batch == 'auto':
-        max_batch = config.get("dask.chunk-size")
-
-    if base_shape is not None:
-        shape += base_shape
-        chunks += (-1,) * len(base_shape)
-
-        if isinstance(max_batch, int):
-            max_batch = max_batch * reduce(operator.mul, base_shape)
-
-    chunks = validate_chunks(shape, chunks, max_batch, dtype)
-
-    if base_shape is not None:
-        chunks = chunks[:-len(base_shape)]
-
-    return chunks
 
 
 def ensemble_blocks(ensembles, chunks):

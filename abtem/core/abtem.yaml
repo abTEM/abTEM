@@ -5,6 +5,11 @@ dask:
   lazy: true
   scheduler: threads
   chunk-size: 128 MB
+  chunk-size-gpu: 512 MB
+cupy:
+  fft-cache-size: 0 MB
 fftw:
   threads: 1
   planning_effort: FFTW_MEASURE
+mkl:
+  threads: 1

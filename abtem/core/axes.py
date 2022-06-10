@@ -2,6 +2,8 @@ import dataclasses
 from dataclasses import dataclass
 from typing import List, Tuple
 
+import numpy as np
+
 
 @dataclass
 class AxisMetadata:
@@ -84,6 +86,10 @@ class PrismPlaneWavesAxis(OrdinalAxis):
 
 def axis_to_dict(axis: AxisMetadata):
     d = dataclasses.asdict(axis)
+    for key, value in d.items():
+        if isinstance(value, np.ndarray):
+            d[key] = tuple(value.tolist())
+
     d['type'] = axis.__class__.__name__
     return d
 
@@ -144,11 +150,9 @@ class HasAxes:
         return indices
 
     def _check_axes_metadata(self):
-        # ssss
-        pass
-        # if hasattr(self, 'array'):
-        #     if len(self.array.shape) != self.num_axes:
-        #         raise RuntimeError(f'{len(self.axes_metadata)} != {self.num_axes}')
+        if hasattr(self, 'array'):
+            if len(self.array.shape) != self.num_axes:
+                raise RuntimeError(f'{len(self.array.shape)} != {self.num_axes}')
 
     @property
     def num_scan_axes(self):
