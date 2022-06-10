@@ -173,11 +173,17 @@ class PotentialBuilder(AbstractPotential):
 
         def build(potential):
             potential = potential.item()
-            return potential.build().array[None, None]
+            indices = (None,) * len(potential.ensemble_shape)
+            return potential.build().array[indices]
 
         if lazy:
-            blocks = self._ensemble_blockwise(1)
-            chunks = blocks.chunks + ((len(self),),) + ((self.gpts[0],), (self.gpts[1],))
+            blocks = self._ensemble_blockwise(self.default_ensemble_chunks)
+
+            chunks = validate_chunks(self.ensemble_shape, (1, -1))
+
+            chunks = chunks + ((len(self),),) + ((self.gpts[0],), (self.gpts[1],))
+
+
             array = blocks.map_blocks(build,
                                       new_axis=(2, 3, 4),
                                       chunks=chunks,
@@ -336,13 +342,6 @@ class Potential(PotentialBuilder):
     @property
     def num_frozen_phonons(self) -> int:
         return len(self.frozen_phonons)
-
-    @property
-    def ensemble_axes_metadata(self):
-        axes_metadata = []
-        axes_metadata += self.frozen_phonons.ensemble_axes_metadata
-        axes_metadata += [ThicknessAxis(values=self.exit_thicknesses)]
-        return axes_metadata
 
     @property
     def slice_thickness(self) -> np.ndarray:
@@ -535,6 +534,13 @@ class Potential(PotentialBuilder):
             raise RuntimeError()
 
     @property
+    def ensemble_axes_metadata(self):
+        axes_metadata = []
+        axes_metadata += self.frozen_phonons.ensemble_axes_metadata
+        axes_metadata += [ThicknessAxis(values=self.exit_thicknesses)]
+        return axes_metadata
+
+    @property
     def ensemble_shape(self) -> Tuple[int, ...]:
         shape = ()
         shape += self.frozen_phonons.ensemble_shape
@@ -547,8 +553,9 @@ class Potential(PotentialBuilder):
 
     def ensemble_blocks(self, chunks=(1, -1)):
         chunks = validate_chunks(self.ensemble_shape, chunks)
-        frozen_phonons_blocks = self.frozen_phonons.ensemble_blocks(chunks[:1])
-        return frozen_phonons_blocks[0], self._exit_plane_blocks(chunks[1:])
+        blocks = self.frozen_phonons.ensemble_blocks(chunks[:1])
+        blocks += self._exit_plane_blocks(chunks[1:]),
+        return blocks
 
     def ensemble_partial(self):
         def potential(*args, potential_kwargs):
