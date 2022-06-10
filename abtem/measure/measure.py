@@ -1388,14 +1388,35 @@ class DiffractionPatterns(AbstractMeasurement):
         axes_metadata = axes_metadata[:-2]
         return cls(array, sampling=sampling, ensemble_axes_metadata=axes_metadata, fftshift=fftshift, metadata=metadata)
 
-    def poisson_noise(self, dose: float, samples: int = 1, seed: int = None, pixel_area: float = None):
+    def poisson_noise(self,
+                      dose_per_area: float = None,
+                      total_dose: float = None,
+                      samples: int = 1,
+                      seed: int = None,
+                      pixel_area: float = None):
 
-        if pixel_area is None and len(self.scan_sampling) == 2:
-            pixel_area = np.prod(self.scan_sampling)
-        elif pixel_area is None:
-            raise RuntimeError()
+        wrong_dose_arg_error = RuntimeError('provide one of "dose_per_area" or "total_dose"')
 
-        return _poisson_noise(self, pixel_area, dose, samples, seed)
+        if dose_per_area is not None:
+            if total_dose is not None:
+                raise wrong_dose_arg_error
+
+            if pixel_area is None and len(self.scan_sampling) == 2:
+                pixel_area = np.prod(self.scan_sampling)
+            elif pixel_area is None:
+                raise RuntimeError('cannot infer ')
+        elif total_dose is not None:
+
+            if dose_per_area is not None:
+                raise wrong_dose_arg_error
+
+            dose_per_area = total_dose
+            pixel_area = 1.
+
+        else:
+            raise wrong_dose_arg_error
+
+        return _poisson_noise(self, pixel_area, dose_per_area, samples, seed)
 
     @property
     def base_axes_metadata(self):
