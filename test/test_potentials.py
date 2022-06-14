@@ -97,7 +97,6 @@ def test_finite_projected_match(Z, slice_thickness, parametrization, sampling):
     potential = potential.build(lazy=False).project().array[0, 1:]
     assert array_is_close(potential, analytical_potential, rel_tol=.01, check_above_rel=.01)
 
-
 # def test_atom_position():
 #     from ase import Atoms
 #
