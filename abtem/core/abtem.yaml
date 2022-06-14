@@ -13,3 +13,5 @@ fftw:
   planning_effort: FFTW_MEASURE
 mkl:
   threads: 1
+prism:
+  interpolation-gpts-warning: true

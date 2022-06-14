@@ -10,12 +10,23 @@ from abtem.core.axes import RealSpaceAxis, FourierSpaceAxis, AxisMetadata
 from abtem.core.backend import HasDevice
 from abtem.core.energy import HasAcceleratorMixin
 from abtem.core.grid import HasGridMixin
+from abtem.core.utils import safe_floor_int
 from abtem.potentials.potentials import Potential, AbstractPotential
 from abtem.waves.tilt import HasBeamTiltMixin
 
 
-def safe_floor_int(n: float, tol: int = 7):
-    return int(np.floor(np.round(n, decimals=tol)))
+
+
+
+def ensure_parity(n, even, v=1):
+    assert (v == 1) or (v == -1)
+    assert isinstance(even, bool)
+
+    if n % 2 == 0 and not even:
+        return n + v
+    elif not n % 2 == 0 and even:
+        return n + v
+    return n
 
 
 class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAxes, HasDevice):
@@ -38,7 +49,8 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAxe
     @property
     def antialias_valid_gpts(self) -> Tuple[int, int]:
         cutoff_gpts = self.antialias_cutoff_gpts
-        return safe_floor_int(cutoff_gpts[0] / np.sqrt(2)), safe_floor_int(cutoff_gpts[0] / np.sqrt(2))
+        return (ensure_parity(safe_floor_int(cutoff_gpts[0] / np.sqrt(2)), self.gpts[0] % 2 == 0, -1),
+                ensure_parity(safe_floor_int(cutoff_gpts[0] / np.sqrt(2)), self.gpts[1] % 2 == 0, -1))
 
     @property
     def antialias_cutoff_gpts(self) -> Tuple[int, int]:
@@ -49,7 +61,8 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAxe
         kcut = 2. / 3. / max(self.sampling)
         extent = self.gpts[0] * self.sampling[0], self.gpts[1] * self.sampling[1]
 
-        return safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
+        return (ensure_parity(safe_floor_int(kcut * extent[0]), self.gpts[0] % 2 == 0),
+                ensure_parity(safe_floor_int(kcut * extent[1]), self.gpts[1] % 2 == 0))
 
     def _gpts_within_angle(self, angle: Union[None, float, str]) -> Tuple[int, int]:
 
@@ -57,8 +70,8 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAxe
             return self.gpts
 
         elif isinstance(angle, (numbers.Number, float)):
-            return (int(2 * np.ceil(angle / self.angular_sampling[0])) + 1,
-                    int(2 * np.ceil(angle / self.angular_sampling[1])) + 1)
+            return (ensure_parity(int(2 * np.ceil(angle / self.angular_sampling[0])) + 1, self.gpts[0] % 2 == 0),
+                    ensure_parity(int(2 * np.ceil(angle / self.angular_sampling[1])) + 1, self.gpts[1] % 2 == 0))
 
         elif angle == 'cutoff':
             return self.antialias_cutoff_gpts
