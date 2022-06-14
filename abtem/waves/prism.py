@@ -14,7 +14,7 @@ from abtem.core.complex import abs2
 from abtem.core.dask import validate_lazy, validate_chunks, chunk_range, equal_sized_chunks
 from abtem.core.energy import Accelerator, HasAcceleratorMixin
 from abtem.core.fft import fft2
-from abtem.core.grid import Grid, HasGridMixin
+from abtem.core.grid import Grid, HasGridMixin, GridUndefinedError
 from abtem.core.intialize import initialize
 from abtem.measure.detect import AbstractDetector, validate_detectors
 from abtem.measure.measure import AbstractMeasurement
@@ -494,6 +494,11 @@ class SMatrix(WavesLikeMixin, AbstractSMatrix):
 
         if potential is not None:
             self._grid = self._potential.grid
+        else:
+            try:
+                self.grid.check_is_defined()
+            except GridUndefinedError:
+                raise ValueError('provide a potential or provide extent and gpts')
 
         self._interpolation = _validate_interpolation(interpolation)
         self._planewave_cutoff = planewave_cutoff
@@ -634,8 +639,6 @@ class SMatrix(WavesLikeMixin, AbstractSMatrix):
             with cp.cuda.Stream():
                 waves._array = cp.asnumpy(waves.array)
 
-
-
         return waves
 
     @staticmethod
@@ -694,10 +697,11 @@ class SMatrix(WavesLikeMixin, AbstractSMatrix):
         downsampled_gpts = self.downsampled_gpts()
 
         if self.potential is not None:
-            potential_blocks = self.potential.ensemble_blocks()[0], (0,)
-            ensemble_axes_metadata = self.potential.ensemble_axes_metadata[:-1] + [AxisMetadata()]
+            potential_blocks = self.potential.ensemble_blocks()[0], (0,), self.potential.ensemble_blocks()[1], (1,)
+            ensemble_axes_metadata = self.potential.ensemble_axes_metadata
         else:
-            potential_blocks = da.from_array(np.array([None], dtype=object), chunks=1), (0,)
+            potential_blocks = (da.from_array(np.array([None], dtype=object), chunks=1), (0,),
+                                da.from_array(np.array([None], dtype=object), chunks=1), (1,))
             ensemble_axes_metadata = [AxisMetadata(), AxisMetadata()]
 
         wave_vector_blocks = np.array(chunk_range(wave_vector_chunks)[0], dtype=int)
@@ -706,10 +710,11 @@ class SMatrix(WavesLikeMixin, AbstractSMatrix):
         if lazy:
             wave_vector_blocks = da.from_array(wave_vector_blocks, chunks=(1, 1, 2), name=False)
             blocks = potential_blocks + (wave_vector_blocks, (0, 2, -1))
+
             arr = da.blockwise(self._wrapped_build_s_matrix,
                                tuple(range(5)),
                                *blocks,
-                               new_axes={1: (1,), 3: (downsampled_gpts[0],), 4: (downsampled_gpts[1],)},
+                               new_axes={3: (downsampled_gpts[0],), 4: (downsampled_gpts[1],)},
                                adjust_chunks={2: wave_vector_chunks[0]},
                                concatenate=True,
                                meta=np.array((), dtype=np.complex64),

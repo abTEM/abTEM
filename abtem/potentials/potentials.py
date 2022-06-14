@@ -1,7 +1,8 @@
 """Module to calculate potentials using the independent atom model."""
 from abc import ABCMeta, abstractmethod
 from copy import copy
-from functools import partial
+from functools import partial, reduce
+from operator import mul
 from typing import Union, Sequence, Tuple, List, TYPE_CHECKING
 
 import dask
@@ -10,14 +11,14 @@ import numpy as np
 import zarr
 from ase import Atoms
 
-from abtem.core.axes import ThicknessAxis, HasAxes, RealSpaceAxis
+from abtem.core.axes import ThicknessAxis, HasAxes, RealSpaceAxis, FrozenPhononsAxis
 from abtem.core.backend import get_array_module, validate_device, copy_to_device, device_name_from_array_module
 from abtem.core.blockwise import Ensemble
 from abtem.core.complex import complex_exponential
 from abtem.core.dask import HasDaskArray, validate_chunks, validate_lazy
 from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
 from abtem.core.grid import Grid, HasGridMixin
-from abtem.core.utils import generate_chunks
+from abtem.core.utils import generate_chunks, normalize_axes
 from abtem.measure.measure import Images
 from abtem.potentials.atom import AtomicPotential
 from abtem.potentials.infinite import calculate_scattering_factor, infinite_potential_projections
@@ -37,6 +38,21 @@ class AbstractPotential(HasAxes, Ensemble, HasGridMixin, metaclass=ABCMeta):
 
     Base class common for all potentials.
     """
+
+    @property
+    @abstractmethod
+    def num_frozen_phonons(self):
+        pass
+
+    @property
+    def _exit_planes_axes_metadata(self):
+        return ThicknessAxis(label='z', values=tuple(self.exit_thicknesses))
+
+    @property
+    def base_axes_metadata(self):
+        return [ThicknessAxis(label='z', values=tuple(self.slice_thickness), units='Å'),
+                RealSpaceAxis(label='x', sampling=self.sampling[0], units='Å', endpoint=False),
+                RealSpaceAxis(label='y', sampling=self.sampling[1], units='Å', endpoint=False)]
 
     @property
     @abstractmethod
@@ -183,7 +199,7 @@ class PotentialBuilder(AbstractPotential):
 
             chunks = validate_chunks(self.ensemble_shape[:-1], (1,))
 
-            chunks = chunks + ((len(self),),) + ((self.gpts[0],), (self.gpts[1],))
+            chunks = chunks + ((len(self),), (self.gpts[0],), (self.gpts[1],))
 
             array = blocks.map_blocks(build,
                                       new_axis=(1, 2, 3),
@@ -202,9 +218,10 @@ class PotentialBuilder(AbstractPotential):
         potential = PotentialArray(array,
                                    sampling=self.sampling,
                                    slice_thickness=self.slice_thickness,
-                                   ensemble_axes_metadata=self.ensemble_axes_metadata)
+                                   exit_planes=self.exit_planes,
+                                   ensemble_axes_metadata=self.ensemble_axes_metadata[:-1])
 
-        potential = potential.squeeze()
+        #potential = potential.squeeze((1,))
 
         if not lazy:
             potential = potential.compute()
@@ -513,7 +530,7 @@ class Potential(PotentialBuilder):
     def ensemble_axes_metadata(self):
         axes_metadata = []
         axes_metadata += self.frozen_phonons.ensemble_axes_metadata
-        axes_metadata += [ThicknessAxis(values=self.exit_thicknesses)]
+        axes_metadata += [self._exit_planes_axes_metadata]
         return axes_metadata
 
     @property
@@ -922,6 +939,26 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
         self._ensemble_axes_metadata = ensemble_axes_metadata
 
     @property
+    def num_frozen_phonons(self):
+        indices = self.find_axes_type(FrozenPhononsAxis)
+        if indices:
+            return reduce(mul, tuple(self.array.shape[i] for i in indices))
+        else:
+            return 1
+
+    def ensure_lazy(self):
+        if self.is_lazy:
+            return self
+
+        chunks = (-1, -1, -1)
+
+        if len(self.array.shape) > 3:
+            chunks = (1,) + chunks
+
+        array = da.from_array(self.array, chunks=chunks)
+        return self.__class__(array, **self._copy_as_dict(copy_array=False))
+
+    @property
     def ensemble_shape(self) -> Tuple[int, ...]:
         shape = self.array.shape[:-3]
         if len(shape) == 0:
@@ -938,23 +975,25 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
 
     @property
     def ensemble_axes_metadata(self):
-        return self._ensemble_axes_metadata
+        return self._ensemble_axes_metadata + [self._exit_planes_axes_metadata]
 
-    @property
-    def base_axes_metadata(self):
-        return [ThicknessAxis(label='z', values=tuple(self.exit_thicknesses), units='Å'),
-                RealSpaceAxis(label='x', sampling=self.sampling[0], units='Å', endpoint=False),
-                RealSpaceAxis(label='y', sampling=self.sampling[1], units='Å', endpoint=False)]
-
-    def squeeze(self):
+    def squeeze(self, axis=()):
         if len(self.array.shape) < 4:
             return self
 
-        d = self._copy_as_dict(copy_array=False)
-        d['ensemble_axes_metadata'] = [m for s, m in zip(self.ensemble_shape[:-1],
-                                                         self.ensemble_axes_metadata[:-1]) if s != 1]
+        if axis is None:
+            axis = range(len(self.shape))
+        else:
+            axis = normalize_axes(axis, self.shape)
 
-        d['array'] = self.array[tuple(0 if s == 1 else slice(None) for s in self.ensemble_shape[:-1])]
+        shape = self.shape[:-2]
+        squeezed = tuple(np.where([(n == 1) and (i in axis) for i, n in enumerate(shape)])[0])
+
+        xp = get_array_module(self.array)
+        d = self._copy_as_dict(copy_array=False)
+        d['array'] = xp.squeeze(self.array, axis=squeezed)
+        d['ensemble_axes_metadata'] = [element for i, element in enumerate(self.ensemble_axes_metadata) if
+                                       i not in squeezed]
         return self.__class__(**d)
 
     @property
@@ -993,16 +1032,19 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
 
     def ensemble_blocks(self, chunks=(1, -1)):
         chunks = validate_chunks(self.ensemble_shape, chunks)
-        blocks = self.array.to_delayed()
 
-        if len(self.array.shape) > 3:
+        potential = self.ensure_lazy()
+
+        blocks = potential.array.to_delayed()
+
+        if len(potential.array.shape) > 3:
             blocks = blocks[..., 0, 0, 0]
         else:
             blocks = blocks[..., 0, 0]
 
         blocks = da.concatenate([da.from_delayed(block, dtype=object, shape=(1,)) for block in blocks])
 
-        return blocks, self._exit_plane_blocks(chunks[1:])
+        return blocks, potential._exit_plane_blocks(chunks[1:])
 
     def ensemble_partial(self):
 
@@ -1024,8 +1066,10 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
             last_slice = len(self)
 
         for i in range(first_slice, last_slice):
-            array = self.array[i][None]
-            yield self.__class__(array, self.slice_thickness[i:i + 1], extent=self.extent)
+            s = (0, i, None)
+            array = self.array[s][None]
+            yield self.__class__(array, self.slice_thickness[i:i + 1],
+                                 extent=self.extent)
 
     def get_chunk(self, first_slice, last_slice):
 

@@ -290,6 +290,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
         shape = self.shape[:-2]
         squeezed = tuple(np.where([(n == 1) and (i in axis) for i, n in enumerate(shape)])[0])
+
         xp = get_array_module(self.array)
         d = self._copy_as_dict(copy_array=False)
         d['array'] = xp.squeeze(self.array, axis=squeezed)

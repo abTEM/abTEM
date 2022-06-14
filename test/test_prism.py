@@ -16,8 +16,7 @@ from abtem.core.backend import cp
        extent=core_st.extent(min_value=5, max_value=10),
        planewave_cutoff=st.floats(10, 15),
        energy=st.floats(100e3, 200e3),
-       interpolation=st.integers(min_value=1, max_value=4),
-       )
+       interpolation=st.integers(min_value=1, max_value=4))
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize('device', ['cpu', gpu])
 def test_prism_normalized(gpts, extent, planewave_cutoff, energy, interpolation, lazy, device):
@@ -64,7 +63,6 @@ def test_prism_matches_probe(gpts, extent, planewave_cutoff, energy, lazy, devic
 @pytest.mark.parametrize('device', ['cpu', gpu])
 def test_prism_matches_probe_with_multislice(atoms, gpts, planewave_cutoff, energy, lazy, device):
     potential = Potential(atoms, gpts=gpts, device=device)
-
     s_matrix = SMatrix(potential=potential,
                        planewave_cutoff=planewave_cutoff,
                        energy=energy,
@@ -81,9 +79,6 @@ def test_prism_matches_probe_with_multislice(atoms, gpts, planewave_cutoff, ener
     assert np.allclose(s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array)
 
 
-# @reproduce_failure('6.29.3', b'AXicY2AgCTAyMAAAADUAAg==')
-# @settings(print_blob=True)
-# @reproduce_failure('6.29.3', b'AXicY2DABKyM855iEQYBRgYGACpXAYs=')
 @given(data=st.data(),
        atoms=atoms_st.random_atoms(min_side_length=5, max_side_length=10),
        gpts=core_st.gpts(min_value=32, max_value=64),
@@ -107,38 +102,52 @@ def test_multislice_matches_prism(data, atoms, gpts, planewave_cutoff, energy, l
     assert np.allclose(measurement.array, prism_measurement.array)
 
 
-@given(atoms=atoms_st.random_atoms(min_side_length=5, max_side_length=10),
-       gpts=core_st.gpts(min_value=32, max_value=64),
-       planewave_cutoff=st.floats(10, 15),
-       interpolation=st.integers(min_value=1, max_value=4),
-       energy=st.floats(100e3, 200e3),
-       data=st.data())
-@pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('device', ['cpu', gpu])
-def test_prism_interpolation(data, atoms, gpts, planewave_cutoff, energy, lazy, device, interpolation):
-    detectors = data.draw(detector_st.detectors(max_detectors=1))
+# def test_prism_interpolation(data, atoms, gpts, planewave_cutoff, energy, lazy, device, interpolation):
+#
+#     s_matrix = SMatrix(potential=None, energy=100e3, planewave_cutoff=20, interpolation=2, extent=10, gpts=64, downsample=False)
+#
+#     probe = s_matrix.dummy_probes()
+#
+#
+#     probe_waves = probe.build()
+#
+#     s_matrix_waves = s_matrix.reduce()
+#
+#     assert np.allclose(probe_waves.array, s_matrix_waves.array)
 
-    potential = Potential(atoms, gpts=gpts, device=device).build().compute()
-    scan = GridScan(start=(0, 0), end=potential.extent)
 
-    probe = Probe(semiangle_cutoff=planewave_cutoff, energy=energy, device=device)
-    probe.grid.match(potential)
-
-    tiled_potential = potential.tile((interpolation,) * 2)
-    s_matrix = SMatrix(potential=tiled_potential, interpolation=interpolation, planewave_cutoff=planewave_cutoff,
-                       energy=energy, device=device, downsample=False)
-
-    diffraction_pattern = probe.build(lazy=False).diffraction_patterns()
-    prism_diffraction_pattern = s_matrix.build(stop=0, lazy=False).reduce().diffraction_patterns()
-
-    xp = get_array_module(device)
-    assume(xp.abs(diffraction_pattern.array - prism_diffraction_pattern.array).max() < 1e-6)
-    assume_valid_probe_and_detectors(probe, detectors)
-
-    measurement = probe.scan(potential, scan=scan, detectors=detectors, lazy=lazy)
-    prism_measurement = s_matrix.scan(scan=scan, detectors=detectors, lazy=lazy)
-
-    assert np.allclose(measurement.array, prism_measurement.array, atol=1e-6)
+# @given(atoms=atoms_st.random_atoms(min_side_length=5, max_side_length=10),
+#        gpts=core_st.gpts(min_value=32, max_value=64),
+#        planewave_cutoff=st.floats(10, 15),
+#        interpolation=st.integers(min_value=1, max_value=4),
+#        energy=st.floats(100e3, 200e3),
+#        data=st.data())
+# @pytest.mark.parametrize('lazy', [True, False])
+# @pytest.mark.parametrize('device', ['cpu', gpu])
+# def test_prism_interpolation(data, atoms, gpts, planewave_cutoff, energy, lazy, device, interpolation):
+#     detectors = data.draw(detector_st.detectors(max_detectors=1))
+#
+#     potential = Potential(atoms, gpts=gpts, device=device).build(lazy=lazy)
+#     scan = GridScan(start=(0, 0), end=potential.extent)
+#
+#     probe = Probe(semiangle_cutoff=planewave_cutoff, energy=energy, device=device)
+#     probe.grid.match(potential)
+#
+#     tiled_potential = potential.tile((interpolation,) * 2)
+#     s_matrix = SMatrix(potential=tiled_potential, interpolation=interpolation, planewave_cutoff=planewave_cutoff,
+#                        energy=energy, device=device, downsample=False)
+#
+#     diffraction_pattern = probe.build(lazy=False).diffraction_patterns()
+#     prism_diffraction_pattern = s_matrix.build(stop=0, lazy=False).reduce().diffraction_patterns()
+#
+#     xp = get_array_module(device)
+#     assume(xp.abs(diffraction_pattern.array - prism_diffraction_pattern.array).max() < 1e-6)
+#     assume_valid_probe_and_detectors(probe, detectors)
+#
+#     measurement = probe.scan(potential, scan=scan, detectors=detectors, lazy=lazy)
+#     prism_measurement = s_matrix.scan(scan=scan, detectors=detectors, lazy=lazy)
+#
+#     assert np.allclose(measurement.array, prism_measurement.array, atol=1e-6)
 #
 #
 #

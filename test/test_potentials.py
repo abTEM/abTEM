@@ -79,10 +79,10 @@ def test_infinite_projected_match(Z, slice_thickness, parametrization, sampling)
 @settings(max_examples=2)
 @given(Z=st.integers(1, 102),
        slice_thickness=st.floats(min_value=2, max_value=4.),
-       sampling=st.floats(min_value=0.02, max_value=0.04))
+       sampling=st.floats(min_value=0.025, max_value=0.05))
 @pytest.mark.parametrize('parametrization', [LobatoParametrization(), KirklandParametrization()])
 def test_finite_projected_match(Z, slice_thickness, parametrization, sampling):
-    sidelength = 8
+    sidelength = 6
     atoms = Atoms([Z], positions=[(0., 0., sidelength / 2)], cell=[sidelength, sidelength, sidelength])
 
     potential = Potential(atoms,
