@@ -1,11 +1,10 @@
 """Module for modifying ASE atoms objects for use in abTEM."""
 from numbers import Number
-from typing import Union, Tuple, Sequence
+from typing import Union, Tuple
 
 import numpy as np
 from ase import Atoms
 from ase.build.tools import rotation_matrix, cut
-from ase.cell import Cell
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import pdist
 
@@ -18,6 +17,23 @@ _axes2tuple = {
     'rxzx': (0, 1, 1, 1), 'rxzy': (1, 0, 0, 1), 'ryzy': (1, 0, 1, 1),
     'rzxy': (1, 1, 0, 1), 'ryxy': (1, 1, 1, 1), 'ryxz': (2, 0, 0, 1),
     'rzxz': (2, 0, 1, 1), 'rxyz': (2, 1, 0, 1), 'rzyz': (2, 1, 1, 1)}
+
+
+def plane_to_axes(plane):
+    """Internal function for extracting axes from a plane."""
+    axes = ()
+    last_axis = [0, 1, 2]
+    for axis in list(plane):
+        if axis == 'x':
+            axes += (0,)
+            last_axis.remove(0)
+        if axis == 'y':
+            axes += (1,)
+            last_axis.remove(1)
+        if axis == 'z':
+            axes += (2,)
+            last_axis.remove(2)
+    return axes + (last_axis[0],)
 
 
 def is_cell_hexagonal(atoms: Atoms):
@@ -265,21 +281,6 @@ def shrink_cell(atoms, repetitions=(2, 3), tol=1e-6):
 axis_mapping = {'x': (1, 0, 0), 'y': (0, 1, 0), 'z': (0, 0, 1)}
 
 
-def plane_to_axes(plane):
-    """Internal function for extracting axes from a plane."""
-    axes = ()
-    last_axis = [0, 1, 2]
-    for axis in list(plane):
-        if axis == 'x':
-            axes += (0,)
-            last_axis.remove(0)
-        if axis == 'y':
-            axes += (1,)
-            last_axis.remove(1)
-        if axis == 'z':
-            axes += (2,)
-            last_axis.remove(2)
-    return axes + (last_axis[0],)
 
 
 def rotation_matrix_from_plane(plane: Union[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = 'xy'):
@@ -425,92 +426,6 @@ def orthogonalize_cell(atoms: Atoms,
         return atoms
 
 
-# def orthogonalize_cell(atoms: Atoms,
-#                        target_box: Tuple[float, float, float] = None,
-#                        max_repetitions: int = None,
-#                        return_transform: bool = False,
-#                        allow_transform: bool = True,
-#                        tolerance: float = 0.01):
-#
-#     eps = 1e-12
-#
-#     zero_vectors = np.linalg.norm(atoms.cell, axis=0) < eps
-#
-#     if zero_vectors.sum() > 1:
-#         raise RuntimeError("two or more lattice vectors of the provided Atoms has no length")
-#     elif zero_vectors.sum() == 1:
-#         atoms.center(axis=np.where(zero_vectors)[0], vacuum=tolerance + eps)
-#
-#     a, b, c = atoms.cell
-#
-#     if target_box is not None and max_repetitions is None:
-#         max_repetitions = int(np.ceil(np.sum(target_box) / np.min(np.linalg.norm(atoms.cell, axis=0))))
-#     elif max_repetitions is None:
-#         max_repetitions = 5
-#
-#     k = np.arange(-max_repetitions, max_repetitions + 1)
-#     l = np.arange(-max_repetitions, max_repetitions + 1)
-#     m = np.arange(-max_repetitions, max_repetitions + 1)
-#
-#     vectors = np.abs(((k[:, None] * a[None])[:, None, None] +
-#                       (l[:, None] * b[None])[None, :, None] +
-#                       (m[:, None] * c[None])[None, None, :]))
-#
-#     norm = np.linalg.norm(vectors, axis=-1)
-#     nonzero = norm > eps
-#     norm[nonzero == 0] = eps
-#
-#     new_vectors = []
-#     for i in range(3):
-#
-#         if target_box:
-#             target_vector = np.zeros(3)
-#             target_vector[i] = target_box[i]
-#             closest_vector = np.linalg.norm(vectors - target_vector[None, None, None], axis=-1)
-#             closest_vector = np.where((closest_vector == np.min(closest_vector)) * nonzero)
-#             new_vector = np.array([k[closest_vector[0][0]],
-#                                    l[closest_vector[1][0]],
-#                                    m[closest_vector[2][0]]])
-#
-#         else:
-#             angles = vectors[..., i] / norm
-#             small_angles = np.abs(angles.max() - angles < eps)
-#             small_angles = np.where(small_angles * nonzero)
-#             shortest_small_angles = np.argmin(np.linalg.norm(vectors[small_angles], axis=1))
-#
-#             new_vector = np.array([k[small_angles[0][shortest_small_angles]],
-#                                    l[small_angles[1][shortest_small_angles]],
-#                                    m[small_angles[2][shortest_small_angles]]])
-#
-#         new_vector = np.sign(np.dot(new_vector, atoms.cell)[i]) * new_vector
-#         new_vectors.append(new_vector)
-#
-#     atoms = cut(atoms, *new_vectors, tolerance=tolerance)
-#
-#     if target_box:
-#         cell = np.diag(target_box)
-#     else:
-#         cell = Cell.new(np.linalg.norm(atoms.cell, axis=0)).complete()
-#
-#     A = np.linalg.solve(atoms.cell.complete(), cell)
-#
-#     if allow_transform:
-#         atoms.positions[:] = np.dot(atoms.positions, A)
-#         atoms.cell[:] = cell
-#
-#     else:
-#         if not is_cell_orthogonal(atoms):
-#             raise RuntimeError()
-#
-#     atoms = shrink_cell(atoms, (2, 3))
-#
-#     if return_transform:
-#         rotation, zoom, shear = decompose_affine_transform(A)
-#         return atoms, (np.array(rotation_matrix_to_euler(rotation)), zoom, shear)
-#     else:
-#         return atoms
-
-
 def atoms_in_box(atoms: Atoms,
                  box: Tuple[float, float, float],
                  margin: Tuple[float, float, float] = (0., 0., 0.),
@@ -575,7 +490,7 @@ def pad_atoms(atoms: Atoms, margins: Union[float, Tuple[float, float, float]], d
     ----------
     atoms: ASE Atoms object
         The atoms that should be padded.
-    margin: two float
+    margins: one or three float
         The padding margin.
 
     Returns

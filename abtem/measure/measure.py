@@ -483,12 +483,13 @@ class Images(AbstractMeasurement):
         ----------
         array : ndarray
             2D or greater array containing data with `float` type or ´complex type´. The second-to-last and last
-            dimensions are the image y and x axis, repectively.
+            dimensions are the image y and x axis, respectively.
         sampling : two float
             Lateral sampling of images in x and y [Å].
-        ensemble_axes_metadata : list of AxesMetadata
-        metadata : dict
-            Metadata
+        ensemble_axes_metadata : list of AxisMetadata, optional
+            Metadata associated with an ensemble axis.
+        metadata : dict, optional
+            A dictionary defining simulation metadata.
         """
 
         if np.isscalar(sampling):
@@ -582,7 +583,10 @@ class Images(AbstractMeasurement):
         d['array'] = array
         return self.__class__(**d)
 
-    def to_hyperspy(self):
+    def to_hyperspy(self) -> 'Signal2D':
+        """
+        Convert Images to a hyperspy Signal2D.
+        """
 
         if Signal2D is None:
             raise RuntimeError(missing_hyperspy_message)
@@ -781,6 +785,7 @@ class Images(AbstractMeasurement):
         Returns
         -------
         noisy_images : Images
+            The images after applying Poisson noise.
         """
         pixel_area = np.prod(self.sampling)
         return _poisson_noise(self, pixel_area, dose, samples, seed)
@@ -1358,15 +1363,22 @@ class DiffractionPatterns(AbstractMeasurement):
                  metadata: dict = None):
 
         """
-
+        One or more diffraction patterns.
 
         Parameters
         ----------
-        array :
-        sampling :
-        fftshift :
-        ensemble_axes_metadata :
-        metadata :
+        array : ndarray
+            2D or greater array containing data with `float` type. The second-to-last and last dimensions are the
+            reciprocal space y and x axis of the diffraction pattern.
+        sampling : float or two float
+            The Fourier space sampling of the diffraction patterns [1 / Å].
+        fftshift : bool, optional
+            If True, the diffraction patterns are assumed to have the zero-frequency component to the center of the
+            spectrum, otherwise the centers are assumed to be at (0,0).
+        ensemble_axes_metadata : list of AxisMetadata, optional
+            Metadata associated with an ensemble axis.
+        metadata : dict, optional
+            A dictionary defining simulation metadata.
         """
 
         if np.isscalar(sampling):
@@ -1392,29 +1404,49 @@ class DiffractionPatterns(AbstractMeasurement):
                       dose_per_area: float = None,
                       total_dose: float = None,
                       samples: int = 1,
-                      seed: int = None,
-                      pixel_area: float = None):
+                      seed: int = None):
+        """
+        Add Poisson noise to the DiffractionPattern.
 
-        wrong_dose_arg_error = RuntimeError('provide one of "dose_per_area" or "total_dose"')
+        Parameters
+        ----------
+        dose_per_area : float, optional
+            The irradiation dose in electrons per Å^2. Provide either "total_dose" or "dose_per_area".
+        total_dose : float, optional
+            The irradiation dose per diffraction pattern. Provide either "total_dose" or "dose_per_area".
+        samples : int, optional
+            The number of samples to draw from the poisson distribution. If this is greater than 1, an additional
+            ensemble axis will be added to the measurement.
+        seed : int, optional
+            Seed the random number generator.
+
+        Returns
+        -------
+        noisy_diffraction_patterns: DiffractionPatterns
+            The noisy diffraction patterns.
+        """
+
+        wrong_dose_error = RuntimeError('provide one of "dose_per_area" or "total_dose"')
 
         if dose_per_area is not None:
             if total_dose is not None:
-                raise wrong_dose_arg_error
+                raise wrong_dose_error
 
-            if pixel_area is None and len(self.scan_sampling) == 2:
+            if len(self.scan_sampling) == 2:
                 pixel_area = np.prod(self.scan_sampling)
-            elif pixel_area is None:
-                raise RuntimeError('cannot infer ')
+            else:
+                raise RuntimeError('cannot infer pixel area for DiffractionPattern')
+
         elif total_dose is not None:
 
             if dose_per_area is not None:
-                raise wrong_dose_arg_error
+                raise wrong_dose_error
 
             dose_per_area = total_dose
             pixel_area = 1.
 
         else:
-            raise wrong_dose_arg_error
+            raise wrong_dose_error
 
         return _poisson_noise(self, pixel_area, dose_per_area, samples, seed)
 

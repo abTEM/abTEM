@@ -430,33 +430,31 @@ def round_gpts_to_multiple_of_interpolation(gpts: Tuple[int, int], interpolation
 
 class SMatrix(WavesLikeMixin, AbstractSMatrix):
     """
-    Scattering matrix builder class
-
-    The scattering matrix builder object is used for creating scattering matrices and simulating STEM experiments using
-    the PRISM algorithm.
+    The SMatrix may be used for creating scattering matrices and simulating STEM experiments using the PRISM algorithm.
 
     Parameters
     ----------
     planewave_cutoff : float
         The radial cutoff of the plane wave expansion [mrad].
     potential : Atoms or AbstractPotential, optional
-        Potential or atoms
+        Potential or atoms represented by the scattering matrix. If given as atoms, a default Potential will be created.
+        If not provided the scattering matrix will represent a vacuum potential, in this case the sampling and extent
+        should be provided.
     energy : float, optional
         Electron energy [eV].
     interpolation : one or two int, optional
         Interpolation factor. Default is 1 (no interpolation).
     extent : one or two float, optional
-        Lateral extent of wave functions [Å]. Provide only is potential is not given.
+        Lateral extent of wave functions [Å]. Provide only if potential is not given.
     gpts : one or two int, optional
-        Number of grid points describing the wave functions. Provide only is potential is not given.
+        Number of grid points describing the wave functions. Provide only if potential is not given.
     sampling : one or two float, optional
-        Lateral sampling of wave functions [1 / Å]. Provide only is potential is not given.
+        Lateral sampling of wave functions [1 / Å]. Provide only if potential is not given.
     tilt : two float
         Small angle beam tilt [mrad].
     downsample : {'cutoff', 'valid'} or float or bool
         If not False, the scattering matrix is downsampled to a maximum given scattering angle after running the
         multislice algorithm.
-
             ``cutoff`` or True :
                 Downsample to the antialias cutoff scattering angle.
 
@@ -466,6 +464,7 @@ class SMatrix(WavesLikeMixin, AbstractSMatrix):
 
             float :
                 Downsample to a maximum scattering angle specified by a float.
+    normalize : {'probe', 'planewaves'}
     device : str, optional
         The calculations will be carried out on this device. Default is 'cpu'.
     store_on_host : bool
@@ -478,7 +477,7 @@ class SMatrix(WavesLikeMixin, AbstractSMatrix):
                  potential: Union[Atoms, AbstractPotential] = None,
                  energy: float = None,
                  interpolation: Union[int, Tuple[int, int]] = 1,
-                 normalize: str = 'intensity',
+                 normalize: str = 'probe',
                  downsample: Union[bool, str] = 'cutoff',
                  tilt: Tuple[float, float] = None,
                  extent: Union[float, Tuple[float, float]] = None,
@@ -511,7 +510,8 @@ class SMatrix(WavesLikeMixin, AbstractSMatrix):
         self._store_on_host = store_on_host
 
         if not all(n % f == 0 for f, n in zip(self.interpolation, self.gpts)):
-            warnings.warn('the interpolation factor does not exactly divide gpts, normalization may not be preserved')
+            warnings.warn('the interpolation factor does not exactly divide gpts, normalization may not be exactly '
+                          'preserved')
 
     def round_gpts_to_interpolation(self):
         rounded = round_gpts_to_multiple_of_interpolation(self.gpts, self.interpolation)
@@ -681,6 +681,7 @@ class SMatrix(WavesLikeMixin, AbstractSMatrix):
         lazy : bool
             If True, build the scattering matrix lazily with dask array.
         max_batch : 'auto' or str
+            The maximum number of plane waves
 
 
         Returns

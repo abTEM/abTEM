@@ -24,6 +24,19 @@ if TYPE_CHECKING:
     pass
 
 
+def validate_scan(scan, probe=None):
+    if scan is None:
+        scan = GridScan()
+
+    if not hasattr(scan, 'get_positions'):
+        scan = CustomScan(scan)
+
+    if probe is not None:
+        scan.match_probe(probe)
+
+    return scan
+
+
 class AbstractScan(ArrayWaveTransform, metaclass=ABCMeta):
     """Abstract class to describe scans."""
 
@@ -221,16 +234,24 @@ class CompoundScan(AbstractScan):
 
 class CustomScan(AbstractScan):
 
-    def __init__(self, positions: np.ndarray = None):
-        if positions is None:
-            positions = np.zeros((0, 2), dtype=np.float32)
-        else:
-            positions = np.array(positions, dtype=np.float32)
+    def __init__(self, positions: np.ndarray = (0., 0.)):
+        """
+        Custom scan based on explicit 2d probe positions.
+
+        Parameters
+        ----------
+        positions : np.ndarray, optional
+            Probe positions. Anything that can be converted to an ndarray of shape (n, 3) is accepted. Default is
+            (0., 0.).
+        """
+
+        positions = np.array(positions, dtype=np.float32)
 
         if len(positions.shape) == 1:
             positions = positions[None]
 
         self._positions = positions
+
         super().__init__()
 
     def match_probe(self, probe):
@@ -296,24 +317,22 @@ class CustomScan(AbstractScan):
 
 class LineScan(AbstractScan):
     """
-    Line scan object.
-
-    Defines a scan along a straight line.
+    A scan along a straight line.
 
     Parameters
     ----------
     start : two float
-        Start point of the scan [Å].
+        Start point of the scan [Å]. Default is (0., 0.).
     end : two float
-        End point of the scan [Å].
+        End point of the scan [Å]. Default is None, the scan end point will match the extent of the potential.
     gpts: int
-        Number of scan positions.
+        Number of scan positions. Default is None. Provide one of gpts or sampling.
     sampling: float
-        Sampling rate of scan positions [1 / Å].
+        Sampling rate of scan positions [1 / Å]. Provide one of gpts or sampling. If not provided the sampling will
+        match the Nyquist sampling of the Probe in a multislice simulation.
     endpoint: bool
         If True, end is the last position. Otherwise, it is not included. Default is True.
     """
-    _num_scan_axes = 1
 
     def __init__(self,
                  start: Union[Tuple[float, float], None] = (0., 0.),
@@ -519,26 +538,25 @@ class LineScan(AbstractScan):
 
 class GridScan(HasGridMixin, AbstractScan):
     """
-    Grid scan object.
-
-    Defines a scan on a regular grid.
+    A scan over a regular grid for calculating scanning transmission electron microscopy.
 
     Parameters
     ----------
     start : two float
-        Start corner of the scan [Å].
+        Start corner of the scan [Å]. Default is (0., 0.).
     end : two float
-        End corner of the scan [Å].
+        End corner of the scan [Å]. Default is None, the scan end point will match the extent of the potential.
     gpts : two int
-        Number of scan positions in the x- and y-direction of the scan.
+        Number of scan positions in the x- and y-direction of the scan. Provide one of gpts or sampling.
     sampling : two float
-        Sampling rate of scan positions [1 / Å].
+        Sampling rate of scan positions [1 / Å]. Provide one of gpts or sampling. If not provided the sampling will
+        match the Nyquist sampling of the  Probe in a multislice simulation.
     endpoint : bool
         If True, end is the last position. Otherwise, it is not included. Default is False.
     """
 
     def __init__(self,
-                 start: Tuple[float, float] = None,
+                 start: Tuple[float, float] = (0., 0.),
                  end: Tuple[float, float] = None,
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
@@ -574,7 +592,12 @@ class GridScan(HasGridMixin, AbstractScan):
         return self.gpts[0] * self.gpts[1]
 
     @classmethod
-    def from_fractional_coordinates(cls, potential, start=(0., 0.), end=(1., 1.), sampling=None, endpoint=False):
+    def from_fractional_coordinates(cls,
+                                    potential,
+                                    start=(0., 0.),
+                                    end=(1., 1.),
+                                    sampling=None,
+                                    endpoint=False):
 
         if np.isscalar(start):
             start = (start, start)

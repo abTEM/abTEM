@@ -100,10 +100,7 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
 
 class FrozenPhonons(AbstractFrozenPhonons):
     """
-    Frozen phonons object.
-
-    Generates atomic configurations for thermal diffuse scattering.
-    Randomly displaces the atomic positions of an ASE Atoms object to emulate thermal vibrations.
+    The frozen phonons randomly displaces the atomic positions of an ASE Atoms object to emulate thermal vibrations.
 
     Parameters
     ----------
@@ -116,10 +113,12 @@ class FrozenPhonons(AbstractFrozenPhonons):
         If dict, a displacement standard deviation should be provided for each species. The atomic species can be
         specified as atomic number or symbol.
         If list or array, a displacement standard deviation should be provided for each atom.
-    directions: str
+    directions: str, optional
         The displacement directions of the atoms as a string; for example 'xy' for displacement in the x- and
-        y-direction.
-    ensemble_mean : True
+        y-direction. Default is 'xy'.
+    ensemble_mean : True, optional
+        If True, the mean of the ensemble of results from a multislice simulation is calculated, otherwise, the result
+        of every frozen phonon is returned.
     seed: int
         Seed for random number generator.
     """
@@ -130,7 +129,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
                  sigmas: Union[float, Mapping[Union[str, int], float], Sequence[float]],
                  directions: str = 'xyz',
                  ensemble_mean: bool = True,
-                 random_state=None):
+                 random_state: int = None):
 
         self._unique_numbers = np.unique(atoms.numbers)
         unique_symbols = [chemical_symbols[number] for number in self._unique_numbers]
@@ -298,12 +297,15 @@ class LazyAtoms:
 
 class MDFrozenPhonons(AbstractFrozenPhonons):
     """
-    Molecular dynamics frozen phonons object.
+    Molecular dynamics frozen phonons.
 
     Parameters
     ----------
-    trajectory: List of ASE Atoms objects
+    trajectory: List of ASE Atoms
         Sequence of Atoms objects representing a thermal distribution of atomic configurations.
+    ensemble_mean : True, optional
+        If True, the mean of the ensemble of results from a multislice simulation is calculated, otherwise, the result
+        of every frozen phonon is returned.
     """
 
     def __init__(self, trajectory: Sequence[Atoms], ensemble_mean: bool = True):
