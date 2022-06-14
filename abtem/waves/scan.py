@@ -328,11 +328,11 @@ class LineScan(AbstractScan):
     gpts: int
         Number of scan positions. Default is None. Provide one of gpts or sampling.
     sampling: float
-        Sampling rate of scan positions [1 / Å].
+        Sampling rate of scan positions [1 / Å]. Provide one of gpts or sampling. If not provided the sampling will
+        match the Nyquist sampling of the Probe in a multislice simulation.
     endpoint: bool
         If True, end is the last position. Otherwise, it is not included. Default is True.
     """
-    _num_scan_axes = 1
 
     def __init__(self,
                  start: Union[Tuple[float, float], None] = (0., 0.),
@@ -547,9 +547,10 @@ class GridScan(HasGridMixin, AbstractScan):
     end : two float
         End corner of the scan [Å]. Default is None, the scan end point will match the extent of the potential.
     gpts : two int
-        Number of scan positions in the x- and y-direction of the scan.
+        Number of scan positions in the x- and y-direction of the scan. Provide one of gpts or sampling.
     sampling : two float
-        Sampling rate of scan positions [1 / Å].
+        Sampling rate of scan positions [1 / Å]. Provide one of gpts or sampling. If not provided the sampling will
+        match the Nyquist sampling of the  Probe in a multislice simulation.
     endpoint : bool
         If True, end is the last position. Otherwise, it is not included. Default is False.
     """

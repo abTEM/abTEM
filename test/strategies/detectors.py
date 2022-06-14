@@ -66,11 +66,11 @@ def waves_detector(draw, max_angle=None):
 
 
 @st.composite
-def detectors(draw, max_detectors=2, allow_detect_every=True):
-    possible_detectors = st.one_of([annular_detector(allow_detect_every=allow_detect_every),
-                                    flexible_annular_detector(allow_detect_every=allow_detect_every),
-                                    segmented_detector(allow_detect_every=allow_detect_every),
-                                    pixelated_detector(allow_detect_every=allow_detect_every),
+def detectors(draw, max_detectors=2):
+    possible_detectors = st.one_of([annular_detector(),
+                                    flexible_annular_detector(),
+                                    segmented_detector(),
+                                    pixelated_detector(),
                                     ])
 
     detectors = st.lists(possible_detectors, min_size=1, max_size=max_detectors)
