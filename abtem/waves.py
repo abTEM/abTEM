@@ -783,14 +783,14 @@ class Probe(_Scanable, HasEventMixin):
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
                  energy: float = None,
-                 aperture: float = None,
+                 semiangle_cutoff: float = None,
                  ctf: CTF = None,
                  tilt: Tuple[float, float] = None,
                  device: str = 'cpu',
                  **kwargs):
 
         if ctf is None:
-            ctf = CTF(energy=energy, aperture=aperture, **kwargs)
+            ctf = CTF(energy=energy, semiangle_cutoff=semiangle_cutoff, **kwargs)
 
         if ctf.energy is None:
             ctf.energy = energy
