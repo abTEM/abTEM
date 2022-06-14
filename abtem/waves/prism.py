@@ -1,26 +1,21 @@
-import hashlib
-import itertools
 import operator
-from abc import abstractmethod
-from collections import defaultdict
+import warnings
 from copy import copy
-from dataclasses import dataclass
 from functools import partial, reduce
 from typing import Union, Tuple, Dict, List
 
-import dask
 import dask.array as da
 import numpy as np
 from ase import Atoms
 
-from abtem.core.axes import OrdinalAxis, RealSpaceAxis, AxisMetadata
+from abtem.core.axes import OrdinalAxis, RealSpaceAxis, AxisMetadata, FrozenPhononsAxis
 from abtem.core.backend import get_array_module, cp, validate_device
-from abtem.core.blockwise import ensemble_blockwise
-from abtem.core.dask import validate_lazy, ComputableList, validate_chunks, chunk_range, equal_sized_chunks
+from abtem.core.complex import abs2
+from abtem.core.dask import validate_lazy, validate_chunks, chunk_range, equal_sized_chunks
 from abtem.core.energy import Accelerator, HasAcceleratorMixin
+from abtem.core.fft import fft2
 from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.intialize import initialize
-from abtem.core.utils import subdivide_into_chunks
 from abtem.measure.detect import AbstractDetector, validate_detectors
 from abtem.measure.measure import AbstractMeasurement
 from abtem.potentials.potentials import AbstractPotential, validate_potential
@@ -28,77 +23,14 @@ from abtem.waves.base import WavesLikeMixin
 from abtem.waves.multislice import multislice, allocate_multislice_measurements
 from abtem.waves.prism_utils import prism_wave_vectors, plane_waves, wrapped_crop_2d, prism_coefficients, minimum_crop, \
     batch_crop_2d
-from abtem.waves.scan import AbstractScan, GridScan, LineScan, CustomScan, validate_scan
+from abtem.waves.scan import AbstractScan, validate_scan, GridScan
 from abtem.waves.tilt import BeamTilt
 from abtem.waves.transfer import CTF
 from abtem.waves.waves import Waves, Probe, finalize_lazy_measurements
 
 
-class AbstractSMatrix(WavesLikeMixin):
-    planewave_cutoff: float
-    interpolation: Tuple[int, int]
-
-    @property
-    @abstractmethod
-    def interpolated_gpts(self):
-        pass
-
-    @property
-    def interpolated_extent(self):
-        return self.interpolated_gpts[0] * self.sampling[0], self.interpolated_gpts[1] * self.sampling[1]
-
-    @property
-    def interpolated_antialias_cutoff_gpts(self):
-        if self.antialias_cutoff_gpts is None:
-            return None
-
-        return (self.antialias_cutoff_gpts[0] // self.interpolation[0],
-                self.antialias_cutoff_gpts[1] // self.interpolation[1])
-
-    def comparable_probe(self, ctf: CTF = None, interpolated: bool = True):
-        gpts = self.interpolated_gpts if interpolated else self.gpts
-        extent = self.interpolated_extent if interpolated else self.extent
-        antialias_cutoff_gpts = self.interpolated_antialias_cutoff_gpts if interpolated else self.antialias_cutoff_gpts
-
-        probe = Probe(gpts=gpts, extent=extent, energy=self.energy, device=self.device,
-                      semiangle_cutoff=self.planewave_cutoff, ctf=ctf)
-
-        probe._antialias_cutoff_gpts = antialias_cutoff_gpts
-        return probe
-
-    def _validate_ctf(self, ctf: CTF) -> CTF:
-        if ctf is None:
-            ctf = CTF(semiangle_cutoff=self.planewave_cutoff, energy=self.energy)
-
-        if isinstance(ctf, dict):
-            ctf = CTF(energy=self.energy, **ctf)
-
-        return ctf
-
-    def _validate_positions(self, positions, ctf):
-        if positions is None:
-            positions = (0., 0.)
-
-        if isinstance(positions, GridScan):
-            if positions.start is None:
-                positions.start = (0., 0.)
-            if positions.end is None:
-                positions.end = self.extent
-            if positions.sampling is None and ctf is not None:
-                positions.sampling = 0.9 * ctf.nyquist_sampling
-            return positions
-
-        elif isinstance(positions, LineScan):
-            raise NotImplementedError()
-
-        elif isinstance(positions, CustomScan):
-            return positions
-
-        elif isinstance(positions, (list, tuple, np.ndarray)):
-            return CustomScan(positions)
-
-        elif not isinstance(positions, CustomScan):
-            raise NotImplementedError
+class AbstractSMatrix:
+    pass
 
 
 def _validate_interpolation(interpolation: Union[int, Tuple[int, int]]):
@@ -109,249 +41,7 @@ def _validate_interpolation(interpolation: Union[int, Tuple[int, int]]):
     return interpolation
 
 
-# class SMatrixArray(HasDaskArray, AbstractSMatrix):
-#     """
-#     Scattering matrix array object.
-#
-#     The scattering matrix array object represents a plane wave expansion of a probe, it is used for STEM simulations
-#     with the PRISM algorithm.
-#
-#     Parameters
-#     ----------
-#     array : 3d array or 4d array
-#         The array representation of the scattering matrix.
-#     energy : float
-#         Electron energy [eV].
-#     wave_vectors : 2d array
-#         The spatial frequencies of each plane in the plane wave expansion.
-#     planewave_cutoff : float
-#         The angular cutoff of the plane wave expansion [mrad].
-#     interpolation : int or two int
-#         Interpolation factor. Default is 1 (no interpolation).
-#     sampling : one or two float, optional
-#         Lateral sampling of wave functions [1 / Å]. Default is None (inherits sampling from the potential).
-#     tilt : two float, optional
-#         Small angle beam tilt [mrad].
-#     antialias_aperture : two float, optional
-#         Assumed antialiasing aperture as a fraction of the real space Nyquist frequency. Default is 2/3.
-#     device : str, optional
-#         The calculations will be carried out on this device. Default is 'cpu'.
-#     extra_axes_metadata : list of dicts
-#     metadata : dict
-#     """
-#
-#     def __init__(self,
-#                  array: Union[np.ndarray, da.core.Array],
-#                  energy: float,
-#                  wave_vectors: np.ndarray,
-#                  planewave_cutoff: float,
-#                  interpolation: Union[int, Tuple[int, int]] = 1,
-#                  partitions: int = None,
-#                  sampling: Union[float, Tuple[float, float]] = None,
-#                  tilt: Tuple[float, float] = None,
-#                  accumulated_defocus: float = 0.,
-#                  crop_offset: Tuple[int, int] = (0, 0),
-#                  uncropped_gpts: Tuple[int, int] = None,
-#                  antialias_cutoff_gpts: Tuple[int, int] = None,
-#                  normalization: str = 'probe',
-#                  device: str = None,
-#                  extra_axes_metadata: List[Dict] = None,
-#                  metadata: Dict = None):
-#
-#         self._interpolation = self._validate_interpolation(interpolation)
-#         self._grid = Grid(gpts=array.shape[-2:], sampling=sampling, lock_gpts=True)
-#
-#         self._beam_tilt = BeamTilt(tilt=tilt)
-#         self._antialias_cutoff_gpts = antialias_cutoff_gpts
-#         self._accelerator = Accelerator(energy=energy)
-#         self._device = validate_device(device)
-#
-#         self._array = array
-#         self._wave_vectors = wave_vectors
-#         self._planewave_cutoff = planewave_cutoff
-#
-#         super().__init__(array)
-#
-#         if extra_axes_metadata is None:
-#             extra_axes_metadata = []
-#
-#         if metadata is None:
-#             metadata = {}
-#
-#         self._extra_axes_metadata = extra_axes_metadata
-#         self._metadata = metadata
-#
-#         self._accumulated_defocus = accumulated_defocus
-#         self._partitions = partitions
-#
-#         self._normalization = normalization
-#
-#         self._crop_offset = crop_offset
-#         self._uncropped_gpts = uncropped_gpts
-#
-#         self._check_axes_metadata()
-#
-
-#
-#
-#
-#     def _validate_probes_per_reduction(self, probes_per_reduction: int) -> int:
-#
-#         if probes_per_reduction == 'auto' or probes_per_reduction is None:
-#             probes_per_reduction = 300
-#         return probes_per_reduction
-#
-#     def rechunk(self, chunks: int = None, **kwargs):
-#         if not isinstance(self.array, da.core.Array):
-#             raise RuntimeError()
-#
-#         if chunks is None:
-#             chunks = self.array.chunks[:-3] + ((sum(self.array.chunks[-3]),),) + self.array.chunks[-2:]
-#
-#         self._array = self._array.rechunk(chunks=chunks, **kwargs)
-#         return self
-#
-#     def crop_to_positions(self, positions: Union[np.ndarray, AbstractScan]):
-#         xp = get_array_module(self.array)
-#         if self.interpolation == (1, 1):
-#             corner = (0, 0)
-#             cropped_array = self.array
-#         else:
-#             corner, size, _ = _minimum_crop(positions, self.sampling, self.interpolated_gpts)
-#             corner = (corner[0] if self.interpolation[0] > 1 else 0, corner[1] if self.interpolation[1] > 1 else 0)
-#
-#             size = (size[0] if self.interpolation[0] > 1 else self.gpts[0],
-#                     size[1] if self.interpolation[1] > 1 else self.gpts[1])
-#
-#             if self.is_lazy:
-#                 cropped_array = self.array.map_blocks(wrapped_crop_2d,
-#                                                       corner=corner,
-#                                                       size=size,
-#                                                       chunks=self.array.chunks[:-2] + ((size[0],), (size[1],)),
-#                                                       meta=xp.array((), dtype=xp.complex64))
-#             else:
-#                 cropped_array = wrapped_crop_2d(self.array, corner=corner, size=size)
-#
-#         d = self._copy_as_dict(copy_array=False)
-#         d['array'] = cropped_array
-#         d['crop_offset'] = corner
-#         d['uncropped_gpts'] = self.uncropped_gpts
-#         return self.__class__(**d)
-#
-#     def downsample(self, max_angle: Union[str, float] = 'cutoff') -> 'SMatrixArray':
-#         waves = Waves(self.array, sampling=self.sampling, energy=self.energy,
-#                       extra_axes_metadata=self.axes_metadata[:-2])
-#
-#         if self.normalization == 'probe':
-#             waves = waves.downsample(max_angle=max_angle, normalization='amplitude')
-#         elif self.normalization == 'planewaves':
-#             waves = waves.downsample(max_angle=max_angle, normalization='values')
-#         else:
-#             raise RuntimeError()
-#
-#         d = self._copy_as_dict(copy_array=False)
-#         d['array'] = waves.array
-#         d['sampling'] = waves.sampling
-#         return self.__class__(**d)
-#
-#     def streaming_multislice(self, potential, chunks=None, **kwargs):
-#
-#         for chunk_start, chunk_stop in generate_chunks(len(self), chunks=chunks):
-#             extra_axes_metadata = self.extra_axes_metadata + [PrismPlaneWavesAxis()]
-#             waves = Waves(self.array[chunk_start:chunk_stop], energy=self.energy, sampling=self.sampling,
-#                           extra_axes_metadata=extra_axes_metadata)
-#             waves = waves.copy('gpu')
-#             self._array[chunk_start:chunk_stop] = waves.multislice(potential, **kwargs).copy('cpu').array
-#
-#         return self
-#
-#     def multislice(self,
-#                    potential: Union[Atoms, AbstractPotential],
-#                    start: int = 0,
-#                    stop: int = None,
-#                    chunks: int = None,
-#                    conjugate: bool = False) -> 'SMatrixArray':
-#         """
-#         Propagate the scattering matrix through the provided potential.
-#
-#         Parameters
-#         ----------
-#         potential : AbstractPotential object
-#             Scattering potential.
-#
-#         Returns
-#         -------
-#         Waves object.
-#             Probe exit wave functions for the provided positions.
-#         """
-#
-#         if chunks is None:
-#             chunks = len(self)
-#
-#         potential = validate_potential(potential)
-#
-#         waves = self.to_waves()
-#
-#         if self._is_streaming:
-#             waves._array = waves._array.map_blocks(cp.asarray)
-#             waves = waves.multislice(potential, start=start, stop=stop, conjugate=conjugate)
-#             waves._array = waves._array.map_blocks(cp.asnumpy)
-#
-#         else:
-#             waves = waves.multislice(potential, start=start, stop=stop)
-#
-#         return self.from_waves(waves)
-#
-
-#     def _distributed_reduce(self,
-#                             detectors: List[AbstractDetector],
-#                             scan: AbstractScan,
-#                             scan_divisions: Tuple[int, int],
-#                             ctf: CTF,
-#                             probes_per_reduction: int):
-#
-#         scans = scan.divide(scan_divisions)
-#
-#         scans = [item for sublist in scans for item in sublist]
-#
-#         measurements = []
-#         for scan in scans:
-#             cropped_s_matrix_array = self.crop_to_positions(scan)
-#
-#             if self._is_streaming:
-#                 cropped_s_matrix_array._array = cropped_s_matrix_array._array.map_blocks(cp.asarray)
-#
-#             measurement = cropped_s_matrix_array._apply_reduction_func(_reduce_to_measurements,
-#                                                                        detectors=detectors,
-#                                                                        scan=scan,
-#                                                                        ctf=ctf,
-#                                                                        probes_per_reduction=probes_per_reduction)
-#             measurements.append(measurement)
-#
-#         measurements = list(map(list, zip(*measurements)))
-#
-#         for i, measurement in enumerate(measurements):
-#             cls = measurement[0].__class__
-#             d = measurement[0]._copy_as_dict(copy_array=False)
-#
-#             measurement = [measurement[i:i + scan_divisions[1]] for i in range(0, len(measurement), scan_divisions[1])]
-#
-#             array = da.concatenate([da.concatenate([item.array for item in block], axis=1)
-#                                     for block in measurement], axis=0)
-#
-#             d['array'] = array
-#             measurements[i] = cls(**d)
-#
-#         return measurements
-
-
-@dataclass
-class DummyPotential:
-    ensemble_axes_metadata: list
-    ensemble_shape: tuple
-
-
-class SMatrixWaves(HasGridMixin, HasAcceleratorMixin):
+class SMatrixWaves(HasGridMixin, HasAcceleratorMixin, AbstractSMatrix):
 
     def __init__(self,
                  waves,
@@ -422,18 +112,6 @@ class SMatrixWaves(HasGridMixin, HasAcceleratorMixin):
         return (self.antialias_cutoff_gpts[0] // self.interpolation[0],
                 self.antialias_cutoff_gpts[1] // self.interpolation[1])
 
-    def dummy_probes(self, scan):
-
-        probe = Probe(gpts=self.cropping_window,
-                      extent=self.window_extent,
-                      energy=self.energy,
-                      device=self._device,
-                      semiangle_cutoff=self.planewave_cutoff)
-
-        probe.add_transform(scan)
-
-        return probe
-
     def reduce_to_waves(self, scan: AbstractScan, ctf: CTF) -> 'Waves':
         array = self.waves.array
 
@@ -449,21 +127,13 @@ class SMatrixWaves(HasGridMixin, HasAcceleratorMixin):
         if self.cropping_window != self.gpts:
             pixel_positions = positions / xp.array(self.waves.sampling) - xp.asarray(self._window_offset)
 
-
             crop_corner, size, corners = minimum_crop(pixel_positions, self.cropping_window)
             array = wrapped_crop_2d(array, crop_corner, size)
 
             array = xp.tensordot(coefficients, array, axes=[-1, -3])
             array = batch_crop_2d(array, corners, self.cropping_window)
-
-            # import matplotlib.pyplot as plt
-            # print(array.shape)
-            # plt.imshow(array[0,0,0].real)
-            # plt.show()
-
-
         else:
-            array = xp.tensordot(coefficients, self.waves.array, axes=[-1, -3])
+            array = xp.tensordot(coefficients, array, axes=[-1, -3])
 
         if len(self.waves.shape) > 3:
             num_extra_axes = len(self.waves.shape) - 3
@@ -477,10 +147,26 @@ class SMatrixWaves(HasGridMixin, HasAcceleratorMixin):
 
         return waves
 
-    def batch_reduce_to_measurements(self, scan, ctf, detectors, reduction_max_batch):
-        probe = self.dummy_probes(scan)
+    def dummy_probes(self, scan=None, ctf=None):
 
-        measurements = allocate_multislice_measurements(probe,
+        if ctf is None:
+            ctf = CTF(energy=self.waves.energy, semiangle_cutoff=self.planewave_cutoff)
+
+        probes = Probe.from_ctf(extent=self.window_extent,
+                                gpts=self.cropping_window,
+                                ctf=ctf,
+                                energy=self.energy,
+                                device=self._device)
+
+        if scan is not None:
+            probes = probes.insert_transform(scan)
+
+        return probes
+
+    def batch_reduce_to_measurements(self, scan, ctf, detectors, reduction_max_batch):
+        dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
+
+        measurements = allocate_multislice_measurements(dummy_probes,
                                                         detectors,
                                                         extra_ensemble_axes_shape=self.waves.ensemble_shape[:-1],
                                                         extra_ensemble_axes_metadata=
@@ -528,15 +214,17 @@ class SMatrixWaves(HasGridMixin, HasAcceleratorMixin):
                        waves_partial=self.waves.ensemble_partial(),
                        kwargs=kwargs)
 
-    def _scan_chunks(self, scan):
+    def _chunk_extents(self):
         chunks = self.waves.chunks[-2:]
-        extents = tuple(tuple((cc[0] * d, cc[1] * d) for cc in c) for c, d in zip(chunk_range(chunks), self.sampling))
-        return scan.chunks_from_extents(extents)
+        return tuple(tuple((cc[0] * d, cc[1] * d) for cc in c) for c, d in zip(chunk_range(chunks), self.sampling))
 
     def _window_overlap(self):
         return self.cropping_window[0] // 2, self.cropping_window[1] // 2
 
     def _overlap_depth(self):
+        if self.cropping_window == self.gpts:
+            return 0
+
         window_overlap = self._window_overlap()
         return [{**{i: 0 for i in range(0, len(self.waves.shape) - 2)},
                  **{j: window_overlap[i] for i, j in
@@ -577,7 +265,12 @@ class SMatrixWaves(HasGridMixin, HasAcceleratorMixin):
                     reduction_max_batch,
                     block_info=None):
 
-        scan = scan.select_block(block_info[0]['chunk-location'][-2:], scan_chunks)
+        if len(scan.ensemble_shape) == 1:
+            block_index = np.ravel_multi_index(block_info[0]['chunk-location'][-2:], block_info[0]['num-chunks'][-2:]),
+        else:
+            block_index = block_info[0]['chunk-location'][-2:]
+
+        scan = scan.select_block(block_index, scan_chunks)
 
         s_matrix = s_matrix_partial(array, window_overlap=window_overlap, block_info=block_info)
 
@@ -587,12 +280,63 @@ class SMatrixWaves(HasGridMixin, HasAcceleratorMixin):
         arr.itemset(measurements)
         return arr
 
+    # def multislice(self,
+    #                potential: Union[Atoms, AbstractPotential],
+    #                start: int = 0,
+    #                stop: int = None,
+    #                chunks: int = None,
+    #                conjugate: bool = False) -> 'SMatrixArray':
+    #     """
+    #     Propagate the scattering matrix through the provided potential.
+    #
+    #     Parameters
+    #     ----------
+    #     potential : AbstractPotential object
+    #         Scattering potential.
+    #
+    #     Returns
+    #     -------
+    #     Waves object.
+    #         Probe exit wave functions for the provided positions.
+    #     """
+    #
+    #     if chunks is None:
+    #         chunks = len(self)
+    #
+    #     potential = validate_potential(potential)
+    #
+    #     waves = self.to_waves()
+    #
+    #     if self._is_streaming:
+    #         waves._array = waves._array.map_blocks(cp.asarray)
+    #         waves = waves.multislice(potential, start=start, stop=stop, conjugate=conjugate)
+    #         waves._array = waves._array.map_blocks(cp.asnumpy)
+    #
+    #     else:
+    #         waves = waves.multislice(potential, start=start, stop=stop)
+    #
+    #     return self.from_waves(waves)
+    #
+
+    #     def streaming_multislice(self, potential, chunks=None, **kwargs):
+    #
+    #         for chunk_start, chunk_stop in generate_chunks(len(self), chunks=chunks):
+    #             extra_axes_metadata = self.extra_axes_metadata + [PrismPlaneWavesAxis()]
+    #             waves = Waves(self.array[chunk_start:chunk_stop], energy=self.energy, sampling=self.sampling,
+    #                           extra_axes_metadata=extra_axes_metadata)
+    #             waves = waves.copy('gpu')
+    #             self._array[chunk_start:chunk_stop] = waves.multislice(potential, **kwargs).copy('cpu').array
+    #
+    #         return self
+    #
+
     def reduce(self,
-               scan: AbstractScan,
+               scan: AbstractScan = None,
                ctf: CTF = None,
                detectors: Union[AbstractDetector, List[AbstractDetector]] = None,
                reduction_max_batch: Union[int, str] = 'auto',
-               rechunk_scheme: Union[Tuple[int, int], str] = 'auto'):
+               rechunk_scheme: Union[Tuple[int, int], str] = 'auto',
+               lazy: bool = None):
 
         """
         Scan the probe across the potential and record a measurement for each detector.
@@ -614,24 +358,33 @@ class SMatrixWaves(HasGridMixin, HasAcceleratorMixin):
             dependent on
         """
 
+        self.accelerator.check_is_defined()
+
         if ctf is None:
-            ctf = CTF(energy=self.waves.energy)
+            ctf = CTF(energy=self.waves.energy, semiangle_cutoff=self.planewave_cutoff)
+
+        if scan is None:
+            scan = self.waves.extent[0] / 2, self.waves.extent[1] / 2
+
+        scan = validate_scan(scan, Probe.from_ctf(extent=self.extent, ctf=ctf, energy=self.energy))
+
+        detectors = validate_detectors(detectors)
+
+        reduction_max_batch = self._validate_reduction_max_batch(scan, reduction_max_batch)
 
         if self.waves.is_lazy:
-            probe = self.dummy_probes(scan)
-
             chunks = self._validate_rechunk_scheme(rechunk_scheme=rechunk_scheme)
 
             self.rechunk_planewaves(chunks=chunks)
 
-            reduction_max_batch = self._validate_reduction_max_batch(scan, reduction_max_batch)
+            scan, scan_chunks = scan.sort_into_extents(self._chunk_extents())
 
-            chunks = self.waves.chunks[:-3] + self._scan_chunks(scan)
+            chunks = self.waves.chunks[:-3] + (1, 1)
 
             array = da.map_overlap(self.lazy_reduce,
                                    self.waves.array,
                                    scan=scan,
-                                   scan_chunks=chunks[-2:],
+                                   scan_chunks=scan_chunks,
                                    drop_axis=len(self.waves.shape) - 3,
                                    align_arrays=False,
                                    chunks=chunks,
@@ -645,16 +398,37 @@ class SMatrixWaves(HasGridMixin, HasAcceleratorMixin):
                                    boundary='periodic',
                                    meta=np.array((), dtype=np.complex64))
 
+            dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
+
+            if len(scan.ensemble_shape) != 2:
+                array = array.reshape(array.shape[:-2] + (array.shape[-2] * array.shape[-1],))
+
+            chunks = self.waves.chunks[:-3] + scan_chunks
+
             return finalize_lazy_measurements(array,
-                                              waves=probe,
+                                              waves=dummy_probes,
                                               detectors=detectors,
-                                              extra_ensemble_axes_metadata=self.waves.ensemble_axes_metadata[:-1])
+                                              extra_ensemble_axes_metadata=self.waves.ensemble_axes_metadata[:-1],
+                                              chunks=chunks)
 
         else:
-            return self.batch_reduce_to_measurements(scan, ctf, detectors, reduction_max_batch)
+
+            measurements = self.batch_reduce_to_measurements(scan, ctf, detectors, reduction_max_batch)
+
+            measurements = tuple(measurement.squeeze() for measurement in measurements)
+
+            return measurements if len(measurements) > 1 else measurements[0]
+
+    def compute(self, **kwargs):
+        self.waves.compute(**kwargs)
+        return self
 
 
-class SMatrix(WavesLikeMixin):
+def round_gpts_to_multiple_of_interpolation(gpts: Tuple[int, int], interpolation: Tuple[int, int]) -> Tuple[int, int]:
+    return tuple(n + (-n) % f for f, n in zip(interpolation, gpts))  # noqa
+
+
+class SMatrix(WavesLikeMixin, AbstractSMatrix):
     """
     Scattering matrix builder class
 
@@ -663,29 +437,35 @@ class SMatrix(WavesLikeMixin):
 
     Parameters
     ----------
-    potential : Atoms or AbstractPotential
-        Potential or atoms
-    energy : float
-        Electron energy [eV].
     planewave_cutoff : float
-        The radial cutoff of the plane wave expansion [mrad]. Default is 30 mrad.
+        The radial cutoff of the plane wave expansion [mrad].
+    potential : Atoms or AbstractPotential, optional
+        Potential or atoms
+    energy : float, optional
+        Electron energy [eV].
     interpolation : one or two int, optional
         Interpolation factor. Default is 1 (no interpolation).
     extent : one or two float, optional
-        Lateral extent of wave functions [Å]. Default is None (inherits the extent from the potential).
+        Lateral extent of wave functions [Å]. Provide only is potential is not given.
     gpts : one or two int, optional
-        Number of grid points describing the wave functions. Default is None (inherits the gpts from the potential).
+        Number of grid points describing the wave functions. Provide only is potential is not given.
     sampling : one or two float, optional
-        Lateral sampling of wave functions [1 / Å]. Default is None (inherits the sampling from the potential).
-    chunks : int, optional
-        Number of PRISM plane waves in each chunk.
+        Lateral sampling of wave functions [1 / Å]. Provide only is potential is not given.
     tilt : two float
         Small angle beam tilt [mrad].
-    downsample : float or str or bool
+    downsample : {'cutoff', 'valid'} or float or bool
         If not False, the scattering matrix is downsampled to a maximum given scattering angle after running the
-        multislice algorithm. If downsample is given as a float angle may be given as a float
+        multislice algorithm.
 
-        is given the scattering matrix is downsampled to a maximum scattering angle
+            ``cutoff`` or True :
+                Downsample to the antialias cutoff scattering angle.
+
+            ``valid`` :
+                Downsample to the largest rectangle inside the circle with a the radius defined by the antialias cutoff
+                scattering angle.
+
+            float :
+                Downsample to a maximum scattering angle specified by a float.
     device : str, optional
         The calculations will be carried out on this device. Default is 'cpu'.
     store_on_host : bool
@@ -694,16 +474,16 @@ class SMatrix(WavesLikeMixin):
     """
 
     def __init__(self,
+                 planewave_cutoff: float,
                  potential: Union[Atoms, AbstractPotential] = None,
                  energy: float = None,
-                 planewave_cutoff: float = 30.,
                  interpolation: Union[int, Tuple[int, int]] = 1,
-                 normalize: bool = True,
-                 downsample: bool = 'cutoff',
+                 normalize: str = 'intensity',
+                 downsample: Union[bool, str] = 'cutoff',
+                 tilt: Tuple[float, float] = None,
                  extent: Union[float, Tuple[float, float]] = None,
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
-                 tilt: Tuple[float, float] = None,
                  device: str = None,
                  store_on_host: bool = False):
 
@@ -725,7 +505,16 @@ class SMatrix(WavesLikeMixin):
         self._normalize = normalize
         self._store_on_host = store_on_host
 
-        self._extra_axes_metadata = []
+        if not all(n % f == 0 for f, n in zip(self.interpolation, self.gpts)):
+            warnings.warn('the interpolation factor does not exactly divide gpts, normalization may not be preserved')
+
+    def round_gpts_to_interpolation(self):
+        rounded = round_gpts_to_multiple_of_interpolation(self.gpts, self.interpolation)
+        if rounded == self.gpts:
+            return self
+
+        self.gpts = rounded
+        return self
 
     @property
     def downsample(self):
@@ -803,71 +592,77 @@ class SMatrix(WavesLikeMixin):
                                  device=self.device)
         return chunks
 
-    @staticmethod
-    def _build_plane_waves_multislice_downsample(*args,
-                                                 downsample,
-                                                 planewave_cutoff,
-                                                 extent,
-                                                 gpts,
-                                                 energy,
-                                                 interpolation,
-                                                 store_on_host,
-                                                 start,
-                                                 stop,
-                                                 device='cpu',
-                                                 potential_partial=None):
-        xp = get_array_module(device)
+    def downsampled_gpts(self) -> Tuple[int, int]:
+        if self.downsample:
+            downsampled_gpts = self._gpts_within_angle(self.downsample)
+            return round_gpts_to_multiple_of_interpolation(downsampled_gpts, self.interpolation)
+        else:
+            return self.gpts
 
-        wave_vectors = prism_wave_vectors(planewave_cutoff, extent, energy, interpolation, xp=xp)
-        array = plane_waves(wave_vectors[slice(*args[-1][0])], extent, gpts)
+    def _build_s_matrix(self, wave_vector_range=None, start=0, stop=None):
 
-        normalization_constant = np.prod(gpts) * xp.sqrt(len(wave_vectors)) / np.prod(interpolation)
+        xp = get_array_module(self.device)
+
+        wave_vectors = xp.asarray(self.wave_vectors)
+
+        if wave_vector_range is not None:
+            wave_vectors = wave_vectors[wave_vector_range]
+
+        array = plane_waves(wave_vectors, self.extent, self.gpts)
+
+        if all(n % f == 0 for f, n in zip(self.interpolation, self.gpts)):
+            normalization_constant = np.prod(self.gpts) * xp.sqrt(len(wave_vectors)) / np.prod(self.interpolation)
+
+        else:
+            cropping_window = self.gpts[0] // self.interpolation[0], self.gpts[1] // self.interpolation[1]
+            corner = cropping_window[0] // 2, cropping_window[1] // 2
+            cropped_array = wrapped_crop_2d(array, corner, cropping_window)
+            normalization_constant = xp.sqrt(abs2(fft2(cropped_array.sum(0))).sum())
+
         array = array / normalization_constant.astype(xp.float32)
-        # else:
         #    array = array / xp.sqrt(np.prod(gpts).astype(xp.float32))
 
-        waves = Waves(array, energy=energy, extent=extent, ensemble_axes_metadata=[OrdinalAxis()])
-
-        if potential_partial is not None:
-            potential = potential_partial(args[0]).item()
-            waves = multislice(waves, potential, start, stop=stop)
-
-        if downsample:
-            waves = waves.downsample(max_angle=downsample)
-
-        array = waves.array[None]
-
-        if store_on_host and device == 'gpu':
-            with cp.cuda.Stream():
-                array = cp.asnumpy(array)
-
-        return array
-
-    def _lazy_build_plane_waves_multislice_downsample(self, start: int = 0, stop: int = None):
+        waves = Waves(array, energy=self.energy, extent=self.extent, ensemble_axes_metadata=[OrdinalAxis()])
 
         if self.potential is not None:
-            potential_partial = self.potential.ensemble_partial()
-        else:
-            potential_partial = None
+            waves = multislice(waves, self.potential, start, stop=stop)
 
-        return partial(self._build_plane_waves_multislice_downsample,
-                       downsample=self.downsample,
-                       planewave_cutoff=self.planewave_cutoff,
-                       extent=self.extent,
-                       gpts=self.gpts,
-                       energy=self.energy,
-                       interpolation=self.interpolation,
-                       store_on_host=self.store_on_host,
-                       start=start,
-                       stop=stop,
-                       potential_partial=potential_partial,
-                       device=self.device)
+        if self.downsampled_gpts() != self.gpts:
+            waves = waves.downsample(gpts=self.downsampled_gpts(), normalization='intensity')
+
+        if self.store_on_host and self.device == 'gpu':
+            with cp.cuda.Stream():
+                waves._array = cp.asnumpy(waves.array)
+
+
+
+        return waves
+
+    @staticmethod
+    def _wrapped_build_s_matrix(*args, s_matrix_partial):
+        s_matrix = s_matrix_partial(*args[:-1])
+        wave_vector_range = slice(*args[-1][0, 0])
+        return s_matrix._build_s_matrix(wave_vector_range).array[None, None]
+
+    def _s_matrix_partial(self):
+        def s_matrix(*args, potential_partial, **kwargs):
+            if potential_partial is not None:
+                potential = potential_partial(*args + (np.array([None], dtype=object),)).item()
+            else:
+                potential = None
+            return SMatrix(potential=potential, **kwargs)
+
+        potential_partial = self.potential.ensemble_partial() if self.potential is not None else None
+        return partial(s_matrix, potential_partial=potential_partial, **self._copy_as_dict(copy_potential=False))
+
+    def dummy_probes(self, scan=None, ctf=None):
+        return self.build(lazy=True).dummy_probes(scan=scan, ctf=ctf)
 
     def build(self,
               start: int = 0,
               stop: int = None,
               lazy: bool = None,
-              max_batch: Union[int, str] = 'auto'):
+              max_batch: Union[int, str] = 'auto') -> SMatrixWaves:
 
         """
         Build the plane waves of the scattering matrix and propagate the waves through the potential using the
@@ -882,11 +677,12 @@ class SMatrix(WavesLikeMixin):
             in the reverse direction. Default is last slice of the potential.
         lazy : bool
             If True, build the scattering matrix lazily with dask array.
+        max_batch : 'auto' or str
 
 
         Returns
         -------
-        SMatrixArray
+        SMatrixWaves
         """
 
         initialize()
@@ -895,36 +691,41 @@ class SMatrix(WavesLikeMixin):
 
         wave_vector_chunks = self._wave_vector_chunks(max_batch)
 
-        potential_blocks = self.potential.ensemble_blocks()[0]
+        downsampled_gpts = self.downsampled_gpts()
 
-        gpts = self._gpts_within_angle(self.downsample)
+        if self.potential is not None:
+            potential_blocks = self.potential.ensemble_blocks()[0], (0,)
+            ensemble_axes_metadata = self.potential.ensemble_axes_metadata[:-1] + [AxisMetadata()]
+        else:
+            potential_blocks = da.from_array(np.array([None], dtype=object), chunks=1), (0,)
+            ensemble_axes_metadata = [AxisMetadata(), AxisMetadata()]
 
-        s_matrix_arrays = []
-        for i in range(len(potential_blocks)):
-            wave_vector_blocks = da.from_array(chunk_range(wave_vector_chunks)[0], chunks=(1, 2), name=False)
+        wave_vector_blocks = np.array(chunk_range(wave_vector_chunks)[0], dtype=int)
+        wave_vector_blocks = np.tile(wave_vector_blocks[None], (len(potential_blocks[0]), 1, 1))
 
-            arr = da.blockwise(self._lazy_build_plane_waves_multislice_downsample(start=start, stop=stop),
-                               (0, 1, 2, 3),
-                               potential_blocks[[i]], (0,),
-                               wave_vector_blocks, (1, -1),
-                               new_axes={2: (gpts[0],), 3: (gpts[1],)},
-                               adjust_chunks={1: wave_vector_chunks[0]},
+        if lazy:
+            wave_vector_blocks = da.from_array(wave_vector_blocks, chunks=(1, 1, 2), name=False)
+            blocks = potential_blocks + (wave_vector_blocks, (0, 2, -1))
+            arr = da.blockwise(self._wrapped_build_s_matrix,
+                               tuple(range(5)),
+                               *blocks,
+                               new_axes={1: (1,), 3: (downsampled_gpts[0],), 4: (downsampled_gpts[1],)},
+                               adjust_chunks={2: wave_vector_chunks[0]},
                                concatenate=True,
-                               meta=np.array((), dtype=np.complex64))
+                               meta=np.array((), dtype=np.complex64),
+                               **{'s_matrix_partial': self._s_matrix_partial()})
 
-            s_matrix_arrays.append(arr)
+            waves = Waves(arr,
+                          energy=self.energy,
+                          extent=self.extent,
+                          ensemble_axes_metadata=ensemble_axes_metadata + self.base_axes_metadata[:1])
 
-        concat_s_matrix_arrays = da.concatenate(s_matrix_arrays)
+        else:
+            waves = self._build_s_matrix()
 
-        waves = Waves(concat_s_matrix_arrays,
-                      energy=self.energy,
-                      extent=self.extent,
+        waves = waves.squeeze(axis=tuple(range(len(waves.shape) - 3)))
 
-                      ensemble_axes_metadata=self.potential.ensemble_axes_metadata + self.base_axes_metadata[:1])
-
-        waves = waves.squeeze()
-
-        cropping_window = self.gpts[0] // self.interpolation[0], self.gpts[1] // self.interpolation[1]
+        cropping_window = downsampled_gpts[0] // self.interpolation[0], downsampled_gpts[1] // self.interpolation[1]
 
         return SMatrixWaves(waves,
                             wave_vectors=self.wave_vectors,
@@ -937,9 +738,8 @@ class SMatrix(WavesLikeMixin):
              scan: Union[np.ndarray, AbstractScan] = None,
              detectors: Union[AbstractDetector, List[AbstractDetector]] = None,
              ctf: Union[CTF, Dict] = None,
-             distribute_scan: Union[bool, Tuple[int, int]] = False,
-             probes_per_reduction: int = None,
-             downsample: Union[float, str] = 'cutoff',
+             multislice_max_batch: Union[str, int] = 'auto',
+             reduction_max_batch: Union[str, int] = 'auto',
              lazy: bool = None) -> Union[Waves, AbstractMeasurement, List[AbstractMeasurement]]:
 
         """
@@ -961,82 +761,45 @@ class SMatrix(WavesLikeMixin):
         lazy : bool
 
         """
+        if scan is None:
+            scan = GridScan()
 
-        ctf = self._validate_ctf(ctf)
+        return self.build(max_batch=multislice_max_batch, lazy=lazy).reduce(scan=scan,
+                                                                            detectors=detectors,
+                                                                            reduction_max_batch=reduction_max_batch,
+                                                                            ctf=ctf)
 
-        if ctf.semiangle_cutoff is None:
-            ctf.semiangle_cutoff = self.planewave_cutoff
+    def reduce(self,
+               scan: Union[np.ndarray, AbstractScan] = None,
+               detectors: Union[AbstractDetector, List[AbstractDetector]] = None,
+               ctf: Union[CTF, Dict] = None,
+               multislice_max_batch: Union[str, int] = 'auto',
+               reduction_max_batch: Union[str, int] = 'auto',
+               lazy: bool = None):
 
-        scan = validate_scan(scan, self.comparable_probe(ctf, interpolated=False))
-
-        detectors = validate_detectors(detectors)
-
-        multislice_start_stop, detect_every, axes_metadata = thickness_series_precursor(detectors, self.potential)
-
-        if len(multislice_start_stop) == 1:
-            return self.build(lazy=lazy, downsample=downsample).reduce(positions=scan,
-                                                                       detectors=detectors,
-                                                                       distribute_scan=distribute_scan,
-                                                                       probes_per_reduction=probes_per_reduction)
-        else:
-            if not lazy:
-                raise RuntimeError()
-
-        measurements = []
-        for i, (s_matrix, potential) in enumerate(self.generate_distribution(stop=0, yield_potential=True)):
-
-            thickness_series = defaultdict(list)
-            for i, (start, stop) in enumerate(multislice_start_stop):
-
-                s_matrix = s_matrix.multislice(potential, start, stop)
-
-                if downsample:
-                    downsampled_s_matrix = s_matrix.downsample(max_angle=downsample)
-                else:
-                    downsampled_s_matrix = s_matrix
-
-                detectors_at = detectors_at_stop_slice(detect_every, stop)
-
-                new_measurements = downsampled_s_matrix.reduce(detectors_at,
-                                                               scan,
-                                                               distribute_scan=distribute_scan,
-                                                               probes_per_reduction=probes_per_reduction)
-
-                new_measurements = [new_measurements] if not isinstance(new_measurements, list) else new_measurements
-
-                for detector, new_measurement in zip(detectors_at, new_measurements):
-                    thickness_series[detector].append(new_measurement)
-
-            measurements.append(stack_thickness_series(thickness_series, detectors, axes_metadata))
-
-        measurements = stack_frozen_phonons(measurements, detectors)
-
-        measurements = [measurement.squeeze() for measurement in measurements]
-
-        if len(measurements) == 1:
-            return measurements[0]
-        else:
-            return ComputableList(measurements)
+        return self.build(max_batch=multislice_max_batch, lazy=lazy).reduce(scan=scan,
+                                                                            detectors=detectors,
+                                                                            reduction_max_batch=reduction_max_batch,
+                                                                            ctf=ctf)
 
     def _copy_as_dict(self, copy_potential: bool = True):
-        potential = self.potential
 
-        if copy_potential and self.potential is not None:
-            potential = potential.copy()
-
-        d = {'potential': potential,
-             'energy': self.energy,
+        d = {'energy': self.energy,
              'planewave_cutoff': self.planewave_cutoff,
              'interpolation': self.interpolation,
-             'partitions': self.partitions,
+             'downsample': self.downsample,
              'normalize': self.normalize,
              'extent': self.extent,
              'gpts': self.gpts,
              'sampling': self.sampling,
-             'chunks': self.chunks,
              'store_on_host': self._store_on_host,
              'tilt': self.tilt,
              'device': self._device}
+
+        if copy_potential:
+            potential = self.potential.copy() if self.potential is not None else None
+            d['potential'] = potential
+
         return d
 
     def __copy__(self) -> 'SMatrix':

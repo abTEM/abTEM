@@ -58,6 +58,39 @@ class WaveTransform(Ensemble):
         pass
 
 
+class EmptyEnsemble(Ensemble):
+
+    @property
+    def default_ensemble_chunks(self):
+        return ()
+
+    @property
+    def ensemble_axes_metadata(self):
+        return []
+
+    def ensemble_blocks(self, chunks=None):
+        return ()
+
+    def ensemble_partial(self):
+
+        def new(*args):
+            arr = np.zeros((), dtype=object)
+            arr.itemset(self.__class__())
+            return arr
+
+        return partial(new)
+
+    @property
+    def ensemble_shape(self):
+        return ()
+
+
+class WaveRenormalization(EmptyEnsemble, WaveTransform):
+
+    def apply(self, waves):
+        return waves.renormalize()
+
+
 class ArrayWaveTransform(WaveTransform):
 
     def _get_polar_spatial_frequencies(self, waves):
@@ -116,6 +149,15 @@ class CompositeWaveTransform(WaveTransform):
 
         self._wave_transforms = wave_transforms
         super().__init__()
+
+    def insert_transform(self, transform, index):
+        self._wave_transforms.insert(transform, index)
+
+    def __len__(self):
+        return len(self.wave_transforms)
+
+    def __iter__(self):
+        return iter(self.wave_transforms)
 
     @property
     def wave_transforms(self):
@@ -275,7 +317,7 @@ class Aperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
                  semiangle_cutoff: Union[float, Distribution],
                  energy: float = None,
                  taper: float = 0.,
-                 normalize: bool = False):
+                 normalize: bool = True):
 
         self._taper = taper
         self._normalize = normalize
@@ -323,9 +365,6 @@ class Aperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
         else:
 
             array = xp.array(alpha <= semiangle_cutoff).astype(xp.float32)
-
-        if self._normalize:
-            array = array / xp.sqrt(array.sum((-2, -1), keepdims=True))
 
         return array
 

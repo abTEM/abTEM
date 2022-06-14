@@ -61,6 +61,12 @@ class Ensemble(metaclass=ABCMeta):
     def ensemble_partial(self):
         pass
 
+    def validate_chunks(self, chunks, limit=None):
+        if chunks is None:
+            chunks = self.default_ensemble_chunks
+
+        return validate_chunks(self.ensemble_shape, chunks, limit=limit)
+
     def ensemble_chunks(self, max_batch=None, base_shape=(), dtype=np.dtype('complex64')):
 
         shape = self.ensemble_shape
@@ -94,12 +100,8 @@ class Ensemble(metaclass=ABCMeta):
         #
         # return validate_chunks(shape, chunks, limit=max_batch, dtype=dtype)[:-2]
 
-    def _ensemble_blockwise(self, chunks=None, max_batch=None):
-        if chunks is None:
-            chunks = validate_chunks(self.ensemble_shape, self.default_ensemble_chunks, limit=max_batch)
-        else:
-            chunks = validate_chunks(self.ensemble_shape, chunks, limit=max_batch)
-
+    def _ensemble_blockwise(self, chunks=None, limit=None):
+        chunks = self.validate_chunks(chunks, limit=limit)
         partial = self.ensemble_partial()
         blocks = self.ensemble_blocks(chunks)
         return ensemble_blockwise(partial, blocks)

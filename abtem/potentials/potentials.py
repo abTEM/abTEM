@@ -14,7 +14,7 @@ from abtem.core.axes import ThicknessAxis, HasAxes, RealSpaceAxis
 from abtem.core.backend import get_array_module, validate_device, copy_to_device, device_name_from_array_module
 from abtem.core.blockwise import Ensemble
 from abtem.core.complex import complex_exponential
-from abtem.core.dask import HasDaskArray, validate_chunks
+from abtem.core.dask import HasDaskArray, validate_chunks, validate_lazy
 from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
 from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.utils import generate_chunks
@@ -168,24 +168,26 @@ class PotentialBuilder(AbstractPotential):
               lazy: bool = None,
               keep_ensemble_dims: bool = False) -> 'PotentialArray':
 
+        lazy = validate_lazy(lazy)
+
         if last_slice is None:
             last_slice = len(self)
 
         def build(potential):
             potential = potential.item()
-            indices = (None,) * len(potential.ensemble_shape)
-            return potential.build().array[indices]
+            indices = (None,) * len(potential.ensemble_shape[:-1])
+            return potential.build(lazy=False).array[indices]
 
         if lazy:
             blocks = self._ensemble_blockwise(self.default_ensemble_chunks)
 
-            chunks = validate_chunks(self.ensemble_shape, (1, -1))
+            chunks = validate_chunks(self.ensemble_shape[:-1], (1,))
 
             chunks = chunks + ((len(self),),) + ((self.gpts[0],), (self.gpts[1],))
 
-
             array = blocks.map_blocks(build,
-                                      new_axis=(2, 3, 4),
+                                      new_axis=(1, 2, 3),
+                                      drop_axis=(1,),
                                       chunks=chunks,
                                       dtype=np.float32)
 
@@ -921,7 +923,11 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
 
     @property
     def ensemble_shape(self) -> Tuple[int, ...]:
-        return self.array.shape[:-3]
+        shape = self.array.shape[:-3]
+        if len(shape) == 0:
+            shape = (1,)
+
+        return shape + (len(self.exit_planes),)
 
     @property
     def base_shape(self):
@@ -941,10 +947,14 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
                 RealSpaceAxis(label='y', sampling=self.sampling[1], units='Å', endpoint=False)]
 
     def squeeze(self):
+        if len(self.array.shape) < 4:
+            return self
+
         d = self._copy_as_dict(copy_array=False)
-        d['ensemble_axes_metadata'] = [m for s, m in zip(self.ensemble_shape, self.ensemble_axes_metadata) if
-                                       s != 1]
-        d['array'] = self.array[tuple(0 if s == 1 else slice(None) for s in self.ensemble_shape)]
+        d['ensemble_axes_metadata'] = [m for s, m in zip(self.ensemble_shape[:-1],
+                                                         self.ensemble_axes_metadata[:-1]) if s != 1]
+
+        d['array'] = self.array[tuple(0 if s == 1 else slice(None) for s in self.ensemble_shape[:-1])]
         return self.__class__(**d)
 
     @property
@@ -961,6 +971,7 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
 
     def _copy_as_dict(self, copy_array: bool = True) -> dict:
         d = {'slice_thickness': self.slice_thickness.copy(),
+             'exit_planes': self.exit_planes,
              'extent': self.extent}
         if copy_array:
             d['array'] = self.array.copy()
@@ -980,11 +991,32 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
     def build(self, first_slice: int = 0, last_slice: int = None, chunks: int = 1, lazy: bool = None):
         return self
 
-    def ensemble_blocks(self, chunks):
-        raise NotImplementedError
+    def ensemble_blocks(self, chunks=(1, -1)):
+        chunks = validate_chunks(self.ensemble_shape, chunks)
+        blocks = self.array.to_delayed()
+
+        if len(self.array.shape) > 3:
+            blocks = blocks[..., 0, 0, 0]
+        else:
+            blocks = blocks[..., 0, 0]
+
+        blocks = da.concatenate([da.from_delayed(block, dtype=object, shape=(1,)) for block in blocks])
+
+        return blocks, self._exit_plane_blocks(chunks[1:])
 
     def ensemble_partial(self):
-        raise NotImplementedError
+
+        def potential(*args, potential_kwargs):
+            array = args[0]
+            exit_planes = args[1].item()
+            arr = np.empty((1, 1), dtype=object)
+            arr[0, 0] = PotentialArray(array, exit_planes=exit_planes, **potential_kwargs)
+            return arr
+
+        potential_kwargs = self._copy_as_dict(copy_array=False)
+        del potential_kwargs['exit_planes']
+
+        return partial(potential, potential_kwargs=potential_kwargs)
 
     def generate_slices(self, first_slice=0, last_slice=None):
 

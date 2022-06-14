@@ -2,6 +2,7 @@
 import itertools
 from abc import ABCMeta, abstractmethod
 from copy import deepcopy
+from functools import partial
 from typing import Union, Tuple, TYPE_CHECKING
 
 import dask.array as da
@@ -16,23 +17,11 @@ from abtem.core.dask import validate_chunks, chunk_range
 from abtem.core.distributions import MultidimensionalAxisAlignedDistribution
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
+from abtem.core.utils import safe_floor_int
 from abtem.waves.transfer import ArrayWaveTransform
 
 if TYPE_CHECKING:
     pass
-
-
-def validate_scan(scan, probe=None):
-    if scan is None:
-        scan = GridScan()
-
-    if not hasattr(scan, 'get_positions'):
-        scan = CustomScan(scan)
-
-    if probe is not None:
-        scan.match_probe(probe)
-
-    return scan
 
 
 class AbstractScan(ArrayWaveTransform, metaclass=ABCMeta):
@@ -72,6 +61,37 @@ class AbstractScan(ArrayWaveTransform, metaclass=ABCMeta):
     def limits(self):
         pass
 
+    @classmethod
+    @abstractmethod
+    def from_blocks(cls, blocks):
+        pass
+
+    @abstractmethod
+    def sort_into_extents(self, extents):
+        pass
+
+    def ensemble_partial(self):
+        def scan(*args, cls):
+            blocks = tuple(arg.item() for arg in args)
+            arr = np.empty((1,) * len(args), dtype=object)
+            arr[0] = cls.from_blocks(blocks)
+            return arr
+
+        return partial(scan, cls=self.__class__)
+
+    def select_block(self, block_index, chunks):
+        blocks = self.ensemble_blocks(chunks, lazy=False)
+        blocks = tuple(block[index] for block, index in zip(blocks, block_index))
+        return self.from_blocks(blocks)
+
+    def generate_scans(self, chunks):
+        chunks = self.validate_chunks(chunks)
+
+        for blocks, indices in zip(itertools.product(*self.ensemble_blocks(chunks, lazy=False)),
+                                   itertools.product(*chunk_range(chunks))):
+            slic = tuple(slice(*i) for i in indices)
+            yield slic, self.from_blocks(blocks)
+
     def evaluate(self, waves):
         device = validate_device(waves.device)
         xp = get_array_module(device)
@@ -91,6 +111,19 @@ class AbstractScan(ArrayWaveTransform, metaclass=ABCMeta):
     def copy(self):
         """Make a copy."""
         return deepcopy(self)
+
+
+def validate_scan(scan: Union[AbstractScan, Tuple[float, float], np.ndarray], probe=None) -> AbstractScan:
+    if scan is None:
+        scan = GridScan()
+
+    if not hasattr(scan, 'get_positions'):
+        scan = CustomScan(scan)
+
+    if probe is not None:
+        scan.match_probe(probe)
+
+    return scan
 
 
 class SourceOffset(AbstractScan):
@@ -164,11 +197,7 @@ class CompoundScan(AbstractScan):
         return [PositionsAxis()] * len(self.shape)
 
     def ensemble_blocks(self, chunks=None):
-        if chunks is None:
-            chunks = self.default_ensemble_chunks
-
-        chunks = validate_chunks(self.ensemble_shape, chunks, limit=None)
-
+        chunks = self.validate_chunks(self.ensemble_shape, chunks)
         blocks = ()
         for parameter, n in zip(self._distribution.factors, chunks):
             blocks += (parameter.divide(n, lazy=True),)
@@ -212,16 +241,41 @@ class CustomScan(AbstractScan):
     def ensemble_axes_metadata(self):
         return [PositionsAxis()]
 
-    def ensemble_blocks(self, chunks):
-        chunks = validate_chunks(self.ensemble_shape, chunks)
+    def ensemble_blocks(self, chunks=None, lazy=True):
+        chunks = self.validate_chunks(chunks)
         cumchunks = tuple(np.cumsum(chunks[0]))
         positions = np.empty(len(chunks[0]), dtype=object)
+
         for i, (start_chunk, chunk) in enumerate(zip((0,) + cumchunks, chunks[0])):
             positions[i] = CustomScan(self._positions[start_chunk:start_chunk + chunk])
-        return da.from_array(positions, chunks=1),
 
-    def ensemble_partial(self):
-        return lambda x: x
+        if lazy:
+            positions = da.from_array(positions, chunks=1)
+
+        return positions,
+
+    def sort_into_extents(self, extents):
+        new_positions = np.zeros_like(self.positions)
+        chunks = ()
+        start = 0
+        for x_extents, y_extents in itertools.product(*extents):
+            mask = (self.positions[:, 0] >= x_extents[0]) * \
+                   (self.positions[:, 0] < x_extents[1]) * \
+                   (self.positions[:, 1] >= y_extents[0]) * \
+                   (self.positions[:, 1] < y_extents[1])
+
+            n = np.sum(mask)
+            chunks += (n,)
+            stop = start + n
+            new_positions[start:stop] = self.positions[mask]
+            start = stop
+
+        assert sum(chunks) == len(self)
+        return CustomScan(new_positions), (chunks,)
+
+    @classmethod
+    def from_blocks(cls, blocks):
+        return cls(blocks[0].positions)
 
     @property
     def shape(self):
@@ -612,54 +666,22 @@ class GridScan(HasGridMixin, AbstractScan):
         return 'auto', 'auto'
 
     @classmethod
-    def from_blocks(cls, x_scan, y_scan):
+    def from_blocks(cls, blocks):
+        x_scan, y_scan = blocks
         start = (x_scan['start'], y_scan['start'])
         end = (x_scan['end'], y_scan['end'])
         gpts = (x_scan['gpts'], y_scan['gpts'])
         endpoint = (x_scan['endpoint'], y_scan['endpoint'])
         return GridScan(start=start, end=end, gpts=gpts, endpoint=endpoint)
 
-    def chunks_from_extents(self, extents):
+    def sort_into_extents(self, extents):
         x_chunks = tuple(
-            int(np.floor(e[1] / self.sampling[0])) - int(np.floor(e[0] / self.sampling[0])) for e in extents[0])
+            safe_floor_int(e[1] / self.sampling[0]) - safe_floor_int(e[0] / self.sampling[0]) for e in extents[0])
         assert sum(x_chunks) == self.gpts[0]
         y_chunks = tuple(
-            int(np.floor(e[1] / self.sampling[1])) - int(np.floor(e[0] / self.sampling[1])) for e in extents[1])
+            safe_floor_int(e[1] / self.sampling[1]) - safe_floor_int(e[0] / self.sampling[1]) for e in extents[1])
         assert sum(y_chunks) == self.gpts[1]
-        return x_chunks, y_chunks
-
-    def validate_chunks(self, chunks):
-        if chunks is None:
-            chunks = self.default_ensemble_chunks
-
-        return validate_chunks(self.ensemble_shape, chunks)
-
-    def select_block(self, block_id, chunks):
-
-        blocks = self.ensemble_blocks(chunks, lazy=False)
-
-        blocks = (blocks[0][block_id[0]], blocks[1][block_id[1]])
-
-        return self.from_blocks(*blocks)
-
-
-    def generate_scans(self, chunks):
-        chunks = self.validate_chunks(chunks)
-
-        for (x_scan, y_scan), (x_ind, y_ind) in zip(itertools.product(*self.ensemble_blocks(chunks, lazy=False)),
-                                                   itertools.product(*chunk_range(chunks))):
-
-            x_slice, y_slice = slice(*x_ind), slice(*y_ind)
-            yield (x_slice, y_slice), GridScan.from_blocks(x_scan, y_scan)
-
-    def ensemble_partial(self):
-        def scan(x_scan, y_scan):
-            x_scan, y_scan = x_scan.item(), y_scan.item()
-            arr = np.empty((1, 1), dtype=object)
-            arr[0] = GridScan.from_blocks(x_scan, y_scan)
-            return arr
-
-        return scan
+        return self, (x_chunks, y_chunks)
 
     def ensemble_blocks(self, chunks=None, lazy=True):
 

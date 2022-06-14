@@ -11,6 +11,10 @@ def array_row_intersection(a, b):
     return np.sum(np.cumsum(tmp, axis=0) * tmp == 1, axis=1).astype(bool)
 
 
+def safe_floor_int(n: float, tol: int = 7):
+    return int(np.floor(np.round(n, decimals=tol)))
+
+
 def insert_empty_axis(match_axis1, match_axis2):
     for i, (a1, a2) in enumerate(zip(reversed(match_axis1), reversed(match_axis2))):
         if a1 is True and a2 is False:
@@ -26,18 +30,17 @@ def insert_empty_axis(match_axis1, match_axis2):
             break
 
 
-def normalize_dims(dims, shape):
+def normalize_axes(dims, shape):
     num_dims = len(shape)
     return tuple(dim if dim >= 0 else num_dims + dim for dim in dims)
 
 
 def expand_dims_to_match(arr1, arr2, match_dims):
-
     assert len(match_dims) == 2
     assert len(match_dims[0]) == len(match_dims[1])
 
-    match_dims[0] = normalize_dims(match_dims[0], arr1.shape)
-    match_dims[1] = normalize_dims(match_dims[1], arr2.shape)
+    match_dims[0] = normalize_axes(match_dims[0], arr1.shape)
+    match_dims[1] = normalize_axes(match_dims[1], arr2.shape)
 
     match_axis1 = [not i in match_dims[0] for i in range(len(arr1.shape))]
     match_axis2 = [not i in match_dims[1] for i in range(len(arr2.shape))]
