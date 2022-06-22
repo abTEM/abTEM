@@ -38,7 +38,7 @@ def is_grid_data_defining(extent, gpts, sampling):
     return sum([1 if grid_prop else 0 for grid_prop in (extent, gpts, sampling)]) > 1
 
 
-def _test_grid_consistent(extent, gpts, sampling):
+def check_grid_consistent(extent, gpts, sampling):
     if is_grid_data_defining(extent, gpts, sampling):
         assert np.allclose(sampling, np.array(extent) / np.array(gpts))
 
@@ -78,7 +78,7 @@ def test_grid_raises(grid_data):
 def test_grid_consistent(grid_data):
     grid = create_grid(grid_data)
     assume(is_grid_data_defining(*unpack_grid_data(grid_data)))
-    _test_grid_consistent(grid.extent, grid.gpts, grid.sampling)
+    check_grid_consistent(grid.extent, grid.gpts, grid.sampling)
 
 
 @given(grid_data=grid_data(), new_gpts=core_st.gpts())
@@ -87,7 +87,7 @@ def test_gpts_change(grid_data, new_gpts):
 
     grid.gpts = new_gpts
     assert grid.gpts == ensure_is_tuple(new_gpts, 2) if new_gpts is not None else new_gpts
-    _test_grid_consistent(grid.extent, grid.gpts, grid.sampling)
+    check_grid_consistent(grid.extent, grid.gpts, grid.sampling)
 
 
 @given(grid_data=grid_data(), new_extent=core_st.extent())
@@ -96,7 +96,7 @@ def test_gpts_change(grid_data, new_extent):
 
     grid.extent = new_extent
     assert grid.extent == ensure_is_tuple(new_extent, 2) if new_extent is not None else new_extent
-    _test_grid_consistent(grid.extent, grid.gpts, grid.sampling)
+    check_grid_consistent(grid.extent, grid.gpts, grid.sampling)
 
 
 @given(grid_data=grid_data(), new_sampling=core_st.sampling())
@@ -110,4 +110,4 @@ def test_sampling_change(grid_data, new_sampling):
         adjusted_sampling = grid.extent / np.ceil(np.array(grid.extent) / np.array(new_sampling))
         assert np.allclose(grid.sampling, adjusted_sampling)
 
-    _test_grid_consistent(grid.extent, grid.gpts, grid.sampling)
+    check_grid_consistent(grid.extent, grid.gpts, grid.sampling)

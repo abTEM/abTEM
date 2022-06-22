@@ -10,7 +10,7 @@ def sensible_floats(allow_nan=False, allow_infinity=False, **kwargs):
 
 
 @st.composite
-def gpts(draw, min_value=32, max_value=128, allow_none=False, base=None):
+def gpts(draw, min_value=32, max_value=64, allow_none=False, base=None):
     gpts = st.integers(min_value=min_value, max_value=max_value)
     gpts = gpts | st.tuples(gpts, gpts)
     if allow_none:

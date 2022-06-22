@@ -40,3 +40,6 @@ def grid_scan(draw):
     end = (start[0] + shift[0], start[1] + shift[1])
 
     return GridScan(start=start, end=end, gpts=gpts, endpoint=endpoint)
+
+
+scan_strategies = [custom_scan, line_scan, grid_scan]

@@ -11,7 +11,7 @@ from abtem.potentials.temperature import AbstractFrozenPhonons
 from abtem.waves.waves import Waves
 
 
-def check_array_matches_device(array, device):
+def assert_array_matches_device(array, device):
     assert get_array_module(array) is get_array_module(device)
 
 
@@ -20,6 +20,10 @@ def assert_array_matches_laziness(array, lazy):
         assert isinstance(array, da.core.Array)
     else:
         assert not isinstance(array, da.core.Array)
+
+
+def remove_dummy_dimensions(shape):
+    return tuple(s for s in shape if s > 1)
 
 
 def ensure_is_tuple(x, length: int = 1):

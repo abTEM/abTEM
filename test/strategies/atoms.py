@@ -7,19 +7,15 @@ from .core import sensible_floats
 
 
 @st.composite
-def empty_atoms_data(draw,
-                     min_side_length=1.,
-                     max_side_length=5.,
-                     min_thickness=.5,
-                     max_thickness=5.):
+def empty_atoms(draw,
+                min_side_length=1.,
+                max_side_length=5.,
+                min_thickness=.5,
+                max_thickness=5.):
     cell = draw(st.tuples(st.floats(min_value=min_side_length, max_value=max_side_length),
                           st.floats(min_value=min_side_length, max_value=max_side_length),
                           st.floats(min_value=min_thickness, max_value=max_thickness)))
-    return {
-        'numbers': [],
-        'positions': [],
-        'cell': cell
-    }
+    return Atoms(cell=cell)
 
 
 @st.composite
@@ -56,10 +52,13 @@ def random_atoms(draw,
                  max_side_length=5.,
                  min_thickness=.5,
                  max_thickness=4.,
-                 max_atoms=10):
+                 max_atoms=10,
+                 min_atomic_number=1,
+                 max_atomic_number=80):
     n = draw(st.integers(1, max_atoms))
 
-    numbers = st.lists(elements=st.integers(min_value=1, max_value=80), min_size=n, max_size=n)
+    numbers = st.lists(elements=st.integers(min_value=min_atomic_number, max_value=max_atomic_number),
+                       min_size=n, max_size=n)
 
     cell = st.tuples(st.floats(min_value=min_side_length, max_value=max_side_length),
                      st.floats(min_value=min_side_length, max_value=max_side_length),
@@ -79,7 +78,7 @@ def random_frozen_phonons(draw,
                           min_thickness=.5,
                           max_thickness=5.,
                           max_atoms=10,
-                          max_configs=2):
+                          max_configs=5):
     atoms = draw(random_atoms(min_side_length=min_side_length,
                               max_side_length=max_side_length,
                               min_thickness=min_thickness,
@@ -87,4 +86,22 @@ def random_frozen_phonons(draw,
                               max_atoms=max_atoms))
     num_configs = draw(st.integers(min_value=1, max_value=max_configs))
     sigmas = draw(st.floats(min_value=0., max_value=.2))
-    return FrozenPhonons(atoms, num_configs=num_configs, sigmas=sigmas)
+    seeds = draw(st.one_of(st.none(), st.integers(min_value=0)))
+    return FrozenPhonons(atoms, num_configs=num_configs, sigmas=sigmas, seeds=seeds)
+
+
+@st.composite
+def random_atoms_or_frozen_phonons(draw,
+                                   min_side_length=1.,
+                                   max_side_length=5.,
+                                   min_thickness=.5,
+                                   max_thickness=5.,
+                                   max_atoms=10,
+                                   max_configs=2):
+    return st.one_of((random_atoms(min_side_length=min_side_length,
+                                   max_side_length=max_side_length,
+                                   min_thickness=min_thickness,
+                                   max_thickness=max_thickness,
+                                   max_atoms=max_atoms,
+                                   max_configs=max_configs))
+                     )

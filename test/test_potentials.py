@@ -2,13 +2,45 @@ import hypothesis.strategies as st
 import numpy as np
 import pytest
 from ase import Atoms
-from hypothesis import given, settings
+from hypothesis import given, settings, reproduce_failure
 
+from abtem import FrozenPhonons
+from abtem.core.ensemble import concatenate_array_blocks
 from abtem.potentials.parametrizations import LobatoParametrization, KirklandParametrization
 from abtem.potentials.potentials import Potential
 from strategies import atoms as atoms_st
 from strategies import core as core_st
 from utils import array_is_close, gpu
+import matplotlib.pyplot as plt
+from strategies.potentials import random_potential
+
+
+@given(atoms=atoms_st.random_atoms(),
+       gpts=core_st.gpts(),
+       num_configs=st.integers(min_value=1, max_value=3),
+       sigmas=st.floats(min_value=0., max_value=1.))
+@pytest.mark.parametrize('lazy', [True, False])
+def test_frozen_phonons_seed(atoms, gpts, lazy, num_configs, sigmas):
+    frozen_phonons = FrozenPhonons(atoms, num_configs=num_configs, sigmas=sigmas, seeds=0)
+    potential1 = Potential(frozen_phonons, gpts=gpts).build(lazy=lazy).compute()
+    frozen_phonons = FrozenPhonons(atoms, num_configs=num_configs, sigmas=sigmas, seeds=0)
+    potential2 = Potential(frozen_phonons, gpts=gpts).build(lazy=lazy).compute()
+    assert np.allclose(potential1.array.sum(0), potential2.array.sum(0))
+
+
+@given(data=st.data(), sampling=core_st.sampling(min_value=.05), )
+@pytest.mark.parametrize('lazy', [True, False])
+@pytest.mark.parametrize('projection', ['infinite'])
+def test_potential_ensemble(data, lazy, sampling, projection):
+    atoms = data.draw(atoms_st.random_atoms(max_atomic_number=10))
+
+    potential = data.draw(random_potential())
+    blocks = potential.ensemble_blocks().compute()
+    for i in np.ndindex(blocks.shape):
+        blocks[i] = blocks[i].build(lazy=False, keep_ensemble_dims=True).array
+
+    assert np.allclose(concatenate_array_blocks(blocks),
+                       potential.build(lazy=lazy, keep_ensemble_dims=True).array.sum(0))
 
 
 @given(atom_data=atoms_st.empty_atoms_data(),
@@ -77,7 +109,7 @@ def test_infinite_projected_match(Z, slice_thickness, parametrization, sampling)
 
 
 @settings(max_examples=2)
-@given(Z=st.integers(1, 102),
+@given(Z=st.integers(1, 50),
        slice_thickness=st.floats(min_value=2, max_value=4.),
        sampling=st.floats(min_value=0.025, max_value=0.05))
 @pytest.mark.parametrize('parametrization', [LobatoParametrization(), KirklandParametrization()])
