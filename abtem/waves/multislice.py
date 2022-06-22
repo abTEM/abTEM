@@ -155,7 +155,6 @@ def multislice_step(waves: 'Waves',
                     antialias_aperture: AntialiasAperture,
                     conjugate: bool = False,
                     transpose: bool = False) -> 'Waves':
-
     if waves.device != potential_slice.device:
         potential_slice = potential_slice.copy_to_device(device=waves.device)
 
@@ -271,7 +270,7 @@ def multislice_and_detect(waves: 'Waves',
                     index = (potential_index, exit_plane_index)
                     measurements[detector].array[index] = new_measurement.array
                 else:
-                    new_measurement._array = new_measurement._array[None, None]
+                    new_measurement = new_measurement.expand_dims((0, 1))
                     measurements[detector] = new_measurement
 
     measurements = tuple(measurements.values())

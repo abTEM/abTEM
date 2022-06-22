@@ -141,7 +141,7 @@ def validate_potential(potential: Union[Atoms, AbstractPotential], waves: 'Waves
     if isinstance(potential, (Atoms, AbstractFrozenPhonons)):
         device = None
         if waves is not None:
-            device = waves._device
+            device = waves.device
 
         potential = Potential(potential, device=device)
 

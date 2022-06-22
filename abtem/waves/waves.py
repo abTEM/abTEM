@@ -39,7 +39,7 @@ def stack_waves(waves, axes_metadata):
     if len(waves) == 0:
         return waves[0]
     array = np.stack([waves.array for waves in waves], axis=0)
-    d = waves[0]._copy_as_dict(copy_array=False)
+    d = waves[0].copy_kwargs(exclude=('array',))
     d['array'] = array
     d['ensemble_axes_metadata'] = [axes_metadata] + waves[0].ensemble_axes_metadata
     return waves[0].__class__(**d)
@@ -49,7 +49,8 @@ def finalize_lazy_measurements(arrays,
                                waves,
                                detectors,
                                extra_ensemble_axes_metadata=None,
-                               chunks=None):
+                               chunks=None,
+                               keep_ensemble_dims=False):
     def extract_measurement(array, index):
         array = array.item()[index].array
         return array
@@ -89,7 +90,8 @@ def finalize_lazy_measurements(arrays,
         if hasattr(measurement, 'reduce_ensemble'):
             measurement = measurement.reduce_ensemble()
 
-        measurement = measurement.squeeze()
+        if not keep_ensemble_dims:
+            measurement = measurement.squeeze()
 
         measurements.append(measurement)
 
@@ -188,14 +190,13 @@ class Waves(HasDaskArray, WavesLikeMixin):
     def ensemble_blocks(self):
         return self.array,
 
-    def ensemble_partial(self):
-        d = self._copy_as_dict(copy_array=False)
+    @staticmethod
+    def _waves(*args, **kwargs):
+        return Waves(args[0], **kwargs)
 
-        def build_waves(*args, **kwargs):
-            array = args[0]
-            return Waves(array, **kwargs)
-
-        return partial(build_waves, **d)
+    def from_partitioned_args(self):
+        d = self.copy_kwargs(exclude=('array', 'extent'))
+        return partial(self._waves, **d)
 
     @property
     def fourier_space(self):
@@ -244,7 +245,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
         return waves
 
     def tile(self, repetitions, keep_normalization: bool = True):
-        d = self._copy_as_dict(copy_array=False)
+        d = self.copy_kwargs(exclude=('array',))
         xp = get_array_module(self.device)
         d['array'] = xp.tile(self.array, (1,) * len(self.ensemble_shape) + repetitions)
         if keep_normalization:
@@ -255,7 +256,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
         if self.is_lazy:
             return self
 
-        d = self._copy_as_dict(copy_array=False)
+        d = self.copy_kwargs(exclude=('array',))
         d['array'] = da.from_array(self.array)
         return self.__class__(**d)
 
@@ -263,7 +264,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
         if self.fourier_space:
             return self
 
-        d = self._copy_as_dict(copy_array=False)
+        d = self.copy_kwargs(exclude=('array',))
         d['array'] = fft2(self.array, overwrite_x=in_place)
         d['fourier_space'] = True
         return self.__class__(**d)
@@ -272,33 +273,50 @@ class Waves(HasDaskArray, WavesLikeMixin):
         if not self.fourier_space:
             return self
 
-        d = self._copy_as_dict(copy_array=False)
+        d = self.copy_kwargs(exclude=('array',))
         d['array'] = ifft2(self.array, overwrite_x=in_place)
         d['fourier_space'] = False
         return self.__class__(**d)
 
-    def squeeze(self, axis=None) -> 'Waves':
-        """
-        Remove axes of length one from the waves.
+    @staticmethod
+    def _apply_wave_transform(*args, waves_partial, transform_partial):
+        waves = waves_partial(*args[-1:])
+        transform = transform_partial(*(arg.item() for arg in args[:-1]))
+        waves = transform.apply(waves)
+        return waves.array
 
-        Returns
-        -------
-        squeezed : Waves
-        """
-        if axis is None:
-            axis = range(len(self.shape))
+    def apply_transform(self, transform, max_batch: Union[int, 'str'] = 'auto') -> 'Waves':
+        if self.is_lazy:
+            if isinstance(max_batch, int):
+                max_batch = max_batch * self.gpts[0] * self.gpts[1]
+
+            chunks = validate_chunks(transform.ensemble_shape + self.shape,
+                                     transform.default_ensemble_chunks + tuple(
+                                         max(chunk) for chunk in self.array.chunks),
+                                     limit=max_batch,
+                                     dtype=np.dtype('complex64'))
+
+            args = tuple((arg, (i,)) for i, arg in enumerate(transform.partition_args(chunks[:-len(self.shape)])))
+
+            xp = get_array_module(self.device)
+
+            kwargs = self.copy_kwargs(exclude=('array',))
+
+            array = da.blockwise(self._apply_wave_transform,
+                                 tuple(range(len(args) + len(self.shape))),
+                                 *tuple(itertools.chain(*args)),
+                                 self.array,
+                                 tuple(range(len(args), len(args) + len(self.shape))),
+                                 adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
+                                 transform_partial=transform.from_partitioned_args(),
+                                 waves_partial=self.from_partitioned_args(),  # noqa
+                                 meta=xp.array((), dtype=np.complex64))
+
+            kwargs['array'] = array
+            kwargs['ensemble_axes_metadata'] = transform.ensemble_axes_metadata + kwargs['ensemble_axes_metadata']
+            return self.__class__(**kwargs)
         else:
-            axis = normalize_axes(axis, self.shape)
-
-        shape = self.shape[:-2]
-        squeezed = tuple(np.where([(n == 1) and (i in axis) for i, n in enumerate(shape)])[0])
-
-        xp = get_array_module(self.array)
-        d = self._copy_as_dict(copy_array=False)
-        d['array'] = xp.squeeze(self.array, axis=squeezed)
-        d['ensemble_axes_metadata'] = [element for i, element in enumerate(self.ensemble_axes_metadata) if
-                                       i not in squeezed]
-        return self.__class__(**d)
+            return transform.apply(self)
 
     def intensity(self) -> Images:
         """
@@ -372,7 +390,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
         else:
             array = fft2_interpolate(self.array, new_shape=gpts, normalization=normalization)
 
-        d = self._copy_as_dict(copy_array=False)
+        d = self.copy_kwargs(exclude=('array',))
         d['array'] = array
         d['sampling'] = (self.extent[0] / gpts[0], self.extent[1] / gpts[1])
         return self.__class__(**d)
@@ -438,51 +456,6 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
         return diffraction_patterns
 
-    def apply_transform(self,
-                        transform: WaveTransform,
-                        max_batch: str = 'auto'):
-
-        self.grid.check_is_defined()
-
-        if self.is_lazy:
-            def apply_wave_transform(*args, transform_partial, waves_kwargs, transform_ensemble_dims):
-                transform = transform_partial(*args[:transform_ensemble_dims]).item()
-                waves = Waves(args[transform_ensemble_dims], **waves_kwargs)
-                waves = transform.apply(waves)
-                return waves.array
-
-            if isinstance(max_batch, int):
-                max_batch = max_batch * self.gpts[0] * self.gpts[1]
-
-            chunks = validate_chunks(transform.ensemble_shape + self.shape,
-                                     transform.default_ensemble_chunks + tuple(
-                                         max(chunk) for chunk in self.array.chunks),
-                                     limit=max_batch,
-                                     dtype=np.dtype('complex64'))
-
-            blocks = tuple(
-                (block, (i,)) for i, block in enumerate(transform.ensemble_blocks(chunks[:-len(self.shape)])))
-
-            xp = get_array_module(self.device)
-
-            array = da.blockwise(apply_wave_transform,
-                                 tuple(range(len(blocks) + len(self.shape))),
-                                 *tuple(itertools.chain(*blocks)),
-                                 self.array,
-                                 tuple(range(len(blocks), len(blocks) + len(self.shape))),
-                                 adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
-                                 transform_partial=transform.ensemble_partial(),
-                                 transform_ensemble_dims=len(transform.ensemble_shape),
-                                 waves_kwargs=self._copy_as_dict(copy_array=False),
-                                 meta=xp.array((), dtype=np.complex64))
-
-            d = self._copy_as_dict(copy_array=False)
-            d['array'] = array
-            d['ensemble_axes_metadata'] = transform.ensemble_axes_metadata + d['ensemble_axes_metadata']
-            return self.__class__(**d)
-        else:
-            return transform.apply(self)
-
     def apply_ctf(self,
                   ctf: WaveTransform = None,
                   max_batch: str = 'auto',
@@ -515,6 +488,17 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
         return self.apply_transform(ctf, max_batch=max_batch)
 
+    @staticmethod
+    def _multislice(*args, potential_partial, waves_partial, detectors):
+        potential = potential_partial(*(arg.item() for arg in args[:1]))
+        waves = waves_partial(*args[-1:])
+
+        measurements = waves.multislice(potential, detectors=detectors, keep_ensemble_dims=True)
+        measurements = (measurements,) if hasattr(measurements, 'array') else measurements
+        arr = np.zeros((1,) * (len(args) - 1), dtype=object)
+        arr.itemset(measurements)
+        return arr
+
     def multislice(self,
                    potential: AbstractPotential,
                    detectors: AbstractDetector = None,
@@ -541,42 +525,40 @@ class Waves(HasDaskArray, WavesLikeMixin):
             Wave function at the exit plane of the potential.
         """
 
+        potential = validate_potential(potential, self)
+
         detectors = validate_detectors(detectors)
 
         if self.is_lazy:
-            def multislice(*args, potential, waves_kwargs, detectors):
-                potential = potential(*args[:2]).item()
-                waves = Waves(args[2], **waves_kwargs)
-                measurements = waves.multislice(potential, detectors=detectors, keep_ensemble_dims=True)
-                measurements = (measurements,) if hasattr(measurements, 'array') else measurements
-                arr = np.zeros((1,) * (len(args) + 1), dtype=object)
-                arr.itemset(measurements)
-                return arr
-
-            chunks = potential.default_ensemble_chunks + self.array.chunks
-            blocks = potential.ensemble_blocks(chunks[:-len(self.shape)])
+            blocks = potential.partition_args()
             blocks = tuple((block, (i,)) for i, block in enumerate(blocks))
-            arrays = da.blockwise(multislice,
-                                  tuple(range(len(blocks) + len(self.shape) - 2)),
+
+            new_axes = {1: (potential.num_exit_planes,)}
+
+            arrays = da.blockwise(self._multislice,
+                                  tuple(range(len(blocks) + 1 + len(self.shape) - 2)),
                                   *tuple(itertools.chain(*blocks)),
                                   self.array,
-                                  tuple(range(len(blocks), len(blocks) + len(self.shape))),
-                                  adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
-                                  potential=potential.ensemble_partial(),
+                                  tuple(range(len(blocks) + 1, len(blocks) + 1 + len(self.shape))),
+                                  # adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
+                                  potential_partial=potential.from_partitioned_args(),
+                                  new_axes=new_axes,
                                   detectors=detectors,
-                                  waves_kwargs=self._copy_as_dict(copy_array=False),
+                                  waves_partial=self.from_partitioned_args(),
                                   concatenate=True,
                                   meta=np.array((), dtype=np.complex64))
 
             return finalize_lazy_measurements(arrays,
                                               self,
                                               detectors,
-                                              extra_ensemble_axes_metadata=potential.ensemble_shape)
+                                              extra_ensemble_axes_metadata=potential.ensemble_axes_metadata +
+                                                                           [potential.exit_planes_axes_metadata],
+                                              keep_ensemble_dims=keep_ensemble_dims)
         else:
             measurements = multislice_and_detect(self,
                                                  potential=potential,
                                                  detectors=detectors,
-                                                 keep_ensemble_dims=False)
+                                                 keep_ensemble_dims=keep_ensemble_dims)
 
         return measurements[0] if len(measurements) == 1 else ComputableList(measurements)
 
@@ -598,7 +580,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
             if not self.is_lazy:
                 self.lazy()
             self.array.to_zarr(url, component='array', overwrite=overwrite)
-            for key, value in self._copy_as_dict(copy_array=False).items():
+            for key, value in self.copy_kwargs(exclude=('array',)).items():
                 if key == 'ensemble_axes_metadata':
                     root.attrs[key] = [axis_to_dict(axis) for axis in value]
                 else:
@@ -645,7 +627,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
         axes = [element for i, element in enumerate(self.ensemble_axes_metadata) if not i in removed_axes]
 
-        d = self._copy_as_dict(copy_array=False)
+        d = self.copy_kwargs(exclude=('array',))
         d['array'] = self._array[items]
         d['ensemble_axes_metadata'] = axes
         return self.__class__(**d)
@@ -659,22 +641,9 @@ class Waves(HasDaskArray, WavesLikeMixin):
         """
         return self.intensity().show(ax=ax, **kwargs)
 
-    def _copy_as_dict(self, copy_array: bool = True) -> dict:
-        d = {'tilt': self.tilt,
-             'energy': self.energy,
-             'sampling': self.sampling,
-             'fourier_space': self.fourier_space,
-             'antialias_cutoff_gpts': self.antialias_cutoff_gpts,
-             'ensemble_axes_metadata': deepcopy(self._ensemble_axes_metadata),
-             'metadata': copy(self.metadata)}
-
-        if copy_array:
-            d['array'] = self.array
-        return d
-
     def copy(self, device: str = None):
         """Make a copy."""
-        d = self._copy_as_dict(copy_array=False)
+        d = self.copy_kwargs(exclude=('array',))
 
         if device is not None:
             array = copy_to_device(self.array, device)
@@ -810,8 +779,6 @@ class WavesBuilder(WavesLikeMixin):
                                 partials=partials,
                                 multislice_func=multislice_func,
                                 detectors=detectors)
-
-        # print(symbols, args)
 
         array = da.blockwise(partial_build,
                              symbols,

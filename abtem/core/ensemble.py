@@ -115,6 +115,27 @@ class Ensemble(EqualityMixin, CopyMixin, metaclass=ABCMeta):
                        )
 
 
+class EmptyEnsemble(Ensemble):
+
+    @property
+    def default_ensemble_chunks(self):
+        return ()
+
+    @property
+    def ensemble_axes_metadata(self):
+        return []
+
+    def partition_args(self, chunks=None, lazy: bool = True):
+        return ()
+
+    def from_partitioned_args(self):
+        return self.__class__
+
+    @property
+    def ensemble_shape(self):
+        return ()
+
+
 def concatenate_array_blocks(blocks):
     for i in range(len(blocks.shape)):
         new_blocks = np.empty(blocks.shape[:-1], dtype=object)

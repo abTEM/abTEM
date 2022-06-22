@@ -1,3 +1,4 @@
+import copy
 import itertools
 from abc import abstractmethod
 from contextlib import nullcontext
@@ -299,35 +300,30 @@ class HasDaskArray(HasAxes, CopyMixin):
     def to_delayed(self):
         return dask.delayed(self._to_delayed_func)(self.array, self.copy_kwargs(exclude=('array',)))
 
-    # def expand_dims(self, axis=None, axis_metadata=None):
-    #     if axis is None:
-    #         axis = (0,)
-    #
-    #     if type(axis) not in (tuple, list):
-    #         axis = (axis,)
-    #
-    #     if axis_metadata is None:
-    #         axis_metadata = [UnknownAxis()] * len(axis)
-    #
-    #     axis = normalize_axes(axis, self.shape)
-    #
-    #     if any(a > len(self.ensemble_shape) for a in axis):
-    #         raise RuntimeError()
-    #
-    #     ensemble_axes_metadata =
-    #
-    #     for index, obj in zip(reversed(newObjectIndices), reversed(newObjects)):
-    #         existingList.insert(index, obj)
-    #
-    #     xp = get_array_module(self.array)
-    #
-    #     kwargs = self.copy_kwargs(exclude=('array', 'ensemble_axes_metadata'))
-    #
-    #     kwargs['array'] = xp.squeeze(self.array, axis=squeezed)
-    #     kwargs['ensemble_axes_metadata'] = [element for i, element in enumerate(self.ensemble_axes_metadata) if
-    #                                         i not in squeezed]
-    #
-    #     return self.__class__(**kwargs)
+    def expand_dims(self, axis=None, axis_metadata=None):
+        if axis is None:
+            axis = (0,)
+
+        if type(axis) not in (tuple, list):
+            axis = (axis,)
+
+        if axis_metadata is None:
+            axis_metadata = [UnknownAxis()] * len(axis)
+
+        axis = normalize_axes(axis, self.shape)
+
+        if any(a >= (len(self.ensemble_shape) + len(axis)) for a in axis):
+            raise RuntimeError()
+
+        ensemble_axes_metadata = copy.deepcopy(self.ensemble_axes_metadata)
+
+        for a, am in zip(axis, axis_metadata):
+            ensemble_axes_metadata.insert(a, am)
+
+        kwargs = self.copy_kwargs(exclude=('array', 'ensemble_axes_metadata'))
+        kwargs['array'] = np.expand_dims(self.array, axis=axis)
+        kwargs['ensemble_axes_metadata'] = ensemble_axes_metadata
+        return self.__class__(**kwargs)
 
     def squeeze(self, axis=None):
         if len(self.array.shape) < len(self.base_shape):

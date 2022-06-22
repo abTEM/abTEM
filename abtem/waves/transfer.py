@@ -12,13 +12,15 @@ from matplotlib.axes import Axes
 from abtem.core.axes import ParameterSeriesAxis
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
+from abtem.core.dask import validate_chunks
 from abtem.core.distributions import ParameterSeries, Distribution
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
-from abtem.core.ensemble import Ensemble
+from abtem.core.ensemble import Ensemble, EmptyEnsemble
 from abtem.core.fft import ifft2
 from abtem.core.grid import Grid, polar_spatial_frequencies
 from abtem.core.utils import expand_dims_to_match
 from abtem.measure.measure import FourierSpaceLineProfiles, DiffractionPatterns
+import dask.array as da
 
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves, WavesLikeMixin
@@ -54,27 +56,6 @@ class WaveTransform(Ensemble):
     @abstractmethod
     def apply(self, waves):
         pass
-
-
-class EmptyEnsemble(Ensemble):
-
-    @property
-    def default_ensemble_chunks(self):
-        return ()
-
-    @property
-    def ensemble_axes_metadata(self):
-        return []
-
-    def partition_args(self, chunks=None, lazy: bool = True):
-        return ()
-
-    def from_partitioned_args(self):
-        return self.__class__
-
-    @property
-    def ensemble_shape(self):
-        return ()
 
 
 class WaveRenormalization(EmptyEnsemble, WaveTransform):
@@ -125,7 +106,7 @@ class ArrayWaveTransform(WaveTransform):
         if not fourier_space_out:
             array = ifft2(array, overwrite_x=False)
 
-        d = waves._copy_as_dict(copy_array=False)
+        d = waves.copy_kwargs(exclude=('array',))
         d['fourier_space'] = fourier_space_out
         d['array'] = array
         d['ensemble_axes_metadata'] = self.ensemble_axes_metadata + d['ensemble_axes_metadata']

@@ -84,6 +84,10 @@ class SMatrixWaves(AbstractSMatrix):
         return self.waves.array
 
     @property
+    def window_offset(self):
+        return self._window_offset
+
+    @property
     def ensemble_shape(self):
         return self.array.shape[:-3]
 
@@ -136,6 +140,17 @@ class SMatrixWaves(AbstractSMatrix):
         return (self.antialias_cutoff_gpts[0] // self.interpolation[0],
                 self.antialias_cutoff_gpts[1] // self.interpolation[1])
 
+    def multislice(self, potential=None, start=0, stop=None, lazy: bool = None, max_batch: Union[int, str] = 'auto'):
+
+        waves = self.waves.multislice(potential, start=start, stop=stop, lazy=lazy, max_batch=max_batch,
+                                      keep_ensemble_dims=True)
+
+        waves = waves.squeeze((0, 1))
+
+        kwargs = self.copy_kwargs(exclude=('waves',))
+
+        return self.__class__(waves, **kwargs)
+
     def reduce_to_waves(self, scan: AbstractScan, ctf: CTF) -> 'Waves':
         array = self.waves.array
 
@@ -148,11 +163,27 @@ class SMatrixWaves(AbstractSMatrix):
         positions = xp.asarray(positions)
         coefficients = prism_coefficients(positions, ctf=ctf, wave_vectors=self.wave_vectors, xp=xp)
 
+        #print(self.cropping_window, self.window_offset, scan.get_positions())
+
         if self.cropping_window != self.gpts:
-            pixel_positions = positions / xp.array(self.waves.sampling) - xp.asarray(self._window_offset)
+            pixel_positions = positions / xp.array(self.waves.sampling) - xp.asarray(self.window_offset)
+
+            # print(pixel_positions, self.waves.sampling)
 
             crop_corner, size, corners = minimum_crop(pixel_positions, self.cropping_window)
-            array = wrapped_crop_2d(array, crop_corner, size)
+
+            # print(crop_corner, self.window_offset, size, self.cropping_window)
+            #
+            # import matplotlib.pyplot as plt
+            # print(scan.extent, size, )
+            # plt.imshow(np.abs((array * coefficients[0,0,:,None,None]).sum(0)) ** 2)
+            # plt.show()
+            #
+            #
+            # array = wrapped_crop_2d(array, crop_corner, size)
+            # plt.imshow(np.abs(array.sum(0)) ** 2)
+            # plt.show()
+            # sss
 
             array = xp.tensordot(coefficients, array, axes=[-1, -3])
             array = batch_crop_2d(array, corners, self.cropping_window)
@@ -213,8 +244,6 @@ class SMatrixWaves(AbstractSMatrix):
         return tuple(measurements.values())
 
     def partial(self):
-        self.waves.ensemble_partial()
-
         def prism_partial(array,
                           waves_partial,
                           window_overlap,
@@ -222,7 +251,6 @@ class SMatrixWaves(AbstractSMatrix):
                           block_info=None):
 
             waves = waves_partial(array)
-
             if block_info is not None:
                 window_offset = (block_info[0]['array-location'][-2][0] -
                                  (block_info[0]['chunk-location'][-2] * 2 + 1) * window_overlap[0],
@@ -241,7 +269,7 @@ class SMatrixWaves(AbstractSMatrix):
                   'interpolation': self.interpolation, }
 
         return partial(prism_partial,
-                       waves_partial=self.waves.ensemble_partial(),
+                       waves_partial=self.waves.from_partitioned_args(),
                        kwargs=kwargs)
 
     def _chunk_extents(self):
@@ -519,15 +547,7 @@ class SMatrix(AbstractSMatrix):
         self._device = validate_device(device)
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
 
-        self._potential = validate_potential(potential, self)
-
-        if potential is not None:
-            self._grid = self._potential.grid
-        else:
-            try:
-                self.grid.check_is_defined()
-            except GridUndefinedError:
-                raise ValueError('provide a potential or provide extent and gpts')
+        self.set_potential(potential)
 
         self._interpolation = _validate_interpolation(interpolation)
         self._planewave_cutoff = planewave_cutoff
@@ -544,6 +564,18 @@ class SMatrix(AbstractSMatrix):
         if not all(n % f == 0 for f, n in zip(self.interpolation, self.gpts)):
             warnings.warn('the interpolation factor does not exactly divide gpts, normalization may not be exactly '
                           'preserved')
+
+    def set_potential(self, potential):
+        self._potential = validate_potential(potential)
+
+        if self._potential is not None:
+            self.grid.match(self._potential)
+            self._grid = self._potential.grid
+        else:
+            try:
+                self.grid.check_is_defined()
+            except GridUndefinedError:
+                raise ValueError('provide a potential or provide extent and gpts')
 
     def round_gpts_to_interpolation(self):
         rounded = round_gpts_to_multiple_of_interpolation(self.gpts, self.interpolation)
@@ -660,6 +692,7 @@ class SMatrix(AbstractSMatrix):
 
         if self.potential is not None:
             waves = multislice_and_detect(waves, self.potential, [WavesDetector()], start=start, stop=stop)[0]
+            waves = waves.squeeze((0, 1))
 
         if self.downsampled_gpts() != self.gpts:
             waves = waves.downsample(gpts=self.downsampled_gpts(), normalization='intensity')
@@ -672,14 +705,15 @@ class SMatrix(AbstractSMatrix):
 
     @staticmethod
     def _wrapped_build_s_matrix(*args, s_matrix_partial):
-        s_matrix = s_matrix_partial(*args[:-1])
+
+        s_matrix = s_matrix_partial(*tuple(arg.item() for arg in args[:-1]))
         wave_vector_range = slice(*args[-1][0, 0])
         return s_matrix._build_s_matrix(wave_vector_range).array[None]
 
     def _s_matrix_partial(self):
         def s_matrix(*args, potential_partial, **kwargs):
             if potential_partial is not None:
-                potential = potential_partial(*args + (np.array([None], dtype=object),)).item()
+                potential = potential_partial(*args + (np.array([None], dtype=object),))
             else:
                 potential = None
             return SMatrix(potential=potential, **kwargs)
@@ -689,6 +723,11 @@ class SMatrix(AbstractSMatrix):
 
     def dummy_probes(self, scan=None, ctf=None):
         return self.build(lazy=True).dummy_probes(scan=scan, ctf=ctf)
+
+    def multislice(self, potential=None, start=0, stop=None, lazy: bool = None, max_batch: Union[int, str] = 'auto'):
+        kwargs = self.copy_kwargs(exclude=('potential',))
+        s_matrix = self.__class__(potential=potential, **kwargs)
+        return s_matrix.build(start=start, stop=stop, lazy=lazy, max_batch=max_batch)
 
     def build(self,
               start: int = 0,
@@ -727,7 +766,7 @@ class SMatrix(AbstractSMatrix):
         downsampled_gpts = self.downsampled_gpts()
 
         if self.potential is not None:
-            potential_blocks = self.potential.ensemble_blocks()[0], (0,)
+            potential_blocks = self.potential.partition_args()[0], (0,)
             ensemble_axes_metadata = self.potential.ensemble_axes_metadata
         else:
             potential_blocks = da.from_array(np.array([None], dtype=object), chunks=1), (0,),

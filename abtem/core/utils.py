@@ -43,8 +43,6 @@ class EqualityMixin:
             except KeyError:
                 return False
 
-            print(equal, key)
-
             if equal is False:
                 return False
 
