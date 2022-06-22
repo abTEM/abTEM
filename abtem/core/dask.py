@@ -1,3 +1,4 @@
+import itertools
 from abc import abstractmethod
 from contextlib import nullcontext
 from functools import reduce
@@ -15,6 +16,9 @@ from dask.array.core import normalize_chunks as dask_normalize_chunks
 from dask.utils import parse_bytes
 from itertools import accumulate
 from abtem.core import config
+from abtem.core.axes import HasAxes, UnknownAxis
+from abtem.core.backend import get_array_module
+from abtem.core.utils import normalize_axes, CopyMixin
 
 if TYPE_CHECKING:
     pass
@@ -142,8 +146,20 @@ def validate_chunks(shape: Tuple[int, ...],
     return validated_chunks
 
 
-def chunk_range(chunks):
+def chunk_ranges(chunks):
     return tuple(tuple((cumchunks - cc, cumchunks) for cc, cumchunks in zip(c, accumulate(c))) for c in chunks)
+
+
+def chunk_shape(chunks):
+    return tuple(len(c) for c in chunks)
+
+
+def iterate_chunk_ranges(chunks):
+    for block_indices, chunk_range in zip(itertools.product(*(range(n) for n in chunk_shape(chunks))),
+                                          itertools.product(*chunk_ranges(chunks))):
+        slic = tuple(slice(*cr) for cr in chunk_range)
+
+        yield block_indices, slic
 
 
 def config_chunk_size(device):
@@ -241,10 +257,16 @@ def equal_sized_chunks(num_items: int, num_chunks: int = None, chunks: int = Non
         return tuple(v)
 
 
-class HasDaskArray:
+class HasDaskArray(HasAxes, CopyMixin):
+    _array: Union[np.ndarray, da.core.Array]
 
-    def __init__(self, array, **kwargs):
-        self._array = array
+    @abstractmethod
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def check_axes_metadata(self):
+        if len(self.array.shape) != self.num_axes:
+            raise RuntimeError(f'{len(self.array.shape)} != {self.num_axes}')
 
     def __len__(self) -> int:
         return len(self.array)
@@ -268,111 +290,81 @@ class HasDaskArray:
     def is_lazy(self):
         return isinstance(self.array, da.core.Array)
 
-    @abstractmethod
-    def _copy_as_dict(self, copy_array: bool = True) -> dict:
-        pass
+    @classmethod
+    def _to_delayed_func(cls, array, **kwargs):
+        kwargs['array'] = array
+
+        return cls(**kwargs)
 
     def to_delayed(self):
+        return dask.delayed(self._to_delayed_func)(self.array, self.copy_kwargs(exclude=('array',)))
 
-        def wrap(array, cls, cls_kwargs):
-            return cls(array, **cls_kwargs)
+    # def expand_dims(self, axis=None, axis_metadata=None):
+    #     if axis is None:
+    #         axis = (0,)
+    #
+    #     if type(axis) not in (tuple, list):
+    #         axis = (axis,)
+    #
+    #     if axis_metadata is None:
+    #         axis_metadata = [UnknownAxis()] * len(axis)
+    #
+    #     axis = normalize_axes(axis, self.shape)
+    #
+    #     if any(a > len(self.ensemble_shape) for a in axis):
+    #         raise RuntimeError()
+    #
+    #     ensemble_axes_metadata =
+    #
+    #     for index, obj in zip(reversed(newObjectIndices), reversed(newObjects)):
+    #         existingList.insert(index, obj)
+    #
+    #     xp = get_array_module(self.array)
+    #
+    #     kwargs = self.copy_kwargs(exclude=('array', 'ensemble_axes_metadata'))
+    #
+    #     kwargs['array'] = xp.squeeze(self.array, axis=squeezed)
+    #     kwargs['ensemble_axes_metadata'] = [element for i, element in enumerate(self.ensemble_axes_metadata) if
+    #                                         i not in squeezed]
+    #
+    #     return self.__class__(**kwargs)
 
-        return dask.delayed(wrap)(self.array, self.__class__, self._copy_as_dict(copy_array=False))
+    def squeeze(self, axis=None):
+        if len(self.array.shape) < len(self.base_shape):
+            return self
 
-    def apply_gufunc(self,
-                     func,
-                     signature,
-                     new_cls=None,
-                     new_cls_kwargs=None,
-                     axes=None,
-                     output_sizes=None,
-                     allow_rechunk=False,
-                     meta=None,
-                     **kwargs):
-
-        if not self.is_lazy:
-            return func(self, **kwargs)
-
-        def wrapped_func(array, cls=None, cls_kwargs=None, **kwargs):
-            has_dask_array = cls(array=array, **cls_kwargs)
-            outputs = func(has_dask_array, **kwargs)
-
-            if len(outputs) == 1:
-                return outputs[0].array
-
-            return [output.array for output in outputs]
-
-        cls_kwargs = self._copy_as_dict(copy_array=False)
-
-        arrays = da.apply_gufunc(
-            wrapped_func,
-            signature,
-            self.array,
-            output_sizes=output_sizes,
-            meta=meta,
-            axes=axes,
-            allow_rechunk=allow_rechunk,
-            cls=self.__class__,
-            cls_kwargs=cls_kwargs,
-            **kwargs,
-        )
-
-        if len(new_cls) > 1:
-            new_cls_kwargs = [{**kwargs, 'array': array} for kwargs, array in zip(new_cls_kwargs, arrays)]
+        if axis is None:
+            axis = range(len(self.shape))
         else:
-            new_cls_kwargs = [{**new_cls_kwargs[0], 'array': arrays}]
+            axis = normalize_axes(axis, self.shape)
 
-        return tuple(cls(**kwargs) for cls, kwargs in zip(new_cls, new_cls_kwargs))
+        shape = self.shape[:-len(self.base_shape)]
 
-    def map_blocks(self,
-                   func,
-                   new_cls=None,
-                   new_cls_kwargs: dict = None,
-                   dtype=None,
-                   name=None,
-                   token=None,
-                   chunks=None,
-                   drop_axis=None,
-                   new_axis=None,
-                   meta=None,
-                   **kwargs):
+        squeezed = tuple(np.where([(n == 1) and (i in axis) for i, n in enumerate(shape)])[0])
 
-        if not self.is_lazy:
-            return func(self, **kwargs)
+        xp = get_array_module(self.array)
 
-        def wrapped_func(array, cls, cls_kwargs, **kwargs):
-            has_dask_array = cls(array=array, **cls_kwargs)
-            has_dask_array = func(has_dask_array, **kwargs)
-            return has_dask_array.array
+        kwargs = self.copy_kwargs(exclude=('array', 'ensemble_axes_metadata'))
 
-        cls_kwargs = self._copy_as_dict(copy_array=False)
+        kwargs['array'] = xp.squeeze(self.array, axis=squeezed)
+        kwargs['ensemble_axes_metadata'] = [element for i, element in enumerate(self.ensemble_axes_metadata) if
+                                            i not in squeezed]
 
-        array = self.array.map_blocks(wrapped_func,
-                                      cls=self.__class__,
-                                      cls_kwargs=cls_kwargs,
-                                      name=name,
-                                      token=token,
-                                      dtype=dtype,
-                                      chunks=chunks,
-                                      drop_axis=drop_axis,
-                                      new_axis=new_axis,
-                                      meta=meta,
-                                      **kwargs)
+        return self.__class__(**kwargs)
 
-        if new_cls is None:
-            new_cls = self.__class__
+    def ensure_lazy(self):
 
-        if new_cls_kwargs is None:
-            new_cls_kwargs = cls_kwargs
+        if self.is_lazy:
+            return self
 
-        return new_cls(array=array, **new_cls_kwargs)
+        chunks = (-1,) * len(self.base_shape)
 
-    # def ensure_lazy(self, chunks=-1):
-    #     if self.is_lazy:
-    #         return self
-    #     d = self._copy_as_dict(copy_array=False)
-    #     d['array'] = da.from_array(self._array, chunks=chunks)
-    #     return self.__class__(**d)
+        if len(self.array.shape) > 3:
+            chunks = (1,) + chunks
+
+        array = da.from_array(self.array, chunks=chunks)
+
+        return self.__class__(array, **self.copy_kwargs(exclude=('array',)))
 
     def compute(self, progress_bar: bool = None, **kwargs):
         if not self.is_lazy:

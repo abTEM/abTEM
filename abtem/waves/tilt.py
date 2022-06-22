@@ -1,7 +1,9 @@
 from typing import Tuple
 from abtem.core.events import HasEventsMixin, Events, watch
+from abtem.core.utils import EqualityMixin
 
-class BeamTilt(HasEventsMixin):
+
+class BeamTilt(HasEventsMixin, EqualityMixin):
 
     def __init__(self, tilt: Tuple[float, float] = (0., 0.)):
         self._tilt = tilt

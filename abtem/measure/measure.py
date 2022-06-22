@@ -155,8 +155,9 @@ class AbstractMeasurement(HasDaskArray, HasAxes, metaclass=ABCMeta):
         self._ensemble_axes_metadata = ensemble_axes_metadata
         self._metadata = metadata
 
-        super().__init__(array)
-        #self._check_axes_metadata()
+        self._array = array
+
+        self.check_axes_metadata()
 
         # if len(array.shape) < len(self.base_shape):
         #     raise RuntimeError(f'array dim smaller than base dim of measurement type {self.__class__}')

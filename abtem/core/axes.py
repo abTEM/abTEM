@@ -133,14 +133,6 @@ class HasAxes:
     def shape(self):
         return self.ensemble_shape + self.base_shape
 
-    # @property
-    # def base_shape(self):
-    #     return tuple(self.shape[i] for i in self.base_axes)
-    #
-    # @property
-    # def ensemble_shape(self):
-    #     return tuple(self.shape[i] for i in self.ensemble_axes)
-
     def find_axes_type(self, cls):
         indices = ()
         for i, axis_metadata in enumerate(self.axes_metadata):
@@ -148,11 +140,6 @@ class HasAxes:
                 indices += (i,)
 
         return indices
-
-    def _check_axes_metadata(self):
-        if hasattr(self, 'array'):
-            if len(self.array.shape) != self.num_axes:
-                raise RuntimeError(f'{len(self.array.shape)} != {self.num_axes}')
 
     @property
     def num_scan_axes(self):

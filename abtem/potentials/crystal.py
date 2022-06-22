@@ -1,5 +1,4 @@
-
-class CrystalPotential(AbstractPotential, HasEventMixin):
+class CrystalPotential(AbstractPotential):
     """
     Crystal potential object
 
@@ -25,21 +24,21 @@ class CrystalPotential(AbstractPotential, HasEventMixin):
     def __init__(self,
                  potential_unit: AbstractPotential,
                  repetitions: Tuple[int, int, int],
-                 num_frozen_phonon_configs: int = 1):
+                 num_frozen_phonon_configs: int = 1,
+                 exit_planes=None,
+                 random_state=None, ):
 
         self._potential_unit = potential_unit
-        self.repetitions = repetitions
+        self._repetitions = repetitions
         self._num_frozen_phonon_configs = num_frozen_phonon_configs
+        self._random_state = random_state
 
-        if (potential_unit.num_frozen_phonon_configs == 1) & (num_frozen_phonon_configs > 1):
-            warnings.warn('"num_frozen_phonon_configs" is greater than one, but the potential unit does not have'
-                          'frozen phonons')
-
-        if (potential_unit.num_frozen_phonon_configs > 1) & (num_frozen_phonon_configs == 1):
-            warnings.warn('the potential unit has frozen phonons, but "num_frozen_phonon_configs" is set to 1')
-
-        self._cache = Cache(1)
-        self._event = Event()
+        # if (potential_unit.num_frozen_phonon_configs == 1) & (num_frozen_phonon_configs > 1):
+        #     warnings.warn('"num_frozen_phonon_configs" is greater than one, but the potential unit does not have'
+        #                   'frozen phonons')
+        #
+        # if (potential_unit.num_frozen_phonon_configs > 1) & (num_frozen_phonon_configs == 1):
+        #     warnings.warn('the potential unit has frozen phonons, but "num_frozen_phonon_configs" is set to 1')
 
         gpts = (self._potential_unit.gpts[0] * self.repetitions[0],
                 self._potential_unit.gpts[1] * self.repetitions[1])
@@ -47,10 +46,45 @@ class CrystalPotential(AbstractPotential, HasEventMixin):
                   self._potential_unit.extent[1] * self.repetitions[1])
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=self._potential_unit.sampling, lock_extent=True)
-        self._grid.observe(self._event.notify)
-        self._event.observe(cache_clear_callback(self._cache))
 
         super().__init__()
+
+        self._exit_planes = validate_exit_planes(exit_planes, len(self))
+
+    @property
+    def ensemble_shape(self) -> Tuple[int, ...]:
+        shape = ()
+        shape += self.frozen_phonons.ensemble_shape
+        shape += (self.num_exit_planes,)
+        return shape
+
+    @property
+    def base_shape(self):
+        return self.gpts
+
+    @property
+    def num_frozen_phonon_configs(self):
+        return self._num_frozen_phonon_configs
+
+    @property
+    def random_state(self):
+        return self._random_state
+
+    @property
+    def slice_thickness(self) -> np.ndarray:
+        return np.tile(self._potential_unit.slice_thickness, self.repetitions[2])
+
+    @property
+    def exit_planes(self) -> Tuple[int]:
+        return self._exit_planes
+
+    @property
+    def device(self):
+        return self._potential_unit.device
+
+    @property
+    def potential_unit(self) -> AbstractPotential:
+        return self._potential_unit
 
     @HasGridMixin.gpts.setter
     def gpts(self, gpts):
@@ -63,14 +97,6 @@ class CrystalPotential(AbstractPotential, HasEventMixin):
     def sampling(self, sampling):
         self.sampling = sampling
         self._potential_unit.sampling = sampling
-
-    @property
-    def num_frozen_phonon_configs(self):
-        return self._num_frozen_phonon_configs
-
-    def generate_frozen_phonon_potentials(self, pbar=False):
-        for i in range(self.num_frozen_phonon_configs):
-            yield self
 
     @property
     def repetitions(self) -> Tuple[int, int, int]:
@@ -89,30 +115,78 @@ class CrystalPotential(AbstractPotential, HasEventMixin):
     def num_slices(self) -> int:
         return self._potential_unit.num_slices * self.repetitions[2]
 
-    def get_slice_thickness(self, i) -> float:
-        return self._potential_unit.get_slice_thickness(i)
+    @property
+    def frozen_phonons(self) -> AbstractFrozenPhonons:
+        return DummyFrozenPhonons()
 
-    @cached_method('_cache')
-    def _calculate_configs(self, energy, max_batch=1):
-        potential_generators = self._potential_unit.generate_frozen_phonon_potentials(pbar=False)
+    @property
+    def num_frozen_phonons(self) -> int:
+        return len(self.frozen_phonons)
 
-        potential_configs = []
-        for potential in potential_generators:
+    @property
+    def ensemble_axes_metadata(self):
+        axes_metadata = []
+        axes_metadata += self.frozen_phonons.ensemble_axes_metadata
+        axes_metadata += [ThicknessAxis(values=self.exit_thicknesses)]
+        return axes_metadata
 
-            if isinstance(potential, AbstractPotentialBuilder):
-                potential = potential.build(max_batch=max_batch)
-            elif not isinstance(potential, PotentialArray):
-                raise RuntimeError()
+    def ensemble_blocks(self, chunks=(1, -1)):
+        chunks = validate_chunks(self.ensemble_shape, chunks)
+        random_state = dask.delayed(self.random_state)
 
-            if energy is not None:
-                potential = potential.as_transmission_function(energy=energy, max_batch=max_batch)
+        potential_unit_blocks = self.potential_unit.ensemble_blocks((-1, -1))
+        potential_partial = self.potential_unit.ensemble_partial()
 
-            potential = potential.tile(self.repetitions[:2])
-            potential_configs.append(potential)
+        blocks = []
+        for i in range(self.num_frozen_phonon_configs):
+            p = dask.delayed(potential_partial)(*potential_unit_blocks)
+            p = da.from_delayed(p, shape=(1,), dtype=object)
+            blocks.append(p)
 
-        return potential_configs
+        blocks = da.concatenate(blocks)
 
-    def _generate_slices_base(self, first_slice=0, last_slice=None, max_batch=1, energy=None):
+        return blocks, self._exit_plane_blocks(chunks[1:])
+
+    def ensemble_partial(self):
+        def crystal_potential(*args, **kwargs):
+            potential_unit = args[0].item()
+            exit_planes = args[1].item()
+
+            arr = np.zeros((1,) * len(args), dtype=object)
+            arr.itemset(CrystalPotential(potential_unit,
+                                         exit_planes=exit_planes,
+                                         **kwargs))
+            return arr
+
+        kwargs = {'repetitions': self.repetitions}
+        return partial(crystal_potential, **kwargs)
+
+    def generate_configurations(self):
+        for i in range(self.num_frozen_phonon_configs):
+            kwargs = self._copy_as_dict()
+            kwargs['num_frozen_phonon_configs'] = 1
+            yield CrystalPotential(**kwargs)
+
+    def build(self,
+              first_slice: int = 0,
+              last_slice: int = None,
+              chunks: int = 1,
+              lazy: bool = None) -> 'PotentialArray':
+
+        if last_slice is None:
+            last_slice = len(self)
+
+        xp = get_array_module(self.device)
+
+        array = xp.zeros((len(self),) + self.gpts, dtype=xp.float32)
+
+        for i, slic in enumerate(self.generate_slices(first_slice, last_slice)):
+            array[i] = slic.array
+
+        return PotentialArray(array, sampling=self.sampling, slice_thickness=self.slice_thickness)
+
+    def generate_slices(self, first_slice: int = 0, last_slice: int = None):
+        potentials = [potential.build() for potential in self.potential_unit.generate_configurations()]
 
         first_layer = first_slice // self._potential_unit.num_slices
         if last_slice is None:
@@ -123,28 +197,35 @@ class CrystalPotential(AbstractPotential, HasEventMixin):
         first_slice = first_slice % self._potential_unit.num_slices
         last_slice = None
 
-        configs = self._calculate_configs(energy, max_batch)
+        # configs = self._calculate_configs(energy, max_batch)
 
-        if len(configs) == 1:
-            layers = configs * self.repetitions[2]
+        # if len(configs) == 1:
+        #    layers = configs * self.repetitions[2]
+        # else:
+        #    layers = [configs[np.random.randint(len(configs))] for _ in range(self.repetitions[2])]
+
+        if self.random_state:
+            random_state = self.random_state
         else:
-            layers = [configs[np.random.randint(len(configs))] for _ in range(self.repetitions[2])]
+            random_state = np.random.RandomState()
 
-        for layer_num, layer in enumerate(layers[first_layer:last_layer]):
+        for i in range(self.repetitions[2]):
 
-            if layer_num == last_layer:
-                last_slice = last_slice % self._potential_unit.num_slices
+            j = random_state.randint(0, len(potentials))
+            generator = potentials[j].generate_slices()
 
-            for start, end, potential_slice in layer.generate_slices(first_slice=first_slice,
-                                                                     last_slice=last_slice,
-                                                                     max_batch=max_batch):
-                yield layer_num + start, layer_num + end, potential_slice
+            for i in range(len(self.potential_unit)):
+                yield next(generator).tile(self.repetitions[:2])
 
-                first_slice = 0
+    def _copy_as_dict(self, copy_potential: bool = True):
 
-    def generate_slices(self, first_slice=0, last_slice=None, max_batch=1):
-        return self._generate_slices_base(first_slice=first_slice, last_slice=last_slice, max_batch=max_batch)
+        kwargs = {'repetitions': self.repetitions,
+                  'num_frozen_phonon_configs': self.num_frozen_phonon_configs,
+                  'exit_planes': self.exit_planes,
+                  'random_state': self.random_state}
 
-    def generate_transmission_functions(self, energy, first_slice=0, last_slice=None, max_batch=1):
-        return self._generate_slices_base(first_slice=first_slice, last_slice=last_slice, max_batch=max_batch,
-                                          energy=energy)
+        if copy_potential:
+            kwargs['potential_unit'] = self.potential_unit.copy()
+
+        return kwargs
+

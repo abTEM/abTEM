@@ -1,3 +1,5 @@
+from functools import reduce
+from operator import mul
 from typing import TYPE_CHECKING, Union, Tuple, List, Dict
 
 import numpy as np
@@ -114,43 +116,9 @@ class FresnelPropagator(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, Has
         array *= antialias_aperture.array
         return array
 
-    def propagate(self, waves: Union['Waves'], overwrite_x: bool = False, **kwargs):
-        waves._array = fft2_convolve(waves.array, self.array, overwrite_x=overwrite_x, **kwargs)
+    def propagate(self, waves: 'Waves', overwrite_x: bool = False) -> 'Waves':
+        waves._array = fft2_convolve(waves.array, self.array, overwrite_x=overwrite_x)
         return waves
-
-
-def multislice_step(waves: 'Waves',
-                    potential_slice: Union[PotentialArray, TransmissionFunction],
-                    propagator: FresnelPropagator,
-                    antialias_aperture: AntialiasAperture,
-                    conjugate: bool = False,
-                    transpose: bool = False):
-
-    if waves.device != potential_slice.device:
-        potential_slice = potential_slice.copy(device=waves.device)
-
-    if isinstance(potential_slice, TransmissionFunction):
-        transmission_function = potential_slice
-
-    else:
-        transmission_function = potential_slice.transmission_function(energy=waves.energy)
-        transmission_function = antialias_aperture.bandlimit(transmission_function)
-
-    if conjugate:
-        propagator.thickness = -transmission_function.slice_thickness[0]
-    else:
-        propagator.thickness = transmission_function.slice_thickness[0]
-
-    if transpose:
-        waves = propagator.propagate(waves)
-        waves = transmission_function.transmit(waves, conjugate=conjugate)
-    else:
-        waves = transmission_function.transmit(waves, conjugate=conjugate)
-        waves = propagator.propagate(waves)
-
-    waves.antialias_aperture = 2. / 3.
-
-    return waves
 
 
 def allocate_multislice_measurements(waves: 'WavesLikeMixin',
@@ -181,7 +149,41 @@ def allocate_multislice_measurements(waves: 'WavesLikeMixin',
     return measurements
 
 
-def multislice(waves, potential, start=0, stop=None):
+def multislice_step(waves: 'Waves',
+                    potential_slice: Union[PotentialArray, TransmissionFunction],
+                    propagator: FresnelPropagator,
+                    antialias_aperture: AntialiasAperture,
+                    conjugate: bool = False,
+                    transpose: bool = False) -> 'Waves':
+
+    if waves.device != potential_slice.device:
+        potential_slice = potential_slice.copy_to_device(device=waves.device)
+
+    if isinstance(potential_slice, TransmissionFunction):
+        transmission_function = potential_slice
+
+    else:
+        transmission_function = potential_slice.transmission_function(energy=waves.energy)
+        transmission_function = antialias_aperture.bandlimit(transmission_function)
+
+    if conjugate:
+        propagator.thickness = -transmission_function.slice_thickness[0]
+    else:
+        propagator.thickness = transmission_function.slice_thickness[0]
+
+    if transpose:
+        waves = propagator.propagate(waves)
+        waves = transmission_function.transmit(waves, conjugate=conjugate)
+    else:
+        waves = transmission_function.transmit(waves, conjugate=conjugate)
+        waves = propagator.propagate(waves)
+
+    waves.antialias_aperture = 2. / 3.
+
+    return waves
+
+
+def multislice(waves: 'Waves', potential: 'AbstractPotential', start: int = 0, stop: int = None) -> 'Waves':
     if potential.num_frozen_phonons > 1:
         raise NotImplementedError
 
@@ -204,7 +206,8 @@ def multislice_and_detect(waves: 'Waves',
                           detectors: List[AbstractDetector],
                           start: int = 0,
                           stop: int = None,
-                          keep_ensemble_dims: bool = True) -> Tuple[AbstractMeasurement]:
+                          keep_ensemble_dims: bool = True) \
+        -> Union[Tuple[Union[AbstractMeasurement, 'Waves'], ...], 'Waves']:
     """
     Run the multislice algorithm given a batch of wave functions and a potential.
 
@@ -233,48 +236,47 @@ def multislice_and_detect(waves: 'Waves',
     exit_waves : Waves
     """
 
-    if potential.num_frozen_phonons > 1:
-        raise NotImplementedError
-
     antialias_aperture = AntialiasAperture(device=get_array_module(waves.array))
     antialias_aperture.match_grid(waves)
 
     propagator = FresnelPropagator(device=get_array_module(waves.array), tilt=waves.tilt)
     propagator.match_waves(waves)
 
-    slice_generator = potential.generate_slices(first_slice=start)
+    if len(potential.exit_planes) > 1 or reduce(mul, potential.ensemble_shape) > 1:
+        extra_ensemble_axes_shape = potential.ensemble_shape + (len(potential.exit_planes),)
+        extra_ensemble_axes_metadata = potential.ensemble_axes_metadata + [potential.exit_planes_axes_metadata]
+        measurements = allocate_multislice_measurements(waves,
+                                                        detectors,
+                                                        extra_ensemble_axes_shape=extra_ensemble_axes_shape,
+                                                        extra_ensemble_axes_metadata=extra_ensemble_axes_metadata)
+    else:
+        measurements = {}
 
-    if detectors is None and len(potential.exit_planes) == 1:
-        for i, potential_slice in enumerate(slice_generator):
-            waves = multislice_step(waves, potential_slice, propagator, antialias_aperture)
+    for potential_index, _, potential_configuration in potential.generate_blocks():
 
-            if i == potential.exit_planes[-1]:
-                break
+        slice_generator = potential_configuration.generate_slices(first_slice=start)
 
-        return waves
+        current_slice_index = start
+        for exit_plane_index, exit_plane in enumerate(potential.exit_planes):
 
-    measurements = allocate_multislice_measurements(waves,
-                                                    detectors,
-                                                    extra_ensemble_axes_shape=potential.ensemble_shape,
-                                                    extra_ensemble_axes_metadata=potential.ensemble_axes_metadata)
+            while exit_plane != current_slice_index:
+                potential_slice = next(slice_generator)
+                waves = multislice_step(waves, potential_slice, propagator, antialias_aperture)
+                current_slice_index += 1
 
-    current_slice_index = start
-    for detect_index, exit_slice in enumerate(potential.exit_planes):
+            for detector in detectors:
+                new_measurement = detector.detect(waves)
 
-        while exit_slice != current_slice_index:
-            potential_slice = next(slice_generator)
-            waves = multislice_step(waves, potential_slice, propagator, antialias_aperture)
-            current_slice_index += 1
-
-        for detector in detectors:
-            indices = (0,) * (len(potential.ensemble_shape) - 1) + (detect_index,)
-
-            new_measurement = detector.detect(waves)
-            measurements[detector].array[indices] = new_measurement.array
+                if detector in measurements.keys():
+                    index = (potential_index, exit_plane_index)
+                    measurements[detector].array[index] = new_measurement.array
+                else:
+                    new_measurement._array = new_measurement._array[None, None]
+                    measurements[detector] = new_measurement
 
     measurements = tuple(measurements.values())
 
     if not keep_ensemble_dims:
-        measurements = tuple(measurement[0, 0] for measurement in measurements)
+        measurements = tuple(measurement.squeeze() for measurement in measurements)
 
     return measurements

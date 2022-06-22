@@ -9,14 +9,12 @@ from typing import Mapping, Union, TYPE_CHECKING, Dict
 import numpy as np
 from matplotlib.axes import Axes
 
-from abtem import LineProfiles
 from abtem.core.axes import ParameterSeriesAxis
 from abtem.core.backend import get_array_module
-from abtem.core.blockwise import Ensemble
 from abtem.core.complex import complex_exponential
-from abtem.core.dask import validate_chunks
 from abtem.core.distributions import ParameterSeries, Distribution
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
+from abtem.core.ensemble import Ensemble
 from abtem.core.fft import ifft2
 from abtem.core.grid import Grid, polar_spatial_frequencies
 from abtem.core.utils import expand_dims_to_match
@@ -68,17 +66,11 @@ class EmptyEnsemble(Ensemble):
     def ensemble_axes_metadata(self):
         return []
 
-    def ensemble_blocks(self, chunks=None):
+    def partition_args(self, chunks=None, lazy: bool = True):
         return ()
 
-    def ensemble_partial(self):
-
-        def new(*args):
-            arr = np.zeros((), dtype=object)
-            arr.itemset(self.__class__())
-            return arr
-
-        return partial(new)
+    def from_partitioned_args(self):
+        return self.__class__
 
     @property
     def ensemble_shape(self):
@@ -178,21 +170,6 @@ class CompositeWaveTransform(WaveTransform):
         ensemble_shape = [wave_transform.ensemble_shape for wave_transform in self.wave_transforms]
         return tuple(itertools.chain(*ensemble_shape))
 
-    def ensemble_blocks(self, chunks=None):
-        if chunks is None:
-            chunks = self.default_ensemble_chunks
-
-        chunks = validate_chunks(self.ensemble_shape, chunks, limit=None)
-
-        blocks = ()
-        start = 0
-        for wave_transform in self.wave_transforms:
-            stop = start + wave_transform.ensemble_dims
-            blocks += wave_transform.ensemble_blocks(chunks[start:stop])
-            start = stop
-
-        return blocks
-
     def apply(self, waves: 'WavesLikeMixin'):
         waves.grid.check_is_defined()
 
@@ -201,31 +178,45 @@ class CompositeWaveTransform(WaveTransform):
 
         return waves
 
-    def ensemble_partial(self):
-        def ctf(*args, partials):
-            wave_transfer_functions = []
-            for p in partials:
-                wave_transfer_functions += [p[0](*[args[i] for i in p[1]]).item()]
+    def partition_args(self, chunks=None, lazy: bool = True):
+        if chunks is None:
+            chunks = self.default_ensemble_chunks
 
-            arr = np.zeros((1,) * len(args), dtype=object)
-            arr.itemset(CompositeWaveTransform(wave_transfer_functions))
-            return arr
+        chunks = self.validate_chunks(chunks)
 
+        blocks = ()
+        start = 0
+        for wave_transform in self.wave_transforms:
+            stop = start + wave_transform.ensemble_dims
+            blocks += wave_transform.partition_args(chunks[start:stop], lazy=lazy)
+            start = stop
+
+        return blocks
+
+    @staticmethod
+    def ctf(*args, partials):
+        wave_transfer_functions = []
+        for p in partials:
+            wave_transfer_functions += [p[0](*[args[i] for i in p[1]])]
+
+        return CompositeWaveTransform(wave_transfer_functions)
+
+    def from_partitioned_args(self):
         partials = ()
         i = 0
         for wave_transform in self.wave_transforms:
-            indices = tuple(range(i, i + len(wave_transform.ensemble_shape)))
-            partials += ((wave_transform.ensemble_partial(), indices),)
-            i += len(indices)
+            arg_indices = tuple(range(i, i + len(wave_transform.ensemble_shape)))
+            partials += ((wave_transform.from_partitioned_args(), arg_indices),)
+            i += len(arg_indices)
 
-        return partial(ctf, partials=partials)
-
-    def copy(self):
-        wave_transforms = [wave_transform.copy() for wave_transform in self.wave_transforms]
-        return self.__class__(wave_transforms)
+        return partial(self.ctf, partials=partials)
 
 
-class HasParameters:
+class HasParameters(Ensemble):
+
+    @abstractmethod
+    def __init__(self, *args, **kwargs):
+        pass
 
     @property
     @abstractmethod
@@ -248,13 +239,25 @@ class HasParameters:
         parameters = self.ensemble_parameters
         return tuple(map(sum, tuple(parameter.shape for parameter in parameters.values())))
 
-    def ensemble_blocks(self, chunks):
+    def partition_args(self, chunks=1, lazy: bool = True):
         parameters = self.ensemble_parameters
-
+        chunks = self.validate_chunks(chunks)
         blocks = ()
         for parameter, n in zip(parameters.values(), chunks):
-            blocks += (parameter.divide(n, lazy=True),)
+            blocks += (parameter.divide(n, lazy=lazy),)
+
         return blocks
+
+    @classmethod
+    def ctf(cls, *args, keys, **kwargs):
+        assert len(args) == len(keys)
+        kwargs.update({key: arg for key, arg in zip(keys, args)})
+        return cls(**kwargs)
+
+    def from_partitioned_args(self):
+        kwargs = self.copy_kwargs()
+        keys = tuple(self.ensemble_parameters.keys())
+        return partial(self.ctf, keys=keys, **kwargs)
 
     @property
     def default_ensemble_chunks(self):
@@ -267,7 +270,7 @@ class HasParameters:
             num_new_axes += len(parameter.values.shape)
         return num_new_axes
 
-    def _reshaped_parameters(self, shape):
+    def _reshaped_parameters(self, shape, xp=np):
         ensemble_parameters = self.ensemble_parameters
         num_new_axes = self.num_new_axes
 
@@ -277,26 +280,15 @@ class HasParameters:
             del axis[i]
             axis = tuple(axis) + tuple(range(num_new_axes, num_new_axes + len(shape)))
             ensemble_parameters[key] = np.expand_dims(parameter.values, axis=axis)
+            ensemble_parameters[key] = xp.asarray(ensemble_parameters[key])
 
             new_weights = np.expand_dims(parameter.weights, axis=axis)
+            new_weights = xp.asarray(new_weights)
             weights = new_weights if weights is None else weights * new_weights
 
         parameters = {key: value for key, value in self.parameters.items()}
         parameters.update(ensemble_parameters)
         return parameters, weights
-
-    def ensemble_partial(self):
-        def ctf(*args, keys, cls, **kwargs):
-            assert len(args) == len(keys)
-            kwargs.update({key: arg.item() for key, arg in zip(keys, args)})
-            arr = np.zeros((1,) * len(args), dtype=object)
-            arr.itemset(cls(**kwargs))
-            return arr
-
-        kwargs = self._copy_as_dict()
-        keys = tuple(self.ensemble_parameters.keys())
-
-        return partial(ctf, keys=keys, cls=self.__class__, **kwargs)
 
     @property
     def ensemble_parameters(self) -> Dict:
@@ -305,10 +297,6 @@ class HasParameters:
             if hasattr(parameter, 'values'):
                 ensemble_parameters[parameter_name] = parameter
         return ensemble_parameters
-
-    @abstractmethod
-    def _copy_as_dict(self):
-        pass
 
 
 class Aperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
@@ -323,6 +311,10 @@ class Aperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
         self._normalize = normalize
         self._accelerator = Accelerator(energy=energy)
         self._parameters = {'semiangle_cutoff': semiangle_cutoff}
+
+    @property
+    def normalize(self):
+        return self._normalize
 
     @property
     def parameters(self):
@@ -347,7 +339,7 @@ class Aperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
     def evaluate_with_alpha_and_phi(self, alpha: Union[float, np.ndarray], phi) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
 
-        parameters, _ = self._reshaped_parameters(alpha.shape)
+        parameters, _ = self._reshaped_parameters(alpha.shape, xp)
 
         alpha = xp.array(alpha)
         alpha = xp.expand_dims(alpha, axis=tuple(range(0, self.num_new_axes)))
@@ -374,17 +366,6 @@ class Aperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
         alpha, phi = self._get_polar_spatial_frequencies(waves)
         return self.evaluate_with_alpha_and_phi(alpha, phi)
 
-    def _copy_as_dict(self):
-        d = {'energy': self.energy,
-             'semiangle_cutoff': copy.copy(self.semiangle_cutoff),
-             'normalize': self._normalize,
-             'taper': copy.copy(self.taper),
-             }
-        return d
-
-    def copy(self):
-        return self.__class__(**self._copy_as_dict())
-
 
 class TemporalEnvelope(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
 
@@ -395,6 +376,10 @@ class TemporalEnvelope(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
         self._normalize = normalize
         self._accelerator = Accelerator(energy=energy)
         self._parameters = {'focal_spread': focal_spread}
+
+    @property
+    def normalize(self):
+        return self._normalize
 
     @property
     def parameters(self):
@@ -411,7 +396,7 @@ class TemporalEnvelope(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
     def evaluate_with_alpha_and_phi(self, alpha: Union[float, np.ndarray], phi) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
 
-        parameters, _ = self._reshaped_parameters(alpha.shape)
+        parameters, _ = self._reshaped_parameters(alpha.shape, xp)
 
         alpha = xp.array(alpha)
         alpha = xp.expand_dims(alpha, axis=tuple(range(0, self.num_new_axes)))
@@ -430,16 +415,6 @@ class TemporalEnvelope(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
         alpha, phi = self._get_polar_spatial_frequencies(waves)
         return self.evaluate_with_alpha_and_phi(alpha, phi)
 
-    def _copy_as_dict(self):
-        d = {'energy': self.energy,
-             'focal_spread': copy.copy(self.focal_spread),
-             'normalize': self._normalize,
-             }
-        return d
-
-    def copy(self):
-        return self.__class__(**self._copy_as_dict())
-
 
 class SpatialEnvelope(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
 
@@ -447,20 +422,33 @@ class SpatialEnvelope(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
                  angular_spread: Union[float, Distribution],
                  energy: float = None,
                  normalize: bool = False,
-                 aberrations=None):
+                 aberrations: 'Aberrations' = None,
+                 **kwargs):
+
         self._normalize = normalize
         self._accelerator = Accelerator(energy=energy)
-        self._parameters = {'angular_spread': angular_spread}
+        self._parameters = {}
 
-        if aberrations is None:
-            aberrations = Aberrations()
+        if aberrations is not None:
+            self._parameters.update(aberrations.parameters)
+
+        self._parameters.update(kwargs)
+        self._parameters['angular_spread'] = angular_spread
 
         self._aberrations = aberrations
         self._aberrations._accelerator = self._accelerator
 
     @property
+    def aberrations(self):
+        return self._aberrations
+
+    @property
+    def normalize(self):
+        return self._normalize
+
+    @property
     def parameters(self):
-        return {**self._parameters, **self._aberrations.parameters}
+        return self._parameters
 
     @property
     def angular_spread(self):
@@ -473,7 +461,7 @@ class SpatialEnvelope(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
     def evaluate_with_alpha_and_phi(self, alpha: Union[float, np.ndarray], phi) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
 
-        p, _ = self._reshaped_parameters(alpha.shape)
+        p, _ = self._reshaped_parameters(alpha.shape, xp)
 
         alpha = xp.array(alpha)
         alpha = xp.expand_dims(alpha, axis=tuple(range(0, self.num_new_axes)))
@@ -520,17 +508,6 @@ class SpatialEnvelope(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
         alpha, phi = self._get_polar_spatial_frequencies(waves)
         return self.evaluate_with_alpha_and_phi(alpha, phi)
 
-    def _copy_as_dict(self):
-        d = {'energy': self.energy,
-             'angular_spread': copy.copy(self.angular_spread),
-             'normalize': self._normalize,
-             'aberrations': self._aberrations.copy()
-             }
-        return d
-
-    def copy(self):
-        return self.__class__(**self._copy_as_dict())
-
 
 class Aberrations(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
 
@@ -549,6 +526,7 @@ class Aberrations(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
             parameters = {}
 
         parameters.update(kwargs)
+
         self.set_parameters(parameters)
 
         def parametrization_property(key):
@@ -589,7 +567,7 @@ class Aberrations(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
                                     phi: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
 
-        p, weights = self._reshaped_parameters(alpha.shape)
+        p, weights = self._reshaped_parameters(alpha.shape, xp)
 
         axis = tuple(range(0, self.num_new_axes))
         alpha = xp.array(alpha)
@@ -633,7 +611,7 @@ class Aberrations(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
         array = complex_exponential(-array)
 
         if weights is not None:
-            array = weights * array
+            array = xp.asarray(weights) * array
 
         return array
 
@@ -667,14 +645,6 @@ class Aberrations(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
                 raise ValueError('{} not a recognized parameter'.format(symbol))
 
         return parameters
-
-    def _copy_as_dict(self):
-        d = {'energy': self.energy,
-             'parameters': copy.copy(self._parameters)}
-        return d
-
-    def copy(self):
-        return self.__class__(**self._copy_as_dict())
 
 
 class CTF(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
@@ -732,24 +702,38 @@ class CTF(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
 
         if aberrations is None:
             aberrations = {}
+        elif isinstance(aberrations, Aberrations):
+            aberrations = copy.deepcopy(aberrations.parameters)
 
-        if not isinstance(aberrations, Aberrations):
-            aberrations = Aberrations(**aberrations, **kwargs)
+        aberrations.update(kwargs)
 
+        aberrations = Aberrations(energy=energy, parameters=aberrations)
+        aperture = Aperture(energy=energy, semiangle_cutoff=semiangle_cutoff, taper=taper)
+        spatial_envelope = SpatialEnvelope(angular_spread=angular_spread, aberrations=aberrations)
+        temporal_envelope = TemporalEnvelope(focal_spread=focal_spread)
+
+        self._set_parts(aberrations, aperture, temporal_envelope, spatial_envelope)
+
+    def _set_parts(self, aberrations, aperture, temporal_envelope, spatial_envelope):
         self._aberrations = aberrations
-        self._aperture = Aperture(energy=energy, semiangle_cutoff=semiangle_cutoff, taper=taper)
-        self._spatial_envelope = SpatialEnvelope(angular_spread=angular_spread, aberrations=self._aberrations)
-        self._temporal_envelope = TemporalEnvelope(focal_spread=focal_spread)
-        self._transforms = [self._aberrations, self._aperture, self._spatial_envelope, self._temporal_envelope]
+        self._aperture = aperture
+        self._temporal_envelope = temporal_envelope
+        self._spatial_envelope = spatial_envelope
 
-        super().__init__()
+        self._transforms = [aberrations, spatial_envelope, temporal_envelope, aperture]
 
-        self._accelerator = Accelerator(energy=energy)
+        self._accelerator = Accelerator(energy=aperture.energy)
 
         self._aberrations._accelerator = self._accelerator
         self._aperture._accelerator = self._accelerator
         self._spatial_envelope._accelerator = self._accelerator
         self._temporal_envelope._accelerator = self._accelerator
+
+    @classmethod
+    def from_parts(cls, aberrations, aperture, temporal_envelope, spatial_envelope):
+        ctf = cls()
+        ctf._set_parts(aberrations, aperture, temporal_envelope, spatial_envelope)
+        return ctf
 
     @property
     def scherzer_defocus(self):
@@ -771,9 +755,10 @@ class CTF(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
     @property
     def parameters(self):
         parameters = {**self.aberrations.parameters,
-                      **self.aperture.parameters,
                       **self.spatial_envelope.parameters,
-                      **self.temporal_envelope.parameters}
+                      **self.temporal_envelope.parameters,
+                      **self.aperture.parameters,
+                      }
         return parameters
 
     @property
@@ -806,6 +791,10 @@ class CTF(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
         self.aberrations.defocus = value
 
     @property
+    def taper(self) -> float:
+        return self.aperture.taper
+
+    @property
     def semiangle_cutoff(self) -> float:
         """The semi-angle cutoff [mrad]."""
         return self.aperture.semiangle_cutoff
@@ -835,9 +824,15 @@ class CTF(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
     def evaluate_with_alpha_and_phi(self, alpha, phi):
         array = self.aberrations.evaluate_with_alpha_and_phi(alpha, phi)
 
-        if self.semiangle_cutoff != np.inf:
-            new_array = self.aperture.evaluate_with_alpha_and_phi(alpha, phi)
-            array, new_array = expand_dims_to_match(array, new_array, match_dims=[(-2, -1), (-2, -1)])
+        if self.angular_spread != 0.:
+            new_array = self.spatial_envelope.evaluate_with_alpha_and_phi(alpha, phi)
+            new_aberrations_dims = tuple(range(self.aberrations.ensemble_dims))
+            old_match_dims = new_aberrations_dims + (-2, -1)
+
+            start = int(hasattr(self.spatial_envelope.angular_spread, 'values'))
+            new_match_dims = tuple(range(self.spatial_envelope.ensemble_dims - start)) + (-2, -1)
+
+            array, new_array = expand_dims_to_match(array, new_array, match_dims=[old_match_dims, new_match_dims])
             array = array * new_array
 
         if self.focal_spread != 0.:
@@ -845,8 +840,8 @@ class CTF(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
             array, new_array = expand_dims_to_match(array, new_array, match_dims=[(-2, -1), (-2, -1)])
             array = array * new_array
 
-        if self.angular_spread != 0.:
-            new_array = self.spatial_envelope.evaluate_with_alpha_and_phi(alpha, phi)
+        if self.semiangle_cutoff != np.inf:
+            new_array = self.aperture.evaluate_with_alpha_and_phi(alpha, phi)
             array, new_array = expand_dims_to_match(array, new_array, match_dims=[(-2, -1), (-2, -1)])
             array = array * new_array
 
@@ -935,386 +930,6 @@ class CTF(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
             ax.legend()
 
         return ax
-
-    def _copy_as_dict(self):
-        d = {'energy': self.energy,
-             **self.parameters}
-        return d
-
-    def copy(self):
-        return self.__class__(**self._copy_as_dict())
-
-
-#
-# class CTF(HasAcceleratorMixin, Ensemble):
-
-#
-#     def __init__(self,
-#                  semiangle_cutoff: float = np.inf,
-#                  focal_spread: float = 0.,
-#                  angular_spread: float = 0.,
-#                  gaussian_spread: float = 0.,
-#                  energy: float = None,
-#                  parameters: Union[Mapping[str, float], Mapping[str, ParameterSeries]] = None,
-#                  aperture=None,
-#                  normalize: str = 'values',
-#                  weight: float = 1.,
-#                  **kwargs):
-#
-#         for key in kwargs.keys():
-#             if (key not in polar_symbols) and (key not in polar_aliases.keys()):
-#                 raise ValueError('{} not a recognized parameter'.format(key))
-#
-#         self._accelerator = Accelerator(energy=energy)
-#
-#         if aperture is not None:
-#             self._aperture = aperture
-#
-#             if semiangle_cutoff < np.inf:
-#                 raise RuntimeError()
-#
-#         elif semiangle_cutoff < np.inf:
-#             self._aperture = Aperture(semiangle_cutoff=semiangle_cutoff)
-#
-#         if self._aperture is not None:
-#             self._accelerator = self._aperture.accelerator
-#
-#         self._semiangle_cutoff = semiangle_cutoff
-#         self._focal_spread = focal_spread
-#         self._angular_spread = angular_spread
-#         self._gaussian_spread = gaussian_spread
-#         self._parameters = dict(zip(polar_symbols, [0.] * len(polar_symbols)))
-#         self._normalize = normalize
-#         self._weight = weight
-#
-#         if parameters is None:
-#             parameters = {}
-#
-#         parameters.update(kwargs)
-#         self.set_parameters(parameters)
-#
-#         def parametrization_property(key):
-#
-#             def getter(self):
-#                 return self._parameters[key]
-#
-#             def setter(self, value):
-#                 self._parameters[key] = value
-#
-#             return property(getter, setter)
-#
-#         for symbol in polar_symbols:
-#             setattr(self.__class__, symbol, parametrization_property(symbol))
-#
-#         for key, value in polar_aliases.items():
-#             if key != 'defocus':
-#                 setattr(self.__class__, key, parametrization_property(value))
-#
-#     @property
-#     def normalize(self):
-#         return self._normalize
-#
-#     @property
-#     def weight(self):
-#         return self._weight
-#
-
-#     @property
-#     def gaussian_spread(self) -> float:
-#         """The Gaussian spread [Å]."""
-#         return self._gaussian_spread
-#
-#     @gaussian_spread.setter
-#     def gaussian_spread(self, value: float):
-#         self._gaussian_spread = value
-#
-#     def set_parameters(self, parameters: Dict[str, float]):
-#         """
-#         Set the phase of the phase aberration.
-#
-#         Parameters
-#         ----------
-#         parameters: dict
-#             Mapping from aberration symbols to their corresponding values.
-#         """
-#
-#         for symbol, value in parameters.items():
-#             if symbol in self._parameters.keys():
-#                 self._parameters[symbol] = value
-#
-#             elif symbol == 'defocus':
-#                 self._parameters[polar_aliases[symbol]] = -value
-#
-#             elif symbol in polar_aliases.keys():
-#                 self._parameters[polar_aliases[symbol]] = value
-#
-#             else:
-#                 raise ValueError('{} not a recognized parameter'.format(symbol))
-#
-#         return parameters
-#
-#     def evaluate_temporal_envelope(self, alpha: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
-#         xp = get_array_module(alpha)
-#         return xp.exp(- (.5 * xp.pi / self.wavelength * self.focal_spread * alpha ** 2) ** 2).astype(xp.float32)
-#
-#     def evaluate_gaussian_envelope(self, alpha: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
-#         xp = get_array_module(alpha)
-#         return xp.exp(- .5 * self.gaussian_spread ** 2 * alpha ** 2 / self.wavelength ** 2)
-#
-#     def evaluate_spatial_envelope(self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]) -> \
-#             Union[float, np.ndarray]:
-#         xp = get_array_module(alpha)
-#         p = self.parameters
-#         dchi_dk = 2 * xp.pi / self.wavelength * (
-#                 (p['C12'] * xp.cos(2. * (phi - p['phi12'])) + p['C10']) * alpha +
-#                 (p['C23'] * xp.cos(3. * (phi - p['phi23'])) +
-#                  p['C21'] * xp.cos(1. * (phi - p['phi21']))) * alpha ** 2 +
-#                 (p['C34'] * xp.cos(4. * (phi - p['phi34'])) +
-#                  p['C32'] * xp.cos(2. * (phi - p['phi32'])) + p['C30']) * alpha ** 3 +
-#                 (p['C45'] * xp.cos(5. * (phi - p['phi45'])) +
-#                  p['C43'] * xp.cos(3. * (phi - p['phi43'])) +
-#                  p['C41'] * xp.cos(1. * (phi - p['phi41']))) * alpha ** 4 +
-#                 (p['C56'] * xp.cos(6. * (phi - p['phi56'])) +
-#                  p['C54'] * xp.cos(4. * (phi - p['phi54'])) +
-#                  p['C52'] * xp.cos(2. * (phi - p['phi52'])) + p['C50']) * alpha ** 5)
-#
-#         dchi_dphi = -2 * xp.pi / self.wavelength * (
-#                 1 / 2. * (2. * p['C12'] * xp.sin(2. * (phi - p['phi12']))) * alpha +
-#                 1 / 3. * (3. * p['C23'] * xp.sin(3. * (phi - p['phi23'])) +
-#                           1. * p['C21'] * xp.sin(1. * (phi - p['phi21']))) * alpha ** 2 +
-#                 1 / 4. * (4. * p['C34'] * xp.sin(4. * (phi - p['phi34'])) +
-#                           2. * p['C32'] * xp.sin(2. * (phi - p['phi32']))) * alpha ** 3 +
-#                 1 / 5. * (5. * p['C45'] * xp.sin(5. * (phi - p['phi45'])) +
-#                           3. * p['C43'] * xp.sin(3. * (phi - p['phi43'])) +
-#                           1. * p['C41'] * xp.sin(1. * (phi - p['phi41']))) * alpha ** 4 +
-#                 1 / 6. * (6. * p['C56'] * xp.sin(6. * (phi - p['phi56'])) +
-#                           4. * p['C54'] * xp.sin(4. * (phi - p['phi54'])) +
-#                           2. * p['C52'] * xp.sin(2. * (phi - p['phi52']))) * alpha ** 5)
-#
-#         return xp.exp(-xp.sign(self.angular_spread) * (self.angular_spread / 2 / 1000) ** 2 *
-#                       (dchi_dk ** 2 + dchi_dphi ** 2))
-#
-#     def evaluate_chi(self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
-#         xp = get_array_module(alpha)
-#
-#         p = self.parameters
-#
-#         alpha2 = alpha ** 2
-#         alpha = xp.array(alpha)
-#
-#         array = xp.zeros(alpha.shape, dtype=np.float32)
-#         if any([p[symbol] != 0. for symbol in ('C10', 'C12', 'phi12')]):
-#             array += (1 / 2 * alpha2 *
-#                       (p['C10'] +
-#                        p['C12'] * xp.cos(2 * (phi - p['phi12']))))
-#
-#         if any([p[symbol] != 0. for symbol in ('C21', 'phi21', 'C23', 'phi23')]):
-#             array += (1 / 3 * alpha2 * alpha *
-#                       (p['C21'] * xp.cos(phi - p['phi21']) +
-#                        p['C23'] * xp.cos(3 * (phi - p['phi23']))))
-#
-#         if any([p[symbol] != 0. for symbol in ('C30', 'C32', 'phi32', 'C34', 'phi34')]):
-#             array += (1 / 4 * alpha2 ** 2 *
-#                       (p['C30'] +
-#                        p['C32'] * xp.cos(2 * (phi - p['phi32'])) +
-#                        p['C34'] * xp.cos(4 * (phi - p['phi34']))))
-#
-#         if any([p[symbol] != 0. for symbol in ('C41', 'phi41', 'C43', 'phi43', 'C45', 'phi41')]):
-#             array += (1 / 5 * alpha2 ** 2 * alpha *
-#                       (p['C41'] * xp.cos((phi - p['phi41'])) +
-#                        p['C43'] * xp.cos(3 * (phi - p['phi43'])) +
-#                        p['C45'] * xp.cos(5 * (phi - p['phi45']))))
-#
-#         if any([p[symbol] != 0. for symbol in ('C50', 'C52', 'phi52', 'C54', 'phi54', 'C56', 'phi56')]):
-#             array += (1 / 6 * alpha2 ** 3 *
-#                       (p['C50'] +
-#                        p['C52'] * xp.cos(2 * (phi - p['phi52'])) +
-#                        p['C54'] * xp.cos(4 * (phi - p['phi54'])) +
-#                        p['C56'] * xp.cos(6 * (phi - p['phi56']))))
-#
-#         array = np.float32(2 * xp.pi / self.wavelength) * array
-#         return array
-#
-#     def evaluate_aberrations(self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]) -> \
-#             Union[float, np.ndarray]:
-#
-#         return complex_exponential(-self.evaluate_chi(alpha, phi))
-#
-#     def evaluate(self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
-#         array = self.evaluate_aberrations(alpha, phi)
-#
-#         if self.semiangle_cutoff < np.inf:
-#             array *= self.evaluate_aperture(alpha)
-#
-#         if self.focal_spread > 0.:
-#             array *= self.evaluate_temporal_envelope(alpha)
-#
-#         if self.angular_spread > 0.:
-#             array *= self.evaluate_spatial_envelope(alpha, phi)
-#
-#         if self.gaussian_spread > 0.:
-#             array *= self.evaluate_gaussian_envelope(alpha)
-#
-#         xp = get_array_module(array)
-#
-#         if self.normalize == 'intensity':
-#             array /= xp.sqrt(abs2(array).sum((-2, -1), keepdims=True))
-#
-#         elif self.normalize == 'amplitude':
-#             array /= xp.abs(array).sum((-2, -1), keepdims=True)
-#
-#         elif not self.normalize == 'values':
-#             raise RuntimeError()
-#
-#         return array
-#
-#     def evaluate_on_grid(self,
-#                          gpts: Union[int, Tuple[int, int]] = None,
-#                          extent: Union[float, Tuple[float, float]] = None,
-#                          sampling: Union[float, Tuple[float, float]] = None,
-#                          device: str = 'cpu') -> np.ndarray:
-#
-#         xp = get_array_module(device)
-#         grid = Grid(gpts=gpts, extent=extent, sampling=sampling)
-#         alpha, phi = polar_spatial_frequencies(grid.gpts, grid.sampling, xp=xp)
-#
-#         if self.ensemble_shape:
-#             array = xp.zeros(self.ensemble_shape + grid.gpts, dtype=xp.complex64)
-#             for i, (weight, ctf) in enumerate(self._generate_ctf_distribution()):
-#                 array[np.unravel_index(i, self.ensemble_shape)] = weight * ctf.evaluate(alpha * self.wavelength, phi)
-#         else:
-#             array = self.evaluate(alpha * self.wavelength, phi)
-#
-#         return array
-#
-#     @property
-#     def _distribution_parameters(self) -> Dict:
-#         parameter_series = {}
-#         for parameter_name, parameter in self.parameters.items():
-#             if hasattr(parameter, 'divide'):
-#                 parameter_series[parameter_name] = parameter
-#         return parameter_series
-#
-#     def _generate_ctf_distribution(self):
-#         values = tuple(distribution.values for distribution in self._distribution_parameters.values())
-#         weights = tuple(distribution.weights for distribution in self._distribution_parameters.values())
-#         xp = get_array_module(weights[0])
-#
-#         keys = self._distribution_parameters.keys()
-#         for value, weight in zip(itertools.product(*values), itertools.product(*weights)):
-#             d = self._copy_as_dict()
-#             d['parameters'].update(dict(zip(keys, value)))
-#
-#             weight = weight if len(weight) > 1 else weight[0]
-#             yield xp.prod(weight), self.__class__(**d)
-#
-#     @property
-#     def ensemble_axes_metadata(self):
-#         axes_metadata = []
-#         for parameter_name, parameter in self._distribution_parameters.items():
-#             axes_metadata += [ParameterSeriesAxis(label=parameter_name,
-#                                                   values=tuple(parameter.values),
-#                                                   units='Å',
-#                                                   _ensemble_mean=parameter.ensemble_mean)]
-#         return axes_metadata
-#
-#     @property
-#     def default_ensemble_chunks(self):
-#         return ('auto',) * len(self.ensemble_shape)
-#
-#     @property
-#     def ensemble_shape(self):
-#         return tuple(map(sum, tuple(block.shape for block in self._distribution_parameters.values())))
-#
-#     def ensemble_partial(self):
-#         def ctf(*args, keys, **kwargs):
-#
-#             assert len(args) == len(keys)
-#
-#             for key, arg in zip(keys, args):
-#                 kwargs['parameters'][key] = arg.item()
-#
-#             arr = np.zeros((1,) * len(keys), dtype=object)
-#             arr[0] = CTF(**kwargs)
-#             return arr
-#
-#         kwargs = self._copy_as_dict()
-#         parameter_names = ()
-#         for parameter_name in self._distribution_parameters.keys():
-#             del kwargs['parameters'][parameter_name]
-#             parameter_names += (parameter_name,)
-#
-#         return partial(ctf, keys=parameter_names, **kwargs)
-#
-#     def ensemble_blocks(self, max_batch: int = None, chunks=None):
-#         if chunks is None:
-#             chunks = self.default_ensemble_chunks
-#
-#         chunks = validate_chunks(self.ensemble_shape, chunks, limit=max_batch)
-#
-#         blocks = ()
-#         for parameter, n in zip(self._distribution_parameters.values(), chunks):
-#             blocks += (parameter.divide(n, lazy=True),)
-#
-#         return blocks
-#
-
-#
-#     def apply(self, waves: 'Waves', fourier_space_out: bool = False):
-#         kernel = self.evaluate_on_grid(extent=waves.extent,
-#                                        gpts=waves.gpts,
-#                                        sampling=waves.sampling,
-#                                        device=waves.device)
-#
-#         waves = waves.ensure_fourier_space()
-#         array = waves.array[(None,) * self.ensemble_dims] * kernel
-#
-#         if not fourier_space_out:
-#             array = fft2(array, overwrite_x=False)
-#
-#         d = waves._copy_as_dict(copy_array=False)
-#         d['fourier_space'] = fourier_space_out
-#         d['array'] = array
-#         d['extra_axes_metadata'] = self.ensemble_axes_metadata + d['extra_axes_metadata']
-#         return waves.__class__(**d)
-#
-#     def show(self,
-#              max_semiangle: float = None,
-#              phi: float = 0,
-#              ax: Axes = None,
-#              angular_units: bool = True,
-#              legend: bool = True, **kwargs):
-#         """
-#         Show the contrast transfer function.
-#
-#         Parameters
-#         ----------
-#         max_semiangle: float
-#             Maximum semiangle to display in the plot.
-#         ax: matplotlib Axes, optional
-#             If given, the plot will be added to this matplotlib axes.
-#         phi: float, optional
-#             The contrast transfer function will be plotted along this angle. Default is 0.
-#         n: int, optional
-#             Number of evaluation points to use in the plot. Default is 1000.
-#         title: str, optional
-#             The title of the plot. Default is 'None'.
-#         kwargs:
-#             Additional keyword arguments for the line plots.
-#         """
-#         import matplotlib.pyplot as plt
-#
-#         if ax is None:
-#             ax = plt.subplot()
-#
-#         for key, profile in self.profiles(max_semiangle, phi).items():
-#             if not np.all(profile.array == 1.):
-#                 ax, lines = profile.show(ax=ax, label=key, angular_units=angular_units, **kwargs)
-#
-#         if legend:
-#             ax.legend()
-#
-#         return ax
 
 
 def scherzer_defocus(Cs, energy):

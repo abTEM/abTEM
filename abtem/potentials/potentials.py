@@ -11,14 +11,14 @@ import numpy as np
 import zarr
 from ase import Atoms
 
-from abtem.core.axes import ThicknessAxis, HasAxes, RealSpaceAxis, FrozenPhononsAxis
+from abtem.core.axes import ThicknessAxis, HasAxes, RealSpaceAxis, FrozenPhononsAxis, AxisMetadata
 from abtem.core.backend import get_array_module, validate_device, copy_to_device, device_name_from_array_module
-from abtem.core.blockwise import Ensemble
+from abtem.core.ensemble import Ensemble
 from abtem.core.complex import complex_exponential
-from abtem.core.dask import HasDaskArray, validate_chunks, validate_lazy
+from abtem.core.dask import HasDaskArray, validate_chunks, validate_lazy, iterate_chunk_ranges
 from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
 from abtem.core.grid import Grid, HasGridMixin
-from abtem.core.utils import generate_chunks, normalize_axes
+from abtem.core.utils import generate_chunks, EqualityMixin
 from abtem.measure.measure import Images
 from abtem.potentials.atom import AtomicPotential
 from abtem.potentials.infinite import calculate_scattering_factor, infinite_potential_projections
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     import Waves
 
 
-class AbstractPotential(HasAxes, Ensemble, HasGridMixin, metaclass=ABCMeta):
+class AbstractPotential(Ensemble, HasAxes, HasGridMixin, EqualityMixin, metaclass=ABCMeta):
     """
     Potential abstract base class
 
@@ -45,7 +45,7 @@ class AbstractPotential(HasAxes, Ensemble, HasGridMixin, metaclass=ABCMeta):
         pass
 
     @property
-    def _exit_planes_axes_metadata(self):
+    def exit_planes_axes_metadata(self):
         return ThicknessAxis(label='z', values=tuple(self.exit_thicknesses))
 
     @property
@@ -117,21 +117,9 @@ class AbstractPotential(HasAxes, Ensemble, HasGridMixin, metaclass=ABCMeta):
     def project(self) -> 'Images':
         return self.build().project()
 
-    @abstractmethod
-    def generate_configurations(self):
-        pass
-
     @property
     def default_ensemble_chunks(self) -> Tuple:
-        return validate_chunks(self.ensemble_shape, (1, -1))
-
-    def _exit_plane_blocks(self, chunks):
-        if len(chunks[0]) > 1:
-            raise NotImplementedError
-
-        arr = np.empty((1,), dtype=object)
-        arr.itemset(self.exit_planes)
-        return da.from_array(arr, chunks=chunks[0])
+        return validate_chunks(self.ensemble_shape, (1,))
 
     def show(self, **kwargs):
         """
@@ -177,6 +165,12 @@ def validate_exit_planes(exit_planes, num_slices):
 
 class PotentialBuilder(AbstractPotential):
 
+    @staticmethod
+    def wrap_build_potential(potential):
+        potential = potential.item()
+        indices = (None,) * len(potential.ensemble_shape)
+        return potential.build(lazy=False).array[indices]
+
     def build(self,
               first_slice: int = 0,
               last_slice: int = None,
@@ -189,39 +183,33 @@ class PotentialBuilder(AbstractPotential):
         if last_slice is None:
             last_slice = len(self)
 
-        def build(potential):
-            potential = potential.item()
-            indices = (None,) * len(potential.ensemble_shape[:-1])
-            return potential.build(lazy=False).array[indices]
-
         if lazy:
-            blocks = self._ensemble_blockwise(self.default_ensemble_chunks)
+            blocks = self.ensemble_blocks(self.default_ensemble_chunks)
 
-            chunks = validate_chunks(self.ensemble_shape[:-1], (1,))
+            chunks = validate_chunks(self.ensemble_shape, (1,))
 
             chunks = chunks + ((len(self),), (self.gpts[0],), (self.gpts[1],))
 
-            array = blocks.map_blocks(build,
+            array = blocks.map_blocks(self.wrap_build_potential,
                                       new_axis=(1, 2, 3),
-                                      drop_axis=(1,),
                                       chunks=chunks,
                                       dtype=np.float32)
 
         else:
             xp = get_array_module(self.device)
-
-            array = xp.zeros((len(self),) + self.gpts, dtype=xp.float32)
-
-            for i, slic in enumerate(self.generate_slices(first_slice, last_slice)):
-                array[i] = slic.array
+            array = xp.zeros((self.num_frozen_phonons, len(self),) + self.gpts, dtype=xp.float32)
+            for i, _, potential in self.generate_blocks():
+                for j, slic in enumerate(potential.generate_slices(first_slice, last_slice)):
+                    array[i, j] = slic.array
 
         potential = PotentialArray(array,
                                    sampling=self.sampling,
                                    slice_thickness=self.slice_thickness,
                                    exit_planes=self.exit_planes,
-                                   ensemble_axes_metadata=self.ensemble_axes_metadata[:-1])
+                                   ensemble_axes_metadata=self.ensemble_axes_metadata)
 
-        #potential = potential.squeeze((1,))
+        if not keep_ensemble_dims:
+            potential = potential.squeeze()
 
         if not lazy:
             potential = potential.compute()
@@ -297,7 +285,7 @@ class Potential(PotentialBuilder):
                  slice_thickness: Union[float, np.ndarray] = .5,
                  parametrization: Union[str, Parametrization] = 'lobato',
                  projection: str = 'infinite',
-                 exit_planes: int = None,
+                 exit_planes: Union[int, Tuple[int, ...]] = None,
                  device: str = None,
                  plane: Union[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = 'xy',
                  origin: Tuple[float, float, float] = (0., 0., 0.),
@@ -354,6 +342,24 @@ class Potential(PotentialBuilder):
 
         super().__init__()
 
+    def _require_cell_transform(self, atoms, box, plane, origin):
+        if box == tuple(np.diag(atoms.cell)):
+            return False
+
+        if not is_cell_orthogonal(atoms):
+            return True
+
+        if box is not None:
+            return True
+
+        if plane != 'xy':
+            return True
+
+        if origin != (0., 0., 0.):
+            return True
+
+        return False
+
     @property
     def frozen_phonons(self) -> AbstractFrozenPhonons:
         return self._frozen_phonons
@@ -373,24 +379,6 @@ class Potential(PotentialBuilder):
     @property
     def device(self) -> str:
         return self._device
-
-    def _require_cell_transform(self, atoms, box, plane, origin):
-        if box == tuple(np.diag(atoms.cell)):
-            return False
-
-        if not is_cell_orthogonal(atoms):
-            return True
-
-        if box is not None:
-            return True
-
-        if plane != 'xy':
-            return True
-
-        if origin != (0., 0., 0.):
-            return True
-
-        return False
 
     @property
     def periodic(self) -> bool:
@@ -532,12 +520,6 @@ class Potential(PotentialBuilder):
                                  slice_thickness=self.slice_thickness[start:stop],
                                  extent=self.extent)
 
-    def generate_configurations(self):
-        for frozen_phonon in self.frozen_phonons.generate_configurations():
-            kwargs = self._copy_as_dict(copy_atoms=False)
-            kwargs['atoms'] = frozen_phonon
-            yield Potential(**kwargs)
-
     def generate_slices(self, first_slice: int = 0, last_slice: int = None):
 
         if last_slice is None:
@@ -554,377 +536,30 @@ class Potential(PotentialBuilder):
 
     @property
     def ensemble_axes_metadata(self):
-        axes_metadata = []
-        axes_metadata += self.frozen_phonons.ensemble_axes_metadata
-        axes_metadata += [self._exit_planes_axes_metadata]
-        return axes_metadata
+        return self.frozen_phonons.ensemble_axes_metadata
 
     @property
     def ensemble_shape(self) -> Tuple[int, ...]:
-        shape = ()
-        shape += self.frozen_phonons.ensemble_shape
-        shape += (self.num_exit_planes,)
-        return shape
+        return self.frozen_phonons.ensemble_shape
 
-    @property
-    def base_shape(self):
-        return self.gpts
+    @staticmethod
+    def potential(*args, frozen_phonons_partial, **kwargs):
+        frozen_phonons = frozen_phonons_partial(*args)
+        return Potential(frozen_phonons, **kwargs)
 
-    def ensemble_blocks(self, chunks=(1, -1)):
-        chunks = validate_chunks(self.ensemble_shape, chunks)
-        blocks = self.frozen_phonons.ensemble_blocks(chunks[:1])
-        blocks += self._exit_plane_blocks(chunks[1:]),
-        return blocks
+    def from_partitioned_args(self, *args, **kwargs):
+        frozen_phonons_partial = self.frozen_phonons.from_partitioned_args()
+        kwargs = self.copy_kwargs(exclude=('atoms',))
+        return partial(self.potential, frozen_phonons_partial=frozen_phonons_partial, **kwargs)
 
-    def ensemble_partial(self):
-        def potential(*args, potential_kwargs):
-            frozen_phonons = args[0].item()
-            exit_planes = args[1].item()
-            arr = np.empty((1, 1), dtype=object)
-            arr[0, 0] = Potential(frozen_phonons, exit_planes=exit_planes, **potential_kwargs)
-            return arr
-
-        potential_kwargs = self._copy_as_dict(copy_atoms=False)
-        del potential_kwargs['exit_planes']
-
-        return partial(potential, potential_kwargs=potential_kwargs)
-
-    def _copy_as_dict(self, copy_atoms: bool = True):
-        d = {'gpts': self.gpts,
-             'sampling': self.gpts,
-             'slice_thickness': self.slice_thickness,
-             'parametrization': self.parametrization,
-             'projection': self.projection,
-             'device': self.device,
-             'exit_planes': self.exit_planes,
-             'plane': self.plane,
-             'box': self.box,
-             'origin': self.origin,
-             'cutoff_tolerance': self.cutoff_tolerance}
-
-        if copy_atoms:
-            d['atoms'] = self.frozen_phonons.copy()
-
-        return d
-
-    def __copy__(self) -> 'Potential':
-        return self.__class__(**self._copy_as_dict(copy_atoms=True))
+    def partition_args(self, chunks=(1,), lazy: bool = True):
+        return self.frozen_phonons.partition_args(chunks, lazy=lazy)
 
 
-class CrystalPotential(AbstractPotential):
+class PotentialArray(AbstractPotential, HasDaskArray):
     """
-    Crystal potential object
-
-    The crystal potential may be used to represent a potential consisting of a repeating unit. This may allow
-    calculations to be performed with lower memory and computational cost.
-
-    The crystal potential has an additional function in conjunction with frozen phonon calculations. The number of
-    frozen phonon configurations are not given by the FrozenPhonon objects, rather the ensemble of frozen phonon
-    potentials represented by a potential with frozen phonons represent a collection of units, which will be assembled
-    randomly to represent a random potential. The number of frozen phonon configurations should be given explicitely.
-    This may save computational cost since a smaller number of units can be combined to a larger frozen phonon ensemble.
-
-    Parameters
-    ----------
-    potential_unit : AbstractPotential
-        The potential unit that repeated will create the full potential.
-    repetitions : three int
-        The repetitions of the potential in x, y and z.
-    num_frozen_phonon_configs : int
-        Number of frozen phonon configurations.
-    """
-
-    def __init__(self,
-                 potential_unit: AbstractPotential,
-                 repetitions: Tuple[int, int, int],
-                 num_frozen_phonon_configs: int = 1,
-                 exit_planes=None,
-                 random_state=None, ):
-
-        self._potential_unit = potential_unit
-        self._repetitions = repetitions
-        self._num_frozen_phonon_configs = num_frozen_phonon_configs
-        self._random_state = random_state
-
-        # if (potential_unit.num_frozen_phonon_configs == 1) & (num_frozen_phonon_configs > 1):
-        #     warnings.warn('"num_frozen_phonon_configs" is greater than one, but the potential unit does not have'
-        #                   'frozen phonons')
-        #
-        # if (potential_unit.num_frozen_phonon_configs > 1) & (num_frozen_phonon_configs == 1):
-        #     warnings.warn('the potential unit has frozen phonons, but "num_frozen_phonon_configs" is set to 1')
-
-        gpts = (self._potential_unit.gpts[0] * self.repetitions[0],
-                self._potential_unit.gpts[1] * self.repetitions[1])
-        extent = (self._potential_unit.extent[0] * self.repetitions[0],
-                  self._potential_unit.extent[1] * self.repetitions[1])
-
-        self._grid = Grid(extent=extent, gpts=gpts, sampling=self._potential_unit.sampling, lock_extent=True)
-
-        super().__init__()
-
-        self._exit_planes = validate_exit_planes(exit_planes, len(self))
-
-    @property
-    def ensemble_shape(self) -> Tuple[int, ...]:
-        shape = ()
-        shape += self.frozen_phonons.ensemble_shape
-        shape += (self.num_exit_planes,)
-        return shape
-
-    @property
-    def base_shape(self):
-        return self.gpts
-
-    @property
-    def num_frozen_phonon_configs(self):
-        return self._num_frozen_phonon_configs
-
-    @property
-    def random_state(self):
-        return self._random_state
-
-    @property
-    def slice_thickness(self) -> np.ndarray:
-        return np.tile(self._potential_unit.slice_thickness, self.repetitions[2])
-
-    @property
-    def exit_planes(self) -> Tuple[int]:
-        return self._exit_planes
-
-    @property
-    def device(self):
-        return self._potential_unit.device
-
-    @property
-    def potential_unit(self) -> AbstractPotential:
-        return self._potential_unit
-
-    @HasGridMixin.gpts.setter
-    def gpts(self, gpts):
-        if not ((gpts[0] % self.repetitions[0] == 0) and (gpts[1] % self.repetitions[0] == 0)):
-            raise ValueError('gpts must be divisible by the number of potential repetitions')
-        self.grid.gpts = gpts
-        self._potential_unit.gpts = (gpts[0] // self._repetitions[0], gpts[1] // self._repetitions[1])
-
-    @HasGridMixin.sampling.setter
-    def sampling(self, sampling):
-        self.sampling = sampling
-        self._potential_unit.sampling = sampling
-
-    @property
-    def repetitions(self) -> Tuple[int, int, int]:
-        return self._repetitions
-
-    @repetitions.setter
-    def repetitions(self, repetitions: Tuple[int, int, int]):
-        repetitions = tuple(repetitions)
-
-        if len(repetitions) != 3:
-            raise ValueError('repetitions must be sequence of length 3')
-
-        self._repetitions = repetitions
-
-    @property
-    def num_slices(self) -> int:
-        return self._potential_unit.num_slices * self.repetitions[2]
-
-    @property
-    def frozen_phonons(self) -> AbstractFrozenPhonons:
-        return DummyFrozenPhonons()
-
-    @property
-    def num_frozen_phonons(self) -> int:
-        return len(self.frozen_phonons)
-
-    @property
-    def ensemble_axes_metadata(self):
-        axes_metadata = []
-        axes_metadata += self.frozen_phonons.ensemble_axes_metadata
-        axes_metadata += [ThicknessAxis(values=self.exit_thicknesses)]
-        return axes_metadata
-
-    def ensemble_blocks(self, chunks=(1, -1)):
-        chunks = validate_chunks(self.ensemble_shape, chunks)
-        random_state = dask.delayed(self.random_state)
-
-        potential_unit_blocks = self.potential_unit.ensemble_blocks((-1, -1))
-        potential_partial = self.potential_unit.ensemble_partial()
-
-        blocks = []
-        for i in range(self.num_frozen_phonon_configs):
-            p = dask.delayed(potential_partial)(*potential_unit_blocks)
-            p = da.from_delayed(p, shape=(1,), dtype=object)
-            blocks.append(p)
-
-        blocks = da.concatenate(blocks)
-
-        return blocks, self._exit_plane_blocks(chunks[1:])
-
-    def ensemble_partial(self):
-        def crystal_potential(*args, **kwargs):
-            potential_unit = args[0].item()
-            exit_planes = args[1].item()
-
-            arr = np.zeros((1,) * len(args), dtype=object)
-            arr.itemset(CrystalPotential(potential_unit,
-                                         exit_planes=exit_planes,
-                                         **kwargs))
-            return arr
-
-        kwargs = {'repetitions': self.repetitions}
-        return partial(crystal_potential, **kwargs)
-
-    def generate_configurations(self):
-        for i in range(self.num_frozen_phonon_configs):
-            kwargs = self._copy_as_dict()
-            kwargs['num_frozen_phonon_configs'] = 1
-            yield CrystalPotential(**kwargs)
-
-    def build(self,
-              first_slice: int = 0,
-              last_slice: int = None,
-              chunks: int = 1,
-              lazy: bool = None) -> 'PotentialArray':
-
-        if last_slice is None:
-            last_slice = len(self)
-
-        xp = get_array_module(self.device)
-
-        array = xp.zeros((len(self),) + self.gpts, dtype=xp.float32)
-
-        for i, slic in enumerate(self.generate_slices(first_slice, last_slice)):
-            array[i] = slic.array
-
-        return PotentialArray(array, sampling=self.sampling, slice_thickness=self.slice_thickness)
-
-    def generate_slices(self, first_slice: int = 0, last_slice: int = None):
-        potentials = [potential.build() for potential in self.potential_unit.generate_configurations()]
-
-        first_layer = first_slice // self._potential_unit.num_slices
-        if last_slice is None:
-            last_layer = self.repetitions[2]
-        else:
-            last_layer = last_slice // self._potential_unit.num_slices
-
-        first_slice = first_slice % self._potential_unit.num_slices
-        last_slice = None
-
-        # configs = self._calculate_configs(energy, max_batch)
-
-        # if len(configs) == 1:
-        #    layers = configs * self.repetitions[2]
-        # else:
-        #    layers = [configs[np.random.randint(len(configs))] for _ in range(self.repetitions[2])]
-
-        if self.random_state:
-            random_state = self.random_state
-        else:
-            random_state = np.random.RandomState()
-
-        for i in range(self.repetitions[2]):
-
-            j = random_state.randint(0, len(potentials))
-            generator = potentials[j].generate_slices()
-
-            for i in range(len(self.potential_unit)):
-                yield next(generator).tile(self.repetitions[:2])
-
-    def _copy_as_dict(self, copy_potential: bool = True):
-
-        kwargs = {'repetitions': self.repetitions,
-                  'num_frozen_phonon_configs': self.num_frozen_phonon_configs,
-                  'exit_planes': self.exit_planes,
-                  'random_state': self.random_state}
-
-        if copy_potential:
-            kwargs['potential_unit'] = self.potential_unit.copy()
-
-        return kwargs
-
-        # array = np.concatenate([potential_array.array for potential_array in potential_arrays], axis=1)
-
-        # array = array.reshape((array.shape[0],) + self.gpts)
-
-        # yield PotentialArray(array,
-        #                      sampling=self.sampling,
-        #                      slice_thickness=potential_arrays[0].slice_thickness,
-        #                      ensemble_axes_metadata=potential_arrays[0].ensemble_axes_metadata)
-
-        # for layer_num, layer in enumerate(layers[first_layer:last_layer]):
-        #
-        #     if layer_num == last_layer:
-        #         last_slice = last_slice % self._potential_unit.num_slices
-        #
-        #     for start, end, potential_slice in layer.generate_slices(first_slice=first_slice,
-        #                                                              last_slice=last_slice,
-        #                                                              max_batch=max_batch):
-        #         yield layer_num + start, layer_num + end, potential_slice
-        #
-        #         first_slice = 0
-
-    # def _calculate_configs(self, energy, max_batch=1):
-    #     potential_generators = self._potential_unit.generate_frozen_phonon_potentials(pbar=False)
-    #
-    #     potential_configs = []
-    #     for potential in potential_generators:
-    #
-    #         if isinstance(potential, AbstractPotentialBuilder):
-    #             potential = potential.build(max_batch=max_batch)
-    #         elif not isinstance(potential, PotentialArray):
-    #             raise RuntimeError()
-    #
-    #         if energy is not None:
-    #             potential = potential.as_transmission_function(energy=energy, max_batch=max_batch, in_place=False)
-    #
-    #         potential = potential.tile(self.repetitions[:2])
-    #         potential_configs.append(potential)
-    #
-    #     return potential_configs
-    #
-    # def _generate_slices_base(self, first_slice=0, last_slice=None, max_batch=1, energy=None):
-    #
-    #     first_layer = first_slice // self._potential_unit.num_slices
-    #     if last_slice is None:
-    #         last_layer = self.repetitions[2]
-    #     else:
-    #         last_layer = last_slice // self._potential_unit.num_slices
-    #
-    #     first_slice = first_slice % self._potential_unit.num_slices
-    #     last_slice = None
-    #
-    #     configs = self._calculate_configs(energy, max_batch)
-    #
-    #     if len(configs) == 1:
-    #         layers = configs * self.repetitions[2]
-    #     else:
-    #         layers = [configs[np.random.randint(len(configs))] for _ in range(self.repetitions[2])]
-    #
-    #     for layer_num, layer in enumerate(layers[first_layer:last_layer]):
-    #
-    #         if layer_num == last_layer:
-    #             last_slice = last_slice % self._potential_unit.num_slices
-    #
-    #         for start, end, potential_slice in layer.generate_slices(first_slice=first_slice,
-    #                                                                  last_slice=last_slice,
-    #                                                                  max_batch=max_batch):
-    #             yield layer_num + start, layer_num + end, potential_slice
-    #
-    #             first_slice = 0
-    #
-    # def generate_slices(self, first_slice=0, last_slice=None, max_batch=1):
-    #     return self._generate_slices_base(first_slice=first_slice, last_slice=last_slice, max_batch=max_batch)
-    #
-    # def generate_transmission_functions(self, energy, first_slice=0, last_slice=None, max_batch=1):
-    #     return self._generate_slices_base(first_slice=first_slice, last_slice=last_slice, max_batch=max_batch,
-    #                                       energy=energy)
-
-
-class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
-    """
-    Potential array object
-
-    The potential array represents slices of the electrostatic potential as an array.
+    The potential array represents slices of the electrostatic potential as an array. All other potentials builds
+    potential arrays.
 
     Parameters
     ----------
@@ -938,6 +573,12 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
         Lateral extent of the potential [Å].
     sampling: one or two float, optional
         Lateral sampling of the potential [1 / Å].
+    exit_planes : int or tuple of int, optional
+        The `exit_planes` argument can be used to calculate thickness series.
+        Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an
+        exit plane is desired, and hence during a multislice simulation a measurement is created. If `exit_planes` is
+        an integer a measurement will be collected every `exit_planes` number of slices.
+
     """
 
     def __init__(self,
@@ -945,8 +586,8 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
                  slice_thickness: Union[np.ndarray, float, Sequence[float]] = None,
                  extent: Union[float, Tuple[float, float]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
-                 exit_planes=None,
-                 ensemble_axes_metadata=None):
+                 exit_planes: Union[int, Tuple[int, ...]] = None,
+                 ensemble_axes_metadata: List[AxisMetadata] = None):
 
         if len(array.shape) < 3:
             raise RuntimeError(f'PotentialArray must be 3d, not {len(array.shape)}d')
@@ -956,12 +597,14 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
         self._slice_thickness = _validate_slice_thickness(slice_thickness, num_slices=array.shape[-3])
         self._exit_planes = validate_exit_planes(exit_planes, len(self._slice_thickness))
 
-        if ensemble_axes_metadata is None:
-            ensemble_axes_metadata = []
-
-        super().__init__(array=array)
+        ensemble_axes_metadata = [] if ensemble_axes_metadata is None else ensemble_axes_metadata
 
         self._ensemble_axes_metadata = ensemble_axes_metadata
+        self.check_axes_metadata()
+
+    @property
+    def ensemble_axes_metadata(self):
+        return self._ensemble_axes_metadata
 
     @property
     def num_frozen_phonons(self):
@@ -971,55 +614,13 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
         else:
             return 1
 
-    def ensure_lazy(self):
-        if self.is_lazy:
-            return self
-
-        chunks = (-1, -1, -1)
-
-        if len(self.array.shape) > 3:
-            chunks = (1,) + chunks
-
-        array = da.from_array(self.array, chunks=chunks)
-        return self.__class__(array, **self._copy_as_dict(copy_array=False))
-
     @property
     def ensemble_shape(self) -> Tuple[int, ...]:
-        shape = self.array.shape[:-3]
-        if len(shape) == 0:
-            shape = (1,)
-
-        return shape + (len(self.exit_planes),)
+        return self.array.shape[:-3]
 
     @property
     def base_shape(self):
         return self.array.shape[-3:]
-
-    def generate_configurations(self):
-        raise NotImplementedError
-
-    @property
-    def ensemble_axes_metadata(self):
-        return self._ensemble_axes_metadata + [self._exit_planes_axes_metadata]
-
-    def squeeze(self, axis=()):
-        if len(self.array.shape) < 4:
-            return self
-
-        if axis is None:
-            axis = range(len(self.shape))
-        else:
-            axis = normalize_axes(axis, self.shape)
-
-        shape = self.shape[:-2]
-        squeezed = tuple(np.where([(n == 1) and (i in axis) for i, n in enumerate(shape)])[0])
-
-        xp = get_array_module(self.array)
-        d = self._copy_as_dict(copy_array=False)
-        d['array'] = xp.squeeze(self.array, axis=squeezed)
-        d['ensemble_axes_metadata'] = [element for i, element in enumerate(self.ensemble_axes_metadata) if
-                                       i not in squeezed]
-        return self.__class__(**d)
 
     @property
     def slice_thickness(self) -> np.ndarray:
@@ -1036,17 +637,12 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
     def _copy_as_dict(self, copy_array: bool = True) -> dict:
         d = {'slice_thickness': self.slice_thickness.copy(),
              'exit_planes': self.exit_planes,
-             'extent': self.extent}
+             'extent': self.extent,
+             'ensemble_axes_metadata': self.ensemble_axes_metadata
+             }
         if copy_array:
             d['array'] = self.array.copy()
         return d
-
-    def to_delayed(self):
-        def wrap(array, d):
-            return PotentialArray(array, **d)
-
-        d = self._copy_as_dict(copy_array=False)
-        return dask.delayed(wrap)(self.array, d)
 
     @property
     def frozen_phonons(self):
@@ -1055,35 +651,46 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
     def build(self, first_slice: int = 0, last_slice: int = None, chunks: int = 1, lazy: bool = None):
         return self
 
-    def ensemble_blocks(self, chunks=(1, -1)):
-        chunks = validate_chunks(self.ensemble_shape, chunks)
-
-        potential = self.ensure_lazy()
-
-        blocks = potential.array.to_delayed()
-
-        if len(potential.array.shape) > 3:
-            blocks = blocks[..., 0, 0, 0]
+    def partition_args(self, chunks=None, lazy: bool = True):
+        if chunks is None:
+            chunks = self.array.chunks[:-3]
         else:
-            blocks = blocks[..., 0, 0]
+            chunks = self.validate_chunks(chunks)
 
-        blocks = da.concatenate([da.from_delayed(block, dtype=object, shape=(1,)) for block in blocks])
+        if lazy:
+            array = self.ensure_lazy().array
 
-        return blocks, potential._exit_plane_blocks(chunks[1:])
+            if chunks != array.chunks:
+                array = array.rechunk(chunks + array.chunks[len(chunks):])
 
-    def ensemble_partial(self):
+            if len(array.shape) <= 3:
+                array = np.expand_dims(array, axis=(0,))
 
-        def potential(*args, potential_kwargs):
-            array = args[0]
-            exit_planes = args[1].item()
-            arr = np.empty((1, 1), dtype=object)
-            arr[0, 0] = PotentialArray(array, exit_planes=exit_planes, **potential_kwargs)
-            return arr
+            def wrap(arr):
+                wrapped = np.zeros((1,), dtype=object)
+                wrapped.itemset(0, arr)
+                return wrapped
 
-        potential_kwargs = self._copy_as_dict(copy_array=False)
-        del potential_kwargs['exit_planes']
+            blocks = np.squeeze(array.map_blocks(wrap, dtype=object).to_delayed(),
+                                axis=tuple(range(1, len(array.shape))))
 
-        return partial(potential, potential_kwargs=potential_kwargs)
+            blocks = da.concatenate([da.from_delayed(block, dtype=object, shape=(1,)) for block in blocks])
+        else:
+            array = self.compute().array
+            blocks = np.zeros(tuple(len(c) for c in chunks), dtype=object)
+
+            for block_indices, chunk_range in iterate_chunk_ranges(chunks):
+                blocks[block_indices] = array[chunk_range]
+
+        return blocks,
+
+    @classmethod
+    def _from_partitioned_args_func(cls, *args, **kwargs):
+        kwargs['array'] = args[0]
+        return cls(**kwargs)
+
+    def from_partitioned_args(self):
+        return partial(self._from_partitioned_args_func, **self.copy_kwargs(exclude=('array',)))
 
     def generate_slices(self, first_slice=0, last_slice=None):
 
@@ -1091,10 +698,9 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
             last_slice = len(self)
 
         for i in range(first_slice, last_slice):
-            s = (0, i, None)
+            s = (0,) * (len(self.array.shape) - 3) + (i,)
             array = self.array[s][None]
-            yield self.__class__(array, self.slice_thickness[i:i + 1],
-                                 extent=self.extent)
+            yield self.__class__(array, self.slice_thickness[i:i + 1], extent=self.extent)
 
     def get_chunk(self, first_slice, last_slice):
 
@@ -1133,13 +739,6 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
         t = TransmissionFunction(array, slice_thickness=self.slice_thickness.copy(), extent=self.extent, energy=energy)
         return t
 
-    @property
-    def num_configurations(self) -> int:
-        return 1
-
-    def get_configurations(self, *args, **kwargs) -> List['PotentialArray']:
-        return [self]
-
     def tile(self, multiples: Union[Tuple[int, int], Tuple[int, int, int]]):
         """
         Tile the potential.
@@ -1164,7 +763,8 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
         new_extent = (self.extent[0] * multiples[0], self.extent[1] * multiples[1])
         new_slice_thickness = np.tile(self.slice_thickness, multiples[2])
 
-        return self.__class__(array=new_array, slice_thickness=new_slice_thickness, extent=new_extent)
+        return self.__class__(array=new_array, slice_thickness=new_slice_thickness, extent=new_extent,
+                              ensemble_axes_metadata=self.ensemble_axes_metadata)
 
     def to_zarr(self, url: str, overwrite: bool = False):
         """
@@ -1255,17 +855,16 @@ class PotentialArray(AbstractPotential, HasGridMixin, HasDaskArray):
         -------
         Measurement
         """
-        return Images(array=self._array.sum(0), sampling=self.sampling)
+        return Images(array=self._array.sum(-3), sampling=self.sampling,
+                      ensemble_axes_metadata=self.ensemble_axes_metadata)
 
-    def copy(self, device: str = None):
+    def copy_to_device(self, device: str = None):
         if device is not None:
             array = copy_to_device(self.array, device)
         else:
             array = self.array.copy()
-
-        return self.__class__(array=array,
-                              slice_thickness=self.slice_thickness.copy(),
-                              extent=self.extent)
+        kwargs = self.copy_kwargs(exclude=('array',))
+        return self.__class__(array=array, **kwargs)
 
 
 class TransmissionFunction(PotentialArray, HasAcceleratorMixin):

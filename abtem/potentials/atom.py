@@ -122,6 +122,7 @@ class AtomicPotential:
 
             table[0, i] = integrate.fixed_quad(v, -limits[0] * 2, limits[0], n=7)[0]
             for j, (a, b) in enumerate(zip(limits[1:-1], limits[2:])):
+                print(a, b)
                 table[j + 1, i] = table[j, i] + integrate.fixed_quad(v, a, b, n=7)[0]
 
         taper_start = taper * self.cutoff
@@ -164,8 +165,6 @@ class AtomicPotential:
         positions = xp.asarray(positions)
         radial_potential_derivative = xp.zeros_like(radial_potential)
         radial_potential_derivative[:, :-1] = xp.diff(radial_potential, axis=1) / xp.diff(self.radial_gpts)[None]
-
-
 
         if xp is cp:
             interpolate_radial_functions_cuda(array=array,

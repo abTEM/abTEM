@@ -7,6 +7,7 @@ from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.grid import polar_spatial_frequencies
 from abtem.core.fft import fft2_convolve
 from abtem.core.events import HasEventsMixin, Events
+from abtem.core.utils import EqualityMixin, CopyMixin
 
 TAPER = 0.01
 CUTOFF = 2 / 3.
@@ -28,7 +29,7 @@ def antialias_aperture(cutoff, taper, gpts, sampling, xp):
     return array
 
 
-class AntialiasAperture(HasGridMixin):
+class AntialiasAperture(HasGridMixin, CopyMixin, EqualityMixin):
 
     def __init__(self,
                  cutoff: float = 2. / 3.,

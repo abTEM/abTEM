@@ -2,6 +2,7 @@ from abc import ABCMeta, abstractmethod
 
 from ase.data import chemical_symbols, atomic_numbers
 
+from abtem.core.utils import EqualityMixin
 from abtem.potentials.parametrizations import lobato, kirkland, ewald, peng
 import numpy as np
 
@@ -12,12 +13,11 @@ from ase.data import chemical_symbols
 # Vacuum permitivity in ASE units
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
-
-#from abtem.potentials.utils import kappa
+# from abtem.potentials.utils import kappa
 kappa = 4 * np.pi * eps0 / (2 * np.pi * units.Bohr * units._e * units.C)
 
 
-class Parametrization(metaclass=ABCMeta):
+class Parametrization(EqualityMixin, metaclass=ABCMeta):
 
     @abstractmethod
     def get_function(self, name, symbol, charge):
@@ -131,7 +131,6 @@ class KirklandParametrization(Parametrization):
         if isinstance(symbol, int):
             symbol = chemical_symbols[symbol]
 
-
         try:
             func = self._functions[name]
             parameters = self._parameters[name][symbol]
@@ -141,33 +140,28 @@ class KirklandParametrization(Parametrization):
 
 
 class LobatoParametrization(Parametrization):
+    _functions = {'potential': lobato.potential,
+                  'scattering_factor': lobato.scattering_factor,
+                  'projected_potential': lobato.projected_potential,
+                  'projected_scattering_factor': lobato.projected_scattering_factor,
+                  'charge': lobato.charge,
+                  }
 
-    def __init__(self):
+    def load_parameters(self, symbol):
+
         with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data/lobato.json'), 'r') as f:
-            data = json.load(f)
+            parameters = np.array(json.load(f)[symbol])
 
-        parameters = {}
-        scaled_parameters = {}
-        for key, value in data.items():
-            value = np.array(value)
-            a = np.pi ** 2 * value[0] / value[1] ** (3 / 2.) / kappa
-            b = 2 * np.pi / np.sqrt(value[1])
-            parameters[key] = value
-            scaled_parameters[key] = np.vstack((a, b))
+        a = np.pi ** 2 * parameters[0] / parameters[1] ** (3 / 2.) / kappa
+        b = 2 * np.pi / np.sqrt(parameters[1])
+        scaled_parameters = np.vstack((a, b))
 
-        self._parameters = {'potential': scaled_parameters,
-                            'scattering_factor': parameters,
-                            'projected_potential': scaled_parameters,
-                            'projected_scattering_factor': scaled_parameters,
-                            'charge': parameters
-                            }
-
-        self._functions = {'potential': lobato.potential,
-                           'scattering_factor': lobato.scattering_factor,
-                           'projected_potential': lobato.projected_potential,
-                           'projected_scattering_factor': lobato.projected_scattering_factor,
-                           'charge': lobato.charge,
-                           }
+        return {'potential': scaled_parameters,
+                'scattering_factor': parameters,
+                'projected_potential': scaled_parameters,
+                'projected_scattering_factor': scaled_parameters,
+                'charge': parameters
+                }
 
     def get_function(self, name, symbol, charge=0.):
         if isinstance(symbol, (int, np.int32, np.int64)):
@@ -178,7 +172,8 @@ class LobatoParametrization(Parametrization):
 
         try:
             func = self._functions[name]
-            parameters = self._parameters[name][symbol]
+            parameters = self.load_parameters(symbol)[name]
+
             return lambda r: func(r, parameters)
         except KeyError:
             raise RuntimeError(f'parametrized function "{name}" does not exist for element {symbol}')
@@ -204,7 +199,6 @@ class EwaldParametrization(Parametrization):
 parametrizations = {'ewald': EwaldParametrization,
                     'lobato': LobatoParametrization,
                     'kirkland': KirklandParametrization}
-
 
 # class PengParametrization(DataParametrization):
 #

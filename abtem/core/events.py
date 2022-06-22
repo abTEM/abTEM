@@ -2,8 +2,10 @@ from typing import Optional, Union, Sequence, Any, Callable, Tuple
 from collections import defaultdict
 import numpy as np
 
+from abtem.core.utils import EqualityMixin
 
-class Events:
+
+class Events(EqualityMixin):
     """
     Event class for registering callbacks.
     """

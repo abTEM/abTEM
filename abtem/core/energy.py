@@ -5,6 +5,7 @@ from typing import Optional
 import numpy as np
 from ase import units
 from abtem.core.events import Events, watch, HasEventsMixin
+from abtem.core.utils import EqualityMixin, CopyMixin
 
 
 def relativistic_mass_correction(energy: float) -> float:
@@ -70,7 +71,8 @@ def energy2sigma(energy: float) -> float:
 class EnergyUndefinedError(Exception):
     pass
 
-class Accelerator(HasEventsMixin):
+
+class Accelerator(HasEventsMixin, EqualityMixin, CopyMixin):
     """
     Accelerator object describes the energy of wave functions and transfer functions.
 
@@ -156,13 +158,6 @@ class Accelerator(HasEventsMixin):
 
         else:
             self.energy = other.energy
-
-    def __copy__(self):
-        return self.__class__(self.energy)
-
-    def copy(self):
-        """Make a copy."""
-        return copy(self)
 
 
 class HasAcceleratorMixin:

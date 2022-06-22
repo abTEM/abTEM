@@ -10,12 +10,9 @@ from abtem.core.axes import RealSpaceAxis, FourierSpaceAxis, AxisMetadata
 from abtem.core.backend import HasDevice
 from abtem.core.energy import HasAcceleratorMixin
 from abtem.core.grid import HasGridMixin
-from abtem.core.utils import safe_floor_int
+from abtem.core.utils import safe_floor_int, CopyMixin, EqualityMixin
 from abtem.potentials.potentials import Potential, AbstractPotential
 from abtem.waves.tilt import HasBeamTiltMixin
-
-
-
 
 
 def ensure_parity(n, even, v=1):
@@ -29,9 +26,13 @@ def ensure_parity(n, even, v=1):
     return n
 
 
-class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAxes, HasDevice):
+class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAxes, HasDevice, CopyMixin, EqualityMixin):
     _base_axes = (-2, -1)
     _antialias_cutoff_gpts: Union[Tuple[int, int], None] = None
+
+    @property
+    def base_shape(self):
+        return self.gpts
 
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:

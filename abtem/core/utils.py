@@ -1,9 +1,62 @@
 """Module for various convenient utilities."""
+import copy
+import inspect
+from typing import Tuple
 
 import numpy as np
 
 from abtem.core.backend import get_array_module
 import dask.array as da
+from abtem.core.backend import cp
+
+
+def is_array_like(x):
+    if isinstance(x, np.ndarray) or (cp is not None and isinstance(x, cp.ndarray)):
+        return True
+    else:
+        return False
+
+
+class CopyMixin:
+
+    def copy_kwargs(self, exclude: Tuple['str', ...] = ()) -> dict:
+        parameters = inspect.signature(self.__class__).parameters
+        keys = {key for key, value in parameters.items() if value.kind not in (value.VAR_POSITIONAL, value.VAR_KEYWORD)}
+        keys = [key for key in keys if key not in exclude]
+        kwargs = {key: copy.deepcopy(getattr(self, key)) for key in keys}
+        return kwargs
+
+    def copy(self):
+        return copy.deepcopy(self)
+
+
+class EqualityMixin:
+
+    def __eq__(self, other):
+        if not isinstance(other, self.__class__):
+            return False
+
+        for key, value in self.__dict__.items():
+
+            try:
+                equal = value == other.__dict__[key]
+            except KeyError:
+                return False
+
+            print(equal, key)
+
+            if equal is False:
+                return False
+
+            if is_array_like(value):
+                xp = get_array_module(value)
+                if not xp.allclose(value, other.__dict__[key]):
+                    return False
+
+        return True
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
 
 
 def array_row_intersection(a, b):
@@ -61,6 +114,8 @@ def expand_dims_to_match(arr1, arr2, match_dims):
 
     axis1 = tuple(i for i, a in enumerate(match_axis1) if a is None)
     axis2 = tuple(i for i, a in enumerate(match_axis2) if a is None)
+
+
 
     arr1 = np.expand_dims(arr1, axis=axis1)
     arr2 = np.expand_dims(arr2, axis=axis2)

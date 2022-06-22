@@ -7,10 +7,10 @@ import numpy as np
 
 from abtem.core.axes import LinearAxis
 from abtem.core.backend import validate_device, get_array_module
-from abtem.core.utils import subdivide_into_chunks
+from abtem.core.utils import subdivide_into_chunks, EqualityMixin
 
 
-class Distribution(metaclass=ABCMeta):
+class Distribution(EqualityMixin, metaclass=ABCMeta):
 
     @property
     @abstractmethod
@@ -143,7 +143,7 @@ class ParameterSeries(OneDimensionalDistributionFromValues):
     def __neg__(self):
         return self.__class__(-self.values, ensemble_mean=self.ensemble_mean)
 
-    def divide(self, chunks: Union[int, Tuple[int, ...]] = 1, lazy: bool = False):
+    def divide(self, chunks: Union[int, Tuple[int, ...]] = 1, lazy: bool = True):
         if isinstance(chunks, int):
             chunks = subdivide_into_chunks(len(self), chunks=chunks)
         elif isinstance(chunks, tuple):

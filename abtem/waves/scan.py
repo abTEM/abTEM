@@ -13,7 +13,7 @@ from matplotlib.patches import Rectangle
 
 from abtem.core.axes import ScanAxis, PositionsAxis
 from abtem.core.backend import get_array_module, validate_device
-from abtem.core.dask import validate_chunks, chunk_range
+from abtem.core.dask import validate_chunks, chunk_ranges
 from abtem.core.distributions import MultidimensionalAxisAlignedDistribution
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
@@ -74,36 +74,9 @@ class AbstractScan(ArrayWaveTransform, metaclass=ABCMeta):
     def limits(self):
         pass
 
-    @classmethod
-    @abstractmethod
-    def from_blocks(cls, blocks):
-        pass
-
     @abstractmethod
     def sort_into_extents(self, extents):
         pass
-
-    def ensemble_partial(self):
-        def scan(*args, cls):
-            blocks = tuple(arg.item() for arg in args)
-            arr = np.empty((1,) * len(args), dtype=object)
-            arr[0] = cls.from_blocks(blocks)
-            return arr
-
-        return partial(scan, cls=self.__class__)
-
-    def select_block(self, block_index, chunks):
-        blocks = self.ensemble_blocks(chunks, lazy=False)
-        blocks = tuple(block[index] for block, index in zip(blocks, block_index))
-        return self.from_blocks(blocks)
-
-    def generate_scans(self, chunks):
-        chunks = self.validate_chunks(chunks)
-
-        for blocks, indices in zip(itertools.product(*self.ensemble_blocks(chunks, lazy=False)),
-                                   itertools.product(*chunk_range(chunks))):
-            slic = tuple(slice(*i) for i in indices)
-            yield slic, self.from_blocks(blocks)
 
     def evaluate(self, waves):
         device = validate_device(waves.device)
@@ -124,19 +97,6 @@ class AbstractScan(ArrayWaveTransform, metaclass=ABCMeta):
     def copy(self):
         """Make a copy."""
         return deepcopy(self)
-
-
-def validate_scan(scan: Union[AbstractScan, Tuple[float, float], np.ndarray], probe=None) -> AbstractScan:
-    if scan is None:
-        scan = GridScan()
-
-    if not hasattr(scan, 'get_positions'):
-        scan = CustomScan(scan)
-
-    if probe is not None:
-        scan.match_probe(probe)
-
-    return scan
 
 
 class SourceOffset(AbstractScan):
@@ -186,52 +146,6 @@ class SourceOffset(AbstractScan):
         pass
 
 
-class CompoundScan(AbstractScan):
-
-    def __init__(self, scans):
-        self._scans = scans
-        super().__init__()
-
-    @property
-    def shape(self):
-        shape = ()
-        for scan in self._scans:
-            shape += scan.shape
-        return shape
-
-    def get_positions(self):
-        positions = self._scans.get_positions()
-        for scan in self._scans[1:]:
-            positions = np.add.outer(positions, scan.get_positions())
-        return positions
-
-    @property
-    def ensemble_axes_metadata(self):
-        return [PositionsAxis()] * len(self.shape)
-
-    def ensemble_blocks(self, chunks=None):
-        chunks = self.validate_chunks(self.ensemble_shape, chunks)
-        blocks = ()
-        for parameter, n in zip(self._distribution.factors, chunks):
-            blocks += (parameter.divide(n, lazy=True),)
-
-        return blocks
-
-    def ensemble_partial(self):
-        def distribution(*args):
-            factors = [arg.item() for arg in args]
-            dist = MultidimensionalAxisAlignedDistribution(factors)
-            arr = np.empty((1,) * len(args), dtype=object)
-            arr.itemset(dist)
-            return arr
-
-        return distribution
-
-    @property
-    def limits(self):
-        pass
-
-
 class CustomScan(AbstractScan):
 
     def __init__(self, positions: np.ndarray = (0., 0.)):
@@ -262,13 +176,19 @@ class CustomScan(AbstractScan):
     def ensemble_axes_metadata(self):
         return [PositionsAxis()]
 
-    def ensemble_blocks(self, chunks=None, lazy=True):
+    @staticmethod
+    def _from_partitioned_args_func(*args, **kwargs):
+        return CustomScan(args[0])
+
+    def from_partitioned_args(self):
+        return self._from_partitioned_args_func
+
+    def partition_args(self, chunks=None, lazy: bool = True):
         chunks = self.validate_chunks(chunks)
         cumchunks = tuple(np.cumsum(chunks[0]))
         positions = np.empty(len(chunks[0]), dtype=object)
-
         for i, (start_chunk, chunk) in enumerate(zip((0,) + cumchunks, chunks[0])):
-            positions[i] = CustomScan(self._positions[start_chunk:start_chunk + chunk])
+            positions.itemset(i, self._positions[start_chunk:start_chunk + chunk])
 
         if lazy:
             positions = da.from_array(positions, chunks=1)
@@ -293,10 +213,6 @@ class CustomScan(AbstractScan):
 
         assert sum(chunks) == len(self)
         return CustomScan(new_positions), (chunks,)
-
-    @classmethod
-    def from_blocks(cls, blocks):
-        return cls(blocks[0].positions)
 
     @property
     def shape(self):
@@ -483,15 +399,16 @@ class LineScan(AbstractScan):
 
     @property
     def default_ensemble_chunks(self):
-        return 'auto', 'auto'
+        return 'auto',
 
-    def ensemble_partial(self):
+    def sort_into_extents(self, extents):
+        raise NotImplementedError
+
+    @staticmethod
+    def from_partitioned_args(*args, **kwargs):
         return lambda x: x
 
-    def ensemble_blocks(self, chunks=None):
-
-        # self.grid.check_is_defined()
-
+    def partition_args(self, chunks=None, lazy: bool = True):
         if chunks is None:
             chunks = self.default_ensemble_chunks
 
@@ -509,7 +426,8 @@ class LineScan(AbstractScan):
             end = start + self.sampling * chunk * direction
             block[i] = LineScan(start=start, end=end, gpts=chunk, endpoint=False)
 
-        block = da.from_array(block, chunks=1)
+        if lazy:
+            block = da.from_array(block, chunks=1)
 
         return block,
 
@@ -672,31 +590,6 @@ class GridScan(HasGridMixin, AbstractScan):
 
         return np.stack(np.meshgrid(*xi, indexing='ij'), axis=-1)
 
-    @property
-    def ensemble_axes_metadata(self):
-        axes_metadata = []
-        labels = ('x', 'y', 'z')
-        for label, sampling, offset, endpoint in zip(labels, self.sampling, self.start, self.endpoint):
-            axes_metadata.append(ScanAxis(label=label, sampling=sampling, offset=offset, units='Å', endpoint=endpoint))
-        return axes_metadata
-
-    @property
-    def ensemble_shape(self):
-        return self.shape
-
-    @property
-    def default_ensemble_chunks(self):
-        return 'auto', 'auto'
-
-    @classmethod
-    def from_blocks(cls, blocks):
-        x_scan, y_scan = blocks
-        start = (x_scan['start'], y_scan['start'])
-        end = (x_scan['end'], y_scan['end'])
-        gpts = (x_scan['gpts'], y_scan['gpts'])
-        endpoint = (x_scan['endpoint'], y_scan['endpoint'])
-        return GridScan(start=start, end=end, gpts=gpts, endpoint=endpoint)
-
     def sort_into_extents(self, extents):
         x_chunks = tuple(
             safe_floor_int(e[1] / self.sampling[0]) - safe_floor_int(e[0] / self.sampling[0]) for e in extents[0])
@@ -706,12 +599,37 @@ class GridScan(HasGridMixin, AbstractScan):
         assert sum(y_chunks) == self.gpts[1]
         return self, (x_chunks, y_chunks)
 
-    def ensemble_blocks(self, chunks=None, lazy=True):
+    @property
+    def ensemble_axes_metadata(self):
+        axes_metadata = []
+        labels = ('x', 'y', 'z')
+        for label, sampling, offset, endpoint in zip(labels, self.sampling, self.start, self.endpoint):
+            axes_metadata.append(ScanAxis(label=label, sampling=sampling, offset=offset, units='Å', endpoint=endpoint))
+        return axes_metadata
 
+    @classmethod
+    def _from_partitioned_args_func(cls, *args, **kwargs):
+        x_scan, y_scan = args
+        start = (x_scan['start'], y_scan['start'])
+        end = (x_scan['end'], y_scan['end'])
+        gpts = (x_scan['gpts'], y_scan['gpts'])
+        endpoint = (x_scan['endpoint'], y_scan['endpoint'])
+        return cls(start=start, end=end, gpts=gpts, endpoint=endpoint)
+
+    def from_partitioned_args(self):
+        return self._from_partitioned_args_func
+
+    @property
+    def ensemble_shape(self):
+        return self.shape
+
+    @property
+    def default_ensemble_chunks(self):
+        return 'auto', 'auto'
+
+    def partition_args(self, chunks=None, lazy=True):
         self.grid.check_is_defined()
-
         chunks = self.validate_chunks(chunks)
-
         blocks = ()
         for i in range(2):
             cumchunks = tuple(np.cumsum(chunks[i]))

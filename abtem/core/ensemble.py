@@ -1,42 +1,19 @@
+import inspect
 import itertools
 import operator
 from abc import abstractmethod, ABCMeta
-from functools import reduce
+from functools import reduce, partial
+from typing import Tuple
 
 import dask.array as da
 import numpy as np
-
+import copy
 from abtem.core import config
-from abtem.core.dask import validate_chunks
+from abtem.core.dask import validate_chunks, chunk_ranges
+from abtem.core.utils import EqualityMixin, CopyMixin
 
 
-def ensemble_chunks(ensembles, max_batch=None, base_shape=None, dtype=None):
-    shape = tuple(itertools.chain(*tuple(ensemble.ensemble_shape for ensemble in ensembles)))
-    chunks = tuple(itertools.chain(*tuple(ensemble.default_ensemble_chunks for ensemble in ensembles)))
-
-    if max_batch == 'auto':
-        max_batch = config.get("dask.chunk-size")
-
-    if base_shape is not None:
-        shape += base_shape
-        chunks += (-1,) * len(base_shape)
-
-        if isinstance(max_batch, int):
-            max_batch = max_batch * reduce(operator.mul, base_shape)
-
-    chunks = validate_chunks(shape, chunks, max_batch, dtype)
-
-    if base_shape is not None:
-        chunks = chunks[:-len(base_shape)]
-
-    return chunks
-
-
-class Ensemble(metaclass=ABCMeta):
-
-    @property
-    def ensemble_dims(self):
-        return len(self.ensemble_shape)
+class Ensemble(EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     @property
     @abstractmethod
@@ -54,12 +31,44 @@ class Ensemble(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def ensemble_blocks(self, chunks=None):
+    def partition_args(self, chunks=None, lazy: bool = True):
         pass
 
-    @abstractmethod
-    def ensemble_partial(self):
-        pass
+    @property
+    def ensemble_dims(self):
+        return len(self.ensemble_shape)
+
+    def select_block(self, index: Tuple[int, ...], chunks):
+        args = self.partition_args(chunks, lazy=False)
+        assert len(args) == len(index)
+        selected_args = tuple(arg[index] for arg, index in zip(args, index))
+        return self.from_partitioned_args()(*selected_args)
+
+    def ensemble_blocks(self, chunks=None, limit=None):
+        chunks = self.validate_chunks(chunks, limit)
+
+        args = self.partition_args(chunks, lazy=True)
+        symbols = tuple(range(len(args)))
+        args = tuple((block, (i,)) for i, block in zip(symbols, args))
+        adjust_chunks = {i: c for i, c in enumerate(chunks)}
+
+        return da.blockwise(self.wrapped_from_partitioned_args(),
+                            symbols,
+                            *tuple(itertools.chain(*args)),
+                            adjust_chunks=adjust_chunks,
+                            meta=np.array((), dtype=object))
+
+    def generate_blocks(self, chunks: int = 1):
+        chunks = self.validate_chunks(chunks)
+        blocks = self.partition_args(chunks=chunks, lazy=False)
+
+        for block_indices, start_stop in zip(itertools.product(*(range(block.shape[0]) for block in blocks)),
+                                             itertools.product(*chunk_ranges(chunks))):
+            block = tuple(block[i] for i, block in zip(block_indices, blocks))
+
+            slics = tuple(slice(start, stop) for start, stop in start_stop)
+
+            yield block_indices, slics, self.from_partitioned_args()(*block)
 
     def validate_chunks(self, chunks, limit=None):
         if chunks is None:
@@ -88,26 +97,25 @@ class Ensemble(metaclass=ABCMeta):
             chunks = chunks[:-len(base_shape)]
 
         return chunks
-        # chunks = self.default_ensemble_chunks
-        #
-        # shape = self.ensemble_shape
-        #
-        # chunks = chunks + (-1, -1)
-        # shape = shape + base_shape
-        #
-        # if isinstance(max_batch, int):
-        #     max_batch = max_batch * np.prod(base_shape)
-        #
-        # return validate_chunks(shape, chunks, limit=max_batch, dtype=dtype)[:-2]
 
-    def _ensemble_blockwise(self, chunks=None, limit=None):
-        chunks = self.validate_chunks(chunks, limit=limit)
-        partial = self.ensemble_partial()
-        blocks = self.ensemble_blocks(chunks)
-        return ensemble_blockwise(partial, blocks)
+    @abstractmethod
+    def from_partitioned_args(self):
+        pass
+
+    @staticmethod
+    def wrap_from_partitioned_args(*args, from_partitioned_args, **kwargs):
+        blocks = tuple(arg.item() for arg in args)
+        arr = np.empty((1,) * len(args), dtype=object)
+        arr.itemset(0, from_partitioned_args(*blocks, **kwargs))
+        return arr
+
+    def wrapped_from_partitioned_args(self, ):
+        return partial(self.wrap_from_partitioned_args,
+                       from_partitioned_args=self.from_partitioned_args(),
+                       )
 
 
-def concatenate_blocks(blocks):
+def concatenate_array_blocks(blocks):
     for i in range(len(blocks.shape)):
         new_blocks = np.empty(blocks.shape[:-1], dtype=object)
 
@@ -124,6 +132,7 @@ def concatenate_blocks(blocks):
 def ensemble_blockwise(partial, blocks, ensemble_chunks=None, base_shape=None, dtype=None):
     block_indices = tuple(range(len(blocks)))
     args = tuple((block, (i,)) for i, block in zip(block_indices, blocks))
+    adjust_chunks = {i: c for i, c in enumerate(ensemble_chunks)}
 
     if ensemble_chunks is not None:
         adjust_chunks = {i: c for i, c in enumerate(ensemble_chunks)}

@@ -5,13 +5,14 @@ import numpy as np
 
 from abtem.core.backend import get_array_module, xp_to_str
 from abtem.core.events import Events, HasEventsMixin, watch
+from abtem.core.utils import CopyMixin, EqualityMixin
 
 
 class GridUndefinedError(Exception):
     pass
 
 
-class Grid(HasEventsMixin):
+class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
     """
     Grid object.
 
@@ -253,9 +254,6 @@ class Grid(HasEventsMixin):
             if not np.all(self.gpts == other.gpts):
                 raise RuntimeError('Inconsistent grid gpts ({} != {})'.format(self.gpts, other.gpts))
 
-    def __eq__(self, other):
-        self.check_match(other)
-
     def round_to_power(self, power: int = 2):
         """
         Round the grid gpts up to the nearest value that is a power of n. Fourier transforms are faster for arrays of
@@ -339,6 +337,7 @@ def spatial_frequencies(gpts: Tuple[int, ...],
         return xp.meshgrid(*out, indexing='ij')
     else:
         return out
+
 
 def polar_spatial_frequencies(gpts, sampling, xp=np):
     xp = get_array_module(xp)

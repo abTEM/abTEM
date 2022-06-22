@@ -15,7 +15,7 @@ from matplotlib.axes import Axes
 from abtem.core.antialias import AntialiasAperture
 from abtem.core.axes import AxisMetadata, axis_from_dict, axis_to_dict
 from abtem.core.backend import get_array_module, validate_device, copy_to_device, device_name_from_array_module
-from abtem.core.blockwise import Ensemble, ensemble_blockwise
+from abtem.core.ensemble import Ensemble, ensemble_blockwise
 from abtem.core.intialize import initialize
 from abtem.core.utils import normalize_axes
 from abtem.ionization.multislice import transition_potential_multislice_and_detect
@@ -145,7 +145,7 @@ class Waves(HasDaskArray, WavesLikeMixin):
         self._antialias_cutoff_gpts = antialias_cutoff_gpts
         self._fourier_space = fourier_space
 
-        super().__init__(array=array)
+        self._array = array
 
         if ensemble_axes_metadata is None:
             ensemble_axes_metadata = []
@@ -155,7 +155,8 @@ class Waves(HasDaskArray, WavesLikeMixin):
 
         self._ensemble_axes_metadata = ensemble_axes_metadata
         self._metadata = metadata
-        self._check_axes_metadata()
+
+        self.check_axes_metadata()
 
     def rechunk(self, chunks):
         self._array = self._array.rechunk(chunks)
@@ -572,15 +573,10 @@ class Waves(HasDaskArray, WavesLikeMixin):
                                               detectors,
                                               extra_ensemble_axes_metadata=potential.ensemble_shape)
         else:
-
-            # if potential.num_frozen_phonons > 1:
-            #    waves.multislice(potential)
-            # array = xp.zeros((len(potential),) + self.shape, dtype=np.complex64)
-
             measurements = multislice_and_detect(self,
                                                  potential=potential,
                                                  detectors=detectors,
-                                                 keep_ensemble_dims=keep_ensemble_dims)
+                                                 keep_ensemble_dims=False)
 
         return measurements[0] if len(measurements) == 1 else ComputableList(measurements)
 
@@ -735,17 +731,22 @@ class WavesBuilder(WavesLikeMixin):
         return self.transforms.ensemble_shape
 
     @staticmethod
-    def build_waves_multislice_detect(*args, probe_partial, transform_partial, potential_partial, multislice_func,
-                                      detectors):
-        waves = probe_partial()
+    def build_waves_multislice_detect(*args, partials, multislice_func, detectors):
 
-        transform = transform_partial[0](*[args[i] for i in transform_partial[1]]).item()
+        waves = partials['base'][0]()
+
+        transform = partials['transforms'][0](*[args[i] for i in partials['transforms'][1]]).item()
+
+        if 'potential' in partials.keys():
+            potential = partials['potential'][0](*[args[i] for i in partials['potential'][1]]).item()
+        else:
+            potential = None
+
         waves = transform.apply(waves)
 
         waves = waves.ensure_real_space()
 
-        if potential_partial is not None:
-            potential = potential_partial[0](*[args[i] for i in potential_partial[1]]).item()
+        if potential is not None:
             measurements = multislice_func(waves,
                                            potential=potential,
                                            detectors=detectors,
@@ -753,7 +754,7 @@ class WavesBuilder(WavesLikeMixin):
         else:
             measurements = tuple(detector.detect(waves) for detector in detectors)
 
-        arr = np.zeros((1,) * len(args), dtype=object)
+        arr = np.zeros((1,) * (len(args) + 1), dtype=object)
         arr.itemset(measurements)
         return arr
 
@@ -763,34 +764,62 @@ class WavesBuilder(WavesLikeMixin):
                                      potential=None,
                                      multislice_func=multislice_and_detect):
 
-        chunks = self.transforms.ensemble_chunks(max_batch, base_shape=self.gpts)
-        blocks = self.transforms.ensemble_blocks(chunks)
+        args = ()
+        symbols = ()
+        adjust_chunks = {}
+        extra_ensemble_axes_metadata = []
+        new_axes = {}
+        partials = {'base': (self.base_waves_partial(), ())}
 
         if potential is not None:
-            potential_partial = potential.ensemble_partial()
-            blocks = potential.ensemble_blocks() + blocks
-            chunks = potential.default_ensemble_chunks + chunks
-            potential_ensemble_dims = potential.ensemble_dims
-            potential_partial = potential_partial, range(potential_ensemble_dims)
-            extra_ensemble_axes_metadata = potential.ensemble_axes_metadata
+            # add potential args
+            potential_symbols = tuple(range(0, potential.ensemble_dims))
+            partials['potential'] = potential.wrapped_from_partitioned_args(), (0,)
+
+            args += potential.partition_args()[0], potential_symbols
+            symbols += potential_symbols
+            adjust_chunks[0] = potential.default_ensemble_chunks[0]
+            extra_ensemble_axes_metadata += potential.ensemble_axes_metadata
+
+            # add exit plane args
+            symbols += tuple(range(max(potential_symbols) + 1, max(potential_symbols) + 2))
+            new_axes[1] = (len(potential.exit_planes),)
+            extra_ensemble_axes_metadata += [potential.exit_planes_axes_metadata]
+
+            max_arg_index = 1
+            max_symbol = 2
         else:
-            potential_partial = None
-            potential_ensemble_dims = 0
-            extra_ensemble_axes_metadata = None
+            max_arg_index = 0
+            max_symbol = 0
 
-        transform_partial = self.transforms.ensemble_partial(), range(potential_ensemble_dims,
-                                                                      potential_ensemble_dims +
-                                                                      self.transforms.ensemble_dims)
+        # add transform args
+        transform_arg_indices = tuple(range(max_arg_index, max_arg_index + self.transforms.ensemble_dims))
+        partials['transforms'] = self.transforms.wrapped_from_partitioned_args(), transform_arg_indices
 
-        partial_build_probes = partial(self.build_waves_multislice_detect,
-                                       probe_partial=self.base_waves_partial(),
-                                       transform_partial=transform_partial,
-                                       potential_partial=potential_partial,
-                                       multislice_func=multislice_func,
-                                       detectors=detectors
-                                       )
+        transform_symbols = tuple(range(max_symbol, max_symbol + self.transforms.ensemble_dims))
+        transform_chunks = self.transforms.ensemble_chunks(max_batch, base_shape=self.gpts)
 
-        array = ensemble_blockwise(partial_build_probes, blocks, chunks)
+        args += tuple(itertools.chain(*tuple((block, (i,)) for i, block in zip(
+            transform_symbols,
+            self.transforms.partition_args(transform_chunks)))))
+
+        symbols += transform_symbols
+        adjust_chunks = {**adjust_chunks, **{i: c for i, c in zip(transform_symbols, transform_chunks)}}
+
+        partial_build = partial(self.build_waves_multislice_detect,
+                                partials=partials,
+                                multislice_func=multislice_func,
+                                detectors=detectors)
+
+        # print(symbols, args)
+
+        array = da.blockwise(partial_build,
+                             symbols,
+                             *args,
+                             adjust_chunks=adjust_chunks,
+                             new_axes=new_axes,
+                             concatenate=True,
+                             meta=np.array((), dtype=object))
 
         return finalize_lazy_measurements(array,
                                           waves=self,
@@ -835,7 +864,6 @@ class PlaneWave(WavesBuilder):
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
         self._beam_tilt = BeamTilt(tilt=tilt)
-        self._antialias_aperture = AntialiasAperture()
         self._device = validate_device(device)
         self._normalize = normalize
 
@@ -890,7 +918,6 @@ class PlaneWave(WavesBuilder):
             return self.lazy_build_multislice_detect(detectors=detectors, max_batch=max_batch)
 
         waves = self.base_waves_partial()()
-
         return waves
 
     def multislice(self,
@@ -934,23 +961,17 @@ class PlaneWave(WavesBuilder):
         else:
             multislice_func = multislice_and_detect
 
-        measurements = self.lazy_build_multislice_detect(detectors=detectors,
-                                                         max_batch=max_batch,
-                                                         potential=potential,
-                                                         multislice_func=multislice_func)
+        if lazy:
+            measurements = self.lazy_build_multislice_detect(detectors=detectors,
+                                                             max_batch=max_batch,
+                                                             potential=potential,
+                                                             multislice_func=multislice_func)
 
-        if not lazy:
-            measurements = measurements.compute()
+        else:
+            waves = self.build(lazy=False)
+            measurements = multislice_func(waves, potential=potential, detectors=detectors, keep_ensemble_dims=False)
 
-        return measurements
-
-    def _copy_as_dict(self):
-        return {'extent': self.extent,
-                'gpts': self.gpts,
-                'energy': self.energy,
-                'tilt': self.tilt,
-                'normalize': self._normalize,
-                'device': self._device}
+        return measurements[0] if len(measurements) == 1 else measurements
 
 
 class Probe(WavesBuilder):
@@ -994,7 +1015,7 @@ class Probe(WavesBuilder):
                  tilt: Tuple[float, float] = (0., 0.),
                  device: str = None,
                  semiangle_cutoff: float = 30.,
-                 taper=0.,
+                 taper: float = 0.,
                  aperture=None,
                  aberrations: Union[Aberrations, dict] = None,
                  extra_transforms=None,
@@ -1028,13 +1049,9 @@ class Probe(WavesBuilder):
         if extra_transforms is None:
             extra_transforms = []
 
-        transforms = extra_transforms + self.named_transforms
+        transforms = extra_transforms + [self.aperture, self.aberrations]
 
         super().__init__(transforms=transforms)
-
-    @property
-    def named_transforms(self):
-        return [self.aperture, self.aberrations]
 
     @classmethod
     def from_ctf(cls, ctf, **kwargs):
@@ -1079,9 +1096,9 @@ class Probe(WavesBuilder):
         return {'energy': self.energy, 'semiangle_cutoff': self.aperture.semiangle_cutoff}
 
     @property
-    def shape(self):
+    def base_shape(self):
         """ Shape of Waves. """
-        return self.ensemble_shape + self.gpts
+        return self.gpts
 
     def base_waves_partial(self):
 
@@ -1186,6 +1203,7 @@ class Probe(WavesBuilder):
         -------
         measurements : AbstractMeasurement or Waves or list of AbstractMeasurement
         """
+        initialize()
 
         potential = validate_potential(potential)
         self.grid.match(potential)
@@ -1208,7 +1226,7 @@ class Probe(WavesBuilder):
         probe = self.copy()
 
         if scan is not None:
-            probe.insert_transform(scan)
+            probe.insert_transform(scan, len(self.transforms))
 
         probe.insert_transform(WaveRenormalization(), 0)
 
@@ -1259,7 +1277,6 @@ class Probe(WavesBuilder):
         -------
         #list_of_measurements : measurement, wave functions, list of measurements
         """
-        initialize()
 
         if scan is None:
             scan = GridScan()
@@ -1314,25 +1331,6 @@ class Probe(WavesBuilder):
 
     def complex_images(self, lazy: bool = False):
         return self.build(lazy=lazy).complex_images()
-
-    def _copy_as_dict(self):
-        new = {'extent': self.extent,
-               'gpts': self.gpts,
-               'sampling': self.sampling,
-               'energy': self.energy,
-               'tilt': self.tilt,
-               'device': self.device,
-               'aberrations': self.aberrations.copy(),
-               'aperture': self.aperture.copy(),
-               'source_offset': copy(self.source_offset),
-               'extra_transforms': self.extra_transforms.copy(),
-               }
-
-        return new
-
-    def copy(self):
-        """ Make a copy. """
-        return self.__class__(**self._copy_as_dict())
 
     def show(self, **kwargs):
         """

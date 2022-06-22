@@ -5,6 +5,7 @@ from typing import Tuple, Any, Union, List, TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.axes import Axes
 
 from abtem.core.axes import FourierSpaceAxis, RealSpaceAxis, LinearAxis
 from abtem.core.backend import get_array_module
@@ -94,8 +95,6 @@ class AbstractDetector(metaclass=ABCMeta):
 
 class AnnularDetector(AbstractDetector):
     """
-    Annular detector.
-
     The annular detector integrates the intensity of the detected wave functions between an inner and outer radial
     integration limit, i.e. over an annulus.
 
@@ -147,7 +146,7 @@ class AnnularDetector(AbstractDetector):
         self._outer = value
 
     @property
-    def offset(self):
+    def offset(self) -> Tuple[float, float]:
         return self._offset
 
     def angular_limits(self, waves: 'Waves') -> Tuple[float, float]:
@@ -197,7 +196,7 @@ class AnnularDetector(AbstractDetector):
 
         return measurement
 
-    def show(self, ax=None):
+    def show(self, ax: Axes = None):
         bins = np.arange(0, 2).reshape((2, 1))
         bins[1, 0] = -1
 
@@ -216,9 +215,6 @@ class AnnularDetector(AbstractDetector):
 
         plt.colorbar(im, extend='min', label='Detector region')
         return ax, im
-
-    def __copy__(self) -> 'AnnularDetector':
-        return self.__class__(self.inner, self.outer)
 
 
 class AbstractRadialDetector(AbstractDetector):
@@ -614,7 +610,6 @@ class WavesDetector(AbstractDetector):
         super().__init__(to_cpu=to_cpu, url=url)
 
     def detect(self, waves: 'Waves') -> 'Waves':
-
         if self.to_cpu:
             waves = waves.copy(device='cpu')
         return waves

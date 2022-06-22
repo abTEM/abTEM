@@ -1,5 +1,6 @@
 import operator
 import warnings
+from abc import abstractmethod
 from copy import copy
 from functools import partial, reduce
 from typing import Union, Tuple, Dict, List
@@ -11,16 +12,16 @@ from ase import Atoms
 from abtem.core.axes import OrdinalAxis, RealSpaceAxis, AxisMetadata, FrozenPhononsAxis
 from abtem.core.backend import get_array_module, cp, validate_device
 from abtem.core.complex import abs2
-from abtem.core.dask import validate_lazy, validate_chunks, chunk_range, equal_sized_chunks
+from abtem.core.dask import validate_lazy, validate_chunks, chunk_ranges, equal_sized_chunks
 from abtem.core.energy import Accelerator, HasAcceleratorMixin
 from abtem.core.fft import fft2
 from abtem.core.grid import Grid, HasGridMixin, GridUndefinedError
 from abtem.core.intialize import initialize
-from abtem.measure.detect import AbstractDetector, validate_detectors
+from abtem.measure.detect import AbstractDetector, validate_detectors, WavesDetector
 from abtem.measure.measure import AbstractMeasurement
 from abtem.potentials.potentials import AbstractPotential, validate_potential
 from abtem.waves.base import WavesLikeMixin
-from abtem.waves.multislice import multislice, allocate_multislice_measurements
+from abtem.waves.multislice import multislice, allocate_multislice_measurements, multislice_and_detect
 from abtem.waves.prism_utils import prism_wave_vectors, plane_waves, wrapped_crop_2d, prism_coefficients, minimum_crop, \
     batch_crop_2d
 from abtem.waves.scan import AbstractScan, validate_scan, GridScan
@@ -29,8 +30,23 @@ from abtem.waves.transfer import CTF
 from abtem.waves.waves import Waves, Probe, finalize_lazy_measurements
 
 
-class AbstractSMatrix:
-    pass
+class AbstractSMatrix(WavesLikeMixin):
+
+    @property
+    @abstractmethod
+    def wave_vectors(self):
+        pass
+
+    def __len__(self) -> int:
+        return len(self.wave_vectors)
+
+    @property
+    def base_axes_metadata(self) -> List[AxisMetadata]:
+        return [OrdinalAxis()] + super().base_axes_metadata  # noqa
+
+    @property
+    def base_shape(self):
+        return (len(self),) + super().base_shape
 
 
 def _validate_interpolation(interpolation: Union[int, Tuple[int, int]]):
@@ -41,7 +57,7 @@ def _validate_interpolation(interpolation: Union[int, Tuple[int, int]]):
     return interpolation
 
 
-class SMatrixWaves(HasGridMixin, HasAcceleratorMixin, AbstractSMatrix):
+class SMatrixWaves(AbstractSMatrix):
 
     def __init__(self,
                  waves,
@@ -62,6 +78,14 @@ class SMatrixWaves(HasGridMixin, HasAcceleratorMixin, AbstractSMatrix):
 
         self._grid = waves.grid
         self._accelerator = waves.accelerator
+
+    @property
+    def array(self):
+        return self.waves.array
+
+    @property
+    def ensemble_shape(self):
+        return self.array.shape[:-3]
 
     @property
     def interpolation(self):
@@ -163,7 +187,13 @@ class SMatrixWaves(HasGridMixin, HasAcceleratorMixin, AbstractSMatrix):
 
         return probes
 
-    def batch_reduce_to_measurements(self, scan, ctf, detectors, reduction_max_batch):
+    def batch_reduce_to_measurements(self,
+                                     scan: AbstractScan,
+                                     ctf: CTF,
+                                     detectors: List[AbstractDetector],
+                                     reduction_max_batch: int) \
+            -> Tuple[Union[AbstractMeasurement, Waves], ...]:
+
         dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
 
         measurements = allocate_multislice_measurements(dummy_probes,
@@ -172,10 +202,10 @@ class SMatrixWaves(HasGridMixin, HasAcceleratorMixin, AbstractSMatrix):
                                                         extra_ensemble_axes_metadata=
                                                         self.waves.ensemble_axes_metadata[:-1])
 
-        for indices, sub_scan in scan.generate_scans(reduction_max_batch):
+        for _, slics, sub_scan in scan.generate_blocks(reduction_max_batch):
             waves = self.reduce_to_waves(sub_scan, ctf)
 
-            indices = (slice(None),) * (len(self.waves.shape) - 3) + indices
+            indices = (slice(None),) * (len(self.waves.shape) - 3) + slics
 
             for detector, measurement in measurements.items():
                 measurement.array[indices] = detector.detect(waves).array
@@ -216,7 +246,7 @@ class SMatrixWaves(HasGridMixin, HasAcceleratorMixin, AbstractSMatrix):
 
     def _chunk_extents(self):
         chunks = self.waves.chunks[-2:]
-        return tuple(tuple((cc[0] * d, cc[1] * d) for cc in c) for c, d in zip(chunk_range(chunks), self.sampling))
+        return tuple(tuple((cc[0] * d, cc[1] * d) for cc in c) for c, d in zip(chunk_ranges(chunks), self.sampling))
 
     def _window_overlap(self):
         return self.cropping_window[0] // 2, self.cropping_window[1] // 2
@@ -428,7 +458,7 @@ def round_gpts_to_multiple_of_interpolation(gpts: Tuple[int, int], interpolation
     return tuple(n + (-n) % f for f, n in zip(interpolation, gpts))  # noqa
 
 
-class SMatrix(WavesLikeMixin, AbstractSMatrix):
+class SMatrix(AbstractSMatrix):
     """
     The SMatrix may be used for creating scattering matrices and simulating STEM experiments using the PRISM algorithm.
 
@@ -509,6 +539,8 @@ class SMatrix(WavesLikeMixin, AbstractSMatrix):
         self._normalize = normalize
         self._store_on_host = store_on_host
 
+        assert planewave_cutoff > 0.
+
         if not all(n % f == 0 for f, n in zip(self.interpolation, self.gpts)):
             warnings.warn('the interpolation factor does not exactly divide gpts, normalization may not be exactly '
                           'preserved')
@@ -537,15 +569,12 @@ class SMatrix(WavesLikeMixin, AbstractSMatrix):
     def shape(self):
         return (len(self),) + self.gpts
 
-    def __len__(self) -> int:
-        return len(self.wave_vectors)
-
     @property
-    def base_axes_metadata(self) -> List[AxisMetadata]:
-        self.grid.check_is_defined()
-        return [OrdinalAxis(),
-                RealSpaceAxis(label='x', sampling=self.sampling[0], units='Å', endpoint=False),
-                RealSpaceAxis(label='y', sampling=self.sampling[0], units='Å', endpoint=False)]
+    def ensemble_shape(self):
+        if self.potential is not None:
+            return self.potential.ensemble_shape
+        else:
+            return ()
 
     @property
     def wave_vectors(self) -> np.ndarray:
@@ -630,7 +659,7 @@ class SMatrix(WavesLikeMixin, AbstractSMatrix):
         waves = Waves(array, energy=self.energy, extent=self.extent, ensemble_axes_metadata=[OrdinalAxis()])
 
         if self.potential is not None:
-            waves = multislice(waves, self.potential, start, stop=stop)
+            waves = multislice_and_detect(waves, self.potential, [WavesDetector()], start=start, stop=stop)[0]
 
         if self.downsampled_gpts() != self.gpts:
             waves = waves.downsample(gpts=self.downsampled_gpts(), normalization='intensity')
@@ -645,7 +674,7 @@ class SMatrix(WavesLikeMixin, AbstractSMatrix):
     def _wrapped_build_s_matrix(*args, s_matrix_partial):
         s_matrix = s_matrix_partial(*args[:-1])
         wave_vector_range = slice(*args[-1][0, 0])
-        return s_matrix._build_s_matrix(wave_vector_range).array[None, None]
+        return s_matrix._build_s_matrix(wave_vector_range).array[None]
 
     def _s_matrix_partial(self):
         def s_matrix(*args, potential_partial, **kwargs):
@@ -655,8 +684,8 @@ class SMatrix(WavesLikeMixin, AbstractSMatrix):
                 potential = None
             return SMatrix(potential=potential, **kwargs)
 
-        potential_partial = self.potential.ensemble_partial() if self.potential is not None else None
-        return partial(s_matrix, potential_partial=potential_partial, **self._copy_as_dict(copy_potential=False))
+        potential_partial = self.potential.from_partitioned_args() if self.potential is not None else None
+        return partial(s_matrix, potential_partial=potential_partial, **self.copy_kwargs(exclude=('potential',)))
 
     def dummy_probes(self, scan=None, ctf=None):
         return self.build(lazy=True).dummy_probes(scan=scan, ctf=ctf)
@@ -698,27 +727,28 @@ class SMatrix(WavesLikeMixin, AbstractSMatrix):
         downsampled_gpts = self.downsampled_gpts()
 
         if self.potential is not None:
-            potential_blocks = self.potential.ensemble_blocks()[0], (0,), self.potential.ensemble_blocks()[1], (1,)
+            potential_blocks = self.potential.ensemble_blocks()[0], (0,)
             ensemble_axes_metadata = self.potential.ensemble_axes_metadata
         else:
-            potential_blocks = (da.from_array(np.array([None], dtype=object), chunks=1), (0,),
-                                da.from_array(np.array([None], dtype=object), chunks=1), (1,))
-            ensemble_axes_metadata = [AxisMetadata(), AxisMetadata()]
+            potential_blocks = da.from_array(np.array([None], dtype=object), chunks=1), (0,),
+            ensemble_axes_metadata = [AxisMetadata()]
 
-        wave_vector_blocks = np.array(chunk_range(wave_vector_chunks)[0], dtype=int)
+        wave_vector_blocks = np.array(chunk_ranges(wave_vector_chunks)[0], dtype=int)
         wave_vector_blocks = np.tile(wave_vector_blocks[None], (len(potential_blocks[0]), 1, 1))
 
         if lazy:
             wave_vector_blocks = da.from_array(wave_vector_blocks, chunks=(1, 1, 2), name=False)
-            blocks = potential_blocks + (wave_vector_blocks, (0, 2, -1))
+            blocks = potential_blocks + (wave_vector_blocks, (0, 1, -1))
+
+            xp = get_array_module(self.device)
 
             arr = da.blockwise(self._wrapped_build_s_matrix,
-                               tuple(range(5)),
+                               tuple(range(4)),
                                *blocks,
-                               new_axes={3: (downsampled_gpts[0],), 4: (downsampled_gpts[1],)},
-                               adjust_chunks={2: wave_vector_chunks[0]},
+                               new_axes={2: (downsampled_gpts[0],), 3: (downsampled_gpts[1],)},
+                               adjust_chunks={1: wave_vector_chunks[0]},
                                concatenate=True,
-                               meta=np.array((), dtype=np.complex64),
+                               meta=xp.array((), dtype=np.complex64),
                                **{'s_matrix_partial': self._s_matrix_partial()})
 
             waves = Waves(arr,
@@ -787,30 +817,3 @@ class SMatrix(WavesLikeMixin, AbstractSMatrix):
                                                                             detectors=detectors,
                                                                             reduction_max_batch=reduction_max_batch,
                                                                             ctf=ctf)
-
-    def _copy_as_dict(self, copy_potential: bool = True):
-
-        d = {'energy': self.energy,
-             'planewave_cutoff': self.planewave_cutoff,
-             'interpolation': self.interpolation,
-             'downsample': self.downsample,
-             'normalize': self.normalize,
-             'extent': self.extent,
-             'gpts': self.gpts,
-             'sampling': self.sampling,
-             'store_on_host': self._store_on_host,
-             'tilt': self.tilt,
-             'device': self._device}
-
-        if copy_potential:
-            potential = self.potential.copy() if self.potential is not None else None
-            d['potential'] = potential
-
-        return d
-
-    def __copy__(self) -> 'SMatrix':
-        return self.__class__(**self._copy_as_dict())
-
-    def copy(self) -> 'SMatrix':
-        """Make a copy."""
-        return copy(self)
