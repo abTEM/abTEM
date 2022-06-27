@@ -56,9 +56,6 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAxe
     @property
     def antialias_cutoff_gpts(self) -> Tuple[int, int]:
         self.grid.check_is_defined()
-        if self._antialias_cutoff_gpts is not None:
-            return self._antialias_cutoff_gpts
-
         kcut = 2. / 3. / max(self.sampling)
         extent = self.gpts[0] * self.sampling[0], self.gpts[1] * self.sampling[1]
 

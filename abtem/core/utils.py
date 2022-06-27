@@ -18,11 +18,16 @@ def is_array_like(x):
 
 
 class CopyMixin:
+    _exclude_from_copy: tuple = ()
+
+    def _arg_keys(self):
+        parameters = inspect.signature(self.__class__).parameters
+        return tuple(key for key, value in parameters.items()
+                     if value.kind not in (value.VAR_POSITIONAL, value.VAR_KEYWORD))
 
     def copy_kwargs(self, exclude: Tuple['str', ...] = ()) -> dict:
-        parameters = inspect.signature(self.__class__).parameters
-        keys = {key for key, value in parameters.items() if value.kind not in (value.VAR_POSITIONAL, value.VAR_KEYWORD)}
-        keys = [key for key in keys if key not in exclude]
+        exclude = self._exclude_from_copy + exclude
+        keys = [key for key in self._arg_keys() if key not in exclude]
         kwargs = {key: copy.deepcopy(getattr(self, key)) for key in keys}
         return kwargs
 
@@ -30,28 +35,36 @@ class CopyMixin:
         return copy.deepcopy(self)
 
 
+def safe_equality(a, b, exclude=()):
+    if not isinstance(b, a.__class__):
+        return False
+
+    for key, value in a.__dict__.items():
+
+        if key in exclude:
+            continue
+
+        try:
+            equal = value == b.__dict__[key]
+
+        except (KeyError, TypeError):
+            return False
+
+        try:
+            equal = np.allclose(value, b.__dict__[key])
+        except (ValueError, TypeError):
+            pass
+
+        if equal is False:
+            return False
+
+    return True
+
+
 class EqualityMixin:
 
     def __eq__(self, other):
-        if not isinstance(other, self.__class__):
-            return False
-
-        for key, value in self.__dict__.items():
-
-            try:
-                equal = value == other.__dict__[key]
-            except KeyError:
-                return False
-
-            if equal is False:
-                return False
-
-            if is_array_like(value):
-                xp = get_array_module(value)
-                if not xp.allclose(value, other.__dict__[key]):
-                    return False
-
-        return True
+        return safe_equality(self, other)
 
     def __ne__(self, other):
         return not self.__eq__(other)
@@ -112,8 +125,6 @@ def expand_dims_to_match(arr1, arr2, match_dims):
 
     axis1 = tuple(i for i, a in enumerate(match_axis1) if a is None)
     axis2 = tuple(i for i, a in enumerate(match_axis2) if a is None)
-
-
 
     arr1 = np.expand_dims(arr1, axis=axis1)
     arr2 = np.expand_dims(arr2, axis=axis2)

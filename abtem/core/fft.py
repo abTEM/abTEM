@@ -249,12 +249,12 @@ def fft2_interpolate(array: np.ndarray,
     if normalization == 'values':
         array *= np.prod(array.shape[-2:]) / old_size
 
-    elif normalization == 'intensity':
-        pass
+    elif normalization != 'intensity':
+        raise ValueError()
     #    # array *= np.sqrt(np.prod(array.shape[-2:]) / old_size)
     #    array *= np.sqrt(old_size / np.prod(array.shape[-2:]))
 
-    elif normalization != 'amplitude':
-        raise RuntimeError()
+    # elif normalization != 'amplitude':
+    #     raise RuntimeError()
 
     return array

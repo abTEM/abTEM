@@ -16,6 +16,9 @@ eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 # from abtem.potentials.utils import kappa
 kappa = 4 * np.pi * eps0 / (2 * np.pi * units.Bohr * units._e * units.C)
 
+real_space_funcs = 'potential', 'projected_potential', 'charge'
+fourier_space_funcs = 'scattering_factor', 'projected_scattering_factor'
+
 
 class Parametrization(EqualityMixin, metaclass=ABCMeta):
 
@@ -95,34 +98,28 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
 #     return self._calculate(k, symbol, charge, 'projected_scattering_factor')
 
 class KirklandParametrization(Parametrization):
+    _functions = {'potential': kirkland.potential,
+                  'scattering_factor': kirkland.scattering_factor,
+                  'projected_potential': kirkland.projected_potential,
+                  'projected_scattering_factor': kirkland.projected_scattering_factor,
+                  }
 
-    def __init__(self):
+    def load_parameters(self, symbol):
         with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data/kirkland.json'), 'r') as f:
-            data = json.load(f)
+            parameters = np.array(json.load(f)[symbol])
 
-        parameters = {}
-        scaled_parameters = {}
-        for key, value in data.items():
-            value = np.array(value)
-            a = np.pi * value[0] / kappa
-            b = 2. * np.pi * np.sqrt(value[1])
-            c = np.pi ** (3. / 2.) * value[2] / value[3] ** (3. / 2.) / kappa
-            d = np.pi ** 2 / value[3]
+        a = np.pi * parameters[0] / kappa
+        b = 2. * np.pi * np.sqrt(parameters[1])
+        c = np.pi ** (3. / 2.) * parameters[2] / parameters[3] ** (3. / 2.) / kappa
+        d = np.pi ** 2 / parameters[3]
 
-            parameters[key] = value
-            scaled_parameters[key] = np.vstack([a, b, c, d])
+        scaled_parameters = np.vstack([a, b, c, d])
 
-        self._parameters = {'potential': scaled_parameters,
-                            'scattering_factor': parameters,
-                            'projected_potential': scaled_parameters,
-                            'projected_scattering_factor': scaled_parameters,
-                            }
-
-        self._functions = {'potential': kirkland.potential,
-                           'scattering_factor': kirkland.scattering_factor,
-                           'projected_potential': kirkland.projected_potential,
-                           'projected_scattering_factor': kirkland.projected_scattering_factor,
-                           }
+        return {'potential': scaled_parameters,
+                'scattering_factor': parameters,
+                'projected_potential': scaled_parameters,
+                'projected_scattering_factor': scaled_parameters,
+                }
 
     def get_function(self, name, symbol, charge=0.):
         if charge > 0.:
@@ -133,7 +130,7 @@ class KirklandParametrization(Parametrization):
 
         try:
             func = self._functions[name]
-            parameters = self._parameters[name][symbol]
+            parameters = self.load_parameters(symbol)[name]
             return lambda r: func(r, parameters)
         except KeyError:
             raise RuntimeError(f'parametrized function "{name}" does not exist for element {symbol}')
@@ -148,7 +145,6 @@ class LobatoParametrization(Parametrization):
                   }
 
     def load_parameters(self, symbol):
-
         with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data/lobato.json'), 'r') as f:
             parameters = np.array(json.load(f)[symbol])
 

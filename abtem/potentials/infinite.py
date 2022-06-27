@@ -6,7 +6,7 @@ from ase.data import chemical_symbols
 from abtem.core.backend import get_array_module
 from abtem.core.fft import fft2, ifft2, fft2_convolve
 from abtem.core.grid import spatial_frequencies, polar_spatial_frequencies
-from abtem.potentials.parametrizations import Parametrization
+from abtem.potentials.atom import AtomicPotential
 
 
 def _sinc(gpts: Tuple[int, int], sampling: Tuple[float, float], xp):
@@ -17,10 +17,8 @@ def _sinc(gpts: Tuple[int, int], sampling: Tuple[float, float], xp):
 
 def calculate_scattering_factor(gpts: Tuple[int, int],
                                 sampling: Tuple[float, float],
-                                number: int,
-                                parametrization: Parametrization,
-                                xp: str = 'numpy',
-                                ) -> np.ndarray:
+                                atomic_potential: AtomicPotential,
+                                xp: str = 'numpy') -> np.ndarray:
     xp = get_array_module(xp)
     # parametrization = parametrization_names[parametrization]
     # parameters = parametrization.load_parameters()
@@ -29,7 +27,7 @@ def calculate_scattering_factor(gpts: Tuple[int, int],
     # scattering_factors = xp.zeros(gpts, dtype=np.float32)
 
     # for i, number in enumerate(atomic_numbers):
-    f = parametrization.projected_scattering_factor(chemical_symbols[number])(k)
+    f = atomic_potential.projected_scattering_factor(k)
     # scattering_factors[i] = f
 
     return f / _sinc(gpts, sampling, xp)

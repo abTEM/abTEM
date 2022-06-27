@@ -15,7 +15,7 @@ from abtem.potentials.parametrizations import EwaldParametrization
 from abtem.potentials.potentials import Potential, AbstractPotential, PotentialArray, PotentialBuilder
 from abtem.potentials.temperature import MDFrozenPhonons, AbstractFrozenPhonons
 from abtem.structures.structures import plane_to_axes
-from abtem.structures.slicing import _validate_slice_thickness
+from abtem.structures.slicing import validate_slice_thickness
 import dask.array as da
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)

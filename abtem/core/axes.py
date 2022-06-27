@@ -1,29 +1,50 @@
 import dataclasses
 from dataclasses import dataclass
+from numbers import Number
 from typing import List, Tuple
 
 import numpy as np
 
+from abtem.core.utils import safe_equality
 
-@dataclass
+
+@dataclass(eq=False)
 class AxisMetadata:
+    _concatenate: bool = True
     label: str = 'unknown'
 
+    def __eq__(self, other):
+        return safe_equality(self, other)
 
-@dataclass
+
+@dataclass(eq=False)
 class UnknownAxis(AxisMetadata):
     label: str = 'unknown'
 
 
-@dataclass
+@dataclass(eq=False)
+class SampleAxis(AxisMetadata):
+    pass
+
+
+@dataclass(eq=False)
 class LinearAxis(AxisMetadata):
     sampling: float = 1.
     offset: float = 0.
     units: str = 'pixels'
     _ensemble_mean: bool = False
 
+    def concatenate(self, other):
+        if not self._concatenate:
+            raise RuntimeError()
 
-@dataclass
+        if not self.__eq__(other):
+            raise RuntimeError()
+
+        return self
+
+
+@dataclass(eq=False)
 class RealSpaceAxis(LinearAxis):
     sampling: float = 1.
     units: str = 'pixels'
@@ -31,55 +52,87 @@ class RealSpaceAxis(LinearAxis):
     endpoint: bool = True
 
 
-@dataclass
+@dataclass(eq=False)
 class FourierSpaceAxis(LinearAxis):
     sampling: float = 1.
     units: str = 'pixels'
     fftshift: bool = True
+    _concatenate: bool = False
 
 
-@dataclass
+@dataclass(eq=False)
 class ScanAxis(RealSpaceAxis):
     start: Tuple[float, float] = None
     end: Tuple[float, float] = None
 
 
-@dataclass
-class NonLinearAxis(AxisMetadata):
+@dataclass(eq=False)
+class OrdinalAxis(AxisMetadata):
     values: tuple = ()
+
+    def concatenate(self, other):
+        if not safe_equality(self, other, ('values',)):
+            raise RuntimeError()
+
+        kwargs = dataclasses.asdict(self)
+        kwargs['values'] = kwargs['values'] + other.values
+
+        return self.__class__(**kwargs)  # noqa
+
+    def compatible(self, other):
+        return
+
+    def __len__(self):
+        return len(self.values)
+
+    def __post_init__(self):
+        if not isinstance(self.values, tuple):
+            try:
+                self.values = tuple(self.values)
+            except TypeError:
+                raise ValueError()
+
+    def __getitem__(self, item):
+        kwargs = dataclasses.asdict(self)
+
+        if isinstance(item, Number):
+            kwargs['values'] = (kwargs['values'][item],)
+        else:
+            kwargs['values'] = tuple(np.array(kwargs['values'])[item])
+
+        return self.__class__(**kwargs)  # noqa
+
+
+@dataclass(eq=False)
+class NonLinearAxis(OrdinalAxis):
     units: str = ''
 
 
-@dataclass
+@dataclass(eq=False)
 class ThicknessAxis(NonLinearAxis):
     label: str = 'thickness'
     units: str = 'Å'
 
 
-@dataclass
+@dataclass(eq=False)
 class ParameterSeriesAxis(NonLinearAxis):
     label: str = ''
     _ensemble_mean: bool = False
 
 
-@dataclass
-class OrdinalAxis(AxisMetadata):
-    domain: tuple = None
-
-
-@dataclass
-class PositionsAxis(OrdinalAxis):
+@dataclass(eq=False)
+class PositionsAxis(NonLinearAxis):
     label: str = 'Positions'
     units: str = 'Å'
 
 
-@dataclass
+@dataclass(eq=False)
 class FrozenPhononsAxis(OrdinalAxis):
     label: str = 'Frozen phonons'
     _ensemble_mean: bool = False
 
 
-@dataclass
+@dataclass(eq=False)
 class PrismPlaneWavesAxis(OrdinalAxis):
     pass
 
@@ -133,6 +186,22 @@ class HasAxes:
     def shape(self):
         return self.ensemble_shape + self.base_shape
 
+    def check_axes_metadata(self):
+        if len(self.shape) != self.num_axes:
+            raise RuntimeError(f'number of dimensions ({len(self.shape)}) does not match number of axis metadata items '
+                               f'({self.num_axes})')
+
+        for n, axis in zip(self.shape, self.axes_metadata):
+            #print(n, self.axes_metadata)
+            if isinstance(axis, OrdinalAxis) and len(axis) != n:
+                raise RuntimeError(f'number of values for ordinal axis ({len(axis)}), does not match size of dimension '
+                                   f'({n})')
+
+    def _is_base_axis(self, axis) -> bool:
+        if isinstance(axis, Number):
+            axis = (axis,)
+        return len(set(axis).intersection(self.base_axes)) > 0
+
     def find_axes_type(self, cls):
         indices = ()
         for i, axis_metadata in enumerate(self.axes_metadata):
@@ -147,7 +216,14 @@ class HasAxes:
 
     @property
     def scan_axes(self):
-        return self.find_axes_type(ScanAxis)
+        num_trailing_scan_axes = 0
+        for axis in reversed(self.ensemble_axes_metadata):
+            if not isinstance(axis, ScanAxis) or num_trailing_scan_axes == 2:
+                break
+
+            num_trailing_scan_axes += 1
+
+        return tuple(range(len(self.ensemble_shape) - num_trailing_scan_axes, len(self.ensemble_shape)))
 
     @property
     def scan_axes_metadata(self):

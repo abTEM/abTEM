@@ -12,13 +12,13 @@ from matplotlib.axes import Axes
 from abtem.core.axes import ParameterSeriesAxis
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
-from abtem.core.dask import validate_chunks
+from abtem.core.chunks import validate_chunks
 from abtem.core.distributions import ParameterSeries, Distribution
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
 from abtem.core.ensemble import Ensemble, EmptyEnsemble
 from abtem.core.fft import ifft2
 from abtem.core.grid import Grid, polar_spatial_frequencies
-from abtem.core.utils import expand_dims_to_match
+from abtem.core.utils import expand_dims_to_match, CopyMixin, EqualityMixin
 from abtem.measure.measure import FourierSpaceLineProfiles, DiffractionPatterns
 import dask.array as da
 
@@ -39,7 +39,7 @@ polar_aliases = {'defocus': 'C10', 'astigmatism': 'C12', 'astigmatism_angle': 'p
                  'C5': 'C50'}
 
 
-class WaveTransform(Ensemble):
+class WaveTransform(Ensemble, EqualityMixin, CopyMixin):
 
     def __add__(self, other):
         wave_transforms = []
@@ -261,10 +261,10 @@ class HasParameters(Ensemble):
             del axis[i]
             axis = tuple(axis) + tuple(range(num_new_axes, num_new_axes + len(shape)))
             ensemble_parameters[key] = np.expand_dims(parameter.values, axis=axis)
-            ensemble_parameters[key] = xp.asarray(ensemble_parameters[key])
+            ensemble_parameters[key] = xp.asarray(ensemble_parameters[key], dtype=xp.float32)
 
             new_weights = np.expand_dims(parameter.weights, axis=axis)
-            new_weights = xp.asarray(new_weights)
+            new_weights = xp.asarray(new_weights, dtype=xp.float32)
             weights = new_weights if weights is None else weights * new_weights
 
         parameters = {key: value for key, value in self.parameters.items()}
@@ -292,6 +292,13 @@ class Aperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
         self._normalize = normalize
         self._accelerator = Accelerator(energy=energy)
         self._parameters = {'semiangle_cutoff': semiangle_cutoff}
+
+    @property
+    def metadata(self):
+        metadata = {}
+        if not 'semiangle_cutoff' in self.ensemble_parameters:
+            metadata['semiangle_cutoff'] = self.semiangle_cutoff
+        return metadata
 
     @property
     def normalize(self):
@@ -337,7 +344,7 @@ class Aperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
             array = xp.where(alpha > semiangle_cutoff - taper, array, xp.ones_like(alpha, dtype=xp.float32))
         else:
 
-            array = xp.array(alpha <= semiangle_cutoff).astype(xp.float32)
+            array = xp.array(alpha < semiangle_cutoff).astype(xp.float32)
 
         return array
 

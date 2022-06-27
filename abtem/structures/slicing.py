@@ -10,19 +10,19 @@ from abtem.core.utils import label_to_index
 from abtem.structures.structures import cut_box, pad_atoms, is_cell_orthogonal
 
 
-def _validate_slice_thickness(slice_thickness: Union[float, np.ndarray, Sequence[float]],
-                              thickness: float = None,
-                              num_slices: int = None) -> np.ndarray:
+def validate_slice_thickness(slice_thickness: Union[float, Tuple[float, ...]],
+                             thickness: float = None,
+                             num_slices: int = None) -> Tuple[float, ...]:
     if np.isscalar(slice_thickness):
         if thickness is not None:
             n = np.ceil(thickness / slice_thickness)
-            slice_thickness = np.full(int(n), thickness / n)
+            slice_thickness = (thickness / n,) * int(n)
         elif num_slices is not None:
-            slice_thickness = [slice_thickness] * num_slices
+            slice_thickness = (slice_thickness,) * num_slices
         else:
             raise RuntimeError()
 
-    slice_thickness = np.array(slice_thickness)
+    slice_thickness = tuple(slice_thickness)
 
     if thickness is not None:
         if not np.isclose(np.sum(slice_thickness), thickness):
@@ -73,7 +73,7 @@ class AbstractSlicedAtoms:
         if isinstance(slice_thickness, str):
             raise NotImplementedError
 
-        self._slice_thickness = _validate_slice_thickness(slice_thickness, thickness=atoms.cell[2, 2])
+        self._slice_thickness = validate_slice_thickness(slice_thickness, thickness=atoms.cell[2, 2])
 
     def __len__(self):
         return self.num_slices
@@ -115,7 +115,7 @@ class SliceIndexedAtoms(AbstractSlicedAtoms):
 
     def __init__(self,
                  atoms: Atoms,
-                 slice_thickness: Union[float, np.ndarray, str]):
+                 slice_thickness: Union[float, Tuple[float, ...]]):
 
         super().__init__(atoms, slice_thickness)
 

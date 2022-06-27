@@ -126,6 +126,9 @@ def copy_to_device(array, device):
     if old_xp is new_xp:
         return array
 
+    if isinstance(array, da.core.Array):
+        return array.map_blocks(copy_to_device, meta=new_xp.array((), dtype=array.dtype), device=device)
+
     if new_xp is np:
         return cp.asnumpy(array)
 

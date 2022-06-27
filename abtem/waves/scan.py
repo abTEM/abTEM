@@ -13,7 +13,7 @@ from matplotlib.patches import Rectangle
 
 from abtem.core.axes import ScanAxis, PositionsAxis
 from abtem.core.backend import get_array_module, validate_device
-from abtem.core.dask import validate_chunks, chunk_ranges
+from abtem.core.chunks import chunk_ranges, validate_chunks
 from abtem.core.distributions import MultidimensionalAxisAlignedDistribution
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
@@ -117,6 +117,7 @@ class SourceOffset(AbstractScan):
 
     @property
     def ensemble_axes_metadata(self):
+
         return [PositionsAxis()] * len(self.shape)
 
     def ensemble_blocks(self, chunks=None):
@@ -174,7 +175,7 @@ class CustomScan(AbstractScan):
 
     @property
     def ensemble_axes_metadata(self):
-        return [PositionsAxis()]
+        return [PositionsAxis(values=tuple(tuple(position) for position in self.positions))]
 
     @staticmethod
     def _from_partitioned_args_func(*args, **kwargs):
@@ -591,11 +592,20 @@ class GridScan(HasGridMixin, AbstractScan):
         return np.stack(np.meshgrid(*xi, indexing='ij'), axis=-1)
 
     def sort_into_extents(self, extents):
-        x_chunks = tuple(
-            safe_floor_int(e[1] / self.sampling[0]) - safe_floor_int(e[0] / self.sampling[0]) for e in extents[0])
+        x_chunks = ()
+        for start, end in extents[0]:
+            start_gpt = safe_floor_int(max(start, self.start[0]) / self.sampling[0])
+            end_gpt = safe_floor_int(min(end, self.end[0]) / self.sampling[0])
+            x_chunks += (max(end_gpt - start_gpt, 0),)
+
         assert sum(x_chunks) == self.gpts[0]
-        y_chunks = tuple(
-            safe_floor_int(e[1] / self.sampling[1]) - safe_floor_int(e[0] / self.sampling[1]) for e in extents[1])
+
+        y_chunks = ()
+        for start, end in extents[1]:
+            start_gpt = safe_floor_int(max(start, self.start[1]) / self.sampling[1])
+            end_gpt = safe_floor_int(min(end, self.end[1]) / self.sampling[1])
+            y_chunks += (max(end_gpt - start_gpt, 0),)
+
         assert sum(y_chunks) == self.gpts[1]
         return self, (x_chunks, y_chunks)
 

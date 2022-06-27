@@ -8,6 +8,11 @@ from abtem.core.events import Events, HasEventsMixin, watch
 from abtem.core.utils import CopyMixin, EqualityMixin
 
 
+def validate_gpts(gpts):
+    if not all(gpts):
+        raise ValueError('gpts must be greater than 0')
+
+
 class GridUndefinedError(Exception):
     pass
 

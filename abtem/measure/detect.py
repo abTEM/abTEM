@@ -1,15 +1,16 @@
 """Module for describing the detection of transmitted waves and different detector types."""
 from abc import ABCMeta, abstractmethod
 from copy import deepcopy
-from typing import Tuple, Any, Union, List, TYPE_CHECKING
+from typing import Tuple, Any, Union, List, TYPE_CHECKING, Type
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
 
-from abtem.core.axes import FourierSpaceAxis, RealSpaceAxis, LinearAxis
+from abtem.core.axes import FourierSpaceAxis, RealSpaceAxis, LinearAxis, AxisMetadata, ScanAxis
 from abtem.core.backend import get_array_module
-from abtem.measure.measure import DiffractionPatterns, PolarMeasurements, Images, LineProfiles
+from abtem.core.utils import CopyMixin
+from abtem.measure.measure import DiffractionPatterns, PolarMeasurements, Images, LineProfiles, scanned_measurement_type
 
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves
@@ -29,7 +30,7 @@ def validate_detectors(detectors: Union['AbstractDetector', List['AbstractDetect
     return detectors
 
 
-class AbstractDetector(metaclass=ABCMeta):
+class AbstractDetector(CopyMixin, metaclass=ABCMeta):
 
     def __init__(self, to_cpu: bool = True, url: str = None):
         """
@@ -87,10 +88,6 @@ class AbstractDetector(metaclass=ABCMeta):
     @abstractmethod
     def angular_limits(self, waves: 'Waves') -> Tuple[float, float]:
         pass
-
-    def copy(self):
-        """Make a copy."""
-        return deepcopy(self)
 
 
 class AnnularDetector(AbstractDetector):
@@ -169,17 +166,11 @@ class AnnularDetector(AbstractDetector):
         return ()
 
     @property
-    def measurement_dtype(self) -> type(np.float32):
+    def measurement_dtype(self) -> np.dtype.base:
         return np.float32
 
     def measurement_type(self, waves: 'Waves') -> Union[type(LineProfiles), type(Images)]:
-
-        if waves.num_scan_axes == 1:
-            return LineProfiles
-        elif waves.num_scan_axes == 2:
-            return Images
-        else:
-            raise RuntimeError(f'no measurement type for AnnularDetector and scan with {waves.num_scan_axes} scan axes')
+        return scanned_measurement_type(waves)
 
     def detect(self, waves: 'Waves') -> Images:
 
@@ -482,7 +473,7 @@ class SegmentedDetector(AbstractRadialDetector):
 class PixelatedDetector(AbstractDetector):
 
     def __init__(self,
-                 max_angle: Union[str, float] = 'valid',
+                 max_angle: Union[str, float, None] = 'valid',
                  resample: bool = False,
                  fourier_space: bool = True,
                  to_cpu: bool = True,
@@ -522,15 +513,15 @@ class PixelatedDetector(AbstractDetector):
         super().__init__(to_cpu=to_cpu, url=url)
 
     @property
-    def max_angle(self):
+    def max_angle(self) -> Union[str, float]:
         return self._max_angle
 
     @property
-    def fourier_space(self):
+    def fourier_space(self) -> bool:
         return self._fourier_space
 
     @property
-    def resample(self):
+    def resample(self) -> Union[str, bool]:
         return self._resample
 
     def angular_limits(self, waves: 'Waves') -> Tuple[float, float]:
@@ -558,10 +549,10 @@ class PixelatedDetector(AbstractDetector):
         return shape
 
     @property
-    def measurement_dtype(self):
+    def measurement_dtype(self) -> np.dtype.base:
         return np.float32
 
-    def measurement_axes_metadata(self, waves: 'Waves'):
+    def measurement_axes_metadata(self, waves: 'Waves') -> List[AxisMetadata]:
         if self.fourier_space:
             sampling = waves.fourier_space_sampling
             return [FourierSpaceAxis(sampling=sampling[0], label='x', units='mrad', fftshift=True),
@@ -576,7 +567,7 @@ class PixelatedDetector(AbstractDetector):
         else:
             return Images
 
-    def detect(self, waves: 'Waves') -> 'PixelatedDetector':
+    def detect(self, waves: 'Waves') -> 'DiffractionPatterns':
         """
         Calculate the far field intensity of the wave functions. The output is cropped to include the non-suppressed
         frequencies from the antialiased 2D fourier spectrum.
@@ -611,31 +602,22 @@ class WavesDetector(AbstractDetector):
 
     def detect(self, waves: 'Waves') -> 'Waves':
         if self.to_cpu:
-            waves = waves.copy(device='cpu')
+            waves = waves.to_cpu()
         return waves
 
     def angular_limits(self, waves: 'Waves') -> Tuple[float, float]:
         return 0., min(waves.full_cutoff_angles)
 
     @property
-    def measurement_dtype(self):
+    def measurement_dtype(self) -> np.dtype.base:
         return np.complex64
 
     def measurement_shape(self, waves: 'Waves') -> Tuple[int, int]:
         return waves.gpts
 
-    def measurement_type(self, waves: 'Waves'):
+    def measurement_type(self, waves: 'Waves') -> Type['Waves']:
         from abtem.waves import Waves
         return Waves
 
-    def measurement_axes_metadata(self, waves: 'Waves'):
+    def measurement_axes_metadata(self, waves: 'Waves') -> List[AxisMetadata]:
         return waves.base_axes_metadata
-
-    # def measurement_kwargs(self, waves):
-    #     extra_axes_metadata = waves.extra_axes_metadata
-    #     return {'sampling': waves.sampling,
-    #             'energy': waves.energy,
-    #             'antialias_cutoff_gpts': waves.antialias_cutoff_gpts,
-    #             'tilt': waves.tilt,
-    #             'extra_axes_metadata': deepcopy(extra_axes_metadata),
-    #             'metadata': waves.metadata}

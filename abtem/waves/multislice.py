@@ -177,8 +177,6 @@ def multislice_step(waves: 'Waves',
         waves = transmission_function.transmit(waves, conjugate=conjugate)
         waves = propagator.propagate(waves)
 
-    waves.antialias_aperture = 2. / 3.
-
     return waves
 
 
@@ -204,8 +202,7 @@ def multislice_and_detect(waves: 'Waves',
                           potential: AbstractPotential,
                           detectors: List[AbstractDetector],
                           start: int = 0,
-                          stop: int = None,
-                          keep_ensemble_dims: bool = True) \
+                          stop: int = None) \
         -> Union[Tuple[Union[AbstractMeasurement, 'Waves'], ...], 'Waves']:
     """
     Run the multislice algorithm given a batch of wave functions and a potential.
@@ -241,17 +238,28 @@ def multislice_and_detect(waves: 'Waves',
     propagator = FresnelPropagator(device=get_array_module(waves.array), tilt=waves.tilt)
     propagator.match_waves(waves)
 
-    if len(potential.exit_planes) > 1 or reduce(mul, potential.ensemble_shape) > 1:
-        extra_ensemble_axes_shape = potential.ensemble_shape + (len(potential.exit_planes),)
-        extra_ensemble_axes_metadata = potential.ensemble_axes_metadata + [potential.exit_planes_axes_metadata]
+    if len(potential.exit_planes) > 1 or potential.ensemble_shape:
+        extra_ensemble_axes_shape = potential.ensemble_shape
+        extra_ensemble_axes_metadata = potential.ensemble_axes_metadata
+
+        if len(potential.exit_planes) > 1:
+            extra_ensemble_axes_shape += (len(potential.exit_planes),)
+            extra_ensemble_axes_metadata += [potential.exit_planes_axes_metadata]
+
         measurements = allocate_multislice_measurements(waves,
                                                         detectors,
                                                         extra_ensemble_axes_shape=extra_ensemble_axes_shape,
                                                         extra_ensemble_axes_metadata=extra_ensemble_axes_metadata)
+
     else:
         measurements = {}
 
-    for potential_index, _, potential_configuration in potential.generate_blocks():
+    if potential.ensemble_shape:
+        potential_generator = potential.generate_blocks()
+    else:
+        potential_generator = ((0, (0, 1), potential) for _ in range(1))
+
+    for potential_index, _, potential_configuration in potential_generator:
 
         slice_generator = potential_configuration.generate_slices(first_slice=start)
 
@@ -267,15 +275,18 @@ def multislice_and_detect(waves: 'Waves',
                 new_measurement = detector.detect(waves)
 
                 if detector in measurements.keys():
-                    index = (potential_index, exit_plane_index)
+                    index = ()
+
+                    if potential_configuration.ensemble_shape:
+                        index += (potential_index,)
+
+                    if len(potential_configuration.exit_planes) > 1:
+                        index += (exit_plane_index,)
+
                     measurements[detector].array[index] = new_measurement.array
                 else:
-                    new_measurement = new_measurement.expand_dims((0, 1))
                     measurements[detector] = new_measurement
 
     measurements = tuple(measurements.values())
-
-    if not keep_ensemble_dims:
-        measurements = tuple(measurement.squeeze() for measurement in measurements)
 
     return measurements

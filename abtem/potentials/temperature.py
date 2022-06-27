@@ -11,14 +11,16 @@ import dask
 import dask.array as da
 import numpy as np
 from ase import Atoms
+from ase.cell import Cell
 from ase.data import chemical_symbols
 
-from abtem.core.axes import FrozenPhononsAxis
+from abtem.core.axes import FrozenPhononsAxis, AxisMetadata
 from abtem.core.ensemble import Ensemble
-from abtem.core.dask import validate_chunks, chunk_ranges
+from abtem.core.chunks import chunk_ranges, validate_chunks
+from abtem.core.utils import CopyMixin, EqualityMixin
 
 
-class AbstractFrozenPhonons(Ensemble, metaclass=ABCMeta):
+class AbstractFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     """Abstract base class for frozen phonons objects."""
 
     def __init__(self, ensemble_mean: bool = True):
@@ -30,71 +32,84 @@ class AbstractFrozenPhonons(Ensemble, metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    def atoms(self):
-        pass
-
-    @abstractmethod
-    def randomize(self, atoms):
+    def atoms(self) -> Atoms:
         pass
 
     @property
-    def ensemble_shape(self):
-        return len(self),
-
-    @property
-    def default_ensemble_chunks(self):
-        return 1,
-
-    @property
-    def ensemble_axes_metadata(self):
-        return [FrozenPhononsAxis(_ensemble_mean=self.ensemble_mean)]
+    def numbers(self) -> np.ndarray:
+        return self.atoms.numbers
 
     @abstractmethod
-    def __len__(self):
+    def randomize(self, atoms: Atoms) -> Atoms:
+        pass
+
+    @abstractmethod
+    def __len__(self) -> int:
         pass
 
     @property
     @abstractmethod
-    def cell(self):
+    def cell(self) -> Cell:
         pass
-
-    def copy(self):
-        """
-        Make a copy.
-        """
-        return copy(self)
 
 
 class DummyFrozenPhonons(AbstractFrozenPhonons):
 
-    def __init__(self):
+    def __init__(self, atoms):
+        self._atoms = atoms
         super().__init__(ensemble_mean=True)
 
-    def ensemble_blocks(self, chunks):
-        raise NotImplementedError
+    @property
+    def ensemble_shape(self):
+        return ()
 
-    def ensemble_partial(self):
-        raise NotImplementedError
+    @property
+    def default_ensemble_chunks(self):
+        return ()
 
-    def generate_configurations(self):
-        raise NotImplementedError
+    @property
+    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
+        return []
 
     def randomize(self, atoms):
-        raise NotImplementedError
+        return atoms
 
     @property
     def atoms(self):
-        return None
+        return self._atoms
 
     @property
     def cell(self):
-        return None
+        return self._atoms.cell
+
+    @classmethod
+    def _from_partitioned_args_func(cls, *args, **kwargs):
+        return cls(args[0])
+
+    def from_partitioned_args(self):
+        kwargs = self.copy_kwargs(exclude=('atoms',))
+        return partial(self._from_partitioned_args_func, **kwargs)
+
+    def partition_args(self, chunks: int = 1, lazy: bool = True):
+        #chunks = validate_chunks(self.ensemble_shape, chunks)
+        atoms = self.atoms
+
+        array = np.zeros((1,), dtype=object)
+        array.itemset(0, atoms)
+
+        # array = np.zeros(len(chunks[0]), dtype=object)
+        # for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
+        #     seeds = self.seeds[start:stop]
+        #     block = {'atoms': atoms, 'seeds': seeds}
+        #     array[i] = block
+
+        if lazy:
+            array = da.from_array(array, chunks=1)
+
+        return array,
 
     def __len__(self):
         return 1
-
-    def __copy__(self):
-        return self.__class__()
 
 
 class FrozenPhonons(AbstractFrozenPhonons):
@@ -177,6 +192,18 @@ class FrozenPhonons(AbstractFrozenPhonons):
         super().__init__(ensemble_mean)
 
     @property
+    def ensemble_shape(self):
+        return len(self),
+
+    @property
+    def default_ensemble_chunks(self):
+        return 1,
+
+    @property
+    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
+        return [FrozenPhononsAxis(values=tuple(range(len(self))), _ensemble_mean=self.ensemble_mean)]
+
+    @property
     def num_configs(self) -> int:
         return len(self._seeds)
 
@@ -245,15 +272,15 @@ class FrozenPhonons(AbstractFrozenPhonons):
         kwargs['seeds'] = args[0]['seeds']
         return cls(**kwargs)
 
-    def from_partitioned_args(self):
-        kwargs = self.copy_kwargs(exclude=('atoms', 'seeds', 'num_configs'))
-        return partial(self._from_partitioned_args_func, **kwargs)
-
     @classmethod
     def merge_blocks(cls, blocks):
         kwargs = blocks[0].copy_kwargs(exclude=('seeds', 'num_configs'))
         kwargs['seeds'] = tuple(itertools.chain(*(block.seeds for block in blocks)))
         return cls(**kwargs)
+
+    def from_partitioned_args(self):
+        kwargs = self.copy_kwargs(exclude=('atoms', 'seeds', 'num_configs'))
+        return partial(self._from_partitioned_args_func, **kwargs)
 
     def partition_args(self, chunks: int = 1, lazy: bool = True):
         chunks = validate_chunks(self.ensemble_shape, chunks)

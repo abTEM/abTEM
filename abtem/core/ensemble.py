@@ -3,27 +3,20 @@ import itertools
 import operator
 from abc import abstractmethod, ABCMeta
 from functools import reduce, partial
-from typing import Tuple
+from typing import Tuple, List
 
 import dask.array as da
 import numpy as np
 import copy
 from abtem.core import config
-from abtem.core.dask import validate_chunks, chunk_ranges
+from abtem.core.axes import AxisMetadata
+from abtem.core.chunks import chunk_ranges, validate_chunks
 from abtem.core.utils import EqualityMixin, CopyMixin
 
 
-class Ensemble(EqualityMixin, CopyMixin, metaclass=ABCMeta):
-
-    @property
-    @abstractmethod
-    def ensemble_axes_metadata(self):
-        pass
-
-    @property
-    @abstractmethod
-    def ensemble_shape(self):
-        pass
+class Ensemble(metaclass=ABCMeta):
+    ensemble_shape: Tuple[int, ...]
+    ensemble_axes_metadata: List[AxisMetadata]
 
     @property
     @abstractmethod
@@ -46,7 +39,6 @@ class Ensemble(EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     def ensemble_blocks(self, chunks=None, limit=None):
         chunks = self.validate_chunks(chunks, limit)
-
         args = self.partition_args(chunks, lazy=True)
         symbols = tuple(range(len(args)))
         args = tuple((block, (i,)) for i, block in zip(symbols, args))

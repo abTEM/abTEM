@@ -6,7 +6,7 @@ from abtem.core.utils import EqualityMixin
 class BeamTilt(HasEventsMixin, EqualityMixin):
 
     def __init__(self, tilt: Tuple[float, float] = (0., 0.)):
-        self._tilt = tilt
+        self._tilt = tuple(tilt)
         self._events = Events()
 
     @property
