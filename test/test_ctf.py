@@ -1,13 +1,8 @@
 import numpy as np
-from hypothesis import given, settings, reproduce_failure
-from hypothesis import strategies as st
 
-from abtem.core.ensemble import concatenate_array_blocks
-from abtem.core.distributions import ParameterSeries
 from abtem.core.energy import energy2wavelength
-from abtem.waves.transfer import Aberrations, polar_symbols, Aperture
+from abtem.waves.transfer import Aberrations
 from abtem.waves.transfer import point_resolution
-from abtem.waves.waves import PlaneWave
 
 
 def test_point_resolution():

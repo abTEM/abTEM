@@ -2,31 +2,33 @@ import hypothesis.strategies as st
 import pytest
 from hypothesis import given
 
-from strategies.potentials import random_potential
-import strategies.atoms as atoms_st
-import strategies.potentials as potentials_st
-import strategies.scan as scan_st
-import strategies.transfer as transfer_st
-import strategies.waves as waves_st
-import strategies.prism as prism_st
+import strategies as abtem_st
 
 
 @given(data=st.data())
 @pytest.mark.parametrize('copyable', [
-    atoms_st.random_frozen_phonons,
-    scan_st.grid_scan,
-    scan_st.line_scan,
-    scan_st.custom_scan,
-    potentials_st.random_potential,
-    potentials_st.random_potential_array,
-    transfer_st.random_aberrations,
-    transfer_st.random_aperture,
-    transfer_st.random_temporal_envelope,
-    transfer_st.random_spatial_envelope,
-    transfer_st.random_composite_wave_transform,
-    waves_st.random_probe,
-    waves_st.random_planewave,
-    prism_st.random_s_matrix,
+    abtem_st.atoms,
+    abtem_st.frozen_phonons,
+    abtem_st.grid_scan,
+    abtem_st.line_scan,
+    abtem_st.custom_scan,
+    abtem_st.potential,
+    abtem_st.potential_array,
+    abtem_st.aberrations,
+    abtem_st.aperture,
+    abtem_st.temporal_envelope,
+    abtem_st.spatial_envelope,
+    abtem_st.composite_wave_transform,
+    abtem_st.ctf,
+    abtem_st.probe,
+    abtem_st.plane_wave,
+    abtem_st.waves,
+    abtem_st.s_matrix,
+    # # # prism_st.random_s_matrix,
+    abtem_st.images,
+    abtem_st.diffraction_patterns,
+    abtem_st.line_profiles,
+    abtem_st.polar_measurements,
 ])
 def test_copy_equals(data, copyable):
     original = data.draw(copyable())

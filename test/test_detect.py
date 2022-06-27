@@ -1,42 +1,89 @@
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given
+from hypothesis import given, assume, reproduce_failure
 
+import strategies as abtem_st
+from abtem import LineProfiles, Images
 from abtem.measure.detect import AnnularDetector, FlexibleAnnularDetector, PixelatedDetector
 from abtem.waves.waves import Probe
-from strategies import atoms as atoms_st
-from strategies import core as core_st
-from utils import assume_valid_probe_and_detectors, gpu
+from utils import gpu
 
 
-@given(atoms=atoms_st.random_atoms(min_side_length=5, max_side_length=10),
-       gpts=core_st.gpts(min_value=128, max_value=128),
-       semiangle_cutoff=st.floats(5, 10),
-       inner=st.floats(0, 50),
-       outer=st.floats(50, 100),
-       energy=st.floats(100e3, 200e3))
+@given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False])
-def test_integrate_consistent(atoms, gpts, semiangle_cutoff, energy, lazy, inner, outer):
-    probe = Probe(gpts=gpts,
-                  semiangle_cutoff=semiangle_cutoff,
-                  energy=energy,
-                  extent=np.diag(atoms.cell)[:2])
+@pytest.mark.parametrize('device', ['cpu', gpu])
+@pytest.mark.parametrize('detector', [
+    abtem_st.segmented_detector,
+    abtem_st.flexible_annular_detector,
+    abtem_st.pixelated_detector,
+    abtem_st.waves_detector
+])
+def test_detect(data, detector, lazy, device):
+    waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
+    detector = data.draw(detector())
 
-    inner, outer = np.round(inner), np.round(outer)
+    assume(all(waves._gpts_within_angle(min(detector.angular_limits(waves)))))
+    assume(min(waves.cutoff_angles) > 1.)
+    measurement = detector.detect(waves)
 
-    detectors = [AnnularDetector(inner=inner, outer=outer),
-                 FlexibleAnnularDetector(),
-                 PixelatedDetector(max_angle='cutoff')]
+    assert measurement.ensemble_shape == waves.ensemble_shape
+    assert measurement.dtype == detector.measurement_dtype
+    assert measurement.base_shape == detector.measurement_shape(waves)
+    assert type(measurement) == detector.measurement_type(waves)
+    assert measurement.base_axes_metadata == detector.measurement_axes_metadata(waves)
 
-    assume_valid_probe_and_detectors(probe, detectors)
+    if detector.to_cpu:
+        assert measurement.device == 'cpu'
 
-    measurements = probe.scan(potential=atoms, detectors=detectors, lazy=lazy)
-    measurements.compute()
-    annular_measurement, flexible_measurement, pixelated_measurement = measurements
 
-    assert np.allclose(annular_measurement.array, flexible_measurement.integrate_radial(inner, outer).array)
-    assert np.allclose(annular_measurement.array, pixelated_measurement.integrate_radial(inner, outer).array)
+@given(data=st.data())
+@pytest.mark.parametrize('lazy', [True, False])
+@pytest.mark.parametrize('device', ['cpu', gpu])
+def test_annular_detector(data, lazy, device):
+    waves = data.draw(abtem_st.waves(lazy=lazy, device=device, min_scan_dims=1))
+    detector = data.draw(abtem_st.annular_detector())
+
+    assume(waves.num_scan_axes > 0)
+    assume(waves.num_scan_axes < 3)
+    assume(all(waves._gpts_within_angle(min(detector.angular_limits(waves)))))
+    assume(min(waves.cutoff_angles) > 1.)
+    print(waves.ensemble_shape, waves.ensemble_axes_metadata)
+    measurement = detector.detect(waves)
+
+    shape = tuple(n for i, n in enumerate(waves.ensemble_shape) if i not in waves.scan_axes[-2:])
+
+    assert measurement.ensemble_shape == shape
+    assert measurement.dtype == detector.measurement_dtype
+    assert measurement.base_shape == waves.scan_shape[-2:]
+
+    if len(waves.scan_axes) == 1:
+        assert type(measurement) == LineProfiles
+    elif len(waves.scan_axes) > 1:
+        assert type(measurement) == Images
+
+    if detector.to_cpu:
+        assert measurement.device == 'cpu'
+
+
+@given(data=st.data())
+@pytest.mark.parametrize('lazy', [True, False])
+@pytest.mark.parametrize('device', [gpu, 'cpu'])
+def test_integrate_consistent(data, lazy, device):
+    waves = data.draw(abtem_st.waves(lazy=lazy, device=device, min_scan_dims=1))
+
+    assume(min(waves.cutoff_angles) > 10.)
+
+    extent = np.floor(data.draw(st.floats(min_value=1., max_value=np.floor(min(waves.cutoff_angles)) - 1.)))
+    inner = np.floor(data.draw(st.floats(min_value=0., max_value=min(waves.cutoff_angles) - extent)))
+    outer = inner + extent
+
+    annular_measurement = AnnularDetector(inner=inner, outer=outer).detect(waves)
+    flexible_measurement = FlexibleAnnularDetector().detect(waves)
+    pixelated_measurement = PixelatedDetector(max_angle='cutoff').detect(waves)
+
+    assert annular_measurement == flexible_measurement.integrate_radial(inner, outer)
+    assert annular_measurement == pixelated_measurement.integrate_radial(inner, outer)
 
 
 @given(gpts=st.integers(min_value=64, max_value=128),

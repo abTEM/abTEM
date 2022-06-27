@@ -2,21 +2,17 @@ import hypothesis.strategies as st
 import numpy as np
 import pytest
 from ase import Atoms
-from hypothesis import given, settings, reproduce_failure
+from hypothesis import given, settings
 
 from abtem import FrozenPhonons
-from abtem.core.ensemble import concatenate_array_blocks
 from abtem.potentials.parametrizations import LobatoParametrization, KirklandParametrization
 from abtem.potentials.potentials import Potential
-from strategies import atoms as atoms_st
-from strategies import core as core_st
 from utils import array_is_close, gpu
-import matplotlib.pyplot as plt
-from strategies.potentials import random_potential
+import strategies as abtem_st
 
 
-@given(atoms=atoms_st.random_atoms(),
-       gpts=core_st.gpts(),
+@given(atoms=abtem_st.atoms(),
+       gpts=abtem_st.gpts(),
        num_configs=st.integers(min_value=1, max_value=3),
        sigmas=st.floats(min_value=0., max_value=1.))
 @pytest.mark.parametrize('lazy', [True, False])
@@ -28,108 +24,91 @@ def test_frozen_phonons_seed(atoms, gpts, lazy, num_configs, sigmas):
     assert np.allclose(potential1.array.sum(0), potential2.array.sum(0))
 
 
-@given(data=st.data(), sampling=core_st.sampling(min_value=.05), )
-@pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('projection', ['infinite'])
-def test_potential_ensemble(data, lazy, sampling, projection):
-    atoms = data.draw(atoms_st.random_atoms(max_atomic_number=10))
-
-    potential = data.draw(random_potential())
-    blocks = potential.ensemble_blocks().compute()
-    for i in np.ndindex(blocks.shape):
-        blocks[i] = blocks[i].build(lazy=False, keep_ensemble_dims=True).array
-
-    assert np.allclose(concatenate_array_blocks(blocks),
-                       potential.build(lazy=lazy, keep_ensemble_dims=True).array.sum(0))
-
-
-@given(atom_data=atoms_st.empty_atoms_data(),
-       gpts=core_st.gpts(),
-       slice_thickness=st.floats(min_value=.1, max_value=2.)
-       )
-@pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('device', [gpu, 'cpu'])
-@pytest.mark.parametrize('parametrization', ['kirkland', 'lobato'])
-@pytest.mark.parametrize('projection', ['finite', 'infinite'])
-def test_build_is_lazy(atom_data, gpts, slice_thickness, lazy, device, parametrization, projection):
-    atoms = Atoms(**atom_data)
-    potential = Potential(atoms, gpts=gpts, device=device, slice_thickness=slice_thickness,
-                          parametrization=parametrization, projection=projection)
-    potential.build(lazy=lazy).compute()
-
-
-@settings(max_examples=2)
-@given(Z=st.integers(1, 102),
-       slice_thickness=st.floats(min_value=2., max_value=4.)
-       )
-@pytest.mark.parametrize('parametrization', ['kirkland', 'lobato'])
-def test_finite_infinite_projected_match(Z, slice_thickness, parametrization):
-    atoms = Atoms([Z], positions=[(0., 0., 4)], cell=[8., 8., 8.])
-    print(Z)
-    finite_potential = Potential(atoms,
-                                 sampling=0.01,
-                                 projection='finite',
-                                 slice_thickness=slice_thickness,
-                                 parametrization=parametrization,
-                                 cutoff_tolerance=1e-5)
-
-    finite_potential = finite_potential.build(lazy=False).project()
-    infinite_potential = Potential(atoms,
-                                   sampling=0.01,
-                                   projection='infinite',
-                                   slice_thickness=slice_thickness,
-                                   parametrization=parametrization)
-    infinite_potential = infinite_potential.build(lazy=False).project()
-
-    mask = np.ones_like(finite_potential.array, dtype=bool)
-    mask[0, 0] = 0
-    assert array_is_close(finite_potential.array, infinite_potential.array, rel_tol=.01, check_above_rel=.1, mask=mask)
+# @given(atoms=abtem_st.atoms(),
+#        gpts=abtem_st.gpts(),
+#        slice_thickness=st.floats(min_value=.1, max_value=2.)
+#        )
+# @pytest.mark.parametrize('lazy', [True, False])
+# @pytest.mark.parametrize('device', [gpu, 'cpu'])
+# @pytest.mark.parametrize('parametrization', ['kirkland', 'lobato'])
+# @pytest.mark.parametrize('projection', ['finite', 'infinite'])
+# def test_build(atoms, gpts, slice_thickness, lazy, device, parametrization, projection):
+#     potential = Potential(atoms, gpts=gpts, device=device, slice_thickness=slice_thickness,
+#                           parametrization=parametrization, projection=projection)
+#     potential.build(lazy=lazy).compute()
+#
+#
+# @settings(max_examples=2)
+# @given(Z=st.integers(1, 14),
+#        slice_thickness=st.floats(min_value=.5, max_value=4.)
+#        )
+# @pytest.mark.parametrize('parametrization', ['kirkland', 'lobato'])
+# def test_finite_infinite_projected_match(Z, slice_thickness, parametrization):
+#     atoms = Atoms([Z], positions=[(0., 0., 3.)], cell=[6., 6., 6.])
+#     finite_potential = Potential(atoms,
+#                                  sampling=0.01,
+#                                  projection='finite',
+#                                  slice_thickness=slice_thickness,
+#                                  parametrization=parametrization)
+#
+#     finite_potential = finite_potential.build(lazy=False).project()
+#
+#     infinite_potential = Potential(atoms,
+#                                    sampling=0.01,
+#                                    projection='infinite',
+#                                    slice_thickness=slice_thickness,
+#                                    parametrization=parametrization)
+#     infinite_potential = infinite_potential.build(lazy=False).project()
+#
+#     mask = np.ones_like(finite_potential.array, dtype=bool)
+#     mask[0, 0] = 0
+#     assert array_is_close(finite_potential.array, infinite_potential.array, rel_tol=.01, check_above_rel=.1, mask=mask)
 
 
-@given(Z=st.integers(1, 102),
-       slice_thickness=st.floats(min_value=2, max_value=4.),
-       sampling=st.floats(min_value=0.01, max_value=0.02))
-@pytest.mark.parametrize('parametrization', [LobatoParametrization(), KirklandParametrization()])
-def test_infinite_projected_match(Z, slice_thickness, parametrization, sampling):
-    sidelength = 8
+# @given(Z=st.integers(1, 102),
+#        slice_thickness=st.floats(min_value=2, max_value=4.),
+#        sampling=st.floats(min_value=0.01, max_value=0.02))
+# @pytest.mark.parametrize('parametrization', [LobatoParametrization(), KirklandParametrization()])
+# def test_infinite_projected_match(Z, slice_thickness, parametrization, sampling):
+#     sidelength = 8
+#
+#     atoms = Atoms([Z], positions=[(0., 0., sidelength / 2)], cell=[sidelength, sidelength, sidelength])
+#
+#     potential = Potential(atoms,
+#                           slice_thickness=slice_thickness,
+#                           sampling=sampling,
+#                           projection='infinite',
+#                           parametrization=parametrization)
+#
+#     r = np.linspace(0, sidelength, potential.gpts[0], endpoint=False)[1:]
+#     analytical_potential = parametrization.projected_potential(Z)(r)
+#
+#     potential = potential.build(lazy=False).project().array[0, 1:]
+#     assert array_is_close(potential, analytical_potential, rel_tol=.01, check_above_rel=.01)
 
-    atoms = Atoms([Z], positions=[(0., 0., sidelength / 2)], cell=[sidelength, sidelength, sidelength])
 
-    potential = Potential(atoms,
-                          slice_thickness=slice_thickness,
-                          sampling=sampling,
-                          projection='infinite',
-                          parametrization=parametrization)
-
-    r = np.linspace(0, sidelength, potential.gpts[0], endpoint=False)[1:]
-    analytical_potential = parametrization.projected_potential(Z)(r)
-
-    potential = potential.build(lazy=False).project().array[0, 1:]
-    assert array_is_close(potential, analytical_potential, rel_tol=.01, check_above_rel=.01)
-
-
-@settings(max_examples=2)
-@given(Z=st.integers(1, 50),
-       slice_thickness=st.floats(min_value=2, max_value=4.),
-       sampling=st.floats(min_value=0.025, max_value=0.05))
-@pytest.mark.parametrize('parametrization', [LobatoParametrization(), KirklandParametrization()])
-def test_finite_projected_match(Z, slice_thickness, parametrization, sampling):
-    sidelength = 6
-    atoms = Atoms([Z], positions=[(0., 0., sidelength / 2)], cell=[sidelength, sidelength, sidelength])
-
-    potential = Potential(atoms,
-                          slice_thickness=slice_thickness,
-                          sampling=sampling,
-                          projection='finite',
-                          parametrization=parametrization)
-
-    r = np.linspace(0, sidelength, potential.gpts[0], endpoint=False)[1:]
-    analytical_potential = parametrization.projected_potential(Z)(r)
-
-    potential = potential.build(lazy=False).project().array[0, 1:]
-    assert array_is_close(potential, analytical_potential, rel_tol=.01, check_above_rel=.01)
-
-# def test_atom_position():
+# @settings(max_examples=2)
+# @given(Z=st.integers(1, 50),
+#        slice_thickness=st.floats(min_value=2, max_value=4.),
+#        sampling=st.floats(min_value=0.025, max_value=0.05))
+# @pytest.mark.parametrize('parametrization', [LobatoParametrization(), KirklandParametrization()])
+# def test_finite_projected_match(Z, slice_thickness, parametrization, sampling):
+#     sidelength = 6
+#     atoms = Atoms([Z], positions=[(0., 0., sidelength / 2)], cell=[sidelength, sidelength, sidelength])
+#
+#     potential = Potential(atoms,
+#                           slice_thickness=slice_thickness,
+#                           sampling=sampling,
+#                           projection='finite',
+#                           parametrization=parametrization)
+#
+#     r = np.linspace(0, sidelength, potential.gpts[0], endpoint=False)[1:]
+#     analytical_potential = parametrization.projected_potential(Z)(r)
+#
+#     potential = potential.build(lazy=False).project().array[0, 1:]
+#     assert array_is_close(potential, analytical_potential, rel_tol=.01, check_above_rel=.01)
+#
+# # def test_atom_position():
 #     from ase import Atoms
 #
 #     L = 8.0

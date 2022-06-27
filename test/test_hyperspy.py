@@ -1,19 +1,20 @@
 import hypothesis.strategies as st
 import pytest
-from hypothesis import given, settings
+from hypothesis import given
 
-from strategies import measurements as measurements_st
-
-all_measurements = {'images': measurements_st.images,
-                    'diffraction_patterns': measurements_st.diffraction_patterns,
-                    'line_profiles': measurements_st.line_profiles,
-                    'polar_measurements': measurements_st.polar_measurements
-                    }
+import strategies as abtem_st
+from utils import gpu
 
 
 @given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('measurement', list(all_measurements.keys()))
-def test_hyperspy(data, measurement, lazy):
-    measurement = data.draw(all_measurements[measurement](lazy=lazy))
+@pytest.mark.parametrize('device', ['cpu', gpu])
+@pytest.mark.parametrize('measurement', [
+    abtem_st.images,
+    abtem_st.line_profiles,
+    abtem_st.diffraction_patterns,
+    abtem_st.polar_measurements
+])
+def test_hyperspy(data, measurement, lazy, device):
+    measurement = data.draw(measurement(lazy=lazy, device=device))
     hyperspy_signal = measurement.to_hyperspy()

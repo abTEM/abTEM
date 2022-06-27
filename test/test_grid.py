@@ -5,16 +5,16 @@ import numpy as np
 import pytest
 from hypothesis import given, assume
 
+import strategies as abtem_st
 from abtem.core.grid import Grid, GridUndefinedError
-from strategies import core as core_st
 from utils import ensure_is_tuple
 
 
 def grid_data(allow_none=False, allow_overdefined=True):
     data = {
-        'gpts': core_st.gpts(allow_none=allow_none),
-        'sampling': core_st.sampling(allow_none=allow_none),
-        'extent': core_st.extent(allow_none=allow_none)
+        'gpts': abtem_st.gpts(allow_none=allow_none),
+        'sampling': abtem_st.sampling(allow_none=allow_none),
+        'extent': abtem_st.extent(allow_none=allow_none)
     }
 
     if not allow_overdefined:
@@ -26,12 +26,8 @@ def grid_data(allow_none=False, allow_overdefined=True):
     )
 
 
-def create_grid(kwargs):
-    return Grid(**kwargs)
-
-
 def unpack_grid_data(grid_data):
-    return tuple(grid_data[grid_prop] for grid_prop in ('extent', 'gpts', 'sampling'))
+    return grid_data['gpts'], grid_data['extent'], grid_data['sampling']
 
 
 def is_grid_data_defining(extent, gpts, sampling):
@@ -45,9 +41,9 @@ def check_grid_consistent(extent, gpts, sampling):
 
 @given(grid_data=grid_data())
 def test_create_grid(grid_data):
-    grid = create_grid(grid_data)
+    grid = Grid(**grid_data)
 
-    gpts, extent, sampling = grid_data['gpts'], grid_data['extent'], grid_data['sampling']
+    gpts, extent, sampling = unpack_grid_data(grid_data)
 
     if gpts is not None:
         assert grid.gpts == ensure_is_tuple(gpts, 2)
@@ -65,7 +61,7 @@ def test_create_grid(grid_data):
 
 @given(grid_data=grid_data())
 def test_grid_raises(grid_data):
-    grid = create_grid(grid_data)
+    grid = Grid(**grid_data)
 
     if is_grid_data_defining(*unpack_grid_data(grid_data)):
         grid.check_is_defined()
@@ -76,32 +72,32 @@ def test_grid_raises(grid_data):
 
 @given(grid_data=grid_data())
 def test_grid_consistent(grid_data):
-    grid = create_grid(grid_data)
+    grid = Grid(**grid_data)
     assume(is_grid_data_defining(*unpack_grid_data(grid_data)))
     check_grid_consistent(grid.extent, grid.gpts, grid.sampling)
 
 
-@given(grid_data=grid_data(), new_gpts=core_st.gpts())
+@given(grid_data=grid_data(), new_gpts=abtem_st.gpts())
 def test_gpts_change(grid_data, new_gpts):
-    grid = create_grid(grid_data)
+    grid = Grid(**grid_data)
 
     grid.gpts = new_gpts
     assert grid.gpts == ensure_is_tuple(new_gpts, 2) if new_gpts is not None else new_gpts
     check_grid_consistent(grid.extent, grid.gpts, grid.sampling)
 
 
-@given(grid_data=grid_data(), new_extent=core_st.extent())
+@given(grid_data=grid_data(), new_extent=abtem_st.extent())
 def test_gpts_change(grid_data, new_extent):
-    grid = create_grid(grid_data)
+    grid = Grid(**grid_data)
 
     grid.extent = new_extent
     assert grid.extent == ensure_is_tuple(new_extent, 2) if new_extent is not None else new_extent
     check_grid_consistent(grid.extent, grid.gpts, grid.sampling)
 
 
-@given(grid_data=grid_data(), new_sampling=core_st.sampling())
+@given(grid_data=grid_data(), new_sampling=abtem_st.sampling())
 def test_sampling_change(grid_data, new_sampling):
-    grid = create_grid(grid_data)
+    grid = Grid(**grid_data)
 
     grid.sampling = new_sampling
     if grid.extent is None:
