@@ -20,14 +20,17 @@ def is_array_like(x):
 class CopyMixin:
     _exclude_from_copy: tuple = ()
 
-    def _arg_keys(self):
-        parameters = inspect.signature(self.__class__).parameters
+    def _arg_keys(self, cls):
+        parameters = inspect.signature(cls).parameters
         return tuple(key for key, value in parameters.items()
                      if value.kind not in (value.VAR_POSITIONAL, value.VAR_KEYWORD))
 
-    def copy_kwargs(self, exclude: Tuple['str', ...] = ()) -> dict:
+    def copy_kwargs(self, exclude: Tuple['str', ...] = (), cls=None) -> dict:
+        if cls is None:
+            cls = self.__class__
+
         exclude = self._exclude_from_copy + exclude
-        keys = [key for key in self._arg_keys() if key not in exclude]
+        keys = [key for key in self._arg_keys(cls) if key not in exclude]
         kwargs = {key: copy.deepcopy(getattr(self, key)) for key in keys}
         return kwargs
 

@@ -14,7 +14,7 @@ from scipy.interpolate import interp1d
 
 from abtem.core.electron_configurations import electron_configurations, config_str_to_config_tuples
 from abtem.potentials.poisson import ChargeDensityPotential
-from abtem.potentials.temperature import MDFrozenPhonons, LazyAtoms
+from abtem.potentials.temperature import MDFrozenPhonons, LazyAtoms, DummyFrozenPhonons
 from abtem.potentials.utils import eps0
 
 try:
@@ -108,8 +108,12 @@ class GPAWPotential(ChargeDensityPotential):
                 frozen_phonons.append(atoms)
                 charge_densities.append(charge_density)
 
-        charge_density = da.stack(charge_densities)
-        atoms = MDFrozenPhonons(frozen_phonons)
+        if len(charge_densities) > 1:
+            charge_density = da.stack(charge_densities)
+            atoms = MDFrozenPhonons(frozen_phonons)
+        else:
+            charge_density = charge_densities[0]
+            atoms = DummyFrozenPhonons(frozen_phonons[0])
 
         super().__init__(charge_density=charge_density, atoms=atoms, gpts=gpts, sampling=sampling,
                          slice_thickness=slice_thickness, plane=plane, box=box, origin=origin, exit_planes=exit_planes)

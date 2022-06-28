@@ -24,12 +24,12 @@ def single_atom_gpaw_calculator(symbol='C'):
 
 @pytest.mark.skipif('gpaw' not in sys.modules, reason="requires gpaw")
 def test_ps2ae_vs_abtem(single_atom_gpaw_calculator):
-    ps2ae_potential = PS2AE(single_atom_gpaw_calculator, grid_spacing=0.02).get_electrostatic_potential()
+    ps2ae_potential = PS2AE(single_atom_gpaw_calculator, h=0.02).get_electrostatic_potential()
     ps2ae_potential = - ps2ae_potential * single_atom_gpaw_calculator.atoms.cell[2, 2] / ps2ae_potential.shape[-1]
     ps2ae_potential = ps2ae_potential.sum(0)
     ps2ae_potential -= ps2ae_potential.min()
 
-    gpaw_potential = GPAWPotential(single_atom_gpaw_calculator, gpts=ps2ae_potential.shape).build().project().array
+    gpaw_potential = GPAWPotential(single_atom_gpaw_calculator, gpts=ps2ae_potential.shape).build().project().compute().array
     gpaw_potential -= gpaw_potential.min()
 
     array_is_close(ps2ae_potential[0, 2:-1], gpaw_potential[0, 2:-1], rel_tol=0.01, check_above_rel=.01)

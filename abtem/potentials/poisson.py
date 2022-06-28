@@ -145,7 +145,7 @@ class ChargeDensityPotential(PotentialBuilder):
                  plane: str = 'xy',
                  box: Tuple[float, float, float] = None,
                  origin: Tuple[float, float, float] = (0., 0., 0.),
-                 exit_planes=None,
+                 exit_planes: int = None,
                  device: str = None, ):
 
         self._charge_density = charge_density
@@ -171,31 +171,12 @@ class ChargeDensityPotential(PotentialBuilder):
         self._grid = self._ewald_potential.grid
 
     @property
-    def frozen_phonons(self):
-        return self.ewald_potential.frozen_phonons
-
-    def _copy_as_dict(self, copy_atoms: bool = True, copy_charge_density: bool = True):
-        kwargs = {'gpts': self.gpts,
-                  'sampling': self.sampling,
-                  'slice_thickness': self.ewald_potential.slice_thickness,
-                  'plane': self.ewald_potential.plane,
-                  'box': self.ewald_potential.box,
-                  'origin': self.ewald_potential.origin,
-                  'exit_planes': self.ewald_potential.exit_planes,
-                  'device': self.device,
-                  }
-
-        if copy_atoms:
-            kwargs['atoms'] = self.ewald_potential.frozen_phonons.atoms
-
-        if copy_charge_density:
-            kwargs['charge_density'] = self.charge_density
-
-        return kwargs
+    def num_frozen_phonons(self):
+        return self.ewald_potential.num_frozen_phonons
 
     def generate_configurations(self):
         for i, frozen_phonons in enumerate(self.ewald_potential.frozen_phonons.generate_configurations()):
-            kwargs = self._copy_as_dict(copy_atoms=False, copy_charge_density=False)
+            kwargs = self.copy_kwargs(exclude=('atoms', 'charge_density'))
 
             kwargs['atoms'] = frozen_phonons
             kwargs['charge_density'] = self.charge_density[i][None]
@@ -223,6 +204,14 @@ class ChargeDensityPotential(PotentialBuilder):
         return self.ewald_potential.box
 
     @property
+    def plane(self):
+        return self.ewald_potential.plane
+
+    @property
+    def origin(self):
+        return self.ewald_potential.origin
+
+    @property
     def charge_density(self):
         return self._charge_density
 
@@ -232,64 +221,69 @@ class ChargeDensityPotential(PotentialBuilder):
 
     @property
     def ewald_parametrization(self):
-        return self.ewald_potential.parametrization
+        return next(iter(self.ewald_potential.atomic_potentials.values())).parametrization
 
     @property
     def device(self):
         return self.ewald_potential.device
 
     @property
-    def slice_thickness(self) -> np.ndarray:
+    def slice_thickness(self) -> Tuple[float, ...]:
         return self.ewald_potential.slice_thickness
 
     @property
     def exit_planes(self) -> Tuple[int]:
         return self.ewald_potential.exit_planes
 
-    @property
-    def frozen_phonons(self) -> AbstractFrozenPhonons:
-        return self.ewald_potential.frozen_phonons
+    @staticmethod
+    def _wrap_charge_density(charge_density, atoms):
+        return np.array({'charge_density': charge_density, 'atoms': atoms}, dtype=object)
 
-    def ensemble_blocks(self, chunks=(1, -1)):
+    def partition_args(self, chunks=None, lazy: bool = True):
+
+        charge_densities = self.charge_density
+
+        if len(self.ensemble_shape) == 0:
+            charge_densities = charge_densities[None]
+
+        if lazy:
+            if not isinstance(charge_densities, da.core.Array):
+                charge_densities = da.from_array(charge_densities, chunks=(1, -1, -1, -1))
+
+            charge_densities = charge_densities.to_delayed()
 
         blocks = []
-        for i, (charge_density, atoms) in enumerate(zip(self.charge_density.to_delayed(), self.frozen_phonons)):
+        for i, (charge_density, (_, _, atoms)) in enumerate(zip(charge_densities,
+                                                                self.ewald_potential.frozen_phonons.generate_blocks())):
 
             if hasattr(atoms, 'atoms'):
                 atoms = atoms.atoms
 
-            block = dask.delayed({'charge_density': charge_density.item(), 'atoms': atoms})
-            block = da.from_delayed(block, shape=(1,), dtype=object)
+            if lazy:
+                block = dask.delayed(self._wrap_charge_density)(charge_density.item(), atoms)
+                block = da.from_delayed(block, shape=(1,), dtype=object)
+            else:
+                print(atoms)
+                block = self._wrap_charge_density(charge_density, atoms)
+
             blocks.append(block)
 
-        blocks = da.concatenate(blocks)
+        if lazy:
+            blocks = da.concatenate(blocks)
+        else:
+            blocks = np.concatenate(blocks)
 
-        arr = np.empty((1,), dtype=object)
-        arr[0] = self.exit_planes
-        exit_planes = da.from_array(arr, chunks=chunks[1])
+        return blocks,
 
-        return blocks, exit_planes
+    @staticmethod
+    def _charge_density_potential(*args, **kwargs):
+        kwargs.update(args[0])
+        potential = ChargeDensityPotential(**kwargs)
+        return potential
 
-    def ensemble_partial(self):
-
-        def charge_density_potential(*args, **kwargs):
-            kwargs.update(args[0])
-            kwargs['exit_planes'] = args[1].item()
-            potential = ChargeDensityPotential(**kwargs)
-
-            arr = np.empty((1,), dtype=object)
-            arr.itemset(potential)
-            return arr
-
-        kwargs = {'gpts': self.gpts,
-                  'sampling': self.sampling,
-                  'slice_thickness': self.ewald_potential.slice_thickness,
-                  'plane': self.ewald_potential.plane,
-                  'box': self.ewald_potential.box,
-                  'origin': self.ewald_potential.origin,
-                  'device': self.device}
-
-        return partial(charge_density_potential, **kwargs)
+    def from_partitioned_args(self):
+        kwargs = self.copy_kwargs(exclude=('atoms', 'charge_density'), cls=ChargeDensityPotential)
+        return partial(self._charge_density_potential, **kwargs)
 
     def generate_slices(self, first_slice: int = 0, last_slice: int = None):
 
@@ -309,13 +303,13 @@ class ChargeDensityPotential(PotentialBuilder):
         if hasattr(array, 'compute'):
             array = array.compute(scheduler='single-threaded')
 
-        potential = self.ewald_potential.build(first_slice, last_slice)
+        potential = self.ewald_potential.build(first_slice=first_slice, last_slice=last_slice, lazy=False)
 
         if self.ewald_potential.plane != 'xy':
             axes = plane_to_axes(self.ewald_potential.plane)
             array = np.moveaxis(array, axes[:2], (0, 1))
 
-        array = solve_point_charges(self.ewald_potential._sliced_atoms.atoms,
+        array = solve_point_charges(self.ewald_potential.sliced_atoms.atoms,
                                     array=-array,
                                     width=self.ewald_parametrization._width)
 

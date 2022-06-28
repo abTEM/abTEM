@@ -211,8 +211,8 @@ class PotentialBuilder(AbstractPotential):
                                    exit_planes=self.exit_planes,
                                    ensemble_axes_metadata=self.ensemble_axes_metadata)
 
-        if not lazy:
-            potential = potential.compute()
+        # if not lazy:
+        #    potential = potential.compute()
 
         return potential
 
@@ -444,7 +444,21 @@ class Potential(PotentialBuilder):
 
         z_padding = max(cutoffs.values()) if cutoffs.values() else 0.
 
-        self._sliced_atoms = SlicedAtoms(atoms=atoms, slice_thickness=self.slice_thickness, z_padding=z_padding)
+        return SlicedAtoms(atoms=atoms, slice_thickness=self.slice_thickness, z_padding=z_padding)
+
+    @property
+    def sliced_atoms(self):
+        if self._sliced_atoms is not None:
+            return self._sliced_atoms
+
+        if self.projection == 'finite':
+            cutoffs = {Z: atomic_potential.cutoff for Z, atomic_potential in self.atomic_potentials.items()}
+            self._sliced_atoms = self._prepare_atoms_finite(cutoffs)
+        elif self.projection == 'infinite':
+            self._sliced_atoms = self._prepare_atoms_infinite()
+        else:
+            raise RuntimeError()
+
         return self._sliced_atoms
 
     def _generate_slices_finite(self, start: int, stop: int) -> 'PotentialArray':
@@ -459,12 +473,7 @@ class Potential(PotentialBuilder):
         tables = {Z: atomic_potential.build_integral_table(min(self.sampling) / 2)
                   for Z, atomic_potential in self.atomic_potentials.items()}
 
-        cutoffs = {Z: atomic_potential.cutoff for Z, atomic_potential in self.atomic_potentials.items()}
-
-        if self._sliced_atoms is None:
-            self._prepare_atoms_finite(cutoffs)
-
-        sliced_atoms = self._sliced_atoms
+        sliced_atoms = self.sliced_atoms
 
         for start, stop in generate_chunks(stop - start, chunks=1, start=start):
             array = xp.zeros((stop - start,) + self.gpts, dtype=np.float32)

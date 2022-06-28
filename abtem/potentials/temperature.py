@@ -90,8 +90,11 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
         kwargs = self.copy_kwargs(exclude=('atoms',))
         return partial(self._from_partitioned_args_func, **kwargs)
 
+    def __iter__(self):
+        return self.generate_blocks()
+
     def partition_args(self, chunks: int = 1, lazy: bool = True):
-        #chunks = validate_chunks(self.ensemble_shape, chunks)
+        # chunks = validate_chunks(self.ensemble_shape, chunks)
         atoms = self.atoms
 
         array = np.zeros((1,), dtype=object)
@@ -344,6 +347,10 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
         for frozen_phonon in self:
             yield MDFrozenPhonons([frozen_phonon])
 
+    @property
+    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
+        return [FrozenPhononsAxis(values=tuple(range(len(self))), _ensemble_mean=self.ensemble_mean)]
+
     def __len__(self) -> int:
         return len(self._trajectory)
 
@@ -355,7 +362,15 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
     def cell(self) -> np.ndarray:
         return self[0].cell
 
-    def ensemble_blocks(self, chunks: int = 1):
+    @property
+    def ensemble_shape(self) -> Tuple[int, ...]:
+        return len(self),
+
+    @property
+    def default_ensemble_chunks(self) -> Tuple[int, ...]:
+        return 1,
+
+    def partition_args(self, chunks: int = 1, lazy: bool = True):
         chunks = validate_chunks(self.ensemble_shape, chunks)
 
         def md_frozen_phonons(atoms, **kwargs):
@@ -379,7 +394,7 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
 
         return da.concatenate(array),
 
-    def ensemble_partial(self):
+    def from_partitioned_args(self):
         return lambda x: x
 
     def randomize(self, atoms):
