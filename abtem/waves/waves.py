@@ -105,11 +105,11 @@ class Waves(HasArray, WavesLikeMixin):
         Small angle beam tilt [mrad]. Default is (0., 0.).
     fourier_space : bool, optional
         If True, the wave functions are assumed to be represented in Fourier space instead of real space.
+    ensemble_axes_metadata : list of AxesMetadata
+        Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.
     metadata : dict
         A dictionary defining simulation metadata. All items will be added to the metadata of measurements derived from
         the waves.
-    ensemble_axes_metadata : list of AxesMetadata
-        Metadata associated with an ensemble axis.
     """
     _base_dims = 2
 

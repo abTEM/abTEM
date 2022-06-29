@@ -6,8 +6,8 @@ from abtem.core.distributions import ParameterSeries
 from abtem.measure.detect import AnnularDetector, SegmentedDetector, FlexibleAnnularDetector, PixelatedDetector, \
     WavesDetector
 from abtem.measure.measure import Images, LineProfiles, DiffractionPatterns, PolarMeasurements
-# from abtem.potentials.crystal import CrystalPotential
 from abtem.potentials.atom import AtomicPotential
+from abtem.potentials.crystal import CrystalPotential
 from abtem.potentials.gpaw import GPAWPotential
 from abtem.potentials.potentials import Potential, PotentialArray
 from abtem.potentials.temperature import FrozenPhonons

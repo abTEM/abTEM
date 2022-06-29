@@ -45,6 +45,10 @@ def validate_chunks(shape: Tuple[int, ...],
                     limit: Union[int, str] = None,
                     dtype: np.dtype.base = None,
                     device: str = 'cpu') -> ValidatedChunks:
+
+    if chunks == -1:
+        return validate_chunks(shape, shape)
+
     if isinstance(chunks, int):
         assert limit is None
         limit = chunks

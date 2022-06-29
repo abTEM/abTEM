@@ -145,6 +145,27 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
         return 1
 
 
+def validate_seeds(seeds: Union[int, Tuple[int, ...]], num_seeds: int = None) -> Tuple[int, ...]:
+    if seeds is None or np.isscalar(seeds):
+        if num_seeds is None:
+            raise ValueError('provide `num_configs` or a seed for each configuration')
+
+        rng = np.random.default_rng(seed=seeds)
+        seeds = ()
+        while len(seeds) < num_seeds:
+            seed = rng.integers(np.iinfo(np.int32).max)
+            if seed not in seeds:
+                seeds += (seed,)
+    else:
+        if not hasattr(seeds, '__len__'):
+            raise ValueError
+
+        if num_seeds is not None:
+            assert num_seeds == len(seeds)
+
+    return seeds
+
+
 class FrozenPhonons(AbstractFrozenPhonons):
     """
     The frozen phonons randomly displaces the atomic positions of an ASE Atoms object to emulate thermal vibrations.
@@ -177,7 +198,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
                  directions: str = 'xyz',
                  ensemble_mean: bool = True,
                  cell: Union[Cell, np.ndarray] = None,
-                 seeds: Union[int, Sequence[int]] = None):
+                 seeds: Union[int, Tuple[int, ...]] = None):
 
         if isinstance(sigmas, dict):
             atomic_numbers = [data.atomic_numbers[symbol] for symbol in sigmas.keys()]
@@ -211,24 +232,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
         self._sigmas = sigmas
         self._directions = directions
 
-        if seeds is None or np.isscalar(seeds):
-            if num_configs is None:
-                raise ValueError('provide `num_configs` or a seed for each configuration')
-
-            rng = np.random.default_rng(seed=seeds)
-            seeds = ()
-            while len(seeds) < num_configs:
-                seed = rng.integers(np.iinfo(np.int32).max)
-                if seed not in seeds:
-                    seeds += (seed,)
-        else:
-            if not hasattr(seeds, '__len__'):
-                raise ValueError
-
-            if num_configs is not None:
-                assert num_configs == len(seeds)
-
-        self._seeds = seeds
+        self._seeds = validate_seeds(seeds, num_seeds=num_configs)
 
         super().__init__(atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean)
 
@@ -249,7 +253,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
         return len(self._seeds)
 
     @property
-    def seeds(self) -> Tuple[int]:
+    def seeds(self) -> Tuple[int, ...]:
         return self._seeds
 
     @property

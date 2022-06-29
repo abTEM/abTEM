@@ -17,7 +17,7 @@ from abtem.core.backend import get_array_module, validate_device, copy_to_device
 from abtem.core.ensemble import Ensemble
 from abtem.core.complex import complex_exponential
 from abtem.core.array import HasArray, validate_lazy
-from abtem.core.chunks import iterate_chunk_ranges, validate_chunks
+from abtem.core.chunks import iterate_chunk_ranges, validate_chunks, chunk_shape
 from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
 from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.utils import generate_chunks, EqualityMixin, CopyMixin
@@ -684,9 +684,18 @@ class PotentialArray(AbstractPotential, HasArray):
     def build(self, first_slice: int = 0, last_slice: int = None, chunks: int = 1, lazy: bool = None):
         raise RuntimeError('potential is already built')
 
-    def partition_args(self, chunks=None, lazy: bool = True):
+    @staticmethod
+    def _wrap_partition_args(*args):
+        wrapped = np.zeros((1,), dtype=object)
+        if len(args) > 1:
+            wrapped.itemset(0, {'array': args[0], 'ensemble_axes_metadata': args[1]})
+        else:
+            wrapped.itemset(0, {'array': args[0][0], 'ensemble_axes_metadata': []})
+        return wrapped
+
+    def partition_args(self, chunks: int = None, lazy: bool = True):
         if chunks is None:
-            chunks = self.array.chunks[:-3]
+            chunks = self.array.chunks[:-len(self.base_shape)]
         else:
             chunks = self.validate_chunks(chunks)
 
@@ -696,34 +705,43 @@ class PotentialArray(AbstractPotential, HasArray):
             if chunks != array.chunks:
                 array = array.rechunk(chunks + array.chunks[len(chunks):])
 
-            if len(array.shape) <= 3:
-                array = np.expand_dims(array, axis=(0,))
+            if len(self.ensemble_shape) == 0:
+                array = array[None]
+                blocks = da.blockwise(self._wrap_partition_args, (0,),
+                                      array, tuple(range(len(array.shape))),
+                                      concatenate=True, dtype=object)
+            else:
+                ensemble_axes_metadata = self.partition_ensemble_axes_metadata(chunks=chunks)
 
-            def wrap(arr):
-                wrapped = np.zeros((1,), dtype=object)
-                wrapped.itemset(0, arr)
-                return wrapped
-
-            blocks = np.squeeze(array.map_blocks(wrap, dtype=object).to_delayed(),
-                                axis=tuple(range(1, len(array.shape))))
-
-            blocks = da.concatenate([da.from_delayed(block, dtype=object, shape=(1,)) for block in blocks])
+                blocks = da.blockwise(self._wrap_partition_args, tuple(range(max(len(self.ensemble_shape), 1))),
+                                      array, tuple(range(len(array.shape))),
+                                      ensemble_axes_metadata, tuple(range(max(len(self.ensemble_shape), 1))),
+                                      concatenate=True, dtype=object)
         else:
             array = self.compute().array
-            blocks = np.zeros(tuple(len(c) for c in chunks), dtype=object)
-
+            blocks = np.zeros(chunk_shape(chunks), dtype=object)
+            ensemble_axes_metadata = self.partition_ensemble_axes_metadata(chunks, lazy=False)
             for block_indices, chunk_range in iterate_chunk_ranges(chunks):
-                blocks[block_indices] = array[chunk_range]
+                blocks[block_indices] = {'array': array[chunk_range],
+                                         'ensemble_axes_metadata': ensemble_axes_metadata[block_indices]}
 
         return blocks,
 
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):
-        kwargs['array'] = args[0]
+        kwargs['array'] = args[0]['array']
+
+        ensemble_axes_metadata = args[0]['ensemble_axes_metadata']
+
+        if hasattr(ensemble_axes_metadata, 'item'):
+            ensemble_axes_metadata = ensemble_axes_metadata.item()
+
+        kwargs['ensemble_axes_metadata'] = ensemble_axes_metadata
         return cls(**kwargs)
 
     def from_partitioned_args(self):
-        return partial(self._from_partitioned_args_func, **self.copy_kwargs(exclude=('array',)))
+        return partial(self._from_partitioned_args_func,
+                       **self.copy_kwargs(exclude=('array', 'ensemble_axes_metadata')))
 
     def generate_slices(self, first_slice=0, last_slice=None):
 

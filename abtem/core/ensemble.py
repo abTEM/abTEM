@@ -10,7 +10,7 @@ import numpy as np
 import copy
 from abtem.core import config
 from abtem.core.axes import AxisMetadata
-from abtem.core.chunks import chunk_ranges, validate_chunks
+from abtem.core.chunks import chunk_ranges, validate_chunks, chunk_shape, iterate_chunk_ranges
 from abtem.core.utils import EqualityMixin, CopyMixin
 
 
@@ -36,6 +36,19 @@ class Ensemble(metaclass=ABCMeta):
         assert len(args) == len(index)
         selected_args = tuple(arg[index] for arg, index in zip(args, index))
         return self.from_partitioned_args()(*selected_args)
+
+    def partition_ensemble_axes_metadata(self, chunks: int = None, lazy: bool = True):
+        chunks = self.validate_chunks(chunks)
+
+        ensemble_axes = np.zeros(chunk_shape(chunks), dtype=object)
+        for index, slic in iterate_chunk_ranges(chunks):
+            ensemble_axes.itemset(index, [self.ensemble_axes_metadata[i][slic[i]]
+                                          for i, axis in enumerate(self.ensemble_axes_metadata)])
+
+        if lazy:
+            ensemble_axes = da.from_array(ensemble_axes, chunks=1)
+
+        return ensemble_axes
 
     def ensemble_blocks(self, chunks=None, limit=None):
         chunks = self.validate_chunks(chunks, limit)
