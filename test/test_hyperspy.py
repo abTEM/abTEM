@@ -1,3 +1,5 @@
+import sys
+
 import hypothesis.strategies as st
 import pytest
 from hypothesis import given
@@ -15,6 +17,7 @@ from utils import gpu
     abtem_st.diffraction_patterns,
     abtem_st.polar_measurements
 ])
+@pytest.mark.skipif('hyperspy' not in sys.modules, reason="requires gpaw")
 def test_hyperspy(data, measurement, lazy, device):
     measurement = data.draw(measurement(lazy=lazy, device=device))
     hyperspy_signal = measurement.to_hyperspy()

@@ -137,7 +137,7 @@ def test_gaussian_filter_images(data, sigma, lazy, device):
     filtered.compute()
     measurement.compute()
 
-    if np.any(np.array(sigma)) > 1e-6:
+    if np.any(np.array(sigma)) > 1:
         assert not np.allclose(filtered.array, measurement.array)
 
 

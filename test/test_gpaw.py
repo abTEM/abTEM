@@ -1,9 +1,11 @@
-from ase import Atoms
+import os
+import sys
+
+import numpy as np
+import pytest
+from ase import Atoms, units
 
 from abtem.potentials.potentials import Potential
-from utils import array_is_close
-import pytest
-import sys
 
 try:
     from gpaw import GPAW
@@ -14,33 +16,67 @@ except ImportError:
 
 
 @pytest.fixture
-def single_atom_gpaw_calculator(symbol='C'):
-    atoms = Atoms(symbol, positions=[(0, 0, 0)], cell=(5, 5, 5), pbc=True)
+def single_atom_gpaw_calculator(request):
+    atoms = Atoms(request.param['symbol'], positions=[(0, 0, 0)], cell=(request.param['side_length'],) * 3, pbc=True)
     gpaw = GPAW(h=.2, txt=None, kpts=(3, 3, 3))
     atoms.calc = gpaw
     atoms.get_potential_energy()
     return gpaw
 
 
+@pytest.mark.parametrize("single_atom_gpaw_calculator",
+                         [{'side_length': 5., 'symbol': 'C'},
+                          {'side_length': 2., 'symbol': 'C'}],
+                         indirect=True)
 @pytest.mark.skipif('gpaw' not in sys.modules, reason="requires gpaw")
 def test_ps2ae_vs_abtem(single_atom_gpaw_calculator):
-    ps2ae_potential = PS2AE(single_atom_gpaw_calculator, h=0.02).get_electrostatic_potential()
+    ps2ae_potential = PS2AE(single_atom_gpaw_calculator, h=0.02)
+    ps2ae_potential = ps2ae_potential.get_electrostatic_potential(rcgauss=.01 * units.Bohr, ae=True)
     ps2ae_potential = - ps2ae_potential * single_atom_gpaw_calculator.atoms.cell[2, 2] / ps2ae_potential.shape[-1]
     ps2ae_potential = ps2ae_potential.sum(0)
     ps2ae_potential -= ps2ae_potential.min()
 
-    gpaw_potential = GPAWPotential(single_atom_gpaw_calculator, gpts=ps2ae_potential.shape).build().project().compute().array
+    gpaw_potential = GPAWPotential(single_atom_gpaw_calculator,
+                                   gpts=ps2ae_potential.shape).build().project().compute().array
     gpaw_potential -= gpaw_potential.min()
 
-    array_is_close(ps2ae_potential[0, 2:-1], gpaw_potential[0, 2:-1], rel_tol=0.01, check_above_rel=.01)
+    assert np.allclose(ps2ae_potential[1:], gpaw_potential[1:], rtol=1e-2, atol=1)
 
 
+@pytest.mark.parametrize("single_atom_gpaw_calculator",
+                         [{'side_length': 5., 'symbol': 'C'}],
+                         indirect=True)
 @pytest.mark.skipif('gpaw' not in sys.modules, reason="requires gpaw")
 def test_gpaw_vs_iam(single_atom_gpaw_calculator):
-    gpaw_potential = GPAWPotential(single_atom_gpaw_calculator, gpts=256).build().project().array
+    gpaw_potential = GPAWPotential(single_atom_gpaw_calculator, gpts=128).build().project().array
     gpaw_potential -= gpaw_potential.min()
 
-    iam_potential = Potential(single_atom_gpaw_calculator.atoms, gpts=256, parametrization='lobato',
-                              projection='finite', cutoff_tolerance=1e-7).build().project().array
+    iam_potential = Potential(single_atom_gpaw_calculator.atoms, gpts=gpaw_potential.shape,
+                              projection='finite').build().project().array
+
     iam_potential -= iam_potential.min()
-    array_is_close(iam_potential, gpaw_potential, rel_tol=0.05, check_above_rel=.05)
+    assert np.allclose(iam_potential, gpaw_potential, rtol=1e-3, atol=5)
+
+
+@pytest.mark.parametrize("single_atom_gpaw_calculator",
+                         [{'side_length': 2., 'symbol': 'C'}],
+                         indirect=True)
+def test_gpaw_potential_from_disk(single_atom_gpaw_calculator, tmpdir):
+    path = os.path.join(str(tmpdir), 'test.gpw')
+    single_atom_gpaw_calculator.write(path)
+
+    gpaw_potential = GPAWPotential(single_atom_gpaw_calculator, gpts=(32, 32))
+    gpaw_potential = gpaw_potential.build().compute()
+
+    gpaw_potential_from_disk = GPAWPotential(path, gpts=(32, 32))
+    gpaw_potential_from_disk = gpaw_potential_from_disk.build().compute()
+
+    assert gpaw_potential_from_disk == gpaw_potential
+
+
+@pytest.mark.parametrize("single_atom_gpaw_calculator",
+                         [{'side_length': 2., 'symbol': 'C'}],
+                         indirect=True)
+def test_gpaw_potential_with_frozen_phonons(single_atom_gpaw_calculator, tmpdir):
+    gpaw_potential = GPAWPotential([single_atom_gpaw_calculator] * 2, gpts=(32, 32))
+    gpaw_potential = gpaw_potential.build().compute()

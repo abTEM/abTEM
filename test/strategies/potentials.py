@@ -1,11 +1,13 @@
+import dask
 import hypothesis.strategies as st
 import numpy as np
 from ase import Atoms
 from ase.build import bulk
+from ase.data import chemical_symbols
 from hypothesis.extra import numpy as numpy_st
 
 from abtem.potentials.potentials import Potential, PotentialArray
-from abtem.potentials.temperature import FrozenPhonons, DummyFrozenPhonons
+from abtem.potentials.temperature import FrozenPhonons, DummyFrozenPhonons, MDFrozenPhonons
 from . import core as core_st
 
 
@@ -44,19 +46,28 @@ def frozen_phonons(draw,
                    max_atoms=10,
                    ensemble_mean=True,
                    min_configs=1,
-                   max_configs=5):
+                   max_configs=5,
+                   lazy=False):
     drawn_atoms = draw(atoms(min_side_length=min_side_length,
                              max_side_length=max_side_length,
                              min_thickness=min_thickness,
                              max_thickness=max_thickness,
                              max_atoms=max_atoms))
+
+    atomic_numbers = np.unique(drawn_atoms.numbers)
+
     num_configs = draw(st.integers(min_value=min_configs, max_value=max_configs))
-    sigmas = draw(st.floats(min_value=0., max_value=.2))
+    sigmas = {chemical_symbols[number]: draw(st.floats(min_value=0., max_value=.2)) for number in atomic_numbers}
     seeds = draw(st.one_of(st.none(), st.integers(min_value=0)))
+
+    if lazy:
+        drawn_atoms = dask.delayed(drawn_atoms)
+
     return FrozenPhonons(drawn_atoms,
                          num_configs=num_configs,
                          sigmas=sigmas,
                          seeds=seeds,
+                         cell=drawn_atoms.cell,
                          ensemble_mean=ensemble_mean)
 
 
@@ -66,14 +77,48 @@ def dummy_frozen_phonons(draw,
                          max_side_length=5.,
                          min_thickness=.5,
                          max_thickness=5.,
-                         max_atoms=10, ):
+                         max_atoms=10,
+                         lazy=False,
+                         ):
     drawn_atoms = draw(atoms(min_side_length=min_side_length,
                              max_side_length=max_side_length,
                              min_thickness=min_thickness,
                              max_thickness=max_thickness,
                              max_atoms=max_atoms))
 
-    return DummyFrozenPhonons(drawn_atoms)
+    if lazy:
+        return DummyFrozenPhonons(dask.delayed(drawn_atoms),
+                                  atomic_numbers=np.unique(drawn_atoms.numbers),
+                                  cell=drawn_atoms.cell)
+    else:
+        return DummyFrozenPhonons(drawn_atoms)
+
+
+@st.composite
+def md_frozen_phonons(draw,
+                      min_side_length=1.,
+                      max_side_length=5.,
+                      min_thickness=.5,
+                      max_thickness=5.,
+                      max_atoms=10,
+                      min_configs=1,
+                      max_configs=5,
+                      lazy=False):
+    drawn_atoms = draw(atoms(min_side_length=min_side_length,
+                             max_side_length=max_side_length,
+                             min_thickness=min_thickness,
+                             max_thickness=max_thickness,
+                             max_atoms=max_atoms))
+    n = draw(st.integers(min_value=min_configs, max_value=max_configs))
+
+    trajectory = [drawn_atoms] * n
+    atomic_numbers = np.unique(drawn_atoms.numbers)
+    cell = drawn_atoms.cell
+
+    if lazy:
+        trajectory = [dask.delayed(drawn_atoms) for drawn_atoms in trajectory]
+
+    return MDFrozenPhonons(trajectory, atomic_numbers=atomic_numbers, cell=cell)
 
 
 @st.composite

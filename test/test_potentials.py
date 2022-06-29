@@ -24,19 +24,19 @@ def test_frozen_phonons_seed(atoms, gpts, lazy, num_configs, sigmas):
     assert np.allclose(potential1.array.sum(0), potential2.array.sum(0))
 
 
-# @given(atoms=abtem_st.atoms(),
-#        gpts=abtem_st.gpts(),
-#        slice_thickness=st.floats(min_value=.1, max_value=2.)
-#        )
-# @pytest.mark.parametrize('lazy', [True, False])
-# @pytest.mark.parametrize('device', [gpu, 'cpu'])
-# @pytest.mark.parametrize('parametrization', ['kirkland', 'lobato'])
-# @pytest.mark.parametrize('projection', ['finite', 'infinite'])
-# def test_build(atoms, gpts, slice_thickness, lazy, device, parametrization, projection):
-#     potential = Potential(atoms, gpts=gpts, device=device, slice_thickness=slice_thickness,
-#                           parametrization=parametrization, projection=projection)
-#     potential.build(lazy=lazy).compute()
-#
+@given(atoms=abtem_st.atoms(max_atomic_number=14),
+       gpts=abtem_st.gpts(),
+       slice_thickness=st.floats(min_value=1, max_value=2.)
+       )
+@pytest.mark.parametrize('lazy', [True, False])
+@pytest.mark.parametrize('device', [gpu, 'cpu'])
+@pytest.mark.parametrize('parametrization', ['kirkland', 'lobato'])
+@pytest.mark.parametrize('projection', ['finite', 'infinite'])
+def test_build(atoms, gpts, slice_thickness, lazy, device, parametrization, projection):
+    potential = Potential(atoms, gpts=gpts, device=device, slice_thickness=slice_thickness,
+                          parametrization=parametrization, projection=projection)
+    potential_array = potential.build(lazy=lazy).compute()
+
 #
 # @settings(max_examples=2)
 # @given(Z=st.integers(1, 14),

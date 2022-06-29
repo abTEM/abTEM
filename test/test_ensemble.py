@@ -14,6 +14,7 @@ from abtem.core.ensemble import concatenate_array_blocks
 @pytest.mark.parametrize('ensemble', [
     abtem_st.frozen_phonons,
     abtem_st.dummy_frozen_phonons,
+    abtem_st.md_frozen_phonons,
     abtem_st.grid_scan,
     abtem_st.line_scan,
     abtem_st.custom_scan,
@@ -25,6 +26,7 @@ from abtem.core.ensemble import concatenate_array_blocks
     abtem_st.spatial_envelope,
     abtem_st.composite_wave_transform,
     abtem_st.ctf,
+
 ])
 def test_ensemble_shape(data, ensemble):
     ensemble = data.draw(ensemble())
@@ -36,11 +38,12 @@ def test_ensemble_shape(data, ensemble):
 @pytest.mark.parametrize('ensemble', [
     abtem_st.frozen_phonons,
     abtem_st.dummy_frozen_phonons,
+    abtem_st.md_frozen_phonons,
     abtem_st.grid_scan,
     abtem_st.line_scan,
     abtem_st.custom_scan,
     abtem_st.potential,
-    #abtem_st.potential_array,
+    # abtem_st.potential_array,
     abtem_st.aberrations,
     abtem_st.aperture,
     abtem_st.temporal_envelope,
@@ -56,7 +59,9 @@ def test_ensembles(data, ensemble):
         chunks = ()
 
     blocks = ensemble.ensemble_blocks(chunks).compute()
-    #assert len(blocks.shape) == len(ensemble.ensemble_shape)
+
+    if len(ensemble.ensemble_shape) > 0:
+        assert len(blocks.shape) == len(ensemble.ensemble_shape)
 
     for i, _, fp in ensemble.generate_blocks(chunks):
         assert blocks[i] == fp
