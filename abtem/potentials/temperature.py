@@ -18,26 +18,59 @@ from abtem.core.axes import FrozenPhononsAxis, AxisMetadata
 from abtem.core.ensemble import Ensemble
 from abtem.core.chunks import chunk_ranges, validate_chunks
 from abtem.core.utils import CopyMixin, EqualityMixin
+from dask.delayed import Delayed
+from ase import data
 
 
 class AbstractFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     """Abstract base class for frozen phonons objects."""
 
-    def __init__(self, ensemble_mean: bool = True):
+    def __init__(self,
+                 atomic_numbers,
+                 cell,
+                 ensemble_mean: bool = True):
+        self._cell = cell
+        self._atomic_numbers = atomic_numbers
         self._ensemble_mean = ensemble_mean
+
+    @property
+    def is_lazy(self):
+        return isinstance(self.atoms, Delayed)
 
     @property
     def ensemble_mean(self):
         return self._ensemble_mean
 
     @property
-    @abstractmethod
-    def atoms(self) -> Atoms:
-        pass
+    def atomic_numbers(self) -> np.ndarray:
+        return self._atomic_numbers
 
     @property
     def numbers(self) -> np.ndarray:
-        return self.atoms.numbers
+        return self._atomic_numbers
+
+    @property
+    def cell(self) -> Cell:
+        return self._cell
+
+    def _validate_atomic_numbers_and_cell(self, atoms, atomic_numbers, cell):
+        if isinstance(atoms, Delayed) and (atomic_numbers is None or cell is None):
+            raise ValueError()
+
+        if cell is None:
+            cell = atoms.cell.copy()
+
+        if atomic_numbers is None:
+            atomic_numbers = np.unique(atoms.numbers)
+        else:
+            atomic_numbers = np.array(atomic_numbers, dtype=int)
+
+        return atomic_numbers, cell
+
+    @property
+    @abstractmethod
+    def atoms(self) -> Union[Atoms, Delayed]:
+        pass
 
     @abstractmethod
     def randomize(self, atoms: Atoms) -> Atoms:
@@ -47,17 +80,18 @@ class AbstractFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMet
     def __len__(self) -> int:
         pass
 
-    @property
-    @abstractmethod
-    def cell(self) -> Cell:
-        pass
-
 
 class DummyFrozenPhonons(AbstractFrozenPhonons):
 
-    def __init__(self, atoms):
+    def __init__(self,
+                 atoms: Union[Atoms, Delayed],
+                 atomic_numbers: Union[np.ndarray, Sequence[int]] = None,
+                 cell: Union[Cell, np.ndarray] = None):
+
         self._atoms = atoms
-        super().__init__(ensemble_mean=True)
+        atomic_numbers, cell = self._validate_atomic_numbers_and_cell(atoms, atomic_numbers, cell)
+
+        super().__init__(atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=True)
 
     @property
     def ensemble_shape(self):
@@ -78,10 +112,6 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
     def atoms(self):
         return self._atoms
 
-    @property
-    def cell(self):
-        return self._atoms.cell
-
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):
         return cls(args[0])
@@ -94,20 +124,20 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
         return self.generate_blocks()
 
     def partition_args(self, chunks: int = 1, lazy: bool = True):
-        # chunks = validate_chunks(self.ensemble_shape, chunks)
-        atoms = self.atoms
+        def _dummy_frozen_phonons(atoms):
+            arr = np.zeros((1,), dtype=object)
+            arr.itemset(0, atoms)
+            return arr
 
-        array = np.zeros((1,), dtype=object)
-        array.itemset(0, atoms)
-
-        # array = np.zeros(len(chunks[0]), dtype=object)
-        # for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
-        #     seeds = self.seeds[start:stop]
-        #     block = {'atoms': atoms, 'seeds': seeds}
-        #     array[i] = block
+        if not lazy and self.is_lazy:
+            atoms = self.atoms.compute()
+        else:
+            atoms = self.atoms
 
         if lazy:
-            array = da.from_array(array, chunks=1)
+            array = da.from_delayed(dask.delayed(_dummy_frozen_phonons)(atoms), shape=(1,), dtype=object)
+        else:
+            array = _dummy_frozen_phonons(atoms)
 
         return array,
 
@@ -146,10 +176,18 @@ class FrozenPhonons(AbstractFrozenPhonons):
                  num_configs: int = None,
                  directions: str = 'xyz',
                  ensemble_mean: bool = True,
+                 cell: Union[Cell, np.ndarray] = None,
                  seeds: Union[int, Sequence[int]] = None):
 
-        self._unique_numbers = np.unique(atoms.numbers)
-        unique_symbols = [chemical_symbols[number] for number in self._unique_numbers]
+        if isinstance(sigmas, dict):
+            atomic_numbers = [data.atomic_numbers[symbol] for symbol in sigmas.keys()]
+        else:
+            atomic_numbers = None
+
+        atomic_numbers, cell = self._validate_atomic_numbers_and_cell(atoms, atomic_numbers, cell)
+
+        unique_symbols = [chemical_symbols[number] for number in atomic_numbers]
+
         self._atoms = atoms
 
         if isinstance(sigmas, Number):
@@ -161,22 +199,22 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
         elif isinstance(sigmas, dict):
             if not all([symbol in unique_symbols for symbol in sigmas.keys()]):
-                raise RuntimeError('Displacement standard deviation must be provided for all atomic species.')
+                raise RuntimeError('displacement standard deviation must be provided for all atomic species')
 
         elif isinstance(sigmas, Iterable):
             sigmas = np.array(sigmas, dtype=np.float32)
             if len(sigmas) != len(atoms):
-                raise RuntimeError('Displacement standard deviation must be provided for all atoms.')
+                raise RuntimeError('displacement standard deviation must be provided for all atoms')
         else:
             raise ValueError()
 
         self._sigmas = sigmas
         self._directions = directions
 
-        # elif hasattr(seeds, '__len__') and num_configs is not None:
-        #    if not len(seeds) == num_configs:
-        #        raise RuntimeError()
         if seeds is None or np.isscalar(seeds):
+            if num_configs is None:
+                raise ValueError('provide `num_configs` or a seed for each configuration')
+
             rng = np.random.default_rng(seed=seeds)
             seeds = ()
             while len(seeds) < num_configs:
@@ -192,7 +230,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
         self._seeds = seeds
 
-        super().__init__(ensemble_mean)
+        super().__init__(atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean)
 
     @property
     def ensemble_shape(self):
@@ -219,11 +257,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
         return self._sigmas
 
     @property
-    def cell(self) -> np.ndarray:
-        return self._atoms.cell
-
-    @property
-    def atoms(self) -> Atoms:
+    def atoms(self) -> Union[Atoms, Delayed]:
         return self._atoms
 
     @property
@@ -271,32 +305,45 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
     @classmethod
     def _from_partitioned_args_func(cls, *args, **kwargs):
-        kwargs['atoms'] = args[0]['atoms']
-        kwargs['seeds'] = args[0]['seeds']
-        return cls(**kwargs)
+        args = args[0]
+        if hasattr(args, 'item'):
+            args = args.item()
 
-    @classmethod
-    def merge_blocks(cls, blocks):
-        kwargs = blocks[0].copy_kwargs(exclude=('seeds', 'num_configs'))
-        kwargs['seeds'] = tuple(itertools.chain(*(block.seeds for block in blocks)))
+        kwargs['atoms'] = args['atoms']
+        kwargs['seeds'] = args['seeds']
         return cls(**kwargs)
 
     def from_partitioned_args(self):
         kwargs = self.copy_kwargs(exclude=('atoms', 'seeds', 'num_configs'))
         return partial(self._from_partitioned_args_func, **kwargs)
 
+    @staticmethod
+    def _frozen_phonons_args(atoms, seeds):
+        arr = np.zeros((1,), dtype=object)
+        arr.itemset(0, {'atoms': atoms, 'seeds': seeds})
+        return arr
+
     def partition_args(self, chunks: int = 1, lazy: bool = True):
         chunks = validate_chunks(self.ensemble_shape, chunks)
-        atoms = self.atoms
 
-        array = np.zeros(len(chunks[0]), dtype=object)
+        if not lazy and self.is_lazy:
+            atoms = self.atoms.compute()
+        else:
+            atoms = self.atoms
+
+        array = np.zeros((len(chunks[0]),), dtype=object)
         for i, (start, stop) in enumerate(chunk_ranges(chunks)[0]):
             seeds = self.seeds[start:stop]
-            block = {'atoms': atoms, 'seeds': seeds}
-            array[i] = block
+
+            if lazy:
+                lazy_atoms = dask.delayed(atoms)
+                lazy_frozen_phonon = dask.delayed(self._frozen_phonons_args)(atoms=lazy_atoms, seeds=seeds)
+                array.itemset(i, da.from_delayed(lazy_frozen_phonon, shape=(1,), dtype=object))
+            else:
+                array.itemset(i, self._frozen_phonons_args(atoms=atoms, seeds=seeds))
 
         if lazy:
-            array = da.from_array(array, chunks=1)
+            array = da.concatenate(list(array))
 
         return array,
 
@@ -334,18 +381,20 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
         of every frozen phonon is returned.
     """
 
-    def __init__(self, trajectory: Sequence[Atoms], ensemble_mean: bool = True):
+    def __init__(self,
+                 trajectory: Sequence[Atoms],
+                 atomic_numbers=None,
+                 cell=None,
+                 ensemble_mean: bool = True):
 
         if isinstance(trajectory, Atoms):
             trajectory = [trajectory]
 
         self._trajectory = trajectory
 
-        super().__init__(ensemble_mean=ensemble_mean)
+        atomic_numbers, cell = self._validate_atomic_numbers_and_cell(trajectory[0], atomic_numbers, cell)
 
-    def generate_configurations(self):
-        for frozen_phonon in self:
-            yield MDFrozenPhonons([frozen_phonon])
+        super().__init__(atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean)
 
     @property
     def ensemble_axes_metadata(self) -> List[AxisMetadata]:
@@ -356,11 +405,7 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
 
     @property
     def atoms(self) -> Atoms:
-        return self[0]
-
-    @property
-    def cell(self) -> np.ndarray:
-        return self[0].cell
+        return self._trajectory[0]
 
     @property
     def ensemble_shape(self) -> Tuple[int, ...]:
@@ -373,36 +418,44 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
     def partition_args(self, chunks: int = 1, lazy: bool = True):
         chunks = validate_chunks(self.ensemble_shape, chunks)
 
-        def md_frozen_phonons(atoms, **kwargs):
-            arr = np.empty((1,), dtype=object)
-            arr[0] = MDFrozenPhonons(atoms, **kwargs)
+        def md_frozen_phonons(atoms):
+            arr = np.zeros((1,), dtype=object)
+            arr.itemset(0, atoms)
             return arr
 
-        array = []
+        array = np.zeros((len(chunks[0]),), dtype=object)
         start = 0
-        for chunk in chunks[0]:
+        for i, chunk in enumerate(chunks[0]):
             stop = start + chunk
+            trajectory = self._trajectory[start:stop]
 
-            atoms = self.atoms[start:stop]
+            if lazy:
+                atoms = dask.delayed(lambda *args: list(args))(*trajectory)
 
-            delayed_frozen_phonon = dask.delayed(md_frozen_phonons)(atoms=atoms,
-                                                                    ensemble_mean=self.ensemble_mean,
-                                                                    )
+                delayed_frozen_phonon = dask.delayed(md_frozen_phonons)(atoms=atoms)
 
-            array.append(da.from_delayed(delayed_frozen_phonon, shape=(1,), dtype=object))
+                array.itemset(i, da.from_delayed(delayed_frozen_phonon, shape=(1,), dtype=object))
+            else:
+                trajectory = [atoms.compute() if hasattr(atoms, 'compute') else atoms for atoms in trajectory]
+                array.itemset(i, trajectory)
+
             start = stop
 
-        return da.concatenate(array),
+        if lazy:
+            array = da.concatenate(list(array))
+
+        return array,
 
     def from_partitioned_args(self):
-        return lambda x: x
+        kwargs = self.copy_kwargs(exclude=('trajectory',))
+        return partial(MDFrozenPhonons, **kwargs)
 
     def randomize(self, atoms):
         return atoms
 
-    def __getitem__(self, item) -> Atoms:
-        atoms = self._trajectory[item]
-        return atoms
+    # def __getitem__(self, item) -> Atoms:
+    #    atoms = self._trajectory[item]
+    #    return atoms
 
     def standard_deviations(self) -> np.ndarray:
         mean_positions = np.mean([atoms.positions for atoms in self], axis=0)

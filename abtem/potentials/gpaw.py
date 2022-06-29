@@ -21,20 +21,20 @@ try:
     from gpaw import GPAW
     from gpaw.atom.aeatom import AllElectronAtom
 except ImportError:
-    warnings.warn('This functionality of abTEM requires GPAW, see https://wiki.fysik.dtu.dk/gpaw/.')
+    GPAW = None
 
 
 class GPAWPotential(ChargeDensityPotential):
 
     def __init__(self,
-                 calculators: Union[List[GPAW], List[str]],
+                 calculators: Union[GPAW, List[GPAW], List[str], str],
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
                  slice_thickness: float = .5,
                  plane: str = 'xy',
                  box: Tuple[float, float, float] = None,
-                 gridrefinement: int = 2,
-                 exit_planes=None,
+                 gridrefinement: int = 4,
+                 exit_planes: int = None,
                  origin: Tuple[float, float, float] = (0., 0., 0.)):
 
         """
@@ -44,7 +44,7 @@ class GPAWPotential(ChargeDensityPotential):
 
         Parameters
         ----------
-        calc : gpaw.GPAW or str or list of str
+        calculators : gpaw.GPAW or list of gpaw.GPAW or str or list of str
 
         gpts : one or two int, optional
             Number of grid points describing each slice of the potential.
@@ -59,9 +59,10 @@ class GPAWPotential(ChargeDensityPotential):
         plane :
         box :
         origin :
-        chunks : int, optional
-            Number of potential slices in each chunk of a lazy calculation. Default is 1.
         """
+
+        if GPAW is None:
+            raise RuntimeError('This functionality of abTEM requires GPAW, see https://wiki.fysik.dtu.dk/gpaw/.')
 
         def load_gpw(path):
             calc = GPAW(path)
@@ -85,13 +86,16 @@ class GPAWPotential(ChargeDensityPotential):
                 charge_density = da.from_delayed(charge_density, shape=shape, meta=np.array((), dtype=float))
                 charge_densities.append(charge_density)
 
+            cell = None
+            atomic_numbers = None
+
         else:
             paths = calculators
             calculator = GPAW(calculators[0])
             shape = calculator.wfs.gd.N_c * gridrefinement
 
             cell = calculator.atoms.cell
-            numbers = np.unique(calculator.atoms.numbers)
+            atomic_numbers = np.unique(calculator.atoms.numbers)
 
             frozen_phonons = []
             charge_densities = []
@@ -101,8 +105,7 @@ class GPAWPotential(ChargeDensityPotential):
                 #    raise ValueError()
 
                 charge_density, atoms = dask.delayed(load_gpw, nout=2)(path)
-                atoms = LazyAtoms(atoms, numbers=numbers, cell=cell)
-
+                # atoms = LazyAtoms(atoms, numbers=numbers, cell=cell)
                 charge_density = da.from_delayed(charge_density, shape=shape, meta=np.array((), dtype=float))
 
                 frozen_phonons.append(atoms)
@@ -110,10 +113,10 @@ class GPAWPotential(ChargeDensityPotential):
 
         if len(charge_densities) > 1:
             charge_density = da.stack(charge_densities)
-            atoms = MDFrozenPhonons(frozen_phonons)
+            atoms = MDFrozenPhonons(frozen_phonons, atomic_numbers=atomic_numbers, cell=cell)
         else:
             charge_density = charge_densities[0]
-            atoms = DummyFrozenPhonons(frozen_phonons[0])
+            atoms = DummyFrozenPhonons(frozen_phonons[0], atomic_numbers=atomic_numbers, cell=cell)
 
         super().__init__(charge_density=charge_density, atoms=atoms, gpts=gpts, sampling=sampling,
                          slice_thickness=slice_thickness, plane=plane, box=box, origin=origin, exit_planes=exit_planes)

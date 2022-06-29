@@ -174,38 +174,17 @@ class LobatoParametrization(Parametrization):
         except KeyError:
             raise RuntimeError(f'parametrized function "{name}" does not exist for element {symbol}')
 
-
-class EwaldParametrization(Parametrization):
-
-    def __init__(self, width=1.):
-        self._width = width
-        self._functions = {'potential': ewald.potential}
-
-    def get_function(self, name, symbol, charge=0.):
-        if charge > 0.:
-            raise RuntimeError('charge not implemented for parametrization "ewald"')
-
-        try:
-            func = self._functions[name]
-            return lambda r: func(r, atomic_numbers[symbol], self._width)
-        except KeyError:
-            raise RuntimeError(f'parametrized function "{name}" does not exist for element {symbol}')
-
-
-parametrizations = {'ewald': EwaldParametrization,
-                    'lobato': LobatoParametrization,
-                    'kirkland': KirklandParametrization}
-
+#
 # class PengParametrization(DataParametrization):
 #
 #     def __init__(self):
 #         with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data/peng.json'), 'r') as f:
 #             data = json.load(f)
 #
-#         with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data/peng_ionic.json'), 'r') as f:
-#             data_ionic = json.load(f)
+#         # with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data/peng_ionic.json'), 'r') as f:
+#         #    data_ionic = json.load(f)
 #
-#         data.update(data_ionic)
+#         # data.update(data_ionic)
 #
 #         parameters = {}
 #         scaled_parameters = {}
@@ -241,3 +220,25 @@ parametrizations = {'ewald': EwaldParametrization,
 #                                   }
 #
 #         super().__init__(parameters, parametrizations, ionic_parametrizations=ionic_parametrizations)
+
+
+class EwaldParametrization(Parametrization):
+
+    def __init__(self, width=1.):
+        self._width = width
+        self._functions = {'potential': ewald.potential}
+
+    def get_function(self, name, symbol, charge=0.):
+        if charge > 0.:
+            raise RuntimeError('charge not implemented for parametrization "ewald"')
+
+        try:
+            func = self._functions[name]
+            return lambda r: func(r, atomic_numbers[symbol], self._width)
+        except KeyError:
+            raise RuntimeError(f'parametrized function "{name}" does not exist for element {symbol}')
+
+
+parametrizations = {'ewald': EwaldParametrization,
+                    'lobato': LobatoParametrization,
+                    'kirkland': KirklandParametrization}

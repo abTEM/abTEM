@@ -29,6 +29,7 @@ from abtem.potentials.temperature import AbstractFrozenPhonons, FrozenPhonons, D
 from abtem.structures.slicing import validate_slice_thickness, SliceIndexedAtoms, SlicedAtoms, unpack_item
 from abtem.structures.structures import is_cell_orthogonal, orthogonalize_cell, best_orthogonal_box, cut_box, \
     rotation_matrix_from_plane, pad_atoms
+from ase.data import atomic_numbers
 
 if TYPE_CHECKING:
     import Waves
@@ -159,7 +160,8 @@ class PotentialBuilder(AbstractPotential):
     @staticmethod
     def _wrap_build_potential(potential):
         potential = potential.item()
-        return potential.build(lazy=False).array
+        array = potential.build(lazy=False).array
+        return array
 
     def __getitem__(self, item) -> 'PotentialArray':
         return self.build(*unpack_item(item, len(self)), lazy=False)
@@ -171,6 +173,8 @@ class PotentialBuilder(AbstractPotential):
               lazy: bool = None) -> 'PotentialArray':
 
         lazy = validate_lazy(lazy)
+
+        self.grid.check_is_defined()
 
         if last_slice is None:
             last_slice = len(self)
@@ -314,7 +318,14 @@ class Potential(PotentialBuilder):
             atomic_potentials = {number: AtomicPotential(number, parametrization=parametrization)
                                  for number in unique_numbers}
 
-        elif not set(unique_numbers).issubset(set(atomic_potentials.keys())):
+        elif isinstance(atomic_potentials, (tuple, list)):
+
+            atomic_potentials = {atomic_numbers[atomic_potential.symbol]: atomic_potential
+                                 for atomic_potential in atomic_potentials}
+        elif not isinstance(atomic_potentials, dict):
+            raise RuntimeError()
+
+        if not set(unique_numbers).issubset(set(atomic_potentials.keys())):
             raise RuntimeError()
 
         self._atomic_potentials = atomic_potentials
@@ -488,6 +499,7 @@ class Potential(PotentialBuilder):
                     table.project_on_grid(array[i], self.sampling, atoms.positions, a, b)
 
             array -= array.min()
+
             yield PotentialArray(array,
                                  slice_thickness=self.slice_thickness[start:stop],
                                  extent=self.extent)

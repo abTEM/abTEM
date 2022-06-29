@@ -3,7 +3,7 @@ from typing import Tuple, Union
 import matplotlib.pyplot as plt
 import numpy as np
 from ase.data import chemical_symbols
-from numba import jit
+from numba import jit, prange
 from scipy import integrate
 from scipy.interpolate import interp1d
 from scipy.optimize import brentq
@@ -15,6 +15,8 @@ from abtem.core.grid import disc_meshgrid
 from abtem.core.utils import CopyMixin, EqualityMixin
 from abtem.measure.measure import FourierSpaceLineProfiles
 from abtem.potentials.parametrizations import parametrizations, Parametrization, real_space_funcs, fourier_space_funcs
+import time
+
 
 if cp is not None:
     from abtem.core.cuda import interpolate_radial_functions as interpolate_radial_functions_cuda
@@ -22,7 +24,7 @@ else:
     interpolate_radial_functions_cuda = None
 
 
-@jit(nopython=True, nogil=True)
+@jit(nopython=True, nogil=True, parallel=True)
 def interpolate_radial_functions(array: np.ndarray,
                                  positions: np.ndarray,
                                  disk_indices: np.ndarray,
@@ -38,7 +40,7 @@ def interpolate_radial_functions(array: np.ndarray,
         px = int(round(positions[i, 0] / sampling[0]))
         py = int(round(positions[i, 1] / sampling[1]))
 
-        for j in range(disk_indices.shape[0]):
+        for j in prange(disk_indices.shape[0]):
             k = px + disk_indices[j, 0]
             m = py + disk_indices[j, 1]
 
@@ -135,6 +137,7 @@ class ProjectionIntegralTable:
                                          radial_gpts=self.radial_gpts,
                                          radial_functions=radial_potential,
                                          radial_derivative=radial_potential_derivative)
+
         return array
 
 
@@ -149,7 +152,7 @@ class AtomicPotential(CopyMixin, EqualityMixin):
                  parametrization: Union[str, Parametrization] = 'lobato',
                  cutoff_tolerance: float = 1e-3,
                  taper: float = 0.85,
-                 integration_step: float = 0.05,
+                 integration_step: float = 0.02,
                  quad_order: int = 8):
         """
         The atomic
