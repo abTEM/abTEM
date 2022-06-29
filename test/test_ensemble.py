@@ -43,7 +43,7 @@ def test_ensemble_shape(data, ensemble):
     abtem_st.line_scan,
     abtem_st.custom_scan,
     abtem_st.potential,
-    # abtem_st.potential_array,
+    abtem_st.potential_array,
     abtem_st.aberrations,
     abtem_st.aperture,
     abtem_st.temporal_envelope,

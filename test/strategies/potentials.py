@@ -128,6 +128,7 @@ def potential(draw,
               max_frozen_phonons=1,
               exit_planes=False,
               ensemble_mean=True,
+              projection='infinite',
               device='cpu'):
     gpts = draw(core_st.gpts())
 
@@ -145,6 +146,7 @@ def potential(draw,
 
     potential = Potential(fp,
                           exit_planes=exit_planes,
+                          projection=projection,
                           gpts=gpts,
                           device=device)
     return potential
@@ -159,8 +161,13 @@ def gold_potential(draw):
 
 
 @st.composite
-def potential_array(draw, lazy=True, device='cpu', min_base_side=8):
-    shape = draw(core_st.shape(base_dims=3, min_base_side=min_base_side, min_ensemble_dims=0, max_ensemble_dims=1))
+def potential_array(draw, lazy=True, device='cpu', min_base_side=8, max_ensemble_dims=1):
+
+    shape = draw(core_st.shape(base_dims=3,
+                               min_base_side=min_base_side,
+                               min_ensemble_dims=0,
+                               max_ensemble_dims=max_ensemble_dims))
+
     axes = draw(st.lists(core_st.ordinal_axis_metadata(shape[0]), min_size=len(shape) - 3, max_size=len(shape) - 3))
 
     if lazy:
@@ -168,7 +175,7 @@ def potential_array(draw, lazy=True, device='cpu', min_base_side=8):
     else:
         chunks = None
 
-    array = core_st.random_array(shape, chunks=chunks, device=device, min_value=0., dtype=np.complex64)
+    array = core_st.random_array(shape, chunks=chunks, device=device, min_value=0., dtype=np.float32)
     sampling = draw(core_st.sampling())
     slice_thickness = draw(st.floats(min_value=0.1, max_value=2.))
     return PotentialArray(array=array, sampling=sampling, ensemble_axes_metadata=axes, slice_thickness=slice_thickness)

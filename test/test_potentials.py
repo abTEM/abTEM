@@ -1,14 +1,13 @@
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from ase import Atoms
-from hypothesis import given, settings
+from hypothesis import given
 
-from abtem import FrozenPhonons
-from abtem.potentials.parametrizations import LobatoParametrization, KirklandParametrization
-from abtem.potentials.potentials import Potential
-from utils import array_is_close, gpu
 import strategies as abtem_st
+from abtem import FrozenPhonons
+from abtem.potentials.crystal import CrystalPotential
+from abtem.potentials.potentials import Potential
+from utils import gpu
 
 
 @given(atoms=abtem_st.atoms(),
@@ -37,7 +36,80 @@ def test_build(atoms, gpts, slice_thickness, lazy, device, parametrization, proj
                           parametrization=parametrization, projection=projection)
     potential_array = potential.build(lazy=lazy).compute()
 
+
+@given(data=st.data(),
+       tile=st.tuples(st.integers(min_value=1, max_value=2),
+                      st.integers(min_value=1, max_value=2),
+                      st.integers(min_value=1, max_value=2)))
+@pytest.mark.parametrize('lazy', [True, False])
+@pytest.mark.parametrize('potential_unit', [
+    abtem_st.potential(projection='infinite', no_frozen_phonons=True),
+    abtem_st.potential_array(max_ensemble_dims=0, lazy=True),
+    abtem_st.potential_array(max_ensemble_dims=0, lazy=False)
+])
+def test_crystal_potential_builds(data, potential_unit, tile, lazy):
+    potential_unit = data.draw(potential_unit)
+
+    crystal_potential = CrystalPotential(potential_unit, tile)
+    crystal_potential = crystal_potential.build(lazy=lazy).compute()
+
+    try:
+        potential_unit = potential_unit.build().compute()
+    except RuntimeError:
+        pass
+
+    tiled_potential = potential_unit.compute().tile(tile)
+    assert crystal_potential == tiled_potential
+    assert len(crystal_potential) == len(potential_unit) * tile[2]
+    assert crystal_potential.gpts == (potential_unit.gpts[0] * tile[0], potential_unit.gpts[1] * tile[1])
+
+
+@given(data=st.data(),
+       num_frozen_phonons=st.integers(1, 3),
+       tile=st.tuples(st.integers(min_value=1, max_value=2),
+                      st.integers(min_value=1, max_value=2),
+                      st.integers(min_value=1, max_value=2)))
+@pytest.mark.parametrize('lazy', [True, False])
+@pytest.mark.parametrize('potential_unit', [
+    abtem_st.potential(projection='infinite'),
+    abtem_st.potential_array(max_ensemble_dims=1, lazy=True),
+    abtem_st.potential_array(max_ensemble_dims=1, lazy=False)
+])
+def test_crystal_potential_with_frozen_phonons(data, potential_unit, tile, num_frozen_phonons, lazy):
+    potential_unit = data.draw(potential_unit)
+
+    crystal_potential = CrystalPotential(potential_unit, tile, num_frozen_phonons=num_frozen_phonons)
+
+    crystal_potential = crystal_potential.build(lazy=lazy)
+
+    assert num_frozen_phonons == crystal_potential.num_frozen_phonons
+
+    crystal_potential.compute()
+
+    assert num_frozen_phonons == crystal_potential.num_frozen_phonons
+
+# @given(data=st.data(),
+#        tile=st.tuples(st.integers(min_value=1, max_value=2),
+#                       st.integers(min_value=1, max_value=2),
+#                       st.integers(min_value=1, max_value=2)))
+# @pytest.mark.parametrize('lazy', [True, False])
+# @pytest.mark.parametrize('device', [gpu, 'cpu'])
+# @pytest.mark.parametrize('potential_unit', [
+#     abtem_st.potential,
+# ])
+# def test_crystal_potential_with_frozen_phonons(data, potential, tile, lazy, device):
+#     potential_unit = data.draw(abtem_st.potential(device=device,
+#                                                   projection='infinite',
+#                                                   ))
 #
+#     crystal_potential = CrystalPotential(potential_unit, tile, num_frozen_phonons=3)
+#     crystal_potential = crystal_potential.build(lazy=lazy).compute()
+
+# potential_unit = potential_unit.build(lazy=lazy).compute()
+
+# tiled_potential = potential_unit.compute().tile(tile)
+# assert crystal_potential == tiled_potential
+
 # @settings(max_examples=2)
 # @given(Z=st.integers(1, 14),
 #        slice_thickness=st.floats(min_value=.5, max_value=4.)
