@@ -7,3 +7,10 @@ named_parametrizations = {'ewald': EwaldParametrization,
                           'lobato': LobatoParametrization,
                           'peng': PengParametrization,
                           'kirkland': KirklandParametrization}
+
+
+def validate_parametrization(parametrization):
+    if isinstance(parametrization, str):
+        parametrization = named_parametrizations[parametrization]()
+
+    return parametrization

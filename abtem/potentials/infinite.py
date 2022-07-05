@@ -1,39 +1,33 @@
-from typing import Tuple
+from typing import Tuple, TYPE_CHECKING
 
 import numpy as np
-from ase.data import chemical_symbols
 
 from abtem.core.backend import get_array_module
 from abtem.core.fft import fft2, ifft2, fft2_convolve
 from abtem.core.grid import spatial_frequencies, polar_spatial_frequencies
-from abtem.potentials.atom import AtomicPotential
+
+if TYPE_CHECKING:
+    from abtem.potentials.atom import AtomicPotential
 
 
 def _sinc(gpts: Tuple[int, int], sampling: Tuple[float, float], xp):
     kx, ky = spatial_frequencies(gpts, sampling, return_grid=False, xp=xp)
-    sinc = np.sinc(np.sqrt((kx[:, None] * sampling[0]) ** 2 + (ky[None] * sampling[1]) ** 2))
-    return sinc * sampling[0] * sampling[1]
+    k = np.sqrt((kx[:, None] * sampling[0]) ** 2 + (ky[None] * sampling[1]) ** 2)
+    sinc = np.sinc(k)
+    return sinc * (sampling[0] * sampling[1])
 
 
 def calculate_scattering_factor(gpts: Tuple[int, int],
                                 sampling: Tuple[float, float],
-                                atomic_potential: AtomicPotential,
+                                atomic_potential: 'AtomicPotential',
                                 xp: str = 'numpy') -> np.ndarray:
     xp = get_array_module(xp)
-    # parametrization = parametrization_names[parametrization]
-    # parameters = parametrization.load_parameters()
-
     k, _ = polar_spatial_frequencies(gpts, sampling, xp=xp)
-    # scattering_factors = xp.zeros(gpts, dtype=np.float32)
-
-    # for i, number in enumerate(atomic_numbers):
     f = atomic_potential.projected_scattering_factor(k)
-    # scattering_factors[i] = f
-
     return f / _sinc(gpts, sampling, xp)
 
 
-def superpose_deltas(positions: np.ndarray, array: np.ndarray, slice_index) -> np.ndarray:
+def superpose_deltas(positions: np.ndarray, array: np.ndarray, slice_index=None) -> np.ndarray:
     xp = get_array_module(array)
     shape = array.shape
 
@@ -50,7 +44,8 @@ def superpose_deltas(positions: np.ndarray, array: np.ndarray, slice_index) -> n
         i = xp.array([rows % shape[0], (rows + 1) % shape[0]] * 2)
         j = xp.array([cols % shape[1]] * 2 + [(cols + 1) % shape[1]] * 2)
         v = xp.array([1 + xy - y - x, x - xy, y - xy, xy])
-        array[i, j] += v
+        np.add.at(array, (i, j), v)
+        # array[i, j] += v
     else:
         raise NotImplementedError
 

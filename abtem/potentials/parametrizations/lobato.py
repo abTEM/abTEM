@@ -49,8 +49,9 @@ def charge(r, p):
 
 
 def projected_potential(r, p):
-    return 2 * (2 * p[0][:, None] / p[1][:, None] * kn(0, r[None] * p[1][:, None]) +
-                p[0][:, None] * r[None] * kn(1, r[None] * p[1][:, None])).sum(0)
+    v = 2 * (2 * p[0][:, None] / p[1][:, None] * kn(0, r[None] * p[1][:, None]) +
+         p[0][:, None] * r[None] * kn(1, r[None] * p[1][:, None])).sum(0)
+    return v.astype(np.float32)
 
 
 def projected_scattering_factor(k, p):
@@ -90,9 +91,9 @@ class LobatoParametrization(Parametrization):
         b = 2 * np.pi / np.sqrt(parameters[1])
         scaled_parameters = np.vstack((a, b))
 
-        return {'potential': scaled_parameters,
+        return {'potential': scaled_parameters.astype(np.float32),
                 'scattering_factor': parameters,
-                'projected_potential': scaled_parameters,
+                'projected_potential': scaled_parameters.astype(np.float32),
                 'projected_scattering_factor': scaled_parameters,
                 'charge': parameters
                 }
