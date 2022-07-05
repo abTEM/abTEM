@@ -1,5 +1,11 @@
+import json
+import os
+
 import numpy as np
 from numba import jit
+from scipy.special import erf
+
+from abtem.potentials.parametrizations.base import Parametrization, kappa
 
 
 @jit(nopython=True, nogil=True)
@@ -11,14 +17,48 @@ def scattering_factor(k, p):
             p[0, 4] * np.exp(-p[1, 4] * k ** 2.))
 
 
-def scattering_factor_ionic(k, p, charge):
-    return scattering_factor(k, p) + 0.023934 * charge / k ** 2
+def finite_projected_scattering_factor(r, p, a, b):
+    p = np.expand_dims(p, tuple(range(2, 2 + len(r.shape))))
+    return (np.abs(erf(p[2] * b) - erf(p[2] * a)) * p[0] * np.exp(-p[1] * r[None, ...] ** 2.)).sum(0) / 2
 
 
-def potential(r, p):
-    return scattering_factor(r, p)
+class PengParametrization(Parametrization):
+    _functions = {'potential': scattering_factor,
+                  'scattering_factor': scattering_factor,
+                  'projected_potential': scattering_factor,
+                  'projected_scattering_factor': scattering_factor,
+                  'finite_projected_potential': finite_projected_scattering_factor,
+                  'finite_projected_scattering_factor': finite_projected_scattering_factor,
+                  }
 
+    def __init__(self):
+        with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data/peng.json'), 'r') as f:
+            parameters = json.load(f)
 
-def potential_ionic(r, p, charge):
-    return potential(r, p) + 0.023934 * charge / r * 2 * np.pi ** 2
+        super().__init__(parameters)
 
+    def scaled_parameters(self, symbol):
+        scattering_factor = np.array(self.parameters[symbol])
+        scattering_factor[1] /= 2 ** 2  # convert scattering factor units
+
+        potential = np.vstack((np.pi ** (3. / 2.) * scattering_factor[0] / scattering_factor[1] ** (3 / 2.) / kappa,
+                               np.pi ** 2 / scattering_factor[1]))
+
+        projected_potential = np.vstack([1 / kappa * np.pi * scattering_factor[0] / scattering_factor[1],
+                                         np.pi ** 2 / scattering_factor[1]])
+
+        projected_scattering_factor = np.vstack([scattering_factor[0] / kappa, scattering_factor[1]])
+
+        finite_projected_scattering_factor = np.concatenate((projected_scattering_factor,
+                                                             [np.pi / np.sqrt(projected_scattering_factor[1])]))
+
+        finite_projected_potential = np.concatenate((projected_potential,
+                                                     [np.sqrt(projected_potential[1])]))
+
+        return {'potential': potential,
+                'scattering_factor': scattering_factor,
+                'finite_projected_potential': finite_projected_potential,
+                'finite_projected_scattering_factor': finite_projected_scattering_factor,
+                'projected_potential': projected_potential,
+                'projected_scattering_factor': projected_scattering_factor,
+                }

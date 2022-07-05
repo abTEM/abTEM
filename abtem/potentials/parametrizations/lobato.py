@@ -1,7 +1,12 @@
+import json
+import os
+
 import numpy as np
 from ase import units
 from numba import jit
 from scipy.special import kn
+
+from abtem.potentials.parametrizations.base import Parametrization, kappa
 
 
 @jit(nopython=True, nogil=True)
@@ -62,3 +67,34 @@ def projected_scattering_factor(k, p):
                       p[0, 4] * p[1, 4] / (four_pi2_k2 + p[1, 4] ** 2) ** 2)
                      )
     return f
+
+
+class LobatoParametrization(Parametrization):
+    _functions = {'potential': potential,
+                  'scattering_factor': scattering_factor,
+                  'projected_potential': projected_potential,
+                  'projected_scattering_factor': projected_scattering_factor,
+                  'charge': charge,
+                  }
+
+    def __init__(self):
+        with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data/lobato.json'), 'r') as f:
+            parameters = json.load(f)
+
+        super().__init__(parameters)
+
+    def scaled_parameters(self, symbol):
+        parameters = np.array(self.parameters[symbol])
+
+        a = np.pi ** 2 * parameters[0] / parameters[1] ** (3 / 2.) / kappa
+        b = 2 * np.pi / np.sqrt(parameters[1])
+        scaled_parameters = np.vstack((a, b))
+
+        return {'potential': scaled_parameters,
+                'scattering_factor': parameters,
+                'projected_potential': scaled_parameters,
+                'projected_scattering_factor': scaled_parameters,
+                'charge': parameters
+                }
+
+#

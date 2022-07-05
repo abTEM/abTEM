@@ -1,6 +1,11 @@
+import json
+import os
+
 import numpy as np
 from numba import jit
 from scipy.special import kn
+
+from abtem.potentials.parametrizations.base import Parametrization, kappa
 
 
 @jit(nopython=True, nogil=True)
@@ -43,3 +48,33 @@ def projected_scattering_factor(k, p):
          4 * np.pi * p[0, 2] / (4 * np.pi ** 2 * k ** 2 + p[1, 2] ** 2) +
          np.sqrt(np.pi / p[3, 2]) * p[2, 2] * np.pi / p[3, 2] * np.exp(-np.pi ** 2 * k ** 2. / p[3, 2]))
     return f
+
+
+class KirklandParametrization(Parametrization):
+    _functions = {'potential': potential,
+                  'scattering_factor': scattering_factor,
+                  'projected_potential': projected_potential,
+                  'projected_scattering_factor': projected_scattering_factor,
+                  }
+
+    def __init__(self):
+        with open(os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data/kirkland.json'), 'r') as f:
+            parameters = json.load(f)
+
+        super().__init__(parameters)
+
+    def scaled_parameters(self, symbol):
+        parameters = np.array(self.parameters[symbol])
+
+        a = np.pi * parameters[0] / kappa
+        b = 2. * np.pi * np.sqrt(parameters[1])
+        c = np.pi ** (3. / 2.) * parameters[2] / parameters[3] ** (3. / 2.) / kappa
+        d = np.pi ** 2 / parameters[3]
+
+        scaled_parameters = np.vstack([a, b, c, d])
+
+        return {'potential': scaled_parameters,
+                'scattering_factor': parameters,
+                'projected_potential': scaled_parameters,
+                'projected_scattering_factor': scaled_parameters,
+                }
