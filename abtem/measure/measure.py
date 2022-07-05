@@ -20,6 +20,7 @@ from abtem.core.fft import fft2, fft2_interpolate
 from abtem.core.interpolate import interpolate_bilinear
 from abtem.core.utils import CopyMixin, EqualityMixin
 from abtem.measure.utils import polar_detector_bins, sum_run_length_encoded
+from abtem.visualize.mpl import show_measurement_2d_exploded
 from abtem.visualize.utils import domain_coloring, add_domain_coloring_cbar
 
 if cp is not None:
@@ -241,13 +242,13 @@ class AbstractMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass
             raise RuntimeError('inplace arithmetic operation not implemented for lazy measurement')
         return self._arithmetic(other, func)
 
-    def mean(self, axes, **kwargs) -> 'T':
+    def mean(self, axes=None, **kwargs) -> 'T':
         return self._reduction('mean', axes=axes, **kwargs)
 
-    def sum(self, axes, **kwargs) -> 'T':
+    def sum(self, axes=None, **kwargs) -> 'T':
         return self._reduction('sum', axes=axes, **kwargs)
 
-    def std(self, axes, **kwargs) -> 'T':
+    def std(self, axes=None, **kwargs) -> 'T':
         return self._reduction('std', axes=axes, **kwargs)
 
     @abstractmethod
@@ -258,6 +259,9 @@ class AbstractMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass
         return self.mean(axes=self._ensemble_axes_to_reduce())
 
     def _reduction(self, reduction_func, axes, split_every: int = 2) -> 'T':
+        if axes is None:
+            return self.array.sum()
+
         if isinstance(axes, Number):
             axes = (axes,)
 
@@ -892,64 +896,127 @@ class Images(AbstractMeasurement):
                                    metadata=self.metadata)
 
     def show(self,
+             cmap: str = 'viridis',
+             explode: bool = False,
              ax: Axes = None,
-             cbar: bool = False,
              figsize: Tuple[int, int] = None,
-             title: str = None,
+             title: Union[bool, str] = True,
+             panel_titles: Union[bool, List[str]] = True,
+             x_ticks: bool = True,
+             y_ticks: bool = True,
+             x_label: Union[bool, str] = True,
+             y_label: Union[bool, str] = True,
+             row_super_label: Union[bool, str] = False,
+             col_super_label: Union[bool, str] = False,
              power: float = 1.,
              vmin: float = None,
              vmax: float = None,
-             **kwargs):
+             common_color_scale=False,
+             cbar: bool = False,
+             sizebar: bool = False,
+             float_formatting: str = '.2f',
+             panel_labels: dict = None,
+             image_grid_kwargs: dict = None,
+             imshow_kwargs: dict = None,
+             anchored_text_kwargs: dict = None,
+             ) -> Axes:
         """
+        Show the image(s) using matplotlib.
 
         Parameters
         ----------
-        ax :
-        cbar :
-        figsize :
-        title :
-        power :
-        vmin :
-        vmax :
-        kwargs :
+        cmap : str, optional
+        explode : bool, optional
+            If True, a grid of images are created for all the items of the last two ensemble axes. If False, the first
+            ensemble item is shown.
+        ax : matplotlib.axes.Axes, optional
+            If given the plots are added to the axis. This is not available for image grids.
+        figsize : two int, optional
+            The figure size given as width and height in inches, passed to matplotlib.pyplot.figure.
+        title : bool or str, optional
+            Add a title to the figure. If True is given instead of a string the title will be given by the value
+            corresponding to the "name" key of the metadata dictionary, if this item exists.
+        panel_titles : bool or list of str, optional
+            Add titles to each panel. If True a title will be created from the axis metadata. If given as a list of
+            strings an item must exist for each panel.
+        x_ticks : bool or list, optional
+            If False, the ticks on the x-axis will be removed.
+        y_ticks : bool or list, optional
+            If False, the ticks on the y-axis will be removed.
+        x_label : bool or str, optional
+            Add label to the x-axis of every plot. If True (default) the label will created from the corresponding axis
+            metadata. A string may be given to override this.
+        y_label : bool or str, optional
+            Add label to the x-axis of every plot. If True (default) the label will created from the corresponding axis
+            metadata. A string may be given to override this.
+        row_super_label : bool or str, optional
+            Add super label to the rows of an image grid. If True the label will be created from the corresponding axis
+            metadata. A string may be given to override this. The default is no super label.
+        col_super_label : bool or str, optional
+            Add super label to the columns of an image grid. If True the label will be created from the corresponding
+            axis metadata. A string may be given to override this. The default is no super label.
+        power : float
+            Show image on a power scale.
+        vmin : float, optional
+            Minimum of the intensity color scale. Default is the minimum of the array values.
+        vmax : float, optional
+            Maximum of the intensity color scale. Default is the maximum of the array values.
+        common_color_scale : bool, optional
+            If True all images in an image grid are shown on the same colorscale, and a single colorbar is created (if
+            it is requested). Default is False.
+        cbar : bool, optional
+            Add colorbar(s) to the image(s). The position and size of the colorbar(s) may be controlled by passing
+            keyword arguments to mpl_toolkits.axes_grid1.axes_grid.ImageGrid through `image_grid_kwargs`.
+        sizebar : bool, optional,
+            Add a size bar to the image(s).
+        float_formatting : str, optional
+            A formatting string used for formatting the floats of the panel titles.
+        panel_labels : list of str
+            A list of labels for each panel of a grid of images.
+        image_grid_kwargs : dict
+            Additional keyword arguments passed to mpl_toolkits.axes_grid1.axes_grid.ImageGrid.
+        imshow_kwargs : dict
+            Additional keyword arguments passed to matplotlib.axes.Axes.imshow.
+        anchored_text_kwargs : dict
+            Additional keyword arguments passed to matplotlib.offsetbox.AnchoredText. This is used for creating panel
+            labels.
 
         Returns
         -------
-
+        matplotlib.axes.Axes
         """
 
-        self.compute()
-
-        if ax is None:
-            fig, ax = plt.subplots(figsize=figsize)
-
-        if title is not None:
-            ax.set_title(title)
-
-        ax.set_title(title)
-
-        array = asnumpy(self.array)[(0,) * self.num_ensemble_axes].T ** power
-
-        if np.iscomplexobj(array):
-            colored_array = domain_coloring(array, vmin=vmin, vmax=vmax)
+        if not explode:
+            measurements = self[(0,) * len(self.ensemble_shape)]
         else:
-            colored_array = array
+            if ax is not None:
+                raise NotImplementedError('`ax` not implemented for with `explode = True`')
+            measurements = self
 
-        im = ax.imshow(colored_array, extent=[0, self.extent[0], 0, self.extent[1]], origin='lower', vmin=vmin,
-                       vmax=vmax, **kwargs)
-
-        ax.set_xlabel('x [Å]')
-        ax.set_ylabel('y [Å]')
-
-        if cbar:
-            if np.iscomplexobj(array):
-                vmin = np.abs(array).min() if vmin is None else vmin
-                vmax = np.abs(array).max() if vmax is None else vmax
-                add_domain_coloring_cbar(ax, vmin, vmax)
-            else:
-                plt.colorbar(im, ax=ax)
-
-        return ax, im
+        return show_measurement_2d_exploded(measurements=measurements,
+                                            cmap=cmap,
+                                            figsize=figsize,
+                                            super_title=title,
+                                            sub_title=panel_titles,
+                                            x_ticks=x_ticks,
+                                            y_ticks=y_ticks,
+                                            x_label=x_label,
+                                            y_label=y_label,
+                                            row_super_label=row_super_label,
+                                            col_super_label=col_super_label,
+                                            power=power,
+                                            vmin=vmin,
+                                            vmax=vmax,
+                                            common_color_scale=common_color_scale,
+                                            cbar=cbar,
+                                            sizebar=sizebar,
+                                            float_formatting=float_formatting,
+                                            panel_labels=panel_labels,
+                                            image_grid_kwargs=image_grid_kwargs,
+                                            imshow_kwargs=imshow_kwargs,
+                                            anchored_text_kwargs=anchored_text_kwargs,
+                                            axes=ax
+                                            )
 
 
 class SinglePointMeasurement(AbstractMeasurement):
@@ -1234,6 +1301,8 @@ def _reduced_scanned_images_or_line_profiles(new_array, old_measurement):
                         metadata=old_measurement.metadata)
 
         return images
+    else:
+        return new_array
 
 
 class DiffractionPatterns(AbstractMeasurement):
@@ -1293,8 +1362,8 @@ class DiffractionPatterns(AbstractMeasurement):
 
     @property
     def base_axes_metadata(self):
-        return [FourierSpaceAxis(sampling=self.sampling[0], label='x', units='mrad', fftshift=self.fftshift),
-                FourierSpaceAxis(sampling=self.sampling[1], label='y', units='mrad', fftshift=self.fftshift)]
+        return [FourierSpaceAxis(sampling=self.sampling[0], label='kx', units='1 / Å', fftshift=self.fftshift),
+                FourierSpaceAxis(sampling=self.sampling[1], label='ky', units='1 / Å', fftshift=self.fftshift)]
 
     def to_hyperspy(self):
         if Signal2D is None:
@@ -1452,7 +1521,7 @@ class DiffractionPatterns(AbstractMeasurement):
         if (outer > self.max_angles[0]) or (outer > self.max_angles[1]):
             raise RuntimeError(
                 f'outer integration limit exceeds the maximum simulated angle ({outer} mrad > '
-                f'{min(self.max_angles)} mrad)')
+                f'{min(self.max_angles)} mrad), increase the number of grid points')
 
         # integration_range = outer - inner
         # if integration_range < min(self.angular_sampling):
@@ -1795,64 +1864,197 @@ class DiffractionPatterns(AbstractMeasurement):
         return self.bandlimit(radius, outer=np.inf)
 
     def show(self,
+             angular_limits: bool = False,
+             cmap: str = 'viridis',
+             explode: bool = False,
              ax: Axes = None,
-             cbar: bool = False,
+             figsize: Tuple[int, int] = None,
+             title: Union[bool, str] = True,
+             panel_titles: Union[bool, List[str]] = True,
+             x_ticks: bool = True,
+             y_ticks: bool = True,
+             x_label: Union[bool, str] = True,
+             y_label: Union[bool, str] = True,
+             row_super_label: Union[bool, str] = False,
+             col_super_label: Union[bool, str] = False,
              power: float = 1.,
-             title: str = None,
-             figsize: Tuple[float, float] = None,
-             angular_units: bool = False,
-             max_angle: float = None,
-             vmin=None,
-             vmax=None,
-             **kwargs):
+             vmin: float = None,
+             vmax: float = None,
+             common_color_scale=False,
+             cbar: bool = False,
+             sizebar: bool = False,
+             float_formatting: str = '.2f',
+             panel_labels: dict = None,
+             image_grid_kwargs: dict = None,
+             imshow_kwargs: dict = None,
+             anchored_text_kwargs: dict = None,
+             ) -> Axes:
+        """
+        Show the image(s) using matplotlib.
 
-        if ax is None:
-            fig, ax = plt.subplots(figsize=figsize)
+        Parameters
+        ----------
+        angular_limits : bool, optional
+        cmap : str, optional
+        explode : bool, optional
+            If True, a grid of images are created for all the items of the last two ensemble axes. If False, the first
+            ensemble item is shown.
+        ax : matplotlib.axes.Axes, optional
+            If given the plots are added to the axis. This is not available for image grids.
+        figsize : two int, optional
+            The figure size given as width and height in inches, passed to matplotlib.pyplot.figure.
+        title : bool or str, optional
+            Add a title to the figure. If True is given instead of a string the title will be given by the value
+            corresponding to the "name" key of the metadata dictionary, if this item exists.
+        panel_titles : bool or list of str, optional
+            Add titles to each panel. If True a title will be created from the axis metadata. If given as a list of
+            strings an item must exist for each panel.
+        x_ticks : bool or list, optional
+            If False, the ticks on the x-axis will be removed.
+        y_ticks : bool or list, optional
+            If False, the ticks on the y-axis will be removed.
+        x_label : bool or str, optional
+            Add label to the x-axis of every plot. If True (default) the label will created from the corresponding axis
+            metadata. A string may be given to override this.
+        y_label : bool or str, optional
+            Add label to the x-axis of every plot. If True (default) the label will created from the corresponding axis
+            metadata. A string may be given to override this.
+        row_super_label : bool or str, optional
+            Add super label to the rows of an image grid. If True the label will be created from the corresponding axis
+            metadata. A string may be given to override this. The default is no super label.
+        col_super_label : bool or str, optional
+            Add super label to the columns of an image grid. If True the label will be created from the corresponding
+            axis metadata. A string may be given to override this. The default is no super label.
+        power : float
+            Show image on a power scale.
+        vmin : float, optional
+            Minimum of the intensity color scale. Default is the minimum of the array values.
+        vmax : float, optional
+            Maximum of the intensity color scale. Default is the maximum of the array values.
+        common_color_scale : bool, optional
+            If True all images in an image grid are shown on the same colorscale, and a single colorbar is created (if
+            it is requested). Default is False.
+        cbar : bool, optional
+            Add colorbar(s) to the image(s). The position and size of the colorbar(s) may be controlled by passing
+            keyword arguments to mpl_toolkits.axes_grid1.axes_grid.ImageGrid through `image_grid_kwargs`.
+        sizebar : bool, optional,
+            Add a size bar to the image(s).
+        float_formatting : str, optional
+            A formatting string used for formatting the floats of the panel titles.
+        panel_labels : list of str
+            A list of labels for each panel of a grid of images.
+        image_grid_kwargs : dict
+            Additional keyword arguments passed to mpl_toolkits.axes_grid1.axes_grid.ImageGrid.
+        imshow_kwargs : dict
+            Additional keyword arguments passed to matplotlib.axes.Axes.imshow.
+        anchored_text_kwargs : dict
+            Additional keyword arguments passed to matplotlib.offsetbox.AnchoredText. This is used for creating panel
+            labels.
 
-        if title is not None:
-            ax.set_title(title)
+        Returns
+        -------
+        matplotlib.axes.Axes
+        """
 
-        if angular_units:
-            ax.set_xlabel('Scattering angle x [mrad]')
-            ax.set_ylabel('Scattering angle y [mrad]')
-            extent = self.angular_limits[0] + self.angular_limits[1]
+        if not explode:
+            measurements = self[(0,) * len(self.ensemble_shape)]
         else:
-            ax.set_xlabel('Spatial frequency x [1 / Å]')
-            ax.set_ylabel('Spatial frequency y [1 / Å]')
-            extent = self.limits[0] + self.limits[1]
+            if ax is not None:
+                raise NotImplementedError('`ax` not implemented for with `explode = True`')
+            measurements = self
 
-        slic = (0,) * self.num_ensemble_axes
-
-        array = asnumpy(self.array)[slic].T
-
-        if np.iscomplexobj(array):
-            if power != 1.:
-                raise ValueError
-
-            colored_array = domain_coloring(array, vmin=vmin, vmax=vmax)
+        if angular_limits:
+            x_label = 'scattering angle x [mrad]'
+            y_label = 'scattering angle y [mrad]'
+            extent = list(self.angular_limits[0] + self.angular_limits[1])
         else:
-            colored_array = array ** power
+            extent = list(self.limits[0] + self.limits[1])
 
-        im = ax.imshow(colored_array, origin='lower', vmin=vmin, extent=extent, vmax=vmax, **kwargs)
+        return show_measurement_2d_exploded(measurements=measurements,
+                                            figsize=figsize,
+                                            super_title=title,
+                                            sub_title=panel_titles,
+                                            x_ticks=x_ticks,
+                                            y_ticks=y_ticks,
+                                            x_label=x_label,
+                                            y_label=y_label,
+                                            extent=extent,
+                                            cmap=cmap,
+                                            row_super_label=row_super_label,
+                                            col_super_label=col_super_label,
+                                            power=power,
+                                            vmin=vmin,
+                                            vmax=vmax,
+                                            common_color_scale=common_color_scale,
+                                            cbar=cbar,
+                                            sizebar=sizebar,
+                                            float_formatting=float_formatting,
+                                            panel_labels=panel_labels,
+                                            image_grid_kwargs=image_grid_kwargs,
+                                            imshow_kwargs=imshow_kwargs,
+                                            anchored_text_kwargs=anchored_text_kwargs,
+                                            axes=ax
+                                            )
 
-        if cbar:
-            if np.iscomplexobj(array):
-                vmin = np.abs(array).min() if vmin is None else vmin
-                vmax = np.abs(array).max() if vmax is None else vmax
-                add_domain_coloring_cbar(ax, vmin, vmax)
-            else:
-                plt.colorbar(im, ax=ax)
-
-        # im = ax.imshow(array, extent=extent, origin='lower', **kwargs)
-
-        if max_angle:
-            ax.set_xlim([-max_angle, max_angle])
-            ax.set_ylim([-max_angle, max_angle])
-
-        if cbar:
-            plt.colorbar(im, ax=ax)
-
-        return ax, im
+    # def show(self,
+    #          ax: Axes = None,
+    #          cbar: bool = False,
+    #          power: float = 1.,
+    #          title: str = None,
+    #          figsize: Tuple[float, float] = None,
+    #          angular_units: bool = False,
+    #          max_angle: float = None,
+    #          vmin=None,
+    #          vmax=None,
+    #          **kwargs):
+    #
+    #     if ax is None:
+    #         fig, ax = plt.subplots(figsize=figsize)
+    #
+    #     if title is not None:
+    #         ax.set_title(title)
+    #
+    #     if angular_units:
+    #         ax.set_xlabel('Scattering angle x [mrad]')
+    #         ax.set_ylabel('Scattering angle y [mrad]')
+    #         extent = self.angular_limits[0] + self.angular_limits[1]
+    #     else:
+    #         ax.set_xlabel('Spatial frequency x [1 / Å]')
+    #         ax.set_ylabel('Spatial frequency y [1 / Å]')
+    #         extent = self.limits[0] + self.limits[1]
+    #
+    #     slic = (0,) * self.num_ensemble_axes
+    #
+    #     array = asnumpy(self.array)[slic].T
+    #
+    #     if np.iscomplexobj(array):
+    #         if power != 1.:
+    #             raise ValueError
+    #
+    #         colored_array = domain_coloring(array, vmin=vmin, vmax=vmax)
+    #     else:
+    #         colored_array = array ** power
+    #
+    #     im = ax.imshow(colored_array, origin='lower', vmin=vmin, extent=extent, vmax=vmax, **kwargs)
+    #
+    #     if cbar:
+    #         if np.iscomplexobj(array):
+    #             vmin = np.abs(array).min() if vmin is None else vmin
+    #             vmax = np.abs(array).max() if vmax is None else vmax
+    #             add_domain_coloring_cbar(ax, vmin, vmax)
+    #         else:
+    #             plt.colorbar(im, ax=ax)
+    #
+    #     # im = ax.imshow(array, extent=extent, origin='lower', **kwargs)
+    #
+    #     if max_angle:
+    #         ax.set_xlim([-max_angle, max_angle])
+    #         ax.set_ylim([-max_angle, max_angle])
+    #
+    #     if cbar:
+    #         plt.colorbar(im, ax=ax)
+    #
+    #     return ax, im
 
 
 class PolarMeasurements(AbstractMeasurement):

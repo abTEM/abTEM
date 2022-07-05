@@ -126,14 +126,20 @@ class SliceIndexedAtoms(AbstractSlicedAtoms):
     def slice_index(self):
         return self._slice_index
 
-    def get_atoms_in_slices(self, first_slice: int, last_slice: int, **kwargs):
+    def get_atoms_in_slices(self, first_slice: int, last_slice: int = None, atomic_number: int = None):
+        if last_slice is None:
+            last_slice = first_slice
 
-        if last_slice - first_slice == 1:
-            is_in_slices = self.slice_index[first_slice]
+        if last_slice - first_slice < 2:
+            in_slice = self.slice_index[first_slice]
         else:
-            is_in_slices = np.concatenate(self.slice_index[first_slice:last_slice])
+            in_slice = np.concatenate(self.slice_index[first_slice:last_slice])
 
-        atoms = self.atoms[is_in_slices]
+        if atomic_number is not None:
+            in_slice = (self.atoms.numbers == atomic_number) * in_slice
+
+        atoms = self.atoms[in_slice]
+
         slice_thickness = self.slice_thickness[first_slice:last_slice]
         atoms.cell[2, 2] = np.sum(slice_thickness)
         atoms.positions[:, 2] -= np.sum(self.slice_thickness[:first_slice])
@@ -161,7 +167,7 @@ class SlicedAtoms(AbstractSlicedAtoms):
             last_slice = first_slice
 
         a = self.slice_limits[first_slice][0]
-        b = self.slice_limits[last_slice][1]
+        b = self.slice_limits[last_slice][0]
 
         in_slice = (self.atoms.positions[:, 2] >= (a - self._z_padding)) * \
                    (self.atoms.positions[:, 2] < (b + self._z_padding))

@@ -1,12 +1,12 @@
 """Main abTEM module."""
 from abtem._version import __version__
+from abtem.core import axes
 from abtem.core import config
 from abtem.core.array import concatenate, stack, from_zarr
 from abtem.core.distributions import ParameterSeries
 from abtem.measure.detect import AnnularDetector, SegmentedDetector, FlexibleAnnularDetector, PixelatedDetector, \
     WavesDetector
 from abtem.measure.measure import Images, LineProfiles, DiffractionPatterns, PolarMeasurements
-from abtem.potentials.atom import AtomicPotential
 from abtem.potentials.crystal import CrystalPotential
 from abtem.potentials.gpaw import GPAWPotential
 from abtem.potentials.potentials import Potential, PotentialArray

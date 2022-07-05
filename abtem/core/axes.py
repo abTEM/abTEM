@@ -16,6 +16,12 @@ class AxisMetadata:
     def __eq__(self, other):
         return safe_equality(self, other)
 
+    def format_label(self):
+        return f'{self.label}'
+
+    def format_title(self, **kwargs):
+        return f'{self.label}'
+
 
 @dataclass(eq=False)
 class UnknownAxis(AxisMetadata):
@@ -33,6 +39,9 @@ class LinearAxis(AxisMetadata):
     offset: float = 0.
     units: str = 'pixels'
     _ensemble_mean: bool = False
+
+    def format_label(self):
+        return f'{self.label} [{self.units}]'
 
     def concatenate(self, other):
         if not self._concatenate:
@@ -105,7 +114,13 @@ class OrdinalAxis(AxisMetadata):
 
 @dataclass(eq=False)
 class NonLinearAxis(OrdinalAxis):
-    units: str = ''
+    units: str = 'unknown'
+
+    def format_label(self):
+        return f'{self.label} [{self.units}]'
+
+    def format_title(self, formatting):
+        return f'{self.label} = {self.values[0]:>{formatting}} {self.units}'
 
 
 @dataclass(eq=False)
@@ -192,7 +207,7 @@ class HasAxes:
                                f'({self.num_axes})')
 
         for n, axis in zip(self.shape, self.axes_metadata):
-            #print(n, self.axes_metadata)
+            # print(n, self.axes_metadata)
             if isinstance(axis, OrdinalAxis) and len(axis) != n:
                 raise RuntimeError(f'number of values for ordinal axis ({len(axis)}), does not match size of dimension '
                                    f'({n})')

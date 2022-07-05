@@ -182,7 +182,7 @@ class AnnularDetector(AbstractDetector):
         diffraction_patterns = waves.diffraction_patterns(max_angle='cutoff')
         measurement = diffraction_patterns.integrate_radial(inner=self.inner, outer=outer)
 
-        if self.to_cpu:
+        if self.to_cpu and hasattr(measurement, 'to_cpu'):
             measurement = measurement.to_cpu()
 
         return measurement

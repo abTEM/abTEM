@@ -1,15 +1,23 @@
 """Module for plotting atoms, images, line scans, and diffraction patterns."""
 from collections.abc import Iterable
+from typing import Union, Tuple, TYPE_CHECKING, List
 
 import matplotlib.pyplot as plt
 import numpy as np
 from ase.data import covalent_radii, chemical_symbols
 from ase.data.colors import jmol_colors
 from matplotlib.collections import PatchCollection
-from matplotlib.patches import Circle
-from abtem.visualize.utils import format_label
-from typing import Union, Tuple
 from matplotlib.lines import Line2D
+from matplotlib.offsetbox import AnchoredText
+from matplotlib.patches import Circle
+from matplotlib.patheffects import withStroke
+from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
+from abtem.visualize.utils import domain_coloring, add_domain_coloring_cbar
+
+from mpl_toolkits.axes_grid1 import ImageGrid
+
+if TYPE_CHECKING:
+    from abtem.measure.measure import AbstractMeasurement
 
 #: Array to facilitate the display of cell boundaries.
 _cube = np.array([[[0, 0, 0], [0, 0, 1]],
@@ -195,174 +203,434 @@ def _show_atoms_3d(atoms, azimuth=45., elevation=30., ax=None, scale_atoms=500.,
     return ax
 
 
-def show_measurement_2d(measurement,
-                        ax=None,
-                        figsize=None,
-                        cbar=False,
-                        cbar_label=None,
-                        cmap='gray',
-                        discrete_cmap=False,
-                        vmin=None,
-                        vmax=None,
-                        power=1.,
-                        log_scale=False,
-                        title=None,
-                        equal_ticks=False,
-                        x_label=None,
-                        y_label=None,
-                        **kwargs):
-    """
-    Show image function
-
-    Function to display an image.
-
-    Parameters
-    ----------
-    array : ndarray
-        Image array.
-    calibrations : tuple of calibration objects.
-        Spatial calibrations.
-    ax : axes object
-        pyplot axes object.
-    title : str, optional
-        Image title. Default is None.
-    colorbar : bool, optional
-        Option to show a colorbar. Default is False.
-    cmap : str, optional
-        Colormap name. Default is 'gray'.
-    figsize : float, pair of float, optional
-        Size of the figure in inches, either as a square for one number or a rectangle for two. Default is None.
-    scans : ndarray, optional
-        Array of scans. Default is None.
-    discrete : bool, optional
-        Option to discretize intensity values to integers. Default is False.
-    cbar_label : str, optional
-        Text label for the color bar. Default is None.
-    vmin : float, optional
-        Minimum of the intensity scale. Default is None.
-    vmax : float, optional
-        Maximum of the intensity scale. Default is None.
-    kwargs :
-        Remaining keyword arguments are passed to pyplot.
-    """
-
-    if ax is None:
-        fig, ax = plt.subplots(figsize=figsize)
-
-    calibrations = measurement.calibrations[-2:]
-    array = measurement.array[(0,) * (measurement.dimensions - 2) + (slice(None),) * 2]
-
+def add_imshow(ax,
+               array,
+               extent,
+               title,
+               x_label,
+               y_label,
+               x_ticks,
+               y_ticks,
+               power,
+               vmin,
+               vmax,
+               **kwargs):
     if power != 1:
         array = array ** power
 
-    if log_scale:
-        array = np.log(array)
+    array = array.T
 
-    extent = []
-    for calibration, num_elem in zip(calibrations, array.shape):
-        extent.append(calibration.offset)
-        extent.append(calibration.offset + num_elem * calibration.sampling - calibration.sampling)
+    if np.iscomplexobj(array):
+        array = domain_coloring(array, vmin=vmin, vmax=vmax)
 
-    if vmin is None:
-        vmin = np.min(array)
-        if discrete_cmap:
-            vmin -= .5
-
-    if vmax is None:
-        vmax = np.max(array)
-        if discrete_cmap:
-            vmax += .5
-
-    if discrete_cmap:
-        cmap = plt.get_cmap(cmap, np.max(array) - np.min(array) + 1)
-
-    im = ax.imshow(array.T, extent=extent, cmap=cmap, origin='lower', vmin=vmin, vmax=vmax, interpolation='nearest',
+    im = ax.imshow(array,
+                   extent=extent,
+                   origin='lower',
+                   vmin=vmin,
+                   vmax=vmax,
                    **kwargs)
 
-    if cbar:
-        if cbar_label is None:
-            cbar_label = format_label(measurement)
-
-        cax = plt.colorbar(im, ax=ax, label=cbar_label)
-        if discrete_cmap:
-            cax.set_ticks(ticks=np.arange(np.min(array), np.max(array) + 1))
-
-    if x_label is None:
-        x_label = format_label(calibrations[-2])
-
-    if y_label is None:
-        y_label = format_label(calibrations[-1])
-
-    ax.set_xlabel(x_label)
-    ax.set_ylabel(y_label)
-
-    if title is not None:
-        ax.set_title(title)
-    elif len(measurement.array.shape) > 2:
-        if any([n > 1 for n in measurement.array.shape[:-2]]):
-            ax.set_title(f'Slice {(0,) * (len(measurement.array.shape) - 2)} of {measurement.array.shape} measurement')
-
-    if equal_ticks:
-        d = max(np.diff(ax.get_xticks())[0], np.diff(ax.get_yticks())[0])
-        xticks = np.arange(*ax.get_xlim(), d)
-        yticks = np.arange(*ax.get_ylim(), d)
-        ax.set_xticks(xticks)
-        ax.set_yticks(yticks)
-
-    return ax, im
-
-
-def show_measurement_1d(measurement, ax=None, figsize=None, legend=False, title=None, label=None,
-                        x_label=None, y_label=None, **kwargs):
-    """
-    Show line function
-
-    Function to display a line scan.
-
-    Parameters
-    ----------
-    array : ndarray
-        Array of measurement values along a line.
-    calibration : calibration object
-        Spatial calibration for the line.
-    ax : axes object, optional
-        pyplot axes object.
-    title : str, optional
-        Title for the plot. Default is None.
-    legend : bool, optional
-        Option to display a plot legend. Default is False.
-    kwargs :
-       Remaining keyword arguments are passed to pyplot.
-    """
-
-    calibration = measurement.calibrations[0]
-    array = measurement.array
-    if calibration is None:
-        x = np.arange(len(array))
-    else:
-        x = np.linspace(calibration.offset, calibration.offset + len(array) * calibration.sampling, len(array))
-
-    if ax is None:
-        fig, ax = plt.subplots(figsize=figsize)
-
-    if not label:
-        label = measurement.name
-
-    lines = ax.plot(x, array, label=label, **kwargs)
-
-    if x_label is None:
-        x_label = format_label(calibration)
-
-    if y_label is None:
-        y_label = format_label(measurement)
-
-    ax.set_xlabel(x_label)
-    ax.set_ylabel(y_label)
-
-    if legend:
-        ax.legend()
-
-    if title is not None:
+    if title:
         ax.set_title(title)
 
-    return ax, lines[0]
+    if x_label:
+        ax.set_xlabel(x_label)
+
+    if y_label:
+        ax.set_ylabel(y_label)
+
+    if not x_ticks:
+        ax.set_xticks([])
+
+    if not y_ticks:
+        ax.set_yticks([])
+
+    return im
+
+
+def add_panel_label(ax, title, **kwargs):
+    # if size is None:
+    # size = dict(size=plt.rcParams['legend.fontsize'])
+
+    if 'loc' not in kwargs:
+        kwargs['loc'] = 2
+
+    at = AnchoredText(title,  # loc=loc, prop=size,
+                      pad=0., borderpad=0.5,
+                      frameon=False, **kwargs)
+    ax.add_artist(at)
+    at.txt._text.set_path_effects([withStroke(foreground="w", linewidth=3)])
+    return at
+
+
+def add_sizebar(ax, label, **kwargs):
+    """
+    Draw a horizontal bar with length of 0.1 in data coordinates,
+    with a fixed label underneath.
+    """
+    if 'loc' not in kwargs:
+        kwargs['loc'] = 3
+
+    if 'borderpad' not in kwargs:
+        kwargs['borderpad'] = .5
+
+    asb = AnchoredSizeBar(ax.transData, label=label, **kwargs)
+    ax.add_artist(asb)
+
+
+def show_measurement_2d_exploded(
+        measurements: 'AbstractMeasurement',
+        figsize: Tuple[int, int],
+        super_title: Union[str, bool],
+        sub_title: bool,
+        x_label: bool,
+        y_label: bool,
+        x_ticks: bool,
+        y_ticks: bool,
+        row_super_label: bool,
+        col_super_label: bool,
+        power: float,
+        vmin: float,
+        vmax: float,
+        common_color_scale: bool,
+        cbar: bool,
+        float_formatting: str,
+        cmap='viridis',
+        extent: List[float] = None,
+        panel_labels: list = None,
+        sizebar=False,
+        image_grid_kwargs: dict = None,
+        imshow_kwargs: dict = None,
+        anchored_text_kwargs: dict = None,
+        anchored_size_bar_kwargs: dict = None,
+        axes=None,
+):
+    measurements = measurements.to_cpu().compute()
+
+    imshow_kwargs = {} if imshow_kwargs is None else imshow_kwargs
+    image_grid_kwargs = {} if image_grid_kwargs is None else image_grid_kwargs
+    anchored_text_kwargs = {} if anchored_text_kwargs is None else anchored_text_kwargs
+    anchored_size_bar_kwargs = {} if anchored_size_bar_kwargs is None else anchored_size_bar_kwargs
+
+    if cbar and not np.iscomplexobj(measurements.array):
+        if common_color_scale:
+            image_grid_kwargs['cbar_mode'] = 'single'
+
+        else:
+            image_grid_kwargs['cbar_mode'] = 'each'
+            image_grid_kwargs['cbar_pad'] = 0.05
+
+    measurements = measurements[(0,) * max(len(measurements.ensemble_shape) - 2, 0)]
+
+    if common_color_scale and np.iscomplexobj(measurements.array):
+        vmin = np.abs(measurements.array).min() if vmin is None else vmin
+        vmax = np.abs(measurements.array).max() if vmax is None else vmax
+    elif common_color_scale:
+        vmin = measurements.array.min() if vmin is None else vmin
+        vmax = measurements.array.max() if vmax is None else vmax
+
+    nrows = measurements.ensemble_shape[-2] if len(measurements.ensemble_shape) > 1 else 1
+    ncols = measurements.ensemble_shape[-1] if len(measurements.ensemble_shape) > 0 else 1
+
+    if axes is None:
+        fig = plt.figure(1, figsize)
+
+        if 'axes_pad' not in image_grid_kwargs:
+            if sub_title:
+                image_grid_kwargs['axes_pad'] = 0.3
+
+            else:
+                image_grid_kwargs['axes_pad'] = 0.1
+
+        axes = ImageGrid(fig,
+                         111,
+                         nrows_ncols=(nrows, ncols),
+                         **image_grid_kwargs,
+                         )
+
+    if x_label is True:
+        x_label = measurements.base_axes_metadata[-2].format_label()
+
+    if y_label is True:
+        y_label = measurements.base_axes_metadata[-1].format_label()
+
+    for index, measurement in measurements.iterate_ensemble(keep_dims=True):
+
+        title = None
+        if len(measurement.ensemble_shape) == 0:
+            super_title = False
+            i = 0
+        elif len(measurement.ensemble_shape) == 1:
+            title = measurement.axes_metadata[0].format_title(float_formatting) if sub_title else None
+            i = np.ravel_multi_index((0,) + index, (nrows, ncols))
+        elif len(measurement.ensemble_shape) == 2:
+            if sub_title:
+                titles = tuple(axis.format_title(float_formatting) for axis in measurement.ensemble_axes_metadata)
+                title = ', '.join(titles)
+
+            i = np.ravel_multi_index(index, (nrows, ncols))
+        else:
+            raise RuntimeError()
+
+        ax = axes[i]
+
+        if extent is None:
+            extent = [0, measurement.extent[0], 0, measurement.extent[1]]
+
+        array = measurement.array[(0,) * len(measurement.ensemble_shape)]
+
+        im = add_imshow(ax=ax,
+                        array=array,
+                        title=title,
+                        extent=extent,
+                        x_label=x_label,
+                        y_label=y_label,
+                        x_ticks=x_ticks,
+                        y_ticks=y_ticks,
+                        power=power,
+                        vmin=vmin,
+                        vmax=vmax,
+                        cmap=cmap,
+                        **imshow_kwargs)
+
+        if panel_labels is not None:
+            add_panel_label(ax, panel_labels[i], **anchored_text_kwargs)
+
+        if cbar:
+            cbar_label = measurement.metadata['label'] if 'label' in measurement.metadata else ''
+            cbar_label += f" [{measurement.metadata['units']}]" if 'units' in measurement.metadata else ''
+
+            if np.iscomplexobj(array):
+
+                add_domain_coloring_cbar(ax, vmin=vmin, vmax=vmax, )
+            else:
+                ax.cax.colorbar(im, label=cbar_label)
+
+        if sizebar:
+            size = measurement.base_axes_metadata[-2].sampling * measurement.base_shape[-2] / 3
+            label = f'{size:>{float_formatting}} {measurement.base_axes_metadata[-2].units}'
+            add_sizebar(ax=ax, label=label, size=size, **anchored_size_bar_kwargs)
+
+    if super_title is True and 'name' in measurements.metadata:
+        fig.suptitle(measurements.metadata['name'])
+
+    elif isinstance(super_title, str):
+        fig.suptitle(super_title)
+
+    if len(measurements.ensemble_axes_metadata) > 0 and row_super_label:
+        fig.supylabel(f'{measurements.ensemble_axes_metadata[-1].format_label()}')
+
+    if len(measurements.ensemble_axes_metadata) > 1 and col_super_label:
+        fig.supylabel(f'{measurements.ensemble_axes_metadata[-2].format_label()}')
+
+    # if cbar:
+    #     if np.iscomplexobj(array):
+    #         vmin = np.abs(array).min() if vmin is None else vmin
+    #         vmax = np.abs(array).max() if vmax is None else vmax
+    #         add_domain_coloring_cbar(ax, vmin, vmax)
+    #     else:
+    #         plt.colorbar(im, ax=ax)
+
+# def show_measurement_2d(measurements: AbstractMeasurement,
+#                                  figsize: Tuple[int, int],
+#                                  title: bool,
+#                                  x_label: bool,
+#                                  y_label: bool,
+#                                  x_ticks: bool,
+#                                  y_ticks: bool,
+#                                  power: float,
+#                                  vmin: float,
+#                                  vmax: float,
+#                                  float_formatting: str
+#                                  ):
+#
+#     fig, ax = plt.subplots(figsize=figsize)
+#
+#     if title is not None:
+#         ax.set_title(title)
+#
+#     image = images[(0,) * self.num_ensemble_axes]
+#
+#     add_imshow()
+#
+#     # else:
+#     #    array = asnumpy(self.array)[(0,) * max(self.num_ensemble_axes - 2, 0)]
+#
+#     im = ax.imshow(colored_array,
+#                    extent=[0, measurements.extent[0], 0, measurements.extent[1]],
+#                    origin='lower',
+#                    vmin=vmin,
+#                    vmax=vmax, **kwargs)
+
+
+# def show_measurement_2d(measurement,
+#                         ax=None,
+#                         figsize=None,
+#                         cbar=False,
+#                         cbar_label=None,
+#                         cmap='gray',
+#                         discrete_cmap=False,
+#                         vmin=None,
+#                         vmax=None,
+#                         power=1.,
+#                         log_scale=False,
+#                         title=None,
+#                         equal_ticks=False,
+#                         x_label=None,
+#                         y_label=None,
+#                         **kwargs):
+#     """
+#     Show image function
+#
+#     Function to display an image.
+#
+#     Parameters
+#     ----------
+#     array : ndarray
+#         Image array.
+#     calibrations : tuple of calibration objects.
+#         Spatial calibrations.
+#     ax : axes object
+#         pyplot axes object.
+#     title : str, optional
+#         Image title. Default is None.
+#     colorbar : bool, optional
+#         Option to show a colorbar. Default is False.
+#     cmap : str, optional
+#         Colormap name. Default is 'gray'.
+#     figsize : float, pair of float, optional
+#         Size of the figure in inches, either as a square for one number or a rectangle for two. Default is None.
+#     scans : ndarray, optional
+#         Array of scans. Default is None.
+#     discrete : bool, optional
+#         Option to discretize intensity values to integers. Default is False.
+#     cbar_label : str, optional
+#         Text label for the color bar. Default is None.
+#     vmin : float, optional
+#         Minimum of the intensity scale. Default is None.
+#     vmax : float, optional
+#         Maximum of the intensity scale. Default is None.
+#     kwargs :
+#         Remaining keyword arguments are passed to pyplot.
+#     """
+#
+#     if ax is None:
+#         fig, ax = plt.subplots(figsize=figsize)
+#
+#     calibrations = measurement.calibrations[-2:]
+#     array = measurement.array[(0,) * (measurement.dimensions - 2) + (slice(None),) * 2]
+#
+#     if power != 1:
+#         array = array ** power
+#
+#     if log_scale:
+#         array = np.log(array)
+#
+#     extent = []
+#     for calibration, num_elem in zip(calibrations, array.shape):
+#         extent.append(calibration.offset)
+#         extent.append(calibration.offset + num_elem * calibration.sampling - calibration.sampling)
+#
+#     if vmin is None:
+#         vmin = np.min(array)
+#         if discrete_cmap:
+#             vmin -= .5
+#
+#     if vmax is None:
+#         vmax = np.max(array)
+#         if discrete_cmap:
+#             vmax += .5
+#
+#     if discrete_cmap:
+#         cmap = plt.get_cmap(cmap, np.max(array) - np.min(array) + 1)
+#
+#     im = ax.imshow(array.T, extent=extent, cmap=cmap, origin='lower', vmin=vmin, vmax=vmax, interpolation='nearest',
+#                    **kwargs)
+#
+#     if cbar:
+#         if cbar_label is None:
+#             cbar_label = format_label(measurement)
+#
+#         cax = plt.colorbar(im, ax=ax, label=cbar_label)
+#         if discrete_cmap:
+#             cax.set_ticks(ticks=np.arange(np.min(array), np.max(array) + 1))
+#
+#     if x_label is None:
+#         x_label = format_label(calibrations[-2])
+#
+#     if y_label is None:
+#         y_label = format_label(calibrations[-1])
+#
+#     ax.set_xlabel(x_label)
+#     ax.set_ylabel(y_label)
+#
+#     if title is not None:
+#         ax.set_title(title)
+#     elif len(measurement.array.shape) > 2:
+#         if any([n > 1 for n in measurement.array.shape[:-2]]):
+#             ax.set_title(f'Slice {(0,) * (len(measurement.array.shape) - 2)} of {measurement.array.shape} measurement')
+#
+#     if equal_ticks:
+#         d = max(np.diff(ax.get_xticks())[0], np.diff(ax.get_yticks())[0])
+#         xticks = np.arange(*ax.get_xlim(), d)
+#         yticks = np.arange(*ax.get_ylim(), d)
+#         ax.set_xticks(xticks)
+#         ax.set_yticks(yticks)
+#
+#     return ax, im
+
+
+# def show_measurement_1d(measurement, ax=None, figsize=None, legend=False, title=None, label=None,
+#                         x_label=None, y_label=None, **kwargs):
+#     """
+#     Show line function
+#
+#     Function to display a line scan.
+#
+#     Parameters
+#     ----------
+#     array : ndarray
+#         Array of measurement values along a line.
+#     calibration : calibration object
+#         Spatial calibration for the line.
+#     ax : axes object, optional
+#         pyplot axes object.
+#     title : str, optional
+#         Title for the plot. Default is None.
+#     legend : bool, optional
+#         Option to display a plot legend. Default is False.
+#     kwargs :
+#        Remaining keyword arguments are passed to pyplot.
+#     """
+#
+#     calibration = measurement.calibrations[0]
+#     array = measurement.array
+#     if calibration is None:
+#         x = np.arange(len(array))
+#     else:
+#         x = np.linspace(calibration.offset, calibration.offset + len(array) * calibration.sampling, len(array))
+#
+#     if ax is None:
+#         fig, ax = plt.subplots(figsize=figsize)
+#
+#     if not label:
+#         label = measurement.name
+#
+#     lines = ax.plot(x, array, label=label, **kwargs)
+#
+#     if x_label is None:
+#         x_label = format_label(calibration)
+#
+#     if y_label is None:
+#         y_label = format_label(measurement)
+#
+#     ax.set_xlabel(x_label)
+#     ax.set_ylabel(y_label)
+#
+#     if legend:
+#         ax.legend()
+#
+#     if title is not None:
+#         ax.set_title(title)
+#
+#     return ax, lines[0]

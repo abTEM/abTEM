@@ -5,20 +5,6 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from abtem.visualize.colors import hsluv
 
 
-def format_label(calibration):
-    if calibration is None:
-        return ''
-
-    label = ''
-    if calibration.name:
-        label += f'{calibration.name}'
-
-    if calibration.units:
-        label += f' [{calibration.units}]'
-
-    return label
-
-
 def add_domain_coloring_cbar(ax, vmin, vmax, aspect=2):
     divider = make_axes_locatable(ax)
     cax = divider.append_axes("right", size="60%", pad=0.3, aspect=aspect)

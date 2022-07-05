@@ -52,6 +52,7 @@ class Ensemble(metaclass=ABCMeta):
 
     def ensemble_blocks(self, chunks=None, limit=None):
         chunks = self.validate_chunks(chunks, limit)
+
         args = self.partition_args(chunks, lazy=True)
         symbols = tuple(range(len(args)))
         args = tuple((block, (i,)) for i, block in zip(symbols, args))
@@ -79,7 +80,9 @@ class Ensemble(metaclass=ABCMeta):
         if chunks is None:
             chunks = self.default_ensemble_chunks
 
-        return validate_chunks(self.ensemble_shape, chunks, limit=limit)
+        chunks = validate_chunks(self.ensemble_shape, chunks, limit=limit)
+
+        return chunks
 
     def ensemble_chunks(self, max_batch=None, base_shape=(), dtype=np.dtype('complex64')):
 

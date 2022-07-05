@@ -1,6 +1,8 @@
 """Module to describe electron waves and their propagation."""
 import itertools
+import warnings
 from abc import abstractmethod
+from copy import copy
 from functools import partial
 from typing import Union, Sequence, Tuple, List, Dict
 
@@ -121,7 +123,8 @@ class Waves(HasArray, WavesLikeMixin):
                  tilt: Tuple[float, float] = (0., 0.),
                  fourier_space: bool = False,
                  ensemble_axes_metadata: List[AxisMetadata] = None,
-                 metadata: Dict = None):
+                 metadata: Dict = None,
+                 ):
 
         if len(array.shape) < 2:
             raise RuntimeError('Wave function array should have 2 dimensions or more')
@@ -255,8 +258,16 @@ class Waves(HasArray, WavesLikeMixin):
             The wave function intensity.
         """
 
-        return Images(abs2(self.array), sampling=self.sampling, ensemble_axes_metadata=self.ensemble_axes_metadata,
-                      metadata=self.metadata)
+        array = abs2(self.array * np.prod(self.gpts))
+
+        metadata = copy(self.metadata)
+        metadata['label'] = 'intensity'
+        metadata['units'] = 'arb. unit'
+
+        return Images(array,
+                      sampling=self.sampling,
+                      ensemble_axes_metadata=self.ensemble_axes_metadata,
+                      metadata=metadata)
 
     def downsample(self,
                    max_angle: Union[str, float] = 'cutoff',
@@ -369,11 +380,15 @@ class Waves(HasArray, WavesLikeMixin):
         else:
             pattern = _diffraction_pattern(self.array, new_gpts=new_gpts, fftshift=fftshift)
 
+        metadata = copy(self.metadata)
+        metadata['label'] = 'intensity'
+        metadata['units'] = 'arb. unit'
+
         diffraction_patterns = DiffractionPatterns(pattern,
                                                    sampling=self.fourier_space_sampling,
                                                    fftshift=fftshift,
                                                    ensemble_axes_metadata=self.ensemble_axes_metadata,
-                                                   metadata=self.metadata)
+                                                   metadata=metadata)
 
         if block_direct:
             diffraction_patterns = diffraction_patterns.block_direct(radius=block_direct)
@@ -708,7 +723,7 @@ class PlaneWave(WavesBuilder):
         Electron energy [eV].
     tilt : two float
         Small angle beam tilt [mrad].
-    normalize : bool
+    normalize : str
         If True,
     device : str
         The plane waves will be build on this device.
@@ -720,7 +735,6 @@ class PlaneWave(WavesBuilder):
                  sampling: Union[float, Tuple[float, float]] = None,
                  energy: float = None,
                  tilt: Tuple[float, float] = (0., 0.),
-                 normalize: bool = True,
                  device: str = None,
                  extra_transforms=None):
 
@@ -728,7 +742,6 @@ class PlaneWave(WavesBuilder):
         self._accelerator = Accelerator(energy=energy)
         self._beam_tilt = BeamTilt(tilt=tilt)
         self._device = validate_device(device)
-        self._normalize = normalize
 
         super().__init__(transforms=extra_transforms)
 
@@ -746,18 +759,14 @@ class PlaneWave(WavesBuilder):
 
     def base_waves_partial(self):
 
-        def base_plane_wave(gpts, extent, energy, normalize, device):
+        def base_plane_wave(gpts, extent, energy, device):
             xp = get_array_module(device)
 
-            if normalize:
-                array = xp.full(gpts, (1 / np.prod(gpts)).astype(xp.complex64), dtype=xp.complex64)
-            else:
-                array = xp.ones(gpts, dtype=xp.complex64)
+            array = xp.full(gpts, (1 / np.prod(gpts)).astype(xp.complex64), dtype=xp.complex64)
 
             return Waves(array=array, energy=energy, extent=extent, fourier_space=False)
 
-        return partial(base_plane_wave, gpts=self.gpts, extent=self.extent, energy=self.energy,
-                       normalize=self._normalize, device=self.device)
+        return partial(base_plane_wave, gpts=self.gpts, extent=self.extent, energy=self.energy, device=self.device)
 
     def build(self, lazy: bool = None, max_batch='auto', keep_ensemble_dims: bool = False) -> Waves:
         """
@@ -873,7 +882,6 @@ class Probe(WavesBuilder):
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
                  energy: float = None,
-                 normalize: bool = True,
                  source_offset=None,
                  tilt: Tuple[float, float] = (0., 0.),
                  device: str = None,
@@ -887,7 +895,8 @@ class Probe(WavesBuilder):
         self._accelerator = Accelerator(energy=energy)
 
         if aperture is None:
-            aperture = Aperture(semiangle_cutoff=semiangle_cutoff, taper=taper, normalize=normalize)
+            aperture = Aperture(semiangle_cutoff=semiangle_cutoff,
+                                taper=taper, normalize=True)
 
         aperture._accelerator = self._accelerator
 
@@ -903,7 +912,6 @@ class Probe(WavesBuilder):
         self._aberrations = aberrations
         self._source_offset = source_offset
         self._beam_tilt = BeamTilt(tilt=tilt)
-        self._normalize = normalize
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
 
         self._device = validate_device(device)

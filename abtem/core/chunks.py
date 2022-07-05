@@ -80,6 +80,7 @@ def validate_chunks(shape: Tuple[int, ...],
         else:
             raise RuntimeError()
 
+
     return validated_chunks
 
 
@@ -127,6 +128,7 @@ def auto_chunks(shape: Tuple[int, ...],
 
         j += 1
 
+    current_chunks = tuple(current_chunks)
     chunks = validate_chunks(shape, current_chunks, limit, dtype)
     return chunks
 
