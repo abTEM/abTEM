@@ -3,6 +3,8 @@ from typing import Tuple
 
 import numpy as np
 
+from abtem.core.utils import EqualityMixin, CopyMixin
+
 
 class ProjectionIntegrator:
 
@@ -17,7 +19,7 @@ class ProjectionIntegrator:
         pass
 
 
-class ProjectionIntegratorPlan(metaclass=ABCMeta):
+class ProjectionIntegratorPlan(EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
     def __init__(self, periodic, finite):
         self._periodic = periodic

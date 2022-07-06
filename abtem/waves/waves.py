@@ -258,9 +258,10 @@ class Waves(HasArray, WavesLikeMixin):
             The wave function intensity.
         """
 
-        array = abs2(self.array * np.prod(self.gpts))
+        array = abs2(self.array * np.prod(self.gpts).astype(np.float32))
 
         metadata = copy(self.metadata)
+
         metadata['label'] = 'intensity'
         metadata['units'] = 'arb. unit'
 
@@ -986,7 +987,7 @@ class Probe(WavesBuilder):
                        metadata=self.metadata)
 
     def build(self,
-              scan: Union[tuple, str, AbstractScan] = 'center',
+              scan: Union[tuple, str, AbstractScan] = None,
               max_batch: int = None,
               lazy: bool = None) -> Waves:
 
@@ -1013,10 +1014,13 @@ class Probe(WavesBuilder):
         self.accelerator.check_is_defined()
         lazy = validate_lazy(lazy)
 
-        squeeze = ()
-        if scan == 'center':
+        if not isinstance(scan, AbstractScan):
+            squeeze = (-3,)
+        else:
+            squeeze = ()
+
+        if scan is None:
             scan = (self.extent[0] / 2, self.extent[1] / 2)
-            squeeze += (-3,)
 
         scan = validate_scan(scan, self)
 
@@ -1080,9 +1084,12 @@ class Probe(WavesBuilder):
         potential = validate_potential(potential)
         self.grid.match(potential)
 
-        squeeze_scan = False
+        if not isinstance(scan, AbstractScan):
+            squeeze = (-3,)
+        else:
+            squeeze = ()
+
         if scan is None:
-            squeeze_scan = True
             scan = self.extent[0] / 2, self.extent[1] / 2
 
         scan = validate_scan(scan, self)
@@ -1115,8 +1122,8 @@ class Probe(WavesBuilder):
                                                           potential=potential,
                                                           multislice_func=multislice_func)
 
-        if squeeze_scan:
-            measurements = measurements.squeeze((-3,))
+        if squeeze:
+            measurements = measurements.squeeze(squeeze)
 
         if not lazy:
             measurements.compute()

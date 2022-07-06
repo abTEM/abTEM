@@ -291,7 +291,7 @@ class Potential(PotentialBuilder):
                  slice_thickness: Union[float, np.ndarray] = .5,
                  parametrization: Union[str, Parametrization] = 'lobato',
                  projection: str = 'finite',
-                 integral_space: str = 'real',
+                 integral_space: str = 'fourier',
                  exit_planes: Union[int, Tuple[int, ...]] = None,
                  device: str = None,
                  plane: Union[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = 'xy',

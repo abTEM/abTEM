@@ -555,8 +555,8 @@ class PixelatedDetector(AbstractDetector):
     def measurement_axes_metadata(self, waves: 'Waves') -> List[AxisMetadata]:
         if self.fourier_space:
             sampling = waves.fourier_space_sampling
-            return [FourierSpaceAxis(sampling=sampling[0], label='x', units='mrad', fftshift=True),
-                    FourierSpaceAxis(sampling=sampling[1], label='y', units='mrad', fftshift=True)]
+            return [FourierSpaceAxis(sampling=sampling[0], label='kx', units='1 / Å', fftshift=True),
+                    FourierSpaceAxis(sampling=sampling[1], label='ky', units='1 / Å', fftshift=True)]
         else:
             return [RealSpaceAxis(label='x', sampling=waves.sampling[0], units='Å'),
                     RealSpaceAxis(label='y', sampling=waves.sampling[1], units='Å')]

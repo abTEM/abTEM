@@ -188,6 +188,7 @@ class ChargeDensityPotential(PotentialBuilder):
                                           parametrization=ewald_parametrization,
                                           slice_thickness=slice_thickness,
                                           projection='finite',
+                                          integral_space='real',
                                           plane=plane,
                                           box=box,
                                           origin=origin,
@@ -244,7 +245,7 @@ class ChargeDensityPotential(PotentialBuilder):
 
     @property
     def ewald_parametrization(self):
-        return next(iter(self.ewald_potential.atomic_potentials.values())).parametrization
+        return self.ewald_potential.integrator.parametrization
 
     @property
     def device(self):
@@ -341,7 +342,7 @@ class ChargeDensityPotential(PotentialBuilder):
 
         array = solve_point_charges(self.ewald_potential.sliced_atoms.atoms,
                                     array=-array,  # -np.fft.fftn(array),#-array,
-                                    width=self.ewald_parametrization._width)
+                                    width=self.ewald_parametrization.width)
 
         for i, ((a, b), slic) in enumerate(zip(self.slice_limits[first_slice:last_slice], potential)):
             slice_shape = self.gpts + (int((b - a) / min(self.sampling)),)
@@ -350,7 +351,7 @@ class ChargeDensityPotential(PotentialBuilder):
 
             slice_array = interpolate_between_cells(array,
                                                     slice_shape,
-                                                    self.ewald_potential._sliced_atoms.atoms.cell,
+                                                    self.ewald_potential.sliced_atoms.atoms.cell,
                                                     slice_box,
                                                     (0, 0, a))
 

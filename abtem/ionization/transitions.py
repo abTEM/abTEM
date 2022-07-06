@@ -290,7 +290,6 @@ class SubshellTransitionPotentials(AbstractTransitionPotential):
 
             if running_total + fractions[j] > min_total_intensity:
                 if not np.isclose(fractions[order[i]], fractions[j]):
-                    print(fractions[order[i]], fractions[j])
                     break
 
             included.append(j)

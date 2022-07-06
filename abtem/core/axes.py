@@ -207,7 +207,6 @@ class HasAxes:
                                f'({self.num_axes})')
 
         for n, axis in zip(self.shape, self.axes_metadata):
-            # print(n, self.axes_metadata)
             if isinstance(axis, OrdinalAxis) and len(axis) != n:
                 raise RuntimeError(f'number of values for ordinal axis ({len(axis)}), does not match size of dimension '
                                    f'({n})')

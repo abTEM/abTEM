@@ -3,6 +3,7 @@ from scipy.special import erf
 
 from abtem.potentials.parametrizations.base import Parametrization
 from abtem.potentials.utils import eps0
+from ase.data import chemical_symbols
 
 
 def gaussian_potential(r, Z, width):
@@ -17,26 +18,21 @@ def point_charge_potential(r, Z):
     return Z / (4 * np.pi * eps0) / r
 
 
-def potential(r, Z, width):
-    return point_charge_potential(r, Z) - gaussian_potential(r, Z, width)
+def potential(r, p):
+    print(p)
+    return point_charge_potential(r, p[1]) - gaussian_potential(r, p[1], p[0])
 
 
 class EwaldParametrization(Parametrization):
-    pass
-    # _functions = {'potential': ewald.potential}
-    #
-    # def __init__(self, width=1.):
-    #     self._width = width
-    #
-    # def load_parameters(self, symbol):
-    #     return self._width
-    #
-    # def get_function(self, name, symbol, charge=0.):
-    #     if charge > 0.:
-    #         raise RuntimeError('charge not implemented for parametrization "ewald"')
-    #
-    #     try:
-    #         func = self._functions[name]
-    #         return lambda r: func(r, atomic_numbers[symbol], self._width)
-    #     except KeyError:
-    #         raise RuntimeError(f'parametrized function "{name}" does not exist for element {symbol}')
+    _functions = {'potential': potential}
+
+    def __init__(self, width: float = 1.):
+        parameters = {symbol: [width, Z] for Z, symbol in enumerate(chemical_symbols[1:], 1)}
+        super().__init__(parameters=parameters)
+
+    @property
+    def width(self):
+        return self.parameters['H'][0]
+
+    def scaled_parameters(self, symbol):
+        return {'potential': self.parameters[symbol]}

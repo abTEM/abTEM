@@ -285,6 +285,7 @@ def multislice_and_detect(waves: 'Waves',
 
                     measurements[detector].array[index] = new_measurement.array
                 else:
+
                     measurements[detector] = new_measurement
 
     measurements = tuple(measurements.values())

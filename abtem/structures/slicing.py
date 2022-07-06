@@ -135,10 +135,10 @@ class SliceIndexedAtoms(AbstractSlicedAtoms):
         else:
             in_slice = np.concatenate(self.slice_index[first_slice:last_slice])
 
-        if atomic_number is not None:
-            in_slice = (self.atoms.numbers == atomic_number) * in_slice
-
         atoms = self.atoms[in_slice]
+
+        if atomic_number is not None:
+            atoms = atoms[(atoms.numbers == atomic_number)]
 
         slice_thickness = self.slice_thickness[first_slice:last_slice]
         atoms.cell[2, 2] = np.sum(slice_thickness)
