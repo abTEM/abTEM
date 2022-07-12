@@ -85,25 +85,39 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
 
     def __init__(self,
                  atoms: Union[Atoms, Delayed],
+                 num_configs: int = None,
                  atomic_numbers: Union[np.ndarray, Sequence[int]] = None,
                  cell: Union[Cell, np.ndarray] = None):
 
         self._atoms = atoms
+        self._num_configs = num_configs
         atomic_numbers, cell = self._validate_atomic_numbers_and_cell(atoms, atomic_numbers, cell)
-
         super().__init__(atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=True)
 
     @property
+    def num_configs(self):
+        return self._num_configs
+
+    @property
     def ensemble_shape(self):
-        return ()
+        if self._num_configs is None:
+            return ()
+        else:
+            return self._num_configs,
 
     @property
     def default_ensemble_chunks(self):
-        return ()
+        if self._num_configs is None:
+            return ()
+        else:
+            return 1,
 
     @property
     def ensemble_axes_metadata(self) -> List[AxisMetadata]:
-        return []
+        if self._num_configs is None:
+            return []
+        else:
+            return [FrozenPhononsAxis(values=tuple(range(len(self))), _ensemble_mean=self.ensemble_mean)]
 
     def randomize(self, atoms):
         return atoms
@@ -119,9 +133,6 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
     def from_partitioned_args(self):
         kwargs = self.copy_kwargs(exclude=('atoms',))
         return partial(self._from_partitioned_args_func, **kwargs)
-
-    def __iter__(self):
-        return self.generate_blocks()
 
     def partition_args(self, chunks: int = 1, lazy: bool = True):
         def _dummy_frozen_phonons(atoms):
@@ -142,7 +153,10 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
         return array,
 
     def __len__(self):
-        return 1
+        if self._num_configs is None:
+            return 1
+        else:
+            return self._num_configs
 
 
 def validate_seeds(seeds: Union[int, Tuple[int, ...]], num_seeds: int = None) -> Tuple[int, ...]:
@@ -351,25 +365,11 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
         return array,
 
-
-class LazyAtoms:
-
-    def __init__(self, atoms, numbers, cell):
-        self._atoms = atoms
-        self._numbers = numbers
-        self._cell = cell
-
-    @property
-    def atoms(self):
-        return self._atoms
-
-    @property
-    def cell(self):
-        return self._cell
-
-    @property
-    def numbers(self):
-        return self._numbers
+    def to_md_frozen_phonons(self):
+        trajectory = []
+        for b in self.generate_blocks(1):
+            trajectory.append(b[-1].randomize(b[-1].atoms))
+        return MDFrozenPhonons(trajectory)
 
 
 class MDFrozenPhonons(AbstractFrozenPhonons):

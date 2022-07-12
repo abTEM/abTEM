@@ -1,13 +1,56 @@
-import numpy as np
+from typing import Tuple
 
-# from abtem.device import get_array_module, get_scipy_module
-# from abtem.measure import Measurement, calibrations_from_grid
-# from abtem.utils import ProgressBar, fft_shift
+import numpy as np
+from scipy.spatial.distance import squareform
+
+from abtem.core.backend import get_array_module, get_ndimage_module
+from abtem.core.chunks import validate_chunks, iterate_chunk_ranges
 from abtem.core.diagnostics import ProgressBar
-from abtem.waves import Probe
-from abtem.core.backend import get_scipy_module, get_array_module, get_ndimage_module
-from abtem.measure.measure import DiffractionPatterns, Images
 from abtem.core.fft import fft_shift
+from abtem.measure.measure import DiffractionPatterns, Images
+from abtem.waves import Probe
+
+
+# # max_batch = 8
+# # chunks = validate_chunks((len(positions),), (max_batch,))
+# # import matplotlib.pyplot as plt
+# # import cupy as cp
+# k = 0
+# while k < maxiter:
+#     indices = np.arange(len(positions))
+#     np.random.shuffle(indices)
+#
+#     old_position = xp.array((0., 0.))
+#     inner_pbar.reset()
+#
+#     # for _, slic in iterate_chunk_ranges(chunks):
+#     #
+#     #     ind = indices[slic]
+#     #
+#     #     batch_positions = xp.asarray(positions[indices[slic]])
+#     #
+#     #     diffraction_pattern = xp.array(diffraction_patterns[ind])
+#     #     illuminated_object = fft_shift(object, - batch_positions)
+#     #
+#     #     g = illuminated_object * probe
+#     #     gprime = xp.fft.ifft2(diffraction_pattern * xp.exp(1j * xp.angle(xp.fft.fft2(g))))
+#     #
+#     #     object = illuminated_object + alpha * (gprime - g) * xp.conj(probe) / (xp.max(xp.abs(probe)) ** 2)
+#     #
+#     #
+#     #
+#     #     if not fix_probe:
+#     #         probe = probe + beta * (gprime - g) * xp.conj(illuminated_object) / (
+#     #                 xp.max(xp.abs(illuminated_object)) ** 2)
+#     #
+#     #     illuminated_object = fft_shift(object, - batch_positions)
+#     #
+#     #
+#     #     plt.imshow(cp.asnumpy(xp.abs(illuminated_object))[0])
+#     #     plt.show()
+#     #     #print(illuminated_object.shape)
+#     #     sss
+
 
 def _run_epie(object,
               probe: np.ndarray,
@@ -19,6 +62,7 @@ def _run_epie(object,
               fix_probe: bool = False,
               fix_com: bool = False,
               return_iterations: bool = False,
+              max_batch: int = 8,
               seed=None):
     xp = get_array_module(probe)
 
@@ -45,86 +89,93 @@ def _run_epie(object,
     if return_iterations:
         object_iterations = []
         probe_iterations = []
-        SSE_iterations = []
+    else:
+        object_iterations = None
+        probe_iterations = None
 
     if seed is not None:
         np.random.seed(seed)
 
     diffraction_patterns = np.fft.ifftshift(np.sqrt(diffraction_patterns), axes=(-2, -1))
 
-    SSE = 0.
-    k = 0
+    center_of_mass = get_ndimage_module(xp).center_of_mass
+
+    chunks = validate_chunks((len(positions),), (max_batch,))
     outer_pbar = ProgressBar(total=maxiter)
     inner_pbar = ProgressBar(total=len(positions))
 
-    center_of_mass = get_ndimage_module(xp).center_of_mass
-
+    k = 0
     while k < maxiter:
         indices = np.arange(len(positions))
         np.random.shuffle(indices)
 
-        old_position = xp.array((0., 0.))
         inner_pbar.reset()
-        SSE = 0.
-        for j in indices:
-            position = xp.array(positions[j])
-            diffraction_pattern = xp.array(diffraction_patterns[j])
-            illuminated_object = fft_shift(object, old_position - position)
+
+        for _, slic in iterate_chunk_ranges(chunks):
+            ind = indices[slic]
+
+            batch_positions = xp.asarray(positions[ind])
+
+            diffraction_pattern = xp.array(diffraction_patterns[ind])
+            illuminated_object = fft_shift(object, - batch_positions)
 
             g = illuminated_object * probe
             gprime = xp.fft.ifft2(diffraction_pattern * xp.exp(1j * xp.angle(xp.fft.fft2(g))))
 
             object = illuminated_object + alpha * (gprime - g) * xp.conj(probe) / (xp.max(xp.abs(probe)) ** 2)
-            old_position = position
 
             if not fix_probe:
                 probe = probe + beta * (gprime - g) * xp.conj(illuminated_object) / (
                         xp.max(xp.abs(illuminated_object)) ** 2)
 
-            # SSE += xp.sum(xp.abs(G) ** 2 - diffraction_pattern) ** 2
+            object = fft_shift(object, batch_positions)
 
-            inner_pbar.update(1)
+            object = object.mean(0)
 
-        object = fft_shift(object, position)
+            inner_pbar.update(len(batch_positions))
 
         if fix_com:
             com = center_of_mass(xp.fft.fftshift(xp.abs(probe) ** 2))
             probe = xp.fft.ifftshift(fft_shift(probe, - xp.array(com)))
 
-        # SSE = SSE / np.prod(diffraction_patterns.shape)
-
-        if return_iterations:
+        if object_iterations is not None and probe_iterations is not None:
             object_iterations.append(object)
             probe_iterations.append(probe)
-            SSE_iterations.append(SSE)
 
         outer_pbar.update(1)
-        # if verbose:
-        #    print(f'Iteration {k:<{len(str(maxiter))}}, SSE = {float(SSE):.3e}')
-
         k += 1
 
     inner_pbar.close()
     outer_pbar.close()
 
-    if return_iterations:
-        return object_iterations, probe_iterations, SSE_iterations
+    if object_iterations is not None and probe_iterations is not None:
+        return object_iterations, probe_iterations
     else:
-        return object, probe, SSE
+        return object, probe
+
+
+def periodic_distances(positions, bounds, square=False):
+    difference = positions[:, None] - positions[None]
+    difference = difference % bounds[None, None]
+    upper = difference[np.triu_indices(len(positions), k=1)]
+    lower = np.swapaxes(difference, 1, 0)[np.triu_indices(len(positions), k=1)]
+    distances = np.sqrt(np.sum(np.minimum(upper, lower) ** 2, axis=1))
+    if square:
+        distances = squareform(distances)
+
+    return distances
 
 
 def epie(diffraction_patterns: DiffractionPatterns,
          probe_guess: Probe,
-         maxiter: int = 5,
+         max_iter: int = 5,
+         max_batch: int = 8,
          alpha: float = 1.,
          beta: float = 1.,
          fix_probe: bool = False,
          fix_com: bool = False,
          return_iterations: bool = False,
-         max_angle: float = None,
-         crop_to_valid: bool = False,
-         seed: int = None,
-         device: str = 'cpu', ):
+         seed: int = None):
     """
     Reconstruct the phase of a 4D-STEM measurement using the extended Ptychographical Iterative Engine.
 
@@ -136,10 +187,10 @@ def epie(diffraction_patterns: DiffractionPatterns,
         4D-STEM measurement.
     probe_guess : Probe object
         The initial guess for the probe.
-    maxiter : int
+    max_iter : int
         Run the algorithm for this many iterations.
     alpha : float
-        Controls the size of the iterative updates for the object. See reference.
+        Step size of the iterative updates for the object. See reference.
     beta : float
         Controls the size of the iterative updates for the probe. See reference.
     fix_probe : bool
@@ -170,26 +221,12 @@ def epie(diffraction_patterns: DiffractionPatterns,
     probe_guess.extent = diffraction_patterns.equivalent_real_space_extent
     probe_guess.gpts = diffraction_patterns.base_shape
 
+    if len(diffraction_patterns.scan_shape) != 2:
+        raise ValueError()
+
     x, y = diffraction_patterns.scan_positions()
     x, y = np.meshgrid(x, y, indexing='ij')
     scan_positions = np.array([x.ravel(), y.ravel()]).T / diffraction_patterns.equivalent_real_space_sampling
-
-    # import matplotlib.pyplot as plt
-    # plt.plot(*scan_positions.T)
-    # plt.show()
-    #
-    # ssss
-    # x = measurement.calibrations[0].coordinates(measurement.shape[0]) / sampling[0]
-    # y = measurement.calibrations[1].coordinates(measurement.shape[1]) / sampling[1]
-    # x, y = np.meshgrid(x, y, indexing='ij')
-    #
-    #
-    # probe_guess.extent = extent
-    # probe_guess.gpts = diffraction_patterns.shape[-2:]
-    #
-    # calibrations = calibrations_from_grid(probe_guess.gpts, probe_guess.sampling, names=['x', 'y'], units='Å')
-    #
-    # probe_guess._device = device
 
     probe_guess = probe_guess.build((0., 0.), lazy=False).array
     diffraction_patterns_array = diffraction_patterns.array.reshape((-1,) + diffraction_patterns.array.shape[-2:])
@@ -198,28 +235,24 @@ def epie(diffraction_patterns: DiffractionPatterns,
                        probe_guess,
                        diffraction_patterns_array,
                        scan_positions,
-                       maxiter=maxiter,
+                       maxiter=max_iter,
                        alpha=alpha,
                        beta=beta,
                        return_iterations=return_iterations,
                        fix_probe=fix_probe,
                        fix_com=fix_com,
+                       max_batch=max_batch,
                        seed=seed)
 
-    #sampling =
-
-
-    # valid_extent = (,
-    #                 measurement.calibration_limits[1][1] - measurement.calibration_limits[1][0])
-
     if return_iterations:
-        object_iterations = [Images(obj, sampling=diffraction_patterns.equivalent_real_space_sampling) for obj in result[0]]
-        #probe_iterations = [Measurement(np.fft.fftshift(probe), calibrations=calibrations) for probe in result[1]]
+        object_iterations = [Images(obj, sampling=diffraction_patterns.equivalent_real_space_sampling) for obj in
+                             result[0]]
+        # probe_iterations = [Measurement(np.fft.fftshift(probe), calibrations=calibrations) for probe in result[1]]
 
-        #if crop_to_valid:
+        # if crop_to_valid:
         #    object_iterations = [object_iteration.crop(valid_extent) for object_iteration in object_iterations]
 
-        return object_iterations #object_iterations, probe_iterations, result[2]
+        return object_iterations  # object_iterations, probe_iterations, result[2]
     else:
         object = Images(result[0], sampling=diffraction_patterns.equivalent_real_space_sampling)
 
@@ -228,6 +261,6 @@ def epie(diffraction_patterns: DiffractionPatterns,
 
         return object
 
-        #return (object,
+        # return (object,
         #        Measurement(np.fft.fftshift(result[1]), calibrations=calibrations),
         #        result[2])

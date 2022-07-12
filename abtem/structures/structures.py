@@ -5,6 +5,7 @@ from typing import Union, Tuple
 import numpy as np
 from ase import Atoms
 from ase.build.tools import rotation_matrix, cut
+from ase.cell import Cell
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import pdist
 
@@ -55,7 +56,7 @@ def is_cell_hexagonal(atoms: Atoms):
     return np.isclose(a, b) & (np.isclose(angle, np.pi / 3) | np.isclose(angle, 2 * np.pi / 3)) & (c == cell[2, 2])
 
 
-def is_cell_orthogonal(atoms: Atoms, tol: float = 1e-12):
+def is_cell_orthogonal(cell: Union[Atoms, Cell], tol: float = 1e-12):
     """
     Check whether an Atoms object has an orthogonal cell.
 
@@ -66,7 +67,10 @@ def is_cell_orthogonal(atoms: Atoms, tol: float = 1e-12):
     tol : float
         Components of the lattice vectors below this value are considered to be zero.
     """
-    return not np.any(np.abs(atoms.cell[~np.eye(3, dtype=bool)]) > tol)
+    if hasattr(cell, 'cell'):
+        cell = cell.cell
+
+    return not np.any(np.abs(cell[~np.eye(3, dtype=bool)]) > tol)
 
 
 def is_cell_valid(atoms: Atoms, tol: float = 1e-12) -> bool:
@@ -279,8 +283,6 @@ def shrink_cell(atoms, repetitions=(2, 3), tol=1e-6):
 
 
 axis_mapping = {'x': (1, 0, 0), 'y': (0, 1, 0), 'z': (0, 0, 1)}
-
-
 
 
 def rotation_matrix_from_plane(plane: Union[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = 'xy'):

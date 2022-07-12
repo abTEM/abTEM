@@ -54,6 +54,9 @@ class Ensemble(metaclass=ABCMeta):
         chunks = self.validate_chunks(chunks, limit)
 
         args = self.partition_args(chunks, lazy=True)
+
+        assert isinstance(args, tuple)
+
         symbols = tuple(range(len(args)))
         args = tuple((block, (i,)) for i, block in zip(symbols, args))
         adjust_chunks = {i: c for i, c in enumerate(chunks)}
@@ -113,6 +116,7 @@ class Ensemble(metaclass=ABCMeta):
     @staticmethod
     def wrap_from_partitioned_args(*args, from_partitioned_args, **kwargs):
         blocks = tuple(arg.item() for arg in args)
+
         arr = np.empty((1,) * len(args), dtype=object)
         arr.itemset(0, from_partitioned_args(*blocks, **kwargs))
         return arr

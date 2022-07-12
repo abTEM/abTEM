@@ -1,46 +1,60 @@
 from functools import partial
 from typing import Tuple, Union
 
+import dask
+import dask.array as da
 import numpy as np
 from ase import Atoms
 from ase import units
 from ase.cell import Cell
-from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import map_coordinates
 
-import dask
-from abtem.core.backend import copy_to_device, get_array_module
-from abtem.core.fft import fft_crop
+from abtem.core.backend import copy_to_device
+from abtem.core.fft import fft_crop, fft_interpolate, ifftn, fftn
 from abtem.potentials.parametrizations import EwaldParametrization
-from abtem.potentials.potentials import Potential, AbstractPotential, PotentialArray, PotentialBuilder
-from abtem.potentials.temperature import MDFrozenPhonons, AbstractFrozenPhonons, LazyAtoms
+from abtem.potentials.potentials import Potential, PotentialBuilder
+from abtem.potentials.temperature import MDFrozenPhonons, DummyFrozenPhonons
 from abtem.structures.structures import plane_to_axes
-from abtem.structures.slicing import validate_slice_thickness
-import dask.array as da
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
 
-def spatial_frequencies(shape, cell):
-    kx, ky, kz = np.meshgrid(*(np.fft.fftfreq(n, d=1 / n) for n in shape), indexing='ij')
+def spatial_frequencies(shape: Tuple[int, int, int], cell: Cell, meshgrid: bool = True) \
+        -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    kx, ky, kz = (np.fft.fftfreq(n, d=1 / n) for n in shape)
+
+    if not meshgrid:
+        assert np.allclose(np.diag(cell.array), cell.lengths())
+        lengths = cell.reciprocal().lengths()
+        kx = kx[:, None, None] * lengths[0]
+        ky = ky[None, :, None] * lengths[1]
+        kz = kz[None, None, :] * lengths[2]
+        return kx, ky, kz
+
+    kx, ky, kz = np.meshgrid(kx, ky, kz, indexing='ij')
     kp = np.array([kx.ravel(), ky.ravel(), kz.ravel()]).T
-    kx, ky, kz = np.dot(kp, cell.reciprocal()).T
+    kx, ky, kz = np.dot(kp, cell.reciprocal().array).T
     kx, ky, kz = kx.reshape(shape), ky.reshape(shape), kz.reshape(shape)
     return kx, ky, kz
 
 
-def _solve_fourier_space(charge, kx, ky, kz):
+def _solve_fourier_space(charge, kx, ky, kz, fourier_space_out=False):
     k2 = 2 ** 2 * np.pi ** 2 * (kx ** 2 + ky ** 2 + kz ** 2)
-    V = np.zeros(charge.shape, dtype=np.complex)
+    k2[0, 0, 0] = 1.
+    # V = np.zeros(charge.shape, dtype=np.complex)
 
-    nonzero = np.ones_like(V, dtype=bool)
-    nonzero[0, 0, 0] = False
+    charge /= k2 * eps0
 
-    V[nonzero] = charge[nonzero] / k2[nonzero]
-    V[0, 0, 0] = 0
+    # nonzero = np.ones_like(V, dtype=bool)
+    # nonzero[0, 0, 0] = False
 
-    V = np.fft.ifftn(V).real / eps0
-    return V
+    # V[nonzero] = charge[nonzero] / k2[nonzero] / eps0
+    # V[0, 0, 0] = 0
+
+    if fourier_space_out:
+        return charge
+    else:
+        return ifftn(charge, overwrite_x=True).real
 
 
 def solve_poisson_equation(charge_density, cell):
@@ -72,68 +86,52 @@ def superpose_deltas(positions, array, cell, scale=1):
     return array
 
 
-def solve_point_charges(atoms, shape=None, array=None, width=0.):
-    if array is None:
-        array = np.zeros(shape, dtype=np.complex64)
+def fourier_space_shift_3d(kx, ky, kz, x, y, z):
+    return np.exp(-2 * np.pi * 1j * (kx * x + ky * y + kz * z))
 
-    def fourier_shift(kx, ky, kz, x, y, z):
-        return np.exp(-2 * np.pi * 1j * (kx * x + ky * y + kz * z))
 
-    def fourier_gaussian(kx, ky, kz):
-        a = np.sqrt(1 / (2 * width ** 2)) / (2 * np.pi)
-        return np.exp(- 1 / (4 * a ** 2) * (kx ** 2 + ky ** 2 + kz ** 2))
+def fourier_space_gaussian_3d(kx, ky, kz, width):
+    a = np.sqrt(1 / (2 * width ** 2)) / (2 * np.pi)
+    return np.exp(- 1 / (4 * a ** 2) * (kx ** 2 + ky ** 2 + kz ** 2))
 
-    kx, ky, kz = spatial_frequencies(array.shape, atoms.cell)
 
+def real_space_point_charges(atoms, array):
     pixel_volume = np.prod(np.diag(atoms.cell)) / np.prod(array.shape)
 
-    compensation = np.zeros_like(array)
     for number in np.unique(atoms.numbers):
-        superpose_deltas(atoms[atoms.numbers == number].positions, compensation, atoms.cell, scale=number)
+        superpose_deltas(atoms[atoms.numbers == number].positions, array, atoms.cell, scale=number / pixel_volume)
 
-    g = fourier_gaussian(kx, ky, kz)
-    array = np.fft.fftn(array) + np.fft.fftn(compensation) * g / pixel_volume
-
-    # array = np.fft.fftn(array) * g / pixel_volume
-
-    # for atom in atoms:
-    #     scale = atom.number / pixel_volume
-    #     x, y, z = atom.position
-    #
-    #     if width > 0.:
-    #         array += scale * g * fourier_shift(kx, ky, kz, x, y, z)
-    #     else:
-    #         array += scale * fourier_shift(kx, ky, kz, x, y, z)
-
-    return _solve_fourier_space(array, kx, ky, kz)
+    return array
 
 
-# def solve_point_charges(atoms, shape=None, array=None, width=0.):
-#     if array is None:
-#         array = np.zeros(shape, dtype=np.complex64)
-#
-#     def fourier_shift(kx, ky, kz, x, y, z):
-#         return np.exp(-2 * np.pi * 1j * (kx * x + ky * y + kz * z))
-#
-#     def fourier_gaussian(kx, ky, kz):
-#         a = np.sqrt(1 / (2 * width ** 2)) / (2 * np.pi)
-#         return np.exp(- 1 / (4 * a ** 2) * (kx ** 2 + ky ** 2 + kz ** 2))
-#
-#     kx, ky, kz = spatial_frequencies(array.shape, atoms.cell)
-#
-#     pixel_volume = np.prod(np.diag(atoms.cell)) / np.prod(array.shape)
-#     for atom in atoms:
-#         scale = atom.number / pixel_volume
-#         x, y, z = atom.position
-#
-#         if width > 0.:
-#             array += scale * fourier_gaussian(kx, ky, kz) * fourier_shift(kx, ky, kz, x, y, z)
-#         else:
-#             array += scale * fourier_shift(kx, ky, kz, x, y, z)
-#
-#     return _solve_fourier_space(array, kx, ky, kz)
+def solve_point_charges(atoms: Atoms,
+                        array: np.ndarray,
+                        width: float = 0.,
+                        real_space_point_charges: bool = False,
+                        fourier_space_in: bool = False,
+                        fourier_space_out: bool = False):
+    pixel_volume = np.prod(np.diag(atoms.cell)) / np.prod(array.shape)
 
-def interpolate_between_cells(array, new_shape, old_cell, new_cell, offset=(0., 0., 0.), order=3):
+    kx, ky, kz = spatial_frequencies(array.shape, atoms.cell, meshgrid=not atoms.cell.orthorhombic)
+
+    gaussian = fourier_space_gaussian_3d(kx, ky, kz, width) if width > 0. else None
+
+    # real_space_point_charges(atoms, array)
+
+    for atom in atoms:
+        scale = atom.number / pixel_volume
+
+        if gaussian is not None:
+            array += scale * gaussian * fourier_space_shift_3d(kx, ky, kz, *atom.position)
+        else:
+            array += scale * fourier_space_shift_3d(kx, ky, kz, *atom.position)
+
+    array = _solve_fourier_space(array, kx, ky, kz, fourier_space_out=fourier_space_out)
+
+    return array
+
+
+def interpolate_between_cells(array, new_shape, old_cell, new_cell, offset=(0., 0., 0.), order=2):
     x = np.linspace(0, 1, new_shape[0], endpoint=False)
     y = np.linspace(0, 1, new_shape[1], endpoint=False)
     z = np.linspace(0, 1, new_shape[2], endpoint=False)
@@ -142,21 +140,105 @@ def interpolate_between_cells(array, new_shape, old_cell, new_cell, offset=(0., 
     coordinates = np.array([x.ravel(), y.ravel(), z.ravel()]).T
     coordinates = np.dot(coordinates, new_cell) + offset
 
-    padded_array = np.pad(array, ((order,) * 2,) * 3, mode='wrap')
+    padding = 3
+    padded_array = np.pad(array, ((padding,) * 2,) * 3, mode='wrap')
 
-    padded_cell = old_cell.copy()
-    padded_cell[:, 0] *= (array.shape[0] + order) / array.shape[0]
-    padded_cell[:, 1] *= (array.shape[1] + order) / array.shape[1]
-    padded_cell[:, 2] *= (array.shape[2] + order) / array.shape[2]
+    # padded_cell = old_cell.copy()
+    # padded_cell[:, 0] *= (array.shape[0] + order) / array.shape[0]
+    # padded_cell[:, 1] *= (array.shape[1] + order) / array.shape[1]
+    # padded_cell[:, 2] *= (array.shape[2] + order) / array.shape[2]
 
     inverse_old_cell = np.linalg.inv(np.array(old_cell))
     mapped_coordinates = np.dot(coordinates, inverse_old_cell) % 1.0
     mapped_coordinates *= array.shape
-    mapped_coordinates += order
+    mapped_coordinates += padding
+    # mapped_coordinates = mapped_coordinates % array.shape
 
     interpolated = map_coordinates(padded_array, mapped_coordinates.T, mode='wrap', order=order)
     interpolated = interpolated.reshape(new_shape)
     return interpolated
+
+
+# def interpolate_between_cells(array, new_shape, old_cell, new_cell, offset=(0., 0., 0.), order=2):
+#     x = np.linspace(0, new_shape[0], new_shape[0], endpoint=False)
+#     y = np.linspace(0, new_shape[1], new_shape[1], endpoint=False)
+#     z = np.linspace(0, new_shape[2], new_shape[2], endpoint=False)
+#
+#     x, y, z = np.meshgrid(x, y, z, indexing='ij')
+#     coordinates = np.array([x.ravel(), y.ravel(), z.ravel()]).T
+#
+#     new_cell = Cell(new_cell.copy())
+#     old_inv = np.linalg.inv(old_cell)
+#
+#     old_scampling = old_cell.lengths() / array.shape
+#     new_sampling = new_cell.lengths() / new_shape
+#
+#     padding = 10
+#
+#     padded_array = np.pad(array, ((padding,) * 2,) * 3, mode='wrap')
+#
+#     mapped_coords = np.dot(coordinates, old_inv) * old_scampling / new_sampling
+#     mapped_coords = (mapped_coords + padding) % array.shape
+#
+#     interpolated = map_coordinates(padded_array, mapped_coords.T, mode='wrap', order=order)
+#     interpolated = interpolated.reshape(new_shape)
+#     return interpolated
+
+
+def _interpolate_slice(array, cell, gpts, sampling, a, b):
+    slice_shape = gpts + (int((b - a) / (min(sampling))),)
+
+    slice_box = np.diag((gpts[0] * sampling[0], gpts[1] * sampling[1]) + (b - a,))
+
+    slice_array = interpolate_between_cells(array,
+                                            slice_shape,
+                                            cell,
+                                            slice_box,
+                                            (0, 0, a))
+
+    return np.trapz(slice_array, axis=-1, dx=(b - a) / (slice_shape[-1] - 1))
+
+
+def generate_slices(array,
+                    ewald_potential,
+                    first_slice: int = 0,
+                    last_slice: int = None):
+    if last_slice is None:
+        last_slice = len(ewald_potential)
+
+    if ewald_potential.plane != 'xy':
+        axes = plane_to_axes(ewald_potential.plane)
+        array = np.moveaxis(array, axes[:2], (0, 1))
+        atoms = ewald_potential._transformed_atoms()
+    else:
+        atoms = ewald_potential.frozen_phonons.atoms
+    # assert len(array.shape) == 3
+
+    atoms = ewald_potential.frozen_phonons.randomize(atoms)
+
+    array = -fftn(array, overwrite_x=True)
+
+    array = fft_crop(array, array.shape[:2] + (ewald_potential.num_slices,), normalize=True)
+
+    array = solve_point_charges(atoms,
+                                array=array,
+                                width=ewald_potential.integrator.parametrization.width,
+                                fourier_space_in=True,
+                                fourier_space_out=False)
+
+    for i, ((a, b), slic) in enumerate(zip(ewald_potential.slice_limits[first_slice:last_slice],
+                                           ewald_potential.generate_slices(first_slice, last_slice))):
+        slice_array = _interpolate_slice(array,
+                                         atoms.cell,
+                                         ewald_potential.gpts,
+                                         ewald_potential.sampling,
+                                         a,
+                                         b)
+
+        slic._array = slic._array + copy_to_device(slice_array[None], slic.array)
+
+        slic._array -= slic._array.min()
+        yield slic
 
 
 class ChargeDensityPotential(PotentialBuilder):
@@ -164,72 +246,59 @@ class ChargeDensityPotential(PotentialBuilder):
     def __init__(self,
                  atoms: Union[Atoms, MDFrozenPhonons],
                  charge_density: np.ndarray = None,
-                 charge_density_cell=None,
+                 charge_density_cell: Cell = None,
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
-                 slice_thickness: float = .5,
+                 slice_thickness: Union[float, Tuple[float]] = .5,
                  plane: str = 'xy',
                  box: Tuple[float, float, float] = None,
                  origin: Tuple[float, float, float] = (0., 0., 0.),
+                 periodic: bool = True,
                  exit_planes: int = None,
                  device: str = None, ):
 
-        self._charge_density = charge_density
+        if hasattr(atoms, 'randomize'):
+            self._frozen_phonons = atoms
+        else:
+            self._frozen_phonons = DummyFrozenPhonons(atoms)
+
+        self._charge_density = charge_density.astype(np.float32)
 
         self._charge_density_cell = atoms.cell.copy() if charge_density_cell is None else charge_density_cell
 
         # if fft_singularities and ((box is not None) or (origin != (0., 0., 0.)) or (plane != 'xy')):
         #    raise NotImplementedError()
-        ewald_parametrization = EwaldParametrization(width=1)
 
-        self._ewald_potential = Potential(atoms=atoms,
-                                          gpts=gpts,
-                                          sampling=sampling,
-                                          parametrization=ewald_parametrization,
-                                          slice_thickness=slice_thickness,
-                                          projection='finite',
-                                          integral_space='real',
-                                          plane=plane,
-                                          box=box,
-                                          origin=origin,
-                                          exit_planes=exit_planes,
-                                          device=device)
+        super().__init__(gpts=gpts,
+                         sampling=sampling,
+                         cell=atoms.cell,
+                         slice_thickness=slice_thickness,
+                         exit_planes=exit_planes,
+                         device=device,
+                         plane=plane,
+                         origin=origin,
+                         box=box,
+                         periodic=periodic)
 
-        super().__init__()
-
-        self._grid = self._ewald_potential.grid
+    @property
+    def frozen_phonons(self):
+        return self._frozen_phonons
 
     @property
     def num_frozen_phonons(self):
-        return self.ewald_potential.num_frozen_phonons
+        return len(self.frozen_phonons)
 
     @property
     def ensemble_axes_metadata(self):
-        return self.ewald_potential.ensemble_axes_metadata
+        return self.frozen_phonons.ensemble_axes_metadata
 
     @property
-    def ensemble_shape(self):
-        return self.ewald_potential.ensemble_shape
-
-    @property
-    def base_shape(self):
-        return self.ewald_potential.base_shape
+    def ensemble_shape(self) -> Tuple[int, ...]:
+        return self.frozen_phonons.ensemble_shape
 
     @property
     def is_lazy(self):
         return isinstance(self.charge_density, da.core.Array)
-
-    @property
-    def box(self):
-        return self.ewald_potential.box
-
-    @property
-    def plane(self):
-        return self.ewald_potential.plane
-
-    @property
-    def origin(self):
-        return self.ewald_potential.origin
 
     @property
     def charge_density(self):
@@ -239,36 +308,22 @@ class ChargeDensityPotential(PotentialBuilder):
     def charge_density_cell(self):
         return self._charge_density_cell
 
-    @property
-    def ewald_potential(self):
-        return self._ewald_potential
-
-    @property
-    def ewald_parametrization(self):
-        return self.ewald_potential.integrator.parametrization
-
-    @property
-    def device(self):
-        return self.ewald_potential.device
-
-    @property
-    def slice_thickness(self) -> Tuple[float, ...]:
-        return self.ewald_potential.slice_thickness
-
-    @property
-    def exit_planes(self) -> Tuple[int]:
-        return self.ewald_potential.exit_planes
-
     @staticmethod
     def _wrap_charge_density(charge_density, frozen_phonon):
         return np.array([{'charge_density': charge_density, 'atoms': frozen_phonon}], dtype=object)
 
-    def partition_args(self, chunks=None, lazy: bool = True):
+    def partition_args(self, chunks: int = 1, lazy: bool = True):
+
+        chunks = self.validate_chunks(chunks)
 
         charge_densities = self.charge_density
 
-        if len(self.ensemble_shape) == 0:
+        if len(charge_densities.shape) == 3:
             charge_densities = charge_densities[None]
+        elif len(charge_densities.shape) != 4:
+            raise RuntimeError()
+
+        if len(self.ensemble_shape) == 0:
             blocks = np.zeros((1,), dtype=object)
         else:
             blocks = np.zeros((len(chunks[0]),), dtype=object)
@@ -277,12 +332,15 @@ class ChargeDensityPotential(PotentialBuilder):
             if not isinstance(charge_densities, da.core.Array):
                 charge_densities = da.from_array(charge_densities, chunks=(1, -1, -1, -1))
 
+            if charge_densities.shape[0] != self.ensemble_shape:
+                charge_densities = da.tile(charge_densities, self.ensemble_shape + (1, 1, 1))
+
             charge_densities = charge_densities.to_delayed()
 
         elif hasattr(charge_densities, 'compute'):
             raise RuntimeError
 
-        frozen_phonon_blocks = self.ewald_potential.frozen_phonons.partition_args(lazy=lazy)[0]
+        frozen_phonon_blocks = self._ewald_potential().frozen_phonons.partition_args(lazy=lazy)[0]
 
         for i, (charge_density, frozen_phonon) in enumerate(zip(charge_densities, frozen_phonon_blocks)):
 
@@ -312,9 +370,53 @@ class ChargeDensityPotential(PotentialBuilder):
 
     def from_partitioned_args(self):
         kwargs = self.copy_kwargs(exclude=('atoms', 'charge_density'), cls=ChargeDensityPotential)
-        frozen_phonons_partial = self.ewald_potential.frozen_phonons.from_partitioned_args()
+        frozen_phonons_partial = self._ewald_potential().frozen_phonons.from_partitioned_args()
 
         return partial(self._charge_density_potential, frozen_phonons_partial=frozen_phonons_partial, **kwargs)
+
+    # def _fourier_space(self):
+    #     fourier_density = -np.fft.fftn(self._charge_density)
+    #     C = np.prod(self.gpts + (self.num_slices,)) / np.prod(fourier_density.shape)
+    #     fourier_density = fft_crop(fourier_density, self.gpts + (self.num_slices,)) * C
+    #     potential = solve_point_charges(self.atoms, array=fourier_density)
+    #     potential = np.rollaxis(potential, 2)
+    #     potential = potential * self.atoms.cell[2, 2] / potential.shape[0]
+
+    def _interpolate_slice(self, array, cell, a, b):
+        slice_shape = self.gpts + (int((b - a) / min(self.sampling)),)
+
+        slice_box = np.diag(self.box[:2] + (b - a,))
+
+        slice_array = interpolate_between_cells(array,
+                                                slice_shape,
+                                                cell,
+                                                slice_box,
+                                                (0, 0, a))
+
+        return np.trapz(slice_array, axis=-1, dx=(b - a) / (slice_shape[-1] - 1))
+
+    def _integrate_slice(self, array, a, b):
+        dz = self.box[2] / array.shape[2]
+        na = int(np.floor(a / dz))
+        nb = int(np.floor(b / dz))
+        slice_array = np.trapz(array[..., na:nb], axis=-1, dx=(b - a) / (nb - na - 1))
+        return fft_interpolate(slice_array, new_shape=self.gpts, normalization='values')
+
+    def _ewald_potential(self):
+        ewald_parametrization = EwaldParametrization(width=1)
+
+        return Potential(atoms=self.frozen_phonons,
+                         gpts=self.gpts,
+                         sampling=self.sampling,
+                         parametrization=ewald_parametrization,
+                         slice_thickness=self.slice_thickness,
+                         projection='finite',
+                         integral_space='real',
+                         plane=self.plane,
+                         box=self.box,
+                         origin=self.origin,
+                         exit_planes=self.exit_planes,
+                         device=self.device)
 
     def generate_slices(self, first_slice: int = 0, last_slice: int = None):
 
@@ -331,31 +433,37 @@ class ChargeDensityPotential(PotentialBuilder):
         else:
             raise RuntimeError()
 
-        if hasattr(array, 'compute'):
-            array = array.compute(scheduler='single-threaded')
+        ewald_potential = self._ewald_potential()
 
-        potential = self.ewald_potential.build(first_slice=first_slice, last_slice=last_slice, lazy=False)
-
-        if self.ewald_potential.plane != 'xy':
-            axes = plane_to_axes(self.ewald_potential.plane)
-            array = np.moveaxis(array, axes[:2], (0, 1))
-
-        array = solve_point_charges(self.ewald_potential.sliced_atoms.atoms,
-                                    array=-array,  # -np.fft.fftn(array),#-array,
-                                    width=self.ewald_parametrization.width)
-
-        for i, ((a, b), slic) in enumerate(zip(self.slice_limits[first_slice:last_slice], potential)):
-            slice_shape = self.gpts + (int((b - a) / min(self.sampling)),)
-
-            slice_box = np.diag(self.box[:2] + (b - a,))
-
-            slice_array = interpolate_between_cells(array,
-                                                    slice_shape,
-                                                    self.ewald_potential.sliced_atoms.atoms.cell,
-                                                    slice_box,
-                                                    (0, 0, a))
-
-            integrated_slice_array = np.trapz(slice_array, axis=-1, dx=(b - a) / (slice_shape[-1] - 1))
-
-            slic._array = slic._array + copy_to_device(integrated_slice_array[None], slic.array)
+        for slic in generate_slices(array, ewald_potential, first_slice=first_slice, last_slice=last_slice):
             yield slic
+
+        # if hasattr(array, 'compute'):
+        #     array = array.compute(scheduler='single-threaded')
+        #
+        # ewald_potential = self._ewald_potential()
+        #
+        # # if self.ewald_potential.plane != 'xy':
+        # #    axes = plane_to_axes(self.ewald_potential.plane)
+        # #    array = np.moveaxis(array, axes[:2], (0, 1))
+        #
+        # assert len(array.shape) == 3
+        #
+        # array = -fftn(array, overwrite_x=True)
+        # array = fft_crop(array, array.shape[:2] + (self.num_slices,), normalize=True)
+        #
+        # array = solve_point_charges(self.frozen_phonons.atoms,
+        #                             array=array,
+        #                             width=ewald_potential.integrator.parametrization.width,
+        #                             fourier_space_in=True,
+        #                             fourier_space_out=False)
+        #
+        # for i, ((a, b), slic) in enumerate(zip(self.slice_limits[first_slice:last_slice],
+        #                                        ewald_potential.generate_slices(first_slice, last_slice))):
+        #     slice_array = self._interpolate_slice(array, self.frozen_phonons.atoms.cell, a, b)
+        #
+        #     slic._array = slic._array + copy_to_device(slice_array[None], slic.array)
+        #     # slic._array = copy_to_device(slice_array[None], slic.array)
+        #
+        #     slic._array -= slic._array.min()
+        #     yield slic

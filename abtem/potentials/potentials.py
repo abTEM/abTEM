@@ -159,14 +159,95 @@ def validate_exit_planes(exit_planes, num_slices):
 
 class PotentialBuilder(AbstractPotential):
 
+    def __init__(self,
+                 gpts,
+                 sampling,
+                 cell,
+                 box,
+                 plane,
+                 origin,
+                 periodic,
+                 device,
+                 slice_thickness,
+                 exit_planes):
+
+        if self._require_cell_transform(cell,
+                                        box=box,
+                                        plane=plane,
+                                        origin=origin):
+            R = rotation_matrix_from_plane(plane)
+            cell = np.dot(cell, R.T)
+            box = tuple(best_orthogonal_box(cell))
+
+        elif box is None:
+            box = tuple(np.diag(cell))
+
+        self._grid = Grid(extent=box[:2], gpts=gpts, sampling=sampling, lock_extent=True)
+        self._device = validate_device(device)
+
+        self._box = box
+        self._plane = plane
+        self._origin = origin
+        self._periodic = periodic
+
+        self._slice_thickness = validate_slice_thickness(slice_thickness, thickness=box[2])
+        self._exit_planes = validate_exit_planes(exit_planes, len(self._slice_thickness))
+
+    @property
+    def slice_thickness(self) -> Tuple[float, ...]:
+        return self._slice_thickness
+
+    @property
+    def exit_planes(self) -> Tuple[int]:
+        return self._exit_planes
+
+    @property
+    def device(self) -> str:
+        return self._device
+
+    @property
+    def periodic(self) -> bool:
+        return self._periodic
+
+    @property
+    def plane(self) -> str:
+        return self._plane
+
+    @property
+    def box(self) -> Tuple[float, float, float]:
+        return self._box
+
+    @property
+    def origin(self) -> Tuple[float, float, float]:
+        return self._origin
+
+    def _require_cell_transform(self, cell, box, plane, origin):
+
+        if box == tuple(np.diag(cell)):
+            return False
+
+        if not is_cell_orthogonal(cell):
+            return True
+
+        if box is not None:
+            return True
+
+        if plane != 'xy':
+            return True
+
+        if origin != (0., 0., 0.):
+            return True
+
+        return False
+
+    def __getitem__(self, item) -> 'PotentialArray':
+        return self.build(*unpack_item(item, len(self)), lazy=False)
+
     @staticmethod
     def _wrap_build_potential(potential):
         potential = potential.item()
         array = potential.build(lazy=False).array
         return array
-
-    def __getitem__(self, item) -> 'PotentialArray':
-        return self.build(*unpack_item(item, len(self)), lazy=False)
 
     def build(self,
               first_slice: int = 0,
@@ -281,17 +362,16 @@ class Potential(PotentialBuilder):
         The device used for calculating the potential. The default is determined by the user configuration file.
 
     """
-
     _exclude_from_copy = ('parametrization', 'projection', 'integral_space')
 
     def __init__(self,
                  atoms: Union[Atoms, AbstractFrozenPhonons] = None,
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
-                 slice_thickness: Union[float, np.ndarray] = .5,
+                 slice_thickness: Union[float, Tuple[float, ...]] = .5,
                  parametrization: Union[str, Parametrization] = 'lobato',
-                 projection: str = 'finite',
-                 integral_space: str = 'fourier',
+                 projection: str = 'infinite',
+                 integral_space: str = None,
                  exit_planes: Union[int, Tuple[int, ...]] = None,
                  device: str = None,
                  plane: Union[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = 'xy',
@@ -305,6 +385,12 @@ class Potential(PotentialBuilder):
         else:
             self._frozen_phonons = atoms
 
+        if projection == 'infinite' and integral_space is None:
+            integral_space = 'fourier'
+
+        elif projection == 'finite' and integral_space is None:
+            integral_space = 'real'
+
         if integrator is None:
             if projection == 'finite' and integral_space == 'real':
                 integrator = ProjectionQuadratureRule(parametrization=parametrization)
@@ -316,51 +402,18 @@ class Potential(PotentialBuilder):
                 raise NotImplementedError
 
         self._integrator = integrator
-
-        if self._require_cell_transform(atoms=atoms,
-                                        box=box,
-                                        plane=plane,
-                                        origin=origin):
-            R = rotation_matrix_from_plane(plane)
-            cell = np.dot(self.frozen_phonons.atoms.cell, R.T)
-            box = tuple(best_orthogonal_box(cell))
-
-            # if not periodic and projection == 'infinite':
-            #     raise ValueError('non-periodic potentials are not available with infinite projection integrals')
-
-        if box is None:
-            box = tuple(np.diag(atoms.cell))
-
-        self._grid = Grid(extent=box[:2], gpts=gpts, sampling=sampling, lock_extent=True)
-        self._device = validate_device(device)
-
-        self._box = box
-        self._plane = plane
-        self._origin = origin
-        self._periodic = periodic
-
-        self._slice_thickness = validate_slice_thickness(slice_thickness, thickness=box[2])
-        self._exit_planes = validate_exit_planes(exit_planes, len(self._slice_thickness))
-
         self._sliced_atoms = None
 
-    def _require_cell_transform(self, atoms, box, plane, origin):
-        if box == tuple(np.diag(atoms.cell)):
-            return False
-
-        if not is_cell_orthogonal(atoms):
-            return True
-
-        if box is not None:
-            return True
-
-        if plane != 'xy':
-            return True
-
-        if origin != (0., 0., 0.):
-            return True
-
-        return False
+        super().__init__(gpts=gpts,
+                         sampling=sampling,
+                         cell=self._frozen_phonons.atoms.cell,
+                         slice_thickness=slice_thickness,
+                         exit_planes=exit_planes,
+                         device=device,
+                         plane=plane,
+                         origin=origin,
+                         box=box,
+                         periodic=periodic)
 
     @property
     def frozen_phonons(self) -> AbstractFrozenPhonons:
@@ -371,67 +424,18 @@ class Potential(PotentialBuilder):
         return len(self.frozen_phonons)
 
     @property
-    def slice_thickness(self) -> Tuple[float, ...]:
-        return self._slice_thickness
-
-    @property
-    def exit_planes(self) -> Tuple[int]:
-        return self._exit_planes
-
-    @property
-    def device(self) -> str:
-        return self._device
-
-    @property
-    def periodic(self) -> bool:
-        return self._periodic
-
-    @property
-    def plane(self) -> str:
-        return self._plane
-
-    @property
-    def box(self) -> Tuple[float, float, float]:
-        return self._box
-
-    @property
-    def origin(self) -> Tuple[float, float, float]:
-        return self._origin
-
-    @property
     def integrator(self):
         return self._integrator
 
-    # @property
-    # def atomic_potentials(self) -> Dict[int, AtomicPotential]:
-    #     """The potential parametrization."""
-    #     return self._atomic_potentials
+    def _cutoffs(self):
+        atoms = self.frozen_phonons.atoms
+        unique_numbers = np.unique(atoms.numbers)
+        return tuple(self._integrator.cutoff(number) for number in unique_numbers)
 
-    # @property
-    # def parametrization(self) -> Parametrization:
-    #     """The potential parametrization."""
-    #     return self._parametrization
-
-    # @property
-    # def projection(self) -> str:
-    #     """The projection method."""
-    #     return self._projection
-
-    # @property
-    # def cutoff_tolerance(self) -> float:
-    #     """The error tolerance used for deciding the radial cutoff distance of the potential [eV / e]."""
-    #     return self._cutoff_tolerance
-
-    @property
-    def sliced_atoms(self):
-        if self._sliced_atoms is not None:
-            return self._sliced_atoms
-
+    def _transformed_atoms(self):
         atoms = self.frozen_phonons.atoms
 
-        unique_numbers = np.unique(atoms.numbers)
-
-        cutoffs = tuple(self._integrator.cutoff(number) for number in unique_numbers)
+        cutoffs = self._cutoffs()
 
         if tuple(np.diag(atoms.cell)) != self.box:
             if self.periodic:
@@ -448,25 +452,45 @@ class Potential(PotentialBuilder):
                                 origin=self.origin,
                                 margin=max(cutoffs) if cutoffs else 0.)
 
+        return atoms
+
+    def _prepare_atoms(self):
+
+        atoms = self._transformed_atoms()
+        cutoffs = self._cutoffs()
+
         if self.integrator.finite:
             margins = max(cutoffs) if len(cutoffs) else 0.
         else:
             margins = 0.
+
+        if self.periodic:
+            atoms = self.frozen_phonons.randomize(atoms)
+            atoms.wrap()
 
         if not self.integrator.periodic and self.integrator.finite:
             atoms = pad_atoms(atoms, margins=margins)
         elif self.integrator.periodic:
             atoms = pad_atoms(atoms, margins=margins, directions='z')
 
-        atoms = self.frozen_phonons.randomize(atoms)
+        if not self.periodic:
+            atoms = self.frozen_phonons.randomize(atoms)
 
-        if self.integrator.periodic:
-            atoms.wrap()
-
-        if margins > 0.:
-            self._sliced_atoms = SlicedAtoms(atoms=atoms, slice_thickness=self.slice_thickness, z_padding=margins)
+        if self.integrator.finite:
+            sliced_atoms = SlicedAtoms(atoms=atoms,
+                                       slice_thickness=self.slice_thickness,
+                                       z_padding=margins)
         else:
-            self._sliced_atoms = SliceIndexedAtoms(atoms=atoms, slice_thickness=self.slice_thickness)
+            sliced_atoms = SliceIndexedAtoms(atoms=atoms, slice_thickness=self.slice_thickness)
+
+        return sliced_atoms
+
+    @property
+    def sliced_atoms(self):
+        if self._sliced_atoms is not None:
+            return self._sliced_atoms
+
+        self._sliced_atoms = self._prepare_atoms()
 
         return self._sliced_atoms
 
@@ -505,108 +529,6 @@ class Potential(PotentialBuilder):
             yield PotentialArray(array,
                                  slice_thickness=self.slice_thickness[start:stop],
                                  extent=self.extent)
-
-        # if last_slice is None:
-        #     last_slice = len(self)
-        #
-        # if self.projection == 'infinite':
-        #     for slices in self._generate_slices_infinite(first_slice, last_slice):
-        #         yield slices
-        # elif self.projection == 'finite':
-        #     for slices in self._generate_slices_finite(first_slice, last_slice):
-        #         yield slices
-        # else:
-        #     raise RuntimeError()
-
-    def _generate_slices_finite(self, start: int, stop: int) -> 'PotentialArray':
-        xp = get_array_module(self._device)
-
-        # atomic_potentials = {}
-        # for Z in np.unique(self.frozen_phonons.atoms.numbers):
-        #     atomic_potentials[Z] = AtomicPotential(symbol=Z,
-        #                                            parametrization=self.parametrization,
-        #                                            inner_cutoff=min(self.sampling) / 2,
-        #                                            cutoff_tolerance=self.cutoff_tolerance)
-        tables = {Z: atomic_potential.build_integral_table(min(self.sampling) / 2)
-                  for Z, atomic_potential in self.atomic_potentials.items()}
-
-        sliced_atoms = self.sliced_atoms
-
-        for start, stop in generate_chunks(stop - start, chunks=1, start=start):
-            array = xp.zeros((stop - start,) + self.gpts, dtype=np.float32)
-
-            for i, slice_idx in enumerate(range(start, stop)):
-                for Z, table in tables.items():
-                    atoms = sliced_atoms.get_atoms_in_slices(slice_idx, atomic_number=Z)
-
-                    a = sliced_atoms.slice_limits[slice_idx][0] - atoms.positions[:, 2]
-                    b = sliced_atoms.slice_limits[slice_idx][1] - atoms.positions[:, 2]
-
-                    table.project_on_grid(array[i], self.sampling, atoms.positions, a, b)
-
-            array -= array.min()
-
-            yield PotentialArray(array,
-                                 slice_thickness=self.slice_thickness[start:stop],
-                                 extent=self.extent)
-
-    def _prepare_atoms_infinite(self):
-
-        atoms = self.frozen_phonons.atoms
-
-        if tuple(np.diag(atoms.cell)) != self.box:
-            atoms = orthogonalize_cell(atoms,
-                                       box=self.box,
-                                       plane=self.plane,
-                                       origin=self.origin,
-                                       return_transform=False,
-                                       allow_transform=True)
-
-        atoms = self.frozen_phonons.randomize(atoms)
-        atoms.wrap()
-
-        self._sliced_atoms = SliceIndexedAtoms(atoms=atoms, slice_thickness=self.slice_thickness)
-        return self._sliced_atoms
-
-    def _generate_slices_infinite(self, start: int, stop: int) -> 'PotentialArray':
-
-        if self._sliced_atoms is None:
-            self._prepare_atoms_infinite()
-
-        sliced_atoms = self._sliced_atoms
-
-        xp = get_array_module(self.device)
-        scattering_factors = {}
-        for Z, atomic_potential in self.atomic_potentials.items():
-            f = calculate_scattering_factor(self.gpts, self.sampling, atomic_potential, xp=xp)
-            scattering_factors[Z] = f
-
-        for start, stop in generate_chunks(stop - start, chunks=1, start=start):
-            atoms = sliced_atoms[start: stop]
-            shape = (stop - start,) + self.gpts
-
-            if len(atoms) == 0:
-                array = xp.zeros(shape, dtype=xp.float32)
-            else:
-                array = infinite_potential_projections(atoms, shape, self.sampling, scattering_factors)
-
-            yield PotentialArray(array,
-                                 slice_thickness=self.slice_thickness[start:stop],
-                                 extent=self.extent)
-
-    # def generate_slices(self, first_slice: int = 0, last_slice: int = None):
-    #
-    #     if last_slice is None:
-    #         last_slice = len(self)
-    #
-    #     if self.projection == 'infinite':
-    #         for slices in self._generate_slices_infinite(first_slice, last_slice):
-    #             yield slices
-    #     elif self.projection == 'finite':
-    #         for slices in self._generate_slices_finite(first_slice, last_slice):
-    #             yield slices
-    #     else:
-    #         raise RuntimeError()
 
     @property
     def ensemble_axes_metadata(self):
@@ -659,7 +581,7 @@ class PotentialArray(AbstractPotential, HasArray):
 
     def __init__(self,
                  array: Union[np.ndarray, da.core.Array],
-                 slice_thickness: Union[np.ndarray, float, Sequence[float]] = None,
+                 slice_thickness: Union[float, Tuple[float, ...]] = None,
                  extent: Union[float, Tuple[float, float]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
                  exit_planes: Union[int, Tuple[int, ...]] = None,
@@ -740,10 +662,13 @@ class PotentialArray(AbstractPotential, HasArray):
         return wrapped
 
     def partition_args(self, chunks: int = None, lazy: bool = True):
-        if chunks is None:
+
+        if chunks is None and self.is_lazy:
             chunks = self.array.chunks[:-len(self.base_shape)]
-        else:
-            chunks = self.validate_chunks(chunks)
+        elif chunks is None:
+            chunks = (1,) * len(self.ensemble_shape)
+
+        chunks = self.validate_chunks(chunks)
 
         if lazy:
             array = self.ensure_lazy().array
@@ -915,7 +840,9 @@ class PotentialArray(AbstractPotential, HasArray):
         return self.transmission_function(waves.energy).transmit(waves, conjugate=conjugate)
 
     def images(self):
-        return Images(array=self._array, sampling=self.sampling,
+        metadata = {'label': 'potential', 'units': 'eV / e'}
+
+        return Images(array=self._array, sampling=self.sampling, metadata=metadata,
                       ensemble_axes_metadata=self.axes_metadata[:-2])
 
     def project(self, cumulative: bool = False) -> Images:
@@ -926,8 +853,10 @@ class PotentialArray(AbstractPotential, HasArray):
         -------
         Measurement
         """
+        metadata = {'label': 'potential', 'units': 'eV / e'}
+
         return Images(array=self._array.sum(-3), sampling=self.sampling,
-                      ensemble_axes_metadata=self.ensemble_axes_metadata)
+                      ensemble_axes_metadata=self.ensemble_axes_metadata, metadata=metadata)
 
 
 class TransmissionFunction(PotentialArray, HasAcceleratorMixin):

@@ -18,7 +18,7 @@ else:
     interpolate_radial_functions_cuda = None
 
 
-@jit(nopython=True, nogil=True, parallel=True)
+@jit(nopython=True, nogil=True)
 def interpolate_radial_functions(array: np.ndarray,
                                  positions: np.ndarray,
                                  disk_indices: np.ndarray,
@@ -34,7 +34,7 @@ def interpolate_radial_functions(array: np.ndarray,
         px = int(round(positions[i, 0] / sampling[0]))
         py = int(round(positions[i, 1] / sampling[1]))
 
-        for j in prange(disk_indices.shape[0]):
+        for j in range(disk_indices.shape[0]):
             k = px + disk_indices[j, 0]
             m = py + disk_indices[j, 1]
 

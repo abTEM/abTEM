@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from ase.data import covalent_radii, chemical_symbols
 from ase.data.colors import jmol_colors
+from matplotlib.axes import Axes
 from matplotlib.collections import PatchCollection
 from matplotlib.lines import Line2D
 from matplotlib.offsetbox import AnchoredText
@@ -294,6 +295,7 @@ def show_measurement_2d_exploded(
         vmax: float,
         common_color_scale: bool,
         cbar: bool,
+        cbar_labels: str,
         float_formatting: str,
         cmap='viridis',
         extent: List[float] = None,
@@ -347,6 +349,8 @@ def show_measurement_2d_exploded(
                          nrows_ncols=(nrows, ncols),
                          **image_grid_kwargs,
                          )
+    elif isinstance(axes, Axes):
+        axes = [axes]
 
     if x_label is True:
         x_label = measurements.base_axes_metadata[-2].format_label()
@@ -397,14 +401,19 @@ def show_measurement_2d_exploded(
             add_panel_label(ax, panel_labels[i], **anchored_text_kwargs)
 
         if cbar:
-            cbar_label = measurement.metadata['label'] if 'label' in measurement.metadata else ''
-            cbar_label += f" [{measurement.metadata['units']}]" if 'units' in measurement.metadata else ''
+            if cbar_labels is None:
+                cbar_label = measurement.metadata['label'] if 'label' in measurement.metadata else ''
+                cbar_label += f" [{measurement.metadata['units']}]" if 'units' in measurement.metadata else ''
+            else:
+                cbar_label = cbar_labels
 
             if np.iscomplexobj(array):
-
                 add_domain_coloring_cbar(ax, vmin=vmin, vmax=vmax, )
             else:
-                ax.cax.colorbar(im, label=cbar_label)
+                try:
+                    ax.cax.colorbar(im, label=cbar_label)
+                except AttributeError:
+                    plt.colorbar(im, ax=ax, label=cbar_label)
 
         if sizebar:
             size = measurement.base_axes_metadata[-2].sampling * measurement.base_shape[-2] / 3

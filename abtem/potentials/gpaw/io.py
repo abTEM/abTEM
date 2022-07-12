@@ -25,13 +25,17 @@ except ImportError:
     unpack_atomic_matrices = None
 
 
-def safe_read_atoms(calculator):
+def safe_read_atoms(calculator, clean: bool = True):
     if isinstance(calculator, str):
         atoms = read_atoms(Reader(calculator).atoms)
     else:
         atoms = calculator.atoms
 
-    return atoms.copy()
+    if clean:
+        atoms.constraints = None
+        atoms.calc = True
+
+    return atoms
 
 
 def get_gpaw_setups(atoms, mode, xc):
@@ -57,8 +61,8 @@ class DummyGPAW:
 
     @classmethod
     def from_gpaw(cls, gpaw, lazy: bool = True):
-        if lazy:
-            return dask.delayed(cls.from_gpaw)(gpaw, lazy=False)
+        # if lazy:
+        #    return dask.delayed(cls.from_gpaw)(gpaw, lazy=False)
 
         atoms = gpaw.atoms.copy()
         atoms.calc = None

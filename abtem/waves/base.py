@@ -28,7 +28,8 @@ def ensure_parity(n, even, v=1):
 
 class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAxes, HasDevice, CopyMixin, EqualityMixin):
     _base_axes = (-2, -1)
-    _antialias_cutoff_gpts: Union[Tuple[int, int], None] = None
+
+    # _antialias_cutoff_gpts: Union[Tuple[int, int], None] = None
 
     @property
     def base_shape(self):
@@ -48,36 +49,55 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAxe
                 FourierSpaceAxis(label='scattering angle y', sampling=self.angular_sampling[1], units='mrad')]
 
     @property
-    def antialias_valid_gpts(self) -> Tuple[int, int]:
+    def _antialias_valid_gpts(self) -> Tuple[int, int]:
         cutoff_gpts = self.antialias_cutoff_gpts
-        return (ensure_parity(safe_floor_int(cutoff_gpts[0] / np.sqrt(2)), self.gpts[0] % 2 == 0, -1),
-                ensure_parity(safe_floor_int(cutoff_gpts[0] / np.sqrt(2)), self.gpts[1] % 2 == 0, -1))
+        return safe_floor_int(cutoff_gpts[0] / np.sqrt(2)), safe_floor_int(cutoff_gpts[0] / np.sqrt(2))
 
     @property
-    def antialias_cutoff_gpts(self) -> Tuple[int, int]:
+    def antialias_valid_gpts(self) -> Tuple[int, int]:
+        gpts = self._antialias_valid_gpts
+        return ensure_parity(gpts[0], self.gpts[0] % 2 == 0, -1), ensure_parity(gpts[1], self.gpts[1] % 2 == 0, -1)
+
+    @property
+    def _antialias_cutoff_gpts(self):
         self.grid.check_is_defined()
         kcut = 2. / 3. / max(self.sampling)
         extent = self.gpts[0] * self.sampling[0], self.gpts[1] * self.sampling[1]
+        return safe_floor_int(kcut * extent[0]), safe_floor_int(kcut * extent[1])
 
-        return (ensure_parity(safe_floor_int(kcut * extent[0]), self.gpts[0] % 2 == 0),
-                ensure_parity(safe_floor_int(kcut * extent[1]), self.gpts[1] % 2 == 0))
+    @property
+    def antialias_cutoff_gpts(self) -> Tuple[int, int]:
+        gpts = self._antialias_cutoff_gpts
+        return ensure_parity(gpts[0], self.gpts[0] % 2 == 0), ensure_parity(gpts[1], self.gpts[1] % 2 == 0)
 
-    def _gpts_within_angle(self, angle: Union[None, float, str]) -> Tuple[int, int]:
+    def _gpts_within_angle(self, angle: Union[None, float, str], parity: str = 'same') -> Tuple[int, int]:
 
         if angle is None:
             return self.gpts
 
         elif isinstance(angle, (numbers.Number, float)):
-            return (ensure_parity(int(2 * np.ceil(angle / self.angular_sampling[0])) + 1, self.gpts[0] % 2 == 0),
-                    ensure_parity(int(2 * np.ceil(angle / self.angular_sampling[1])) + 1, self.gpts[1] % 2 == 0))
+            gpts = (int(2 * np.ceil(angle / self.angular_sampling[0])) + 1,
+                    int(2 * np.ceil(angle / self.angular_sampling[1])) + 1)
 
         elif angle == 'cutoff':
-            return self.antialias_cutoff_gpts
+            gpts = self._antialias_cutoff_gpts
 
         elif angle == 'valid':
-            return self.antialias_valid_gpts
+            gpts = self._antialias_valid_gpts
 
-        raise ValueError('angle must be a number or one of "cutoff" or "angle"')
+        else:
+            raise ValueError('angle must be a number or one of "cutoff" or "angle"')
+
+        if parity == 'same':
+            return ensure_parity(gpts[0], self.gpts[0] % 2 == 0), ensure_parity(gpts[1], self.gpts[1] % 2 == 0)
+        elif parity == 'odd':
+            return ensure_parity(gpts[0], even=False), ensure_parity(gpts[1], even=False)
+        elif parity == 'even':
+            return ensure_parity(gpts[0], even=True), ensure_parity(gpts[1], even=True)
+        elif parity != 'none':
+            raise ValueError()
+
+        return gpts
 
     @property
     def cutoff_angles(self) -> Tuple[float, float]:

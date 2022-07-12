@@ -154,6 +154,115 @@ class HasArray(HasAxes, CopyMixin):
 
         return cls(**kwargs)
 
+    @property
+    def is_complex(self):
+        return np.iscomplexobj(self.array)
+
+    def check_is_compatible(self, other: 'HasArray'):
+        if not isinstance(other, self.__class__):
+            raise RuntimeError(f'incompatible types ({self.__class__} != {other.__class__})')
+
+        if self.shape != other.shape:
+            raise RuntimeError(f'incompatible shapes ({self.shape} != {other.shape})')
+
+        for (key, value), (other_key, other_value) in zip(self.copy_kwargs(exclude=('array',)).items(),
+                                                          other.copy_kwargs(exclude=('array',)).items()):
+            if np.any(value != other_value):
+                raise RuntimeError(f'incompatible ({self.shape} != {other.shape})')
+
+    def mean(self, axes=None, **kwargs) -> 'T':
+        return self._reduction('mean', axes=axes, **kwargs)
+
+    def sum(self, axes=None, **kwargs) -> 'T':
+        return self._reduction('sum', axes=axes, **kwargs)
+
+    def std(self, axes=None, **kwargs) -> 'T':
+        return self._reduction('std', axes=axes, **kwargs)
+
+    def min(self, axes=None, **kwargs) -> 'T':
+        return self._reduction('min', axes=axes, **kwargs)
+
+    def max(self, axes=None, **kwargs) -> 'T':
+        return self._reduction('max', axes=axes, **kwargs)
+
+    def _reduction(self, reduction_func, axes, split_every: int = 2) -> 'T':
+        xp = get_array_module(self.array)
+
+        if axes is None:
+            if self.is_lazy:
+                return getattr(da, reduction_func)(self.array)
+            else:
+                return getattr(xp, reduction_func)(self.array)
+
+        if isinstance(axes, Number):
+            axes = (axes,)
+
+        axes = tuple(axis if axis >= 0 else len(self) + axis for axis in axes)
+
+        if self._is_base_axis(axes):
+            raise RuntimeError('base axes cannot be reduced')
+
+        ensemble_axes_metadata = copy.deepcopy(self.ensemble_axes_metadata)
+        ensemble_axes_metadata = [axis_metadata for axis_metadata, axis in
+                                  zip(ensemble_axes_metadata, self.ensemble_axes)
+                                  if axis not in axes]
+
+        kwargs = self.copy_kwargs(exclude=('array',))
+        if self.is_lazy:
+            kwargs['array'] = getattr(da, reduction_func)(self.array, axes, split_every=split_every)
+        else:
+
+            kwargs['array'] = getattr(xp, reduction_func)(self.array, axes)
+
+        kwargs['ensemble_axes_metadata'] = ensemble_axes_metadata
+        return self.__class__(**kwargs)
+
+    def _arithmetic(self, other, func) -> 'T':
+        if hasattr(other, 'array'):
+            self.check_is_compatible(other)
+            other = other.array
+        # else:
+        #     try:
+        #         other = other.item()
+        #     except AttributeError:
+        #         pass
+
+        kwargs = self.copy_kwargs(exclude=('array',))
+        kwargs['array'] = getattr(self.array, func)(other)
+        return self.__class__(**kwargs)
+
+    def _in_place_arithmetic(self, other, func) -> 'T':
+        if self.is_lazy or other.is_lazy:
+            raise RuntimeError('inplace arithmetic operation not implemented for lazy measurement')
+        return self._arithmetic(other, func)
+
+    def __mul__(self, other) -> 'T':
+        return self._arithmetic(other, '__mul__')
+
+    def __imul__(self, other) -> 'T':
+        return self._in_place_arithmetic(other, '__imul__')
+
+    def __truediv__(self, other) -> 'T':
+        return self._arithmetic(other, '__truediv__')
+
+    def __itruediv__(self, other) -> 'T':
+        return self._arithmetic(other, '__itruediv__')
+
+    def __sub__(self, other) -> 'T':
+        return self._arithmetic(other, '__sub__')
+
+    def __isub__(self, other) -> 'T':
+        return self._in_place_arithmetic(other, '__isub__')
+
+    def __add__(self, other) -> 'T':
+        return self._arithmetic(other, '__add__')
+
+    def __iadd__(self, other) -> 'T':
+        return self._in_place_arithmetic(other, '__iadd__')
+
+    __rmul__ = __mul__
+    __rtruediv__ = __truediv__
+
     def get_items(self, items, keep_dims: bool = False) -> 'T':
         if isinstance(items, (Number, slice)):
             items = (items,)
@@ -194,6 +303,7 @@ class HasArray(HasAxes, CopyMixin):
         d = self.copy_kwargs(exclude=('array', 'ensemble_axes_metadata'))
         d['array'] = self._array[items]
         d['ensemble_axes_metadata'] = new_axes_metadata
+
         return self.__class__(**d)
 
     def __getitem__(self, items) -> 'T':
@@ -353,7 +463,10 @@ def from_zarr(url: str, chunks: Chunks = None):
     return cls.from_zarr(url, chunks)
 
 
-def stack(has_arrays: Sequence[HasArray], axes_metadata: AxisMetadata, axis: int = 0) -> 'T':
+def stack(has_arrays: Sequence[HasArray], axes_metadata: AxisMetadata = None, axis: int = 0) -> 'T':
+    if axes_metadata is None:
+        axes_metadata = UnknownAxis()
+
     xp = get_array_module(has_arrays[0].array)
 
     assert axis <= len(has_arrays[0].ensemble_shape)

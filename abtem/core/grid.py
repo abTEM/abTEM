@@ -13,6 +13,20 @@ def validate_gpts(gpts):
         raise ValueError('gpts must be greater than 0')
 
 
+def adjusted_gpts(target_sampling: Tuple[float, ...],
+                  old_sampling: Tuple[float, ...],
+                  old_gpts: Tuple[int, ...]) -> Tuple[Tuple[float, ...], Tuple[int, ...]]:
+    new_sampling = ()
+    new_gpts = ()
+    for d_target, d, n in zip(target_sampling, old_sampling, old_gpts):
+        scale_factor = d / d_target
+        nn = int(np.ceil(n * scale_factor))
+        new_sampling += (d * n / nn,)
+        new_gpts += (nn,)
+
+    return new_sampling, new_gpts
+
+
 class GridUndefinedError(Exception):
     pass
 

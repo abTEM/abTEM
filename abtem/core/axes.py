@@ -19,7 +19,7 @@ class AxisMetadata:
     def format_label(self):
         return f'{self.label}'
 
-    def format_title(self, **kwargs):
+    def format_title(self, *args, **kwargs):
         return f'{self.label}'
 
 
@@ -78,6 +78,9 @@ class ScanAxis(RealSpaceAxis):
 @dataclass(eq=False)
 class OrdinalAxis(AxisMetadata):
     values: tuple = ()
+
+    def format_title(self, formatting):
+        return f'{self.values[0]}'
 
     def concatenate(self, other):
         if not safe_equality(self, other, ('values',)):

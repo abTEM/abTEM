@@ -2,11 +2,16 @@ from typing import Tuple
 
 import numpy as np
 
-from abtem.core.backend import get_array_module
+from abtem.core.backend import get_array_module, device_name_from_array_module
 from abtem.core.fft import fft2, ifft2, fft2_convolve
 from abtem.core.grid import spatial_frequencies, polar_spatial_frequencies
 from abtem.potentials.integrals.base import ProjectionIntegrator, ProjectionIntegratorPlan
 from abtem.potentials.parametrizations import validate_parametrization
+
+from abtem.core.backend import cp
+
+if cp is not None:
+    import cupyx
 
 
 def sinc(gpts: Tuple[int, int], sampling: Tuple[float, float], xp):
@@ -37,7 +42,11 @@ def superpose_deltas(positions: np.ndarray, array: np.ndarray, slice_index=None,
         if weights is not None:
             v = v * weights[None]
 
-        np.add.at(array, (i, j), v)
+        if device_name_from_array_module(xp) == 'cpu':
+            xp.add.at(array, (i, j), v)
+        else:
+            print(array.dtype, v.dtype, i.dtype)
+            cupyx.scatter_add(array, (i, j), v)
     else:
         raise NotImplementedError
 
@@ -53,14 +62,16 @@ def infinite_potential_projections(atoms, shape, sampling, scattering_factors, s
     if slice_index is None:
         shape = shape[1:]
 
-    array = xp.zeros(shape, dtype=xp.complex64)
+
     positions = (atoms.positions[:, :2] / sampling).astype(xp.float32)
 
     unique = np.unique(atoms.numbers)
     if len(unique) > 1:
-        temp = xp.zeros_like(array, dtype=np.complex64)
+        array = xp.zeros(shape, dtype=xp.complex64)
 
         for i, number in enumerate(unique):
+            temp = xp.zeros_like(array, dtype=np.float32)
+
             mask = atoms.numbers == number
 
             if i > 0:
@@ -79,6 +90,7 @@ def infinite_potential_projections(atoms, shape, sampling, scattering_factors, s
 
         array = ifft2(array, overwrite_x=True).real
     else:
+        array = xp.zeros(shape, dtype=xp.float32)
         superpose_deltas(positions, array, slice_index=slice_index)
         array = fft2_convolve(array, scattering_factors[unique[0]], overwrite_x=True).real
 
@@ -117,7 +129,7 @@ class ProjectedScatteringFactors(ProjectionIntegrator):
 
         positions = (positions[:, :2] / sampling).astype(xp.float32)
 
-        array = xp.zeros(gpts, dtype=xp.complex64)
+        array = xp.zeros(gpts, dtype=xp.float32)
 
         array = superpose_deltas(positions, array)
 

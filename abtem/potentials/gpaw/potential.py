@@ -7,6 +7,7 @@ import dask.array as da
 import numpy as np
 
 from abtem.core.axes import AxisMetadata
+from abtem.core.fft import fft_interpolate
 from abtem.potentials.gpaw.density import get_all_electron_density
 from abtem.potentials.gpaw.io import safe_read_atoms, DummyGPAW
 from abtem.potentials.parametrizations import EwaldParametrization
@@ -36,29 +37,28 @@ class GPAWPotential(PotentialBuilder):
                  periodic: bool = True,
                  repetitions: Tuple[int, int, int] = (1, 1, 1),
                  frozen_phonons: AbstractFrozenPhonons = None, ):
-
         """
-        GPAW potential
 
-        Calculate electrostratic potential from a GPAW calculation.
+        Calculate electrostatic potential from a converged DFT calculation using GPAW.
 
         Parameters
         ----------
-        calculators : gpaw.GPAW or list of gpaw.GPAW or str or list of str
+        calculators : GPAW calculator or path to GPAW calculator or list of calculators or paths
 
         gpts : one or two int, optional
-            Number of grid points describing each slice of the potential.
+            Number of grid points in x and y describing each slice of the potential. Provide either "sampling" or "gpts".
         sampling : one or two float, optional
-            Lateral sampling of the potential [1 / Å].
-        slice_thickness : float or sequence of float, optional
-            Thickness of the potential slices in Å. If given as a float the number of slices are calculated by dividing the
-            slice thickness into the z-height of supercell.
-            The slice thickness may be as a sequence of values for each slice, in which case an error will be thrown is the
-            sum of slice thicknesses is not equal to the z-height of the supercell.
-            Default is 0.5 Å.
-        plane :
-        box :
-        origin :
+            Sampling of the potential in x and y [1 / Å]. Provide either "sampling" or "gpts".
+        slice_thickness
+        exit_planes
+        gridrefinement
+        device
+        plane
+        box
+        origin
+        periodic
+        repetitions
+        frozen_phonons
         """
 
         if GPAW is None:
@@ -123,10 +123,14 @@ class GPAWPotential(PotentialBuilder):
 
         calculator = self.calculators[0] if isinstance(self.calculators, list) else self.calculators
 
+        try:
+            calculator = calculator.compute()
+        except AttributeError:
+            pass
+
         # assert len(self.calculators) == 1
 
         calculator = DummyGPAW.from_generic(calculator)
-
         atoms = self.frozen_phonons.atoms
 
         if self.repetitions != (1, 1, 1):
@@ -139,14 +143,26 @@ class GPAWPotential(PotentialBuilder):
             gd = calculator.gd
             nt_sG = calculator.nt_sG
 
+        gridrefinement = self.gridrefinement
+        if np.isscalar(self.gridrefinement):
+            gridrefinement = (gridrefinement,) * 3
+
+        if not all([r == 1 for r in gridrefinement]):
+            cell_cv = gd.cell_cv
+            N_c = tuple(n_c * r for n_c, r in zip(gd.N_c, gridrefinement))
+            nt_sG = fft_interpolate(nt_sG, new_shape=N_c).astype(np.float64)
+            gd = gd.new_descriptor(N_c=N_c, cell_cv=cell_cv)
+
         random_atoms = self.frozen_phonons.randomize(atoms)
+
+        gpaw = GPAW(txt=None, mode=calculator.setup_mode, xc=calculator.setup_xc)
+        gpaw.initialize(random_atoms)
 
         return get_all_electron_density(nt_sG=nt_sG,
                                         gd=gd,
                                         D_asp=calculator.D_asp,
-                                        setups=calculator.setups,
-                                        atoms=random_atoms,
-                                        gridrefinement=self.gridrefinement)
+                                        setups=gpaw.setups,
+                                        atoms=random_atoms)
 
     def generate_slices(self, first_slice: int = 0, last_slice: int = None):
         if last_slice is None:

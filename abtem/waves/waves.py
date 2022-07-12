@@ -17,7 +17,7 @@ from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
 from abtem.core.complex import abs2
 from abtem.core.energy import Accelerator
-from abtem.core.fft import fft2, ifft2, fft_crop, fft2_interpolate
+from abtem.core.fft import fft2, ifft2, fft_crop, fft_interpolate
 from abtem.core.grid import Grid, validate_gpts
 from abtem.core.intialize import initialize
 from abtem.ionization.multislice import transition_potential_multislice_and_detect
@@ -316,13 +316,13 @@ class Waves(HasArray, WavesLikeMixin):
             gpts = self._gpts_within_angle(max_angle)
 
         if self.is_lazy:
-            array = self.array.map_blocks(fft2_interpolate,
+            array = self.array.map_blocks(fft_interpolate,
                                           new_shape=gpts,
                                           normalization=normalization,
                                           chunks=self.array.chunks[:-2] + gpts,
                                           meta=xp.array((), dtype=xp.complex64))
         else:
-            array = fft2_interpolate(self.array, new_shape=gpts, normalization=normalization)
+            array = fft_interpolate(self.array, new_shape=gpts, normalization=normalization)
 
         kwargs = self.copy_kwargs(exclude=('array',))
         kwargs['array'] = array
@@ -332,7 +332,8 @@ class Waves(HasArray, WavesLikeMixin):
     def diffraction_patterns(self,
                              max_angle: Union[str, float, None] = 'cutoff',
                              block_direct: Union[bool, float] = False,
-                             fftshift: bool = True) -> DiffractionPatterns:
+                             fftshift: bool = True,
+                             parity: str = 'same') -> DiffractionPatterns:
         """
         Calculate the intensity of the wave functions at the diffraction plane.
 
@@ -370,8 +371,7 @@ class Waves(HasArray, WavesLikeMixin):
             return array
 
         xp = get_array_module(self.array)
-        new_gpts = self._gpts_within_angle(max_angle)
-
+        new_gpts = self._gpts_within_angle(max_angle, parity=parity)
         validate_gpts(new_gpts)
 
         if self.is_lazy:
@@ -916,7 +916,6 @@ class Probe(WavesBuilder):
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
 
         self._device = validate_device(device)
-        self._antialias_cutoff_gpts = None
 
         if extra_transforms is None:
             extra_transforms = []
@@ -932,10 +931,6 @@ class Probe(WavesBuilder):
     @property
     def ctf(self):
         return CTF(semiangle_cutoff=self.aperture.semiangle_cutoff, aberrations=self.aberrations, energy=self.energy)
-
-    @property
-    def normalize(self):
-        return self._normalize
 
     @property
     def source_offset(self):

@@ -19,7 +19,6 @@ def point_charge_potential(r, Z):
 
 
 def potential(r, p):
-    print(p)
     return point_charge_potential(r, p[1]) - gaussian_potential(r, p[1], p[0])
 
 
