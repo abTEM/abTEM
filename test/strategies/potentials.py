@@ -20,7 +20,7 @@ def atoms(draw,
           min_atoms=5,
           max_atoms=10,
           min_atomic_number=1,
-          max_atomic_number=102):
+          max_atomic_number=92):
     n = draw(st.integers(min_atoms, max_atoms))
 
     numbers = st.lists(elements=st.integers(min_value=min_atomic_number, max_value=max_atomic_number),
