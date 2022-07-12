@@ -1,18 +1,23 @@
 import numpy as np
 from ase import Atoms
 
-from abtem.potentials import Potential
+from abtem.potentials.potentials import Potential
 from abtem.waves.waves import PlaneWave
 import pytest
 
 
 @pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('projection', ['infinite'])
-def test_fig_5_12(projection, lazy):
+@pytest.mark.parametrize('projection', ['infinite', 'finite'])
+@pytest.mark.parametrize('integral_space', ['real', 'fourier'])
+def test_fig_5_12(projection, lazy, integral_space):
+    if integral_space == 'real' and projection == 'infinite':
+        pytest.skip("invalid parameter combination")
+
     atoms = Atoms('CSiCuAuU', positions=[(x, 25, 4) for x in np.linspace(5, 45, 5)], cell=(50, 50, 8))
 
-    potential = Potential(atoms=atoms, gpts=512, parametrization='kirkland', projection=projection)
-    waves = PlaneWave(energy=200e3, normalize=False)
+    potential = Potential(atoms=atoms, gpts=512, parametrization='kirkland', projection=projection,
+                          integral_space=integral_space)
+    waves = PlaneWave(energy=200e3)
 
     waves = waves.multislice(potential, lazy=lazy)
 

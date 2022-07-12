@@ -1,7 +1,7 @@
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given, assume, reproduce_failure
+from hypothesis import given, assume
 
 import strategies as abtem_st
 from abtem import LineProfiles, Images
@@ -48,7 +48,7 @@ def test_annular_detector(data, lazy, device):
     assume(waves.num_scan_axes < 3)
     assume(all(waves._gpts_within_angle(min(detector.angular_limits(waves)))))
     assume(min(waves.cutoff_angles) > 1.)
-    print(waves.ensemble_shape, waves.ensemble_axes_metadata)
+
     measurement = detector.detect(waves)
 
     shape = tuple(n for i, n in enumerate(waves.ensemble_shape) if i not in waves.scan_axes[-2:])

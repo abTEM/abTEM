@@ -1,51 +1,148 @@
+import hypothesis.strategies as st
 import numpy as np
 import pytest
+from hypothesis import given
 
-from abtem.potentials.atom import AtomicPotential
-from abtem.potentials.parametrizations import LobatoParametrization, KirklandParametrization
+from abtem.potentials.integrals.gaussians import GaussianProjectionIntegrals
+from abtem.potentials.integrals.quadrature import ProjectionQuadratureRule
+
+from abtem.potentials.parametrizations import LobatoParametrization, KirklandParametrization, PengParametrization
+
+
+@given(atomic_number=st.integers(min_value=1, max_value=98))
+@pytest.mark.parametrize('parametrization_a',
+                         [LobatoParametrization(),
+                          KirklandParametrization(),
+                          PengParametrization(),
+                          ], ids=['lobato', 'kirkland', 'peng'])
+@pytest.mark.parametrize('parametrization_b',
+                         [LobatoParametrization(),
+                          KirklandParametrization(),
+                          PengParametrization()],
+                         ids=['lobato', 'kirkland', 'peng'])
+def test_parametrizations(atomic_number, parametrization_a, parametrization_b):
+    k = np.linspace(0, 5, 100)
+    assert np.allclose(parametrization_a.projected_scattering_factor(atomic_number)(k),
+                       parametrization_b.projected_scattering_factor(atomic_number)(k),
+                       atol=10, rtol=0.1)
+    r = np.linspace(.2, 5, 100)
+    assert np.allclose(parametrization_a.projected_potential(atomic_number)(r),
+                       parametrization_b.projected_potential(atomic_number)(r),
+                       atol=20, rtol=0.1)
+
+
+@pytest.mark.parametrize('parameters',
+                         [{'gaussian_projection_integrals':
+                               GaussianProjectionIntegrals(correction_parametrization=None),
+                           'parametrization':
+                               PengParametrization()
+                           },
+                          {'gaussian_projection_integrals':
+                               GaussianProjectionIntegrals(correction_parametrization='lobato'),
+                           'parametrization': LobatoParametrization()
+                           }
+                          ], ids=['uncorrected', 'corrected'])
+def test_gaussian_projection_integrals(parameters):
+    parametrization = parameters['parametrization']
+    gaussian_projection_integrals = parameters['gaussian_projection_integrals']
+
+    symbol = 'C'
+    gpts = (256, 256)
+    sampling = (0.1, 0.1)
+    positions = np.array([[0, 0, 0]], dtype=np.float32)
+    a = -np.inf
+    b = np.inf
+
+    gaussian_scattering_factors = gaussian_projection_integrals.gaussian_scattering_factors('C', gpts, sampling)
+
+    projections = gaussian_scattering_factors.integrate_on_grid(
+        positions,
+        a,
+        b,
+        gpts,
+        sampling,
+        fourier_space=True)
+
+    k = np.abs(np.fft.fftfreq(gpts[0], sampling[0])).astype(np.float32)
+    analytical = parametrization.projected_scattering_factor(symbol)(k)
+    assert np.allclose(analytical, projections[0].real, rtol=1e-6)
+
+
+@pytest.mark.parametrize('fourier_space', [True, False])
+def test_finite_gaussian_projection_integrals(fourier_space):
+    gaussian_projection_integrals = GaussianProjectionIntegrals(correction_parametrization=None)
+
+    symbol = 'C'
+    gpts = (256, 256)
+    sampling = (0.02, 0.02)
+    positions = np.array([[0, 0, 0]], dtype=np.float32)
+    a = -.2
+    b = .2
+
+    gaussian_scattering_factors = gaussian_projection_integrals.gaussian_scattering_factors('C', gpts, sampling)
+
+    projections = gaussian_scattering_factors.integrate_on_grid(
+        positions,
+        a,
+        b,
+        gpts,
+        sampling,
+        fourier_space=fourier_space)
+
+    if fourier_space:
+        k = np.abs(np.fft.fftfreq(gpts[0], sampling[0])).astype(np.float32)
+        analytical = PengParametrization().finite_projected_scattering_factor(symbol)(k, a, b)
+        assert np.allclose(analytical, projections[0].real, rtol=1e-6)
+
+    else:
+        r = np.linspace(0, gpts[0] * sampling[0], gpts[0], endpoint=False)
+        analytical = PengParametrization().finite_projected_potential(symbol)(r, a, b)
+        assert np.allclose(analytical[:len(r) // 2], projections[0][:len(r) // 2], rtol=1e-6, atol=5)
 
 
 @pytest.mark.parametrize('parametrization',
                          [LobatoParametrization(),
                           KirklandParametrization()])
-def test_project(parametrization):
-    atomic_potential = AtomicPotential(102,
-                                       parametrization=parametrization,
-                                       cutoff_tolerance=1e-7,
-                                       quad_order=20,
-                                       taper=1)
+def test_quadrature(parametrization):
+    quadrature = ProjectionQuadratureRule(parametrization, quad_order=20, cutoff_tolerance=1e-9)
 
-    analytical = parametrization.projected_potential(102)(atomic_potential.radial_gpts(inner_cutoff=0.01))
+    symbol = 'Au'
+    gpts = (256, 256)
+    sampling = (0.05, 0.05)
+    xp = np
+    a = -20
+    b = 20
 
-    table = atomic_potential.build_integral_table(inner_limit=0.01)
+    positions = xp.array([[0, 0, 0]], dtype=xp.float32)
 
-    assert np.allclose(analytical, table.project(-atomic_potential.cutoff, atomic_potential.cutoff))
+    table = quadrature.build_integral_table(symbol, min(sampling) / 2)
+
+    integrated = table.integrate_on_grid(positions, a, b, gpts, sampling)
+
+    r = np.linspace(0, gpts[0] * sampling[0], gpts[0], endpoint=False).astype(np.float32)
+    analytical = parametrization.projected_potential(symbol)(r[1:])
+
+    assert np.allclose(analytical, integrated[0, 1:], atol=2)
 
 
-@pytest.mark.parametrize('parametrization',
-                         [LobatoParametrization(),
-                          KirklandParametrization()])
-def test_project_on_grid(parametrization):
-    Z = 102
-    sampling = (.02, .02)
-    array = np.zeros((100, 1), dtype=float)
-    positions = np.zeros((1, 2), dtype=float)
-    inner_cutoff = 0.01
+def test_finite_projections():
+    quadrature = ProjectionQuadratureRule('lobato', quad_order=8, cutoff_tolerance=1e-4)
+    gaussian_projection_integrals = GaussianProjectionIntegrals()
 
-    atomic_potential = AtomicPotential(Z,
-                                       parametrization=parametrization,
-                                       cutoff_tolerance=1e-7,
-                                       quad_order=20,
-                                       taper=1)
+    symbol = 'C'
+    gpts = (256, 256)
+    sampling = (0.05, 0.05)
+    a = .1
+    b = 1
 
-    table = atomic_potential.build_integral_table(inner_limit=inner_cutoff)
+    positions = np.array([[0, 0, 0]], dtype=np.float32)
 
-    a = np.array([-atomic_potential.cutoff])
-    b = np.array([atomic_potential.cutoff])
+    table = quadrature.build_integral_table(symbol, min(sampling) / 2)
 
-    projected = table.project_on_grid(array, sampling, positions, a, b)
+    quadrature_potential = table.integrate_on_grid(positions, a, b, gpts, sampling)
 
-    r = np.linspace(sampling[0], array.shape[0] * sampling[0], array.shape[0] - 1, endpoint=False)
-    analytical = parametrization.projected_potential(Z)(r)
+    gaussian_scattering_factors = gaussian_projection_integrals.gaussian_scattering_factors(symbol, gpts, sampling)
 
-    assert np.allclose(analytical, projected[1:, 0], rtol=1e-3)
+    gaussian_potential = gaussian_scattering_factors.integrate_on_grid(positions, a, b, gpts, sampling)
+
+    assert np.allclose(quadrature_potential[0, :gpts[1] // 2], gaussian_potential[0, :gpts[1] // 2], atol=2)

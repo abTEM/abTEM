@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 from ase import Atoms, units
 
+from abtem import FrozenPhonons
 from abtem.potentials.potentials import Potential
 
 try:
@@ -16,67 +17,104 @@ except ImportError:
 
 
 @pytest.fixture
-def single_atom_gpaw_calculator(request):
-    atoms = Atoms(request.param['symbol'], positions=[(0, 0, 0)], cell=(request.param['side_length'],) * 3, pbc=True)
-    gpaw = GPAW(h=.2, txt=None, kpts=(3, 3, 3))
-    atoms.calc = gpaw
+def gpaw_calculator_no_bonding():
+    atoms = Atoms('C', positions=[(0, 0, 0)], cell=(5.,) * 3, pbc=True)
+    atoms.calc = GPAW(h=.2, txt=None, kpts=(3, 3, 3))
     atoms.get_potential_energy()
-    return gpaw
+    return atoms.calc
 
 
-@pytest.mark.parametrize("single_atom_gpaw_calculator",
-                         [{'side_length': 5., 'symbol': 'C'},
-                          {'side_length': 2., 'symbol': 'C'}],
-                         indirect=True)
+@pytest.fixture
+def gpaw_calculator_bonding():
+    atoms = Atoms('C', positions=[(0, 0, 0)], cell=(2.,) * 3, pbc=True)
+    atoms.calc = GPAW(h=.2, txt=None, kpts=(3, 3, 3))
+    atoms.get_potential_energy()
+    return atoms.calc
+
+
 @pytest.mark.skipif('gpaw' not in sys.modules, reason="requires gpaw")
-def test_ps2ae_vs_abtem(single_atom_gpaw_calculator):
-    ps2ae_potential = PS2AE(single_atom_gpaw_calculator, h=0.02)
+def test_all_electron_density(gpaw_calculator_no_bonding):
+    abtem_ae_density = GPAWPotential(gpaw_calculator_no_bonding)._get_all_electron_density()
+    gpaw_ae_density = gpaw_calculator_no_bonding.get_all_electron_density(gridrefinement=4)
+    assert np.all(abtem_ae_density == gpaw_ae_density)
+
+
+def assert_psae_matches_abtem(calc):
+    ps2ae_potential = PS2AE(calc, h=0.02)
     ps2ae_potential = ps2ae_potential.get_electrostatic_potential(rcgauss=.01 * units.Bohr, ae=True)
-    ps2ae_potential = - ps2ae_potential * single_atom_gpaw_calculator.atoms.cell[2, 2] / ps2ae_potential.shape[-1]
-    ps2ae_potential = ps2ae_potential.sum(0)
+    ps2ae_potential = - ps2ae_potential.sum(-1) * calc.atoms.cell[2, 2] / ps2ae_potential.shape[-1]
     ps2ae_potential -= ps2ae_potential.min()
 
-    gpaw_potential = GPAWPotential(single_atom_gpaw_calculator,
-                                   gpts=ps2ae_potential.shape).build().project().compute().array
+    gpaw_potential = GPAWPotential(calc, gpts=ps2ae_potential.shape)
+    gpaw_potential = gpaw_potential.build().project().compute().array
     gpaw_potential -= gpaw_potential.min()
 
     assert np.allclose(ps2ae_potential[1:], gpaw_potential[1:], rtol=1e-2, atol=1)
 
 
-@pytest.mark.parametrize("single_atom_gpaw_calculator",
-                         [{'side_length': 5., 'symbol': 'C'}],
-                         indirect=True)
 @pytest.mark.skipif('gpaw' not in sys.modules, reason="requires gpaw")
-def test_gpaw_vs_iam(single_atom_gpaw_calculator):
-    gpaw_potential = GPAWPotential(single_atom_gpaw_calculator, gpts=128).build().project().array
+def test_compare_ps2ae_to_abtem_no_bonding(gpaw_calculator_no_bonding):
+    assert_psae_matches_abtem(gpaw_calculator_no_bonding)
+
+
+@pytest.mark.skipif('gpaw' not in sys.modules, reason="requires gpaw")
+def test_compare_ps2ae_to_abtem_bonding(gpaw_calculator_bonding):
+    assert_psae_matches_abtem(gpaw_calculator_bonding)
+
+
+@pytest.mark.skipif('gpaw' not in sys.modules, reason="requires gpaw")
+def test_gpaw_potential_with_frozen_phonons(gpaw_calculator_bonding):
+    frozen_phonons = FrozenPhonons(gpaw_calculator_bonding.atoms, num_configs=2, sigmas=.1)
+    gpaw_potential = GPAWPotential(gpaw_calculator_bonding, sampling=0.05, frozen_phonons=frozen_phonons)
+    assert gpaw_potential.ensemble_shape == (2,)
+    assert gpaw_potential.build().ensemble_shape == (2,)
+    gpaw_potential = gpaw_potential.build().compute()
+    assert gpaw_potential.ensemble_shape == (2,)
+    assert not np.allclose(gpaw_potential.array[0], gpaw_potential.array[1])
+
+
+@pytest.mark.skipif('gpaw' not in sys.modules, reason="requires gpaw")
+def test_gpaw_potential_multiple_calculators(gpaw_calculator_bonding):
+    gpaw_potential = GPAWPotential([gpaw_calculator_bonding] * 2, sampling=0.05)
+    assert gpaw_potential.ensemble_shape == (2,)
+    assert gpaw_potential.build().ensemble_shape == (2,)
+    gpaw_potential = gpaw_potential.build().compute()
+    assert gpaw_potential.ensemble_shape == (2,)
+    assert np.all(gpaw_potential.array[0] == gpaw_potential.array[1])
+
+
+@pytest.mark.skipif('gpaw' not in sys.modules, reason="requires gpaw")
+def test_gpaw_vs_iam(gpaw_calculator_no_bonding):
+    gpaw_potential = GPAWPotential(gpaw_calculator_no_bonding, gpts=128).build().project().array
     gpaw_potential -= gpaw_potential.min()
 
-    iam_potential = Potential(single_atom_gpaw_calculator.atoms, gpts=gpaw_potential.shape,
-                              projection='finite').build().project().array
+    iam_potential = Potential(gpaw_calculator_no_bonding.atoms, gpts=gpaw_potential.shape,
+                              integral_space='real', projection='finite').build().project().array
 
     iam_potential -= iam_potential.min()
     assert np.allclose(iam_potential, gpaw_potential, rtol=1e-3, atol=5)
 
 
-@pytest.mark.parametrize("single_atom_gpaw_calculator",
-                         [{'side_length': 2., 'symbol': 'C'}],
-                         indirect=True)
-def test_gpaw_potential_from_disk(single_atom_gpaw_calculator, tmpdir):
+@pytest.mark.skipif('gpaw' not in sys.modules, reason="requires gpaw")
+def test_gpaw_potential_from_disk(gpaw_calculator_bonding, tmpdir):
     path = os.path.join(str(tmpdir), 'test.gpw')
-    single_atom_gpaw_calculator.write(path)
+    gpaw_calculator_bonding.write(path)
 
-    gpaw_potential = GPAWPotential(single_atom_gpaw_calculator, gpts=(32, 32))
+    gpaw_potential = GPAWPotential(gpaw_calculator_bonding, gpts=(32, 32))
     gpaw_potential = gpaw_potential.build().compute()
 
     gpaw_potential_from_disk = GPAWPotential(path, gpts=(32, 32))
     gpaw_potential_from_disk = gpaw_potential_from_disk.build().compute()
-
     assert gpaw_potential_from_disk == gpaw_potential
 
+    gpaw_potential_from_disk_with_fp = GPAWPotential([path] * 2, gpts=(32, 32))
+    gpaw_potential_from_disk_with_fp = gpaw_potential_from_disk_with_fp.build().compute()
 
-@pytest.mark.parametrize("single_atom_gpaw_calculator",
-                         [{'side_length': 2., 'symbol': 'C'}],
-                         indirect=True)
-def test_gpaw_potential_with_frozen_phonons(single_atom_gpaw_calculator, tmpdir):
-    gpaw_potential = GPAWPotential([single_atom_gpaw_calculator] * 2, gpts=(32, 32))
-    gpaw_potential = gpaw_potential.build().compute()
+    assert gpaw_potential_from_disk_with_fp.ensemble_shape == (2,)
+    assert np.all(gpaw_potential_from_disk_with_fp.array[0] == gpaw_potential_from_disk_with_fp.array[1])
+
+
+@pytest.mark.skipif('gpaw' not in sys.modules, reason="requires gpaw")
+def test_charge_density_potential(gpaw_calculator_bonding, tmpdir):
+    gpaw_potential = GPAWPotential(gpaw_calculator_bonding, sampling=0.05)
+
