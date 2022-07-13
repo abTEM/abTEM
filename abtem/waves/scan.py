@@ -18,6 +18,7 @@ from abtem.core.distributions import MultidimensionalAxisAlignedDistribution
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.utils import safe_floor_int
+from abtem.potentials.potentials import AbstractPotential
 from abtem.waves.transfer import ArrayWaveTransform
 
 if TYPE_CHECKING:
@@ -512,11 +513,30 @@ class GridScan(HasGridMixin, AbstractScan):
 
     @classmethod
     def from_fractional_coordinates(cls,
-                                    potential,
-                                    start=(0., 0.),
-                                    end=(1., 1.),
-                                    sampling=None,
-                                    endpoint=False):
+                                    potential: AbstractPotential,
+                                    start: Tuple[float, float] = (0., 0.),
+                                    end: Tuple[float, float] = (1., 1.),
+                                    sampling: Union[float, Tuple[float, float]] = None,
+                                    endpoint: Union[bool, Tuple[bool, bool]] = False) -> 'GridScan':
+        """
+        Create grid scan using fractional coordinates.
+
+        Parameters
+        ----------
+        potential : AbstractPotential
+            Potential defining the grid with respect to which the fractional coordinates should be given.
+        start : two float, optional
+            Scan start as a fraction of the extent of the potential.
+        end : two float, optional
+            Scan end as a fraction of the extent of the potential.
+        sampling : float or two float
+
+        endpoint : bool or two bool
+
+        Returns
+        -------
+        grid_scan : GridScan
+        """
 
         if np.isscalar(start):
             start = (start, start)

@@ -45,6 +45,9 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
     def charge(self, symbol, charge=0.):
         return self.get_function('charge', symbol, charge)
 
+    def x_ray_scattering_factor(self, symbol, charge=0.):
+        return self.get_function('x_ray_scattering_factor', symbol, charge)
+
     def finite_projected_potential(self, symbol, charge=0.):
         return self.get_function('finite_projected_potential', symbol, charge)
 

@@ -55,8 +55,7 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAxe
 
     @property
     def antialias_valid_gpts(self) -> Tuple[int, int]:
-        gpts = self._antialias_valid_gpts
-        return ensure_parity(gpts[0], self.gpts[0] % 2 == 0, -1), ensure_parity(gpts[1], self.gpts[1] % 2 == 0, -1)
+        return self._gpts_within_angle('valid', 'same')
 
     @property
     def _antialias_cutoff_gpts(self):
@@ -67,8 +66,7 @@ class WavesLikeMixin(HasGridMixin, HasAcceleratorMixin, HasBeamTiltMixin, HasAxe
 
     @property
     def antialias_cutoff_gpts(self) -> Tuple[int, int]:
-        gpts = self._antialias_cutoff_gpts
-        return ensure_parity(gpts[0], self.gpts[0] % 2 == 0), ensure_parity(gpts[1], self.gpts[1] % 2 == 0)
+        return self._gpts_within_angle('cutoff', 'same')
 
     def _gpts_within_angle(self, angle: Union[None, float, str], parity: str = 'same') -> Tuple[int, int]:
 

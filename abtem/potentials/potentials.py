@@ -1,37 +1,33 @@
 """Module to calculate potentials using the independent atom model."""
 from abc import ABCMeta, abstractmethod
-from copy import copy
 from functools import partial, reduce
 from numbers import Number
 from operator import mul
-from typing import Union, Sequence, Tuple, List, TYPE_CHECKING, Dict
+from typing import Union, Sequence, Tuple, List, TYPE_CHECKING
 
-import dask
 import dask.array as da
 import numpy as np
-import zarr
 from ase import Atoms
+from ase.cell import Cell
+from ase.data import chemical_symbols
 
-from abtem.core.axes import ThicknessAxis, HasAxes, RealSpaceAxis, FrozenPhononsAxis, AxisMetadata
-from abtem.core.backend import get_array_module, validate_device, copy_to_device, device_name_from_array_module
-from abtem.core.ensemble import Ensemble
-from abtem.core.complex import complex_exponential
 from abtem.core.array import HasArray, validate_lazy
-from abtem.core.chunks import iterate_chunk_ranges, validate_chunks, chunk_shape
+from abtem.core.axes import ThicknessAxis, HasAxes, RealSpaceAxis, FrozenPhononsAxis, AxisMetadata
+from abtem.core.backend import get_array_module, validate_device
+from abtem.core.chunks import iterate_chunk_ranges, validate_chunks, chunk_shape, Chunks
+from abtem.core.complex import complex_exponential
 from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
+from abtem.core.ensemble import Ensemble
 from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.utils import generate_chunks, EqualityMixin, CopyMixin
 from abtem.measure.measure import Images
-from abtem.potentials.infinite import calculate_scattering_factor, infinite_potential_projections
-from abtem.potentials.parametrizations.base import Parametrization
-from abtem.potentials.parametrizations import named_parametrizations
-from abtem.potentials.integrals import named_integrators, ProjectionQuadratureRule, GaussianProjectionIntegrals, \
+from abtem.potentials.integrals import ProjectionQuadratureRule, GaussianProjectionIntegrals, \
     InfinitePotentialProjections
+from abtem.potentials.parametrizations.base import Parametrization
 from abtem.potentials.temperature import AbstractFrozenPhonons, FrozenPhonons, DummyFrozenPhonons
 from abtem.structures.slicing import validate_slice_thickness, SliceIndexedAtoms, SlicedAtoms, unpack_item
 from abtem.structures.structures import is_cell_orthogonal, orthogonalize_cell, best_orthogonal_box, cut_box, \
     rotation_matrix_from_plane, pad_atoms
-from ase.data import atomic_numbers, chemical_symbols
 
 if TYPE_CHECKING:
     import Waves
@@ -160,16 +156,17 @@ def validate_exit_planes(exit_planes, num_slices):
 class PotentialBuilder(AbstractPotential):
 
     def __init__(self,
-                 gpts,
-                 sampling,
-                 cell,
-                 box,
-                 plane,
-                 origin,
-                 periodic,
-                 device,
-                 slice_thickness,
-                 exit_planes):
+                 gpts: Union[int, Tuple[int, int]],
+                 sampling: Union[float, Tuple[float, float]],
+                 slice_thickness: Union[float, Tuple[float, ...]],
+                 exit_planes: Union[int, Tuple[int, ...]],
+                 cell: Union[np.ndarray, Cell],
+                 box: Tuple[float, float, float],
+                 plane: Union[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]],
+                 origin: Tuple[float, float, float],
+                 periodic: bool,
+                 device: str ,
+                 ):
 
         if self._require_cell_transform(cell,
                                         box=box,
@@ -252,8 +249,22 @@ class PotentialBuilder(AbstractPotential):
     def build(self,
               first_slice: int = 0,
               last_slice: int = None,
-              chunks: int = 1,
+              chunks: Chunks = 1,
               lazy: bool = None) -> 'PotentialArray':
+        """
+        Build the potential producing a PotentialArray.
+
+        Parameters
+        ----------
+        first_slice : int, optional
+        last_slice : int, optional
+        chunks : int or tuple of int or tuple of tuple of int
+        lazy : bool
+
+        Returns
+        -------
+        potential_array : PotentialArray
+        """
 
         lazy = validate_lazy(lazy)
 
@@ -332,6 +343,9 @@ class Potential(PotentialBuilder):
     projection : 'finite' or 'infinite', optional
         If 'finite' the 3d potential is numerically integrated between the slice boundaries. If 'infinite' the infinite
         potential projection of each atom will be assigned to a single slice. Default is 'infinite'.
+    integral_space : 'real' or 'fourier', optional
+        Specifies whether to perform projection integrals in real space or Fourier space. By default finite projection
+        integrals are computed in real space and infinite projection integrals are performed in Fourier space.
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an

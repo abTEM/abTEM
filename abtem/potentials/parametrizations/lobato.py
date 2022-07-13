@@ -48,9 +48,19 @@ def charge(r, p):
     return n
 
 
+@jit(nopython=True, nogil=True)
+def x_ray_scattering_factor(k, p):
+    n = (2 * np.pi ** 2 * units.Bohr * p[0, 0] / (p[1, 0] * (1 + p[1, 0] * k ** 2) ** 2) +
+         2 * np.pi ** 2 * units.Bohr * p[0, 1] / (p[1, 1] * (1 + p[1, 1] * k ** 2) ** 2) +
+         2 * np.pi ** 2 * units.Bohr * p[0, 2] / (p[1, 2] * (1 + p[1, 2] * k ** 2) ** 2) +
+         2 * np.pi ** 2 * units.Bohr * p[0, 3] / (p[1, 3] * (1 + p[1, 3] * k ** 2) ** 2) +
+         2 * np.pi ** 2 * units.Bohr * p[0, 4] / (p[1, 4] * (1 + p[1, 4] * k ** 2) ** 2))
+    return n
+
+
 def projected_potential(r, p):
     v = 2 * (2 * p[0][:, None] / p[1][:, None] * kn(0, r[None] * p[1][:, None]) +
-         p[0][:, None] * r[None] * kn(1, r[None] * p[1][:, None])).sum(0)
+             p[0][:, None] * r[None] * kn(1, r[None] * p[1][:, None])).sum(0)
     return v.astype(np.float32)
 
 
@@ -75,6 +85,7 @@ class LobatoParametrization(Parametrization):
                   'scattering_factor': scattering_factor,
                   'projected_potential': projected_potential,
                   'projected_scattering_factor': projected_scattering_factor,
+                  'x_ray_scattering_factor': x_ray_scattering_factor,
                   'charge': charge,
                   }
 
@@ -95,6 +106,7 @@ class LobatoParametrization(Parametrization):
                 'scattering_factor': parameters,
                 'projected_potential': scaled_parameters.astype(np.float32),
                 'projected_scattering_factor': scaled_parameters,
+                'x_ray_scattering_factor': parameters,
                 'charge': parameters
                 }
 

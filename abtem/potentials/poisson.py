@@ -159,32 +159,6 @@ def interpolate_between_cells(array, new_shape, old_cell, new_cell, offset=(0., 
     return interpolated
 
 
-# def interpolate_between_cells(array, new_shape, old_cell, new_cell, offset=(0., 0., 0.), order=2):
-#     x = np.linspace(0, new_shape[0], new_shape[0], endpoint=False)
-#     y = np.linspace(0, new_shape[1], new_shape[1], endpoint=False)
-#     z = np.linspace(0, new_shape[2], new_shape[2], endpoint=False)
-#
-#     x, y, z = np.meshgrid(x, y, z, indexing='ij')
-#     coordinates = np.array([x.ravel(), y.ravel(), z.ravel()]).T
-#
-#     new_cell = Cell(new_cell.copy())
-#     old_inv = np.linalg.inv(old_cell)
-#
-#     old_scampling = old_cell.lengths() / array.shape
-#     new_sampling = new_cell.lengths() / new_shape
-#
-#     padding = 10
-#
-#     padded_array = np.pad(array, ((padding,) * 2,) * 3, mode='wrap')
-#
-#     mapped_coords = np.dot(coordinates, old_inv) * old_scampling / new_sampling
-#     mapped_coords = (mapped_coords + padding) % array.shape
-#
-#     interpolated = map_coordinates(padded_array, mapped_coords.T, mode='wrap', order=order)
-#     interpolated = interpolated.reshape(new_shape)
-#     return interpolated
-
-
 def _interpolate_slice(array, cell, gpts, sampling, a, b):
     slice_shape = gpts + (int((b - a) / (min(sampling))),)
 
@@ -437,33 +411,3 @@ class ChargeDensityPotential(PotentialBuilder):
 
         for slic in generate_slices(array, ewald_potential, first_slice=first_slice, last_slice=last_slice):
             yield slic
-
-        # if hasattr(array, 'compute'):
-        #     array = array.compute(scheduler='single-threaded')
-        #
-        # ewald_potential = self._ewald_potential()
-        #
-        # # if self.ewald_potential.plane != 'xy':
-        # #    axes = plane_to_axes(self.ewald_potential.plane)
-        # #    array = np.moveaxis(array, axes[:2], (0, 1))
-        #
-        # assert len(array.shape) == 3
-        #
-        # array = -fftn(array, overwrite_x=True)
-        # array = fft_crop(array, array.shape[:2] + (self.num_slices,), normalize=True)
-        #
-        # array = solve_point_charges(self.frozen_phonons.atoms,
-        #                             array=array,
-        #                             width=ewald_potential.integrator.parametrization.width,
-        #                             fourier_space_in=True,
-        #                             fourier_space_out=False)
-        #
-        # for i, ((a, b), slic) in enumerate(zip(self.slice_limits[first_slice:last_slice],
-        #                                        ewald_potential.generate_slices(first_slice, last_slice))):
-        #     slice_array = self._interpolate_slice(array, self.frozen_phonons.atoms.cell, a, b)
-        #
-        #     slic._array = slic._array + copy_to_device(slice_array[None], slic.array)
-        #     # slic._array = copy_to_device(slice_array[None], slic.array)
-        #
-        #     slic._array -= slic._array.min()
-        #     yield slic

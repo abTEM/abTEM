@@ -5,6 +5,7 @@ from typing import Tuple, List, Union
 import dask
 import dask.array as da
 import numpy as np
+from ase.cell import Cell
 
 from abtem.core.axes import ThicknessAxis, FrozenPhononsAxis, AxisMetadata
 from abtem.core.backend import get_array_module
@@ -47,9 +48,6 @@ class CrystalPotential(PotentialBuilder):
                  exit_planes: int = None,
                  seeds: Union[int, Tuple[int, ...]] = None):
 
-        self._potential_unit = potential_unit
-        self._repetitions = repetitions
-
         if num_frozen_phonons is None and seeds is None:
             self._seeds = None
         else:
@@ -67,16 +65,27 @@ class CrystalPotential(PotentialBuilder):
         # if (potential_unit.num_frozen_phonon_configs > 1) & (num_frozen_phonon_configs == 1):
         #     warnings.warn('the potential unit has frozen phonons, but "num_frozen_phonon_configs" is set to 1')
 
-        gpts = (self._potential_unit.gpts[0] * self.repetitions[0],
-                self._potential_unit.gpts[1] * self.repetitions[1])
-        extent = (self._potential_unit.extent[0] * self.repetitions[0],
-                  self._potential_unit.extent[1] * self.repetitions[1])
+        gpts = potential_unit.gpts[0] * repetitions[0], potential_unit.gpts[1] * repetitions[1]
+        extent = potential_unit.extent[0] * repetitions[0], potential_unit.extent[1] * repetitions[1]
+        sampling = extent[0] / gpts[0], extent[1] / gpts[1]
+        box = extent + (potential_unit.thickness * repetitions[2],)
+        slice_thickness = potential_unit.slice_thickness * repetitions[2]
+        super().__init__(
+            gpts=gpts,
+            sampling=sampling,
+            cell=Cell(np.diag(box)),
+            slice_thickness=slice_thickness,
+            exit_planes=exit_planes,
+            device=potential_unit.device,
+            plane='xy',
+            origin=(0., 0., 0.),
+            box=box,
+            periodic=True
 
-        self._grid = Grid(extent=extent, gpts=gpts, sampling=self._potential_unit.sampling, lock_extent=True)
+        )
 
-        super().__init__()
-
-        self._exit_planes = validate_exit_planes(exit_planes, len(self))
+        self._potential_unit = potential_unit
+        self._repetitions = repetitions
 
     @property
     def ensemble_shape(self) -> Tuple[int, ...]:
@@ -97,18 +106,6 @@ class CrystalPotential(PotentialBuilder):
         return self._seeds
 
     @property
-    def slice_thickness(self) -> np.ndarray:
-        return np.tile(self._potential_unit.slice_thickness, self.repetitions[2])
-
-    @property
-    def exit_planes(self) -> Tuple[int]:
-        return self._exit_planes
-
-    @property
-    def device(self):
-        return self._potential_unit.device
-
-    @property
     def potential_unit(self) -> AbstractPotential:
         return self._potential_unit
 
@@ -127,15 +124,6 @@ class CrystalPotential(PotentialBuilder):
     @property
     def repetitions(self) -> Tuple[int, int, int]:
         return self._repetitions
-
-    @repetitions.setter
-    def repetitions(self, repetitions: Tuple[int, int, int]):
-        repetitions = tuple(repetitions)
-
-        if len(repetitions) != 3:
-            raise ValueError('repetitions must be sequence of length 3')
-
-        self._repetitions = repetitions
 
     @property
     def num_slices(self) -> int:
@@ -178,7 +166,6 @@ class CrystalPotential(PotentialBuilder):
                 block = da.from_delayed(block, shape=(1,), dtype=object)
             else:
                 block = self._wrap_partition_args(potential_unit, seeds, num_frozen_phonons)
-
 
             array.itemset(block_indices[0], block)
 

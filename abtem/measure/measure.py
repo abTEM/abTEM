@@ -838,6 +838,7 @@ class Images(AbstractMeasurement):
 
     def diffractograms(self) -> 'DiffractionPatterns':
         """
+        Calculate the diffractograms (i.e. power spectra) from the images.
 
         Returns
         -------
@@ -893,6 +894,7 @@ class Images(AbstractMeasurement):
         Parameters
         ----------
         cmap : str, optional
+            TODO
         explode : bool, optional
             If True, a grid of images are created for all the items of the last two ensemble axes. If False, the first
             ensemble item is shown.
@@ -934,6 +936,7 @@ class Images(AbstractMeasurement):
         cbar : bool, optional
             Add colorbar(s) to the image(s). The position and size of the colorbar(s) may be controlled by passing
             keyword arguments to mpl_toolkits.axes_grid1.axes_grid.ImageGrid through `image_grid_kwargs`.
+        cbar_labels : str or list of str
         sizebar : bool, optional,
             Add a size bar to the image(s).
         float_formatting : str, optional

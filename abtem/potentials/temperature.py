@@ -207,11 +207,10 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
     def __init__(self,
                  atoms: Atoms,
+                 num_configs: int,
                  sigmas: Union[float, Mapping[Union[str, int], float], Sequence[float]],
-                 num_configs: int = None,
                  directions: str = 'xyz',
                  ensemble_mean: bool = True,
-                 cell: Union[Cell, np.ndarray] = None,
                  seeds: Union[int, Tuple[int, ...]] = None):
 
         if isinstance(sigmas, dict):
@@ -219,7 +218,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
         else:
             atomic_numbers = None
 
-        atomic_numbers, cell = self._validate_atomic_numbers_and_cell(atoms, atomic_numbers, cell)
+        atomic_numbers, cell = self._validate_atomic_numbers_and_cell(atoms, atomic_numbers, cell=None)
 
         unique_symbols = [chemical_symbols[number] for number in atomic_numbers]
 
@@ -329,6 +328,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
         kwargs['atoms'] = args['atoms']
         kwargs['seeds'] = args['seeds']
+        kwargs['num_configs'] = args['num_configs']
         return cls(**kwargs)
 
     def from_partitioned_args(self):
@@ -338,7 +338,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
     @staticmethod
     def _frozen_phonons_args(atoms, seeds):
         arr = np.zeros((1,), dtype=object)
-        arr.itemset(0, {'atoms': atoms, 'seeds': seeds})
+        arr.itemset(0, {'atoms': atoms, 'seeds': seeds, 'num_configs': len(seeds)})
         return arr
 
     def partition_args(self, chunks: int = 1, lazy: bool = True):
