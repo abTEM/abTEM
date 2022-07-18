@@ -9,7 +9,7 @@ from ase.io.trajectory import read_atoms
 from ase.units import Bohr
 
 try:
-    from gpaw import GPAW
+    from gpaw.calculator import GPAW
     from gpaw.atom.aeatom import AllElectronAtom
     from gpaw.io import Reader
     from gpaw.density import RealSpaceDensity
