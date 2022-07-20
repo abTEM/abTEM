@@ -31,7 +31,7 @@ import strategies as abtem_st
 #         shape += detector.measurement_shape(waves)
 #
 #     return shape
-#
+
 
 @given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False], ids=['lazy', 'not_lazy'])

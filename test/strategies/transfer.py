@@ -1,7 +1,7 @@
 import hypothesis.strategies as st
 import numpy as np
 
-from abtem import ParameterSeries
+from abtem.core import distributions
 from abtem.waves.transfer import polar_symbols, Aberrations, Aperture, TemporalEnvelope, CompositeWaveTransform, \
     SpatialEnvelope, CTF
 from . import core as core_st
@@ -9,16 +9,11 @@ from . import scan as scan_st
 
 
 @st.composite
-def linspace(draw, min_value=-100., max_value=100.):
+def uniform_distribution(draw, min_value=-100., max_value=100.):
     num = draw(st.integers(min_value=1, max_value=10))
-    start = draw(st.floats(min_value=min_value, max_value=max_value))
-    extent = draw(st.floats(min_value=0., max_value=max_value - start))
-    return np.linspace(start=start, stop=start + extent, num=num)
-
-
-@st.composite
-def parameter_series(draw, min_value=-100, max_value=100):
-    return ParameterSeries(draw(linspace(min_value=min_value, max_value=max_value)))
+    low = draw(st.floats(min_value=min_value, max_value=max_value))
+    extent = draw(st.floats(min_value=0., max_value=max_value - low))
+    return distributions.uniform(low=low, high=low + extent, num_samples=num)
 
 
 @st.composite
@@ -26,7 +21,7 @@ def parameter(draw, min_value=-100, max_value=100, allow_distribution=True):
     scalar_value = st.floats(min_value=min_value, max_value=max_value)
     if not allow_distribution:
         return draw(scalar_value)
-    return draw(st.one_of(parameter_series(min_value=min_value, max_value=max_value), scalar_value))
+    return draw(st.one_of(uniform_distribution(min_value=min_value, max_value=max_value), scalar_value))
 
 
 @st.composite

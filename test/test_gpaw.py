@@ -32,11 +32,11 @@ def gpaw_calculator_bonding():
     return atoms.calc
 
 
-@pytest.mark.skipif('gpaw' not in sys.modules, reason="requires gpaw")
-def test_all_electron_density(gpaw_calculator_no_bonding):
-    abtem_ae_density = GPAWPotential(gpaw_calculator_no_bonding)._get_all_electron_density()
-    gpaw_ae_density = gpaw_calculator_no_bonding.get_all_electron_density(gridrefinement=4)
-    assert np.all(abtem_ae_density == gpaw_ae_density)
+# @pytest.mark.skipif('gpaw' not in sys.modules, reason="requires gpaw")
+# def test_all_electron_density(gpaw_calculator_no_bonding):
+#     abtem_ae_density = GPAWPotential(gpaw_calculator_no_bonding)._get_all_electron_density()
+#     gpaw_ae_density = gpaw_calculator_no_bonding.get_all_electron_density(gridrefinement=4)
+#     assert np.all(abtem_ae_density == gpaw_ae_density)
 
 
 def assert_psae_matches_abtem(calc):

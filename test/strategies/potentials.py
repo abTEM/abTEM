@@ -60,6 +60,9 @@ def frozen_phonons(draw,
     sigmas = {chemical_symbols[number]: draw(st.floats(min_value=0., max_value=.2)) for number in atomic_numbers}
     seeds = draw(st.one_of(st.none(), st.integers(min_value=0)))
 
+    cell = drawn_atoms.cell
+    atomic_numbers = atomic_numbers
+
     if lazy:
         drawn_atoms = dask.delayed(drawn_atoms)
 
@@ -67,7 +70,8 @@ def frozen_phonons(draw,
                          num_configs=num_configs,
                          sigmas=sigmas,
                          seeds=seeds,
-                         cell=drawn_atoms.cell,
+                         atomic_numbers=atomic_numbers,
+                         cell=cell,
                          ensemble_mean=ensemble_mean)
 
 
@@ -162,7 +166,6 @@ def gold_potential(draw):
 
 @st.composite
 def potential_array(draw, lazy=True, device='cpu', min_base_side=8, max_ensemble_dims=1):
-
     shape = draw(core_st.shape(base_dims=3,
                                min_base_side=min_base_side,
                                min_ensemble_dims=0,
