@@ -775,7 +775,7 @@ class Images(AbstractMeasurement):
         if len(repetitions) != 2:
             raise RuntimeError()
         kwargs = self.copy_kwargs(exclude=('array',))
-        kwargs['array'] = np.tile(self.array, (1,) * (len(self.array.shape) - 2) + reps)
+        kwargs['array'] = np.tile(self.array, (1,) * (len(self.array.shape) - 2) + repetitions)
         return self.__class__(**kwargs)
 
     def gaussian_filter(self, sigma: Union[float, Tuple[float, float]], boundary: str = 'periodic', cval: float = 0.):
