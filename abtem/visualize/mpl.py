@@ -362,6 +362,8 @@ def show_measurement_2d_exploded(
 
         title = None
         if len(measurement.ensemble_shape) == 0:
+            if super_title:
+                title = super_title
             super_title = False
             i = 0
         elif len(measurement.ensemble_shape) == 1:
@@ -424,6 +426,7 @@ def show_measurement_2d_exploded(
         fig.suptitle(measurements.metadata['name'])
 
     elif isinstance(super_title, str):
+
         fig.suptitle(super_title)
 
     if len(measurements.ensemble_axes_metadata) > 0 and row_super_label:

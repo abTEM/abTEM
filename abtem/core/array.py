@@ -161,10 +161,10 @@ class HasArray(HasAxes, CopyMixin):
         if self.shape != other.shape:
             raise RuntimeError(f'incompatible shapes ({self.shape} != {other.shape})')
 
-        for (key, value), (other_key, other_value) in zip(self.copy_kwargs(exclude=('array',)).items(),
-                                                          other.copy_kwargs(exclude=('array',)).items()):
+        for (key, value), (other_key, other_value) in zip(self.copy_kwargs(exclude=('array', 'metadata')).items(),
+                                                          other.copy_kwargs(exclude=('array', 'metadata')).items()):
             if np.any(value != other_value):
-                raise RuntimeError(f'incompatible ({self.shape} != {other.shape})')
+                raise RuntimeError(f'incompatible values for {key} ({value} != {other_value})')
 
     def mean(self, axes=None, **kwargs) -> 'T':
         return self._reduction('mean', axes=axes, **kwargs)

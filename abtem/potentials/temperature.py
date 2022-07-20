@@ -462,8 +462,8 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
     #    return atoms
 
     def standard_deviations(self) -> np.ndarray:
-        mean_positions = np.mean([atoms.positions for atoms in self], axis=0)
-        squared_deviations = [(atoms.positions - mean_positions) ** 2 for atoms in self]
+        mean_positions = np.mean([atoms.positions for atoms in self._trajectory], axis=0)
+        squared_deviations = [(atoms.positions - mean_positions) ** 2 for atoms in self._trajectory]
         return np.sqrt(np.sum(squared_deviations, axis=0) / (len(self) - 1))
 
     def __copy__(self):
