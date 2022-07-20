@@ -523,10 +523,11 @@ class Images(AbstractMeasurement):
         cropped_images : Images
         """
 
-        offset = (np.round(self.base_shape[0] * offset[0] / self.extent[0]),
-                  np.round(self.base_shape[1] * offset[1] / self.extent[1]))
-        new_shape = (np.round(self.base_shape[0] * extent[0] / self.extent[0]),
-                     np.round(self.base_shape[1] * extent[1] / self.extent[1]))
+        offset = (int(np.round(self.base_shape[0] * offset[0] / self.extent[0])),
+                  int(np.round(self.base_shape[1] * offset[1] / self.extent[1])))
+        new_shape = (int(np.round(self.base_shape[0] * extent[0] / self.extent[0])),
+                     int(np.round(self.base_shape[1] * extent[1] / self.extent[1])))
+
         array = self.array[..., offset[0]:offset[0] + new_shape[0], offset[1]:offset[1] + new_shape[1]]
 
         kwargs = self.copy_kwargs(exclude=('array',))
