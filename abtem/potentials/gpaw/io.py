@@ -1,4 +1,5 @@
 """Module to handle ab initio electrostatic potentials from the DFT code GPAW."""
+import copy
 from dataclasses import dataclass
 from typing import Any
 
@@ -9,7 +10,7 @@ from ase.io.trajectory import read_atoms
 from ase.units import Bohr
 
 try:
-    from gpaw.calculator import GPAW
+    from gpaw import GPAW
     from gpaw.atom.aeatom import AllElectronAtom
     from gpaw.io import Reader
     from gpaw.density import RealSpaceDensity
@@ -83,7 +84,8 @@ class DummyGPAW:
         reader = Reader(path)
         atoms = read_atoms(reader.atoms)
 
-        parameters = GPAW.default_parameters
+        from gpaw.calculator import GPAW
+        parameters = copy.copy(GPAW.default_parameters)
         parameters.update(reader.parameters.asdict())
 
         setup_mode = parameters['mode']
@@ -115,7 +117,7 @@ class DummyGPAW:
     def from_generic(cls, calculator, lazy: bool = True):
         if isinstance(calculator, str):
             return cls.from_file(calculator, lazy=lazy)
-        elif isinstance(calculator, GPAW):
+        elif hasattr(calculator, 'density'):
             return cls.from_gpaw(calculator, lazy=lazy)
         elif isinstance(calculator, cls):
             return calculator
