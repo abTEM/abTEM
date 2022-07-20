@@ -165,7 +165,7 @@ class PotentialBuilder(AbstractPotential):
                  plane: Union[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]],
                  origin: Tuple[float, float, float],
                  periodic: bool,
-                 device: str ,
+                 device: str,
                  ):
 
         if self._require_cell_transform(cell,
@@ -599,7 +599,8 @@ class PotentialArray(AbstractPotential, HasArray):
                  extent: Union[float, Tuple[float, float]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
                  exit_planes: Union[int, Tuple[int, ...]] = None,
-                 ensemble_axes_metadata: List[AxisMetadata] = None):
+                 ensemble_axes_metadata: List[AxisMetadata] = None,
+                 metadata: dict = None):
 
         if len(array.shape) < 3:
             raise RuntimeError(f'PotentialArray must be 3d, not {len(array.shape)}d')
@@ -613,6 +614,7 @@ class PotentialArray(AbstractPotential, HasArray):
 
         self._ensemble_axes_metadata = ensemble_axes_metadata
         self.check_axes_metadata()
+        self._metadata = {} if metadata is None else metadata
 
     @property
     def ensemble_axes_metadata(self):
@@ -806,10 +808,14 @@ class PotentialArray(AbstractPotential, HasArray):
         new_array = np.tile(self.array, (multiples[2], multiples[0], multiples[1]))
 
         new_extent = (self.extent[0] * multiples[0], self.extent[1] * multiples[1])
-        new_slice_thickness = np.tile(self.slice_thickness, multiples[2])
+        new_slice_thickness = tuple(np.tile(self.slice_thickness, multiples[2]))
 
         return self.__class__(array=new_array, slice_thickness=new_slice_thickness, extent=new_extent,
                               ensemble_axes_metadata=self.ensemble_axes_metadata)
+
+    @property
+    def metadata(self):
+        return self._metadata
 
     def to_hyperspy(self):
         from hyperspy._signals.signal2d import Signal2D

@@ -3,7 +3,7 @@ from abtem._version import __version__
 from abtem.core import axes
 from abtem.core import config
 from abtem.core.array import concatenate, stack, from_zarr
-from abtem.core.distributions import ParameterSeries
+from abtem.core import distributions
 from abtem.structures.structures import orthogonalize_cell
 from abtem.measure.detect import AnnularDetector, SegmentedDetector, FlexibleAnnularDetector, PixelatedDetector, \
     WavesDetector

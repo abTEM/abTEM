@@ -1,6 +1,5 @@
 """Module to describe electron waves and their propagation."""
 import itertools
-import warnings
 from abc import abstractmethod
 from copy import copy
 from functools import partial
@@ -9,7 +8,6 @@ from typing import Union, Sequence, Tuple, List, Dict
 import dask.array as da
 import numpy as np
 from ase import Atoms
-from matplotlib.axes import Axes
 
 from abtem.core.array import HasArray, validate_lazy, ComputableList
 from abtem.core.axes import AxisMetadata
@@ -21,14 +19,13 @@ from abtem.core.fft import fft2, ifft2, fft_crop, fft_interpolate
 from abtem.core.grid import Grid, validate_gpts
 from abtem.core.intialize import initialize
 from abtem.ionization.multislice import transition_potential_multislice_and_detect
-from abtem.measure.detect import AbstractDetector, validate_detectors, WavesDetector, \
-    FlexibleAnnularDetector
+from abtem.measure.detect import AbstractDetector, validate_detectors, WavesDetector, FlexibleAnnularDetector
 from abtem.measure.measure import DiffractionPatterns, Images, AbstractMeasurement
 from abtem.potentials.potentials import Potential, AbstractPotential, validate_potential
 from abtem.waves.base import WavesLikeMixin
-from abtem.waves.multislice import multislice_and_detect
-from abtem.waves.scan import AbstractScan, GridScan, validate_scan, CustomScan
-from abtem.waves.tilt import BeamTilt
+from abtem.waves.multislice import multislice_and_detect, FresnelPropagator
+from abtem.waves.scan import AbstractScan, GridScan, validate_scan
+from abtem.waves.tilt import BeamTilt, tilt_from_metadata
 from abtem.waves.transfer import Aperture, Aberrations, WaveTransform, CompositeWaveTransform, CTF, WaveRenormalization
 
 
@@ -80,9 +77,6 @@ def finalize_lazy_measurements(arrays,
         if hasattr(measurement, 'reduce_ensemble'):
             measurement = measurement.reduce_ensemble()
 
-        # if not keep_ensemble_dims:
-        #     measurement = measurement.squeeze()
-
         measurements.append(measurement)
 
     return measurements[0] if len(measurements) == 1 else ComputableList(measurements)
@@ -104,7 +98,7 @@ class Waves(HasArray, WavesLikeMixin):
     sampling : one or two float
         Sampling of wave functions in x and y [1 / Å].
     tilt : two float, optional
-        Small angle beam tilt [mrad]. Default is (0., 0.).
+        Small angle beam tilt [mrad]. Implemented by shifting the wave function at every slice. Default is (0., 0.).
     fourier_space : bool, optional
         If True, the wave functions are assumed to be represented in Fourier space instead of real space.
     ensemble_axes_metadata : list of AxesMetadata
@@ -120,11 +114,9 @@ class Waves(HasArray, WavesLikeMixin):
                  energy: float = None,
                  extent: Union[float, Tuple[float, float]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
-                 tilt: Tuple[float, float] = (0., 0.),
                  fourier_space: bool = False,
                  ensemble_axes_metadata: List[AxisMetadata] = None,
-                 metadata: Dict = None,
-                 ):
+                 metadata: Dict = None):
 
         if len(array.shape) < 2:
             raise RuntimeError('Wave function array should have 2 dimensions or more')
@@ -132,7 +124,6 @@ class Waves(HasArray, WavesLikeMixin):
         self._array = array
         self._grid = Grid(extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True)
         self._accelerator = Accelerator(energy=energy)
-        self._beam_tilt = BeamTilt(tilt=tilt)
         self._ensemble_axes_metadata = [] if ensemble_axes_metadata is None else ensemble_axes_metadata
         self._metadata = {} if metadata is None else metadata
 
@@ -145,6 +136,13 @@ class Waves(HasArray, WavesLikeMixin):
     #                                ensemble_axes_metadata=self.ensemble_axes_metadata,
     #                                metadata=self.metadata)
 
+    @property
+    def tilt(self):
+        return tilt_from_metadata(self.ensemble_axes_metadata, self.metadata)
+
+    def fresnel_propagator(self, thickness: float) -> FresnelPropagator:
+        return FresnelPropagator(self, thickness)
+
     def complex_images(self):
         waves = self.ensure_real_space(in_place=False)
         return Images(waves.array, sampling=self.sampling, ensemble_axes_metadata=self.ensemble_axes_metadata,
@@ -153,14 +151,6 @@ class Waves(HasArray, WavesLikeMixin):
     @property
     def ensemble_axes_metadata(self):
         return self._ensemble_axes_metadata
-
-    @property
-    def base_shape(self):
-        return self._array.shape[-2:]
-
-    @property
-    def ensemble_shape(self):
-        return self._array.shape[:-2]
 
     @property
     def fourier_space(self):
@@ -185,29 +175,40 @@ class Waves(HasArray, WavesLikeMixin):
                    ensemble_axes_metadata=axes_metadata[:-2],
                    metadata=metadata)
 
-    def renormalize(self, mode: str = 'intensity'):
+    def renormalize(self, space: str = 'fourier'):
         xp = get_array_module(self.device)
 
         fourier_space = self.fourier_space
 
-        if not self.fourier_space:
+        if space == 'fourier':
             waves = self.ensure_fourier_space()
-        else:
-            waves = self.copy()
-
-        if mode == 'intensity':
             f = xp.sqrt(abs2(waves.array).sum((-2, -1), keepdims=True))
+            waves = waves / f
+            if not fourier_space:
+                waves = waves.ensure_real_space()
+        elif space == 'real':
+            raise NotImplementedError
         else:
             raise ValueError()
 
-        waves._array /= f
-
-        if not fourier_space:
-            waves = waves.ensure_real_space()
-
         return waves
 
-    def tile(self, repetitions, normalization: str = 'intensity'):
+    def tile(self, repetitions: Tuple[int, int], normalization: str = 'intensity') -> 'Waves':
+        """
+        Tile wave functions.
+
+        Parameters
+        ----------
+        repetitions : two int
+            The number of repetitions of the wave functions along the x- and y-axis.
+        normalization : {'intensity', 'values'}
+
+
+        Returns
+        -------
+        tiled_wave_functions : Waves
+        """
+
         d = self.copy_kwargs(exclude=('array', 'extent'))
         xp = get_array_module(self.device)
 
@@ -341,14 +342,20 @@ class Waves(HasArray, WavesLikeMixin):
         ----------
         max_angle : {'cutoff', 'valid'} or float
             Maximum scattering angle of the diffraction patterns.
-            ``cutoff`` :
-            The maximum scattering angle will be the cutoff of the antialias aperture.
-            ``valid`` :
-            The maximum scattering angle will be the largest rectangle that fits inside the circular antialias aperture.
+
+                ``cutoff`` :
+                    The maximum scattering angle will be the cutoff of the antialias aperture.
+
+                ``valid`` :
+                    The maximum scattering angle will be the largest rectangle that fits inside the circular antialias
+                    aperture.
+
         block_direct : bool or float
             If true the direct beam is masked.
         fftshift : bool
             If true, shift the zero-angle component to the center of the diffraction patterns.
+        parity : {'same', 'even', 'odd', 'none'}
+            The parity of the shape of the diffraction patterns.
 
         Returns
         -------
@@ -403,7 +410,25 @@ class Waves(HasArray, WavesLikeMixin):
         waves = transform.apply(waves)
         return waves.array
 
-    def apply_transform(self, transform, max_batch: Union[int, 'str'] = 'auto') -> 'Waves':
+    def apply_transform(self,
+                        transform: WaveTransform,
+                        max_batch: int = None) -> 'Waves':
+        """
+        Apply wave function transformation to the wave functions.
+
+        Parameters
+        ----------
+        transform : WaveTransform
+            Wave function transformation to apply.
+        max_batch : int, optional
+            The number of wave functions in each chunk of the Dask array. If None, the number of chunks are
+            automatically estimated based on "dask.chunk-size" in the user configuration.
+
+        Returns
+        -------
+        transformed_waves : Waves
+        """
+
         if self.is_lazy:
             if isinstance(max_batch, int):
                 max_batch = max_batch * self.gpts[0] * self.gpts[1]
@@ -437,19 +462,21 @@ class Waves(HasArray, WavesLikeMixin):
             return transform.apply(self)
 
     def apply_ctf(self,
-                  ctf: WaveTransform = None,
-                  max_batch: str = 'auto',
+                  ctf: CTF = None,
+                  max_batch: str = None,
                   **kwargs) -> 'Waves':
         """
-        Apply the aberrations defined by a CTF to this collection of wave functions.
+        Apply the aberrations and apertures of a Contrast Transfer Function to the wave functions.
 
         Parameters
         ----------
-        ctf : CTF
-            Contrast Transfer Function object to be applied.
+        ctf : CTF, optional
+            Contrast Transfer Function to be applied.
+        max_batch : int, optional
+            The number of wave functions in each chunk of the Dask array. If None, the number of chunks are
+            automatically estimated based on "dask.chunk-size" in the user configuration.
         kwargs :
-            Provide the parameters of the contrast transfer function as keyword arguments. See the documentation for the
-            CTF object.
+            Provide the parameters of the contrast transfer function as keyword arguments. See `abtem.transfer.CTF`.
 
         Returns
         -------
@@ -482,27 +509,27 @@ class Waves(HasArray, WavesLikeMixin):
     def multislice(self,
                    potential: AbstractPotential,
                    detectors: Union[AbstractDetector, List[AbstractDetector]] = None,
-                   start: int = 0,
-                   stop: int = None,
                    conjugate: bool = False,
-                   keep_ensemble_dims: bool = False,
-                   **kwargs):
+                   transpose: bool = False) -> 'Waves':
         """
-        Propagate and transmit wave function through the provided potential.
+        Propagate and transmit wave function through the provided potential using the multislice algorithm.
 
         Parameters
         ----------
         potential : Potential
             The potential through which to propagate the wave function.
         detectors : detector or list of detectors
-        start : int
-        stop : int
-        conjugate : bool
+            A detector or a list of detectors defining how the wave functions should be converted to measurements after
+            running the multislice algorithm. See abtem.measure.detect for a list of implemented detectors.
+        conjugate : bool, optional
+            If True, use the conjugate of the transmission function. Default is False.
+        transpose : bool, optional
+            If True, reverse the order of propagation and transmission. Default is False.
 
         Returns
         -------
-        Waves object
-            Wave function at the exit plane of the potential.
+        exit_waves : Waves
+            Wave function(s) at the exit plane(s) of the potential.
         """
 
         potential = validate_potential(potential, self)
@@ -528,10 +555,11 @@ class Waves(HasArray, WavesLikeMixin):
                                   *tuple(itertools.chain(*blocks)),
                                   self.array,
                                   tuple(range(num_new_symbols, num_new_symbols + len(self.shape))),
-                                  # adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
                                   potential_partial=potential.from_partitioned_args(),
                                   new_axes=new_axes,
                                   detectors=detectors,  # noqa
+                                  conjugate=conjugate,  # noqa
+                                  transpose=transpose,  # noqa
                                   waves_partial=self.from_partitioned_args(),  # noqa
                                   concatenate=True,
                                   meta=np.array((), dtype=np.complex64))
@@ -541,7 +569,11 @@ class Waves(HasArray, WavesLikeMixin):
                                               detectors,
                                               extra_ensemble_axes_metadata=extra_ensemble_axes_metadata)
         else:
-            measurements = multislice_and_detect(self, potential=potential, detectors=detectors)
+            measurements = multislice_and_detect(self,
+                                                 potential=potential,
+                                                 detectors=detectors,
+                                                 conjugate=conjugate,
+                                                 transpose=transpose)
             measurements = tuple(
                 measurement.reduce_ensemble()
                 if hasattr(measurement, 'reduce_ensemble') else measurement
@@ -549,14 +581,14 @@ class Waves(HasArray, WavesLikeMixin):
 
         return measurements[0] if len(measurements) == 1 else ComputableList(measurements)
 
-    def show(self, ax: Axes = None, **kwargs):
+    def show(self, **kwargs):
         """
-        Show the wave function.
+        Show the wave function intensities.
 
         kwargs :
-            Additional keyword arguments for the abtem.plot.show_image function.
+            Keyword arguments for the `abtem.measure.Images.show` method.
         """
-        return self.intensity().show(ax=ax, **kwargs)
+        return self.intensity().show(**kwargs)
 
 
 class WavesBuilder(WavesLikeMixin):
@@ -605,16 +637,14 @@ class WavesBuilder(WavesLikeMixin):
         return self.transforms.ensemble_shape
 
     @staticmethod
-    def build_waves_multislice_detect(*args,
-                                      partials,
-                                      multislice_func,
-                                      detectors):
+    def _build_waves_multislice_detect(*args,
+                                       partials,
+                                       multislice_func,
+                                       detectors):
 
         waves = partials['base'][0]()
 
         transform = partials['transforms'][0](*[args[i] for i in partials['transforms'][1]]).item()
-
-        # print(partials['potential'][0])
 
         if 'potential' in partials.keys():
             potential = partials['potential'][0](*[args[i] for i in partials['potential'][1]]).item()
@@ -687,7 +717,7 @@ class WavesBuilder(WavesLikeMixin):
         symbols += transform_symbols
         adjust_chunks = {**adjust_chunks, **{i: c for i, c in zip(transform_symbols, transform_chunks)}}
 
-        partial_build = partial(self.build_waves_multislice_detect,
+        partial_build = partial(self._build_waves_multislice_detect,
                                 partials=partials,
                                 multislice_func=multislice_func,
                                 detectors=detectors)
@@ -723,11 +753,9 @@ class PlaneWave(WavesBuilder):
     energy : float
         Electron energy [eV].
     tilt : two float
-        Small angle beam tilt [mrad].
-    normalize : str
-        If True,
-    device : str
-        The plane waves will be build on this device.
+        Small angle beam tilt [mrad]. Implemented by shifting the wave function at every slice. Default is (0., 0.).
+    device : str, optional
+        The wave function data is stored on this device. The default is determined by the user configuration.
     """
 
     def __init__(self,
@@ -797,16 +825,19 @@ class PlaneWave(WavesBuilder):
                    potential: Union[AbstractPotential, Atoms],
                    detectors: AbstractDetector = None,
                    lazy: bool = None,
-                   max_batch='auto',
-                   ctf=None,
+                   max_batch: Union[int, str] = 'auto',
+                   ctf: CTF = None,
                    transition_potentials=None) -> Waves:
         """
         Build plane wave function and propagate it through the potential. The grid of the two will be matched.
 
         Parameters
         ----------
-        potential : Potential or Atoms object
-            The potential through which to propagate the wave function.
+        potential : AbstractPotential, Atoms
+            A potential as an AbstractPotential. The potential may also be provided as `ase.Atoms`,
+        detectors : detector, list of detectors, optional
+            A detector or a list of detectors defining how the wave functions should be converted to measurements after
+            running the multislice algorithm. See abtem.measure.detect for a list of implemented detectors.
         lazy : bool, optional
             Return lazy computation. Default is True.
 
@@ -849,8 +880,6 @@ class PlaneWave(WavesBuilder):
 
 class Probe(WavesBuilder):
     """
-    Probe wave function
-
     The probe can represent a stack of electron probe wave functions for simulating scanning transmission
     electron microscopy.
 
@@ -888,7 +917,7 @@ class Probe(WavesBuilder):
                  device: str = None,
                  semiangle_cutoff: float = 30.,
                  taper: float = 0.,
-                 aperture=None,
+                 aperture: Aperture = None,
                  aberrations: Union[Aberrations, dict] = None,
                  extra_transforms=None,
                  **kwargs):
@@ -912,7 +941,8 @@ class Probe(WavesBuilder):
         self._aperture = aperture
         self._aberrations = aberrations
         self._source_offset = source_offset
-        self._beam_tilt = BeamTilt(tilt=tilt)
+        self._tilt = BeamTilt(tilt=tilt)
+
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
 
         self._device = validate_device(device)
@@ -983,7 +1013,7 @@ class Probe(WavesBuilder):
 
     def build(self,
               scan: Union[tuple, str, AbstractScan] = None,
-              max_batch: int = None,
+              max_batch: Union[int, str] = None,
               lazy: bool = None) -> Waves:
 
         """
@@ -993,9 +1023,9 @@ class Probe(WavesBuilder):
         ----------
         scan : scan object or array of xy-positions
             Positions of the probe wave functions
-        chunks : int
-            Specifies the number of wave functions in each chunk of a the created dask array. If None, the number
-            of chunks are automatically estimated based on the "dask.chunk-size" parameter in the configuration.
+        max_batch : int, optional
+            The number of wave functions in each chunk of the Dask array. If None, the number of chunks are
+            automatically estimated based on "dask.chunk-size" in the user configuration.
         lazy : boolean, optional
             If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
             value set in the configuration file.
@@ -1061,7 +1091,6 @@ class Probe(WavesBuilder):
             potential.
         detectors : detector, list of detectors, optional
             A detector or a list of detectors defining how the wave functions should be converted to measurements after
-            running the multislice algorithm. See abtem.measure.detect for a list of implemented detectors.
             running the multislice algorithm. See abtem.measure.detect for a list of implemented detectors.
         chunks : int, optional
             Specifices the number of wave functions in each chunk of a the created dask array. If None, the number
@@ -1146,8 +1175,8 @@ class Probe(WavesBuilder):
             A detector or a list of detectors defining how the wave functions should be converted to measurements after
             running the multislice algorithm. See abtem.measure.detect for a list of implemented detectors.
         max_batch : int, optional
-            Specifices the number of wave functions in each chunk of a the created dask array. If None, the number
-            of chunks are automatically estimated based on the "dask.chunk-size" parameter in the configuration.
+            The number of wave functions in each chunk of the Dask array. If None, the number of chunks are
+            automatically estimated based on "dask.chunk-size" in the user configuration.
         lazy : boolean, optional
             If True, create the measurements lazily, otherwise, calculate instantly. If None, this defaults to the value
             set in the configuration file.

@@ -14,7 +14,7 @@ from matplotlib.patches import Rectangle
 from abtem.core.axes import ScanAxis, PositionsAxis
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import chunk_ranges, validate_chunks
-from abtem.core.distributions import MultidimensionalAxisAlignedDistribution
+from abtem.core.distributions import AxisAlignedDistributionND
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.utils import safe_floor_int
@@ -136,7 +136,7 @@ class SourceOffset(AbstractScan):
     def ensemble_partial(self):
         def distribution(*args):
             factors = [arg.item() for arg in args]
-            dist = SourceOffset(MultidimensionalAxisAlignedDistribution(factors))
+            dist = SourceOffset(AxisAlignedDistributionND(factors))
             arr = np.empty((1,) * len(args), dtype=object)
             arr.itemset(dist)
             return arr

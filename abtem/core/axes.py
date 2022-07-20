@@ -22,6 +22,12 @@ class AxisMetadata:
     def format_title(self, *args, **kwargs):
         return f'{self.label}'
 
+    def item_metadata(self, item):
+        return {}
+
+    def __getitem__(self, item):
+        return self
+
 
 @dataclass(eq=False)
 class UnknownAxis(AxisMetadata):
@@ -104,6 +110,9 @@ class OrdinalAxis(AxisMetadata):
             except TypeError:
                 raise ValueError()
 
+    def item_metadata(self, item):
+        return {self.label: self.values[item]}
+
     def __getitem__(self, item):
         kwargs = dataclasses.asdict(self)
 
@@ -124,6 +133,13 @@ class NonLinearAxis(OrdinalAxis):
 
     def format_title(self, formatting):
         return f'{self.label} = {self.values[0]:>{formatting}} {self.units}'
+
+
+@dataclass(eq=False)
+class TiltAxis(NonLinearAxis):
+    units: str = 'mrad'
+    direction: str = 'x'
+    _ensemble_mean: bool = False
 
 
 @dataclass(eq=False)

@@ -102,7 +102,10 @@ def normalize_axes(dims, shape):
     return tuple(dim if dim >= 0 else num_dims + dim for dim in dims)
 
 
-def expand_dims_to_match(arr1, arr2, match_dims):
+def expand_dims_to_match(arr1, arr2, match_dims=None):
+    if match_dims is None:
+        match_dims = [(), ()]
+
     assert len(match_dims) == 2
     assert len(match_dims[0]) == len(match_dims[1])
 

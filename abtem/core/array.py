@@ -1,5 +1,4 @@
 import copy
-import importlib
 from abc import abstractmethod
 from contextlib import nullcontext
 from numbers import Number
@@ -9,16 +8,13 @@ import dask
 import dask.array as da
 import numpy as np
 import zarr
-from dask.diagnostics import ProgressBar
+from dask.diagnostics import ProgressBar, Profiler
 
 from abtem.core import config
 from abtem.core.axes import HasAxes, UnknownAxis, axis_to_dict, axis_from_dict, AxisMetadata, OrdinalAxis
 from abtem.core.backend import get_array_module, copy_to_device, device_name_from_array_module
 from abtem.core.chunks import Chunks
 from abtem.core.utils import normalize_axes, CopyMixin
-
-if TYPE_CHECKING:
-    pass
 
 
 class ComputableList(list):
@@ -52,9 +48,9 @@ class ComputableList(list):
         return dask.visualize(self._get_computables(), **kwargs)
 
 
-def _compute(dask_array_wrappers, progress_bar=None, **kwargs):
+def _compute(dask_array_wrappers, progress_bar: bool = None, **kwargs):
     if progress_bar is None:
-        progress_bar = config.get('progress_bar')
+        progress_bar = config.get('local_diagnostics.progress_bar')
 
     if progress_bar:
         progress_bar = ProgressBar()
@@ -275,35 +271,31 @@ class HasArray(HasAxes, CopyMixin):
         if isinstance(items, tuple) and len(items) > len(self.ensemble_shape):
             raise RuntimeError('base axes cannot be indexed')
 
-        axis_to_remove = []
-        for i, item in enumerate(items):
-            if isinstance(item, Number):
-                axis_to_remove.append(i)
-            elif isinstance(item, (type(...), type(None))):
-                raise NotImplementedError
+        if any(isinstance(item, (type(...), type(None))) for item in items):
+            raise NotImplementedError
 
-        if self._is_base_axis(axis_to_remove):
+        if len(items) > len(self.ensemble_shape):
             raise RuntimeError('base axes cannot be indexed')
 
-        new_axes_metadata = []
+        metadata = {}
+        axes_metadata = []
         last_indexed = 0
-        for i, (axes_metadata, item) in enumerate(zip(self.ensemble_axes_metadata, items)):
+        for axes_metadata_item, item in zip(self.ensemble_axes_metadata, items):
             last_indexed += 1
 
-            if i in axis_to_remove:
-                continue
+            indexed_axes_metadata = axes_metadata_item[item]
 
-            if isinstance(axes_metadata, OrdinalAxis):
-                new_axes_metadata += [axes_metadata[item]]
+            if isinstance(item, Number):
+                metadata = {**metadata, **indexed_axes_metadata.item_metadata(0)}
             else:
-                new_axes_metadata += [axes_metadata]
+                axes_metadata += [indexed_axes_metadata]
 
-        new_axes_metadata += self.ensemble_axes_metadata[last_indexed:]
+        axes_metadata += self.ensemble_axes_metadata[last_indexed:]
 
-        d = self.copy_kwargs(exclude=('array', 'ensemble_axes_metadata'))
+        d = self.copy_kwargs(exclude=('array', 'ensemble_axes_metadata', 'metadata'))
         d['array'] = self._array[items]
-        d['ensemble_axes_metadata'] = new_axes_metadata
-
+        d['ensemble_axes_metadata'] = axes_metadata
+        d['metadata'] = {**self.metadata, **metadata}
         return self.__class__(**d)
 
     def __getitem__(self, items) -> 'T':

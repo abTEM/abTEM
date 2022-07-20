@@ -2,32 +2,30 @@ import inspect
 import operator
 import warnings
 from abc import abstractmethod
-from copy import copy
 from functools import partial, reduce
 from typing import Union, Tuple, Dict, List
 
 import dask.array as da
 import numpy as np
 from ase import Atoms
-from matplotlib import pyplot as plt
 
-from abtem.core.axes import OrdinalAxis, RealSpaceAxis, AxisMetadata, FrozenPhononsAxis
-from abtem.core.backend import get_array_module, cp, validate_device
-from abtem.core.complex import abs2
 from abtem.core.array import validate_lazy, HasArray, ComputableList
+from abtem.core.axes import OrdinalAxis, AxisMetadata
+from abtem.core.backend import get_array_module, cp, validate_device
 from abtem.core.chunks import chunk_ranges, validate_chunks, equal_sized_chunks
-from abtem.core.energy import Accelerator, HasAcceleratorMixin
+from abtem.core.complex import abs2
+from abtem.core.energy import Accelerator
 from abtem.core.fft import fft2
-from abtem.core.grid import Grid, HasGridMixin, GridUndefinedError
+from abtem.core.grid import Grid, GridUndefinedError
 from abtem.core.intialize import initialize
 from abtem.measure.detect import AbstractDetector, validate_detectors, WavesDetector
 from abtem.measure.measure import AbstractMeasurement
 from abtem.potentials.potentials import AbstractPotential, validate_potential
 from abtem.waves.base import WavesLikeMixin
-from abtem.waves.multislice import multislice, allocate_multislice_measurements, multislice_and_detect
+from abtem.waves.multislice import allocate_multislice_measurements, multislice_and_detect
 from abtem.waves.prism_utils import prism_wave_vectors, plane_waves, wrapped_crop_2d, prism_coefficients, minimum_crop, \
     batch_crop_2d
-from abtem.waves.scan import AbstractScan, validate_scan, GridScan, CustomScan
+from abtem.waves.scan import AbstractScan, validate_scan, GridScan
 from abtem.waves.tilt import BeamTilt
 from abtem.waves.transfer import CTF
 from abtem.waves.waves import Waves, Probe, finalize_lazy_measurements
@@ -108,6 +106,10 @@ class SMatrixArray(HasArray, AbstractSMatrix):
         self._device = device
 
         self.check_axes_metadata()
+
+    @property
+    def tilt(self):
+        return self._beam_tilt.tilt
 
     @property
     def device(self):
@@ -567,6 +569,10 @@ class SMatrix(AbstractSMatrix):
             except GridUndefinedError:
                 raise ValueError('provide a potential or provide extent and gpts')
 
+    @property
+    def tilt(self):
+        return self._beam_tilt.tilt
+
     def round_gpts_to_interpolation(self):
         rounded = round_gpts_to_multiple_of_interpolation(self.gpts, self.interpolation)
         if rounded == self.gpts:
@@ -717,8 +723,6 @@ class SMatrix(AbstractSMatrix):
         return s_matrix.build(start=start, stop=stop, lazy=lazy, max_batch=max_batch)
 
     def build(self,
-              start: int = 0,
-              stop: int = None,
               lazy: bool = None,
               max_batch: Union[int, str] = 'auto') -> SMatrixArray:
 
@@ -728,20 +732,14 @@ class SMatrix(AbstractSMatrix):
 
         Parameters
         ----------
-        start : int
-            First slice index for running the multislice algorithm. Default is first slice of the potential.
-        stop : int
-            Last slice for running the multislice algorithm. If smaller than start the multislice algorithm will run
-            in the reverse direction. Default is last slice of the potential.
         lazy : bool
-            If True, build the scattering matrix lazily with dask array.
+            If True, build the scattering matrix lazily.
         max_batch : 'auto' or str
             The maximum number of plane waves
 
-
         Returns
         -------
-        SMatrixArray
+        s_matrix_array  : SMatrixArray
         """
 
         initialize()

@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 from ase import Atoms
 
-from abtem import show_atoms
 from abtem.core.antialias import AntialiasAperture
 from abtem.core.backend import get_array_module, copy_to_device
 from abtem.core.complex import complex_exponential
@@ -13,7 +12,7 @@ from abtem.structures.slicing import SliceIndexedAtoms
 from abtem.waves.multislice import FresnelPropagator, multislice_step, allocate_multislice_measurements
 
 if TYPE_CHECKING:
-    from abtem.waves.prism import SMatrix, SMatrixArray
+    from abtem.waves.prism import SMatrix
 
 
 def validate_sites(potential=None, sites=None):
@@ -41,9 +40,9 @@ def transition_potential_multislice_and_detect(waves,
                                                transition_potentials,
                                                ctf=None,
                                                keep_ensemble_dims=False):
-    #print(potential.num_frozen_phonons)
+    # print(potential.num_frozen_phonons)
     potential = validate_potential(potential)
-    #sites = validate_sites(potential, sites)
+    # sites = validate_sites(potential, sites)
 
     transition_potentials.grid.match(waves)
     transition_potentials.accelerator.match(waves)
@@ -54,7 +53,7 @@ def transition_potential_multislice_and_detect(waves,
     transmission_function = potential.build(lazy=waves.is_lazy).transmission_function(energy=waves.energy)
     transmission_function = antialias_aperture.bandlimit(transmission_function)
 
-    sites = potential._sliced_atoms
+    sites = potential.sliced_atoms
 
     measurements = allocate_multislice_measurements(waves, potential, detectors)
 

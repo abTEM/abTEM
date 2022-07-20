@@ -4,7 +4,7 @@ import itertools
 from abc import abstractmethod
 from collections import defaultdict
 from functools import partial
-from typing import Mapping, Union, TYPE_CHECKING, Dict
+from typing import Mapping, Union, TYPE_CHECKING, Dict, List
 
 import numpy as np
 from matplotlib.axes import Axes
@@ -12,15 +12,13 @@ from matplotlib.axes import Axes
 from abtem.core.axes import ParameterSeriesAxis
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
-from abtem.core.chunks import validate_chunks
-from abtem.core.distributions import ParameterSeries, Distribution
+from abtem.core.distributions import Distribution
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
 from abtem.core.ensemble import Ensemble, EmptyEnsemble
 from abtem.core.fft import ifft2
 from abtem.core.grid import Grid, polar_spatial_frequencies
 from abtem.core.utils import expand_dims_to_match, CopyMixin, EqualityMixin
 from abtem.measure.measure import FourierSpaceLineProfiles, DiffractionPatterns
-import dask.array as da
 
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves, WavesLikeMixin
@@ -41,7 +39,7 @@ polar_aliases = {'defocus': 'C10', 'astigmatism': 'C12', 'astigmatism_angle': 'p
 
 class WaveTransform(Ensemble, EqualityMixin, CopyMixin):
 
-    def __add__(self, other):
+    def __add__(self, other: 'WaveTransform') -> 'CompositeWaveTransform':
         wave_transforms = []
 
         for wave_transform in (self, other):
@@ -54,7 +52,7 @@ class WaveTransform(Ensemble, EqualityMixin, CopyMixin):
         return CompositeWaveTransform(wave_transforms)
 
     @abstractmethod
-    def apply(self, waves):
+    def apply(self, waves: 'Waves'):
         pass
 
 
@@ -84,7 +82,7 @@ class ArrayWaveTransform(WaveTransform):
     def evaluate(self, waves: 'WavesLikeMixin'):
         raise NotImplementedError
 
-    def apply(self, waves: 'Waves', out_space: 'str' = 'in_space'):
+    def apply(self, waves: 'Waves', out_space: 'str' = 'in_space') -> 'Waves':
         if out_space == 'in_space':
             fourier_space_out = waves.fourier_space
         elif out_space in ('fourier_space', 'real_space'):
@@ -115,7 +113,7 @@ class ArrayWaveTransform(WaveTransform):
 
 class CompositeWaveTransform(WaveTransform):
 
-    def __init__(self, wave_transforms=None):
+    def __init__(self, wave_transforms: List[WaveTransform] = None):
 
         if wave_transforms is None:
             wave_transforms = []
@@ -206,9 +204,8 @@ class HasParameters(Ensemble):
 
     @property
     def ensemble_axes_metadata(self):
-        parameters = self.ensemble_parameters
         axes_metadata = []
-        for parameter_name, parameter in parameters.items():
+        for parameter_name, parameter in self.ensemble_parameters.items():
             axes_metadata += [ParameterSeriesAxis(label=parameter_name,
                                                   values=tuple(parameter.values),
                                                   units='Å',
@@ -217,8 +214,7 @@ class HasParameters(Ensemble):
 
     @property
     def ensemble_shape(self):
-        parameters = self.ensemble_parameters
-        return tuple(map(sum, tuple(parameter.shape for parameter in parameters.values())))
+        return tuple(map(sum, tuple(parameter.shape for parameter in self.ensemble_parameters.values())))
 
     def partition_args(self, chunks=1, lazy: bool = True):
         parameters = self.ensemble_parameters
@@ -501,7 +497,7 @@ class Aberrations(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
 
     def __init__(self,
                  energy: float = None,
-                 parameters: Union[Mapping[str, float], Mapping[str, ParameterSeries]] = None,
+                 parameters: Union[Mapping[str, float], Mapping[str, Distribution]] = None,
                  **kwargs):
 
         for key in kwargs.keys():
@@ -537,7 +533,7 @@ class Aberrations(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
         self._accelerator = Accelerator(energy=energy)
 
     @property
-    def parameters(self) -> Dict[str, Union[float, ParameterSeries]]:
+    def parameters(self) -> Dict[str, Union[float, Distribution]]:
         """The parameters."""
         return self._parameters
 

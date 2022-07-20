@@ -1,6 +1,7 @@
 device: cpu
 fft: mkl
-progress_bar: false
+local_diagnostics:
+  progress_bar: true
 dask:
   lazy: true
   scheduler: threads

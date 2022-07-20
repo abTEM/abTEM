@@ -36,7 +36,7 @@ def abs2(x, **kwargs):
     raise ValueError()
 
 
-def complex_exponential(x, **kwargs):
+def complex_exponential(x):
     if isinstance(x, np.ndarray):
         return _complex_exponential(x)
 

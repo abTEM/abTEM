@@ -1,18 +1,18 @@
 """Module for describing the detection of transmitted waves and different detector types."""
 from abc import ABCMeta, abstractmethod
-from copy import deepcopy
 from typing import Tuple, Any, Union, List, TYPE_CHECKING, Type
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
 
-from abtem.core.axes import FourierSpaceAxis, RealSpaceAxis, LinearAxis, AxisMetadata, ScanAxis
+from abtem.core.axes import FourierSpaceAxis, RealSpaceAxis, LinearAxis, AxisMetadata
 from abtem.core.backend import get_array_module
 from abtem.core.utils import CopyMixin
 from abtem.measure.measure import DiffractionPatterns, PolarMeasurements, Images, LineProfiles, scanned_measurement_type
 
 if TYPE_CHECKING:
+    from abtem.waves.base import WavesLikeMixin
     from abtem.waves.waves import Waves
 
 
@@ -57,7 +57,7 @@ class AbstractDetector(CopyMixin, metaclass=ABCMeta):
     def to_cpu(self):
         return self._to_cpu
 
-    def measurement_meta(self, waves: 'Waves'):
+    def measurement_meta(self, waves: 'WavesLikeMixin'):
         if self.to_cpu:
             return np.array((), dtype=self.measurement_dtype)
         else:
@@ -70,15 +70,15 @@ class AbstractDetector(CopyMixin, metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def measurement_shape(self, waves: 'Waves') -> Tuple:
+    def measurement_shape(self, waves: 'WavesLikeMixin') -> Tuple:
         pass
 
     @abstractmethod
-    def measurement_type(self, waves: 'Waves'):
+    def measurement_type(self, waves: 'WavesLikeMixin'):
         pass
 
     @abstractmethod
-    def measurement_axes_metadata(self, waves: 'Waves'):
+    def measurement_axes_metadata(self, waves: 'WavesLikeMixin'):
         pass
 
     @abstractmethod
@@ -86,7 +86,7 @@ class AbstractDetector(CopyMixin, metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def angular_limits(self, waves: 'Waves') -> Tuple[float, float]:
+    def angular_limits(self, waves: 'WavesLikeMixin') -> Tuple[float, float]:
         pass
 
 
@@ -146,7 +146,7 @@ class AnnularDetector(AbstractDetector):
     def offset(self) -> Tuple[float, float]:
         return self._offset
 
-    def angular_limits(self, waves: 'Waves') -> Tuple[float, float]:
+    def angular_limits(self, waves: 'WavesLikeMixin') -> Tuple[float, float]:
         if self.inner is not None:
             inner = self.inner
         else:
@@ -159,20 +159,20 @@ class AnnularDetector(AbstractDetector):
 
         return inner, outer
 
-    def measurement_axes_metadata(self, waves: 'Waves'):
+    def measurement_axes_metadata(self, waves: 'WavesLikeMixin'):
         return []
 
-    def measurement_shape(self, waves: 'Waves') -> Tuple:
+    def measurement_shape(self, waves: 'WavesLikeMixin') -> Tuple:
         return ()
 
     @property
     def measurement_dtype(self) -> np.dtype.base:
         return np.float32
 
-    def measurement_type(self, waves: 'Waves') -> Union[type(LineProfiles), type(Images)]:
+    def measurement_type(self, waves: 'WavesLikeMixin') -> Union[type(LineProfiles), type(Images)]:
         return scanned_measurement_type(waves)
 
-    def detect(self, waves: 'Waves') -> Images:
+    def detect(self, waves: 'WavesLikeMixin') -> Images:
 
         if self.outer is None:
             outer = np.floor(min(waves.cutoff_angles))

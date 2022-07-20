@@ -20,7 +20,6 @@ from abtem.core.interpolate import interpolate_bilinear
 from abtem.core.utils import CopyMixin, EqualityMixin
 from abtem.measure.utils import polar_detector_bins, sum_run_length_encoded
 from abtem.potentials.temperature import validate_seeds
-
 from abtem.visualize.mpl import show_measurement_2d_exploded
 
 if cp is not None:
@@ -42,7 +41,7 @@ except ImportError:
     Signal1D = None
 
 if TYPE_CHECKING:
-    from abtem.waves.waves import Waves
+    from abtem.waves.base import WavesLikeMixin
 
 T = TypeVar('T', bound='AbstractMeasurement')
 
@@ -84,7 +83,8 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
     return hyperspy_axes
 
 
-def scanned_measurement_type(measurement: Union['AbstractMeasurement', 'Waves']) -> Type['AbstractMeasurement']:
+def scanned_measurement_type(measurement: Union['AbstractMeasurement', 'WavesLikeMixin']) \
+        -> Type['AbstractMeasurement']:
     if len(measurement.scan_axes) == 0:
         return SinglePointMeasurement
 
@@ -758,20 +758,20 @@ class Images(AbstractMeasurement):
         return LineProfiles(array=array, sampling=scan.sampling,
                             ensemble_axes_metadata=self.ensemble_axes_metadata, metadata=self.metadata)
 
-    def tile(self, reps: Tuple[int, int]) -> 'Images':
+    def tile(self, repetitions: Tuple[int, int]) -> 'Images':
         """
         Tile images.
 
         Parameters
         ----------
-        reps : two int
+        repetitions : two int
             The number of repetitions of the images along the x and y axis, respectively.
 
         Returns
         -------
         tiled_images : Images
         """
-        if len(reps) != 2:
+        if len(repetitions) != 2:
             raise RuntimeError()
         kwargs = self.copy_kwargs(exclude=('array',))
         kwargs['array'] = np.tile(self.array, (1,) * (len(self.array.shape) - 2) + reps)

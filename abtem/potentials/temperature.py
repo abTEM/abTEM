@@ -198,7 +198,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
     directions: str, optional
         The displacement directions of the atoms as a string; for example 'xy' for displacement in the x- and
         y-direction. Default is 'xy'.
-    ensemble_mean : True, optional
+    ensemble_mean : bool, optional
         If True, the mean of the ensemble of results from a multislice simulation is calculated, otherwise, the result
         of every frozen phonon is returned.
     seeds: int or sequence of int
@@ -211,14 +211,14 @@ class FrozenPhonons(AbstractFrozenPhonons):
                  sigmas: Union[float, Mapping[Union[str, int], float], Sequence[float]],
                  directions: str = 'xyz',
                  ensemble_mean: bool = True,
-                 seeds: Union[int, Tuple[int, ...]] = None):
+                 seeds: Union[int, Tuple[int, ...]] = None,
+                 atomic_numbers: Union[np.ndarray, Sequence[int]] = None,
+                 cell: Union[Cell, np.ndarray] = None):
 
-        if isinstance(sigmas, dict):
+        if isinstance(sigmas, dict) and atomic_numbers is None:
             atomic_numbers = [data.atomic_numbers[symbol] for symbol in sigmas.keys()]
-        else:
-            atomic_numbers = None
 
-        atomic_numbers, cell = self._validate_atomic_numbers_and_cell(atoms, atomic_numbers, cell=None)
+        atomic_numbers, cell = self._validate_atomic_numbers_and_cell(atoms, atomic_numbers, cell=cell)
 
         unique_symbols = [chemical_symbols[number] for number in atomic_numbers]
 

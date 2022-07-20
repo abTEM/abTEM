@@ -19,8 +19,10 @@ _axes2tuple = {
     'rzxy': (1, 1, 0, 1), 'ryxy': (1, 1, 1, 1), 'ryxz': (2, 0, 0, 1),
     'rzxz': (2, 0, 1, 1), 'rxyz': (2, 1, 0, 1), 'rzyz': (2, 1, 1, 1)}
 
+axis_mapping = {'x': (1, 0, 0), 'y': (0, 1, 0), 'z': (0, 0, 1)}
 
-def plane_to_axes(plane):
+
+def plane_to_axes(plane: str) -> tuple:
     """Internal function for extracting axes from a plane."""
     axes = ()
     last_axis = [0, 1, 2]
@@ -37,7 +39,7 @@ def plane_to_axes(plane):
     return axes + (last_axis[0],)
 
 
-def is_cell_hexagonal(atoms: Atoms):
+def is_cell_hexagonal(atoms: Atoms) -> bool:
     """
     Function to check whether the cell of an ASE atoms object is hexagonal.
 
@@ -62,7 +64,7 @@ def is_cell_orthogonal(cell: Union[Atoms, Cell], tol: float = 1e-12):
 
     Parameters
     ----------
-    atoms : ASE atoms object
+    cell : ASE atoms object
         The atoms that should be checked.
     tol : float
         Components of the lattice vectors below this value are considered to be zero.
@@ -101,7 +103,7 @@ def is_cell_valid(atoms: Atoms, tol: float = 1e-12) -> bool:
     return True
 
 
-def standardize_cell(atoms: Atoms, tol: float = 1e-12):
+def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     """
     Standardize the cell of an ASE atoms object. The atoms are rotated so one of the lattice vectors in the xy-plane
     aligns with the x-axis, then all of the lattice vectors are made positive.
@@ -245,7 +247,7 @@ def merge_close_atoms(atoms: Atoms, tol: float = 1e-7) -> Atoms:
     return new_atoms
 
 
-def wrap_with_tolerance(atoms, tol: float = 1e-6):
+def wrap_with_tolerance(atoms: Atoms, tol: float = 1e-6) -> Atoms:
     atoms = atoms.copy()
 
     atoms.wrap()
@@ -258,7 +260,7 @@ def wrap_with_tolerance(atoms, tol: float = 1e-6):
     return atoms
 
 
-def shrink_cell(atoms, repetitions=(2, 3), tol=1e-6):
+def shrink_cell(atoms: Atoms, repetitions=(2, 3), tol=1e-6):
     atoms = wrap_with_tolerance(atoms, tol=tol)
 
     for repetition in repetitions:
@@ -280,9 +282,6 @@ def shrink_cell(atoms, repetitions=(2, 3), tol=1e-6):
                     break
 
     return atoms
-
-
-axis_mapping = {'x': (1, 0, 0), 'y': (0, 1, 0), 'z': (0, 0, 1)}
 
 
 def rotation_matrix_from_plane(plane: Union[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = 'xy'):
