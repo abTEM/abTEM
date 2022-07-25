@@ -9,7 +9,8 @@ from typing import Mapping, Union, TYPE_CHECKING, Dict, List
 import numpy as np
 from matplotlib.axes import Axes
 
-from abtem.core.axes import ParameterSeriesAxis
+from abtem import stack
+from abtem.core.axes import ParameterSeriesAxis, OrdinalAxis
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.distributions import Distribution
@@ -18,7 +19,7 @@ from abtem.core.ensemble import Ensemble, EmptyEnsemble
 from abtem.core.fft import ifft2
 from abtem.core.grid import Grid, polar_spatial_frequencies
 from abtem.core.utils import expand_dims_to_match, CopyMixin, EqualityMixin
-from abtem.measure.measure import FourierSpaceLineProfiles, DiffractionPatterns
+from abtem.measure.measure import FourierSpaceLineProfiles, DiffractionPatterns, Images
 
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves, WavesLikeMixin
@@ -64,16 +65,15 @@ class WaveRenormalization(EmptyEnsemble, WaveTransform):
 
 class ArrayWaveTransform(WaveTransform):
 
-    def _get_polar_spatial_frequencies(self, waves):
-        gpts = waves.gpts
-        extent = waves.extent
-        device = waves.device
-
-        xp = get_array_module(device)
-        grid = Grid(gpts=gpts, extent=extent)
+    def _polar_spatial_frequencies_from_grid(self, gpts, sampling, wavelength, xp):
+        grid = Grid(gpts=gpts, sampling=sampling)
         alpha, phi = polar_spatial_frequencies(grid.gpts, grid.sampling, xp=xp)
-        alpha *= waves.wavelength
+        alpha *= wavelength
         return alpha, phi
+
+    def _polar_spatial_frequencies_from_waves(self, waves):
+        xp = get_array_module(waves.device)
+        return self._polar_spatial_frequencies_from_grid(waves.gpts, waves.sampling, waves.wavelength, xp)
 
     def evaluate_with_alpha_and_phi(self, alpha, phi):
         raise NotImplementedError
@@ -347,7 +347,7 @@ class Aperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
     def evaluate(self, waves):
         self.accelerator.match(waves)
         waves.grid.check_is_defined()
-        alpha, phi = self._get_polar_spatial_frequencies(waves)
+        alpha, phi = self._polar_spatial_frequencies_from_waves(waves)
         return self.evaluate_with_alpha_and_phi(alpha, phi)
 
 
@@ -396,7 +396,7 @@ class TemporalEnvelope(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
     def evaluate(self, waves):
         self.accelerator.match(waves)
         waves.grid.check_is_defined()
-        alpha, phi = self._get_polar_spatial_frequencies(waves)
+        alpha, phi = self._polar_spatial_frequencies_from_waves(waves)
         return self.evaluate_with_alpha_and_phi(alpha, phi)
 
 
@@ -489,7 +489,7 @@ class SpatialEnvelope(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
     def evaluate(self, waves):
         self.accelerator.match(waves)
         waves.grid.check_is_defined()
-        alpha, phi = self._get_polar_spatial_frequencies(waves)
+        alpha, phi = self._polar_spatial_frequencies_from_waves(waves)
         return self.evaluate_with_alpha_and_phi(alpha, phi)
 
 
@@ -602,7 +602,7 @@ class Aberrations(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
     def evaluate(self, waves):
         self.accelerator.match(waves)
         waves.grid.check_is_defined()
-        alpha, phi = self._get_polar_spatial_frequencies(waves)
+        alpha, phi = self._polar_spatial_frequencies_from_waves(waves)
         return self.evaluate_with_alpha_and_phi(alpha, phi)
 
     def set_parameters(self, parameters: Dict[str, float]):
@@ -658,23 +658,19 @@ class CTF(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
 
         Parameters
         ----------
-        semiangle_cutoff: float
-            The semiangle cutoff describes the sharp Fourier space cutoff due to the objective aperture [mrad].
-        rolloff: float
-            Tapers the cutoff edge over the given angular range [mrad].
-        focal_spread: float
-            The 1/e width of the focal spread due to chromatic aberration and lens current instability [Å].
-        angular_spread: float
-            The 1/e width of the angular deviations due to source size [Å].
-        gaussian_spread:
-            The 1/e width image deflections due to vibrations and thermal magnetic noise [Å].
         energy: float
             The electron energy of the wave functions this contrast transfer function will be applied to [eV].
-        parameters: dict
-            Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in Å
-            and angles should be given in radians.
-        normalize : {'values', 'amplitude', 'intensity'}
-        weight : float
+        semiangle_cutoff: float
+            The semiangle cutoff describes the sharp Fourier space cutoff due to the objective aperture [mrad].
+        taper: float
+            Tapers the cutoff edge over the given angular range [mrad].
+        focal_spread: float
+            The 1 / e width of the focal spread due to chromatic aberration and lens current instability [Å].
+        angular_spread: float
+            The 1 / e width of the angular deviations due to source size [Å].
+        aberrations: dict
+            Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in
+            Å and angles should be given in radians.
         kwargs:
             Provide the aberration coefficients as keyword arguments.
 
@@ -809,13 +805,13 @@ class CTF(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
         array = self.aberrations.evaluate_with_alpha_and_phi(alpha, phi)
 
         if self.angular_spread != 0.:
-            new_array = self.spatial_envelope.evaluate_with_alpha_and_phi(alpha, phi)
             new_aberrations_dims = tuple(range(self.aberrations.ensemble_dims))
             old_match_dims = new_aberrations_dims + (-2, -1)
 
-            start = int(hasattr(self.spatial_envelope.angular_spread, 'values'))
-            new_match_dims = tuple(range(self.spatial_envelope.ensemble_dims - start)) + (-2, -1)
+            added_dims = int(hasattr(self.spatial_envelope.angular_spread, 'values'))
+            new_match_dims = tuple(range(self.spatial_envelope.ensemble_dims - added_dims)) + (-2, -1)
 
+            new_array = self.spatial_envelope.evaluate_with_alpha_and_phi(alpha, phi)
             array, new_array = expand_dims_to_match(array, new_array, match_dims=[old_match_dims, new_match_dims])
             array = array * new_array
 
@@ -834,86 +830,71 @@ class CTF(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
     def evaluate(self, waves):
         self.accelerator.match(waves)
         waves.grid.check_is_defined()
-        alpha, phi = self._get_polar_spatial_frequencies(waves)
+        alpha, phi = self._polar_spatial_frequencies_from_waves(waves)
         return self.evaluate_with_alpha_and_phi(alpha, phi)
 
-    def fourier_space_image(self, waves):
-        array = np.fft.fftshift(self.evaluate(waves))
-        return DiffractionPatterns(array, sampling=waves.fourier_space_sampling, metadata={'energy': self.energy})
+    def image(self, gpts, max_angle):
 
-    def profiles(self, max_semiangle: float = None, phi: float = 0.):
-        if max_semiangle is None:
+        angular_sampling = 2 * max_angle / gpts[0], 2 * max_angle / gpts[1]
+
+        fourier_space_sampling = (angular_sampling[0] / (self.wavelength * 1e3),
+                                  angular_sampling[1] / (self.wavelength * 1e3))
+
+        sampling = 1 / (fourier_space_sampling[0] * gpts[0]), 1 / (fourier_space_sampling[1] * gpts[1])
+
+        alpha, phi = self._polar_spatial_frequencies_from_grid(gpts=gpts, sampling=sampling, wavelength=self.wavelength,
+                                                               xp=np)
+
+        array = np.fft.fftshift(self.evaluate_with_alpha_and_phi(alpha, phi))
+
+        # array = np.fft.fftshift(self.evaluate(waves))
+        return DiffractionPatterns(array, sampling=fourier_space_sampling, metadata={'energy': self.energy})
+
+    # def point_spread_function(self, waves):
+    #     alpha, phi = self._polar_spatial_frequencies_from_waves(waves)
+    #     xp = get_array_module(waves.device)
+    #     array = xp.fft.fftshift(ifft2(self.evaluate_with_alpha_and_phi(alpha, phi)))
+    #     return Images(array, sampling=waves.sampling, metadata={'energy': self.energy})
+
+    def profiles(self, max_angle: float = None, phi: float = 0.):
+        if max_angle is None:
             if self.semiangle_cutoff == np.inf:
-                max_semiangle = 50
+                max_angle = 50
             else:
-                max_semiangle = self.semiangle_cutoff * 1.6
+                max_angle = self.semiangle_cutoff * 1.6
 
-        sampling = max_semiangle / 1000. / 1000.
-        alpha = np.arange(0, max_semiangle / 1000., sampling)
+        sampling = max_angle / 1000. / 1000.
+        alpha = np.arange(0, max_angle / 1000., sampling)
 
         aberrations = self.aberrations.evaluate_with_alpha_and_phi(alpha, phi)
-        aperture = self.aperture.evaluate_with_alpha_and_phi(alpha, phi)
-        temporal_envelope = self.temporal_envelope.evaluate_with_alpha_and_phi(alpha, phi)
         spatial_envelope = self.spatial_envelope.evaluate_with_alpha_and_phi(alpha, phi)
-        # gaussian_envelope = self.evaluate_gaussian_envelope(alpha)
-        envelope = aperture * temporal_envelope * spatial_envelope  # * gaussian_envelope
+        temporal_envelope = self.temporal_envelope.evaluate_with_alpha_and_phi(alpha, phi)
+        aperture = self.aperture.evaluate_with_alpha_and_phi(alpha, phi)
+        envelope = aperture * temporal_envelope * spatial_envelope
 
         sampling = alpha[1] / energy2wavelength(self.energy)
 
-        profiles = {}
-        profiles['ctf'] = FourierSpaceLineProfiles(-aberrations.imag * envelope,
-                                                   sampling=sampling,
-                                                   metadata={'energy': self.energy})
-        profiles['aperture'] = FourierSpaceLineProfiles(aperture,
-                                                        sampling=sampling,
-                                                        metadata={'energy': self.energy})
-        # profiles['aperture'] = LineProfiles(aperture, sampling=sampling, energy=self.energy)
-        profiles['envelope'] = FourierSpaceLineProfiles(envelope, sampling=sampling, metadata={'energy': self.energy})
-        profiles['temporal_envelope'] = FourierSpaceLineProfiles(temporal_envelope, sampling=sampling,
-                                                                 metadata={'energy': self.energy})
-        profiles['spatial_envelope'] = FourierSpaceLineProfiles(spatial_envelope, sampling=sampling,
-                                                                metadata={'energy': self.energy})
-        # profiles['gaussian_envelope'] = RadialFourierSpaceLineProfiles(gaussian_envelope, sampling=sampling,
-        #                                                                energy=self.energy)
-        return profiles
+        axis_metadata = ['ctf']
+        metadata = {'energy': self.energy}
+        profiles = [FourierSpaceLineProfiles(-aberrations.imag * envelope, sampling=sampling, metadata=metadata)]
 
-    def show(self,
-             max_semiangle: float = None,
-             phi: float = 0,
-             ax: Axes = None,
-             angular_units: bool = True,
-             legend: bool = True, **kwargs):
-        """
-        Show the contrast transfer function.
+        if self.semiangle_cutoff != np.inf:
+            profiles += [FourierSpaceLineProfiles(aperture, sampling=sampling, metadata=metadata)]
+            axis_metadata += ['aperture']
 
-        Parameters
-        ----------
-        max_semiangle: float
-            Maximum semiangle to display in the plot.
-        ax: matplotlib Axes, optional
-            If given, the plot will be added to this matplotlib axes.
-        phi: float, optional
-            The contrast transfer function will be plotted along this angle. Default is 0.
-        n: int, optional
-            Number of evaluation points to use in the plot. Default is 1000.
-        title: str, optional
-            The title of the plot. Default is 'None'.
-        kwargs:
-            Additional keyword arguments for the line plots.
-        """
-        import matplotlib.pyplot as plt
+        if self.focal_spread > 0. and self.angular_spread > 0.:
+            profiles += [FourierSpaceLineProfiles(envelope, sampling=sampling, metadata=metadata)]
+            axis_metadata += ['envelope']
 
-        if ax is None:
-            ax = plt.subplot()
+        if self.focal_spread > 0.:
+            profiles += [FourierSpaceLineProfiles(temporal_envelope, sampling=sampling, metadata=metadata)]
+            axis_metadata += ['temporal']
 
-        for key, profile in self.profiles(max_semiangle, phi).items():
-            if not np.all(profile.array == 1.):
-                ax, lines = profile.show(ax=ax, label=key, angular_units=angular_units, **kwargs)
+        if self.angular_spread > 0.:
+            profiles += [FourierSpaceLineProfiles(spatial_envelope, sampling=sampling, metadata=metadata)]
+            axis_metadata += ['spatial']
 
-        if legend:
-            ax.legend()
-
-        return ax
+        return stack(profiles, axis_metadata=OrdinalAxis(values=tuple(axis_metadata)))
 
 
 def scherzer_defocus(Cs, energy):

@@ -124,7 +124,7 @@ class SMatrixArray(HasArray, AbstractSMatrix):
     @property
     def waves(self):
         kwargs = {key: getattr(self, key) for key in common_kwargs(self.__class__, Waves)}
-        kwargs['ensemble_axes_metadata'] = kwargs['ensemble_axes_metadata'] + self.base_axes_metadata[-1:]
+        kwargs['ensemble_axes_metadata'] = kwargs['ensemble_axes_metadata'] + self.base_axes_metadata[:-2]
         return Waves(**kwargs)
 
     def _copy_with_new_waves(self, waves):
@@ -194,13 +194,8 @@ class SMatrixArray(HasArray, AbstractSMatrix):
         return (self.antialias_cutoff_gpts[0] // self.interpolation[0],
                 self.antialias_cutoff_gpts[1] // self.interpolation[1])
 
-    def multislice(self,
-                   potential: AbstractPotential = None,
-                   start: int = 0,
-                   stop: int = None,
-                   lazy: bool = None,
-                   max_batch: Union[int, str] = 'auto'):
-        waves = self.waves.multislice(potential, start=start, stop=stop, lazy=lazy, max_batch=max_batch)
+    def multislice(self, potential: AbstractPotential = None):
+        waves = self.waves.multislice(potential)
         return self._copy_with_new_waves(waves)
 
     def reduce_to_waves(self, scan: AbstractScan, ctf: CTF) -> 'Waves':
@@ -661,7 +656,7 @@ class SMatrix(AbstractSMatrix):
         else:
             return self.gpts
 
-    def _build_s_matrix(self, wave_vector_range=slice(None), start=0, stop=None):
+    def _build_s_matrix(self, wave_vector_range=slice(None)):
 
         xp = get_array_module(self.device)
 
@@ -685,7 +680,7 @@ class SMatrix(AbstractSMatrix):
                       ensemble_axes_metadata=[OrdinalAxis(values=wave_vectors)])
 
         if self.potential is not None:
-            waves = multislice_and_detect(waves, self.potential, [WavesDetector()], start=start, stop=stop)[0]
+            waves = multislice_and_detect(waves, self.potential, [WavesDetector()])[0]
 
         if self.downsampled_gpts() != self.gpts:
             waves = waves.downsample(gpts=self.downsampled_gpts(), normalization='intensity')
@@ -720,7 +715,7 @@ class SMatrix(AbstractSMatrix):
 
     def multislice(self, potential=None, start=0, stop=None, lazy: bool = None, max_batch: Union[int, str] = 'auto'):
         s_matrix = self.__class__(potential=potential, **self.copy_kwargs(exclude=('potential',)))
-        return s_matrix.build(start=start, stop=stop, lazy=lazy, max_batch=max_batch)
+        return s_matrix.build(lazy=lazy, max_batch=max_batch)
 
     def build(self,
               lazy: bool = None,

@@ -176,7 +176,8 @@ class CustomScan(AbstractScan):
 
     @property
     def ensemble_axes_metadata(self):
-        return [PositionsAxis(values=tuple(tuple(position) for position in self.positions))]
+        a = [PositionsAxis(values=tuple((float(position[0]), float(position[1])) for position in self.positions))]
+        return a
 
     @staticmethod
     def _from_partitioned_args_func(*args, **kwargs):

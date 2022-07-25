@@ -179,7 +179,7 @@ class GPAWPotential(PotentialBuilder):
                                     parametrization=ewald_parametrization,
                                     slice_thickness=self.slice_thickness,
                                     projection='finite',
-                                    integral_space='real',
+                                    integral_method='quadrature',
                                     plane=self.plane,
                                     box=self.box,
                                     origin=self.origin,

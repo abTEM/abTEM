@@ -119,7 +119,9 @@ class OrdinalAxis(AxisMetadata):
         if isinstance(item, Number):
             kwargs['values'] = (kwargs['values'][item],)
         else:
-            kwargs['values'] = tuple(np.array(kwargs['values'])[item])
+            array = np.empty(len(kwargs['values']), dtype=object)
+            array[:] = kwargs['values']
+            kwargs['values'] = tuple(array[item])
 
         return self.__class__(**kwargs)  # noqa
 
@@ -132,7 +134,11 @@ class NonLinearAxis(OrdinalAxis):
         return f'{self.label} [{self.units}]'
 
     def format_title(self, formatting):
-        return f'{self.label} = {self.values[0]:>{formatting}} {self.units}'
+        if isinstance(self.values[0], tuple):
+            formatted = ', '.join(tuple(f'{value:>{formatting}}' for value in self.values[0]))
+            return f'{self.label} = {formatted} {self.units}'
+        else:
+            return f'{self.label} = {self.values[0]:>{formatting}} {self.units}'
 
 
 @dataclass(eq=False)
@@ -156,7 +162,7 @@ class ParameterSeriesAxis(NonLinearAxis):
 
 @dataclass(eq=False)
 class PositionsAxis(NonLinearAxis):
-    label: str = 'Positions'
+    label: str = 'x, y'
     units: str = 'Å'
 
 

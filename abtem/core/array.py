@@ -103,7 +103,8 @@ class HasArray(HasAxes, CopyMixin):
     def __init__(self, *args, **kwargs):
         pass
 
-    def from_array_and_metadata(self, array, axes_metadata, metadata):
+    @classmethod
+    def from_array_and_metadata(cls, array, axes_metadata, metadata):
         raise NotImplementedError
 
     @property
@@ -455,9 +456,14 @@ def from_zarr(url: str, chunks: Chunks = None):
     return cls.from_zarr(url, chunks)
 
 
-def stack(has_arrays: Sequence[HasArray], axes_metadata: AxisMetadata = None, axis: int = 0) -> 'T':
-    if axes_metadata is None:
-        axes_metadata = UnknownAxis()
+def stack(has_arrays: Sequence[HasArray], axis_metadata: AxisMetadata = None, axis: int = 0) -> 'T':
+    if axis_metadata is None:
+        axis_metadata = UnknownAxis()
+
+    elif isinstance(axis_metadata, (tuple, list)):
+        if not all(isinstance(element, str) for element in axis_metadata):
+            raise ValueError()
+        axis_metadata = OrdinalAxis(values=axis_metadata)
 
     xp = get_array_module(has_arrays[0].array)
 
@@ -472,7 +478,7 @@ def stack(has_arrays: Sequence[HasArray], axes_metadata: AxisMetadata = None, ax
     kwargs = has_arrays[0].copy_kwargs(exclude=('array',))
 
     kwargs['array'] = array
-    kwargs['ensemble_axes_metadata'] = [axes_metadata] + kwargs['ensemble_axes_metadata']
+    kwargs['ensemble_axes_metadata'] = [axis_metadata] + kwargs['ensemble_axes_metadata']
     return cls(**kwargs)
 
 

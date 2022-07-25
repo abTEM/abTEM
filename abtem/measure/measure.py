@@ -14,13 +14,13 @@ from abtem.core.axes import HasAxes, RealSpaceAxis, AxisMetadata, FourierSpaceAx
 from abtem.core.backend import cp, get_array_module, get_ndimage_module, copy_to_device
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
-from abtem.core.fft import fft2, fft_interpolate
+from abtem.core.fft import fft2, fft_interpolate, fft_crop
 from abtem.core.grid import adjusted_gpts
 from abtem.core.interpolate import interpolate_bilinear
 from abtem.core.utils import CopyMixin, EqualityMixin
 from abtem.measure.utils import polar_detector_bins, sum_run_length_encoded
 from abtem.potentials.temperature import validate_seeds
-from abtem.visualize.mpl import show_measurement_2d_exploded
+from abtem.visualize.mpl import show_measurement_2d_exploded, show_measurements_1d
 
 if cp is not None:
     from abtem.core.cuda import sum_run_length_encoded as sum_run_length_encoded_cuda
@@ -46,6 +46,10 @@ if TYPE_CHECKING:
 T = TypeVar('T', bound='AbstractMeasurement')
 
 missing_hyperspy_message = 'This functionality of abTEM requires hyperspy, see https://hyperspy.org/.'
+
+angular_units = ('angular', 'mrad')
+bins = ('bins',)
+reciprocal_units = ('reciprocal', '1/Å')
 
 
 def _to_hyperspy_axes_metadata(axes_metadata, shape):
@@ -1108,60 +1112,13 @@ class AbstractMeasurement1d(AbstractMeasurement):
 
         return s
 
-    def _plot(self, x, y, ax, label, **kwargs):
-        y = copy_to_device(y, np)
-        x, y = np.squeeze(x), np.squeeze(y)
-
-        if np.iscomplexobj(self.array):
-            if label is None:
-                label = ''
-
-            line1 = ax.plot(x, y.real, label=f'Real {label}', **kwargs)
-            line2 = ax.plot(x, y.imag, label=f'Imag. {label}', **kwargs)
-            line = (line1, line2)
-        else:
-            line = ax.plot(x, y, label=label, **kwargs)
-
-        return line
-
-    def show(self,
-             ax: Axes = None,
-             title: str = None,
-             figsize=None,
-             angular_units: bool = False):
-
-        if ax is None:
-            fig, ax = plt.subplots(figsize=figsize)
-
-        if title is None and 'name' in self.metadata:
-            title = self.metadata['name']
-
-        if title is not None:
-            ax.set_title(title)
-
-        x = np.linspace(0, self.extent, self.shape[-1], endpoint=False)
-
-        if angular_units:
-            x *= energy2wavelength(self.energy) * 1e3
-
-        for index, line_profile in self.iterate_ensemble(keep_dims=True):
-
-            labels = []
-            for axis in line_profile.ensemble_axes_metadata:
-
-                if isinstance(axis, OrdinalAxis):
-                    labels += [f'{axis.values[0]}']
-
-            label = ''.join(labels)
-
-            self._plot(x, line_profile.array, ax, label)
-
-        ax.set_xlabel(f'{self.axes_metadata[-1].label} [{self.axes_metadata[-1].units}]')
-
-        if len(self.ensemble_shape) > 0:
-            ax.legend()
-
-        return ax
+    # def show(self,
+    #          ax: Axes = None,
+    #          title: str = None,
+    #          figsize=None,
+    #          angular_units: bool = False):
+    #
+    #     pass
 
 
 class LineProfiles(AbstractMeasurement1d):
@@ -1209,6 +1166,27 @@ class FourierSpaceLineProfiles(AbstractMeasurement1d):
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
         return [FourierSpaceAxis(label='k', sampling=self.sampling, units='1 / Å')]
+
+    @property
+    def angular_extent(self):
+        return self.extent * self.wavelength * 1e3
+
+    def show(self,
+             ax: Axes = None,
+             x_label=None,
+             y_label=None,
+             units: str = 'reciprocal'):
+        if units in angular_units:
+            extent = [0, self.angular_extent]
+
+            if x_label is None:
+                x_label = 'scattering angle [mrad]'
+        elif units in reciprocal_units:
+            extent = [0, self.extent]
+        else:
+            raise RuntimeError()
+
+        return show_measurements_1d(self, x_label=x_label, extent=extent, ax=ax)
 
 
 def integrate_gradient_2d(gradient, sampling):
@@ -1915,6 +1893,16 @@ class DiffractionPatterns(AbstractMeasurement):
         kwargs['array'] = array
         return self.__class__(**kwargs)
 
+    def crop(self, max_angle):
+        gpts = (int(2 * np.ceil(max_angle / self.angular_sampling[0])) + 1,
+                int(2 * np.ceil(max_angle / self.angular_sampling[1])) + 1)
+
+        xp = get_array_module(self.array)
+        array = xp.fft.fftshift(fft_crop(xp.fft.fftshift(self.array, axes=(-2, -1)), new_shape=gpts), axes=(-2, -1))
+        kwargs = self.copy_kwargs(exclude=('array',))
+        kwargs['array'] = array
+        return self.__class__(**kwargs)
+
     def block_direct(self, radius: float = None) -> 'DiffractionPatterns':
         """
         Block the direct beam by setting the pixels of the zeroth order disk to zero.
@@ -2047,10 +2035,6 @@ class DiffractionPatterns(AbstractMeasurement):
                 raise NotImplementedError('`ax` not implemented for with `explode = True`')
             measurements = self
 
-        angular_units = ('angular', 'mrad')
-        bins = ('bins',)
-        reciprocal_units = ('reciprocal', '1/Å')
-
         if units.lower() in angular_units:
             x_label = 'scattering angle x [mrad]'
             y_label = 'scattering angle y [mrad]'
@@ -2096,66 +2080,6 @@ class DiffractionPatterns(AbstractMeasurement):
                                             anchored_text_kwargs=anchored_text_kwargs,
                                             axes=ax
                                             )
-
-    # def show(self,
-    #          ax: Axes = None,
-    #          cbar: bool = False,
-    #          power: float = 1.,
-    #          title: str = None,
-    #          figsize: Tuple[float, float] = None,
-    #          angular_units: bool = False,
-    #          max_angle: float = None,
-    #          vmin=None,
-    #          vmax=None,
-    #          **kwargs):
-    #
-    #     if ax is None:
-    #         fig, ax = plt.subplots(figsize=figsize)
-    #
-    #     if title is not None:
-    #         ax.set_title(title)
-    #
-    #     if angular_units:
-    #         ax.set_xlabel('Scattering angle x [mrad]')
-    #         ax.set_ylabel('Scattering angle y [mrad]')
-    #         extent = self.angular_limits[0] + self.angular_limits[1]
-    #     else:
-    #         ax.set_xlabel('Spatial frequency x [1 / Å]')
-    #         ax.set_ylabel('Spatial frequency y [1 / Å]')
-    #         extent = self.limits[0] + self.limits[1]
-    #
-    #     slic = (0,) * self.num_ensemble_axes
-    #
-    #     array = asnumpy(self.array)[slic].T
-    #
-    #     if np.iscomplexobj(array):
-    #         if power != 1.:
-    #             raise ValueError
-    #
-    #         colored_array = domain_coloring(array, vmin=vmin, vmax=vmax)
-    #     else:
-    #         colored_array = array ** power
-    #
-    #     im = ax.imshow(colored_array, origin='lower', vmin=vmin, extent=extent, vmax=vmax, **kwargs)
-    #
-    #     if cbar:
-    #         if np.iscomplexobj(array):
-    #             vmin = np.abs(array).min() if vmin is None else vmin
-    #             vmax = np.abs(array).max() if vmax is None else vmax
-    #             add_domain_coloring_cbar(ax, vmin, vmax)
-    #         else:
-    #             plt.colorbar(im, ax=ax)
-    #
-    #     # im = ax.imshow(array, extent=extent, origin='lower', **kwargs)
-    #
-    #     if max_angle:
-    #         ax.set_xlim([-max_angle, max_angle])
-    #         ax.set_ylim([-max_angle, max_angle])
-    #
-    #     if cbar:
-    #         plt.colorbar(im, ax=ax)
-    #
-    #     return ax, im
 
 
 class PolarMeasurements(AbstractMeasurement):

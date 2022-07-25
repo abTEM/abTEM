@@ -343,7 +343,7 @@ class Potential(PotentialBuilder):
     projection : 'finite' or 'infinite', optional
         If 'finite' the 3d potential is numerically integrated between the slice boundaries. If 'infinite' the infinite
         potential projection of each atom will be assigned to a single slice. Default is 'infinite'.
-    integral_space : 'real' or 'fourier', optional
+    integral_method : {'quadrature', 'analytic'}, optional
         Specifies whether to perform projection integrals in real space or Fourier space. By default finite projection
         integrals are computed in real space and infinite projection integrals are performed in Fourier space.
     exit_planes : int or tuple of int, optional
@@ -376,7 +376,7 @@ class Potential(PotentialBuilder):
         The device used for calculating the potential. The default is determined by the user configuration file.
 
     """
-    _exclude_from_copy = ('parametrization', 'projection', 'integral_space')
+    _exclude_from_copy = ('parametrization', 'projection', 'integral_method')
 
     def __init__(self,
                  atoms: Union[Atoms, AbstractFrozenPhonons] = None,
@@ -385,7 +385,7 @@ class Potential(PotentialBuilder):
                  slice_thickness: Union[float, Tuple[float, ...]] = .5,
                  parametrization: Union[str, Parametrization] = 'lobato',
                  projection: str = 'infinite',
-                 integral_space: str = None,
+                 integral_method: str = None,
                  exit_planes: Union[int, Tuple[int, ...]] = None,
                  device: str = None,
                  plane: Union[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = 'xy',
@@ -399,18 +399,18 @@ class Potential(PotentialBuilder):
         else:
             self._frozen_phonons = atoms
 
-        if projection == 'infinite' and integral_space is None:
-            integral_space = 'fourier'
+        if projection == 'infinite' and integral_method is None:
+            integral_method = 'analytic'
 
-        elif projection == 'finite' and integral_space is None:
-            integral_space = 'real'
+        elif projection == 'finite' and integral_method is None:
+            integral_method = 'quadrature'
 
         if integrator is None:
-            if projection == 'finite' and integral_space == 'real':
+            if projection == 'finite' and integral_method == 'quadrature':
                 integrator = ProjectionQuadratureRule(parametrization=parametrization)
-            elif projection == 'finite' and integral_space == 'fourier':
+            elif projection == 'finite' and integral_method == 'analytic':
                 integrator = GaussianProjectionIntegrals(correction_parametrization=parametrization)
-            elif projection == 'infinite' and integral_space == 'fourier':
+            elif projection == 'infinite' and integral_method == 'analytic':
                 integrator = InfinitePotentialProjections(parametrization=parametrization)
             else:
                 raise NotImplementedError

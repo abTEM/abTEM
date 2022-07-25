@@ -197,6 +197,12 @@ def decompose_affine_transform(affined_transform: np.ndarray) -> Tuple[np.ndarra
     return rotation, zoom, shear
 
 
+def pretty_print_transform(transform):
+    print('euler angles (degrees): \t x = {:.3f}, \t y = {:.3f}, \t z = {:.3f}'.format(*transform[0] / np.pi * 180))
+    print('normal strains (percent): \t x = {:.3f}, \t y = {:.3f}, \t z = {:.3f}'.format(*(transform[1] - 1) * 100))
+    print('shear strains (percent): \t xy = {:.3f}, \t xz = {:.3f}, \t xz = {:.3f}'.format(*(transform[2]) * 100))
+
+
 def _label_to_index_generator(labels: np.ndarray, first_label: int = 0):
     labels = labels.flatten()
     labels_order = labels.argsort()
@@ -404,6 +410,9 @@ def orthogonalize_cell(atoms: Atoms,
 
     if box is None:
         box = best_orthogonal_box(atoms.cell, max_repetitions=max_repetitions)
+
+    if np.any(atoms.cell.lengths() < tolerance):
+        raise RuntimeError('cell vectors must have non-zero length')
 
     inv = np.linalg.inv(atoms.cell)
     vectors = np.dot(np.diag(box), inv)
