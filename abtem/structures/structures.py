@@ -120,6 +120,8 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     atoms : ASE atoms object
         The standardized atoms.
     """
+    atoms = atoms.copy()
+
     cell = np.array(atoms.cell)
 
     vertical_vector = np.where(np.all(np.abs(cell[:, :2]) < tol, axis=1))[0]
@@ -135,10 +137,17 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     if r != 0.:
         atoms.rotate(-r, 'z', rotate_cell=True)
 
+    if not np.all(atoms.cell.lengths() == np.abs(np.diag(atoms.cell))):
+        raise RuntimeError('cell has nonorthgonal lattice vectors')
+
+    for i, diagonal_component in enumerate(np.diag(atoms.cell)):
+        if diagonal_component < 0:
+            atoms.positions[:, i] = - atoms.positions[:, i]
+
+    atoms.set_cell(np.diag(np.abs(atoms.get_cell())))
+
     if not is_cell_valid(atoms, tol):
         raise RuntimeError('This cell cannot be made orthogonal using currently implemented methods.')
-
-    atoms.set_cell(np.abs(atoms.get_cell()))
 
     return atoms
 

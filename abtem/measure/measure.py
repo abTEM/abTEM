@@ -1150,6 +1150,15 @@ class LineProfiles(AbstractMeasurement1d):
 
         return self.__class__(**kwargs)
 
+    def show(self,
+             ax: Axes = None,
+             x_label=None,
+             y_label=None):
+
+        extent = [0, self.extent]
+
+        return show_measurements_1d(self, x_label=x_label, extent=extent, ax=ax)
+
 
 class FourierSpaceLineProfiles(AbstractMeasurement1d):
 
@@ -1176,6 +1185,7 @@ class FourierSpaceLineProfiles(AbstractMeasurement1d):
              x_label=None,
              y_label=None,
              units: str = 'reciprocal'):
+
         if units in angular_units:
             extent = [0, self.angular_extent]
 
@@ -1930,9 +1940,21 @@ class DiffractionPatterns(AbstractMeasurement):
         center = np.array([self.base_shape[0] // 2, self.base_shape[1] // 2])
         indices = bins + center
         if len(bins.shape) == 2:
-            return self.array[..., indices[:, 0], indices[:, 1]]
+            array = self.array[..., indices[:, 0], indices[:, 1]]
         else:
-            return self.array[..., indices[0], indices[1]]
+            array = self.array[..., indices[0], indices[1]]
+
+        return array
+
+        # if len(array.shape) > 1:
+        #     array = np.swapaxes(array, -1, -2)
+        #
+        #
+        # return LineProfiles(array=array,
+        #                     metadata=self.metadata,
+        #                     ensemble_axes_metadata=
+        #
+        #                     )
 
     def show(self,
              units: str = 'reciprocal',

@@ -42,9 +42,17 @@ def _plane2axes(plane):
     return axes + (last_axis[0],)
 
 
-def show_atoms(atoms, repeat: Tuple[int, int] = (1, 1), scans=None, plane: Union[Tuple[float, float], str] = 'xy',
-               ax=None, scale_atoms: float = .5, title: str = None, numbering: bool = False, figsize=None,
-               legend=False):
+def show_atoms(atoms,
+               repeat: Tuple[int, int] = (1, 1),
+               scans=None,
+               plane: Union[Tuple[float, float], str] = 'xy',
+               ax=None,
+               scale_atoms: float = .5,
+               title: str = None,
+               numbering: bool = False,
+               figsize=None,
+               legend: bool = False):
+
     """
     Show atoms function
 
@@ -87,17 +95,26 @@ def show_atoms(atoms, repeat: Tuple[int, int] = (1, 1), scans=None, plane: Union
     return ax
 
 
-def _show_atoms_2d(atoms, scans=None, plane: Union[Tuple[float, float], str] = 'xy', ax=None, scale_atoms: float = .5,
-                   title: str = None, numbering: bool = False, figsize=None, legend=False):
+def _show_atoms_2d(atoms,
+                   scans=None,
+                   plane: Union[Tuple[float, float], str] = 'xy',
+                   ax=None,
+                   scale_atoms: float = .5,
+                   title: str = None,
+                   numbering: bool = False,
+                   figsize=None,
+                   legend=False):
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
 
     cell = atoms.cell
     axes = _plane2axes(plane)
 
-    for line in _cube:
-        cell_lines = np.array([np.dot(line[0], cell), np.dot(line[1], cell)])
-        ax.plot(cell_lines[:, axes[0]], cell_lines[:, axes[1]], 'k-')
+    cell_lines = np.array([[np.dot(line[0], cell), np.dot(line[1], cell)] for line in _cube])
+    cell_lines_x, cell_lines_y = cell_lines[..., axes[0]], cell_lines[..., axes[1]]
+
+    for cell_line_x, cell_line_y in zip(cell_lines_x, cell_lines_y):
+        ax.plot(cell_line_x, cell_line_y, 'k-')
 
     if len(atoms) > 0:
         positions = atoms.positions[:, axes[:2]]
@@ -129,7 +146,10 @@ def _show_atoms_2d(atoms, scans=None, plane: Union[Tuple[float, float], str] = '
                                   markerfacecolor=jmol_colors[unique], markersize=12)
                            for unique in np.unique(atoms.numbers)]
 
-        ax.legend(handles=legend_elements)
+        ax.legend(handles=legend_elements, loc='upper right')
+
+    # ax.set_xlim([0, np.max(cell_lines_x)])
+    # ax.set_ylim([0, np.max(cell_lines_y)])
 
     if scans is not None:
         if not isinstance(scans, Iterable):

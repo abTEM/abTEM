@@ -115,7 +115,10 @@ class AbstractPotential(Ensemble, HasAxes, HasGridMixin, EqualityMixin, CopyMixi
     def default_ensemble_chunks(self) -> Tuple:
         return validate_chunks(self.ensemble_shape, (1,))
 
-    def show(self, **kwargs):
+    def images(self):
+        return self.build().images()
+
+    def show(self, explode: bool = False, **kwargs):
         """
         Show the potential projection. This requires building all potential slices.
 
@@ -124,7 +127,10 @@ class AbstractPotential(Ensemble, HasAxes, HasGridMixin, EqualityMixin, CopyMixi
         kwargs:
             Additional keyword arguments for abtem.plot.show_image.
         """
-        return self.project().show(**kwargs)
+        if explode:
+            return self.images().show(explode=True, **kwargs)
+        else:
+            return self.project().show(**kwargs)
 
 
 def validate_potential(potential: Union[Atoms, AbstractPotential], waves: 'Waves' = None) -> AbstractPotential:
@@ -241,9 +247,9 @@ class PotentialBuilder(AbstractPotential):
         return self.build(*unpack_item(item, len(self)), lazy=False)
 
     @staticmethod
-    def _wrap_build_potential(potential):
+    def _wrap_build_potential(potential, first_slice, last_slice):
         potential = potential.item()
-        array = potential.build(lazy=False).array
+        array = potential.build(first_slice, last_slice, lazy=False).array
         return array
 
     def build(self,
@@ -287,15 +293,18 @@ class PotentialBuilder(AbstractPotential):
 
             array = blocks.map_blocks(self._wrap_build_potential,
                                       new_axis=new_axis,
+                                      first_slice=first_slice,
+                                      last_slice=last_slice,
                                       chunks=chunks,
                                       meta=xp.array((), dtype=np.float32))
 
         else:
             xp = get_array_module(self.device)
 
-            array = xp.zeros(self.ensemble_shape + (len(self),) + self.gpts, dtype=xp.float32)
+            array = xp.zeros(self.ensemble_shape + (last_slice - first_slice,) + self.gpts, dtype=xp.float32)
 
             if self.ensemble_shape:
+
                 for i, _, potential in self.generate_blocks():
                     for j, slic in enumerate(potential.generate_slices(first_slice, last_slice)):
                         array[i, j] = slic.array
@@ -305,7 +314,7 @@ class PotentialBuilder(AbstractPotential):
 
         potential = PotentialArray(array,
                                    sampling=self.sampling,
-                                   slice_thickness=self.slice_thickness,
+                                   slice_thickness=self.slice_thickness[first_slice:last_slice],
                                    exit_planes=self.exit_planes,
                                    ensemble_axes_metadata=self.ensemble_axes_metadata)
 
@@ -525,7 +534,6 @@ class Potential(PotentialBuilder):
 
         for start, stop in generate_chunks(last_slice - first_slice, chunks=1, start=first_slice):
             array = xp.zeros((stop - start,) + self.gpts, dtype=np.float32)
-
             for i, slice_idx in enumerate(range(start, stop)):
 
                 for Z, integrator in integrators.items():

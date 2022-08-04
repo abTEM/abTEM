@@ -1,27 +1,18 @@
-from typing import Tuple
-
 import numba as nb
 import numpy as np
 
 from abtem.core.backend import get_array_module
-from abtem.core.complex import complex_exponential
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import ifft2
 from abtem.core.grid import spatial_frequencies
 from abtem.waves.natural_neighbors import pairwise_weights
 from abtem.waves.transfer import CTF
 
+
 def beamlet_weights(parent_wave_vectors, wave_vectors, gpts, sampling):
     kx, ky = spatial_frequencies(gpts, sampling)
     kx, ky = np.meshgrid(kx, ky, indexing='ij')
     k = np.asarray((kx.ravel(), ky.ravel())).T
-
-    # import matplotlib.pyplot as plt
-    # plt.figure(figsize=(12,12))
-    # plt.plot(*k.T,'r.')
-    # plt.plot(*wave_vectors.T, 'b.')
-    # plt.show()
-    # sss
 
     indices = np.argmax(np.all(np.isclose(wave_vectors[:, None, :], k), axis=2), axis=1)
     weights = np.zeros((len(parent_wave_vectors),) + kx.shape)
@@ -105,7 +96,6 @@ def reduce_beamlets_nearest_no_interpolation(waves, basis, parent_s_matrix, shif
                                         (j + shifts[i, 0]) % parent_s_matrix.shape[1],
                                         (k + shifts[i, 1]) % parent_s_matrix.shape[2]])
     return waves
-
 
 
 def partitioned_prism_wave_vectors(cutoff, extent, energy, num_rings, num_points_per_ring=6, xp=np):

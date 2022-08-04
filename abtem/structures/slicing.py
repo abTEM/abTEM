@@ -45,8 +45,8 @@ def unpack_item(item, num_items):
         first_index = item
         last_index = first_index + 1
     elif isinstance(item, slice):
-        first_index = item.start
-        last_index = item.stop
+        first_index = 0 if item.start is None else item.start
+        last_index = num_items if item.stop is None else item.stop
     else:
         raise RuntimeError()
 

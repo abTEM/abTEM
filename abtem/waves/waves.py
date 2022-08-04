@@ -259,7 +259,7 @@ class Waves(HasArray, WavesLikeMixin):
             The wave function intensity.
         """
 
-        array = abs2(self.array * np.prod(self.gpts).astype(np.float32))
+        array = abs2(self.array)
 
         metadata = copy(self.metadata)
 
@@ -763,6 +763,7 @@ class PlaneWave(WavesBuilder):
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
                  energy: float = None,
+                 normalize: bool = False,
                  tilt: Tuple[float, float] = (0., 0.),
                  device: str = None,
                  extra_transforms=None):
@@ -770,6 +771,7 @@ class PlaneWave(WavesBuilder):
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
         self._beam_tilt = BeamTilt(tilt=tilt)
+        self._normalize = normalize
         self._device = validate_device(device)
 
         super().__init__(transforms=extra_transforms)
@@ -786,16 +788,24 @@ class PlaneWave(WavesBuilder):
     def shape(self):
         return self.gpts
 
+    @property
+    def normalize(self):
+        return self._normalize
+
     def base_waves_partial(self):
 
-        def base_plane_wave(gpts, extent, energy, device):
+        def base_plane_wave(gpts, extent, energy, normalize, device):
             xp = get_array_module(device)
 
-            array = xp.full(gpts, (1 / np.prod(gpts)).astype(xp.complex64), dtype=xp.complex64)
+            if normalize:
+                array = xp.full(gpts, (1 / np.prod(gpts)).astype(xp.complex64), dtype=xp.complex64)
+            else:
+                array = xp.ones(gpts, dtype=xp.complex64)
 
             return Waves(array=array, energy=energy, extent=extent, fourier_space=False)
 
-        return partial(base_plane_wave, gpts=self.gpts, extent=self.extent, energy=self.energy, device=self.device)
+        return partial(base_plane_wave, gpts=self.gpts, extent=self.extent, energy=self.energy,
+                       normalize=self.normalize, device=self.device)
 
     def build(self, lazy: bool = None, max_batch='auto', keep_ensemble_dims: bool = False) -> Waves:
         """

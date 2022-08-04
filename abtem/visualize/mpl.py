@@ -221,6 +221,8 @@ def add_imshow(ax,
                **kwargs):
     if power != 1:
         array = array ** power
+        vmin = vmin ** power
+        vmax = vmax ** power
 
     array = array.T
 
