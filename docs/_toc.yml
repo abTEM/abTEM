@@ -1,0 +1,27 @@
+# Table of contents
+# Learn more at https://jupyterbook.org/customize/toc.html
+
+format: jb-book
+root: intro
+parts:
+  - caption: Get started
+    chapters:
+    - file: getting_started/install
+    - file: getting_started/examples/examples
+  - caption: User guide
+    chapters:
+    - file: user_guide/atomic_models
+    - file: user_guide/potentials
+    - file: user_guide/wave_functions
+    - file: user_guide/multislice
+    - file: user_guide/appendix/appendix
+      sections:
+      - file: user_guide/appendix/multislice_derivation
+      - file: user_guide/appendix/normalization
+      - file: user_guide/appendix/antialiasing
+  - caption: Library
+    chapters:
+    - file: library/api
+    - file: library/bibliography
+    - file: library/contributing
+    - file: library/changelog
