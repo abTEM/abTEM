@@ -1,4 +1,3 @@
-import warnings
 from abc import ABCMeta, abstractmethod
 from typing import Union, Tuple, TypeVar, Dict, List, Sequence, Type, TYPE_CHECKING
 
@@ -10,8 +9,8 @@ from matplotlib.axes import Axes
 
 from abtem.core.array import HasArray
 from abtem.core.axes import HasAxes, RealSpaceAxis, AxisMetadata, FourierSpaceAxis, LinearAxis, NonLinearAxis, \
-    SampleAxis, OrdinalAxis
-from abtem.core.backend import cp, get_array_module, get_ndimage_module, copy_to_device
+    SampleAxis
+from abtem.core.backend import cp, get_array_module, get_ndimage_module
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
 from abtem.core.fft import fft2, fft_interpolate, fft_crop
@@ -29,23 +28,10 @@ else:
     sum_run_length_encoded_cuda = None
     interpolate_bilinear_cuda = None
 
-try:
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=DeprecationWarning)
-        import hyperspy.api as hs
-
-        Signal2D = hs.signals.Signal2D
-        Signal1D = hs.signals.Signal1D
-except ImportError:
-    Signal2D = None
-    Signal1D = None
-
 if TYPE_CHECKING:
     from abtem.waves.base import WavesLikeMixin
 
 T = TypeVar('T', bound='AbstractMeasurement')
-
-missing_hyperspy_message = 'This functionality of abTEM requires hyperspy, see https://hyperspy.org/.'
 
 angular_units = ('angular', 'mrad')
 bins = ('bins',)
@@ -325,9 +311,42 @@ class AbstractMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass
         kwargs['ensemble_axes_metadata'] = axes_metadata + kwargs['ensemble_axes_metadata']
         return self.__class__(**kwargs)
 
-    @abstractmethod
     def to_hyperspy(self):
-        pass
+        """
+        Convert measurement to a hyperspy signal.
+        """
+
+        try:
+            import hyperspy.api as hs
+        except ImportError:
+            raise ImportError('This functionality of abTEM requires hyperspy, see https://hyperspy.org/.')
+
+        if self._base_dims == 1:
+            signal_type = hs.signals.Signal1D
+        elif self._base_dims == 2:
+            signal_type = hs.signals.Signal2D
+        else:
+            raise RuntimeError()
+
+        axes_base = _to_hyperspy_axes_metadata(
+            self.base_axes_metadata,
+            self.base_shape,
+        )
+        axes_extra = _to_hyperspy_axes_metadata(
+            self.ensemble_axes_metadata,
+            self.ensemble_shape,
+        )
+
+        array = np.transpose(self.to_cpu().array, self.ensemble_axes[::-1] + self.base_axes[::-1])
+
+        s = signal_type(array, axes=axes_extra[::-1] + axes_base[::-1])
+        # for axis in s.axes_manager.signal_axes:
+        #     axis.offset = -int(axis.size / 2) * axis.scale
+        #
+        if self.is_lazy:
+            s = s.as_lazy()
+
+        return s
 
 
 def interpolate_stack(array, positions, mode, order, **kwargs):
@@ -445,9 +464,9 @@ class Images(AbstractMeasurement):
     def imag(self):
         """ Calculate the phase from complex images. """
         self._check_is_complex()
-        return self._apply_element_wise_func(get_array_module(self.array).real)
+        return self._apply_element_wise_func(get_array_module(self.array).imag)
 
-    def angle(self):
+    def phase(self):
         """ Calculate the phase from complex images. """
         self._check_is_complex()
         return self._apply_element_wise_func(get_array_module(self.array).angle)
@@ -482,34 +501,6 @@ class Images(AbstractMeasurement):
         kwargs = self.copy_kwargs(exclude=('array',))
         kwargs['array'] = array
         return self.__class__(**kwargs)
-
-    def to_hyperspy(self) -> 'Signal2D':
-        """
-        Convert Images to a hyperspy Signal2D.
-        """
-
-        if Signal2D is None:
-            raise RuntimeError(missing_hyperspy_message)
-
-        axes_base = _to_hyperspy_axes_metadata(
-            self.base_axes_metadata,
-            self.base_shape,
-        )
-        axes_extra = _to_hyperspy_axes_metadata(
-            self.ensemble_axes_metadata,
-            self.ensemble_shape,
-        )
-
-        # We need to transpose the navigation axes to match hyperspy convention
-        array = np.transpose(self.to_cpu().array, self.ensemble_axes[::-1] + self.base_axes[::-1])
-        # The index in the array corresponding to each axis is determine from
-        # the index in the axis list
-        s = Signal2D(array, axes=axes_extra[::-1] + axes_base[::-1])
-
-        if self.is_lazy:
-            s = s.as_lazy()
-
-        return s
 
     def crop(self, extent: Tuple[float, float], offset: Tuple[float, float] = (0., 0.)):
         """
@@ -892,6 +883,7 @@ class Images(AbstractMeasurement):
              image_grid_kwargs: dict = None,
              imshow_kwargs: dict = None,
              anchored_text_kwargs: dict = None,
+             domain_coloring_kwargs: dict = None,
              ) -> Axes:
         """
         Show the image(s) using matplotlib.
@@ -991,6 +983,7 @@ class Images(AbstractMeasurement):
                                             image_grid_kwargs=image_grid_kwargs,
                                             imshow_kwargs=imshow_kwargs,
                                             anchored_text_kwargs=anchored_text_kwargs,
+                                            domain_coloring_kwargs=domain_coloring_kwargs,
                                             axes=ax
                                             )
 
@@ -1088,38 +1081,6 @@ class AbstractMeasurement1d(AbstractMeasurement):
         kwargs['sampling'] = sampling
         return self.__class__(**kwargs)
 
-    def to_hyperspy(self):
-        if Signal1D is None:
-            raise RuntimeError(missing_hyperspy_message)
-
-        axes_base = _to_hyperspy_axes_metadata(
-            self.base_axes_metadata,
-            self.base_shape,
-        )
-        axes_extra = _to_hyperspy_axes_metadata(
-            self.ensemble_axes_metadata,
-            self.ensemble_shape,
-        )
-
-        # We need to transpose the navigation axes to match hyperspy convention
-        array = np.transpose(self.to_cpu().array, self.ensemble_axes[::-1] + self.base_axes[::-1])
-        # The index in the array corresponding to each axis is determine from
-        # the index in the axis list
-        s = Signal1D(array, axes=axes_extra[::-1] + axes_base[::-1])
-
-        if self.is_lazy:
-            s = s.as_lazy()
-
-        return s
-
-    # def show(self,
-    #          ax: Axes = None,
-    #          title: str = None,
-    #          figsize=None,
-    #          angular_units: bool = False):
-    #
-    #     pass
-
 
 class LineProfiles(AbstractMeasurement1d):
 
@@ -1153,11 +1114,12 @@ class LineProfiles(AbstractMeasurement1d):
     def show(self,
              ax: Axes = None,
              x_label=None,
+             title=None,
              y_label=None):
 
         extent = [0, self.extent]
 
-        return show_measurements_1d(self, x_label=x_label, extent=extent, ax=ax)
+        return show_measurements_1d(self, x_label=x_label, title=title, extent=extent, ax=ax)
 
 
 class FourierSpaceLineProfiles(AbstractMeasurement1d):
@@ -1241,7 +1203,7 @@ def _fourier_space_bilinear_nodes_and_weight(old_shape: Tuple[int, int],
     return v, u, vw, uw
 
 
-def _reduced_scanned_images_or_line_profiles(new_array, old_measurement):
+def _reduced_scanned_images_or_line_profiles(new_array, old_measurement) -> Union[LineProfiles, Images, np.ndarray]:
     if scanned_measurement_type(old_measurement) is LineProfiles:
         sampling = old_measurement.ensemble_axes_metadata[-1].sampling
 
@@ -1328,33 +1290,6 @@ class DiffractionPatterns(AbstractMeasurement):
     def base_axes_metadata(self):
         return [FourierSpaceAxis(sampling=self.sampling[0], label='kx', units='1 / Å', fftshift=self.fftshift),
                 FourierSpaceAxis(sampling=self.sampling[1], label='ky', units='1 / Å', fftshift=self.fftshift)]
-
-    def to_hyperspy(self):
-        if Signal2D is None:
-            raise RuntimeError(missing_hyperspy_message)
-
-        axes_base = _to_hyperspy_axes_metadata(
-            self.base_axes_metadata,
-            self.base_shape,
-        )
-        axes_extra = _to_hyperspy_axes_metadata(
-            self.ensemble_axes_metadata,
-            self.ensemble_shape,
-        )
-
-        # We need to transpose the navigation axes to match hyperspy convention
-        array = np.transpose(self.to_cpu().array, self.ensemble_axes[::-1] + self.base_axes[::-1])
-        # The index in the array corresponding to each axis is determine from
-        # the index in the axis list
-        s = Signal2D(array, axes=axes_extra[::-1] + axes_base[::-1])
-
-        # s.set_signal_type('electron_diffraction')
-        for axis in s.axes_manager.signal_axes:
-            axis.offset = -int(axis.size / 2) * axis.scale
-        if self.is_lazy:
-            s = s.as_lazy()
-
-        return s
 
     @property
     def fftshift(self):
@@ -1652,7 +1587,7 @@ class DiffractionPatterns(AbstractMeasurement):
                                           nbins_radial=nbins_radial,
                                           nbins_azimuthal=nbins_azimuthal,
                                           fftshift=self.fftshift,
-                                          rotation=rotation / 1e3,
+                                          rotation=rotation,
                                           offset=offset,
                                           return_indices=True)
 
@@ -1904,11 +1839,11 @@ class DiffractionPatterns(AbstractMeasurement):
         return self.__class__(**kwargs)
 
     def crop(self, max_angle):
-        gpts = (int(2 * np.ceil(max_angle / self.angular_sampling[0])) + 1,
-                int(2 * np.ceil(max_angle / self.angular_sampling[1])) + 1)
+        gpts = (int(2 * np.round(max_angle / self.angular_sampling[0])) + 1,
+                int(2 * np.round(max_angle / self.angular_sampling[1])) + 1)
 
         xp = get_array_module(self.array)
-        array = xp.fft.fftshift(fft_crop(xp.fft.fftshift(self.array, axes=(-2, -1)), new_shape=gpts), axes=(-2, -1))
+        array = xp.fft.fftshift(fft_crop(xp.fft.ifftshift(self.array, axes=(-2, -1)), new_shape=gpts), axes=(-2, -1))
         kwargs = self.copy_kwargs(exclude=('array',))
         kwargs['array'] = array
         return self.__class__(**kwargs)
@@ -2147,30 +2082,6 @@ class PolarMeasurements(AbstractMeasurement):
                 LinearAxis(label='Azimuthal scattering angle', offset=self.azimuthal_offset,
                            sampling=self.azimuthal_sampling, units='rad')]
 
-    def to_hyperspy(self):
-        if Signal2D is None:
-            raise RuntimeError(missing_hyperspy_message)
-
-        axes_base = _to_hyperspy_axes_metadata(
-            self.base_axes_metadata,
-            self.base_shape,
-        )
-        axes_extra = _to_hyperspy_axes_metadata(
-            self.ensemble_axes_metadata,
-            self.ensemble_shape,
-        )
-
-        # We need to transpose the navigation axes to match hyperspy convention
-        array = np.transpose(self.to_cpu().array, self.ensemble_axes[::-1] + self.base_axes[::-1])
-        # The index in the array corresponding to each axis is determine from
-        # the index in the axis list
-        s = Signal2D(array, axes=axes_extra[::-1] + axes_base[::-1]).squeeze()
-
-        if self.is_lazy:
-            s = s.as_lazy()
-
-        return s
-
     @property
     def radial_offset(self) -> float:
         return self._radial_offset
@@ -2223,19 +2134,52 @@ class PolarMeasurements(AbstractMeasurement):
 
         return _reduced_scanned_images_or_line_profiles(array, self)
 
-    def show(self, ax: Axes = None, title: str = None, min_azimuthal_division: float = np.pi / 20, grid: bool = False,
+    def differentials(self,
+                      direction_1_plus,
+                      direction_1_minus,
+                      direction_2_plus,
+                      direction_2_minus,
+                      return_complex: bool = True):
+
+        differential_1 = (self.integrate(detector_regions=direction_1_plus) -
+                          self.integrate(detector_regions=direction_1_minus))
+
+        differential_2 = (self.integrate(detector_regions=direction_2_plus) -
+                          self.integrate(detector_regions=direction_2_minus))
+
+        xp = get_array_module(self.device)
+        array = xp.zeros_like(differential_1.array, dtype=xp.complex64)
+        array.real = differential_1.array
+        array.imag = differential_2.array
+
+        return differential_1.__class__(array, **differential_1.copy_kwargs(exclude=('array',)))
+
+    def show(self,
+             ax: Axes = None,
+             title: str = None,
+             min_azimuthal_division: float = np.pi / 20,
+             grid: bool = True,
+             figsize=None,
+             radial_ticks=None,
+             azimuthal_ticks=None,
              **kwargs):
 
+        import matplotlib.patheffects as pe
+
+        fig = plt.figure(figsize=figsize)
+
         if ax is None:
-            ax = plt.subplot(projection="polar")
+            ax = fig.add_subplot(projection="polar")
 
         if title is not None:
             ax.set_title(title)
 
         array = self.array[(0,) * (len(self.shape) - 2)]
 
+        array = array[..., ::-1]
+
         repeat = int(self.azimuthal_sampling / min_azimuthal_division)
-        r = np.pi / (4 * repeat) + self.azimuthal_offset
+        r = np.pi / (4 * repeat) + self.azimuthal_offset + np.pi / 2
         azimuthal_grid = np.linspace(r, 2 * np.pi + r, self.shape[-1] * repeat, endpoint=False)
 
         d = (self.outer_angle - self.radial_offset) / 2 / self.shape[-2]
@@ -2247,7 +2191,16 @@ class PolarMeasurements(AbstractMeasurement):
         im = ax.pcolormesh(th, r, z.T, shading='auto', **kwargs)
         ax.set_rlim([0, self.outer_angle * 1.1])
 
+        if radial_ticks is None:
+            radial_ticks = ax.get_yticks()
+
+        if azimuthal_ticks is None:
+            azimuthal_ticks = ax.get_xticks()
+
+        ax.set_rgrids(radial_ticks, path_effects=[pe.withStroke(linewidth=4, foreground="white")])
+        ax.set_xticks(azimuthal_ticks)
+
         if grid:
-            ax.grid()
+            ax.grid(linewidth=2, color='white')
 
         return ax, im

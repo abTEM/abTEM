@@ -64,6 +64,9 @@ class AbstractDetector(CopyMixin, metaclass=ABCMeta):
             xp = get_array_module(waves.device)
             return xp.array((), dtype=self.measurement_dtype)
 
+    def measurement_metadata(self, waves: 'WavesLikeMixin') -> dict:
+        return waves.metadata
+
     @property
     @abstractmethod
     def measurement_dtype(self):
@@ -145,6 +148,12 @@ class AnnularDetector(AbstractDetector):
     @property
     def offset(self) -> Tuple[float, float]:
         return self._offset
+
+    def measurement_metadata(self, waves: 'WavesLikeMixin') -> dict:
+        metadata = super().measurement_metadata(waves)
+        metadata['label'] = 'intensity'
+        metadata['units'] = 'arb. unit'
+        return metadata
 
     def angular_limits(self, waves: 'WavesLikeMixin') -> Tuple[float, float]:
         if self.inner is not None:
@@ -310,7 +319,7 @@ class AbstractRadialDetector(AbstractDetector):
 
         return measurement
 
-    def show(self, waves=None, ax=None, cmap='prism'):
+    def show(self, waves=None, ax=None, cmap='tab20', figsize=None, **kwargs):
         bins = np.arange(0, self._calculate_nbins_radial(waves) * self._calculate_nbins_azimuthal(waves))
         bins = bins.reshape((self._calculate_nbins_radial(waves), self._calculate_nbins_azimuthal(waves)))
 
@@ -324,7 +333,13 @@ class AbstractRadialDetector(AbstractDetector):
                                                radial_offset=self.inner,
                                                azimuthal_offset=self._rotation)
 
-        ax, im = polar_measurements.show(ax=ax, cmap=cmap, vmin=vmin, vmax=vmax)
+        ax, im = polar_measurements.show(ax=ax,
+                                         cmap=cmap,
+                                         vmin=vmin,
+                                         vmax=vmax,
+                                         figsize=figsize,
+                                         **kwargs
+                                         )
 
         plt.colorbar(im, extend='min', label='Detector region')
         # ax.set_rlim([-0, min(waves.cutoff_angles) * 1.1])

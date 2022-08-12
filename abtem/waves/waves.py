@@ -72,7 +72,9 @@ def finalize_lazy_measurements(arrays,
 
         cls = detector.measurement_type(waves)
 
-        measurement = cls.from_array_and_metadata(array, axes_metadata=axes_metadata, metadata=waves.metadata)
+        metadata = detector.measurement_metadata(waves)
+
+        measurement = cls.from_array_and_metadata(array, axes_metadata=axes_metadata, metadata=metadata)
 
         if hasattr(measurement, 'reduce_ensemble'):
             measurement = measurement.reduce_ensemble()
@@ -970,7 +972,9 @@ class Probe(WavesBuilder):
 
     @property
     def ctf(self):
-        return CTF(semiangle_cutoff=self.aperture.semiangle_cutoff, aberrations=self.aberrations, energy=self.energy)
+        return CTF(semiangle_cutoff=self.aperture.semiangle_cutoff,
+                   aberrations=self.aberrations,
+                   energy=self.energy)
 
     @property
     def source_offset(self):

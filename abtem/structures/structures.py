@@ -445,12 +445,26 @@ def orthogonalize_cell(atoms: Atoms,
         return atoms
 
 
-def atoms_in_box(atoms: Atoms,
-                 box: Tuple[float, float, float],
-                 margin: Tuple[float, float, float] = (0., 0., 0.),
-                 origin: Tuple[float, float, float] = (0., 0., 0.)) -> Atoms:
-    mask = np.all(atoms.positions >= (np.array(origin) - margin - 1e-12)[None], axis=1) * \
-           np.all(atoms.positions < (np.array(origin) + box + margin)[None], axis=1)
+# def atoms_in_box(atoms: Atoms,
+#                  box: Tuple[float, float, float],
+#                  margin: Tuple[float, float, float] = (0., 0., 0.),
+#                  origin: Tuple[float, float, float] = (0., 0., 0.)) -> Atoms:
+#     mask = np.all(atoms.positions >= (np.array(origin) - margin - 1e-12)[None], axis=1) * \
+#            np.all(atoms.positions < (np.array(origin) + box + margin)[None], axis=1)
+#
+#     atoms = atoms[mask]
+#     return atoms
+
+
+def atoms_in_cell(atoms: Atoms,
+                  margin: Tuple[float, float, float] = (0., 0., 0.),
+                  origin: Tuple[float, float, float] = (0., 0., 0.)) -> Atoms:
+    scaled_positions = atoms.get_scaled_positions(wrap=False)
+    scaled_margins = np.array(margin) / atoms.cell.lengths()
+
+    mask = np.all(scaled_positions >= (- scaled_margins - 1e-12)[None], axis=1) * \
+           np.all(scaled_positions < (1 + scaled_margins)[None], axis=1)
+
     atoms = atoms[mask]
     return atoms
 
@@ -518,8 +532,8 @@ def pad_atoms(atoms: Atoms, margins: Union[float, Tuple[float, float, float]], d
         Padded atoms.
     """
 
-    if not is_cell_orthogonal(atoms):
-        raise RuntimeError('The cell of the atoms must be orthogonal.')
+    #if not is_cell_orthogonal(atoms):
+    #    raise RuntimeError('The cell of the atoms must be orthogonal.')
 
     if isinstance(margins, Number):
         margins = (margins,) * 3
@@ -535,9 +549,8 @@ def pad_atoms(atoms: Atoms, margins: Union[float, Tuple[float, float, float]], d
 
     if any([rep > 1 for rep in reps]):
         atoms *= reps
-        atoms.positions[:] -= np.diag(old_cell) * [rep // 2 for rep in reps]
+        atoms.positions[:] -= old_cell.sum(axis=0) * [rep // 2 for rep in reps]
         atoms.cell = old_cell
 
-    atoms = atoms_in_box(atoms, np.diag(atoms.cell), margins)
-
+    atoms = atoms_in_cell(atoms, margins)
     return atoms

@@ -1,7 +1,9 @@
 import copy
 from abc import abstractmethod
 from contextlib import nullcontext
+from functools import reduce
 from numbers import Number
+from operator import mul
 from typing import TYPE_CHECKING, Tuple, Union, TypeVar, List, Sequence
 
 import dask
@@ -9,6 +11,8 @@ import dask.array as da
 import numpy as np
 import zarr
 from dask.diagnostics import ProgressBar, Profiler
+from dask.utils import format_bytes
+from tabulate import tabulate
 
 from abtem.core import config
 from abtem.core.axes import HasAxes, UnknownAxis, axis_to_dict, axis_from_dict, AxisMetadata, OrdinalAxis
@@ -31,7 +35,7 @@ class ComputableList(list):
         return computables
 
     def compute(self, **kwargs):
-        if config.get('progress_bar'):
+        if config.get('local_diagnostics.progress_bar'):
             progress_bar = ProgressBar()
         else:
             progress_bar = nullcontext()
@@ -95,6 +99,40 @@ def validate_lazy(lazy):
 T = TypeVar('T', bound='HasArray')
 
 
+def format_axes_metadata(axes_metadata, shape):
+    data = []
+    for axis, n in zip(axes_metadata, shape):
+        data += [axis._tabular_repr_data(n)]
+
+    return tabulate(data, headers=['type', 'label', 'coordinates'], tablefmt="simple")
+
+
+def format_array(array):
+    is_lazy = isinstance(array, da.core.Array)
+
+    nbytes = format_bytes(array.nbytes)
+    cbytes = format_bytes(np.prod(array.chunksize) * array.dtype.itemsize) if is_lazy else '-'
+    chunksize = str(array.chunksize) if is_lazy else '-'
+    nchunks = reduce(mul, (len(chunks) for chunks in array.chunks)) if is_lazy else '-'
+    meta = array._meta if is_lazy else array
+    array_type = f'{type(meta).__module__.split(".")[0]}.{type(meta).__name__}'
+
+    ntasks = f'{len(array.dask)} tasks' if is_lazy else '-'
+
+    data = [
+        ['array', nbytes, str(array.shape), ntasks, array.dtype.name],
+        ['chunks', cbytes, chunksize, f'{str(nchunks)} chunks', array_type]
+    ]
+    return tabulate(data, headers=['', 'bytes', 'shape', 'count', 'type'], tablefmt="simple")
+
+
+def format_type(x):
+    module = x.__module__
+    qualname = x.__qualname__
+    text = f"<{module}.{qualname} object at {hex(id(x))}>"
+    return f'{text}\n{"-" * len(text)}'
+
+
 class HasArray(HasAxes, CopyMixin):
     _array: Union[np.ndarray, da.core.Array]
     _base_dims: int
@@ -102,6 +140,12 @@ class HasArray(HasAxes, CopyMixin):
     @abstractmethod
     def __init__(self, *args, **kwargs):
         pass
+
+    def __repr__(self):
+        formatted_type = format_type(self.__class__)
+        axes_table = format_axes_metadata(self.axes_metadata, self.shape)
+        array_table = format_array(self.array)
+        return '\n\n'.join([formatted_type, axes_table, array_table])
 
     @classmethod
     def from_array_and_metadata(cls, array, axes_metadata, metadata):
@@ -256,6 +300,9 @@ class HasArray(HasAxes, CopyMixin):
 
     def __iadd__(self, other) -> 'T':
         return self._in_place_arithmetic(other, '__iadd__')
+
+    def __pow__(self, other) -> 'T':
+        return self._arithmetic(other, '__pow__')
 
     __rmul__ = __mul__
     __rtruediv__ = __truediv__

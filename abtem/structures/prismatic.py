@@ -23,3 +23,5 @@ def export_prismatic_xyz(filename, atoms):
         for number, position in zip(atoms.numbers, atoms.positions):
             f.write('{}  {}  {}  {}  {}  {} \n'.format(number, *position, 1, 0.00))
         f.write('-1 \n')
+
+

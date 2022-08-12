@@ -10,7 +10,7 @@ import numpy as np
 from matplotlib.axes import Axes
 
 from abtem import stack
-from abtem.core.axes import ParameterSeriesAxis, OrdinalAxis
+from abtem.core.axes import ParameterAxis, OrdinalAxis
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.distributions import Distribution
@@ -206,10 +206,10 @@ class HasParameters(Ensemble):
     def ensemble_axes_metadata(self):
         axes_metadata = []
         for parameter_name, parameter in self.ensemble_parameters.items():
-            axes_metadata += [ParameterSeriesAxis(label=parameter_name,
-                                                  values=tuple(parameter.values),
-                                                  units='Å',
-                                                  _ensemble_mean=parameter.ensemble_mean)]
+            axes_metadata += [ParameterAxis(label=parameter_name,
+                                            values=tuple(parameter.values),
+                                            units='Å',
+                                            _ensemble_mean=parameter.ensemble_mean)]
         return axes_metadata
 
     @property
@@ -682,7 +682,7 @@ class CTF(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
 
         if aberrations is None:
             aberrations = {}
-        elif isinstance(aberrations, Aberrations):
+        elif not hasattr(aberrations, 'update'):
             aberrations = copy.deepcopy(aberrations.parameters)
 
         aberrations.update(kwargs)
