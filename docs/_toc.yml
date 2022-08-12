@@ -6,19 +6,29 @@ root: intro
 parts:
   - caption: Get started
     chapters:
+    - file: getting_started/overview
     - file: getting_started/install
-    - file: getting_started/examples/examples
+    - file: getting_started/basics
   - caption: User guide
     chapters:
-    - file: user_guide/atomic_models
-    - file: user_guide/potentials
-    - file: user_guide/wave_functions
-    - file: user_guide/multislice
+    - file: user_guide/walkthrough/walkthrough
+      sections:
+      - file: user_guide/walkthrough/atomic_models
+      - file: user_guide/walkthrough/potentials
+      - file: user_guide/walkthrough/wave_functions
+      - file: user_guide/walkthrough/multislice
+      - file: user_guide/walkthrough/contrast_transfer_function
+      - file: user_guide/walkthrough/scan_and_detect
+      - file: user_guide/walkthrough/frozen_phonons
+      - file: user_guide/walkthrough/prism
     - file: user_guide/appendix/appendix
       sections:
       - file: user_guide/appendix/multislice_derivation
       - file: user_guide/appendix/normalization
       - file: user_guide/appendix/antialiasing
+      - file: user_guide/appendix/ensembles
+      - file: user_guide/appendix/visualized_aberrations
+    - file: user_guide/examples/examples
   - caption: Library
     chapters:
     - file: library/api
