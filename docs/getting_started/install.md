@@ -51,7 +51,7 @@ gpaw install-data <dir>
 ````
 `````
 
-### GPU
+### GPU (only Nvidia) 
 
 GPU calculations with abTEM require a working installation of [CuPy](https://cupy.dev/).
 See [here](https://docs.cupy.dev/en/stable/install.html) for detailed installation instructions.
@@ -75,3 +75,6 @@ where * should be substituted for the CUDA Toolkit version.
 ````
 `````
 
+### Development
+
+See [our guide to contributing](library:contributing) for instructions on a development installation `abTEM`.
