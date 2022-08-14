@@ -897,6 +897,10 @@ class CTF(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
         return stack(profiles, axis_metadata=OrdinalAxis(values=tuple(axis_metadata)))
 
 
+def nyquist_sampling(cutoff, wavelength):
+    return 1 / (4 * cutoff / wavelength * 1e-3)
+
+
 def scherzer_defocus(Cs, energy):
     """
     Calculate the Scherzer defocus.

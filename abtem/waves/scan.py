@@ -276,6 +276,44 @@ class LineScan(AbstractScan):
         self._adjust_sampling()
 
     @classmethod
+    def from_fractional_coordinates(cls,
+                                    potential: AbstractPotential,
+                                    start: Tuple[float, float] = (0., 0.),
+                                    end: Tuple[float, float] = (1., 1.),
+                                    sampling: Union[float, Tuple[float, float]] = None,
+                                    endpoint: Union[bool, Tuple[bool, bool]] = False) -> 'LineScan':
+        """
+        Create grid scan using fractional coordinates.
+
+        Parameters
+        ----------
+        potential : AbstractPotential
+            Potential defining the grid with respect to which the fractional coordinates should be given.
+        start : two float, optional
+            Scan start as a fraction of the extent of the potential.
+        end : two float, optional
+            Scan end as a fraction of the extent of the potential.
+        sampling : float or two float
+
+        endpoint : bool or two bool
+
+        Returns
+        -------
+        grid_scan : GridScan
+        """
+
+        if np.isscalar(start):
+            start = (start, start)
+
+        if np.isscalar(end):
+            end = (end, end)
+
+        start = (potential.extent[0] * start[0], potential.extent[1] * start[1])
+        end = (potential.extent[0] * end[0], potential.extent[1] * end[1])
+
+        return cls(start=start, end=end, sampling=sampling, endpoint=endpoint)
+
+    @classmethod
     def at_position(cls,
                     position: Union[Tuple[float, float], Atom],
                     extent: float = 1.,

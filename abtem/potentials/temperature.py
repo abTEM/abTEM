@@ -80,6 +80,10 @@ class AbstractFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMet
     def __len__(self) -> int:
         pass
 
+    def __iter__(self):
+        for _, _, fp in self.generate_blocks(1):
+            yield self.randomize(fp.atoms)
+
 
 class DummyFrozenPhonons(AbstractFrozenPhonons):
 
