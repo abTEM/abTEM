@@ -232,10 +232,10 @@ class SMatrixArray(HasArray, AbstractSMatrix):
         waves = Waves(array, sampling=self.sampling, energy=self.energy, ensemble_axes_metadata=ensemble_axes_metadata)
         return waves
 
-    def dummy_probes(self, scan=None, ctf=None):
+    def dummy_probes(self, scan: AbstractScan = None, ctf: CTF = None):
 
         if ctf is None:
-            ctf = CTF(energy=self.waves.energy, semiangle_cutoff=self.planewave_cutoff)
+            ctf = CTF(energy=self.energy, semiangle_cutoff=self.planewave_cutoff)
 
         probes = Probe.from_ctf(extent=self.window_extent,
                                 gpts=self.cropping_window,
@@ -701,8 +701,8 @@ class SMatrix(AbstractSMatrix):
         if self.potential is not None:
             waves = multislice_and_detect(waves, self.potential, [WavesDetector()])[0]
 
-        # if self.downsampled_gpts() != self.gpts:
-        #    waves = waves.downsample(gpts=self.downsampled_gpts(), normalization='intensity')
+        if self.downsampled_gpts() != self.gpts:
+            waves = waves.downsample(gpts=self.downsampled_gpts(), normalization='intensity')
 
         if self.store_on_host and self.device == 'gpu':
             with cp.cuda.Stream():

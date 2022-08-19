@@ -27,6 +27,7 @@ from abtem.waves.multislice import multislice_and_detect, FresnelPropagator
 from abtem.waves.scan import AbstractScan, GridScan, validate_scan
 from abtem.waves.tilt import BeamTilt, tilt_from_metadata
 from abtem.waves.transfer import Aperture, Aberrations, WaveTransform, CompositeWaveTransform, CTF, WaveRenormalization
+from abtem.core.complex import complex_exponential
 
 
 def _extract_measurement(array, index):
@@ -250,6 +251,25 @@ class Waves(HasArray, WavesLikeMixin):
         d['array'] = ifft2(self.array, overwrite_x=in_place)
         d['fourier_space'] = False
         return self.__class__(**d)
+
+    def phase_shift(self, shift):
+        """
+        Shift the phase of the wave functions by
+
+        Parameters
+        ----------
+        shift :
+
+        Returns
+        -------
+
+        """
+        xp = get_array_module(self.array)
+        arr = xp.exp(np.pi * 1.j * shift) * self.array
+
+        kwargs = self.copy_kwargs(exclude=('array',))
+
+        return self.__class__(array=arr, **kwargs)
 
     def intensity(self) -> Images:
         """
@@ -708,7 +728,6 @@ class WavesBuilder(WavesLikeMixin):
         # add transform args
         transform_arg_indices = tuple(range(max_arg_index, max_arg_index + self.transforms.ensemble_dims))
         partials['transforms'] = self.transforms.wrapped_from_partitioned_args(), transform_arg_indices
-
         transform_symbols = tuple(range(max_symbol, max_symbol + self.transforms.ensemble_dims))
         transform_chunks = self.transforms.ensemble_chunks(max_batch, base_shape=self.gpts)
 
