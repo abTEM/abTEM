@@ -1,14 +1,51 @@
 # Welcome to abTEM
 
-`abTEM` - ab initio Transmission Electron Microscopy in Python
+abTEM - ab initio Transmission Electron Microscopy in Python
 
-abTEM is a fast flexible code for running simulations of Transmission Electron Microscopy images. It is written entirely
-in Python, which enables easy integration with first-principles codes and analysis tools accessible from Python, and
-allows for a simple and intuitive user interface. The computationally demanding parts are implemented using jit-compiled
-Numba code and high-performance libraries, maintaining speed while ensuring portability.
+abTEM is a flexible open-source package for simulating Transmission Electron Microscopy experiments. The Python API
+allows for easy integration with other simulation codes and analysis tools accessible from Python, while utilization of
+other open-source projects makes *abTEM* fast and scalable.
 
-abTEM works with the Atomic Simulation Environment and the density functional theory code GPAW to provide an seamless
-environment for simulating images from first principles.
+Here are a few links to help you get started.
 
-```{tableofcontents}
-```
+::::{grid} 1 1 2 2
+:gutter: 2
+
+:::{grid-item-card}
+:link: getting_started:overview
+:link-type: ref
+**Getting started**
+
+New to *abTEM*? Visit our getting started guides. They will introduce you to *abTEM's* main concepts and provide links
+to basic examples.
+:::
+
+:::{grid-item-card}
+:link: user_guide:walkthrough
+:link-type: ref
+**User guide**
+
+The user guide provides in-depth information about the key concepts of *abTEM* with background information about
+simulations of electron microscopy experiments.
+:::
+
+:::{grid-item-card}
+:link: user_guide:example_gallery
+:link-type: ref
+**Example gallery**
+
+Check the gallery for templates to assist with your common simulation tasks or for examples demonstrating a unique topic
+or reproducing publication results.
+
+:::
+
+:::{grid-item-card}
+:link: api_reference
+:link-type: ref
+**API reference**
+
+The reference guide contains a detailed description of the *abTEM* API. The reference describes how the methods work and
+which parameters can be used. It assumes that you have an understanding of the key concepts.
+:::
+
+::::

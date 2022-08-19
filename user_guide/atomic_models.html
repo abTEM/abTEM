@@ -1,0 +1,1216 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>Atomic models with ASE &#8212; abTEM Documentation</title>
+    
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+
+    
+  <link rel="stylesheet"
+    href="../_static/vendor/fontawesome/5.13.0/css/all.min.css">
+  <link rel="preload" as="font" type="font/woff2" crossorigin
+    href="../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
+  <link rel="preload" as="font" type="font/woff2" crossorigin
+    href="../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" href="../_static/styles/sphinx-book-theme.css?digest=5115cc725059bd94278eecd172e13a965bf8f5a9" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/mystnb.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-thebe.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/design-style.b7bb847fb20b106c3d81b95245e65545.min.css" />
+    
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
+
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <script src="../_static/clipboard.min.js"></script>
+    <script src="../_static/copybutton.js"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
+    <script>let toggleHintShow = 'Click to show';</script>
+    <script>let toggleHintHide = 'Click to hide';</script>
+    <script>let toggleOpenOnPrint = 'true';</script>
+    <script src="../_static/togglebutton.js"></script>
+    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown, .tag_hide_input div.cell_input, .tag_hide-input div.cell_input, .tag_hide_output div.cell_output, .tag_hide-output div.cell_output, .tag_hide_cell.cell, .tag_hide-cell.cell';</script>
+    <script src="../_static/design-tabs.js"></script>
+    <script>const THEBE_JS_URL = "https://unpkg.com/thebe@0.8.2/lib/index.js"
+const thebe_selector = ".thebe,.cell"
+const thebe_selector_input = "pre"
+const thebe_selector_output = ".output, .cell_output"
+</script>
+    <script async="async" src="../_static/sphinx-thebe.js"></script>
+    <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+    <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="docsearch:language" content="None">
+    
+
+    <!-- Google Analytics -->
+    
+  </head>
+  <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="60">
+<!-- Checkboxes to toggle the left sidebar -->
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle navigation sidebar">
+<label class="overlay overlay-navbar" for="__navigation">
+    <div class="visually-hidden">Toggle navigation sidebar</div>
+</label>
+<!-- Checkboxes to toggle the in-page toc -->
+<input type="checkbox" class="sidebar-toggle" name="__page-toc" id="__page-toc" aria-label="Toggle in-page Table of Contents">
+<label class="overlay overlay-pagetoc" for="__page-toc">
+    <div class="visually-hidden">Toggle in-page Table of Contents</div>
+</label>
+<!-- Headers at the top -->
+<div class="announcement header-item noprint"></div>
+<div class="header header-item noprint"></div>
+
+    
+    <div class="container-fluid" id="banner"></div>
+
+    
+
+    <div class="container-xl">
+      <div class="row">
+          
+<!-- Sidebar -->
+<div class="bd-sidebar noprint" id="site-navigation">
+    <div class="bd-sidebar__content">
+        <div class="bd-sidebar__top"><div class="navbar-brand-box">
+    <a class="navbar-brand text-wrap" href="../index.html">
+      
+        <!-- `logo` is deprecated in Sphinx 4.0, so remove this when we stop supporting 3 -->
+        
+      
+      
+      <img src="../_static/logo.png" class="logo" alt="logo">
+      
+      
+      <h1 class="site-logo" id="site-title">abTEM Documentation</h1>
+      
+    </a>
+</div><form class="bd-search d-flex align-items-center" action="../search.html" method="get">
+  <i class="icon fas fa-search"></i>
+  <input type="search" class="form-control" name="q" id="search-input" placeholder="Search this book..." aria-label="Search this book..." autocomplete="off" >
+</form><nav class="bd-links" id="bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item active">
+        
+        <ul class="nav bd-sidenav bd-sidenav__home-link">
+            <li class="toctree-l1">
+                <a class="reference internal" href="../intro.html">
+                    Welcome to abTEM
+                </a>
+            </li>
+        </ul>
+        <p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Get started
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../getting_started/overview.html">
+   Overview
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../getting_started/install.html">
+   Installation
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../getting_started/basics.html">
+   The basics
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  User guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="walkthrough/walkthrough.html">
+   Walkthrough
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
+  <label for="toctree-checkbox-1">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="walkthrough/atomic_models.html">
+     Atomic models with ASE
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="walkthrough/potentials.html">
+     Potentials
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="walkthrough/wave_functions.html">
+     Wave functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="walkthrough/multislice.html">
+     Multislice simulations
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="walkthrough/contrast_transfer_function.html">
+     Contrast Transfer Function
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="walkthrough/scan_and_detect.html">
+     Scan and detect
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="walkthrough/frozen_phonons.html">
+     Frozen phonons
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="walkthrough/performance.html">
+     Performance, parallelization and GPUs
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="walkthrough/prism.html">
+     PRISM
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="walkthrough/charge_density.html">
+     <em>
+      ab initio
+     </em>
+     potentials with GPAW
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="appendix/appendix.html">
+   Appendix
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+  <label for="toctree-checkbox-2">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="appendix/multislice_derivation.html">
+     Deriving the Multislice Algorithm
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="appendix/normalization.html">
+     Wave Function Normalization
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="appendix/antialiasing.html">
+     Antialiasing and Sampling
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="appendix/ensembles.html">
+     Ensembles
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="appendix/visualized_aberrations.html">
+     Visualized aberrations
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="examples/examples.html">
+   Example gallery
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
+  <label for="toctree-checkbox-3">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="examples/notebooks/cbed_quickstart.html">
+     CBED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="examples/notebooks/hrtem_quickstart.html">
+     HRTEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="examples/notebooks/prism_quickstart.html">
+     PRISM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="examples/notebooks/hbn_dft_iam.html">
+     DFT vs. IAM in hBN diffraction
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Library
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../library/api.html">
+   API Reference
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
+  <label for="toctree-checkbox-4">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../library/_autosummary/abtem.waves.waves.Probe.html">
+     abtem.waves.waves.Probe
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library/bibliography.html">
+   Bibliography
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library/contributing.html">
+   Contributing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library/changelog.html">
+   Changelog
+  </a>
+ </li>
+</ul>
+
+    </div>
+</nav></div>
+        <div class="bd-sidebar__bottom">
+             <!-- To handle the deprecated key -->
+            
+            <div class="navbar_extra_footer">
+            Powered by <a href="https://jupyterbook.org">Jupyter Book</a>
+            </div>
+            
+        </div>
+    </div>
+    <div id="rtd-footer-container"></div>
+</div>
+
+
+          
+
+
+          
+<!-- A tiny helper pixel to detect if we've scrolled -->
+<div class="sbt-scroll-pixel-helper"></div>
+<!-- Main content -->
+<div class="col py-0 content-container">
+    
+    <div class="header-article row sticky-top noprint">
+        
+
+
+
+<div class="col py-1 d-flex header-article-main">
+    <div class="header-article__left">
+        
+        <label for="__navigation"
+  class="headerbtn"
+  data-toggle="tooltip"
+data-placement="right"
+title="Toggle navigation"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-bars"></i>
+  </span>
+
+</label>
+
+        
+    </div>
+    <div class="header-article__right">
+<div class="menu-dropdown menu-dropdown-launch-buttons">
+  <button class="headerbtn menu-dropdown__trigger"
+      aria-label="Launch interactive content">
+      <i class="fas fa-rocket"></i>
+  </button>
+  <div class="menu-dropdown__content">
+    <ul>
+      <li>
+        <a href="https://mybinder.org/v2/gh/executablebooks/jupyter-book/master?urlpath=tree/docs/user_guide/atomic_models.ipynb"
+   class="headerbtn"
+   data-toggle="tooltip"
+data-placement="left"
+title="Launch on Binder"
+>
+  
+
+<span class="headerbtn__icon-container">
+  
+    <img src="../_static/images/logo_binder.svg">
+  </span>
+<span class="headerbtn__text-container">Binder</span>
+</a>
+
+      </li>
+      
+    </ul>
+  </div>
+</div>
+
+<button onclick="toggleFullScreen()"
+  class="headerbtn"
+  data-toggle="tooltip"
+data-placement="bottom"
+title="Fullscreen mode"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+<div class="menu-dropdown menu-dropdown-repository-buttons">
+  <button class="headerbtn menu-dropdown__trigger"
+      aria-label="Source repositories">
+      <i class="fab fa-github"></i>
+  </button>
+  <div class="menu-dropdown__content">
+    <ul>
+      <li>
+        <a href="https://github.com/executablebooks/jupyter-book"
+   class="headerbtn"
+   data-toggle="tooltip"
+data-placement="left"
+title="Source repository"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="headerbtn__text-container">repository</span>
+</a>
+
+      </li>
+      
+      <li>
+        <a href="https://github.com/executablebooks/jupyter-book/issues/new?title=Issue%20on%20page%20%2Fuser_guide/atomic_models.html&body=Your%20issue%20content%20here."
+   class="headerbtn"
+   data-toggle="tooltip"
+data-placement="left"
+title="Open an issue"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="headerbtn__text-container">open issue</span>
+</a>
+
+      </li>
+      
+    </ul>
+  </div>
+</div>
+
+<div class="menu-dropdown menu-dropdown-download-buttons">
+  <button class="headerbtn menu-dropdown__trigger"
+      aria-label="Download this page">
+      <i class="fas fa-download"></i>
+  </button>
+  <div class="menu-dropdown__content">
+    <ul>
+      <li>
+        <a href="../_sources/user_guide/atomic_models.ipynb"
+   class="headerbtn"
+   data-toggle="tooltip"
+data-placement="left"
+title="Download source file"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="headerbtn__text-container">.ipynb</span>
+</a>
+
+      </li>
+      
+      <li>
+        
+<button onclick="printPdf(this)"
+  class="headerbtn"
+  data-toggle="tooltip"
+data-placement="left"
+title="Print to PDF"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="headerbtn__text-container">.pdf</span>
+</button>
+
+      </li>
+      
+    </ul>
+  </div>
+</div>
+<label for="__page-toc"
+  class="headerbtn headerbtn-page-toc"
+  
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-list"></i>
+  </span>
+
+</label>
+
+    </div>
+</div>
+
+<!-- Table of contents -->
+<div class="col-md-3 bd-toc show noprint">
+    <div class="tocsection onthispage pt-5 pb-3">
+        <i class="fas fa-list"></i> Contents
+    </div>
+    <nav id="bd-toc-nav" aria-label="Page">
+        <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#atoms">
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     Atoms
+    </span>
+   </code>
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#import-export">
+   Import/export
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#visualizing-structures">
+   Visualizing structures
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#bulding-structures">
+   Bulding structures
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#manipulating-structures">
+   Manipulating structures
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#rotating-structures">
+     Rotating structures
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#adding-vacuum">
+     Adding vacuum
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#rotation-of-bulk-structures">
+     Rotation of bulk structures
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#repeating-the-structure">
+     Repeating the structure
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#conditionally-modifying-atoms">
+     Conditionally modifying atoms
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#scaling-structures">
+     Scaling structures
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#combining-multiple-structures">
+     Combining multiple structures
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#orthogonal-and-periodic-supercells">
+   Orthogonal and periodic supercells
+  </a>
+ </li>
+</ul>
+
+    </nav>
+</div>
+    </div>
+    <div class="article row">
+        <div class="col pl-md-3 pl-lg-5 content-container">
+            <!-- Table of contents that is only displayed when printing the page -->
+            <div id="jb-print-docs-body" class="onlyprint">
+                <h1>Atomic models with ASE</h1>
+                <!-- Table of contents -->
+                <div id="print-main-content">
+                    <div id="jb-print-toc">
+                        
+                        <div>
+                            <h2> Contents </h2>
+                        </div>
+                        <nav aria-label="Page">
+                            <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#atoms">
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     Atoms
+    </span>
+   </code>
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#import-export">
+   Import/export
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#visualizing-structures">
+   Visualizing structures
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#bulding-structures">
+   Bulding structures
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#manipulating-structures">
+   Manipulating structures
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#rotating-structures">
+     Rotating structures
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#adding-vacuum">
+     Adding vacuum
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#rotation-of-bulk-structures">
+     Rotation of bulk structures
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#repeating-the-structure">
+     Repeating the structure
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#conditionally-modifying-atoms">
+     Conditionally modifying atoms
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#scaling-structures">
+     Scaling structures
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#combining-multiple-structures">
+     Combining multiple structures
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#orthogonal-and-periodic-supercells">
+   Orthogonal and periodic supercells
+  </a>
+ </li>
+</ul>
+
+                        </nav>
+                    </div>
+                </div>
+            </div>
+            <main id="main-content" role="main">
+                
+              <div>
+                
+  <div class="cell tag_hide-input docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="o">%</span><span class="k">matplotlib</span> inline
+
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+
+<span class="kn">from</span> <span class="nn">ase</span> <span class="kn">import</span> <span class="n">Atoms</span>
+<span class="kn">from</span> <span class="nn">ase</span> <span class="kn">import</span> <span class="n">build</span>
+<span class="kn">from</span> <span class="nn">ase.io</span> <span class="kn">import</span> <span class="n">read</span><span class="p">,</span> <span class="n">write</span>
+<span class="kn">from</span> <span class="nn">ase.visualize</span> <span class="kn">import</span> <span class="n">view</span>
+
+<span class="kn">import</span> <span class="nn">abtem</span>
+</pre></div>
+</div>
+</div>
+</div>
+<section class="tex2jax_ignore mathjax_ignore" id="atomic-models-with-ase">
+<span id="user-guide-atomic-models"></span><h1>Atomic models with ASE<a class="headerlink" href="#atomic-models-with-ase" title="Permalink to this headline">#</a></h1>
+<p>abTEM uses the Atomic Simulation Environment (<a class="reference external" href="https://wiki.fysik.dtu.dk/ase/">ASE</a>) for creating model atomic structures. ASE is a set of tools and Python modules for setting up, manipulating, visualizing and analyzing atomistic simulations. It is also used in conjunction with other simulation codes such as GPAW for running DFT simulations. Here, we introduce the set of features of ASE needed for image simulations; please refer to the ASE documentation for a more general introduction.</p>
+<section id="atoms">
+<h2><code class="docutils literal notranslate"><span class="pre">Atoms</span></code><a class="headerlink" href="#atoms" title="Permalink to this headline">#</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">Atoms</span></code> object defines a collection of atoms. Here, is how to set up an N<sub>2</sub> molecule by directly specifying the position of the two nitrogen atoms (in units of Ångstrom):</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">n2</span> <span class="o">=</span> <span class="n">Atoms</span><span class="p">(</span><span class="s1">&#39;2N&#39;</span><span class="p">,</span> <span class="n">positions</span><span class="o">=</span><span class="p">[(</span><span class="mf">0.</span><span class="p">,</span> <span class="mf">0.</span><span class="p">,</span> <span class="mf">0.</span><span class="p">),</span> <span class="p">(</span><span class="mf">0.</span><span class="p">,</span> <span class="mf">0.</span><span class="p">,</span> <span class="mf">1.10</span><span class="p">)],</span> <span class="n">cell</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">])</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>A basic <code class="docutils literal notranslate"><span class="pre">abTEM</span></code> simulation only uses the positional coordinates, atomic numbers and the unit cell for creating electrostatic potentials. Below we access the atomic numbers and the <span class="math notranslate nohighlight">\(xyz\)</span> positions as an <span class="math notranslate nohighlight">\(n\times 3\)</span> array:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">n2</span><span class="o">.</span><span class="n">numbers</span><span class="p">,</span> <span class="n">n2</span><span class="o">.</span><span class="n">positions</span> 
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(array([7, 7]),
+ array([[0. , 0. , 0. ],
+        [0. , 0. , 1.1]]))
+</pre></div>
+</div>
+</div>
+</div>
+<p>The cell can be accessed as below:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">n2</span><span class="o">.</span><span class="n">cell</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>Cell([2.0, 2.0, 2.0])
+</pre></div>
+</div>
+</div>
+</div>
+<p>In this example, the unit vectors of the cell are all orthogonal and axis-aligned, hence the cell can be given as just the sides of a rectangular cuboid. In general, a cell is defined by three lattice vectors. We print the full representation of the cell below, where each row represents a lattice vector</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">n2</span><span class="o">.</span><span class="n">cell</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[[2. 0. 0.]
+ [0. 2. 0.]
+ [0. 0. 2.]]
+</pre></div>
+</div>
+</div>
+</div>
+<div class="admonition important">
+<p class="admonition-title">Important</p>
+<p>The multislice algorithm as implemented in <code class="docutils literal notranslate"><span class="pre">abTEM</span></code> always requires that the unit cell is an axis-aligned rectangular cuboid, additionally, the cell must be periodic. Fulfilling both of these constraints, while creating a desired model structure is not always trivial, see <a class="reference internal" href="walkthrough/atomic_models.html#orthogonal"><span class="std std-ref">below</span></a> for our introduction to the problem.</p>
+</div>
+</section>
+<section id="import-export">
+<h2>Import/export<a class="headerlink" href="#import-export" title="Permalink to this headline">#</a></h2>
+<p>ASE can import all the common atomic structure formats, see a full list <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/io/io.html">here</a>. Below we import a <code class="docutils literal notranslate"><span class="pre">.cif</span></code>-file defining a unit cell of strontium titanate (SrTiO<sub>3</sub>).</p>
+<p>We downloaded the structure file from the <a class="reference external" href="https://materialsproject.org/">materials project</a>. This is an open source library containing a huge number of crystal structures, calculated using density functional theory.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">srtio3</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="s1">&#39;./data/SrTiO3.cif&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output traceback highlight-ipythontb notranslate"><div class="highlight"><pre><span></span><span class="gt">---------------------------------------------------------------------------</span>
+<span class="ne">FileNotFoundError</span><span class="g g-Whitespace">                         </span>Traceback (most recent call last)
+<span class="o">&lt;</span><span class="n">ipython</span><span class="o">-</span><span class="nb">input</span><span class="o">-</span><span class="mi">6</span><span class="o">-</span><span class="mi">2</span><span class="n">f0f6722efbc</span><span class="o">&gt;</span> <span class="ow">in</span> <span class="o">&lt;</span><span class="n">module</span><span class="o">&gt;</span>
+<span class="ne">----&gt; </span><span class="mi">1</span> <span class="n">srtio3</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="s1">&#39;./data/SrTiO3.cif&#39;</span><span class="p">)</span>
+
+<span class="nn">/opt/anaconda3/envs/abtem-dask/lib/python3.8/site-packages/ase/io/formats.py</span> in <span class="ni">read</span><span class="nt">(filename, index, format, parallel, do_not_split_by_at_sign, **kwargs)</span>
+<span class="g g-Whitespace">    </span><span class="mi">727</span>     <span class="k">if</span> <span class="n">index</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+<span class="g g-Whitespace">    </span><span class="mi">728</span>         <span class="n">index</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+<span class="ne">--&gt; </span><span class="mi">729</span>     <span class="nb">format</span> <span class="o">=</span> <span class="nb">format</span> <span class="ow">or</span> <span class="n">filetype</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="n">read</span><span class="o">=</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="nb">str</span><span class="p">))</span>
+<span class="g g-Whitespace">    </span><span class="mi">730</span> 
+<span class="g g-Whitespace">    </span><span class="mi">731</span>     <span class="n">io</span> <span class="o">=</span> <span class="n">get_ioformat</span><span class="p">(</span><span class="nb">format</span><span class="p">)</span>
+
+<span class="nn">/opt/anaconda3/envs/abtem-dask/lib/python3.8/site-packages/ase/io/formats.py</span> in <span class="ni">filetype</span><span class="nt">(filename, read, guess)</span>
+<span class="g g-Whitespace">    </span><span class="mi">918</span> 
+<span class="g g-Whitespace">    </span><span class="mi">919</span>         <span class="k">if</span> <span class="n">orig_filename</span> <span class="o">==</span> <span class="n">filename</span><span class="p">:</span>
+<span class="ne">--&gt; </span><span class="mi">920</span>             <span class="n">fd</span> <span class="o">=</span> <span class="n">open_with_compression</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="s1">&#39;rb&#39;</span><span class="p">)</span>
+<span class="g g-Whitespace">    </span><span class="mi">921</span>         <span class="k">else</span><span class="p">:</span>
+<span class="g g-Whitespace">    </span><span class="mi">922</span>             <span class="n">fd</span> <span class="o">=</span> <span class="n">orig_filename</span>  <span class="c1"># type: ignore</span>
+
+<span class="nn">/opt/anaconda3/envs/abtem-dask/lib/python3.8/site-packages/ase/io/formats.py</span> in <span class="ni">open_with_compression</span><span class="nt">(filename, mode)</span>
+<span class="g g-Whitespace">    </span><span class="mi">549</span>     <span class="k">else</span><span class="p">:</span>
+<span class="g g-Whitespace">    </span><span class="mi">550</span>         <span class="c1"># Either None or unknown string</span>
+<span class="ne">--&gt; </span><span class="mi">551</span>         <span class="k">return</span> <span class="nb">open</span><span class="p">(</span><span class="n">filename</span><span class="p">,</span> <span class="n">mode</span><span class="p">)</span>
+<span class="g g-Whitespace">    </span><span class="mi">552</span> 
+<span class="g g-Whitespace">    </span><span class="mi">553</span> 
+
+<span class="ne">FileNotFoundError</span>: [Errno 2] No such file or directory: &#39;./data/SrTiO3.cif&#39;
+</pre></div>
+</div>
+</div>
+</div>
+<p>Of course, we can also write the structure back to disk.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">write</span><span class="p">(</span><span class="s1">&#39;./data/SrTiO3.cif&#39;</span><span class="p">,</span> <span class="n">srtio3</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Unlike some other multislice simulation codes, <code class="docutils literal notranslate"><span class="pre">abTEM</span></code> does not use any Debye-Waller factors or partial occupations embedded in structure files.</p>
+</div>
+</section>
+<section id="visualizing-structures">
+<h2>Visualizing structures<a class="headerlink" href="#visualizing-structures" title="Permalink to this headline">#</a></h2>
+<p>The simplest way to visualize the atoms is the <code class="docutils literal notranslate"><span class="pre">view</span></code> function, which should bring up an interactive 3d viewer:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># may not work in remote environments (e.g. binder)</span>
+<span class="c1"># view(srtio3) </span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>If you are working in a remote environment or prefer to embed the viewer in the notebook, you can install <a class="reference external" href="https://github.com/nglviewer/nglview">nglview</a>. This will allow you to use the <code class="docutils literal notranslate"><span class="pre">nglview</span></code> backend for the <code class="docutils literal notranslate"><span class="pre">view</span></code> function.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># may not work without installing additional dependencies</span>
+<span class="c1"># view(srtio3, viewer=&#39;nglview&#39;) </span>
+</pre></div>
+</div>
+</div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">abTEM</span></code> provides a simple viewer for embedding a basic visualization in a notebook. This function shows a 2D orthogonal projection of the structure perpendicular to a specified plane. For example:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">srtio3</span><span class="p">,</span> 
+                 <span class="n">plane</span><span class="o">=</span><span class="s1">&#39;xy&#39;</span><span class="p">,</span> 
+                 <span class="n">scale</span><span class="o">=</span><span class="mf">.5</span><span class="p">,</span> 
+                 <span class="n">show_periodic</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                 <span class="n">legend</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="bulding-structures">
+<h2>Bulding structures<a class="headerlink" href="#bulding-structures" title="Permalink to this headline">#</a></h2>
+<p>In addition to importing the structure, ASE has tools for procedurally creating many common structures:</p>
+<ul class="simple">
+<li><p>Common bulk crystals: <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/build/build.html#ase.build.bulk"><code class="docutils literal notranslate"><span class="pre">ase.build.bulk</span></code></a></p></li>
+<li><p>Bulk structures by its spacegroup: <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/spacegroup/spacegroup.html?highlight=crystal"><code class="docutils literal notranslate"><span class="pre">ase.spacegroup.crystal</span></code></a></p></li>
+<li><p>Carbon nanotubes: <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/build/build.html#nanotubes"><code class="docutils literal notranslate"><span class="pre">ase.build.nanotube</span></code></a></p></li>
+<li><p>Nanoparticles: <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/cluster/cluster.html"><code class="docutils literal notranslate"><span class="pre">ase.cluster</span></code></a></p></li>
+</ul>
+<p>As an example, we create a nanoparticle of gold by specifying 6 layers in the (100) directions, 9 in the (110) directions and 5 in the (111) directions</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">ase.cluster</span> <span class="kn">import</span> <span class="n">FaceCenteredCubic</span>
+
+<span class="n">surfaces</span> <span class="o">=</span> <span class="p">[(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)]</span>
+<span class="n">layers</span> <span class="o">=</span> <span class="p">[</span><span class="mi">6</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">5</span><span class="p">]</span>
+<span class="n">latticeconstant</span> <span class="o">=</span> <span class="mf">4.08</span>
+
+<span class="n">nanoparticle</span> <span class="o">=</span> <span class="n">FaceCenteredCubic</span><span class="p">(</span><span class="s1">&#39;Au&#39;</span><span class="p">,</span> <span class="n">surfaces</span><span class="p">,</span> <span class="n">layers</span><span class="p">,</span> <span class="n">latticeconstant</span><span class="o">=</span><span class="n">latticeconstant</span><span class="p">)</span>
+
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">nanoparticle</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mf">.9</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="manipulating-structures">
+<h2>Manipulating structures<a class="headerlink" href="#manipulating-structures" title="Permalink to this headline">#</a></h2>
+<p>The structure you import or build may not exactly match your requirements or the requirements of <code class="docutils literal notranslate"><span class="pre">abTEM</span></code>. Here, we exemplify the most common manipulations needed for creating models for image simulation:</p>
+<section id="rotating-structures">
+<h3>Rotating structures<a class="headerlink" href="#rotating-structures" title="Permalink to this headline">#</a></h3>
+<p>One of the most common problem when creating model structures is choosing the imaging direction. <code class="docutils literal notranslate"><span class="pre">abTEM</span></code> always assumes that the imaging electrons travels along the <span class="math notranslate nohighlight">\(z\)</span>-axis in the direction from negative to positive coordinate values, hence choosing the propagation direction requires manipulating the atomic structure.</p>
+<p>In this example, we rotate the nanoparticle into the (110) zone axis with the (100)-facet aligned with the <span class="math notranslate nohighlight">\(x\)</span>-axis. We first <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/atoms.html?highlight=atoms#ase.Atoms.rotate"><code class="docutils literal notranslate"><span class="pre">.rotate</span></code></a> the atoms by <span class="math notranslate nohighlight">\(45 \ \mathrm{deg.}\)</span> around <span class="math notranslate nohighlight">\(x\)</span> and then by <span class="math notranslate nohighlight">\(\sim35.26 \ \mathrm{deg.}\)</span> around <span class="math notranslate nohighlight">\(z\)</span>.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">rotated_nanoparticle</span> <span class="o">=</span> <span class="n">nanoparticle</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+<span class="n">rotated_nanoparticle</span><span class="o">.</span><span class="n">rotate</span><span class="p">(</span><span class="mi">45</span><span class="p">,</span> <span class="s1">&#39;x&#39;</span><span class="p">)</span>
+
+<span class="n">rotated_nanoparticle</span><span class="o">.</span><span class="n">rotate</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">degrees</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">arctan</span><span class="p">(</span><span class="mi">1</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="mi">2</span><span class="p">))),</span> <span class="s1">&#39;z&#39;</span><span class="p">)</span>
+
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">rotated_nanoparticle</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mf">.9</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="admonition seealso">
+<p class="admonition-title">See also</p>
+<p>For rotations that does not correspond with a low-index zone axis, see our introduction to creating arbitrary orthogonal structures <a class="reference internal" href="walkthrough/atomic_models.html#orthogonal"><span class="std std-ref">below</span></a>.</p>
+</div>
+</section>
+<section id="adding-vacuum">
+<h3>Adding vacuum<a class="headerlink" href="#adding-vacuum" title="Permalink to this headline">#</a></h3>
+<p>The unit cell of the nanotube above has <em>zero extent</em>.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">rotated_nanoparticle</span><span class="o">.</span><span class="n">cell</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>The extent of the unit cell determines the extent of the wave function, hence this is an invalid cell. We can use <code class="docutils literal notranslate"><span class="pre">.center</span></code> to add vacuum around the unit cell.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">centered_nanoparticle</span> <span class="o">=</span> <span class="n">rotated_nanoparticle</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+<span class="n">centered_nanoparticle</span><span class="o">.</span><span class="n">center</span><span class="p">(</span><span class="n">vacuum</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>Showing the unit cell, we now see that there is a vacuum of <span class="math notranslate nohighlight">\(2 \ \mathrm{Å}\)</span> separating the outermost atoms and the unit cell boundary.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">centered_nanoparticle</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="rotation-of-bulk-structures">
+<h3>Rotation of bulk structures<a class="headerlink" href="#rotation-of-bulk-structures" title="Permalink to this headline">#</a></h3>
+<p>Rotating the nanoparticle without considering the unit cell was only possible because the structure did not require periodicity. For periodic structures, we can use <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/build/surface.html#create-specific-non-common-surfaces"><code class="docutils literal notranslate"><span class="pre">surface</span></code></a> function for picking the <a class="reference external" href="https://en.wikipedia.org/wiki/Zone_axis">zone axis</a> of a given structure by providing the Miller indices. Below we create a SrTiO<sub>3</sub> structure in the (110) zone axis.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">srtio3_110</span> <span class="o">=</span> <span class="n">build</span><span class="o">.</span><span class="n">surface</span><span class="p">(</span><span class="n">srtio3</span><span class="p">,</span> <span class="n">indices</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="n">layers</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">periodic</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">srtio3_110</span><span class="p">,</span> <span class="n">plane</span><span class="o">=</span><span class="s1">&#39;xy&#39;</span><span class="p">,</span> <span class="n">show_periodic</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mf">.5</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="admonition seealso">
+<p class="admonition-title">See also</p>
+<p>For rotations that does not correspond with a low-index zone axis, see our introduction to creating arbitrary orthogonal structures <a class="reference internal" href="walkthrough/atomic_models.html#orthogonal"><span class="std std-ref">below</span></a>.</p>
+</div>
+</section>
+<section id="repeating-the-structure">
+<h3>Repeating the structure<a class="headerlink" href="#repeating-the-structure" title="Permalink to this headline">#</a></h3>
+<p>It is often necessary to repeat the unit cell. For example, you may need to increase the thickness of the structure by repeating it along <span class="math notranslate nohighlight">\(z\)</span>. In STEM, the <span class="math notranslate nohighlight">\(xy\)</span>-extent of the model structure have to be large enough to accomodate the size of the probe while preventing self-interaction with its periodic images.</p>
+<p>In ASE structures may be repeated by multiplying them.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">repeated_srtio3</span> <span class="o">=</span> <span class="n">srtio3_110</span> <span class="o">*</span> <span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+
+<span class="n">_</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span> <span class="o">=</span> <span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">repeated_srtio3</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">show_periodic</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">repeated_srtio3</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">plane</span><span class="o">=</span><span class="s1">&#39;xz&#39;</span><span class="p">,</span> <span class="n">show_periodic</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="conditionally-modifying-atoms">
+<h3>Conditionally modifying atoms<a class="headerlink" href="#conditionally-modifying-atoms" title="Permalink to this headline">#</a></h3>
+<p>The atomic positions and numbers are just <code class="docutils literal notranslate"><span class="pre">numpy</span></code> arrays and can be modified directly. We create a SrTiO<sub>3</sub> / LaTiO<sub>3</sub> interface changing the atomic number of half the Sr atoms.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">sto_lto_interface</span> <span class="o">=</span> <span class="n">repeated_srtio3</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+<span class="c1"># select atoms with atomic number 38</span>
+<span class="n">mask_sr</span> <span class="o">=</span> <span class="n">sto_lto_interface</span><span class="o">.</span><span class="n">numbers</span> <span class="o">==</span> <span class="mi">38</span> 
+
+<span class="c1"># select atoms to the left of center</span>
+<span class="n">mask_left_side</span> <span class="o">=</span> <span class="n">sto_lto_interface</span><span class="o">.</span><span class="n">positions</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">sto_lto_interface</span><span class="o">.</span><span class="n">cell</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="mi">2</span> 
+
+<span class="c1"># combine selection</span>
+<span class="n">mask_combined</span> <span class="o">=</span> <span class="n">mask_sr</span> <span class="o">*</span> <span class="n">mask_left_side</span>
+
+<span class="c1"># assign new atomic numbers to selection</span>
+<span class="n">sto_lto_interface</span><span class="o">.</span><span class="n">numbers</span><span class="p">[</span><span class="n">mask_combined</span><span class="p">]</span> <span class="o">=</span> <span class="mi">57</span>
+
+<span class="n">sto_lto_interface</span><span class="o">.</span><span class="n">center</span><span class="p">()</span>
+
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">sto_lto_interface</span><span class="p">,</span> <span class="n">show_periodic</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">legend</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">write</span><span class="p">(</span><span class="s1">&#39;data/STO_LTO.cif&#39;</span><span class="p">,</span> <span class="n">sto_lto_interface</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>As an alternative, you can use the getter and setter methods <code class="docutils literal notranslate"><span class="pre">get_atomic_numbers</span></code> and <code class="docutils literal notranslate"><span class="pre">set_atomic_numbers</span></code>.</p>
+</section>
+<section id="scaling-structures">
+<h3>Scaling structures<a class="headerlink" href="#scaling-structures" title="Permalink to this headline">#</a></h3>
+<p>Here, we randomly substitutionally dope the structures by making the titanium atoms into indium atoms with a probability of 10 %.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">scaled_sto_lto_interface</span> <span class="o">=</span> <span class="n">sto_lto_interface</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+<span class="n">a_sr</span> <span class="o">=</span> <span class="mf">3.905</span>
+<span class="n">a_la</span> <span class="o">=</span> <span class="mf">3.97</span>
+<span class="n">a_new</span> <span class="o">=</span> <span class="p">(</span><span class="mf">3.905</span> <span class="o">+</span> <span class="mf">3.97</span><span class="p">)</span> <span class="o">/</span> <span class="mi">2</span>
+<span class="n">a_old</span> <span class="o">=</span> <span class="n">srtio3</span><span class="o">.</span><span class="n">cell</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+
+<span class="n">new_cell</span> <span class="o">=</span> <span class="n">sto_lto_interface</span><span class="o">.</span><span class="n">cell</span> <span class="o">*</span> <span class="n">a_new</span> <span class="o">/</span> <span class="n">a_old</span>
+
+<span class="n">scaled_sto_lto_interface</span><span class="o">.</span><span class="n">set_cell</span><span class="p">(</span><span class="n">new_cell</span><span class="p">,</span> <span class="n">scale_atoms</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="combining-multiple-structures">
+<h3>Combining multiple structures<a class="headerlink" href="#combining-multiple-structures" title="Permalink to this headline">#</a></h3>
+<p>Some complex hetero-structures can only be created by combining multiple component structures. As an example we create a support the nanoparticle from above on a simple model of amorphous carbon.</p>
+<p>Below, the amorphous carbon is created by randomly displacing the atoms of a diamond structure.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">substrate</span> <span class="o">=</span> <span class="n">build</span><span class="o">.</span><span class="n">bulk</span><span class="p">(</span><span class="s1">&#39;C&#39;</span><span class="p">,</span> <span class="n">cubic</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="c1"># repeat substrate</span>
+<span class="n">substrate</span> <span class="o">*=</span> <span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span> 
+
+<span class="c1"># displace atoms with a standard deviation of 25 % of the bond length</span>
+<span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="n">seed</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+<span class="n">substrate</span><span class="o">.</span><span class="n">positions</span><span class="p">[:]</span> <span class="o">+=</span> <span class="n">rng</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">substrate</span><span class="p">),</span> <span class="mi">3</span><span class="p">))</span> <span class="o">*</span> <span class="mf">.25</span> <span class="o">*</span> <span class="mf">1.54</span> 
+
+<span class="c1"># wrap the atoms displaced outside the cell back into the cell </span>
+<span class="n">substrate</span><span class="o">.</span><span class="n">wrap</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>We delete the atoms with a value of <span class="math notranslate nohighlight">\(y\)</span> less than <span class="math notranslate nohighlight">\(\mathrm{10} \ Å\)</span>, then the nanoparticle is centered with respect to the substrate.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">cut_nanoparticle</span> <span class="o">=</span> <span class="n">centered_nanoparticle</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+<span class="n">mask</span> <span class="o">=</span> <span class="n">cut_nanoparticle</span><span class="o">.</span><span class="n">positions</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mi">10</span>
+
+<span class="c1"># deletion *requires* providing the indices</span>
+<span class="k">del</span> <span class="n">cut_nanoparticle</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">mask</span><span class="p">)[</span><span class="mi">0</span><span class="p">]]</span>
+
+<span class="c1"># center nanoparticle relative to substrate</span>
+<span class="n">cut_nanoparticle</span><span class="o">.</span><span class="n">set_cell</span><span class="p">(</span><span class="n">substrate</span><span class="o">.</span><span class="n">cell</span><span class="p">)</span>
+<span class="n">cut_nanoparticle</span><span class="o">.</span><span class="n">center</span><span class="p">()</span>
+
+<span class="c1"># shift nanoparticle in the y-direction</span>
+<span class="n">cut_nanoparticle</span><span class="o">.</span><span class="n">positions</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">15</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>The substrate and nanoparticle and be combined by adding the models, lastly the models are centered along the <span class="math notranslate nohighlight">\(z\)</span>-axis with a vacuum of <span class="math notranslate nohighlight">\(5 \ \mathrm{Å}\)</span></p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">supported_nanoparticle</span> <span class="o">=</span> <span class="n">substrate</span> <span class="o">+</span> <span class="n">cut_nanoparticle</span>
+
+<span class="n">supported_nanoparticle</span><span class="o">.</span><span class="n">center</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">vacuum</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+
+<span class="n">_</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span> <span class="o">=</span> <span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">supported_nanoparticle</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s1">&#39;Supported nanoparticle beam view&#39;</span><span class="p">)</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">supported_nanoparticle</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">plane</span><span class="o">=</span><span class="s1">&#39;xz&#39;</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s1">&#39;Supported nanoparticle side view&#39;</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">write</span><span class="p">(</span><span class="s1">&#39;data/srtio3_110.cif&#39;</span><span class="p">,</span> <span class="n">repeated_srtio3</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+</section>
+<section id="orthogonal-and-periodic-supercells">
+<span id="orthogonal"></span><h2>Orthogonal and periodic supercells<a class="headerlink" href="#orthogonal-and-periodic-supercells" title="Permalink to this headline">#</a></h2>
+<p>The multislice algorithm requires an orthogonal periodic atomic structure as its input. However, taking any arbitrary structure and making it periodic and orthogonal is not always trivial. abTEM has a tool for solving this problem. To demonstrate the tool, we create a graphene structure with the minimal hexagonal unit cell.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">ase</span> <span class="kn">import</span> <span class="n">build</span>
+
+<span class="n">graphene</span> <span class="o">=</span> <span class="n">build</span><span class="o">.</span><span class="n">graphene</span><span class="p">(</span><span class="n">vacuum</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">graphene</span><span class="p">,</span> <span class="n">show_periodic</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>The minimal unit cell of graphene is hexagonal, whereas the multislice algorithm requires an orthogonal unit cell. To make the unit cell orthogonal, we can use the abTEM <code class="docutils literal notranslate"><span class="pre">orthogonalize_cell</span></code> function. It is not always possible to make a periodic cell orthogonal without introducing some strain, hence we can return the strain tensor.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">abtem.structures</span> <span class="kn">import</span> <span class="n">orthogonalize_cell</span><span class="p">,</span> <span class="n">pretty_print_transform</span>
+
+<span class="n">orthogonal_graphene</span><span class="p">,</span> <span class="n">transform</span> <span class="o">=</span> <span class="n">orthogonalize_cell</span><span class="p">(</span><span class="n">graphene</span><span class="p">,</span> <span class="n">return_transform</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">orthogonal_graphene</span><span class="p">,</span> <span class="n">show_periodic</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>Hexagonal cells can be made orthogonal by doubling its size without introducing any strain.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">pretty_print_transform</span><span class="p">(</span><span class="n">transform</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>A common, less trivial example, is the creation of models with a specific rotation relative to the beam. Here, we want to view FCC gold at a 10 degree angle.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">desired_rotation</span> <span class="o">=</span> <span class="mi">10</span>
+
+<span class="n">gold</span> <span class="o">=</span> <span class="n">build</span><span class="o">.</span><span class="n">bulk</span><span class="p">(</span><span class="s1">&#39;Au&#39;</span><span class="p">,</span> <span class="n">cubic</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="n">gold</span><span class="o">.</span><span class="n">rotate</span><span class="p">(</span><span class="n">desired_rotation</span><span class="p">,</span> <span class="s1">&#39;y&#39;</span><span class="p">,</span> <span class="n">rotate_cell</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="n">gold</span><span class="p">,</span> <span class="n">transform</span> <span class="o">=</span> <span class="n">orthogonalize_cell</span><span class="p">(</span><span class="n">gold</span><span class="p">,</span> <span class="n">max_repetitions</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">return_transform</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
+
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">gold</span><span class="p">,</span> 
+                 <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> 
+                 <span class="n">scale</span><span class="o">=</span><span class="mf">.5</span><span class="p">,</span> 
+                 <span class="n">title</span><span class="o">=</span><span class="s1">&#39;Rotated gold beam view&#39;</span><span class="p">)</span>
+
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">gold</span><span class="p">,</span> 
+                 <span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> 
+                 <span class="n">plane</span><span class="o">=</span><span class="s1">&#39;xz&#39;</span><span class="p">,</span> 
+                 <span class="n">scale</span><span class="o">=</span><span class="mf">.5</span><span class="p">,</span> 
+                 <span class="n">title</span><span class="o">=</span><span class="s1">&#39;Rotated gold side view&#39;</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>As shown below, creating the rotated structure required an additional rotation of <span class="math notranslate nohighlight">\(0.538 \ \mathrm{degrees}\)</span> around the <span class="math notranslate nohighlight">\(y\)</span>-axis. This means that within the contraint of repeating the structure at most 10 times in either direction, the closest periodic and orthogonal structure is rotated by <span class="math notranslate nohighlight">\(10.538 \ \mathrm{degrees}\)</span> and not the desired <span class="math notranslate nohighlight">\(10.0 \ \mathrm{degrees}\)</span>. This may be close enough, if it is not <code class="docutils literal notranslate"><span class="pre">max_repetitions</span></code> may be increased. For example, within a <code class="docutils literal notranslate"><span class="pre">max_repetitions</span></code> of 20, the required transform is just <span class="math notranslate nohighlight">\(-0.008 \ \mathrm{degrees}\)</span> around the <span class="math notranslate nohighlight">\(y\)</span>-axis.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">pretty_print_transform</span><span class="p">(</span><span class="n">transform</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+</section>
+
+    <script type="text/x-thebe-config">
+    {
+        requestKernel: true,
+        binderOptions: {
+            repo: "binder-examples/jupyter-stacks-datascience",
+            ref: "master",
+        },
+        codeMirrorConfig: {
+            theme: "abcdef",
+            mode: "abtem-dask"
+        },
+        kernelOptions: {
+            kernelName: "abtem-dask",
+            path: "./user_guide"
+        },
+        predefinedOutput: true
+    }
+    </script>
+    <script>kernelName = 'abtem-dask'</script>
+
+              </div>
+              
+            </main>
+            <footer class="footer-article noprint">
+                
+    <!-- Previous / next buttons -->
+<div class='prev-next-area'>
+</div>
+            </footer>
+        </div>
+    </div>
+    <div class="footer-content row">
+        <footer class="col footer"><p>
+  
+    By The abTEM developers<br/>
+  
+      &copy; Copyright 2022.<br/>
+</p>
+        </footer>
+    </div>
+    
+</div>
+
+
+      </div>
+    </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script src="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
+
+
+  </body>
+</html>
