@@ -2,6 +2,7 @@
 from collections.abc import Iterable
 from typing import Union, Tuple, TYPE_CHECKING, List
 
+import cplot
 import matplotlib.pyplot as plt
 import numpy as np
 from ase.data import covalent_radii, chemical_symbols
@@ -18,7 +19,7 @@ from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import copy_to_device
 from abtem.visualize.utils import domain_coloring, add_domain_coloring_cbar
 
-from mpl_toolkits.axes_grid1 import ImageGrid
+from mpl_toolkits.axes_grid1 import ImageGrid, make_axes_locatable
 
 if TYPE_CHECKING:
     from abtem.measure.measure import AbstractMeasurement
@@ -218,16 +219,22 @@ def add_imshow(ax,
                power,
                vmin,
                vmax,
+               domain_coloring_kwargs=None,
                **kwargs):
     if power != 1:
         array = array ** power
-        vmin = vmin ** power
-        vmax = vmax ** power
+        vmin = array.min() if vmin is None else vmin ** power
+        vmax = array.max() if vmax is None else vmax ** power
+        #vmin = vmin ** power
+        #vmax = vmax ** power
 
     array = array.T
 
     if np.iscomplexobj(array):
-        array = domain_coloring(array, vmin=vmin, vmax=vmax)
+        if domain_coloring_kwargs is None:
+            domain_coloring_kwargs = {}
+
+        array = cplot.get_srgb1(array, **domain_coloring_kwargs)
 
     im = ax.imshow(array,
                    extent=extent,
@@ -310,6 +317,7 @@ def show_measurement_2d_exploded(
         imshow_kwargs: dict = None,
         anchored_text_kwargs: dict = None,
         anchored_size_bar_kwargs: dict = None,
+        domain_coloring_kwargs: dict = None,
         axes: Axes = None,
 ):
     measurements = measurements.to_cpu().compute()
@@ -318,6 +326,11 @@ def show_measurement_2d_exploded(
     image_grid_kwargs = {} if image_grid_kwargs is None else image_grid_kwargs
     anchored_text_kwargs = {} if anchored_text_kwargs is None else anchored_text_kwargs
     anchored_size_bar_kwargs = {} if anchored_size_bar_kwargs is None else anchored_size_bar_kwargs
+
+    if domain_coloring_kwargs is None:
+        domain_coloring_kwargs = {'abs_scaling': lambda x: x / (x + 1),
+                                  'saturation_adjustment': 1.38
+                                  }
 
     if cbar and not np.iscomplexobj(measurements.array):
         if common_color_scale:
@@ -403,6 +416,7 @@ def show_measurement_2d_exploded(
                         vmin=vmin,
                         vmax=vmax,
                         cmap=cmap,
+                        domain_coloring_kwargs=domain_coloring_kwargs,
                         **imshow_kwargs)
 
         if panel_labels is not None:
@@ -416,7 +430,20 @@ def show_measurement_2d_exploded(
                 cbar_label = cbar_labels
 
             if np.iscomplexobj(array):
-                add_domain_coloring_cbar(ax, vmin=vmin, vmax=vmax, )
+                from cplot._main import _add_colorbar_arg, _add_colorbar_abs
+
+                divider = make_axes_locatable(ax)
+                cax1 = divider.append_axes("right", size="5%", pad=0.3)
+                cax2 = divider.append_axes("right", size="5%", pad=0.5)
+
+                _add_colorbar_abs(cax2, domain_coloring_kwargs['abs_scaling'], 10)
+                _add_colorbar_arg(cax1, domain_coloring_kwargs['saturation_adjustment'])
+
+                # vmin = np.abs(measurement.array).min() if vmin is None else vmin
+                # vmax = np.abs(measurement.array).max() if vmax is None else vmax
+                #add_domain_coloring_cbar(ax,
+                #                         domain_coloring_kwargs['abs_scaling'],
+                #                         domain_coloring_kwargs['saturation_adjustment'])
             else:
                 try:
                     ax.cax.colorbar(im, label=cbar_label)
@@ -506,6 +533,14 @@ def show_measurements_1d(measurements,
         add_plot(x, line_profile.array, ax, label)
 
     ax.set_xlabel(x_label)
+
+    if y_label is None and 'label' in measurements.metadata:
+        y_label = measurements.metadata['label']
+        if 'units' in measurements.metadata:
+            y_label += f' [{measurements.metadata["units"]}]'
+        ax.set_ylabel(y_label)
+
+    ax.set_ylabel(y_label)
 
     if len(measurements.ensemble_shape) > 0:
         ax.legend()

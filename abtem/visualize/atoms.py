@@ -6,11 +6,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 from ase.data import covalent_radii, chemical_symbols
 from ase.data.colors import jmol_colors
+from matplotlib.axes import Axes
 from matplotlib.collections import PatchCollection
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle
 
 #: Array to facilitate the display of cell boundaries.
+from abtem.structures.structures import pad_atoms
+
 _cube = np.array([[[0, 0, 0], [0, 0, 1]],
                   [[0, 0, 0], [0, 1, 0]],
                   [[0, 0, 0], [1, 0, 0]],
@@ -42,21 +45,44 @@ def _plane2axes(plane):
     return axes + (last_axis[0],)
 
 
+# def show_atoms(atoms,
+#                repeat: Tuple[int, int] = (1, 1),
+#                scans=None,
+#                plane: Union[Tuple[float, float], str] = 'xy',
+#                ax=None,
+#                scale: float = .75,
+#                title: str = None,
+#                numbering: bool = False,
+#                figsize=None,
+#                legend: bool = False):
+#
+#     atoms = atoms.copy()
+#     atoms *= repeat + (1,)
+#
+#     if isinstance(plane, str):
+#         ax = _show_atoms_2d(atoms, scans, plane, ax, scale, title, numbering, figsize, legend=legend)
+#     else:
+#         if scans is not None:
+#             raise NotImplementedError()
+#
+#         if numbering:
+#             raise NotImplementedError()
+#         ax = _show_atoms_3d(atoms, plane[0], plane[1], scale_atoms=scale, ax=ax, figsize=figsize)
+#
+#     return ax
+
+
 def show_atoms(atoms,
-               repeat: Tuple[int, int] = (1, 1),
-               scans=None,
                plane: Union[Tuple[float, float], str] = 'xy',
-               ax=None,
-               scale_atoms: float = .5,
+               ax: Axes = None,
+               scale: float = .75,
                title: str = None,
                numbering: bool = False,
-               figsize=None,
+               show_periodic: bool = False,
+               figsize: Tuple[float, float] = None,
                legend: bool = False):
-
     """
-    Show atoms function
-
-    Function to display atoms, especially in Jupyter notebooks.
+    Display atoms using matplotlib especially in Jupyter notebooks.
 
     Parameters
     ----------
@@ -79,31 +105,14 @@ def show_atoms(atoms,
         Option to set plot numbering. Default is False.
     """
 
-    atoms = atoms.copy()
-    atoms *= repeat + (1,)
+    if show_periodic:
+        atoms = atoms.copy()
+        atoms = pad_atoms(atoms, margins=1e-3)
 
-    if isinstance(plane, str):
-        ax = _show_atoms_2d(atoms, scans, plane, ax, scale_atoms, title, numbering, figsize, legend=legend)
-    else:
-        if scans is not None:
-            raise NotImplementedError()
+    # wrapped = atoms[wrap]
+    # wrapped.set_scaled_positions(wrapped.get_scaled_positions() + shift)
+    # atoms = atoms + wrapped
 
-        if numbering:
-            raise NotImplementedError()
-        ax = _show_atoms_3d(atoms, plane[0], plane[1], scale_atoms=scale_atoms, ax=ax, figsize=figsize)
-
-    return ax
-
-
-def _show_atoms_2d(atoms,
-                   scans=None,
-                   plane: Union[Tuple[float, float], str] = 'xy',
-                   ax=None,
-                   scale_atoms: float = .5,
-                   title: str = None,
-                   numbering: bool = False,
-                   figsize=None,
-                   legend=False):
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
 
@@ -122,7 +131,7 @@ def _show_atoms_2d(atoms,
         positions = positions[order]
 
         colors = jmol_colors[atoms.numbers[order]]
-        sizes = covalent_radii[atoms.numbers[order]] * scale_atoms
+        sizes = covalent_radii[atoms.numbers[order]] * scale
 
         circles = []
         for position, size in zip(positions, sizes):
@@ -150,13 +159,6 @@ def _show_atoms_2d(atoms,
 
     # ax.set_xlim([0, np.max(cell_lines_x)])
     # ax.set_ylim([0, np.max(cell_lines_y)])
-
-    if scans is not None:
-        if not isinstance(scans, Iterable):
-            scans = [scans]
-
-        for scan in scans:
-            scan.add_to_mpl_plot(ax)
 
     return ax
 

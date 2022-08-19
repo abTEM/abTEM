@@ -18,7 +18,7 @@ from abtem.core.energy import Accelerator
 from abtem.core.fft import fft2
 from abtem.core.grid import Grid, GridUndefinedError
 from abtem.core.intialize import initialize
-from abtem.measure.detect import AbstractDetector, validate_detectors, WavesDetector
+from abtem.measure.detect import AbstractDetector, validate_detectors, WavesDetector, FlexibleAnnularDetector
 from abtem.measure.measure import AbstractMeasurement
 from abtem.potentials.potentials import AbstractPotential, validate_potential
 from abtem.waves.base import WavesLikeMixin
@@ -43,7 +43,7 @@ class AbstractSMatrix(WavesLikeMixin):
 
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
-        return [OrdinalAxis(values=self.wave_vectors)] + super().base_axes_metadata  # noqa
+        return [OrdinalAxis(label='(n, m)', values=self.wave_vectors)] + super().base_axes_metadata  # noqa
 
     @property
     def base_shape(self):
@@ -219,6 +219,7 @@ class SMatrixArray(HasArray, AbstractSMatrix):
             array = xp.tensordot(coefficients, array, axes=[-1, -3])
             array = batch_crop_2d(array, corners, self.cropping_window)
         else:
+
             array = xp.tensordot(coefficients, array, axes=[-1, -3])
 
         if len(self.waves.shape) > 3:
@@ -231,10 +232,10 @@ class SMatrixArray(HasArray, AbstractSMatrix):
         waves = Waves(array, sampling=self.sampling, energy=self.energy, ensemble_axes_metadata=ensemble_axes_metadata)
         return waves
 
-    def dummy_probes(self, scan=None, ctf=None):
+    def dummy_probes(self, scan: AbstractScan = None, ctf: CTF = None):
 
         if ctf is None:
-            ctf = CTF(energy=self.waves.energy, semiangle_cutoff=self.planewave_cutoff)
+            ctf = CTF(energy=self.energy, semiangle_cutoff=self.planewave_cutoff)
 
         probes = Probe.from_ctf(extent=self.window_extent,
                                 gpts=self.cropping_window,
@@ -264,7 +265,6 @@ class SMatrixArray(HasArray, AbstractSMatrix):
 
         for _, slics, sub_scan in scan.generate_blocks(reduction_max_batch):
             waves = self.reduce_to_waves(sub_scan, ctf)
-
             indices = (slice(None),) * (len(self.waves.shape) - 3) + slics
 
             for detector, measurement in measurements.items():
@@ -468,6 +468,24 @@ class SMatrixArray(HasArray, AbstractSMatrix):
 
         return measurements[0] if len(measurements) == 1 else ComputableList(measurements)
 
+    def scan(self,
+             scan: AbstractScan = None,
+             ctf: CTF = None,
+             detectors: Union[AbstractDetector, List[AbstractDetector]] = None,
+             reduction_max_batch: Union[int, str] = 'auto',
+             rechunk_scheme: Union[Tuple[int, int], str] = 'auto'):
+        if scan is None:
+            scan = GridScan()
+
+        if detectors is None:
+            detectors = [FlexibleAnnularDetector()]
+
+        return self.reduce(scan=scan,
+                           ctf=ctf,
+                           detectors=detectors,
+                           reduction_max_batch=reduction_max_batch,
+                           rechunk_scheme=rechunk_scheme)
+
 
 def round_gpts_to_multiple_of_interpolation(gpts: Tuple[int, int], interpolation: Tuple[int, int]) -> Tuple[int, int]:
     return tuple(n + (-n) % f for f, n in zip(interpolation, gpts))  # noqa
@@ -660,9 +678,9 @@ class SMatrix(AbstractSMatrix):
 
         xp = get_array_module(self.device)
 
-        wave_vectors = xp.asarray(self.wave_vectors, dtype=xp.float32)[wave_vector_range]
+        wave_vectors = xp.asarray(self.wave_vectors, dtype=xp.float32)
 
-        array = plane_waves(wave_vectors, self.extent, self.gpts)
+        array = plane_waves(wave_vectors[wave_vector_range], self.extent, self.gpts)
 
         if all(n % f == 0 for f, n in zip(self.interpolation, self.gpts)):
             normalization_constant = np.prod(self.gpts) * xp.sqrt(len(wave_vectors)) / np.prod(self.interpolation)
@@ -674,10 +692,11 @@ class SMatrix(AbstractSMatrix):
             normalization_constant = xp.sqrt(abs2(fft2(cropped_array.sum(0))).sum())
 
         array = array / normalization_constant.astype(xp.float32)
+
         #    array = array / xp.sqrt(np.prod(gpts).astype(xp.float32))
 
         waves = Waves(array, energy=self.energy, extent=self.extent,
-                      ensemble_axes_metadata=[OrdinalAxis(values=wave_vectors)])
+                      ensemble_axes_metadata=[OrdinalAxis(values=wave_vectors[wave_vector_range])])
 
         if self.potential is not None:
             waves = multislice_and_detect(waves, self.potential, [WavesDetector()])[0]
@@ -696,8 +715,8 @@ class SMatrix(AbstractSMatrix):
         s_matrix = s_matrix_partial(*tuple(arg.item() for arg in args[:-1]))
 
         wave_vector_range = slice(*np.squeeze(args[-1]))
-
-        return s_matrix._build_s_matrix(wave_vector_range).array
+        array = s_matrix._build_s_matrix(wave_vector_range).array
+        return array
 
     def _s_matrix_partial(self):
         def s_matrix(*args, potential_partial, **kwargs):
@@ -790,7 +809,6 @@ class SMatrix(AbstractSMatrix):
                           energy=self.energy,
                           extent=self.extent,
                           ensemble_axes_metadata=ensemble_axes_metadata + self.base_axes_metadata[:1])
-
         else:
             waves = self._build_s_matrix()
 
@@ -833,10 +851,10 @@ class SMatrix(AbstractSMatrix):
         if scan is None:
             scan = GridScan()
 
-        return self.build(max_batch=multislice_max_batch, lazy=lazy).reduce(scan=scan,
-                                                                            detectors=detectors,
-                                                                            reduction_max_batch=reduction_max_batch,
-                                                                            ctf=ctf)
+        return self.build(max_batch=multislice_max_batch, lazy=lazy).scan(scan=scan,
+                                                                          detectors=detectors,
+                                                                          reduction_max_batch=reduction_max_batch,
+                                                                          ctf=ctf)
 
     def reduce(self,
                scan: Union[np.ndarray, AbstractScan] = None,

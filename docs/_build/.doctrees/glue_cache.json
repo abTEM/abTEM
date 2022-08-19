@@ -1,0 +1,74 @@
+{
+  "user_guide/examples/notebooks/cbed_quickstart": {
+    "cbed_quickstart": {
+      "data": {
+        "application/papermill.record/image/png": null,
+        "application/papermill.record/text/plain": "<Figure size 288x288 with 2 Axes>"
+      },
+      "metadata": {
+        "scrapbook": {
+          "mime_prefix": "application/papermill.record/",
+          "name": "cbed_quickstart"
+        },
+        "filenames": {
+          "image/png": "/Users/jacobmadsen/PycharmProjects/abTEM_dask/docs/_build/jupyter_execute/user_guide/examples/notebooks/cbed_quickstart_9_0.png"
+        }
+      },
+      "output_type": "display_data"
+    }
+  },
+  "user_guide/examples/notebooks/hbn_dft_iam": {
+    "hbn_dft_iam": {
+      "data": {
+        "application/papermill.record/image/png": null,
+        "application/papermill.record/text/plain": "<Figure size 288x288 with 2 Axes>"
+      },
+      "metadata": {
+        "scrapbook": {
+          "mime_prefix": "application/papermill.record/",
+          "name": "hbn_dft_iam"
+        },
+        "filenames": {
+          "image/png": "/Users/jacobmadsen/PycharmProjects/abTEM_dask/docs/_build/jupyter_execute/user_guide/examples/notebooks/hbn_dft_iam_12_0.png"
+        }
+      },
+      "output_type": "display_data"
+    }
+  },
+  "user_guide/examples/notebooks/hrtem_quickstart": {
+    "hrtem_quickstart": {
+      "data": {
+        "application/papermill.record/image/png": null,
+        "application/papermill.record/text/plain": "<Figure size 288x288 with 2 Axes>"
+      },
+      "metadata": {
+        "scrapbook": {
+          "mime_prefix": "application/papermill.record/",
+          "name": "hrtem_quickstart"
+        },
+        "filenames": {
+          "image/png": "/Users/jacobmadsen/PycharmProjects/abTEM_dask/docs/_build/jupyter_execute/user_guide/examples/notebooks/hrtem_quickstart_8_0.png"
+        }
+      },
+      "output_type": "display_data"
+    }
+  },
+  "user_guide/examples/notebooks/prism_quickstart": {
+    "prism_quickstart": {
+      "data": {
+        "application/papermill.record/image/png": null,
+        "application/papermill.record/text/plain": "<Figure size 288x288 with 2 Axes>"
+      },
+      "metadata": {
+        "scrapbook": {
+          "mime_prefix": "application/papermill.record/",
+          "name": "prism_quickstart"
+        },
+        "filenames": {
+          "image/png": "/Users/jacobmadsen/PycharmProjects/abTEM_dask/docs/_build/jupyter_execute/user_guide/examples/notebooks/prism_quickstart_11_0.png"
+        }
+      },
+      "output_type": "display_data"
+    }
+  }
+}
