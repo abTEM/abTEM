@@ -282,7 +282,7 @@ class HasParameters(Ensemble):
         return ensemble_parameters
 
 
-class BaseAperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
+class AbstractAperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
 
     def __init__(self, semiangle_cutoff: float, energy: float, parameters=None, units=None, *args, **kwargs):
         self._semiangle_cutoff = semiangle_cutoff
@@ -315,7 +315,7 @@ class BaseAperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
         return self.evaluate_with_alpha_and_phi(alpha, phi)
 
 
-class Aperture(BaseAperture):
+class Aperture(AbstractAperture):
 
     def __init__(self,
                  semiangle_cutoff: Union[float, Distribution],
