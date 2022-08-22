@@ -956,8 +956,7 @@ class Probe(WavesBuilder):
         self._accelerator = Accelerator(energy=energy)
 
         if aperture is None:
-            aperture = Aperture(semiangle_cutoff=semiangle_cutoff,
-                                taper=taper, normalize=True)
+            aperture = Aperture(semiangle_cutoff=semiangle_cutoff, taper=taper)
 
         aperture._accelerator = self._accelerator
 
@@ -984,6 +983,8 @@ class Probe(WavesBuilder):
         transforms = extra_transforms + [self.aperture, self.aberrations]
 
         super().__init__(transforms=transforms)
+
+        self.accelerator.match(self.aperture)
 
     @classmethod
     def from_ctf(cls, ctf, **kwargs):

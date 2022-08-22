@@ -192,24 +192,30 @@ class CompositeWaveTransform(WaveTransform):
 
 
 class HasParameters(Ensemble):
+    _parameters: dict
+    _units: dict
 
-    @abstractmethod
     def __init__(self, *args, **kwargs):
-        pass
+        super().__init__(*args, **kwargs)
 
     @property
-    @abstractmethod
     def parameters(self):
-        pass
+        return self._parameters
 
     @property
     def ensemble_axes_metadata(self):
         axes_metadata = []
         for parameter_name, parameter in self.ensemble_parameters.items():
-            axes_metadata += [ParameterAxis(label=parameter_name,
-                                            values=tuple(parameter.values),
-                                            units='Å',
-                                            _ensemble_mean=parameter.ensemble_mean)]
+            try:
+                axes_metadata += [ParameterAxis(label=parameter_name,
+                                                values=tuple(parameter.values),
+                                                units=self._units[parameter_name],
+                                                _ensemble_mean=parameter.ensemble_mean)]
+            except (KeyError, AttributeError):
+                axes_metadata += [ParameterAxis(label=parameter_name,
+                                                values=tuple(parameter.values),
+                                                units='unknown',
+                                                _ensemble_mean=parameter.ensemble_mean)]
         return axes_metadata
 
     @property
@@ -276,18 +282,51 @@ class HasParameters(Ensemble):
         return ensemble_parameters
 
 
-class Aperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
+class BaseAperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
+
+    def __init__(self, semiangle_cutoff: float, energy: float, parameters=None, units=None, *args, **kwargs):
+        self._semiangle_cutoff = semiangle_cutoff
+        self._accelerator = Accelerator(energy=energy)
+
+        parameters = {} if parameters is None else parameters
+        units = {} if units is None else units
+
+        self._parameters = parameters
+        self._units = units
+        super().__init__(*args, **kwargs)
+
+    @property
+    def semiangle_cutoff(self):
+        return self._semiangle_cutoff
+
+    @property
+    def nyquist_sampling(self) -> float:
+        return 1 / (4 * self.semiangle_cutoff / self.wavelength * 1e-3)
+
+    def evaluate(self, waves):
+        self.accelerator.match(waves)
+        waves.grid.check_is_defined()
+        alpha, phi = self._polar_spatial_frequencies_from_waves(waves)
+        return self.evaluate_with_alpha_and_phi(alpha, phi)
+
+
+class Aperture(BaseAperture):
 
     def __init__(self,
                  semiangle_cutoff: Union[float, Distribution],
                  energy: float = None,
-                 taper: float = 0.,
-                 normalize: bool = True):
+                 taper: float = 0.):
 
         self._taper = taper
-        self._normalize = normalize
         self._accelerator = Accelerator(energy=energy)
-        self._parameters = {'semiangle_cutoff': semiangle_cutoff}
+
+        parameters = {'semiangle_cutoff': semiangle_cutoff}
+        units = {'semiangle_cutoff': 'mrad'}
+
+        if isinstance(semiangle_cutoff, Distribution):
+            semiangle_cutoff = np.max(semiangle_cutoff.values)
+
+        super().__init__(energy=energy, semiangle_cutoff=semiangle_cutoff, parameters=parameters, units=units)
 
     @property
     def metadata(self):
@@ -295,26 +334,6 @@ class Aperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
         if not 'semiangle_cutoff' in self.ensemble_parameters:
             metadata['semiangle_cutoff'] = self.semiangle_cutoff
         return metadata
-
-    @property
-    def normalize(self):
-        return self._normalize
-
-    @property
-    def parameters(self):
-        return self._parameters
-
-    @property
-    def nyquist_sampling(self) -> float:
-        return 1 / (4 * self.semiangle_cutoff / self.wavelength * 1e-3)
-
-    @property
-    def semiangle_cutoff(self):
-        return self._parameters['semiangle_cutoff']
-
-    @semiangle_cutoff.setter
-    def semiangle_cutoff(self, value):
-        self._parameters['semiangle_cutoff'] = value
 
     @property
     def taper(self):
@@ -344,12 +363,6 @@ class Aperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
 
         return array
 
-    def evaluate(self, waves):
-        self.accelerator.match(waves)
-        waves.grid.check_is_defined()
-        alpha, phi = self._polar_spatial_frequencies_from_waves(waves)
-        return self.evaluate_with_alpha_and_phi(alpha, phi)
-
 
 class TemporalEnvelope(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
 
@@ -360,14 +373,12 @@ class TemporalEnvelope(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
         self._normalize = normalize
         self._accelerator = Accelerator(energy=energy)
         self._parameters = {'focal_spread': focal_spread}
+        self._units = {'focal_spread': 'mrad'}
+        super().__init__()
 
     @property
     def normalize(self):
         return self._normalize
-
-    @property
-    def parameters(self):
-        return self._parameters
 
     @property
     def focal_spread(self):
@@ -421,6 +432,8 @@ class SpatialEnvelope(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
 
         self._aberrations = aberrations
         self._aberrations._accelerator = self._accelerator
+        self._units = {'angular_spread': 'mrad'}
+        super().__init__()
 
     @property
     def aberrations(self):
@@ -523,14 +536,17 @@ class Aberrations(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
 
             return property(getter, setter)
 
+        self._units = {}
         for symbol in polar_symbols:
             setattr(self.__class__, symbol, parametrization_property(symbol))
+            self._units[symbol] = 'Å'
 
         for key, value in polar_aliases.items():
             if key != 'defocus':
                 setattr(self.__class__, key, parametrization_property(value))
 
         self._accelerator = Accelerator(energy=energy)
+        super().__init__()
 
     @property
     def parameters(self) -> Dict[str, Union[float, Distribution]]:

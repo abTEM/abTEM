@@ -3,7 +3,7 @@ from typing import Tuple
 
 try:
     import pyfftw
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ImportError):
     pyfftw = None
 
 import dask.array as da

@@ -229,7 +229,7 @@ def test_to_cpu(data, has_array, destination, lazy, device):
 ])
 def test_stacks_with_self(data, has_array, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
-    stacked = stack((has_array, has_array), axes_metadata=OrdinalAxis(values=(1, 1)), axis=0)
+    stacked = stack((has_array, has_array), axis_metadata=OrdinalAxis(values=(1, 1)), axis=0)
     stacked.compute()
     has_array._metadata = stacked[1].metadata
     assert stacked[0] == stacked[1] == has_array

@@ -42,7 +42,7 @@ def aperture(draw, allow_distribution=True):
     normalize = draw(st.booleans())
     energy = draw(core_st.energy())
     taper = draw(st.floats(min_value=0., max_value=1.))
-    return Aperture(semiangle_cutoff=semiangle_cutoff, energy=energy, taper=taper, normalize=normalize)
+    return Aperture(semiangle_cutoff=semiangle_cutoff, energy=energy, taper=taper)
 
 
 @st.composite
