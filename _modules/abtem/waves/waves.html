@@ -700,7 +700,7 @@ title="Open an issue"
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span><span class="o">**</span><span class="n">d</span><span class="p">)</span>
 
     <span class="k">def</span> <span class="nf">phase_shift</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">shift</span><span class="p">):</span>
-        <span class="sd">&quot;&quot;&quot; </span>
+        <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Shift the phase of the wave functions by</span>
 
 <span class="sd">        Parameters</span>
@@ -1403,8 +1403,7 @@ title="Open an issue"
         <span class="bp">self</span><span class="o">.</span><span class="n">_accelerator</span> <span class="o">=</span> <span class="n">Accelerator</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="n">energy</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="n">aperture</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="n">aperture</span> <span class="o">=</span> <span class="n">Aperture</span><span class="p">(</span><span class="n">semiangle_cutoff</span><span class="o">=</span><span class="n">semiangle_cutoff</span><span class="p">,</span>
-                                <span class="n">taper</span><span class="o">=</span><span class="n">taper</span><span class="p">,</span> <span class="n">normalize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="n">aperture</span> <span class="o">=</span> <span class="n">Aperture</span><span class="p">(</span><span class="n">semiangle_cutoff</span><span class="o">=</span><span class="n">semiangle_cutoff</span><span class="p">,</span> <span class="n">taper</span><span class="o">=</span><span class="n">taper</span><span class="p">)</span>
 
         <span class="n">aperture</span><span class="o">.</span><span class="n">_accelerator</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_accelerator</span>
 
@@ -1430,7 +1429,9 @@ title="Open an issue"
 
         <span class="n">transforms</span> <span class="o">=</span> <span class="n">extra_transforms</span> <span class="o">+</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">aperture</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">aberrations</span><span class="p">]</span>
 
-        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">transforms</span><span class="o">=</span><span class="n">transforms</span><span class="p">)</span></div>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">transforms</span><span class="o">=</span><span class="n">transforms</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">accelerator</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">aperture</span><span class="p">)</span></div>
 
     <span class="nd">@classmethod</span>
     <span class="k">def</span> <span class="nf">from_ctf</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">ctf</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>

@@ -49,17 +49,13 @@ and `remove-cell` to hide the cell from the documentation rendition of the examp
 ## Contributing to the documentation
 
 The documentation exists in two places, under `/docs` in the form of markdown files and Jupyter notebooks and as
-docstrings in the library which become the auto-generated API reference. 
+docstrings in the library which become the auto-generated API reference.
 
-For minor corrections you may simply modify the 
+The documentation is build using [`jupyter-book`](https://jupyterbook.org/en/stable/intro.html). To generate the docs
+from the source navigating to the `/docs` folder and running `jb build .` at the command line. The built site will be
+available in your `_build\html` folder.
 
-
-is build using [`jupyter-book`](https://jupyterbook.org/en/stable/intro.html).
-
-
-Editing of the documentation happens in one of four places:
-
-*
+The online documentation is automatically updated when the source is updated. 
 
 ## Getting started with the codebase
 
