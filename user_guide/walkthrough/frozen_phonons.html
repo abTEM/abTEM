@@ -587,12 +587,6 @@ title="Print to PDF"
 <span class="kn">from</span> <span class="nn">ase.build</span> <span class="kn">import</span> <span class="n">mx2</span>
 
 <span class="kn">import</span> <span class="nn">abtem</span>
-<span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s1">&#39;fft&#39;</span><span class="p">:</span><span class="s1">&#39;fftw&#39;</span><span class="p">})</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;dask.config.set at 0x7fb39641cfa0&gt;
 </pre></div>
 </div>
 </div>
@@ -656,11 +650,6 @@ title="Print to PDF"
 </pre></div>
 </div>
 </div>
-<div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(0.038526660156249996, 0.038526660156249996)
-</pre></div>
-</div>
-</div>
 </div>
 <p>If the potential is <code class="docutils literal notranslate"><span class="pre">build</span></code> the resulting <code class="docutils literal notranslate"><span class="pre">PotentialArray</span></code> is represented by a 4d array.</p>
 <div class="cell docutils container">
@@ -670,7 +659,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.potentials.potentials.PotentialArray object at 0x7fb399ff3c90&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.potentials.potentials.PotentialArray object at 0x7f8fcd8fc6e0&gt;
 ---------------------------------------------------------------------
 
 type               label           coordinates
@@ -699,8 +688,8 @@ chunks  99.00 MiB  (1, 99, 512, 512)   10 chunks  numpy.ndarray
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 11.8s
-[########################################] | 100% Completed |  2.8s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 27.5s
+[########################################] | 100% Completed |  2.3s
 </pre></div>
 </div>
 </div>
@@ -713,7 +702,7 @@ chunks  99.00 MiB  (1, 99, 512, 512)   10 chunks  numpy.ndarray
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.waves.Waves object at 0x7fb397efb6e0&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.waves.Waves object at 0x7f8fce08b9f0&gt;
 --------------------------------------------------
 
 type               label           coordinates
@@ -754,7 +743,7 @@ chunks  -          -               - chunks  numpy.ndarray
     <span class="n">exit_waves_elastic</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="s1">&#39;valid&#39;</span><span class="p">),</span>
     <span class="n">exit_waves_phonons</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="s1">&#39;valid&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span>
 <span class="p">],</span>
-    <span class="p">(</span><span class="s1">&#39;phonons&#39;</span><span class="p">,</span> <span class="s1">&#39;elastic&#39;</span><span class="p">)</span>
+    <span class="p">(</span><span class="s1">&#39;elastic&#39;</span><span class="p">,</span> <span class="s1">&#39;phonons&#39;</span><span class="p">)</span>
 <span class="p">)</span>
 
 <span class="n">diffraction_patterns</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> 
@@ -801,7 +790,7 @@ chunks  -          -               - chunks  numpy.ndarray
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  1min 23.1s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  3min 12.4s
 </pre></div>
 </div>
 </div>

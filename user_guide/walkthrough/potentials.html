@@ -730,13 +730,15 @@ title="Print to PDF"
 <p>Here, we create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> representing SrTiO<sub>3</sub> which represents a sliced IAM potential using a given parametrization. The parameter <code class="docutils literal notranslate"><span class="pre">sampling</span></code> denotes the spacing of the <span class="math notranslate nohighlight">\(xy\)</span>-samples of the potential, <code class="docutils literal notranslate"><span class="pre">parametrization</span></code> specifies the potential parametrization as described above, <code class="docutils literal notranslate"><span class="pre">slice_thickness</span></code> denotes the spacing</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">sto_lto_interface</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="s1">&#39;./data/STO_LTO.cif&#39;</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">sto_lto_interface</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="s2">&quot;./data/STO_LTO.cif&quot;</span><span class="p">)</span>
 
-<span class="n">potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">sto_lto_interface</span><span class="p">,</span>
-                            <span class="n">sampling</span> <span class="o">=</span> <span class="mf">.05</span><span class="p">,</span>
-                            <span class="n">parametrization</span> <span class="o">=</span> <span class="s1">&#39;lobato&#39;</span><span class="p">,</span>
-                            <span class="n">slice_thickness</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
-                            <span class="n">projection</span> <span class="o">=</span> <span class="s1">&#39;finite&#39;</span><span class="p">)</span>
+<span class="n">potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span>
+    <span class="n">sto_lto_interface</span><span class="p">,</span>
+    <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span>
+    <span class="n">parametrization</span><span class="o">=</span><span class="s2">&quot;lobato&quot;</span><span class="p">,</span>
+    <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+    <span class="n">projection</span><span class="o">=</span><span class="s2">&quot;finite&quot;</span><span class="p">,</span>
+<span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -769,9 +771,9 @@ title="Print to PDF"
 </div>
 </div>
 <p>The <code class="docutils literal notranslate"><span class="pre">Potential</span></code> may be indexed to return a subset of slices. Below we select the first 5 slices and show them all by setting <code class="docutils literal notranslate"><span class="pre">explode=True</span></code>.</p>
-<div class="cell tag_full-width docutils container">
+<div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential</span><span class="p">[:</span><span class="mi">5</span><span class="p">]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">image_grid_kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;axes_pad&#39;</span><span class="p">:</span> <span class="mf">.05</span><span class="p">});</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential</span><span class="p">[:</span><span class="mi">5</span><span class="p">]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">});</span>
 </pre></div>
 </div>
 </div>
@@ -807,53 +809,53 @@ title="Print to PDF"
     <tr><td> </td><th> Array </th><th> Chunk </th></tr>
   </thead>
   <tbody>
-    <tr><th> Bytes </th><td> 15.49 MiB </td> <td> 15.49 MiB </td></tr>
-    <tr><th> Shape </th><td> (23, 447, 395) </td> <td> (23, 447, 395) </td></tr>
+    <tr><th> Bytes </th><td> 9.32 MiB </td> <td> 9.32 MiB </td></tr>
+    <tr><th> Shape </th><td> (23, 224, 474) </td> <td> (23, 224, 474) </td></tr>
     <tr><th> Count </th><td> 4 Tasks </td><td> 1 Chunks </td></tr>
     <tr><th> Type </th><td> float32 </td><td> numpy.ndarray </td></tr>
   </tbody>
 </table>
 </td>
 <td>
-<svg width="186" height="190" style="stroke:rgb(0,0,0);stroke-width:1" >
+<svg width="200" height="126" style="stroke:rgb(0,0,0);stroke-width:1" >
 
   <!-- Horizontal lines -->
   <line x1="10" y1="0" x2="30" y2="20" style="stroke-width:2" />
-  <line x1="10" y1="120" x2="30" y2="140" style="stroke-width:2" />
+  <line x1="10" y1="56" x2="30" y2="76" style="stroke-width:2" />
 
   <!-- Vertical lines -->
-  <line x1="10" y1="0" x2="10" y2="120" style="stroke-width:2" />
-  <line x1="30" y1="20" x2="30" y2="140" style="stroke-width:2" />
+  <line x1="10" y1="0" x2="10" y2="56" style="stroke-width:2" />
+  <line x1="30" y1="20" x2="30" y2="76" style="stroke-width:2" />
 
   <!-- Colored Rectangle -->
-  <polygon points="10.0,0.0 30.39792571260327,20.39792571260327 30.39792571260327,140.39792571260327 10.0,120.0" style="fill:#ECB172A0;stroke-width:0"/>
+  <polygon points="10.0,0.0 30.186690710066642,20.186690710066642 30.186690710066642,76.89555146956032 10.0,56.708860759493675" style="fill:#ECB172A0;stroke-width:0"/>
 
   <!-- Horizontal lines -->
-  <line x1="10" y1="0" x2="116" y2="0" style="stroke-width:2" />
-  <line x1="30" y1="20" x2="136" y2="20" style="stroke-width:2" />
+  <line x1="10" y1="0" x2="130" y2="0" style="stroke-width:2" />
+  <line x1="30" y1="20" x2="150" y2="20" style="stroke-width:2" />
 
   <!-- Vertical lines -->
   <line x1="10" y1="0" x2="30" y2="20" style="stroke-width:2" />
-  <line x1="116" y1="0" x2="136" y2="20" style="stroke-width:2" />
+  <line x1="130" y1="0" x2="150" y2="20" style="stroke-width:2" />
 
   <!-- Colored Rectangle -->
-  <polygon points="10.0,0.0 116.04026845637584,0.0 136.43819416897912,20.39792571260327 30.39792571260327,20.39792571260327" style="fill:#ECB172A0;stroke-width:0"/>
+  <polygon points="10.0,0.0 130.0,0.0 150.18669071006664,20.186690710066642 30.186690710066642,20.186690710066642" style="fill:#ECB172A0;stroke-width:0"/>
 
   <!-- Horizontal lines -->
-  <line x1="30" y1="20" x2="136" y2="20" style="stroke-width:2" />
-  <line x1="30" y1="140" x2="136" y2="140" style="stroke-width:2" />
+  <line x1="30" y1="20" x2="150" y2="20" style="stroke-width:2" />
+  <line x1="30" y1="76" x2="150" y2="76" style="stroke-width:2" />
 
   <!-- Vertical lines -->
-  <line x1="30" y1="20" x2="30" y2="140" style="stroke-width:2" />
-  <line x1="136" y1="20" x2="136" y2="140" style="stroke-width:2" />
+  <line x1="30" y1="20" x2="30" y2="76" style="stroke-width:2" />
+  <line x1="150" y1="20" x2="150" y2="76" style="stroke-width:2" />
 
   <!-- Colored Rectangle -->
-  <polygon points="30.39792571260327,20.39792571260327 136.43819416897912,20.39792571260327 136.43819416897912,140.39792571260327 30.39792571260327,140.39792571260327" style="fill:#ECB172A0;stroke-width:0"/>
+  <polygon points="30.186690710066642,20.186690710066642 150.18669071006664,20.186690710066642 150.18669071006664,76.89555146956032 30.186690710066642,76.89555146956032" style="fill:#ECB172A0;stroke-width:0"/>
 
   <!-- Text -->
-  <text x="83.418060" y="160.397926" font-size="1.0rem" font-weight="100" text-anchor="middle" >395</text>
-  <text x="156.438194" y="80.397926" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(-90,156.438194,80.397926)">447</text>
-  <text x="10.198963" y="150.198963" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(45,10.198963,150.198963)">23</text>
+  <text x="90.186691" y="96.895551" font-size="1.0rem" font-weight="100" text-anchor="middle" >474</text>
+  <text x="170.186691" y="48.541121" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(-90,170.186691,48.541121)">224</text>
+  <text x="10.093345" y="86.802206" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(45,10.093345,86.802206)">23</text>
 </svg>
 </td>
 </tr>
@@ -869,7 +871,19 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.potentials.potentials.PotentialArray at 0x7fd4e52f0880&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.potentials.potentials.PotentialArray object at 0x7fa9839d1a40&gt;
+---------------------------------------------------------------------
+
+type           label    coordinates
+-------------  -------  -------------------
+ThicknessAxis  z [Å]    0.97 1.94 ... 22.32
+RealSpaceAxis  x [Å]    0.00 0.05 ... 11.11
+RealSpaceAxis  y [Å]    0.00 0.05 ... 23.62
+
+        bytes     shape           count     type
+------  --------  --------------  --------  -------------
+array   9.32 MiB  (23, 224, 474)  2 tasks   float32
+chunks  9.32 MiB  (23, 224, 474)  1 chunks  numpy.ndarray
 </pre></div>
 </div>
 </div>
@@ -895,15 +909,19 @@ V_{proj}^{(i)}(x, y) = \int_{z_i}^{z_i+\Delta z} V(x,y,z) dz \quad ,
 \[ \int_{-\infty}^{\infty} V(x,y,z) dz \approx \int_{z_i}^{z_i+\Delta z} V(x,y,z) dz \]</div>
 <p>The infinite projection of the atomic potential for each atom is assigned to a single slice. The implementation uses the hybrid real-space/Fourier-space approach by W. van den Broek et. al. (<a class="reference external" href="https://doi.org/10.1016/j.ultramic.2015.07.005">https://doi.org/10.1016/j.ultramic.2015.07.005</a>). Using infinite projections can be <em>much</em> faster, especially for potentials with a large numbers of atoms. The error introduced by using infinite integrals is negligible compared to other sources of error in most cases.</p>
 <p>Below we create the same SrTiO3 potential as above with infinite projections.</p>
-<div class="cell tag_full-width docutils container">
+<div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_infinite</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">sto_lto_interface</span><span class="p">,</span> 
-                                     <span class="n">sampling</span> <span class="o">=</span> <span class="mf">.05</span><span class="p">,</span> 
-                                     <span class="n">parametrization</span> <span class="o">=</span> <span class="s1">&#39;lobato&#39;</span><span class="p">,</span> 
-                                     <span class="n">slice_thickness</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
-                                     <span class="n">projection</span> <span class="o">=</span> <span class="s1">&#39;infinite&#39;</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_infinite</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span>
+    <span class="n">sto_lto_interface</span><span class="p">,</span>
+    <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span>
+    <span class="n">parametrization</span><span class="o">=</span><span class="s2">&quot;lobato&quot;</span><span class="p">,</span>
+    <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+    <span class="n">projection</span><span class="o">=</span><span class="s2">&quot;infinite&quot;</span><span class="p">,</span>
+<span class="p">)</span>
 
-<span class="n">potential_infinite</span><span class="p">[:</span><span class="mi">5</span><span class="p">]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">image_grid_kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;axes_pad&#39;</span><span class="p">:</span> <span class="mf">.05</span><span class="p">});</span>
+<span class="n">potential_infinite</span><span class="p">[:</span><span class="mi">5</span><span class="p">]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">}</span>
+<span class="p">);</span>
 </pre></div>
 </div>
 </div>
@@ -1004,8 +1022,8 @@ V_{proj}^{(i)}(x, y) = \int_{z_i}^{z_i+\Delta z} V(x,y,z) dz \quad ,
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>CPU times: user 1.07 s, sys: 121 ms, total: 1.2 s
-Wall time: 621 ms
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>CPU times: user 1.06 s, sys: 108 ms, total: 1.16 s
+Wall time: 582 ms
 </pre></div>
 </div>
 </div>

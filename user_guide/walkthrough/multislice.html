@@ -593,11 +593,14 @@ title="Print to PDF"
                 
   <div class="cell tag_hide-input docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">ase.io</span> <span class="kn">import</span> <span class="n">read</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="o">%</span><span class="k">matplotlib</span> inline
+
+<span class="kn">from</span> <span class="nn">ase.io</span> <span class="kn">import</span> <span class="n">read</span>
 <span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 <span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 
 <span class="kn">import</span> <span class="nn">abtem</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s1">&#39;local_diagnostics.progress_bar&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">});</span>
 </pre></div>
 </div>
 </div>
@@ -611,7 +614,7 @@ One forward step through a slice of the potential consists of a transmission and
 <p>Below we create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> and a <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code>:</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="s1">&#39;./data/STO_LTO.cif&#39;</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="s1">&#39;./data/STO_LTO.cif&#39;</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
 
 <span class="n">potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">.05</span><span class="p">)</span>
 
@@ -632,11 +635,6 @@ One forward step through a slice of the potential consists of a transmission and
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">pw_exit_wave</span><span class="o">.</span><span class="n">compute</span><span class="p">();</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  0.3s
 </pre></div>
 </div>
 </div>
@@ -719,11 +717,6 @@ One forward step through a slice of the potential consists of a transmission and
 </pre></div>
 </div>
 </div>
-<div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  0.7s
-</pre></div>
-</div>
-</div>
 </div>
 <p>The convergent-beam electron diffraction (CBED) pattern can be calculated in the same manner as the ED pattern. We again display the result on a log scale. Note that to get more useful results, we should go back and increase our sampling of the potential.</p>
 <div class="cell tag_full-width docutils container">
@@ -762,27 +755,22 @@ One forward step through a slice of the potential consists of a transmission and
 </pre></div>
 </div>
 </div>
-<div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  0.4s
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_patterns_thickness</span> <span class="o">=</span> <span class="n">exit_waves_thickness</span><span class="p">[::</span><span class="mi">3</span><span class="p">]</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span><span class="o">.</span><span class="n">block_direct</span><span class="p">()</span>
 </pre></div>
 </div>
 </div>
 </div>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_patterns_thickness</span> <span class="o">=</span> <span class="n">exit_waves</span><span class="p">[::</span><span class="mi">3</span><span class="p">]</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span><span class="o">.</span><span class="n">block_direct</span><span class="p">()</span>
-</pre></div>
-</div>
-</div>
-</div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_patterns</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> 
-                          <span class="n">figsize</span> <span class="o">=</span> <span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
-                          <span class="n">common_color_scale</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-                          <span class="n">cbar</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-                          <span class="n">image_grid_kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;axes_pad&#39;</span><span class="p">:</span> <span class="mf">.05</span><span class="p">},</span>
-                          <span class="p">);</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_patterns_thickness</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> 
+                                      <span class="n">figsize</span> <span class="o">=</span> <span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+                                      <span class="n">common_color_scale</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+                                      <span class="n">cbar</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+                                      <span class="n">image_grid_kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;axes_pad&#39;</span><span class="p">:</span> <span class="mf">.05</span><span class="p">},</span>
+                                      <span class="p">);</span>
 </pre></div>
 </div>
 </div>
