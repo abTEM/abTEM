@@ -1,0 +1,12 @@
+*.pyc
+.project
+.pydevproject
+*.swp
+*.ipynb_checkpoints*
+
+# Folders #
+.idea/
+__pycache__/
+*.egg-info/
+build/
+dist/
