@@ -299,6 +299,11 @@ class BaseAperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
     def semiangle_cutoff(self):
         return self._semiangle_cutoff
 
+    @semiangle_cutoff.setter
+    def semiangle_cutoff(self, value):
+        self._parameters['semiangle_cutoff'] = value
+        self._semiangle_cutoff = value
+
     @property
     def nyquist_sampling(self) -> float:
         return 1 / (4 * self.semiangle_cutoff / self.wavelength * 1e-3)
@@ -709,6 +714,8 @@ class CTF(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
         temporal_envelope = TemporalEnvelope(focal_spread=focal_spread)
 
         self._set_parts(aberrations, aperture, temporal_envelope, spatial_envelope)
+
+        super().__init__()
 
     def _set_parts(self, aberrations, aperture, temporal_envelope, spatial_envelope):
         self._aberrations = aberrations
