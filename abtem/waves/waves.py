@@ -271,6 +271,28 @@ class Waves(HasArray, WavesLikeMixin):
 
         return self.__class__(array=arr, **kwargs)
 
+    def as_complex_image(self):
+        """
+        Calculate the the wave function as a complex measurement.
+
+        Returns
+        -------
+        intensity_images : Images
+            The wave function intensity.
+        """
+
+        array = self.array
+
+        metadata = copy(self.metadata)
+
+        metadata['label'] = 'intensity'
+        metadata['units'] = 'arb. unit'
+
+        return Images(array,
+                      sampling=self.sampling,
+                      ensemble_axes_metadata=self.ensemble_axes_metadata,
+                      metadata=metadata)
+
     def intensity(self) -> Images:
         """
         Calculate the intensity of the wave functions at the image plane.
