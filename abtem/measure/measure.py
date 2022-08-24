@@ -1146,6 +1146,7 @@ class FourierSpaceLineProfiles(AbstractMeasurement1d):
              ax: Axes = None,
              x_label=None,
              y_label=None,
+             title=None,
              units: str = 'reciprocal'):
 
         if units in angular_units:
@@ -1158,7 +1159,7 @@ class FourierSpaceLineProfiles(AbstractMeasurement1d):
         else:
             raise RuntimeError()
 
-        return show_measurements_1d(self, x_label=x_label, extent=extent, ax=ax)
+        return show_measurements_1d(self, x_label=x_label, extent=extent, title=title, ax=ax)
 
 
 def integrate_gradient_2d(gradient, sampling):
@@ -1927,10 +1928,10 @@ class DiffractionPatterns(AbstractMeasurement):
         units : bool, optional
         cmap : str, optional
         explode : bool, optional
-            If True, a grid of images are created for all the items of the last two ensemble axes. If False, the first
+            If True, a grid of images is created for all the items of the last two ensemble axes. If False, the first
             ensemble item is shown.
-        ax : matplotlib.axes.Axes, optional
-            If given the plots are added to the axis. This is not available for image grids.
+        ax : matplotlib Axes, optional
+            If given the plots are added to the Axes. This is not available for image grids.
         figsize : two int, optional
             The figure size given as width and height in inches, passed to matplotlib.pyplot.figure.
         title : bool or str, optional
@@ -1944,10 +1945,10 @@ class DiffractionPatterns(AbstractMeasurement):
         y_ticks : bool or list, optional
             If False, the ticks on the y-axis will be removed.
         x_label : bool or str, optional
-            Add label to the x-axis of every plot. If True (default) the label will created from the corresponding axis
+            Add label to the x-axis of every plot. If True (default) the label will be created from the corresponding axis
             metadata. A string may be given to override this.
         y_label : bool or str, optional
-            Add label to the x-axis of every plot. If True (default) the label will created from the corresponding axis
+            Add label to the x-axis of every plot. If True (default) the label will be created from the corresponding axis
             metadata. A string may be given to override this.
         row_super_label : bool or str, optional
             Add super label to the rows of an image grid. If True the label will be created from the corresponding axis
@@ -1983,7 +1984,7 @@ class DiffractionPatterns(AbstractMeasurement):
 
         Returns
         -------
-        matplotlib.axes.Axes
+        matplotlib Axes
         """
 
         if not explode:

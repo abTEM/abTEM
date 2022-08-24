@@ -282,7 +282,7 @@ class HasParameters(Ensemble):
         return ensemble_parameters
 
 
-class BaseAperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
+class AbstractAperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
 
     def __init__(self, semiangle_cutoff: float, energy: float, parameters=None, units=None, *args, **kwargs):
         self._semiangle_cutoff = semiangle_cutoff
@@ -315,12 +315,23 @@ class BaseAperture(HasParameters, ArrayWaveTransform, HasAcceleratorMixin):
         return self.evaluate_with_alpha_and_phi(alpha, phi)
 
 
-class Aperture(BaseAperture):
+class Aperture(AbstractAperture):
 
     def __init__(self,
                  semiangle_cutoff: Union[float, Distribution],
                  energy: float = None,
                  taper: float = 0.):
+        """
+        The typical circular aperture cutting off the wave function at a specified angle, employed in both STEM and
+        HRTEM. The hard cutoff may be softened using a taper.
+
+        Parameters
+        ----------
+        semiangle_cutoff : float
+
+        energy : float
+        taper : float
+        """
 
         self._taper = taper
         self._accelerator = Accelerator(energy=energy)
