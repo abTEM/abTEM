@@ -94,9 +94,9 @@ def _apply_displacement_field(image, distortion_x, distortion_y):
     image : ndarray
         Image array.
     distortion_x : ndarray
-        Displacement field along the x axis.
+        Displacement field along the x-axis.
     distortion_y : ndarray
-        Displacement field along the y axis.
+        Displacement field along the y-axis.
     """
 
     x = np.arange(0, image.shape[0])

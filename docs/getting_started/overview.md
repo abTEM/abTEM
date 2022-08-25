@@ -15,7 +15,7 @@ allows for a simple and intuitive user interface.
 The computationally demanding parts are implemented using jit-compiled
 Numba code and high-performance libraries, maintaining speed while ensuring portability.
 
-abTEM works with the Atomic Simulation Environment and the density functional theory code GPAW to provide an seamless
+abTEM works with the Atomic Simulation Environment and the density functional theory code GPAW to provide a seamless
 environment for simulating images from first principles.
 
 ### The abTEM object model

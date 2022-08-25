@@ -28,7 +28,7 @@
     <link rel="stylesheet" type="text/css" href="../../_static/sphinx-thebe.css" />
     <link rel="stylesheet" type="text/css" href="../../_static/design-style.b7bb847fb20b106c3d81b95245e65545.min.css" />
     
-  <!-- Pre-loaded scripts that we'll load fully later -->
+  <!-- Preloaded scripts that we'll load fully later -->
   <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
 
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
@@ -587,11 +587,11 @@ title="Print to PDF"
 <section class="tex2jax_ignore mathjax_ignore" id="frozen-phonons">
 <h1>Frozen phonons<a class="headerlink" href="#frozen-phonons" title="Permalink to this headline">#</a></h1>
 <p>The atoms in real materials are not stationary, they vibrate around their position in the crystal due to thermal and zero-point vibrations.</p>
-<p>Vibrational scattering scattering (or electron-phonon scattering) is responsible for features including diffuse backgrounds and Kikuchi lines as well as for a large part of the high-angle scattering measured in annular dark-field measurements.</p>
+<p>Vibrational scattering (or electron-phonon scattering) is responsible for features including diffuse backgrounds and Kikuchi lines as well as for a large part of the high-angle scattering measured in annular dark-field measurements.</p>
 <p>The frozen phonon approximation is a simple, if somewhat brute, approach to numerically simulate the effects of thermal vibrations. In the Frozen phonon approximation, the intensity is averaged over several frozen snapshots of the atomic model as it vibrates. Hence, each frozen phonon captures the atomic model with its atoms displaced by a different random offset.</p>
 <section id="kikuchi-lines-in-srtio-sub-3-sub">
 <h2>Kikuchi lines in SrTiO<sub>3</sub><a class="headerlink" href="#kikuchi-lines-in-srtio-sub-3-sub" title="Permalink to this headline">#</a></h2>
-<p>We simulate SrTiO<sub>3</sub>(100) with frozen phonons. In order to observe visible Kikuchi lines, the sample needs some thickness, hence the unit cell is repeated 80 times along the <span class="math notranslate nohighlight">\(z\)</span>-direction. We also need too repeat the atoms in <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span>, otherwise the structure is just a repetition of the same unit with displaced atoms.</p>
+<p>We simulate SrTiO<sub>3</sub>(100) with frozen phonons. In order to observe visible Kikuchi lines, the sample needs some thickness, hence the unit cell is repeated 80 times along the <span class="math notranslate nohighlight">\(z\)</span>-direction. We also need to repeat the atoms in <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span>, otherwise the structure is just a repetition of the same unit with displaced atoms.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="s1">&#39;data/srtio3.cif&#39;</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">50</span><span class="p">)</span>

@@ -35,9 +35,9 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
         focal_spread : float, optional
             The standard deviation of the gaussian focal spread assuming [Å].
         source_size : float, optional
-            The standard deviation of the of the 2d gaussian shaped electron source [Å].
+            The standard deviation of the 2d gaussian shaped electron source [Å].
         rectangular_offset : two float, optional
-            The standard deviation of the of the 2d gaussian shaped electron source [Å].
+            The standard deviation of the 2d gaussian shaped electron source [Å].
         eigenvectors : int, or tuple of int
             The subset of eigenvectors of the decomposed mixed coherence used to represent the electron probe. It is
             possible to parallelize over eigenvectors.

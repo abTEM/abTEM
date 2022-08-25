@@ -522,7 +522,7 @@ class SMatrix(AbstractSMatrix):
                 Downsample to the antialias cutoff scattering angle.
 
             ``valid`` :
-                Downsample to the largest rectangle inside the circle with a the radius defined by the antialias cutoff
+                Downsample to the largest rectangle inside the circle with a radius defined by the antialias cutoff
                 scattering angle.
 
             float :
