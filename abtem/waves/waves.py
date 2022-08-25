@@ -93,7 +93,7 @@ class Waves(HasArray, WavesLikeMixin):
     ----------
     array : array
         Complex array defining one or more 2d wave functions. The second-to-last and last dimensions are the wave
-        function y and x axis, respectively.
+        function y- and x-axis, respectively.
     energy : float
         Electron energy [eV].
     extent : one or two float
@@ -332,7 +332,7 @@ class Waves(HasArray, WavesLikeMixin):
                     Downsample to the antialias cutoff scattering angle.
 
                 ``valid`` :
-                    Downsample to the largest rectangle inside the circle with a the radius defined by the antialias
+                    Downsample to the largest rectangle inside the circle with a radius defined by the antialias
                     cutoff scattering angle.
 
                 float :
@@ -1224,7 +1224,7 @@ class Probe(WavesBuilder):
             A detector or a list of detectors defining how the wave functions should be converted to measurements after
             running the multislice algorithm. See abtem.measure.detect for a list of implemented detectors.
         chunks : int, optional
-            Specifices the number of wave functions in each chunk of a the created dask array. If None, the number
+            Specifices the number of wave functions in each chunk of the created dask array. If None, the number
             of chunks are automatically estimated based on the "dask.chunk-size" parameter in the configuration.
         lazy : boolean, optional
             If True, create the measurements lazily, otherwise, calculate instantly. If None, this defaults to the value

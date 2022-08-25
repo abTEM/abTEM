@@ -26,7 +26,7 @@ from abtem.potentials.integrals import ProjectionQuadratureRule, GaussianProject
 from abtem.potentials.parametrizations.base import Parametrization
 from abtem.potentials.temperature import AbstractFrozenPhonons, FrozenPhonons, DummyFrozenPhonons
 from abtem.structures.slicing import validate_slice_thickness, SliceIndexedAtoms, SlicedAtoms, unpack_item
-from abtem.structures.structures import is_cell_orthogonal, orthogonalize_cell, best_orthogonal_box, cut_box, \
+from abtem.structures.transform import is_cell_orthogonal, orthogonalize_cell, best_orthogonal_box, cut_box, \
     rotation_matrix_from_plane, pad_atoms
 
 if TYPE_CHECKING:
@@ -347,13 +347,13 @@ class Potential(PotentialBuilder):
         Default is 0.5 Å.
     parametrization : 'lobato' or 'kirkland', optional
         The potential parametrization describes the radial dependence of the potential for each element. Two of the
-        most accurate parametrizations are available by Lobato et. al. and Kirkland. The abTEM default is 'lobato'.
+        most accurate parametrizations are available by Lobato et al. and Kirkland. The abTEM default is 'lobato'.
         See the citation guide for references.
     projection : 'finite' or 'infinite', optional
         If 'finite' the 3d potential is numerically integrated between the slice boundaries. If 'infinite' the infinite
         potential projection of each atom will be assigned to a single slice. Default is 'infinite'.
     integral_method : {'quadrature', 'analytic'}, optional
-        Specifies whether to perform projection integrals in real space or Fourier space. By default finite projection
+        Specifies whether to perform projection integrals in real space or Fourier space. By default, finite projection
         integrals are computed in real space and infinite projection integrals are performed in Fourier space.
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
@@ -374,7 +374,7 @@ class Potential(PotentialBuilder):
         The default is (0., 0., 0.).
     box : three float, optional
         The extent of the potential in x, y and z. If not given this is determined from the Atoms. If the box size does
-        not match an integer number of the atoms supercell, an affine transformation may be necessary to preserve
+        not match an integer number of the atoms' supercell, an affine transformation may be necessary to preserve
         periodicity, determined by the `periodic` keyword.
     periodic : bool, True
         If a transformation of the atomic structure is required, `periodic` determines how the atomic structure is

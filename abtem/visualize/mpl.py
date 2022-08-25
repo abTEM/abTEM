@@ -64,6 +64,9 @@ def _plane2axes(plane):
     return axes + (last_axis[0],)
 
 
+def merge_columns(atoms: Atoms, tol: float = 1e-7) -> Atoms:
+    pass
+
 def show_atoms(
     atoms: Atoms,
     repeat: Tuple[int, int] = (1, 1),

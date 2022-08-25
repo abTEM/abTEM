@@ -387,7 +387,7 @@ class Images(AbstractMeasurement):
         ----------
         array : ndarray
             2D or greater array containing data with `float` type or ´complex type´. The second-to-last and last
-            dimensions are the image y and x axis, respectively.
+            dimensions are the image y- and x-axis, respectively.
         sampling : two float
             Lateral sampling of images in x and y [Å].
         ensemble_axes_metadata : list of AxisMetadata, optional
@@ -761,7 +761,7 @@ class Images(AbstractMeasurement):
         Parameters
         ----------
         repetitions : two int
-            The number of repetitions of the images along the x and y axis, respectively.
+            The number of repetitions of the images along the x- and y-axis, respectively.
 
         Returns
         -------
@@ -1249,7 +1249,7 @@ class DiffractionPatterns(AbstractMeasurement):
         ----------
         array : ndarray
             2D or greater array containing data with `float` type. The second-to-last and last dimensions are the
-            reciprocal space y and x axis of the diffraction pattern.
+            reciprocal space y- and x-axis of the diffraction pattern.
         sampling : float or two float
             The Fourier space sampling of the diffraction patterns [1 / Å].
         fftshift : bool, optional

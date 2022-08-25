@@ -3,7 +3,7 @@
 
 # # Deriving the Multislice Algorithm
 
-# This is a short description on the theory of the multislice method. For a more complete, formal discussion including detailed theory see Advanced Computing Computing in Electron Microscopy by EJ Kirkland.
+# This is a short description on the theory of the multislice method. For a more complete, formal discussion including detailed theory see Advanced Computing in Electron Microscopy by EJ Kirkland.
 # 
 # The energy of the incident electron waves (100 - 1000 keV) are much higher than the specimen potential, which provides only minor perturbations on the forward motion of the electrons. Hence, it is useful to write the wave function, $\psi$, of the propagating electrons as a slowly varying plane wave along the optical axis, $z$, with an amplitude modulation
 # 

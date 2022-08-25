@@ -12,7 +12,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Circle
 
 #: Array to facilitate the display of cell boundaries.
-from abtem.structures.structures import pad_atoms
+from abtem.structures.transform import pad_atoms
 
 _cube = np.array([[[0, 0, 0], [0, 0, 1]],
                   [[0, 0, 0], [0, 1, 0]],

@@ -19,7 +19,7 @@ os.environ["MKL_NUM_THREADS"] = "1"
 
 # # Effect of temperature with frozen phonons
 # 
-# The atoms in any real material at a particular instance of time are not exactly located at their symmetrical lattice points due to thermal and zero-point vibrations. The frozen phonon approximation is a simple if somewhat brute-force approach to numerically simulate the effects of thermal vibrations in the specimen. In the Frozen phonon approximation, the simulated image or diffraction pattern is the intensity averaged over several different configurations of atoms with different random offsets. This type of scattering may be referred to as thermal diffuse scattering or simply TDS.
+# The atoms in any real material at a particular instance of time are not exactly located at their symmetrical lattice points due to thermal and zero-point vibrations. The frozen phonon approximation is a simple if somewhat brute-force approach to numerically simulate the effects of thermal vibrations in the specimen. In the Frozen phonon approximation, the simulated image or diffraction pattern is the intensity averaged over several configurations of atoms with different random offsets. This type of scattering may be referred to as thermal diffuse scattering or simply TDS.
 # 
 # We will simulate strontium titanate [100] with TDS. In order to observe visible Kikuchi lines, the sample needs a certain thickness, hence we repeat the unit cell 40 times along the z-direction.
 

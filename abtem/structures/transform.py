@@ -10,16 +10,33 @@ from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import pdist
 
 _axes2tuple = {
-    'sxyz': (0, 0, 0, 0), 'sxyx': (0, 0, 1, 0), 'sxzy': (0, 1, 0, 0),
-    'sxzx': (0, 1, 1, 0), 'syzx': (1, 0, 0, 0), 'syzy': (1, 0, 1, 0),
-    'syxz': (1, 1, 0, 0), 'syxy': (1, 1, 1, 0), 'szxy': (2, 0, 0, 0),
-    'szxz': (2, 0, 1, 0), 'szyx': (2, 1, 0, 0), 'szyz': (2, 1, 1, 0),
-    'rzyx': (0, 0, 0, 1), 'rxyx': (0, 0, 1, 1), 'ryzx': (0, 1, 0, 1),
-    'rxzx': (0, 1, 1, 1), 'rxzy': (1, 0, 0, 1), 'ryzy': (1, 0, 1, 1),
-    'rzxy': (1, 1, 0, 1), 'ryxy': (1, 1, 1, 1), 'ryxz': (2, 0, 0, 1),
-    'rzxz': (2, 0, 1, 1), 'rxyz': (2, 1, 0, 1), 'rzyz': (2, 1, 1, 1)}
+    "sxyz": (0, 0, 0, 0),
+    "sxyx": (0, 0, 1, 0),
+    "sxzy": (0, 1, 0, 0),
+    "sxzx": (0, 1, 1, 0),
+    "syzx": (1, 0, 0, 0),
+    "syzy": (1, 0, 1, 0),
+    "syxz": (1, 1, 0, 0),
+    "syxy": (1, 1, 1, 0),
+    "szxy": (2, 0, 0, 0),
+    "szxz": (2, 0, 1, 0),
+    "szyx": (2, 1, 0, 0),
+    "szyz": (2, 1, 1, 0),
+    "rzyx": (0, 0, 0, 1),
+    "rxyx": (0, 0, 1, 1),
+    "ryzx": (0, 1, 0, 1),
+    "rxzx": (0, 1, 1, 1),
+    "rxzy": (1, 0, 0, 1),
+    "ryzy": (1, 0, 1, 1),
+    "rzxy": (1, 1, 0, 1),
+    "ryxy": (1, 1, 1, 1),
+    "ryxz": (2, 0, 0, 1),
+    "rzxz": (2, 0, 1, 1),
+    "rxyz": (2, 1, 0, 1),
+    "rzyz": (2, 1, 1, 1),
+}
 
-axis_mapping = {'x': (1, 0, 0), 'y': (0, 1, 0), 'z': (0, 0, 1)}
+axis_mapping = {"x": (1, 0, 0), "y": (0, 1, 0), "z": (0, 0, 1)}
 
 
 def plane_to_axes(plane: str) -> tuple:
@@ -27,13 +44,13 @@ def plane_to_axes(plane: str) -> tuple:
     axes = ()
     last_axis = [0, 1, 2]
     for axis in list(plane):
-        if axis == 'x':
+        if axis == "x":
             axes += (0,)
             last_axis.remove(0)
-        if axis == 'y':
+        if axis == "y":
             axes += (1,)
             last_axis.remove(1)
-        if axis == 'z':
+        if axis == "z":
             axes += (2,)
             last_axis.remove(2)
     return axes + (last_axis[0],)
@@ -55,7 +72,11 @@ def is_cell_hexagonal(atoms: Atoms) -> bool:
     c = np.linalg.norm(cell[2], axis=0)
     angle = np.arccos(np.dot(cell[0], cell[1]) / (a * b))
 
-    return np.isclose(a, b) & (np.isclose(angle, np.pi / 3) | np.isclose(angle, 2 * np.pi / 3)) & (c == cell[2, 2])
+    return (
+        np.isclose(a, b)
+        & (np.isclose(angle, np.pi / 3) | np.isclose(angle, 2 * np.pi / 3))
+        & (c == cell[2, 2])
+    )
 
 
 def is_cell_orthogonal(cell: Union[Atoms, Cell], tol: float = 1e-12):
@@ -69,7 +90,7 @@ def is_cell_orthogonal(cell: Union[Atoms, Cell], tol: float = 1e-12):
     tol : float
         Components of the lattice vectors below this value are considered to be zero.
     """
-    if hasattr(cell, 'cell'):
+    if hasattr(cell, "cell"):
         cell = cell.cell
 
     return not np.any(np.abs(cell[~np.eye(3, dtype=bool)]) > tol)
@@ -106,7 +127,7 @@ def is_cell_valid(atoms: Atoms, tol: float = 1e-12) -> bool:
 def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     """
     Standardize the cell of an ASE atoms object. The atoms are rotated so one of the lattice vectors in the xy-plane
-    aligns with the x-axis, then all of the lattice vectors are made positive.
+    aligns with the x-axis, then all the lattice vectors are made positive.
 
     Parameters
     ----------
@@ -127,32 +148,34 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     vertical_vector = np.where(np.all(np.abs(cell[:, :2]) < tol, axis=1))[0]
 
     if len(vertical_vector) != 1:
-        raise RuntimeError('Invalid cell: no vertical lattice vector')
+        raise RuntimeError("Invalid cell: no vertical lattice vector")
 
     cell[[vertical_vector[0], 2]] = cell[[2, vertical_vector[0]]]
     r = np.arctan2(atoms.cell[0, 1], atoms.cell[0, 0]) / np.pi * 180
 
     atoms.set_cell(cell)
 
-    if r != 0.:
-        atoms.rotate(-r, 'z', rotate_cell=True)
+    if r != 0.0:
+        atoms.rotate(-r, "z", rotate_cell=True)
 
     if not np.all(atoms.cell.lengths() == np.abs(np.diag(atoms.cell))):
-        raise RuntimeError('cell has nonorthgonal lattice vectors')
+        raise RuntimeError("cell has nonorthgonal lattice vectors")
 
     for i, diagonal_component in enumerate(np.diag(atoms.cell)):
         if diagonal_component < 0:
-            atoms.positions[:, i] = - atoms.positions[:, i]
+            atoms.positions[:, i] = -atoms.positions[:, i]
 
     atoms.set_cell(np.diag(np.abs(atoms.get_cell())))
 
     if not is_cell_valid(atoms, tol):
-        raise RuntimeError('This cell cannot be made orthogonal using currently implemented methods.')
+        raise RuntimeError(
+            "This cell cannot be made orthogonal using currently implemented methods."
+        )
 
     return atoms
 
 
-def rotation_matrix_to_euler(R: np.ndarray, axes: str = 'sxyz', eps: float = 1e-6):
+def rotation_matrix_to_euler(R: np.ndarray, axes: str = "sxyz", eps: float = 1e-6):
     firstaxis, parity, repetition, frame = _axes2tuple[axes.lower()]
 
     i = firstaxis
@@ -188,7 +211,9 @@ def rotation_matrix_to_euler(R: np.ndarray, axes: str = 'sxyz', eps: float = 1e-
     return ax, ay, az
 
 
-def decompose_affine_transform(affined_transform: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def decompose_affine_transform(
+    affined_transform: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     ZS = np.linalg.cholesky(np.dot(affined_transform.T, affined_transform)).T
 
     zoom = np.diag(ZS)
@@ -207,9 +232,21 @@ def decompose_affine_transform(affined_transform: np.ndarray) -> Tuple[np.ndarra
 
 
 def pretty_print_transform(transform):
-    print('euler angles (degrees): \t x = {:.3f}, \t y = {:.3f}, \t z = {:.3f}'.format(*transform[0] / np.pi * 180))
-    print('normal strains (percent): \t x = {:.3f}, \t y = {:.3f}, \t z = {:.3f}'.format(*(transform[1] - 1) * 100))
-    print('shear strains (percent): \t xy = {:.3f}, \t xz = {:.3f}, \t xz = {:.3f}'.format(*(transform[2]) * 100))
+    print(
+        "euler angles (degrees): \t x = {:.3f}, \t y = {:.3f}, \t z = {:.3f}".format(
+            *transform[0] / np.pi * 180
+        )
+    )
+    print(
+        "normal strains (percent): \t x = {:.3f}, \t y = {:.3f}, \t z = {:.3f}".format(
+            *(transform[1] - 1) * 100
+        )
+    )
+    print(
+        "shear strains (percent): \t xy = {:.3f}, \t xz = {:.3f}, \t xz = {:.3f}".format(
+            *(transform[2]) * 100
+        )
+    )
 
 
 def _label_to_index_generator(labels: np.ndarray, first_label: int = 0):
@@ -218,15 +255,15 @@ def _label_to_index_generator(labels: np.ndarray, first_label: int = 0):
     sorted_labels = labels[labels_order]
     indices = np.arange(0, len(labels) + 1)[labels_order]
     index = np.arange(first_label, np.max(labels) + 1)
-    lo = np.searchsorted(sorted_labels, index, side='left')
-    hi = np.searchsorted(sorted_labels, index, side='right')
+    lo = np.searchsorted(sorted_labels, index, side="left")
+    hi = np.searchsorted(sorted_labels, index, side="right")
     for i, (l, h) in enumerate(zip(lo, hi)):
         yield indices[l:h]
 
 
 def merge_close_atoms(atoms: Atoms, tol: float = 1e-7) -> Atoms:
     """
-    Merge atoms within closer in distance than a given tolerance.
+    Merge atoms that are closer in distance than a given tolerance.
 
     Parameters
     ----------
@@ -244,21 +281,25 @@ def merge_close_atoms(atoms: Atoms, tol: float = 1e-7) -> Atoms:
 
     atoms = wrap_with_tolerance(atoms)
 
-    points = atoms.positions
-    numbers = atoms.numbers
-
-    clusters = fcluster(linkage(pdist(points), method='complete'), tol, criterion='distance')
-    new_points = np.zeros_like(points)
-    new_numbers = np.zeros_like(numbers)
+    new_points = np.zeros_like(atoms.positions)
+    new_numbers = np.zeros_like(atoms.numbers)
 
     k = 0
-    for i, cluster in enumerate(_label_to_index_generator(clusters, 1)):
-        new_points[i] = np.mean(points[cluster], axis=0)
-        assert np.all(numbers[cluster] == numbers[0])
-        new_numbers[i] = numbers[0]
-        k += 1
+    for unique in np.unique(atoms.numbers):
+        points = atoms.positions[atoms.numbers == unique]
+        clusters = fcluster(
+            linkage(pdist(points), method="complete"), tol, criterion="distance"
+        )
 
-    new_atoms = Atoms(positions=new_points[:k], numbers=new_numbers[:k], cell=atoms.cell)
+        for i, cluster in enumerate(_label_to_index_generator(clusters, 1)):
+            new_points[k + i] = np.mean(points[cluster], axis=0)
+            new_numbers[k + i] = unique
+
+        k += i
+
+    new_atoms = Atoms(
+        positions=new_points[: k + 1], numbers=new_numbers[: k + 1], cell=atoms.cell
+    )
     return new_atoms
 
 
@@ -299,7 +340,11 @@ def shrink_cell(atoms: Atoms, repetitions=(2, 3), tol=1e-6):
     return atoms
 
 
-def rotation_matrix_from_plane(plane: Union[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = 'xy'):
+def rotation_matrix_from_plane(
+    plane: Union[
+        str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+    ] = "xy"
+):
     x_vector, y_vector = plane
 
     if isinstance(x_vector, str):
@@ -308,8 +353,8 @@ def rotation_matrix_from_plane(plane: Union[str, Tuple[Tuple[float, float, float
     if isinstance(y_vector, str):
         y_vector = np.array(axis_mapping[y_vector])
 
-    old_x_vector = np.array([1., 0., 0.])
-    old_y_vector = np.array([0., 1., 0.])
+    old_x_vector = np.array([1.0, 0.0, 0.0])
+    old_y_vector = np.array([0.0, 1.0, 0.0])
 
     if np.any(x_vector != old_x_vector) or np.any(y_vector != old_y_vector):
         return rotation_matrix(old_x_vector, x_vector, old_y_vector, y_vector)
@@ -317,10 +362,13 @@ def rotation_matrix_from_plane(plane: Union[str, Tuple[Tuple[float, float, float
         return np.eye(3)
 
 
-def rotate_atoms_to_plane(atoms: Atoms,
-                          plane: Union[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = 'xy',
-                          ) -> Atoms:
-    if plane == 'xy':
+def rotate_atoms_to_plane(
+    atoms: Atoms,
+    plane: Union[
+        str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+    ] = "xy",
+) -> Atoms:
+    if plane == "xy":
         return atoms
 
     atoms = atoms.copy()
@@ -337,20 +385,28 @@ def flip_atoms(atoms: Atoms, axis: int = 2) -> Atoms:
     return atoms
 
 
-def best_orthogonal_box(cell: np.ndarray, max_repetitions: int = 5, eps: float = 1e-12) -> np.ndarray:
+def best_orthogonal_box(
+    cell: np.ndarray, max_repetitions: int = 5, eps: float = 1e-12
+) -> np.ndarray:
     zero_vectors = np.linalg.norm(cell, axis=0) < eps
 
     if zero_vectors.sum() > 1:
-        raise RuntimeError("two or more lattice vectors of the provided Atoms has no length")
+        raise RuntimeError(
+            "two or more lattice vectors of the provided Atoms has no length"
+        )
 
     k = np.arange(-max_repetitions, max_repetitions + 1)
     l = np.arange(-max_repetitions, max_repetitions + 1)
     m = np.arange(-max_repetitions, max_repetitions + 1)
 
     a, b, c = cell
-    vectors = np.abs(((k[:, None] * a[None])[:, None, None] +
-                      (l[:, None] * b[None])[None, :, None] +
-                      (m[:, None] * c[None])[None, None, :]))
+    vectors = np.abs(
+        (
+            (k[:, None] * a[None])[:, None, None]
+            + (l[:, None] * b[None])[None, :, None]
+            + (m[:, None] * c[None])[None, None, :]
+        )
+    )
 
     norm = np.linalg.norm(vectors, axis=-1)
     nonzero = norm > eps
@@ -366,9 +422,13 @@ def best_orthogonal_box(cell: np.ndarray, max_repetitions: int = 5, eps: float =
 
         shortest_small_angles = np.argmin(np.linalg.norm(vectors[small_angles], axis=1))
 
-        new_vector = np.array([k[small_angles[0][shortest_small_angles]],
-                               l[small_angles[1][shortest_small_angles]],
-                               m[small_angles[2][shortest_small_angles]]])
+        new_vector = np.array(
+            [
+                k[small_angles[0][shortest_small_angles]],
+                l[small_angles[1][shortest_small_angles]],
+                m[small_angles[2][shortest_small_angles]],
+            ]
+        )
 
         new_vector = np.sign(np.dot(new_vector, cell)[i]) * new_vector
         new_vectors.append(new_vector)
@@ -377,14 +437,18 @@ def best_orthogonal_box(cell: np.ndarray, max_repetitions: int = 5, eps: float =
     return np.linalg.norm(cell, axis=0)
 
 
-def orthogonalize_cell(atoms: Atoms,
-                       box: Tuple[float, float, float] = None,
-                       max_repetitions: int = 5,
-                       return_transform: bool = False,
-                       allow_transform: bool = True,
-                       origin: Tuple[float, float, float] = (0., 0., 0.),
-                       plane: Union[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = 'xy',
-                       tolerance: float = 0.01):
+def orthogonalize_cell(
+    atoms: Atoms,
+    box: Tuple[float, float, float] = None,
+    max_repetitions: int = 5,
+    return_transform: bool = False,
+    allow_transform: bool = True,
+    origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+    plane: Union[
+        str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+    ] = "xy",
+    tolerance: float = 0.01,
+):
     """
     Make the cell of an ASE atoms object orthogonal. This is accomplished by repeating the cell until lattice vectors
     are close to the three principal Cartesian directions. If the structure is not exactly orthogonal after the
@@ -410,18 +474,18 @@ def orthogonalize_cell(atoms: Atoms,
         The applied transform in the form the euler angles
     """
 
-    if origin != (0., 0., 0.):
+    if origin != (0.0, 0.0, 0.0):
         atoms.translate(-np.array(origin))
         atoms.wrap()
 
-    if plane != 'xy':
+    if plane != "xy":
         atoms = rotate_atoms_to_plane(atoms, plane)
 
     if box is None:
         box = best_orthogonal_box(atoms.cell, max_repetitions=max_repetitions)
 
     if np.any(atoms.cell.lengths() < tolerance):
-        raise RuntimeError('cell vectors must have non-zero length')
+        raise RuntimeError("cell vectors must have non-zero length")
 
     inv = np.linalg.inv(atoms.cell)
     vectors = np.dot(np.diag(box), inv)
@@ -456,24 +520,31 @@ def orthogonalize_cell(atoms: Atoms,
 #     return atoms
 
 
-def atoms_in_cell(atoms: Atoms,
-                  margin: Tuple[float, float, float] = (0., 0., 0.),
-                  origin: Tuple[float, float, float] = (0., 0., 0.)) -> Atoms:
+def atoms_in_cell(
+    atoms: Atoms,
+    margin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+    origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+) -> Atoms:
     scaled_positions = atoms.get_scaled_positions(wrap=False)
     scaled_margins = np.array(margin) / atoms.cell.lengths()
 
-    mask = np.all(scaled_positions >= (- scaled_margins - 1e-12)[None], axis=1) * \
-           np.all(scaled_positions < (1 + scaled_margins)[None], axis=1)
+    mask = np.all(scaled_positions >= (-scaled_margins - 1e-12)[None], axis=1) * np.all(
+        scaled_positions < (1 + scaled_margins)[None], axis=1
+    )
 
     atoms = atoms[mask]
     return atoms
 
 
-def cut_box(atoms: Atoms,
-            box: Tuple[float, float, float] = None,
-            plane: Union[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = 'xy',
-            origin: Tuple[float, float, float] = (0., 0., 0.),
-            margin: Union[float, Tuple[float, float, float]] = 0.) -> Atoms:
+def cut_box(
+    atoms: Atoms,
+    box: Tuple[float, float, float] = None,
+    plane: Union[
+        str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+    ] = "xy",
+    origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+    margin: Union[float, Tuple[float, float, float]] = 0.0,
+) -> Atoms:
     if box is None:
         box = best_orthogonal_box(atoms.cell)
 
@@ -481,7 +552,7 @@ def cut_box(atoms: Atoms,
         margin = (margin, margin, margin)
 
     atoms = atoms.copy()
-    if not np.all(np.isclose(origin, (0., 0., 0.))):
+    if not np.all(np.isclose(origin, (0.0, 0.0, 0.0))):
         atoms.positions[:] = atoms.positions - origin
         atoms.wrap()
 
@@ -493,14 +564,22 @@ def cut_box(atoms: Atoms,
     scaled_margin = atoms.cell.scaled_positions(np.diag(margin))
     scaled_margin = np.sign(scaled_margin) * (np.ceil(np.abs(scaled_margin)))
 
-    scaled_corners_new_cell = np.array([[0., 0., 0.], [0., 0., 1.],
-                                        [0., 1., 0.], [0., 1., 1.],
-                                        [1., 0., 0.], [1., 0., 1.],
-                                        [1., 1., 0.], [1., 1., 1.]])
+    scaled_corners_new_cell = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 1.0, 1.0],
+        ]
+    )
 
     corners = np.dot(scaled_corners_new_cell, new_cell)
     scaled_corners = np.linalg.solve(atoms.cell.T, corners.T).T
-    repetitions = np.ceil(scaled_corners.ptp(axis=0)).astype('int') + 1
+    repetitions = np.ceil(scaled_corners.ptp(axis=0)).astype("int") + 1
     new_atoms = atoms * repetitions
 
     center_translate = np.dot(np.floor(scaled_corners.min(axis=0)), atoms.cell)
@@ -515,7 +594,11 @@ def cut_box(atoms: Atoms,
     return new_atoms
 
 
-def pad_atoms(atoms: Atoms, margins: Union[float, Tuple[float, float, float]], directions: str = 'xyz') -> Atoms:
+def pad_atoms(
+    atoms: Atoms,
+    margins: Union[float, Tuple[float, float, float]],
+    directions: str = "xyz",
+) -> Atoms:
     """
     Repeat the atoms in x and y, retaining only the repeated atoms within the margin distance from the cell boundary.
 
@@ -532,7 +615,7 @@ def pad_atoms(atoms: Atoms, margins: Union[float, Tuple[float, float, float]], d
         Padded atoms.
     """
 
-    #if not is_cell_orthogonal(atoms):
+    # if not is_cell_orthogonal(atoms):
     #    raise RuntimeError('The cell of the atoms must be orthogonal.')
 
     if isinstance(margins, Number):
@@ -541,7 +624,7 @@ def pad_atoms(atoms: Atoms, margins: Union[float, Tuple[float, float, float]], d
     atoms = atoms.copy()
     old_cell = atoms.cell.copy()
 
-    axes = [{'x': 0, 'y': 1, 'z': 2}[direction] for direction in directions]
+    axes = [{"x": 0, "y": 1, "z": 2}[direction] for direction in directions]
 
     reps = [1, 1, 1]
     for axis, margin in zip(axes, margins):

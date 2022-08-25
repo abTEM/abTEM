@@ -7,7 +7,7 @@ from ase import Atoms
 from ase.data import atomic_numbers
 
 from abtem.core.utils import label_to_index
-from abtem.structures.structures import cut_box, pad_atoms, is_cell_orthogonal
+from abtem.structures.transform import cut_box, pad_atoms, is_cell_orthogonal
 
 
 def validate_slice_thickness(slice_thickness: Union[float, Tuple[float, ...]],

@@ -89,6 +89,7 @@ GPAW for calculating DFT potentials::
         pages = {035109},
         journal = {Phys. Rev. B},
     }
+
 Linear-scaling algorithm for calculation of inelastic transitions by Hamish G. Brown et al::
 
     @article{PhysRevResearch.1.033186,
@@ -104,6 +105,7 @@ Linear-scaling algorithm for calculation of inelastic transitions by Hamish G. B
       publisher = {American Physical Society},
       doi = {10.1103/PhysRevResearch.1.033186},
     }
+
 Linear-scaling algorithm for calculation of inelastic transitions by  Brown et al::
 
     @article{PhysRevResearch.1.033186,
@@ -119,3 +121,4 @@ Linear-scaling algorithm for calculation of inelastic transitions by  Brown et a
       publisher = {American Physical Society},
       doi = {10.1103/PhysRevResearch.1.033186},
     }
+
