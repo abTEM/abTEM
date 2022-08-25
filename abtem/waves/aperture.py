@@ -9,9 +9,9 @@ class Spokes(AbstractAperture):
 	
 	Parameters
     ----------
-		num_spokes (float)		:  number of spokes
-		spoke_width (float)		: width of spokes (in radians)
-		semiangle_cutoff (float): max angle of probe (mrad)
+		spoke_num (float)		: number of spokes (int)
+		spoke_width (float)		: width of spokes (radians)
+		semiangle_cutoff (float): probe semiangle (mrad)
 	
 	Returns
 	----------
@@ -52,7 +52,7 @@ class Spokes(AbstractAperture):
         array = alpha < semiangle_cutoff
         array = array * (((phi + self.spoke_width / 2) * self.spoke_num) % (2 * np.pi) > (
                 self.spoke_width * self.spoke_num))
-
+        
         return array
 
 class Bullseye(AbstractAperture):
@@ -60,9 +60,11 @@ class Bullseye(AbstractAperture):
     vortex beam
     Parameters
     ----------
-        num_rings (float)      :  number of rings
-        ring_width (float)     :  width of rings (in mrad)
-        semiangle_cutoff (float): max angle of probe (mrad)
+        spoke_num (float)       : number of spokes (int)
+        spoke_width (float)     : width of spokes (radians)
+        ring_num (float)        : number of rings (int)
+        ring_width (float)      : width of rings (mrad)
+        semiangle_cutoff (float): probe semiangle (mrad)
     
     Returns
     ----------
@@ -119,13 +121,11 @@ class Bullseye(AbstractAperture):
                 self.spoke_width * self.spoke_num))
 
         #add ring bars
-        end_edges = np.linspace(0, semiangle_cutoff, self.ring_num+1)
-        end_edges = end_edges[1:]
+        end_edges = np.linspace(semiangle_cutoff/self.ring_num, semiangle_cutoff, self.ring_num)
         start_edges = end_edges - self.ring_width/1e3
-
+        
         for start_edge, end_edge in zip(start_edges, end_edges):
                 array[(alpha > start_edge) * (alpha < end_edge)] = 0.
-
 
         return array
 

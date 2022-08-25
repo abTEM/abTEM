@@ -270,29 +270,7 @@ class Waves(HasArray, WavesLikeMixin):
         kwargs = self.copy_kwargs(exclude=('array',))
 
         return self.__class__(array=arr, **kwargs)
-
-    def as_complex_image(self):
-        """
-        Calculate the the wave function as a complex measurement.
-
-        Returns
-        -------
-        intensity_images : Images
-            The wave function intensity.
-        """
-
-        array = self.array
-
-        metadata = copy(self.metadata)
-
-        metadata['label'] = 'intensity'
-        metadata['units'] = 'arb. unit'
-
-        return Images(array,
-                      sampling=self.sampling,
-                      ensemble_axes_metadata=self.ensemble_axes_metadata,
-                      metadata=metadata)
-
+   
     def intensity(self) -> Images:
         """
         Calculate the intensity of the wave functions at the image plane.
@@ -304,6 +282,28 @@ class Waves(HasArray, WavesLikeMixin):
         """
 
         array = abs2(self.array)
+
+        metadata = copy(self.metadata)
+
+        metadata['label'] = 'intensity'
+        metadata['units'] = 'arb. unit'
+
+        return Images(array,
+                      sampling=self.sampling,
+                      ensemble_axes_metadata=self.ensemble_axes_metadata,
+                      metadata=metadata)
+
+    def as_complex_image(self):
+        """
+        Calculate the complex array of the wave functions at the image plane.
+
+        Rerturns
+        -------
+        intensity_images : Images
+            The wave function intensity.
+        """
+
+        array = self.array
 
         metadata = copy(self.metadata)
 
@@ -431,6 +431,81 @@ class Waves(HasArray, WavesLikeMixin):
                                             meta=xp.array((), dtype=xp.float32))
         else:
             pattern = _diffraction_pattern(self.array, new_gpts=new_gpts, fftshift=fftshift)
+
+        metadata = copy(self.metadata)
+        metadata['label'] = 'intensity'
+        metadata['units'] = 'arb. unit'
+
+        diffraction_patterns = DiffractionPatterns(pattern,
+                                                   sampling=self.fourier_space_sampling,
+                                                   fftshift=fftshift,
+                                                   ensemble_axes_metadata=self.ensemble_axes_metadata,
+                                                   metadata=metadata)
+
+        if block_direct:
+            diffraction_patterns = diffraction_patterns.block_direct(radius=block_direct)
+
+        return diffraction_patterns
+        
+    def as_complex_diffraction(
+        self,
+        max_angle: Union[str, float, None] = 'cutoff',
+        block_direct: Union[bool, float] = False,
+        fftshift: bool = True,
+        parity: str = 'same'
+        ) -> DiffractionPatterns:
+        """
+        Calculate the complex array of the wave functions at the diffraction plane.
+
+        Parameters
+        ----------
+        max_angle : {'cutoff', 'valid'} or float
+            Maximum scattering angle of the diffraction patterns.
+
+                ``cutoff`` :
+                    The maximum scattering angle will be the cutoff of the antialias aperture.
+
+                ``valid`` :
+                    The maximum scattering angle will be the largest rectangle that fits inside the circular antialias
+                    aperture.
+
+        block_direct : bool or float
+            If true the direct beam is masked.
+        fftshift : bool
+            If true, shift the zero-angle component to the center of the diffraction patterns.
+        parity : {'same', 'even', 'odd', 'none'}
+            The parity of the shape of the diffraction patterns.
+
+        Returns
+        -------
+        diffraction_patterns : DiffractionPatterns
+        """
+
+        def _as_complex_diffraction(array, new_gpts, fftshift):
+            array = self.array
+            xp = get_array_module(array)
+
+            array =  fft2(xp.fft.fftshift(array))
+
+            if array.shape[-2:] != new_gpts:
+                array = fft_crop(array, new_shape=array.shape[:-2] + new_gpts)
+            
+            if fftshift:
+                array =  xp.fft.ifftshift(array, axes=(-1, -2))
+
+
+            return array
+
+        xp = get_array_module(self.array)
+        new_gpts = self._gpts_within_angle(max_angle, parity=parity)
+        validate_gpts(new_gpts)
+
+        if self.is_lazy:
+            pattern = self.array.map_blocks(_as_complex_diffraction, new_gpts=new_gpts, fftshift=fftshift,
+                                            chunks=self.array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
+                                            meta=xp.array((), dtype=xp.float32))
+        else:
+            pattern = _as_complex_diffraction(self.array, new_gpts=new_gpts, fftshift=fftshift)
 
         metadata = copy(self.metadata)
         metadata['label'] = 'intensity'
