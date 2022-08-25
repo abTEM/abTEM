@@ -26,7 +26,7 @@ from abtem.potentials.integrals import ProjectionQuadratureRule, GaussianProject
 from abtem.potentials.parametrizations.base import Parametrization
 from abtem.potentials.temperature import AbstractFrozenPhonons, FrozenPhonons, DummyFrozenPhonons
 from abtem.structures.slicing import validate_slice_thickness, SliceIndexedAtoms, SlicedAtoms, unpack_item
-from abtem.structures.structures import is_cell_orthogonal, orthogonalize_cell, best_orthogonal_box, cut_box, \
+from abtem.structures.transform import is_cell_orthogonal, orthogonalize_cell, best_orthogonal_box, cut_box, \
     rotation_matrix_from_plane, pad_atoms
 
 if TYPE_CHECKING:

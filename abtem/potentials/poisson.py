@@ -14,7 +14,7 @@ from abtem.core.fft import fft_crop, fft_interpolate, ifftn, fftn
 from abtem.potentials.parametrizations import EwaldParametrization
 from abtem.potentials.potentials import Potential, PotentialBuilder
 from abtem.potentials.temperature import MDFrozenPhonons, DummyFrozenPhonons
-from abtem.structures.structures import plane_to_axes
+from abtem.structures.transform import plane_to_axes
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
