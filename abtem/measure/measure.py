@@ -8,8 +8,15 @@ from ase import Atom
 from matplotlib.axes import Axes
 
 from abtem.core.array import HasArray
-from abtem.core.axes import HasAxes, RealSpaceAxis, AxisMetadata, FourierSpaceAxis, LinearAxis, NonLinearAxis, \
-    SampleAxis
+from abtem.core.axes import (
+    HasAxes,
+    RealSpaceAxis,
+    AxisMetadata,
+    FourierSpaceAxis,
+    LinearAxis,
+    NonLinearAxis,
+    SampleAxis,
+)
 from abtem.core.backend import cp, get_array_module, get_ndimage_module
 from abtem.core.complex import abs2
 from abtem.core.energy import energy2wavelength
@@ -31,11 +38,11 @@ else:
 if TYPE_CHECKING:
     from abtem.waves.base import WavesLikeMixin
 
-T = TypeVar('T', bound='AbstractMeasurement')
+T = TypeVar("T", bound="AbstractMeasurement")
 
-angular_units = ('angular', 'mrad')
-bins = ('bins',)
-reciprocal_units = ('reciprocal', '1/Å')
+angular_units = ("angular", "mrad")
+bins = ("bins",)
+reciprocal_units = ("reciprocal", "1/Å")
 
 
 def _to_hyperspy_axes_metadata(axes_metadata, shape):
@@ -45,13 +52,14 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
         shape = (shape,)
 
     for metadata, n in zip(axes_metadata, shape):
-        hyperspy_axes.append({'size': n})
+        hyperspy_axes.append({"size": n})
 
-        axes_mapping = {'sampling': 'scale',
-                        'units': 'units',
-                        'label': 'name',
-                        'offset': 'offset'
-                        }
+        axes_mapping = {
+            "sampling": "scale",
+            "units": "units",
+            "label": "name",
+            "offset": "offset",
+        }
 
         if isinstance(metadata, NonLinearAxis):
             # TODO : when hyperspy supports arbitrary (non-uniform) DataAxis this should be updated
@@ -59,12 +67,14 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
             if len(metadata.values) > 1:
                 sampling = metadata.values[1] - metadata.values[0]
             else:
-                sampling = 1.
+                sampling = 1.0
 
-            metadata = LinearAxis(label=metadata.label,
-                                  units=metadata.units,
-                                  sampling=sampling,
-                                  offset=metadata.values[0])
+            metadata = LinearAxis(
+                label=metadata.label,
+                units=metadata.units,
+                sampling=sampling,
+                offset=metadata.values[0],
+            )
 
         for attr, mapped_attr in axes_mapping.items():
             if hasattr(metadata, attr):
@@ -73,8 +83,9 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
     return hyperspy_axes
 
 
-def scanned_measurement_type(measurement: Union['AbstractMeasurement', 'WavesLikeMixin']) \
-        -> Type['AbstractMeasurement']:
+def scanned_measurement_type(
+    measurement: Union["AbstractMeasurement", "WavesLikeMixin"]
+) -> Type["AbstractMeasurement"]:
     if len(measurement.scan_axes) == 0:
         return SinglePointMeasurement
 
@@ -85,14 +96,23 @@ def scanned_measurement_type(measurement: Union['AbstractMeasurement', 'WavesLik
         return Images
 
     else:
-        raise RuntimeError(f'no measurement type for {measurement.__class__} with {len(measurement.scan_axes)} scan '
-                           f'axes')
+        raise RuntimeError(
+            f"no measurement type for {measurement.__class__} with {len(measurement.scan_axes)} scan "
+            f"axes"
+        )
 
 
-class AbstractMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABCMeta):
-
-    def __init__(self, array, ensemble_axes_metadata, metadata, allow_complex=False,
-                 allow_base_axis_chunks=False):
+class AbstractMeasurement(
+    HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABCMeta
+):
+    def __init__(
+        self,
+        array,
+        ensemble_axes_metadata,
+        metadata,
+        allow_complex=False,
+        allow_base_axis_chunks=False,
+    ):
         #
 
         if ensemble_axes_metadata is None:
@@ -129,9 +149,9 @@ class AbstractMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass
 
     @property
     def energy(self):
-        if not 'energy' in self.metadata.keys():
-            raise RuntimeError('energy not in measurement metadata')
-        return self.metadata['energy']
+        if not "energy" in self.metadata.keys():
+            raise RuntimeError("energy not in measurement metadata")
+        return self.metadata["energy"]
 
     @property
     def wavelength(self):
@@ -155,7 +175,13 @@ class AbstractMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass
         positions = ()
         for n, metadata in zip(self.scan_shape, self.scan_axes_metadata):
             positions += (
-                np.linspace(metadata.offset, metadata.offset + metadata.sampling * n, n, endpoint=metadata.endpoint),)
+                np.linspace(
+                    metadata.offset,
+                    metadata.offset + metadata.sampling * n,
+                    n,
+                    endpoint=metadata.endpoint,
+                ),
+            )
         return positions
 
     def scan_extent(self):
@@ -189,7 +215,7 @@ class AbstractMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass
     #         if np.any(value != other_value):
     #             raise RuntimeError(f'{key}, {other_key} {value} {other_value}')
 
-    def relative_difference(self, other, min_relative_tol=0.):
+    def relative_difference(self, other, min_relative_tol=0.0):
         difference = self - other
 
         xp = get_array_module(self.array)
@@ -204,20 +230,20 @@ class AbstractMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass
         return difference
 
     def power(self, number):
-        kwargs = self.copy_kwargs(exclude=('array',))
-        kwargs['array'] = self.array ** number
+        kwargs = self.copy_kwargs(exclude=("array",))
+        kwargs["array"] = self.array ** number
         return self.__class__(**kwargs)
 
     @abstractmethod
-    def from_array_and_metadata(self, array, axes_metadata, metadata) -> 'T':
+    def from_array_and_metadata(self, array, axes_metadata, metadata) -> "T":
         pass
 
-    def reduce_ensemble(self) -> 'T':
+    def reduce_ensemble(self) -> "T":
         return self.mean(axes=self._ensemble_axes_to_reduce())
 
-    def _apply_element_wise_func(self, func: callable) -> 'T':
-        d = self.copy_kwargs(exclude=('array',))
-        d['array'] = func(self.array)
+    def _apply_element_wise_func(self, func: callable) -> "T":
+        d = self.copy_kwargs(exclude=("array",))
+        d["array"] = func(self.array)
         return self.__class__(**d)
 
     @property
@@ -230,22 +256,30 @@ class AbstractMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass
         xp = get_array_module(array)
 
         if block_info is not None:
-            chunk_index = np.ravel_multi_index(block_info[0]['chunk-location'], block_info[0]['num-chunks'])
+            chunk_index = np.ravel_multi_index(
+                block_info[0]["chunk-location"], block_info[0]["num-chunks"]
+            )
         else:
             chunk_index = 0
 
         rng = xp.random.default_rng(seed + chunk_index)
-        randomized_seed = int(rng.integers(np.iinfo(np.int32).max))  # fixes strange cupy bug
+        randomized_seed = int(
+            rng.integers(np.iinfo(np.int32).max)
+        )  # fixes strange cupy bug
 
         rng = xp.random.RandomState(seed=randomized_seed)
 
-        return rng.poisson(xp.clip(array, a_min=0., a_max=None) * total_dose).astype(xp.float32)
+        return rng.poisson(xp.clip(array, a_min=0.0, a_max=None) * total_dose).astype(
+            xp.float32
+        )
 
-    def poisson_noise(self,
-                      dose_per_area: float = None,
-                      total_dose: float = None,
-                      samples: int = 1,
-                      seed: int = None):
+    def poisson_noise(
+        self,
+        dose_per_area: float = None,
+        total_dose: float = None,
+        samples: int = 1,
+        seed: int = None,
+    ):
         """
         Add Poisson noise to the DiffractionPattern.
 
@@ -267,7 +301,9 @@ class AbstractMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass
             The noisy diffraction patterns.
         """
 
-        wrong_dose_error = RuntimeError('provide one of "dose_per_area" or "total_dose"')
+        wrong_dose_error = RuntimeError(
+            'provide one of "dose_per_area" or "total_dose"'
+        )
 
         if dose_per_area is not None:
             if total_dose is not None:
@@ -291,24 +327,35 @@ class AbstractMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass
             if self.is_lazy:
 
                 arrays.append(
-                    self.array.map_blocks(self._add_poisson_noise, total_dose=total_dose, seed=seed,
-                                          meta=xp.array((), dtype=xp.float32)))
+                    self.array.map_blocks(
+                        self._add_poisson_noise,
+                        total_dose=total_dose,
+                        seed=seed,
+                        meta=xp.array((), dtype=xp.float32),
+                    )
+                )
             else:
-                arrays.append(self._add_poisson_noise(self.array, total_dose=total_dose, seed=seed))
+                arrays.append(
+                    self._add_poisson_noise(
+                        self.array, total_dose=total_dose, seed=seed
+                    )
+                )
 
         if len(seeds) > 1:
             if self.is_lazy:
                 arrays = da.stack(arrays)
             else:
                 arrays = xp.stack(arrays)
-            axes_metadata = [SampleAxis(label='sample')]
+            axes_metadata = [SampleAxis(label="sample")]
         else:
             arrays = arrays[0]
             axes_metadata = []
 
-        kwargs = self.copy_kwargs(exclude=('array',))
-        kwargs['array'] = arrays
-        kwargs['ensemble_axes_metadata'] = axes_metadata + kwargs['ensemble_axes_metadata']
+        kwargs = self.copy_kwargs(exclude=("array",))
+        kwargs["array"] = arrays
+        kwargs["ensemble_axes_metadata"] = (
+            axes_metadata + kwargs["ensemble_axes_metadata"]
+        )
         return self.__class__(**kwargs)
 
     def to_hyperspy(self):
@@ -319,7 +366,9 @@ class AbstractMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass
         try:
             import hyperspy.api as hs
         except ImportError:
-            raise ImportError('This functionality of abTEM requires hyperspy, see https://hyperspy.org/.')
+            raise ImportError(
+                "This functionality of abTEM requires hyperspy, see https://hyperspy.org/."
+            )
 
         if self._base_dims == 1:
             signal_type = hs.signals.Signal1D
@@ -337,7 +386,9 @@ class AbstractMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass
             self.ensemble_shape,
         )
 
-        array = np.transpose(self.to_cpu().array, self.ensemble_axes[::-1] + self.base_axes[::-1])
+        array = np.transpose(
+            self.to_cpu().array, self.ensemble_axes[::-1] + self.base_axes[::-1]
+        )
 
         s = signal_type(array, axes=axes_extra[::-1] + axes_base[::-1])
         # for axis in s.axes_manager.signal_axes:
@@ -373,11 +424,13 @@ def interpolate_stack(array, positions, mode, order, **kwargs):
 class Images(AbstractMeasurement):
     _base_dims = 2
 
-    def __init__(self,
-                 array: Union[da.core.Array, np.array],
-                 sampling: Union[float, Tuple[float, float]],
-                 ensemble_axes_metadata: List[AxisMetadata] = None,
-                 metadata: Dict = None):
+    def __init__(
+        self,
+        array: Union[da.core.Array, np.array],
+        sampling: Union[float, Tuple[float, float]],
+        ensemble_axes_metadata: List[AxisMetadata] = None,
+        metadata: Dict = None,
+    ):
 
         """
         A collection of 2d images such as images from HRTEM or STEM-ADF. The complex valued images may be used to
@@ -403,28 +456,40 @@ class Images(AbstractMeasurement):
 
         self._sampling = sampling
 
-        super().__init__(array=array,
-                         ensemble_axes_metadata=ensemble_axes_metadata,
-                         metadata=metadata,
-                         allow_complex=True,
-                         allow_base_axis_chunks=True)
+        super().__init__(
+            array=array,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+            allow_complex=True,
+            allow_base_axis_chunks=True,
+        )
 
     @classmethod
-    def from_array_and_metadata(cls, array, axes_metadata, metadata=None) -> 'Images':
+    def from_array_and_metadata(cls, array, axes_metadata, metadata=None) -> "Images":
 
-        real_space_axes = tuple(i for i, axis in enumerate(axes_metadata) if isinstance(axis, RealSpaceAxis))
+        real_space_axes = tuple(
+            i for i, axis in enumerate(axes_metadata) if isinstance(axis, RealSpaceAxis)
+        )
 
         if len(real_space_axes) < 2:
             raise RuntimeError()
 
         scan_axes_metadata = [axes_metadata[i] for i in real_space_axes[-2:]]
 
-        other_axes_metadata = [axes_metadata[i] for i, metadata in enumerate(axes_metadata)
-                               if i not in real_space_axes[-2:]]
+        other_axes_metadata = [
+            axes_metadata[i]
+            for i, metadata in enumerate(axes_metadata)
+            if i not in real_space_axes[-2:]
+        ]
 
         sampling = (scan_axes_metadata[-2].sampling, scan_axes_metadata[-1].sampling)
 
-        return cls(array, sampling=sampling, ensemble_axes_metadata=other_axes_metadata, metadata=metadata)
+        return cls(
+            array,
+            sampling=sampling,
+            ensemble_axes_metadata=other_axes_metadata,
+            metadata=metadata,
+        )
 
     @property
     def _area_per_pixel(self):
@@ -432,52 +497,57 @@ class Images(AbstractMeasurement):
 
     @property
     def sampling(self) -> Tuple[float, float]:
-        """ Sampling of images in x and y [Å]. """
+        """Sampling of images in x and y [Å]."""
         return self._sampling
 
     @property
     def extent(self) -> Tuple[float, float]:
-        """ Extent of images in x and y [Å]. """
-        return self.sampling[0] * self.base_shape[0], self.sampling[1] * self.base_shape[1]
+        """Extent of images in x and y [Å]."""
+        return (
+            self.sampling[0] * self.base_shape[0],
+            self.sampling[1] * self.base_shape[1],
+        )
 
     @property
     def coordinates(self) -> Tuple[np.ndarray, np.ndarray]:
-        """ Coordinates of pixels in x and y [Å]. """
-        x = np.linspace(0., self.shape[-2] * self.sampling[0], self.shape[-2])
-        y = np.linspace(0., self.shape[-1] * self.sampling[1], self.shape[-1])
+        """Coordinates of pixels in x and y [Å]."""
+        x = np.linspace(0.0, self.shape[-2] * self.sampling[0], self.shape[-2])
+        y = np.linspace(0.0, self.shape[-1] * self.sampling[1], self.shape[-1])
         return x, y
 
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
-        return [RealSpaceAxis(label='x', sampling=self.sampling[0], units='Å'),
-                RealSpaceAxis(label='y', sampling=self.sampling[1], units='Å')]
+        return [
+            RealSpaceAxis(label="x", sampling=self.sampling[0], units="Å"),
+            RealSpaceAxis(label="y", sampling=self.sampling[1], units="Å"),
+        ]
 
     def _check_is_complex(self):
         if not np.iscomplexobj(self.array):
-            raise RuntimeError('function not implemented for non-complex image')
+            raise RuntimeError("function not implemented for non-complex image")
 
     def real(self):
-        """ Calculate the phase from complex images. """
+        """Calculate the phase from complex images."""
         self._check_is_complex()
         return self._apply_element_wise_func(get_array_module(self.array).real)
 
     def imag(self):
-        """ Calculate the phase from complex images. """
+        """Calculate the phase from complex images."""
         self._check_is_complex()
         return self._apply_element_wise_func(get_array_module(self.array).imag)
 
     def phase(self):
-        """ Calculate the phase from complex images. """
+        """Calculate the phase from complex images."""
         self._check_is_complex()
         return self._apply_element_wise_func(get_array_module(self.array).angle)
 
     def abs(self):
-        """ Calculate the absolute value from complex images. """
+        """Calculate the absolute value from complex images."""
         self._check_is_complex()
         return self._apply_element_wise_func(get_array_module(self.array).abs)
 
     def intensity(self):
-        """ Calculate the absolute square from complex images. """
+        """Calculate the absolute square from complex images."""
         self._check_is_complex()
         return self._apply_element_wise_func(abs2)
 
@@ -493,16 +563,24 @@ class Images(AbstractMeasurement):
         self._check_is_complex()
         if self.is_lazy:
             xp = get_array_module(self.array)
-            array = self.array.rechunk(self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],)))
-            array = array.map_blocks(integrate_gradient_2d, sampling=self.sampling, meta=xp.array((), dtype=np.float32))
+            array = self.array.rechunk(
+                self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
+            )
+            array = array.map_blocks(
+                integrate_gradient_2d,
+                sampling=self.sampling,
+                meta=xp.array((), dtype=np.float32),
+            )
         else:
             array = integrate_gradient_2d(self.array, sampling=self.sampling)
 
-        kwargs = self.copy_kwargs(exclude=('array',))
-        kwargs['array'] = array
+        kwargs = self.copy_kwargs(exclude=("array",))
+        kwargs["array"] = array
         return self.__class__(**kwargs)
 
-    def crop(self, extent: Tuple[float, float], offset: Tuple[float, float] = (0., 0.)):
+    def crop(
+        self, extent: Tuple[float, float], offset: Tuple[float, float] = (0.0, 0.0)
+    ):
         """
         Crop images to a smaller extent.
 
@@ -518,25 +596,35 @@ class Images(AbstractMeasurement):
         cropped_images : Images
         """
 
-        offset = (int(np.round(self.base_shape[0] * offset[0] / self.extent[0])),
-                  int(np.round(self.base_shape[1] * offset[1] / self.extent[1])))
-        new_shape = (int(np.round(self.base_shape[0] * extent[0] / self.extent[0])),
-                     int(np.round(self.base_shape[1] * extent[1] / self.extent[1])))
+        offset = (
+            int(np.round(self.base_shape[0] * offset[0] / self.extent[0])),
+            int(np.round(self.base_shape[1] * offset[1] / self.extent[1])),
+        )
+        new_shape = (
+            int(np.round(self.base_shape[0] * extent[0] / self.extent[0])),
+            int(np.round(self.base_shape[1] * extent[1] / self.extent[1])),
+        )
 
-        array = self.array[..., offset[0]:offset[0] + new_shape[0], offset[1]:offset[1] + new_shape[1]]
+        array = self.array[
+            ...,
+            offset[0] : offset[0] + new_shape[0],
+            offset[1] : offset[1] + new_shape[1],
+        ]
 
-        kwargs = self.copy_kwargs(exclude=('array',))
-        kwargs['array'] = array
+        kwargs = self.copy_kwargs(exclude=("array",))
+        kwargs["array"] = array
         return self.__class__(**kwargs)
 
-    def interpolate(self,
-                    sampling: Union[float, Tuple[float, float]] = None,
-                    gpts: Union[int, Tuple[int, int]] = None,
-                    method: str = 'fft',
-                    boundary: str = 'periodic',
-                    order: int = 3,
-                    normalization: str = 'values',
-                    cval: float = 0.) -> 'Images':
+    def interpolate(
+        self,
+        sampling: Union[float, Tuple[float, float]] = None,
+        gpts: Union[int, Tuple[int, int]] = None,
+        method: str = "fft",
+        boundary: str = "periodic",
+        order: int = 3,
+        normalization: str = "values",
+        cval: float = 0.0,
+    ) -> "Images":
         """
         Interpolate images producing equivalent images with a different sampling.
 
@@ -589,8 +677,8 @@ class Images(AbstractMeasurement):
         -------
         interpolated_images : Images
         """
-        if method == 'fft' and boundary != 'periodic':
-            raise ValueError('only periodic boundaries available for FFT interpolation')
+        if method == "fft" and boundary != "periodic":
+            raise ValueError("only periodic boundaries available for FFT interpolation")
 
         if sampling is None and gpts is None:
             raise ValueError()
@@ -612,79 +700,98 @@ class Images(AbstractMeasurement):
 
         def interpolate_spline(array, old_gpts, new_gpts, pad_mode, order, cval):
             xp = get_array_module(array)
-            x = xp.linspace(0., old_gpts[0], new_gpts[0], endpoint=False)
-            y = xp.linspace(0., old_gpts[1], new_gpts[1], endpoint=False)
-            positions = xp.meshgrid(x, y, indexing='ij')
+            x = xp.linspace(0.0, old_gpts[0], new_gpts[0], endpoint=False)
+            y = xp.linspace(0.0, old_gpts[1], new_gpts[1], endpoint=False)
+            positions = xp.meshgrid(x, y, indexing="ij")
             positions = xp.stack(positions, axis=-1)
             return interpolate_stack(array, positions, pad_mode, order=order, cval=cval)
 
-        if boundary == 'periodic':
-            boundary = 'wrap'
+        if boundary == "periodic":
+            boundary = "wrap"
 
         array = None
         if self.is_lazy:
-            array = self.array.rechunk(chunks=self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],)))
-            if method == 'fft':
-                array = array.map_blocks(fft_interpolate,
-                                         new_shape=gpts,
-                                         normalization=normalization,
-                                         chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
-                                         meta=xp.array((), dtype=self.array.dtype))
+            array = self.array.rechunk(
+                chunks=self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
+            )
+            if method == "fft":
+                array = array.map_blocks(
+                    fft_interpolate,
+                    new_shape=gpts,
+                    normalization=normalization,
+                    chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                    meta=xp.array((), dtype=self.array.dtype),
+                )
 
-            elif method == 'spline':
-                array = array.map_blocks(interpolate_spline,
-                                         old_gpts=self.shape[-2:],
-                                         new_gpts=gpts,
-                                         order=order,
-                                         cval=cval,
-                                         pad_mode=boundary,
-                                         chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
-                                         meta=xp.array((), dtype=self.array.dtype))
+            elif method == "spline":
+                array = array.map_blocks(
+                    interpolate_spline,
+                    old_gpts=self.shape[-2:],
+                    new_gpts=gpts,
+                    order=order,
+                    cval=cval,
+                    pad_mode=boundary,
+                    chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                    meta=xp.array((), dtype=self.array.dtype),
+                )
 
         else:
-            if method == 'fft':
+            if method == "fft":
                 array = fft_interpolate(self.array, gpts, normalization=normalization)
-            elif method == 'spline':
-                array = interpolate_spline(self.array,
-                                           old_gpts=self.shape[-2:],
-                                           new_gpts=gpts,
-                                           pad_mode=boundary,
-                                           order=order,
-                                           cval=cval)
+            elif method == "spline":
+                array = interpolate_spline(
+                    self.array,
+                    old_gpts=self.shape[-2:],
+                    new_gpts=gpts,
+                    pad_mode=boundary,
+                    order=order,
+                    cval=cval,
+                )
 
         if array is None:
             raise RuntimeError()
 
-        kwargs = self.copy_kwargs(exclude=('array',))
-        kwargs['sampling'] = sampling
-        kwargs['array'] = array
+        kwargs = self.copy_kwargs(exclude=("array",))
+        kwargs["sampling"] = sampling
+        kwargs["array"] = array
         return self.__class__(**kwargs)
 
-    def interpolate_line_at_position(self,
-                                     center: Union[Tuple[float, float], Atom],
-                                     angle: float,
-                                     extent: float,
-                                     gpts: int = None,
-                                     sampling: float = None,
-                                     width: float = 0.,
-                                     order: int = 3,
-                                     endpoint: bool = True):
+    def interpolate_line_at_position(
+        self,
+        center: Union[Tuple[float, float], Atom],
+        angle: float,
+        extent: float,
+        gpts: int = None,
+        sampling: float = None,
+        width: float = 0.0,
+        order: int = 3,
+        endpoint: bool = True,
+    ):
 
         from abtem.waves.scan import LineScan
 
         scan = LineScan.at_position(position=center, extent=extent, angle=angle)
 
-        return self.interpolate_line(scan.start, scan.end, gpts=gpts, sampling=sampling, width=width, order=order,
-                                     endpoint=endpoint)
+        return self.interpolate_line(
+            scan.start,
+            scan.end,
+            gpts=gpts,
+            sampling=sampling,
+            width=width,
+            order=order,
+            endpoint=endpoint,
+        )
 
-    def interpolate_line(self,
-                         start: Union[Tuple[float, float], Atom] = None,
-                         end: Union[Tuple[float, float], Atom] = None,
-                         gpts: int = None,
-                         sampling: float = None,
-                         width: float = 0.,
-                         order: int = 3,
-                         endpoint: bool = False) -> 'LineProfiles':
+    def interpolate_line(
+        self,
+        start: Union[Tuple[float, float], Atom] = None,
+        end: Union[Tuple[float, float], Atom] = None,
+        gpts: int = None,
+        sampling: float = None,
+        width: float = 0.0,
+        order: int = 3,
+        endpoint: bool = False,
+    ) -> "LineProfiles":
         """
         Interpolate image along a line.
 
@@ -719,12 +826,14 @@ class Images(AbstractMeasurement):
         xp = get_array_module(self.array)
 
         if start is None:
-            start = (0., 0.)
+            start = (0.0, 0.0)
 
         if end is None:
-            end = (0., self.extent[0])
+            end = (0.0, self.extent[0])
 
-        scan = LineScan(start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint)
+        scan = LineScan(
+            start=start, end=end, gpts=gpts, sampling=sampling, endpoint=endpoint
+        )
 
         positions = xp.asarray(scan.get_positions(lazy=False) / self.sampling)
 
@@ -733,28 +842,37 @@ class Images(AbstractMeasurement):
             direction = direction / xp.linalg.norm(direction)
             perpendicular_direction = xp.array([-direction[1], direction[0]])
             n = xp.floor(width / min(self.sampling) / 2) * 2 + 1
-            perpendicular_positions = xp.linspace(-n / 2, n / 2, int(n))[:, None] * perpendicular_direction[None]
+            perpendicular_positions = (
+                xp.linspace(-n / 2, n / 2, int(n))[:, None]
+                * perpendicular_direction[None]
+            )
             positions = perpendicular_positions[None, :] + positions[:, None]
 
         if self.is_lazy:
-            array = self.array.map_blocks(interpolate_stack,
-                                          positions=positions,
-                                          mode='wrap',
-                                          order=order,
-                                          drop_axis=self.base_axes,
-                                          new_axis=self.base_axes[0],
-                                          chunks=self.array.chunks[:-2] + (positions.shape[0],),
-                                          meta=xp.array((), dtype=np.float32))
+            array = self.array.map_blocks(
+                interpolate_stack,
+                positions=positions,
+                mode="wrap",
+                order=order,
+                drop_axis=self.base_axes,
+                new_axis=self.base_axes[0],
+                chunks=self.array.chunks[:-2] + (positions.shape[0],),
+                meta=xp.array((), dtype=np.float32),
+            )
         else:
-            array = interpolate_stack(self.array, positions, mode='wrap', order=order)
+            array = interpolate_stack(self.array, positions, mode="wrap", order=order)
 
         if width:
             array = array.mean(-1)
 
-        return LineProfiles(array=array, sampling=scan.sampling,
-                            ensemble_axes_metadata=self.ensemble_axes_metadata, metadata=self.metadata)
+        return LineProfiles(
+            array=array,
+            sampling=scan.sampling,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=self.metadata,
+        )
 
-    def tile(self, repetitions: Tuple[int, int]) -> 'Images':
+    def tile(self, repetitions: Tuple[int, int]) -> "Images":
         """
         Tile images.
 
@@ -769,11 +887,18 @@ class Images(AbstractMeasurement):
         """
         if len(repetitions) != 2:
             raise RuntimeError()
-        kwargs = self.copy_kwargs(exclude=('array',))
-        kwargs['array'] = np.tile(self.array, (1,) * (len(self.array.shape) - 2) + repetitions)
+        kwargs = self.copy_kwargs(exclude=("array",))
+        kwargs["array"] = np.tile(
+            self.array, (1,) * (len(self.array.shape) - 2) + repetitions
+        )
         return self.__class__(**kwargs)
 
-    def gaussian_filter(self, sigma: Union[float, Tuple[float, float]], boundary: str = 'periodic', cval: float = 0.):
+    def gaussian_filter(
+        self,
+        sigma: Union[float, Tuple[float, float]],
+        boundary: str = "periodic",
+        cval: float = 0.0,
+    ):
         """
         Apply 2d gaussian filter to images.
 
@@ -804,9 +929,9 @@ class Images(AbstractMeasurement):
         xp = get_array_module(self.array)
         gaussian_filter = get_ndimage_module(self.array).gaussian_filter
 
-        if boundary == 'periodic':
-            mode = 'wrap'
-        elif boundary in ('reflect', 'constant'):
+        if boundary == "periodic":
+            mode = "wrap"
+        elif boundary in ("reflect", "constant"):
             mode = boundary
         else:
             raise ValueError()
@@ -814,25 +939,31 @@ class Images(AbstractMeasurement):
         if np.isscalar(sigma):
             sigma = (sigma,) * 2
 
-        sigma = (0,) * (len(self.shape) - 2) + tuple(s / d for s, d in zip(sigma, self.sampling))
+        sigma = (0,) * (len(self.shape) - 2) + tuple(
+            s / d for s, d in zip(sigma, self.sampling)
+        )
 
         if self.is_lazy:
-            depth = tuple(min(int(np.ceil(4.0 * s)), n) for s, n in zip(sigma, self.base_shape))
-            array = self.array.map_overlap(gaussian_filter,
-                                           sigma=sigma,
-                                           boundary=boundary,
-                                           mode=mode,
-                                           cval=cval,
-                                           depth=(0,) * (len(self.shape) - 2) + depth,
-                                           meta=xp.array((), dtype=xp.float32))
+            depth = tuple(
+                min(int(np.ceil(4.0 * s)), n) for s, n in zip(sigma, self.base_shape)
+            )
+            array = self.array.map_overlap(
+                gaussian_filter,
+                sigma=sigma,
+                boundary=boundary,
+                mode=mode,
+                cval=cval,
+                depth=(0,) * (len(self.shape) - 2) + depth,
+                meta=xp.array((), dtype=xp.float32),
+            )
         else:
             array = gaussian_filter(self.array, sigma=sigma, mode=mode, cval=cval)
 
-        kwargs = self.copy_kwargs(exclude=('array',))
-        kwargs['array'] = array
+        kwargs = self.copy_kwargs(exclude=("array",))
+        kwargs["array"] = array
         return self.__class__(**kwargs)
 
-    def diffractograms(self) -> 'DiffractionPatterns':
+    def diffractograms(self) -> "DiffractionPatterns":
         """
         Calculate the diffractograms (i.e. power spectra) from the images.
 
@@ -847,44 +978,51 @@ class Images(AbstractMeasurement):
             return xp.fft.fftshift(xp.abs(array), axes=(-2, -1))
 
         if self.is_lazy:
-            array = self.array.rechunk(chunks=self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],)))
-            array = array.map_blocks(diffractograms, meta=xp.array((), dtype=xp.float32))
+            array = self.array.rechunk(
+                chunks=self.array.chunks[:-2] + ((self.shape[-2],), (self.shape[-1],))
+            )
+            array = array.map_blocks(
+                diffractograms, meta=xp.array((), dtype=xp.float32)
+            )
         else:
             array = diffractograms(self.array)
 
         sampling = 1 / self.extent[0], 1 / self.extent[1]
-        return DiffractionPatterns(array=array,
-                                   sampling=sampling,
-                                   ensemble_axes_metadata=self.ensemble_axes_metadata,
-                                   metadata=self.metadata)
+        return DiffractionPatterns(
+            array=array,
+            sampling=sampling,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=self.metadata,
+        )
 
-    def show(self,
-             cmap: str = 'viridis',
-             explode: bool = False,
-             ax: Axes = None,
-             figsize: Tuple[int, int] = None,
-             title: Union[bool, str] = True,
-             panel_titles: Union[bool, List[str]] = True,
-             x_ticks: bool = True,
-             y_ticks: bool = True,
-             x_label: Union[bool, str] = True,
-             y_label: Union[bool, str] = True,
-             row_super_label: Union[bool, str] = False,
-             col_super_label: Union[bool, str] = False,
-             power: float = 1.,
-             vmin: float = None,
-             vmax: float = None,
-             common_color_scale=False,
-             cbar: bool = False,
-             cbar_labels: str = None,
-             sizebar: bool = False,
-             float_formatting: str = '.2f',
-             panel_labels: dict = None,
-             image_grid_kwargs: dict = None,
-             imshow_kwargs: dict = None,
-             anchored_text_kwargs: dict = None,
-             domain_coloring_kwargs: dict = None,
-             ) -> Axes:
+    def show(
+        self,
+        cmap: str = "viridis",
+        explode: bool = False,
+        ax: Axes = None,
+        figsize: Tuple[int, int] = None,
+        title: Union[bool, str] = True,
+        panel_titles: Union[bool, List[str]] = True,
+        x_ticks: bool = True,
+        y_ticks: bool = True,
+        x_label: Union[bool, str] = True,
+        y_label: Union[bool, str] = True,
+        row_super_label: Union[bool, str] = False,
+        col_super_label: Union[bool, str] = False,
+        power: float = 1.0,
+        vmin: float = None,
+        vmax: float = None,
+        common_color_scale=False,
+        cbar: bool = False,
+        cbar_labels: str = None,
+        sizebar: bool = False,
+        float_formatting: str = ".2f",
+        panel_labels: dict = None,
+        image_grid_kwargs: dict = None,
+        imshow_kwargs: dict = None,
+        anchored_text_kwargs: dict = None,
+        domain_coloring_kwargs: dict = None,
+    ) -> Axes:
         """
         Show the image(s) using matplotlib.
 
@@ -957,35 +1095,38 @@ class Images(AbstractMeasurement):
             measurements = self[(0,) * len(self.ensemble_shape)]
         else:
             if ax is not None:
-                raise NotImplementedError('`ax` not implemented for with `explode = True`')
+                raise NotImplementedError(
+                    "`ax` not implemented for with `explode = True`"
+                )
             measurements = self
 
-        return show_measurement_2d_exploded(measurements=measurements,
-                                            cmap=cmap,
-                                            figsize=figsize,
-                                            super_title=title,
-                                            sub_title=panel_titles,
-                                            x_ticks=x_ticks,
-                                            y_ticks=y_ticks,
-                                            x_label=x_label,
-                                            y_label=y_label,
-                                            row_super_label=row_super_label,
-                                            col_super_label=col_super_label,
-                                            power=power,
-                                            vmin=vmin,
-                                            vmax=vmax,
-                                            common_color_scale=common_color_scale,
-                                            cbar=cbar,
-                                            cbar_labels=cbar_labels,
-                                            sizebar=sizebar,
-                                            float_formatting=float_formatting,
-                                            panel_labels=panel_labels,
-                                            image_grid_kwargs=image_grid_kwargs,
-                                            imshow_kwargs=imshow_kwargs,
-                                            anchored_text_kwargs=anchored_text_kwargs,
-                                            domain_coloring_kwargs=domain_coloring_kwargs,
-                                            axes=ax
-                                            )
+        return show_measurement_2d_exploded(
+            measurements=measurements,
+            cmap=cmap,
+            figsize=figsize,
+            super_title=title,
+            sub_title=panel_titles,
+            x_ticks=x_ticks,
+            y_ticks=y_ticks,
+            x_label=x_label,
+            y_label=y_label,
+            row_super_label=row_super_label,
+            col_super_label=col_super_label,
+            power=power,
+            vmin=vmin,
+            vmax=vmax,
+            common_color_scale=common_color_scale,
+            cbar=cbar,
+            cbar_labels=cbar_labels,
+            sizebar=sizebar,
+            float_formatting=float_formatting,
+            panel_labels=panel_labels,
+            image_grid_kwargs=image_grid_kwargs,
+            imshow_kwargs=imshow_kwargs,
+            anchored_text_kwargs=anchored_text_kwargs,
+            domain_coloring_kwargs=domain_coloring_kwargs,
+            axes=ax,
+        )
 
 
 class SinglePointMeasurement(AbstractMeasurement):
@@ -998,29 +1139,38 @@ class SinglePointMeasurement(AbstractMeasurement):
 class AbstractMeasurement1d(AbstractMeasurement):
     _base_dims = 1
 
-    def __init__(self,
-                 array: np.ndarray,
-                 sampling: float = None,
-                 ensemble_axes_metadata: List[AxisMetadata] = None,
-                 metadata: dict = None):
+    def __init__(
+        self,
+        array: np.ndarray,
+        sampling: float = None,
+        ensemble_axes_metadata: List[AxisMetadata] = None,
+        metadata: dict = None,
+    ):
 
         self._sampling = sampling
 
-        super().__init__(array=array,
-                         ensemble_axes_metadata=ensemble_axes_metadata,
-                         metadata=metadata,
-                         allow_complex=True,
-                         allow_base_axis_chunks=True)
+        super().__init__(
+            array=array,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+            allow_complex=True,
+            allow_base_axis_chunks=True,
+        )
 
     @property
     def _area_per_pixel(self):
-        raise RuntimeError('cannot infer pixel area from metadata')
+        raise RuntimeError("cannot infer pixel area from metadata")
 
     @classmethod
-    def from_array_and_metadata(cls, array, axes_metadata, metadata=None) -> 'T':
+    def from_array_and_metadata(cls, array, axes_metadata, metadata=None) -> "T":
         sampling = axes_metadata[-1].sampling
         axes_metadata = axes_metadata[:-1]
-        return cls(array, sampling=sampling, ensemble_axes_metadata=axes_metadata, metadata=metadata)
+        return cls(
+            array,
+            sampling=sampling,
+            ensemble_axes_metadata=axes_metadata,
+            metadata=metadata,
+        )
 
     @property
     def extent(self) -> float:
@@ -1035,11 +1185,13 @@ class AbstractMeasurement1d(AbstractMeasurement):
     def base_axes_metadata(self) -> List[Union[RealSpaceAxis, FourierSpaceAxis]]:
         pass
 
-    def interpolate(self,
-                    sampling: float = None,
-                    gpts: int = None,
-                    order: int = 3,
-                    endpoint: bool = False) -> 'T':
+    def interpolate(
+        self,
+        sampling: float = None,
+        gpts: int = None,
+        order: int = 3,
+        endpoint: bool = False,
+    ) -> "T":
 
         map_coordinates = get_ndimage_module(self.array).map_coordinates
         xp = get_array_module(self.array)
@@ -1060,8 +1212,10 @@ class AbstractMeasurement1d(AbstractMeasurement):
             old_shape = array.shape
             array = array.reshape((-1, array.shape[-1]))
 
-            array = xp.pad(array, ((0,) * 2, (3,) * 2), mode='wrap')
-            new_points = xp.linspace(3., array.shape[-1] - 3., gpts, endpoint=endpoint)[None]
+            array = xp.pad(array, ((0,) * 2, (3,) * 2), mode="wrap")
+            new_points = xp.linspace(
+                3.0, array.shape[-1] - 3.0, gpts, endpoint=endpoint
+            )[None]
 
             new_array = xp.zeros(array.shape[:-1] + (gpts,), dtype=xp.float32)
             for i in range(len(array)):
@@ -1071,95 +1225,131 @@ class AbstractMeasurement1d(AbstractMeasurement):
 
         if self.is_lazy:
             array = self.array.rechunk(self.array.chunks[:-1] + ((self.shape[-1],),))
-            array = array.map_blocks(interpolate, gpts=gpts, endpoint=endpoint, order=order,
-                                     chunks=self.array.chunks[:-1] + ((gpts,)), meta=xp.array((), dtype=xp.float32))
+            array = array.map_blocks(
+                interpolate,
+                gpts=gpts,
+                endpoint=endpoint,
+                order=order,
+                chunks=self.array.chunks[:-1] + ((gpts,)),
+                meta=xp.array((), dtype=xp.float32),
+            )
         else:
             array = interpolate(self.array, gpts, endpoint, order)
 
-        kwargs = self.copy_kwargs(exclude=('array',))
-        kwargs['array'] = array
-        kwargs['sampling'] = sampling
+        kwargs = self.copy_kwargs(exclude=("array",))
+        kwargs["array"] = array
+        kwargs["sampling"] = sampling
         return self.__class__(**kwargs)
 
 
 class LineProfiles(AbstractMeasurement1d):
+    def __init__(
+        self,
+        array: np.ndarray,
+        sampling: float = None,
+        ensemble_axes_metadata: List[AxisMetadata] = None,
+        metadata: dict = None,
+    ):
 
-    def __init__(self,
-                 array: np.ndarray,
-                 sampling: float = None,
-                 ensemble_axes_metadata: List[AxisMetadata] = None,
-                 metadata: dict = None):
-
-        super().__init__(array=array,
-                         sampling=sampling,
-                         ensemble_axes_metadata=ensemble_axes_metadata,
-                         metadata=metadata)
+        super().__init__(
+            array=array,
+            sampling=sampling,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
 
     @property
     def base_axes_metadata(self) -> List[RealSpaceAxis]:
-        return [RealSpaceAxis(label='r', sampling=self.sampling, units='Å')]
+        return [RealSpaceAxis(label="r", sampling=self.sampling, units="Å")]
 
-    def tile(self, reps: int) -> 'LineProfiles':
-        kwargs = self.copy_kwargs(exclude=('array',))
+    def tile(self, reps: int) -> "LineProfiles":
+        kwargs = self.copy_kwargs(exclude=("array",))
         xp = get_array_module(self.array)
         reps = (1,) * (len(self.array.shape) - 1) + (reps,)
 
         if self.is_lazy:
-            kwargs['array'] = da.tile(self.array, reps)
+            kwargs["array"] = da.tile(self.array, reps)
         else:
-            kwargs['array'] = xp.tile(self.array, reps)
+            kwargs["array"] = xp.tile(self.array, reps)
 
         return self.__class__(**kwargs)
 
-    def show(self,
-             ax: Axes = None,
-             x_label=None,
-             title=None,
-             y_label=None):
+    def show(
+        self,
+        ax: Axes = None,
+        x_label=None,
+        title=None,
+        y_label=None,
+        float_formatting: str = ".2f",
+        **kwargs,
+    ):
 
         extent = [0, self.extent]
 
-        return show_measurements_1d(self, x_label=x_label, title=title, extent=extent, ax=ax)
+        return show_measurements_1d(
+            self,
+            x_label=x_label,
+            title=title,
+            extent=extent,
+            ax=ax,
+            float_formatting=float_formatting,
+            **kwargs,
+        )
 
 
 class FourierSpaceLineProfiles(AbstractMeasurement1d):
-
-    def __init__(self,
-                 array: np.ndarray,
-                 sampling: float = None,
-                 ensemble_axes_metadata: List[AxisMetadata] = None,
-                 metadata: dict = None):
-        super().__init__(array=array,
-                         sampling=sampling,
-                         ensemble_axes_metadata=ensemble_axes_metadata,
-                         metadata=metadata)
+    def __init__(
+        self,
+        array: np.ndarray,
+        sampling: float = None,
+        ensemble_axes_metadata: List[AxisMetadata] = None,
+        metadata: dict = None,
+    ):
+        super().__init__(
+            array=array,
+            sampling=sampling,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
 
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
-        return [FourierSpaceAxis(label='k', sampling=self.sampling, units='1 / Å')]
+        return [FourierSpaceAxis(label="k", sampling=self.sampling, units="1 / Å")]
 
     @property
     def angular_extent(self):
         return self.extent * self.wavelength * 1e3
 
-    def show(self,
-             ax: Axes = None,
-             x_label=None,
-             y_label=None,
-             title=None,
-             units: str = 'reciprocal'):
+    def show(
+        self,
+        ax: Axes = None,
+        x_label=None,
+        y_label=None,
+        title=None,
+        units: str = "reciprocal",
+        float_formatting: str = ".2f",
+        **kwargs,
+    ):
 
         if units in angular_units:
             extent = [0, self.angular_extent]
 
             if x_label is None:
-                x_label = 'scattering angle [mrad]'
+                x_label = "scattering angle [mrad]"
         elif units in reciprocal_units:
             extent = [0, self.extent]
         else:
             raise RuntimeError()
 
-        return show_measurements_1d(self, x_label=x_label, extent=extent, title=title, ax=ax)
+        return show_measurements_1d(
+            self,
+            x_label=x_label,
+            extent=extent,
+            title=title,
+            ax=ax,
+            float_formatting=float_formatting,
+            **kwargs,
+        )
 
 
 def integrate_gradient_2d(gradient, sampling):
@@ -1168,7 +1358,7 @@ def integrate_gradient_2d(gradient, sampling):
     (nx, ny) = gx.shape[-2:]
     ikx = xp.fft.fftfreq(nx, d=sampling[0])
     iky = xp.fft.fftfreq(ny, d=sampling[1])
-    grid_ikx, grid_iky = xp.meshgrid(ikx, iky, indexing='ij')
+    grid_ikx, grid_iky = xp.meshgrid(ikx, iky, indexing="ij")
     k = grid_ikx ** 2 + grid_iky ** 2
     k[k == 0] = 1e-12
     That = (xp.fft.fft2(gx) * grid_ikx + xp.fft.fft2(gy) * grid_iky) / (2j * np.pi * k)
@@ -1177,24 +1367,32 @@ def integrate_gradient_2d(gradient, sampling):
     return T
 
 
-def _fourier_space_bilinear_nodes_and_weight(old_shape: Tuple[int, int],
-                                             new_shape: Tuple[int, int],
-                                             old_angular_sampling: Tuple[float, float],
-                                             new_angular_sampling: Tuple[float, float],
-                                             xp) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def _fourier_space_bilinear_nodes_and_weight(
+    old_shape: Tuple[int, int],
+    new_shape: Tuple[int, int],
+    old_angular_sampling: Tuple[float, float],
+    new_angular_sampling: Tuple[float, float],
+    xp,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     nodes = []
     weights = []
 
-    old_sampling = 1 / old_angular_sampling[0] / old_shape[0], 1 / old_angular_sampling[1] / old_shape[1]
-    new_sampling = 1 / new_angular_sampling[0] / new_shape[0], 1 / new_angular_sampling[1] / new_shape[1]
+    old_sampling = (
+        1 / old_angular_sampling[0] / old_shape[0],
+        1 / old_angular_sampling[1] / old_shape[1],
+    )
+    new_sampling = (
+        1 / new_angular_sampling[0] / new_shape[0],
+        1 / new_angular_sampling[1] / new_shape[1],
+    )
 
     for n, m, r, d in zip(old_shape, new_shape, old_sampling, new_sampling):
         k = xp.fft.fftshift(xp.fft.fftfreq(n, r).astype(xp.float32))
         k_new = xp.fft.fftshift(xp.fft.fftfreq(m, d).astype(xp.float32))
         distances = k_new[None] - k[:, None]
-        distances[distances < 0.] = np.inf
+        distances[distances < 0.0] = np.inf
         w = distances.min(0) / (k[1] - k[0])
-        w[w == np.inf] = 0.
+        w[w == np.inf] = 0.0
         nodes.append(distances.argmin(0))
         weights.append(w)
 
@@ -1204,28 +1402,36 @@ def _fourier_space_bilinear_nodes_and_weight(old_shape: Tuple[int, int],
     return v, u, vw, uw
 
 
-def _reduced_scanned_images_or_line_profiles(new_array, old_measurement) -> Union[LineProfiles, Images, np.ndarray]:
+def _reduced_scanned_images_or_line_profiles(
+    new_array, old_measurement
+) -> Union[LineProfiles, Images, np.ndarray]:
     if scanned_measurement_type(old_measurement) is LineProfiles:
         sampling = old_measurement.ensemble_axes_metadata[-1].sampling
 
         ensemble_axes_metadata = old_measurement.ensemble_axes_metadata[:-1]
 
-        return LineProfiles(new_array,
-                            sampling=sampling,
-                            ensemble_axes_metadata=ensemble_axes_metadata,
-                            metadata=old_measurement.metadata)
+        return LineProfiles(
+            new_array,
+            sampling=sampling,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=old_measurement.metadata,
+        )
 
     elif scanned_measurement_type(old_measurement) is Images:
 
         ensemble_axes_metadata = old_measurement.ensemble_axes_metadata[:-2]
 
-        sampling = old_measurement.ensemble_axes_metadata[-2].sampling, \
-                   old_measurement.ensemble_axes_metadata[-1].sampling
+        sampling = (
+            old_measurement.ensemble_axes_metadata[-2].sampling,
+            old_measurement.ensemble_axes_metadata[-1].sampling,
+        )
 
-        images = Images(new_array,
-                        sampling=sampling,
-                        ensemble_axes_metadata=ensemble_axes_metadata,
-                        metadata=old_measurement.metadata)
+        images = Images(
+            new_array,
+            sampling=sampling,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=old_measurement.metadata,
+        )
 
         return images
     else:
@@ -1235,12 +1441,14 @@ def _reduced_scanned_images_or_line_profiles(new_array, old_measurement) -> Unio
 class DiffractionPatterns(AbstractMeasurement):
     _base_dims = 2
 
-    def __init__(self,
-                 array: Union[np.ndarray, da.core.Array],
-                 sampling: Union[float, Tuple[float, float]],
-                 fftshift: bool = False,
-                 ensemble_axes_metadata: List[AxisMetadata] = None,
-                 metadata: dict = None):
+    def __init__(
+        self,
+        array: Union[np.ndarray, da.core.Array],
+        sampling: Union[float, Tuple[float, float]],
+        fftshift: bool = False,
+        ensemble_axes_metadata: List[AxisMetadata] = None,
+        metadata: dict = None,
+    ):
 
         """
         One or more diffraction patterns.
@@ -1271,26 +1479,51 @@ class DiffractionPatterns(AbstractMeasurement):
 
         self._base_axes = (-2, -1)
 
-        super().__init__(array=array, ensemble_axes_metadata=ensemble_axes_metadata, metadata=metadata)
+        super().__init__(
+            array=array,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
 
     @property
     def _area_per_pixel(self):
         if len(self.scan_sampling) == 2:
             return np.prod(self.scan_sampling)
         else:
-            raise RuntimeError('cannot infer pixel area from metadata')
+            raise RuntimeError("cannot infer pixel area from metadata")
 
     @classmethod
     def from_array_and_metadata(cls, array, axes_metadata, metadata=None):
         sampling = (axes_metadata[-2].sampling, axes_metadata[-1].sampling)
         fftshift = axes_metadata[-1].fftshift
         axes_metadata = axes_metadata[:-2]
-        return cls(array, sampling=sampling, ensemble_axes_metadata=axes_metadata, fftshift=fftshift, metadata=metadata)
+        return cls(
+            array,
+            sampling=sampling,
+            ensemble_axes_metadata=axes_metadata,
+            fftshift=fftshift,
+            metadata=metadata,
+        )
 
     @property
     def base_axes_metadata(self):
-        return [FourierSpaceAxis(sampling=self.sampling[0], label='kx', units='1 / Å', fftshift=self.fftshift),
-                FourierSpaceAxis(sampling=self.sampling[1], label='ky', units='1 / Å', fftshift=self.fftshift)]
+        limits = self.limits
+        return [
+            FourierSpaceAxis(
+                sampling=self.sampling[0],
+                offset=limits[0][0],
+                label="kx",
+                units="1 / Å",
+                fftshift=self.fftshift,
+            ),
+            FourierSpaceAxis(
+                sampling=self.sampling[1],
+                offset=limits[1][0],
+                label="ky",
+                units="1 / Å",
+                fftshift=self.fftshift,
+            ),
+        ]
 
     @property
     def fftshift(self):
@@ -1302,11 +1535,17 @@ class DiffractionPatterns(AbstractMeasurement):
 
     @property
     def angular_sampling(self) -> Tuple[float, float]:
-        return self.sampling[0] * self.wavelength * 1e3, self.sampling[1] * self.wavelength * 1e3
+        return (
+            self.sampling[0] * self.wavelength * 1e3,
+            self.sampling[1] * self.wavelength * 1e3,
+        )
 
     @property
     def max_angles(self):
-        return self.shape[-2] // 2 * self.angular_sampling[0], self.shape[-1] // 2 * self.angular_sampling[1]
+        return (
+            self.shape[-2] // 2 * self.angular_sampling[0],
+            self.shape[-1] // 2 * self.angular_sampling[1],
+        )
 
     @property
     def equivalent_real_space_extent(self):
@@ -1314,7 +1553,10 @@ class DiffractionPatterns(AbstractMeasurement):
 
     @property
     def equivalent_real_space_sampling(self):
-        return 1 / self.sampling[0] / self.base_shape[0], 1 / self.sampling[1] / self.base_shape[1]
+        return (
+            1 / self.sampling[0] / self.base_shape[0],
+            1 / self.sampling[1] / self.base_shape[1],
+        )
 
     @property
     def scan_extent(self):
@@ -1328,36 +1570,54 @@ class DiffractionPatterns(AbstractMeasurement):
         limits = []
         for i in (-2, -1):
             if self.shape[i] % 2:
-                limits += [(-(self.shape[i] - 1) // 2 * self.sampling[i], (self.shape[i] - 1) // 2 * self.sampling[i])]
+                limits += [
+                    (
+                        -(self.shape[i] - 1) // 2 * self.sampling[i],
+                        (self.shape[i] - 1) // 2 * self.sampling[i],
+                    )
+                ]
             else:
-                limits += [(-self.shape[i] // 2 * self.sampling[i], (self.shape[i] // 2 - 1) * self.sampling[i])]
+                limits += [
+                    (
+                        -self.shape[i] // 2 * self.sampling[i],
+                        (self.shape[i] // 2 - 1) * self.sampling[i],
+                    )
+                ]
         return limits
 
     @property
     def angular_limits(self) -> List[Tuple[float, float]]:
         limits = self.limits
-        limits[0] = limits[0][0] * self.wavelength * 1e3, limits[0][1] * self.wavelength * 1e3
-        limits[1] = limits[1][0] * self.wavelength * 1e3, limits[1][1] * self.wavelength * 1e3
+        limits[0] = (
+            limits[0][0] * self.wavelength * 1e3,
+            limits[0][1] * self.wavelength * 1e3,
+        )
+        limits[1] = (
+            limits[1][0] * self.wavelength * 1e3,
+            limits[1][1] * self.wavelength * 1e3,
+        )
         return limits
 
     @property
     def angular_coordinates(self) -> Tuple[np.ndarray, np.ndarray]:
-        """ Angular coordinates. """
+        """Angular coordinates."""
         xp = get_array_module(self.array)
         limits = self.angular_limits
-        alpha_x = xp.linspace(limits[0][0], limits[0][1], self.shape[-2], dtype=xp.float32)
-        alpha_y = xp.linspace(limits[1][0], limits[1][1], self.shape[-1], dtype=xp.float32)
+        alpha_x = xp.linspace(
+            limits[0][0], limits[0][1], self.shape[-2], dtype=xp.float32
+        )
+        alpha_y = xp.linspace(
+            limits[1][0], limits[1][1], self.shape[-1], dtype=xp.float32
+        )
         return alpha_x, alpha_y
 
     @staticmethod
     def _batch_interpolate_bilinear(array, new_sampling, sampling, new_gpts):
 
         xp = get_array_module(array)
-        v, u, vw, uw = _fourier_space_bilinear_nodes_and_weight(array.shape[-2:],
-                                                                new_gpts,
-                                                                sampling,
-                                                                new_sampling,
-                                                                xp)
+        v, u, vw, uw = _fourier_space_bilinear_nodes_and_weight(
+            array.shape[-2:], new_gpts, sampling, new_sampling, xp
+        )
 
         old_shape = array.shape
         array = array.reshape((-1,) + array.shape[-2:])
@@ -1434,7 +1694,7 @@ class DiffractionPatterns(AbstractMeasurement):
         interpolated_diffraction_patterns : DiffractionPatterns
         """
 
-        if sampling == 'uniform':
+        if sampling == "uniform":
             sampling = (max(self.sampling),) * 2
 
         elif not isinstance(sampling, str) and np.isscalar(sampling):
@@ -1443,30 +1703,36 @@ class DiffractionPatterns(AbstractMeasurement):
         sampling, gpts = adjusted_gpts(sampling, self.sampling, self.base_shape)
 
         if self.is_lazy:
-            array = self.array.map_blocks(self._batch_interpolate_bilinear,
-                                          sampling=self.sampling,
-                                          new_sampling=sampling,
-                                          new_gpts=gpts,
-                                          chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
-                                          dtype=np.float32)
+            array = self.array.map_blocks(
+                self._batch_interpolate_bilinear,
+                sampling=self.sampling,
+                new_sampling=sampling,
+                new_gpts=gpts,
+                chunks=self.array.chunks[:-2] + ((gpts[0],), (gpts[1],)),
+                dtype=np.float32,
+            )
         else:
-            array = self._batch_interpolate_bilinear(self.array, sampling=self.sampling, new_sampling=sampling,
-                                                     new_gpts=gpts)
+            array = self._batch_interpolate_bilinear(
+                self.array, sampling=self.sampling, new_sampling=sampling, new_gpts=gpts
+            )
 
-        kwargs = self.copy_kwargs(exclude=('array',))
-        kwargs['sampling'] = sampling
-        kwargs['array'] = array
+        kwargs = self.copy_kwargs(exclude=("array",))
+        kwargs["sampling"] = sampling
+        kwargs["array"] = array
         return self.__class__(**kwargs)
 
     def _check_integration_limits(self, inner: float, outer: float):
         if inner >= outer:
-            raise RuntimeError(f'inner detection ({inner} mrad) angle exceeds outer detection angle'
-                               f'({outer} mrad)')
+            raise RuntimeError(
+                f"inner detection ({inner} mrad) angle exceeds outer detection angle"
+                f"({outer} mrad)"
+            )
 
         if (outer > self.max_angles[0]) or (outer > self.max_angles[1]):
             raise RuntimeError(
-                f'outer integration limit exceeds the maximum simulated angle ({outer} mrad > '
-                f'{min(self.max_angles)} mrad), increase the number of grid points')
+                f"outer integration limit exceeds the maximum simulated angle ({outer} mrad > "
+                f"{min(self.max_angles)} mrad), increase the number of grid points"
+            )
 
         # integration_range = outer - inner
         # if integration_range < min(self.angular_sampling):
@@ -1474,7 +1740,9 @@ class DiffractionPatterns(AbstractMeasurement):
         #         f'integration range ({integration_range} mrad) smaller than angular sampling of simulation'
         #         f' ({min(self.angular_sampling)} mrad)')
 
-    def gaussian_source_size(self, sigma: Union[float, Tuple[float, float]]) -> 'DiffractionPatterns':
+    def gaussian_source_size(
+        self, sigma: Union[float, Tuple[float, float]]
+    ) -> "DiffractionPatterns":
         """
         Simulate Gaussian source size by applying a gaussian filter.
 
@@ -1496,7 +1764,8 @@ class DiffractionPatterns(AbstractMeasurement):
         """
         if self.num_scan_axes < 2:
             raise RuntimeError(
-                'gaussian_source_size not implemented for DiffractionPatterns with less than 2 scan axes')
+                "gaussian_source_size not implemented for DiffractionPatterns with less than 2 scan axes"
+            )
 
         if np.isscalar(sigma):
             sigma = (sigma,) * 2
@@ -1516,34 +1785,40 @@ class DiffractionPatterns(AbstractMeasurement):
                 depth += (min(int(np.ceil(4.0 * sigma[i] / scan_sampling)), n),)
                 i += 1
             else:
-                padded_sigma += (0.,)
+                padded_sigma += (0.0,)
                 depth += (0,)
 
-        padded_sigma += (0.,) * 2
+        padded_sigma += (0.0,) * 2
         depth += (0,) * 2
 
         if self.is_lazy:
-            array = self.array.map_overlap(gaussian_filter,
-                                           sigma=padded_sigma,
-                                           mode='wrap',
-                                           depth=depth,
-                                           meta=xp.array((), dtype=xp.float32))
+            array = self.array.map_overlap(
+                gaussian_filter,
+                sigma=padded_sigma,
+                mode="wrap",
+                depth=depth,
+                meta=xp.array((), dtype=xp.float32),
+            )
         else:
-            array = gaussian_filter(self.array, sigma=padded_sigma, mode='wrap')
+            array = gaussian_filter(self.array, sigma=padded_sigma, mode="wrap")
 
-        return self.__class__(array,
-                              sampling=self.sampling,
-                              ensemble_axes_metadata=self.ensemble_axes_metadata,
-                              metadata=self.metadata,
-                              fftshift=self.fftshift)
+        return self.__class__(
+            array,
+            sampling=self.sampling,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=self.metadata,
+            fftshift=self.fftshift,
+        )
 
-    def polar_binning(self,
-                      nbins_radial: int,
-                      nbins_azimuthal: int,
-                      inner: float = 0.,
-                      outer: float = None,
-                      rotation: float = 0.,
-                      offset: Tuple[float, float] = (0., 0.)):
+    def polar_binning(
+        self,
+        nbins_radial: int,
+        nbins_azimuthal: int,
+        inner: float = 0.0,
+        outer: float = None,
+        rotation: float = 0.0,
+        offset: Tuple[float, float] = (0.0, 0.0),
+    ):
         """
         Create polar measurements from the diffraction patterns by binning the measurements on a polar grid. This
         method may be used to simulate a segmented detector with a specified .
@@ -1581,24 +1856,39 @@ class DiffractionPatterns(AbstractMeasurement):
         def radial_binning(array, nbins_radial, nbins_azimuthal, sampling):
             xp = get_array_module(array)
 
-            indices = polar_detector_bins(gpts=array.shape[-2:],
-                                          sampling=sampling,
-                                          inner=inner,
-                                          outer=outer,
-                                          nbins_radial=nbins_radial,
-                                          nbins_azimuthal=nbins_azimuthal,
-                                          fftshift=self.fftshift,
-                                          rotation=rotation,
-                                          offset=offset,
-                                          return_indices=True)
+            indices = polar_detector_bins(
+                gpts=array.shape[-2:],
+                sampling=sampling,
+                inner=inner,
+                outer=outer,
+                nbins_radial=nbins_radial,
+                nbins_azimuthal=nbins_azimuthal,
+                fftshift=self.fftshift,
+                rotation=rotation,
+                offset=offset,
+                return_indices=True,
+            )
 
-            separators = xp.concatenate((xp.array([0]), xp.cumsum(xp.array([len(i) for i in indices]))))
+            separators = xp.concatenate(
+                (xp.array([0]), xp.cumsum(xp.array([len(i) for i in indices])))
+            )
 
             new_shape = array.shape[:-2] + (nbins_radial, nbins_azimuthal)
 
-            array = array.reshape((-1, array.shape[-2] * array.shape[-1],))[..., np.concatenate(indices)]
+            array = array.reshape(
+                (
+                    -1,
+                    array.shape[-2] * array.shape[-1],
+                )
+            )[..., np.concatenate(indices)]
 
-            result = xp.zeros((array.shape[0], len(indices),), dtype=xp.float32)
+            result = xp.zeros(
+                (
+                    array.shape[0],
+                    len(indices),
+                ),
+                dtype=xp.float32,
+            )
 
             if xp is cp:
                 sum_run_length_encoded_cuda(array, result, separators)
@@ -1609,35 +1899,47 @@ class DiffractionPatterns(AbstractMeasurement):
             return result.reshape(new_shape)
 
         if self.is_lazy:
-            array = self.array.map_blocks(radial_binning,
-                                          nbins_radial=nbins_radial,
-                                          nbins_azimuthal=nbins_azimuthal,
-                                          sampling=self.angular_sampling,
-                                          drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
-                                          chunks=self.array.chunks[:-2] + ((nbins_radial,), (nbins_azimuthal,),),
-                                          new_axis=(len(self.shape) - 2, len(self.shape) - 1,),
-                                          meta=xp.array((), dtype=xp.float32))
+            array = self.array.map_blocks(
+                radial_binning,
+                nbins_radial=nbins_radial,
+                nbins_azimuthal=nbins_azimuthal,
+                sampling=self.angular_sampling,
+                drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
+                chunks=self.array.chunks[:-2]
+                + (
+                    (nbins_radial,),
+                    (nbins_azimuthal,),
+                ),
+                new_axis=(
+                    len(self.shape) - 2,
+                    len(self.shape) - 1,
+                ),
+                meta=xp.array((), dtype=xp.float32),
+            )
         else:
-            array = radial_binning(self.array,
-                                   nbins_radial=nbins_radial,
-                                   nbins_azimuthal=nbins_azimuthal,
-                                   sampling=self.angular_sampling)
+            array = radial_binning(
+                self.array,
+                nbins_radial=nbins_radial,
+                nbins_azimuthal=nbins_azimuthal,
+                sampling=self.angular_sampling,
+            )
 
         radial_sampling = (outer - inner) / nbins_radial
         azimuthal_sampling = 2 * np.pi / nbins_azimuthal
 
-        return PolarMeasurements(array,
-                                 radial_sampling=radial_sampling,
-                                 azimuthal_sampling=azimuthal_sampling,
-                                 radial_offset=inner,
-                                 azimuthal_offset=rotation,
-                                 ensemble_axes_metadata=self.ensemble_axes_metadata,
-                                 metadata=self.metadata)
+        return PolarMeasurements(
+            array,
+            radial_sampling=radial_sampling,
+            azimuthal_sampling=azimuthal_sampling,
+            radial_offset=inner,
+            azimuthal_offset=rotation,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=self.metadata,
+        )
 
-    def radial_binning(self,
-                       step_size: float = 1.,
-                       inner: float = 0.,
-                       outer: float = None) -> 'PolarMeasurements':
+    def radial_binning(
+        self, step_size: float = 1.0, inner: float = 0.0, outer: float = None
+    ) -> "PolarMeasurements":
         """
         Create polar measurements from the diffraction patterns by binning the measurements in annular regions.
 
@@ -1686,13 +1988,15 @@ class DiffractionPatterns(AbstractMeasurement):
 
         def integrate_fourier_space(array, sampling):
 
-            bins = polar_detector_bins(gpts=array.shape[-2:],
-                                       sampling=sampling,
-                                       inner=inner,
-                                       outer=outer,
-                                       nbins_radial=1,
-                                       nbins_azimuthal=1,
-                                       fftshift=self.fftshift)
+            bins = polar_detector_bins(
+                gpts=array.shape[-2:],
+                sampling=sampling,
+                inner=inner,
+                outer=outer,
+                nbins_radial=1,
+                nbins_azimuthal=1,
+                fftshift=self.fftshift,
+            )
 
             xp = get_array_module(array)
             bins = xp.asarray(bins, dtype=xp.float32)
@@ -1700,12 +2004,16 @@ class DiffractionPatterns(AbstractMeasurement):
             return xp.sum(array * (bins == 0), axis=(-2, -1))
 
         if self.is_lazy:
-            integrated_intensity = self.array.map_blocks(integrate_fourier_space,
-                                                         sampling=self.angular_sampling,
-                                                         drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
-                                                         meta=xp.array((), dtype=xp.float32))
+            integrated_intensity = self.array.map_blocks(
+                integrate_fourier_space,
+                sampling=self.angular_sampling,
+                drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
+                meta=xp.array((), dtype=xp.float32),
+            )
         else:
-            integrated_intensity = integrate_fourier_space(self.array, sampling=self.angular_sampling)
+            integrated_intensity = integrate_fourier_space(
+                self.array, sampling=self.angular_sampling
+            )
 
         return _reduced_scanned_images_or_line_profiles(integrated_intensity, self)
 
@@ -1723,14 +2031,16 @@ class DiffractionPatterns(AbstractMeasurement):
         if isinstance(com, Images):
             return com.integrate_gradient()
         else:
-            raise RuntimeError(f'integrated center of mass not implemented for DiffractionPatterns with '
-                               f'{self.num_scan_axes} scan axes')
+            raise RuntimeError(
+                f"integrated center of mass not implemented for DiffractionPatterns with "
+                f"{self.num_scan_axes} scan axes"
+            )
 
     @staticmethod
     def _com(array, x, y):
         com_x = (array * x[:, None]).sum(axis=(-2, -1))
         com_y = (array * y[None]).sum(axis=(-2, -1))
-        com = com_x + 1.j * com_y
+        com = com_x + 1.0j * com_y
         return com
 
     def center_of_mass(self) -> Union[Images, LineProfiles]:
@@ -1752,25 +2062,29 @@ class DiffractionPatterns(AbstractMeasurement):
         x, y = xp.asarray(x), xp.asarray(y)
 
         if self.is_lazy:
-            array = self.array.map_blocks(self._com, x=x, y=y, drop_axis=self.base_axes, dtype=np.complex64)
+            array = self.array.map_blocks(
+                self._com, x=x, y=y, drop_axis=self.base_axes, dtype=np.complex64
+            )
         else:
             array = self._com(self.array, x=x, y=y)
 
         return _reduced_scanned_images_or_line_profiles(array, self)
 
-    def epie(self,
-             probe_guess,
-             max_batch: int = 8,
-             max_iter: int = 4,
-             alpha: float = 1.,
-             beta: float = 1.,
-             fix_probe: bool = False,
-             fix_com: bool = True,
-             crop_to_scan: bool = True) -> Images:
+    def epie(
+        self,
+        probe_guess,
+        max_batch: int = 8,
+        max_iter: int = 4,
+        alpha: float = 1.0,
+        beta: float = 1.0,
+        fix_probe: bool = False,
+        fix_com: bool = True,
+        crop_to_scan: bool = True,
+    ) -> Images:
 
         """
         Ptychographic reconstruction with the extended ptychographical engine (ePIE) algorithm.
-        
+
         probe_guess : abtem.waves.Probe
             The initial guess for the probe.
         max_batch : int
@@ -1791,21 +2105,23 @@ class DiffractionPatterns(AbstractMeasurement):
 
         from abtem.reconstruct.epie import epie
 
-        reconstruction = epie(self,
-                              probe_guess,
-                              max_batch=max_batch,
-                              max_iter=max_iter,
-                              alpha=alpha,
-                              beta=beta,
-                              fix_com=fix_com,
-                              fix_probe=fix_probe)
+        reconstruction = epie(
+            self,
+            probe_guess,
+            max_batch=max_batch,
+            max_iter=max_iter,
+            alpha=alpha,
+            beta=beta,
+            fix_com=fix_com,
+            fix_probe=fix_probe,
+        )
 
         if crop_to_scan:
             reconstruction = reconstruction.crop(self.scan_extent)
 
         return reconstruction
 
-    def bandlimit(self, inner: float, outer: float) -> 'DiffractionPatterns':
+    def bandlimit(self, inner: float, outer: float) -> "DiffractionPatterns":
         """
         Bandlimit the diffraction patterns by setting everything outside an annulus defined by two radial angles to
         zero.
@@ -1831,25 +2147,32 @@ class DiffractionPatterns(AbstractMeasurement):
         xp = get_array_module(self.array)
 
         if self.is_lazy:
-            array = self.array.map_blocks(bandlimit, inner=inner, outer=outer, meta=xp.array((), dtype=xp.float32))
+            array = self.array.map_blocks(
+                bandlimit, inner=inner, outer=outer, meta=xp.array((), dtype=xp.float32)
+            )
         else:
             array = bandlimit(self.array, inner, outer)
 
-        kwargs = self.copy_kwargs(exclude=('array',))
-        kwargs['array'] = array
+        kwargs = self.copy_kwargs(exclude=("array",))
+        kwargs["array"] = array
         return self.__class__(**kwargs)
 
     def crop(self, max_angle):
-        gpts = (int(2 * np.round(max_angle / self.angular_sampling[0])) + 1,
-                int(2 * np.round(max_angle / self.angular_sampling[1])) + 1)
+        gpts = (
+            int(2 * np.round(max_angle / self.angular_sampling[0])) + 1,
+            int(2 * np.round(max_angle / self.angular_sampling[1])) + 1,
+        )
 
         xp = get_array_module(self.array)
-        array = xp.fft.fftshift(fft_crop(xp.fft.ifftshift(self.array, axes=(-2, -1)), new_shape=gpts), axes=(-2, -1))
-        kwargs = self.copy_kwargs(exclude=('array',))
-        kwargs['array'] = array
+        array = xp.fft.fftshift(
+            fft_crop(xp.fft.ifftshift(self.array, axes=(-2, -1)), new_shape=gpts),
+            axes=(-2, -1),
+        )
+        kwargs = self.copy_kwargs(exclude=("array",))
+        kwargs["array"] = array
         return self.__class__(**kwargs)
 
-    def block_direct(self, radius: float = None) -> 'DiffractionPatterns':
+    def block_direct(self, radius: float = None) -> "DiffractionPatterns":
         """
         Block the direct beam by setting the pixels of the zeroth order disk to zero.
 
@@ -1864,8 +2187,8 @@ class DiffractionPatterns(AbstractMeasurement):
         """
 
         if radius is None:
-            if 'semiangle_cutoff' in self.metadata.keys():
-                radius = self.metadata['semiangle_cutoff']
+            if "semiangle_cutoff" in self.metadata.keys():
+                radius = self.metadata["semiangle_cutoff"]
             else:
                 radius = max(self.angular_sampling) * 1.0001
 
@@ -1892,34 +2215,35 @@ class DiffractionPatterns(AbstractMeasurement):
         #
         #                     )
 
-    def show(self,
-             units: str = 'reciprocal',
-             cmap: str = 'viridis',
-             explode: bool = False,
-             ax: Axes = None,
-             figsize: Tuple[int, int] = None,
-             title: Union[bool, str] = True,
-             panel_titles: Union[bool, List[str]] = True,
-             x_ticks: bool = True,
-             y_ticks: bool = True,
-             x_label: Union[bool, str] = True,
-             y_label: Union[bool, str] = True,
-             row_super_label: Union[bool, str] = False,
-             col_super_label: Union[bool, str] = False,
-             power: float = 1.,
-             vmin: float = None,
-             vmax: float = None,
-             common_color_scale=False,
-             cbar: bool = False,
-             cbar_labels: str = None,
-             sizebar: bool = False,
-             float_formatting: str = '.2f',
-             panel_labels: dict = None,
-             image_grid_kwargs: dict = None,
-             imshow_kwargs: dict = None,
-             anchored_text_kwargs: dict = None,
-             domain_coloring_kwargs: dict = None
-             ) -> Axes:
+    def show(
+        self,
+        units: str = "reciprocal",
+        cmap: str = "viridis",
+        explode: bool = False,
+        ax: Axes = None,
+        figsize: Tuple[int, int] = None,
+        title: Union[bool, str] = True,
+        panel_titles: Union[bool, List[str]] = True,
+        x_ticks: bool = True,
+        y_ticks: bool = True,
+        x_label: Union[bool, str] = True,
+        y_label: Union[bool, str] = True,
+        row_super_label: Union[bool, str] = False,
+        col_super_label: Union[bool, str] = False,
+        power: float = 1.0,
+        vmin: float = None,
+        vmax: float = None,
+        common_color_scale=False,
+        cbar: bool = False,
+        cbar_labels: str = None,
+        sizebar: bool = False,
+        float_formatting: str = ".2f",
+        panel_labels: dict = None,
+        image_grid_kwargs: dict = None,
+        imshow_kwargs: dict = None,
+        anchored_text_kwargs: dict = None,
+        domain_coloring_kwargs: dict = None,
+    ) -> Axes:
         """
         Show the image(s) using matplotlib.
 
@@ -1934,6 +2258,7 @@ class DiffractionPatterns(AbstractMeasurement):
             If given the plots are added to the Axes. This is not available for image grids.
         figsize : two int, optional
             The figure size given as width and height in inches, passed to matplotlib.pyplot.figure.
+        title : bool or str, optional
         title : bool or str, optional
             Add a title to the figure. If True is given instead of a string the title will be given by the value
             corresponding to the "name" key of the metadata dictionary, if this item exists.
@@ -1991,99 +2316,127 @@ class DiffractionPatterns(AbstractMeasurement):
             measurements = self[(0,) * len(self.ensemble_shape)]
         else:
             if ax is not None:
-                raise NotImplementedError('`ax` not implemented for with `explode = True`')
+                raise NotImplementedError(
+                    "`ax` not implemented for with `explode = True`"
+                )
             measurements = self
 
         if units.lower() in angular_units:
-            x_label = 'scattering angle x [mrad]'
-            y_label = 'scattering angle y [mrad]'
+            x_label = "scattering angle x [mrad]"
+            y_label = "scattering angle y [mrad]"
             extent = list(self.angular_limits[0] + self.angular_limits[1])
         elif units in bins:
+
             def bin_extent(n):
                 if n % 2 == 0:
-                    return -n // 2 - .5, n // 2 - .5
+                    return -n // 2 - 0.5, n // 2 - 0.5
                 else:
-                    return -n // 2 + .5, n // 2 + .5
+                    return -n // 2 + 0.5, n // 2 + 0.5
 
-            x_label = 'frequency bin n'
-            y_label = 'frequency bin m'
+            x_label = "frequency bin n"
+            y_label = "frequency bin m"
             extent = bin_extent(self.base_shape[0]) + bin_extent(self.base_shape[1])
         elif units.lower().strip() in reciprocal_units:
             extent = list(self.limits[0] + self.limits[1])
         else:
             raise ValueError()
 
-        return show_measurement_2d_exploded(measurements=measurements,
-                                            figsize=figsize,
-                                            super_title=title,
-                                            sub_title=panel_titles,
-                                            x_ticks=x_ticks,
-                                            y_ticks=y_ticks,
-                                            x_label=x_label,
-                                            y_label=y_label,
-                                            extent=extent,
-                                            cmap=cmap,
-                                            row_super_label=row_super_label,
-                                            col_super_label=col_super_label,
-                                            power=power,
-                                            vmin=vmin,
-                                            vmax=vmax,
-                                            common_color_scale=common_color_scale,
-                                            cbar=cbar,
-                                            cbar_labels=cbar_labels,
-                                            sizebar=sizebar,
-                                            float_formatting=float_formatting,
-                                            panel_labels=panel_labels,
-                                            image_grid_kwargs=image_grid_kwargs,
-                                            imshow_kwargs=imshow_kwargs,
-                                            anchored_text_kwargs=anchored_text_kwargs,
-                                            domain_coloring_kwargs=domain_coloring_kwargs,
-                                            axes=ax
-                                            )
+        return show_measurement_2d_exploded(
+            measurements=measurements,
+            figsize=figsize,
+            super_title=title,
+            sub_title=panel_titles,
+            x_ticks=x_ticks,
+            y_ticks=y_ticks,
+            x_label=x_label,
+            y_label=y_label,
+            extent=extent,
+            cmap=cmap,
+            row_super_label=row_super_label,
+            col_super_label=col_super_label,
+            power=power,
+            vmin=vmin,
+            vmax=vmax,
+            common_color_scale=common_color_scale,
+            cbar=cbar,
+            cbar_labels=cbar_labels,
+            sizebar=sizebar,
+            float_formatting=float_formatting,
+            panel_labels=panel_labels,
+            image_grid_kwargs=image_grid_kwargs,
+            imshow_kwargs=imshow_kwargs,
+            anchored_text_kwargs=anchored_text_kwargs,
+            domain_coloring_kwargs=domain_coloring_kwargs,
+            axes=ax,
+        )
 
 
 class PolarMeasurements(AbstractMeasurement):
     _base_dims = 2
 
-    def __init__(self,
-                 array: np.ndarray,
-                 radial_sampling: float,
-                 azimuthal_sampling: float,
-                 radial_offset: float = 0.,
-                 azimuthal_offset: float = 0.,
-                 ensemble_axes_metadata: List[AxisMetadata] = None,
-                 metadata: dict = None):
+    def __init__(
+        self,
+        array: np.ndarray,
+        radial_sampling: float,
+        azimuthal_sampling: float,
+        radial_offset: float = 0.0,
+        azimuthal_offset: float = 0.0,
+        ensemble_axes_metadata: List[AxisMetadata] = None,
+        metadata: dict = None,
+    ):
 
         self._radial_sampling = radial_sampling
         self._azimuthal_sampling = azimuthal_sampling
         self._radial_offset = radial_offset
         self._azimuthal_offset = azimuthal_offset
 
-        super().__init__(array=array, ensemble_axes_metadata=ensemble_axes_metadata, metadata=metadata)
+        super().__init__(
+            array=array,
+            ensemble_axes_metadata=ensemble_axes_metadata,
+            metadata=metadata,
+        )
 
     @property
     def _area_per_pixel(self):
         if len(self.scan_sampling) == 2:
             return np.prod(self.scan_sampling)
         else:
-            raise RuntimeError('cannot infer pixel area from metadata')
+            raise RuntimeError("cannot infer pixel area from metadata")
 
     @classmethod
-    def from_array_and_metadata(cls, array, axes_metadata, metadata) -> 'PolarMeasurements':
+    def from_array_and_metadata(
+        cls, array, axes_metadata, metadata
+    ) -> "PolarMeasurements":
         radial_sampling = axes_metadata[-2].sampling
         radial_offset = axes_metadata[-2].offset
         azimuthal_sampling = axes_metadata[-1].sampling
         azimuthal_offset = axes_metadata[-1].offset
-        return cls(array, radial_sampling=radial_sampling, radial_offset=radial_offset,
-                   azimuthal_sampling=azimuthal_sampling, azimuthal_offset=azimuthal_offset,
-                   ensemble_axes_metadata=axes_metadata[:-2], metadata=metadata)
+        return cls(
+            array,
+            radial_sampling=radial_sampling,
+            radial_offset=radial_offset,
+            azimuthal_sampling=azimuthal_sampling,
+            azimuthal_offset=azimuthal_offset,
+            ensemble_axes_metadata=axes_metadata[:-2],
+            metadata=metadata,
+        )
 
     @property
     def base_axes_metadata(self) -> List[AxisMetadata]:
-        return [LinearAxis(label='Radial scattering angle', offset=self.radial_offset,
-                           sampling=self.radial_sampling, units='mrad'),
-                LinearAxis(label='Azimuthal scattering angle', offset=self.azimuthal_offset,
-                           sampling=self.azimuthal_sampling, units='rad')]
+        return [
+            LinearAxis(
+                label="Radial scattering angle",
+                offset=self.radial_offset,
+                sampling=self.radial_sampling,
+                units="mrad",
+            ),
+            LinearAxis(
+                label="Azimuthal scattering angle",
+                offset=self.azimuthal_offset,
+                sampling=self.azimuthal_sampling,
+                units="rad",
+            ),
+        ]
 
     @property
     def radial_offset(self) -> float:
@@ -2105,25 +2458,35 @@ class PolarMeasurements(AbstractMeasurement):
     def azimuthal_offset(self) -> float:
         return self._azimuthal_offset
 
-    def integrate_radial(self, inner: float, outer: float) -> Union[Images, LineProfiles]:
+    def integrate_radial(
+        self, inner: float, outer: float
+    ) -> Union[Images, LineProfiles]:
         return self.integrate(radial_limits=(inner, outer))
 
-    def integrate(self,
-                  radial_limits: Tuple[float, float] = None,
-                  azimuthal_limits: Tuple[float, float] = None,
-                  detector_regions: Sequence[int] = None) -> Union[Images, LineProfiles]:
+    def integrate(
+        self,
+        radial_limits: Tuple[float, float] = None,
+        azimuthal_limits: Tuple[float, float] = None,
+        detector_regions: Sequence[int] = None,
+    ) -> Union[Images, LineProfiles]:
 
         if detector_regions is not None:
             if (radial_limits is not None) or (azimuthal_limits is not None):
                 raise RuntimeError()
 
-            array = self.array.reshape(self.shape[:-2] + (-1,))[..., list(detector_regions)].sum(axis=-1)
+            array = self.array.reshape(self.shape[:-2] + (-1,))[
+                ..., list(detector_regions)
+            ].sum(axis=-1)
         else:
             if radial_limits is None:
                 radial_slice = slice(None)
             else:
-                inner_index = int((radial_limits[0] - self.radial_offset) / self.radial_sampling)
-                outer_index = int((radial_limits[1] - self.radial_offset) / self.radial_sampling)
+                inner_index = int(
+                    (radial_limits[0] - self.radial_offset) / self.radial_sampling
+                )
+                outer_index = int(
+                    (radial_limits[1] - self.radial_offset) / self.radial_sampling
+                )
                 radial_slice = slice(inner_index, outer_index)
 
             if azimuthal_limits is None:
@@ -2137,35 +2500,43 @@ class PolarMeasurements(AbstractMeasurement):
 
         return _reduced_scanned_images_or_line_profiles(array, self)
 
-    def differentials(self,
-                      direction_1_plus,
-                      direction_1_minus,
-                      direction_2_plus,
-                      direction_2_minus,
-                      return_complex: bool = True):
+    def differentials(
+        self,
+        direction_1_plus,
+        direction_1_minus,
+        direction_2_plus,
+        direction_2_minus,
+        return_complex: bool = True,
+    ):
 
-        differential_1 = (self.integrate(detector_regions=direction_1_plus) -
-                          self.integrate(detector_regions=direction_1_minus))
+        differential_1 = self.integrate(
+            detector_regions=direction_1_plus
+        ) - self.integrate(detector_regions=direction_1_minus)
 
-        differential_2 = (self.integrate(detector_regions=direction_2_plus) -
-                          self.integrate(detector_regions=direction_2_minus))
+        differential_2 = self.integrate(
+            detector_regions=direction_2_plus
+        ) - self.integrate(detector_regions=direction_2_minus)
 
         xp = get_array_module(self.device)
         array = xp.zeros_like(differential_1.array, dtype=xp.complex64)
         array.real = differential_1.array
         array.imag = differential_2.array
 
-        return differential_1.__class__(array, **differential_1.copy_kwargs(exclude=('array',)))
+        return differential_1.__class__(
+            array, **differential_1.copy_kwargs(exclude=("array",))
+        )
 
-    def show(self,
-             ax: Axes = None,
-             title: str = None,
-             min_azimuthal_division: float = np.pi / 20,
-             grid: bool = True,
-             figsize=None,
-             radial_ticks=None,
-             azimuthal_ticks=None,
-             **kwargs):
+    def show(
+        self,
+        ax: Axes = None,
+        title: str = None,
+        min_azimuthal_division: float = np.pi / 20,
+        grid: bool = True,
+        figsize=None,
+        radial_ticks=None,
+        azimuthal_ticks=None,
+        **kwargs,
+    ):
 
         import matplotlib.patheffects as pe
 
@@ -2183,15 +2554,19 @@ class PolarMeasurements(AbstractMeasurement):
 
         repeat = int(self.azimuthal_sampling / min_azimuthal_division)
         r = np.pi / (4 * repeat) + self.azimuthal_offset + np.pi / 2
-        azimuthal_grid = np.linspace(r, 2 * np.pi + r, self.shape[-1] * repeat, endpoint=False)
+        azimuthal_grid = np.linspace(
+            r, 2 * np.pi + r, self.shape[-1] * repeat, endpoint=False
+        )
 
         d = (self.outer_angle - self.radial_offset) / 2 / self.shape[-2]
-        radial_grid = np.linspace(self.radial_offset + d, self.outer_angle - d, self.shape[-2])
+        radial_grid = np.linspace(
+            self.radial_offset + d, self.outer_angle - d, self.shape[-2]
+        )
 
         z = np.repeat(array, repeat, axis=-1)
         r, th = np.meshgrid(radial_grid, azimuthal_grid)
 
-        im = ax.pcolormesh(th, r, z.T, shading='auto', **kwargs)
+        im = ax.pcolormesh(th, r, z.T, shading="auto", **kwargs)
         ax.set_rlim([0, self.outer_angle * 1.1])
 
         if radial_ticks is None:
@@ -2200,10 +2575,12 @@ class PolarMeasurements(AbstractMeasurement):
         if azimuthal_ticks is None:
             azimuthal_ticks = ax.get_xticks()
 
-        ax.set_rgrids(radial_ticks, path_effects=[pe.withStroke(linewidth=4, foreground="white")])
+        ax.set_rgrids(
+            radial_ticks, path_effects=[pe.withStroke(linewidth=4, foreground="white")]
+        )
         ax.set_xticks(azimuthal_ticks)
 
         if grid:
-            ax.grid(linewidth=2, color='white')
+            ax.grid(linewidth=2, color="white")
 
         return ax, im

@@ -22,10 +22,13 @@ class CopyMixin:
 
     def _arg_keys(self, cls):
         parameters = inspect.signature(cls).parameters
-        return tuple(key for key, value in parameters.items()
-                     if value.kind not in (value.VAR_POSITIONAL, value.VAR_KEYWORD))
+        return tuple(
+            key
+            for key, value in parameters.items()
+            if value.kind not in (value.VAR_POSITIONAL, value.VAR_KEYWORD)
+        )
 
-    def copy_kwargs(self, exclude: Tuple['str', ...] = (), cls=None) -> dict:
+    def copy_kwargs(self, exclude: Tuple["str", ...] = (), cls=None) -> dict:
         if cls is None:
             cls = self.__class__
 
@@ -65,7 +68,6 @@ def safe_equality(a, b, exclude=()):
 
 
 class EqualityMixin:
-
     def __eq__(self, other):
         return safe_equality(self, other)
 
@@ -163,7 +165,7 @@ def subdivide_into_chunks(num_items: int, num_chunks: int = None, chunks: int = 
         num_chunks = (num_items + (-num_items % chunks)) // chunks
 
     if num_items < num_chunks:
-        raise RuntimeError('num_chunks may not be larger than num_items')
+        raise RuntimeError("num_chunks may not be larger than num_items")
 
     elif num_items % num_chunks == 0:
         return tuple([num_items // num_chunks] * num_chunks)
@@ -179,7 +181,9 @@ def subdivide_into_chunks(num_items: int, num_chunks: int = None, chunks: int = 
         return tuple(v)
 
 
-def generate_chunks(num_items: int, num_chunks: int = None, chunks: int = None, start: int = 0):
+def generate_chunks(
+    num_items: int, num_chunks: int = None, chunks: int = None, start: int = 0
+):
     for batch in subdivide_into_chunks(num_items, num_chunks, chunks):
         end = start + batch
         yield start, end
@@ -196,49 +200,44 @@ def label_to_index(labels, max_label=None):
     sorted_labels = labels[labels_order]
     indices = xp.arange(0, len(labels) + 1)[labels_order]
     index = xp.arange(0, max_label + 1)
-    lo = xp.searchsorted(sorted_labels, index, side='left')
-    hi = xp.searchsorted(sorted_labels, index, side='right')
+    lo = xp.searchsorted(sorted_labels, index, side="left")
+    hi = xp.searchsorted(sorted_labels, index, side="right")
     for i, (l, h) in enumerate(zip(lo, hi)):
         yield indices[l:h]
 
 
-def reassemble_chunks_along(blocks, shape, axis, concatenate=True, delayed=False):
-    xp = get_array_module(blocks[0])
-    if delayed:
-        xp = da
-
-    row_blocks = []
-    new_blocks = []
-    row_tally = 0
-    for block in blocks:
-        row_blocks.append(block)
-        row_tally += block.shape[axis]
-
-        if row_tally == shape:
-            if concatenate:
-                new_blocks.append(xp.concatenate(row_blocks, axis=axis))
-            else:
-                new_blocks.append(row_blocks)
-
-            row_blocks = []
-            row_tally = 0
-
-        if row_tally > shape:
-            raise RuntimeError()
-
-    return new_blocks
-
-
-def tapered_cutoff(x, cutoff, rolloff=.1):
+def tapered_cutoff(x, cutoff, rolloff=0.1):
     xp = get_array_module(x)
 
     rolloff = rolloff * cutoff
 
-    if rolloff > 0.:
-        array = .5 * (1 + xp.cos(np.pi * (x - cutoff + rolloff) / rolloff))
-        array[x > cutoff] = 0.
+    if rolloff > 0.0:
+        array = 0.5 * (1 + xp.cos(np.pi * (x - cutoff + rolloff) / rolloff))
+        array[x > cutoff] = 0.0
         array = xp.where(x > cutoff - rolloff, array, xp.ones_like(x, dtype=xp.float32))
     else:
         array = xp.array(x < cutoff).astype(xp.float32)
 
     return array
+
+
+def dictionary_property(name, key):
+    def getter(self):
+        return getattr(self, name)[key]
+
+    def setter(self, value):
+        getattr(self, name)[key] = value
+
+    return property(getter, setter)
+
+
+def delegate_property(delegate_name, property_name):
+    def getter(self):
+        delegate = getattr(self, delegate_name)
+        return getattr(delegate, property_name)
+
+    def setter(self, value):
+        delegate = getattr(self, delegate_name)
+        setattr(delegate, property_name, value)
+
+    return property(getter, setter)

@@ -26,38 +26,46 @@ except ModuleNotFoundError:
 
 
 def raise_fft_lib_not_present(lib_name):
-    raise RuntimeError(f'FFT library {lib_name} not present. Install this package or change the FFT library in your '
-                       f'configuration')
+    raise RuntimeError(
+        f"FFT library {lib_name} not present. Install this package or change the FFT library in your "
+        f"configuration"
+    )
 
 
 def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
     xp = get_array_module(x)
 
     if isinstance(x, np.ndarray):
-        if config.get('fft') == 'mkl':
+        if config.get("fft") == "mkl":
             if mkl_fft is None:
-                raise_fft_lib_not_present('mkl_fft')
+                raise_fft_lib_not_present("mkl_fft")
 
             return getattr(mkl_fft, func_name)(x, overwrite_x=overwrite_x, **kwargs)
-        elif config.get('fft') == 'fftw':
+        elif config.get("fft") == "fftw":
             if pyfftw is None:
-                raise_fft_lib_not_present('pyfftw')
+                raise_fft_lib_not_present("pyfftw")
 
-            fftw_obj = getattr(pyfftw.builders, func_name)(x,
-                                                           overwrite_input=overwrite_x,
-                                                           planner_effort=config.get('fftw.planning_effort'),
-                                                           threads=config.get('fftw.threads'),
-                                                           avoid_copy=False,
-                                                           **kwargs
-                                                           )
+            fftw_obj = getattr(pyfftw.builders, func_name)(
+                x,
+                overwrite_input=overwrite_x,
+                planner_effort=config.get("fftw.planning_effort"),
+                threads=config.get("fftw.threads"),
+                avoid_copy=False,
+                **kwargs,
+            )
 
             return fftw_obj()
         else:
             raise RuntimeError()
 
     if isinstance(x, da.core.Array):
-        return x.map_blocks(_fft_dispatch, func_name=func_name, overwrite_x=overwrite_x, **kwargs,
-                            meta=xp.array((), dtype=np.complex64))
+        return x.map_blocks(
+            _fft_dispatch,
+            func_name=func_name,
+            overwrite_x=overwrite_x,
+            **kwargs,
+            meta=xp.array((), dtype=np.complex64),
+        )
 
     check_cupy_is_installed()
 
@@ -65,20 +73,20 @@ def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
         return getattr(cp.fft, func_name)(x, **kwargs)
 
 
-def fft2(x, overwrite_x=False, **kwargs):
-    return _fft_dispatch(x, func_name='fft2', overwrite_x=overwrite_x, **kwargs)
+def fft2(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray:
+    return _fft_dispatch(x, func_name="fft2", overwrite_x=overwrite_x, **kwargs)
 
 
-def ifft2(x, overwrite_x=False, **kwargs):
-    return _fft_dispatch(x, func_name='ifft2', overwrite_x=overwrite_x, **kwargs)
+def ifft2(x: np.ndarray, overwrite_x: bool = False, **kwargs) -> np.ndarray:
+    return _fft_dispatch(x, func_name="ifft2", overwrite_x=overwrite_x, **kwargs)
 
 
-def fftn(x, overwrite_x=False, **kwargs):
-    return _fft_dispatch(x, func_name='fftn', overwrite_x=overwrite_x, **kwargs)
+def fftn(x, overwrite_x: bool = False, **kwargs):
+    return _fft_dispatch(x, func_name="fftn", overwrite_x=overwrite_x, **kwargs)
 
 
 def ifftn(x, overwrite_x=False, **kwargs):
-    return _fft_dispatch(x, func_name='ifftn', overwrite_x=overwrite_x, **kwargs)
+    return _fft_dispatch(x, func_name="ifftn", overwrite_x=overwrite_x, **kwargs)
 
 
 def _fft2_convolve(x, kernel, overwrite_x: bool = False):
@@ -97,8 +105,12 @@ def fft2_convolve(x, kernel, overwrite_x: bool = False):
         return _fft2_convolve(x, kernel, overwrite_x)
 
     if isinstance(x, da.core.Array):
-        return x.map_blocks(_fft2_convolve, kernel=kernel, overwrite_x=overwrite_x,
-                            meta=xp.array((), dtype=np.complex64))
+        return x.map_blocks(
+            _fft2_convolve,
+            kernel=kernel,
+            overwrite_x=overwrite_x,
+            meta=xp.array((), dtype=np.complex64),
+        )
 
     check_cupy_is_installed()
 
@@ -125,14 +137,19 @@ def fft_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
     assert positions.shape[-1] == len(shape)
     dims = positions.shape[-1]
     n = len(positions.shape) - 1
-    k = list(spatial_frequencies(shape, (1.,) * dims, xp=xp))
+    k = list(spatial_frequencies(shape, (1.0,) * dims, xp=xp))
 
-    positions = [np.expand_dims(positions[..., i], tuple(range(n, n + dims))) for i in range(dims)]
+    positions = [
+        np.expand_dims(positions[..., i], tuple(range(n, n + dims)))
+        for i in range(dims)
+    ]
 
     for i in range(dims):
         d = list(range(0, n)) + list(range(n, n + dims))
         del d[i + n]
-        k[i] = complex_exponential(- 2 * np.pi * np.expand_dims(k[i], tuple(d)) * positions[i])
+        k[i] = complex_exponential(
+            -2 * np.pi * np.expand_dims(k[i], tuple(d)) * positions[i]
+        )
 
     array = k[0]
     for i in range(1, dims):
@@ -143,7 +160,9 @@ def fft_shift_kernel(positions: np.ndarray, shape: tuple) -> np.ndarray:
 
 def fft_shift(array, positions):
     xp = get_array_module(array)
-    return xp.fft.ifft2(xp.fft.fft2(array) * fft_shift_kernel(positions, array.shape[-2:]))
+    return xp.fft.ifft2(
+        xp.fft.fft2(array) * fft_shift_kernel(positions, array.shape[-2:])
+    )
 
 
 def _fft_interpolation_masks_1d(n1, n2):
@@ -156,20 +175,20 @@ def _fft_interpolation_masks_1d(n1, n2):
         if n1 == 1:
             mask2[0] = True
         elif n1 % 2 == 0:
-            mask2[:n1 // 2] = True
-            mask2[-n1 // 2:] = True
+            mask2[: n1 // 2] = True
+            mask2[-n1 // 2 :] = True
         else:
-            mask2[:n1 // 2 + 1] = True
-            mask2[-n1 // 2 + 1:] = True
+            mask2[: n1 // 2 + 1] = True
+            mask2[-n1 // 2 + 1 :] = True
     else:
         if n2 == 1:
             mask1[0] = True
         elif n2 % 2 == 0:
-            mask1[:n2 // 2] = True
-            mask1[-n2 // 2:] = True
+            mask1[: n2 // 2] = True
+            mask1[-n2 // 2 :] = True
         else:
-            mask1[:n2 // 2 + 1] = True
-            mask1[-n2 // 2 + 1:] = True
+            mask1[: n2 // 2 + 1] = True
+            mask1[-n2 // 2 + 1 :] = True
 
         mask2[:] = True
 
@@ -204,7 +223,7 @@ def fft_crop(array, new_shape, normalize: bool = False):
     xp = get_array_module(array)
 
     if len(new_shape) < len(array.shape):
-        new_shape = array.shape[:-len(new_shape)] + new_shape
+        new_shape = array.shape[: -len(new_shape)] + new_shape
 
     mask_in, mask_out = fft_interpolation_masks(array.shape, new_shape)
 
@@ -218,12 +237,14 @@ def fft_crop(array, new_shape, normalize: bool = False):
     return new_array
 
 
-def fft_interpolate(array: np.ndarray,
-                    new_shape: Tuple[int, ...],
-                    normalization: str = 'values',
-                    overwrite_x: bool = False):
+def fft_interpolate(
+    array: np.ndarray,
+    new_shape: Tuple[int, ...],
+    normalization: str = "values",
+    overwrite_x: bool = False,
+):
     xp = get_array_module(array)
-    old_size = np.prod(array.shape[-len(new_shape):])
+    old_size = np.prod(array.shape[-len(new_shape) :])
 
     is_complex = np.iscomplexobj(array)
     array = array.astype(xp.complex64)
@@ -236,15 +257,19 @@ def fft_interpolate(array: np.ndarray,
         else:
             axes = None
 
-        array = ifftn(fft_crop(fftn(array, axes=axes), new_shape), overwrite_x=overwrite_x, axes=axes)
+        array = ifftn(
+            fft_crop(fftn(array, axes=axes), new_shape),
+            overwrite_x=overwrite_x,
+            axes=axes,
+        )
 
     if not is_complex:
         array = array.real
 
-    if normalization == 'values':
-        array *= np.prod(array.shape[-len(new_shape):]) / old_size
+    if normalization == "values":
+        array *= np.prod(array.shape[-len(new_shape) :]) / old_size
 
-    elif normalization != 'intensity':
+    elif normalization != "intensity":
         raise ValueError()
 
     return array

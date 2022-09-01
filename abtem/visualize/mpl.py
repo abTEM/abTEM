@@ -1,177 +1,24 @@
 """Module for plotting atoms, images, line scans, and diffraction patterns."""
-from collections.abc import Iterable
 from typing import Union, Tuple, TYPE_CHECKING, List
 
 import cplot
 import matplotlib.pyplot as plt
 import numpy as np
-from ase import Atoms
-from ase.data import covalent_radii, chemical_symbols
-from ase.data.colors import jmol_colors
 from matplotlib.axes import Axes
-from matplotlib.collections import PatchCollection
-from matplotlib.lines import Line2D
 from matplotlib.offsetbox import AnchoredText
-from matplotlib.patches import Circle
 from matplotlib.patheffects import withStroke
+from mpl_toolkits.axes_grid1 import ImageGrid, make_axes_locatable
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
 from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import copy_to_device
 
-from mpl_toolkits.axes_grid1 import ImageGrid, make_axes_locatable
-
-
 if TYPE_CHECKING:
-    from abtem.waves.scan import AbstractScan
     from abtem.measure.measure import (
         AbstractMeasurement,
         LineProfiles,
         FourierSpaceLineProfiles,
     )
-
-_cube = np.array(
-    [
-        [[0, 0, 0], [0, 0, 1]],
-        [[0, 0, 0], [0, 1, 0]],
-        [[0, 0, 0], [1, 0, 0]],
-        [[0, 0, 1], [0, 1, 1]],
-        [[0, 0, 1], [1, 0, 1]],
-        [[0, 1, 0], [1, 1, 0]],
-        [[0, 1, 0], [0, 1, 1]],
-        [[1, 0, 0], [1, 1, 0]],
-        [[1, 0, 0], [1, 0, 1]],
-        [[0, 1, 1], [1, 1, 1]],
-        [[1, 0, 1], [1, 1, 1]],
-        [[1, 1, 0], [1, 1, 1]],
-    ]
-)
-
-
-def _plane2axes(plane):
-    axes = ()
-    last_axis = [0, 1, 2]
-    for axis in list(plane):
-        if axis == "x":
-            axes += (0,)
-            last_axis.remove(0)
-        if axis == "y":
-            axes += (1,)
-            last_axis.remove(1)
-        if axis == "z":
-            axes += (2,)
-            last_axis.remove(2)
-    return axes + (last_axis[0],)
-
-
-def merge_columns(atoms: Atoms, tol: float = 1e-7) -> Atoms:
-    pass
-
-def show_atoms(
-    atoms: Atoms,
-    repeat: Tuple[int, int] = (1, 1),
-    scans: List["AbstractScan"] = None,
-    plane: Union[Tuple[float, float], str] = "xy",
-    ax: Axes = None,
-    scale_atoms: float = 0.5,
-    title: str = None,
-    numbering: bool = False,
-    figsize: Tuple[int, int] = None,
-    legend: bool = False,
-):
-    """
-    Display 2d projection of atoms as a Matplotlib plot.
-
-    Parameters
-    ----------
-    atoms : ASE Atoms
-        The atoms to be shown.
-    repeat : two int, optional
-        Tiling of the atoms. Default is (1,1), i.e. no tiling.
-    scans : ndarray, optional
-        List of scans to apply. Default is None.
-    plane : str, two float
-        The projection plane given as a combination of 'x' 'y' and 'z', e.g. 'xy', or the as two floats representing the
-        azimuth and elevation angles in degrees of the viewing direction, e.g. (45, 45).
-    ax : matplotlib Axes, optional
-        If given the plots are added to the axes.
-    scale_atoms : float
-        Scaling factor for the atom display sizes. Default is 0.5.
-    title : str
-        Title of the displayed image. Default is None.
-    numbering : bool
-        Show the index of the Atoms on the plot. Default is False.
-    figsize : two int, optional
-        The figure size given as width and height in inches, passed to matplotlib.pyplot.figure.
-    legend : bool
-        If True, add a legend
-    """
-
-    atoms = atoms.copy()
-    atoms *= repeat + (1,)
-
-    if ax is None:
-        fig, ax = plt.subplots(figsize=figsize)
-
-    cell = atoms.cell
-    axes = _plane2axes(plane)
-
-    for line in _cube:
-        cell_lines = np.array([np.dot(line[0], cell), np.dot(line[1], cell)])
-        ax.plot(cell_lines[:, axes[0]], cell_lines[:, axes[1]], "k-")
-
-    if len(atoms) > 0:
-        positions = atoms.positions[:, axes[:2]]
-        order = np.argsort(atoms.positions[:, axes[2]])
-        positions = positions[order]
-
-        colors = jmol_colors[atoms.numbers[order]]
-        sizes = covalent_radii[atoms.numbers[order]] * scale_atoms
-
-        circles = []
-        for position, size in zip(positions, sizes):
-            circles.append(Circle(position, size))
-
-        coll = PatchCollection(circles, facecolors=colors, edgecolors="black")
-        ax.add_collection(coll)
-
-        ax.axis("equal")
-        ax.set_xlabel(plane[0] + " [Å]")
-        ax.set_ylabel(plane[1] + " [Å]")
-
-        ax.set_title(title)
-
-        if numbering:
-            for i, (position, size) in enumerate(zip(positions, sizes)):
-                ax.annotate(
-                    "{}".format(order[i]), xy=position, ha="center", va="center"
-                )
-
-    if legend:
-        legend_elements = [
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                color="w",
-                markeredgecolor="k",
-                label=chemical_symbols[unique],
-                markerfacecolor=jmol_colors[unique],
-                markersize=12,
-            )
-            for unique in np.unique(atoms.numbers)
-        ]
-
-        ax.legend(handles=legend_elements)
-
-    if scans is not None:
-        if not isinstance(scans, Iterable):
-            scans = [scans]
-
-        for scan in scans:
-            scan.add_to_mpl_plot(ax)
-
-    return ax
 
 
 def add_imshow(
@@ -275,7 +122,7 @@ def show_measurement_2d_exploded(
     cmap="viridis",
     extent: List[float] = None,
     panel_labels: list = None,
-    sizebar=False,
+    sizebar: bool = False,
     image_grid_kwargs: dict = None,
     imshow_kwargs: dict = None,
     anchored_text_kwargs: dict = None,
@@ -332,7 +179,12 @@ def show_measurement_2d_exploded(
             else:
                 image_grid_kwargs["axes_pad"] = 0.1
 
-        axes = ImageGrid(fig, 111, nrows_ncols=(nrows, ncols), **image_grid_kwargs,)
+        axes = ImageGrid(
+            fig,
+            111,
+            nrows_ncols=(nrows, ncols),
+            **image_grid_kwargs,
+        )
     elif isinstance(axes, Axes):
         axes = [axes]
         fig = None
@@ -457,14 +309,6 @@ def show_measurement_2d_exploded(
     if len(measurements.ensemble_axes_metadata) > 1 and col_super_label:
         fig.supylabel(f"{measurements.ensemble_axes_metadata[-2].format_label()}")
 
-    # if cbar:
-    #     if np.iscomplexobj(array):
-    #         vmin = np.abs(array).min() if vmin is None else vmin
-    #         vmax = np.abs(array).max() if vmax is None else vmax
-    #         add_domain_coloring_cbar(ax, vmin, vmax)
-    #     else:
-    #         plt.colorbar(im, ax=ax)
-
     return fig, ax
 
 
@@ -487,12 +331,14 @@ def add_plot(x: np.ndarray, y: np.ndarray, ax: Axes, label: str = None, **kwargs
 
 def show_measurements_1d(
     measurements: Union["LineProfiles", "FourierSpaceLineProfiles"],
+    float_formatting: str,
     extent=None,
-    ax=None,
-    x_label=None,
-    y_label=None,
-    title=None,
-    figsize=None,
+    ax: Axes = None,
+    x_label: str = None,
+    y_label: str = None,
+    title: str = None,
+    figsize: Tuple[int, int] = None,
+    **kwargs,
 ):
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
@@ -515,13 +361,11 @@ def show_measurements_1d(
 
         labels = []
         for axis in line_profile.ensemble_axes_metadata:
-
-            if isinstance(axis, OrdinalAxis):
-                labels += [f"{axis.values[0]}"]
+            labels += [axis.format_title(float_formatting)]
 
         label = "-".join(labels)
 
-        add_plot(x, line_profile.array, ax, label)
+        add_plot(x, line_profile.array, ax, label, **kwargs)
 
     ax.set_xlabel(x_label)
 

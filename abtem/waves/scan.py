@@ -19,10 +19,10 @@ from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.utils import safe_floor_int
 from abtem.potentials.potentials import AbstractPotential
-from abtem.waves.transfer import ArrayWaveTransform
+from abtem.waves.transfer import WaveTransform
 
 if TYPE_CHECKING:
-    pass
+    from abtem.waves.waves import Waves
 
 
 def validate_scan(scan, probe=None):
@@ -38,7 +38,7 @@ def validate_scan(scan, probe=None):
     return scan
 
 
-class AbstractScan(ArrayWaveTransform, metaclass=ABCMeta):
+class AbstractScan(WaveTransform, metaclass=ABCMeta):
     """Abstract class to describe scans."""
 
     def __len__(self):
@@ -96,6 +96,11 @@ class AbstractScan(ArrayWaveTransform, metaclass=ABCMeta):
             pass
 
         return kernel
+
+    def apply(self, waves: "Waves") -> "Waves":
+        array = self.evaluate(waves)
+        axes_metadata = self.ensemble_axes_metadata
+        return waves.convolve(array, axes_metadata)
 
     def copy(self):
         """Make a copy."""
@@ -423,7 +428,7 @@ class LineScan(AbstractScan):
                 label="x",
                 sampling=float(self.sampling),
                 units="Å",
-                start=start,
+                start=self.start,
                 end=self.end,
             )
         ]

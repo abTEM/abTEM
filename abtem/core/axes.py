@@ -8,16 +8,16 @@ import numpy as np
 from abtem.core.utils import safe_equality
 
 
-@dataclass(eq=False, repr=False)
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class AxisMetadata:
     _concatenate: bool = True
-    label: str = 'unknown'
+    label: str = "unknown"
 
     def _tabular_repr_data(self, n):
         return [self.format_type(), self.format_label(), self.format_coordinates(n)]
 
     def format_coordinates(self, n: int = None):
-        return '-'
+        return "-"
 
     def __eq__(self, other):
         return safe_equality(self, other)
@@ -26,10 +26,10 @@ class AxisMetadata:
         return self.__class__.__name__
 
     def format_label(self):
-        return f'{self.label}'
+        return f"{self.label}"
 
     def format_title(self, *args, **kwargs):
-        return f'{self.label}'
+        return f"{self.label}"
 
     def item_metadata(self, item):
         return {}
@@ -38,36 +38,38 @@ class AxisMetadata:
         return self
 
 
-@dataclass(eq=False, repr=False)
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class UnknownAxis(AxisMetadata):
-    label: str = 'unknown'
+    label: str = "unknown"
 
 
-@dataclass(eq=False, repr=False)
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class SampleAxis(AxisMetadata):
     pass
 
 
-@dataclass(eq=False, repr=False)
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class LinearAxis(AxisMetadata):
-    sampling: float = 1.
-    offset: float = 0.
-    units: str = 'pixels'
+    sampling: float = 1.0
+    units: str = "pixels"
+    offset: float = 0.0
     _ensemble_mean: bool = False
 
     def format_coordinates(self, n: int = None):
         coordinates = self.coordinates(n)
         if n > 3:
-            coordinates = [f'{coord:.2f}' for coord in coordinates[[0, 1, -1]]]
-            return f'{coordinates[0]} {coordinates[1]} ... {coordinates[2]}'
+            coordinates = [f"{coord:.2f}" for coord in coordinates[[0, 1, -1]]]
+            return f"{coordinates[0]} {coordinates[1]} ... {coordinates[2]}"
         else:
-            return ' '.join([f'{coord:.2f}' for coord in coordinates])
+            return " ".join([f"{coord:.2f}" for coord in coordinates])
 
-    def coordinates(self, n):
-        return np.linspace(self.offset, self.offset + self.sampling * n, n, endpoint=False)
+    def coordinates(self, n: int) -> np.ndarray:
+        return np.linspace(
+            self.offset, self.offset + self.sampling * n, n, endpoint=False
+        )
 
     def format_label(self):
-        return f'{self.label} [{self.units}]'
+        return f"{self.label} [{self.units}]"
 
     def concatenate(self, other):
         if not self._concatenate:
@@ -79,41 +81,40 @@ class LinearAxis(AxisMetadata):
         return self
 
 
-@dataclass(eq=False, repr=False)
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class RealSpaceAxis(LinearAxis):
-    sampling: float = 1.
-    units: str = 'pixels'
-    offset: float = 0.
+    sampling: float = 1.0
+    units: str = "pixels"
     endpoint: bool = True
 
 
-@dataclass(eq=False, repr=False)
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class FourierSpaceAxis(LinearAxis):
-    sampling: float = 1.
-    units: str = 'pixels'
+    sampling: float = 1.0
+    units: str = "pixels"
     fftshift: bool = True
     _concatenate: bool = False
 
 
-@dataclass(eq=False, repr=False)
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class ScanAxis(RealSpaceAxis):
     start: Tuple[float, float] = None
     end: Tuple[float, float] = None
 
 
-@dataclass(eq=False, repr=False)
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class OrdinalAxis(AxisMetadata):
     values: tuple = ()
 
     def format_title(self, formatting):
-        return f'{self.values[0]}'
+        return f"{self.values[0]}"
 
     def concatenate(self, other):
-        if not safe_equality(self, other, ('values',)):
+        if not safe_equality(self, other, ("values",)):
             raise RuntimeError()
 
         kwargs = dataclasses.asdict(self)
-        kwargs['values'] = kwargs['values'] + other.values
+        kwargs["values"] = kwargs["values"] + other.values
 
         return self.__class__(**kwargs)  # noqa
 
@@ -137,69 +138,71 @@ class OrdinalAxis(AxisMetadata):
         kwargs = dataclasses.asdict(self)
 
         if isinstance(item, Number):
-            kwargs['values'] = (kwargs['values'][item],)
+            kwargs["values"] = (kwargs["values"][item],)
         else:
-            array = np.empty(len(kwargs['values']), dtype=object)
-            array[:] = kwargs['values']
-            kwargs['values'] = tuple(array[item])
+            array = np.empty(len(kwargs["values"]), dtype=object)
+            array[:] = kwargs["values"]
+            kwargs["values"] = tuple(array[item])
 
         return self.__class__(**kwargs)  # noqa
 
 
-@dataclass(eq=False, repr=False)
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class NonLinearAxis(OrdinalAxis):
-    units: str = 'unknown'
+    units: str = "unknown"
 
     def format_label(self):
-        return f'{self.label} [{self.units}]'
+        return f"{self.label} [{self.units}]"
 
     def format_coordinates(self, n: int = None):
         if len(self.values) > 3:
-            values = [f'{self.values[i]:.2f}' for i in [0, 1, -1]]
-            return f'{values[0]} {values[1]} ... {values[-1]}'
+            values = [f"{self.values[i]:.2f}" for i in [0, 1, -1]]
+            return f"{values[0]} {values[1]} ... {values[-1]}"
         else:
-            return ' '.join([f'{value:.2f}' for value in self.values])
+            return " ".join([f"{value:.2f}" for value in self.values])
 
     def format_title(self, formatting):
-        return f'{self.label} = {self.values[0]:>{formatting}} {self.units}'
+        return f"{self.label} = {self.values[0]:>{formatting}} {self.units}"
 
 
-@dataclass(eq=False, repr=False)
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class TiltAxis(NonLinearAxis):
-    units: str = 'mrad'
-    direction: str = 'x'
+    units: str = "mrad"
+    direction: str = "x"
     _ensemble_mean: bool = False
 
 
-@dataclass(eq=False, repr=False)
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class ThicknessAxis(NonLinearAxis):
-    label: str = 'thickness'
-    units: str = 'Å'
+    label: str = "thickness"
+    units: str = "Å"
 
 
-@dataclass(eq=False, repr=False)
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class ParameterAxis(NonLinearAxis):
-    label: str = ''
+    label: str = ""
     _ensemble_mean: bool = False
 
 
-@dataclass(eq=False, repr=False)
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class PositionsAxis(OrdinalAxis):
-    label: str = 'x, y'
-    units: str = 'Å'
+    label: str = "x, y"
+    units: str = "Å"
 
     def format_title(self, formatting):
-        formatted = ', '.join(tuple(f'{value:>{formatting}}' for value in self.values[0]))
-        return f'{self.label} = {formatted} {self.units}'
+        formatted = ", ".join(
+            tuple(f"{value:>{formatting}}" for value in self.values[0])
+        )
+        return f"{self.label} = {formatted} {self.units}"
 
 
-@dataclass(eq=False, repr=False)
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class FrozenPhononsAxis(OrdinalAxis):
-    label: str = 'Frozen phonons'
+    label: str = "Frozen phonons"
     _ensemble_mean: bool = False
 
 
-@dataclass(eq=False)
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class PrismPlaneWavesAxis(OrdinalAxis):
     pass
 
@@ -210,13 +213,13 @@ def axis_to_dict(axis: AxisMetadata):
         if isinstance(value, np.ndarray):
             d[key] = tuple(value.tolist())
 
-    d['type'] = axis.__class__.__name__
+    d["type"] = axis.__class__.__name__
     return d
 
 
 def axis_from_dict(d):
-    cls = globals()[d['type']]
-    return cls(**{key: value for key, value in d.items() if key != 'type'})
+    cls = globals()[d["type"]]
+    return cls(**{key: value for key, value in d.items() if key != "type"})
 
 
 class HasAxes:
@@ -243,7 +246,9 @@ class HasAxes:
 
     @property
     def base_axes(self):
-        return tuple(range(self.num_ensemble_axes, self.num_ensemble_axes + self.num_base_axes))
+        return tuple(
+            range(self.num_ensemble_axes, self.num_ensemble_axes + self.num_base_axes)
+        )
 
     @property
     def ensemble_axes(self):
@@ -255,13 +260,17 @@ class HasAxes:
 
     def check_axes_metadata(self):
         if len(self.shape) != self.num_axes:
-            raise RuntimeError(f'number of dimensions ({len(self.shape)}) does not match number of axis metadata items '
-                               f'({self.num_axes})')
+            raise RuntimeError(
+                f"number of dimensions ({len(self.shape)}) does not match number of axis metadata items "
+                f"({self.num_axes})"
+            )
 
         for n, axis in zip(self.shape, self.axes_metadata):
             if isinstance(axis, OrdinalAxis) and len(axis) != n:
-                raise RuntimeError(f'number of values for ordinal axis ({len(axis)}), does not match size of dimension '
-                                   f'({n})')
+                raise RuntimeError(
+                    f"number of values for ordinal axis ({len(axis)}), does not match size of dimension "
+                    f"({n})"
+                )
 
     def _is_base_axis(self, axis) -> bool:
         if isinstance(axis, Number):
@@ -289,7 +298,12 @@ class HasAxes:
 
             num_trailing_scan_axes += 1
 
-        return tuple(range(len(self.ensemble_shape) - num_trailing_scan_axes, len(self.ensemble_shape)))
+        return tuple(
+            range(
+                len(self.ensemble_shape) - num_trailing_scan_axes,
+                len(self.ensemble_shape),
+            )
+        )
 
     @property
     def scan_axes_metadata(self):
@@ -306,6 +320,6 @@ class HasAxes:
     def _ensemble_axes_to_reduce(self):
         reduce = ()
         for i, axis in enumerate(self.axes_metadata):
-            if hasattr(axis, '_ensemble_mean') and axis._ensemble_mean:
+            if hasattr(axis, "_ensemble_mean") and axis._ensemble_mean:
                 reduce += (i,)
         return reduce

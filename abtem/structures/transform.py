@@ -9,6 +9,8 @@ from ase.cell import Cell
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import pdist
 
+from abtem.structures.utils import label_to_index_generator
+
 _axes2tuple = {
     "sxyz": (0, 0, 0, 0),
     "sxyx": (0, 0, 1, 0),
@@ -40,7 +42,6 @@ axis_mapping = {"x": (1, 0, 0), "y": (0, 1, 0), "z": (0, 0, 1)}
 
 
 def plane_to_axes(plane: str) -> tuple:
-    """Internal function for extracting axes from a plane."""
     axes = ()
     last_axis = [0, 1, 2]
     for axis in list(plane):
@@ -73,9 +74,9 @@ def is_cell_hexagonal(atoms: Atoms) -> bool:
     angle = np.arccos(np.dot(cell[0], cell[1]) / (a * b))
 
     return (
-        np.isclose(a, b)
-        & (np.isclose(angle, np.pi / 3) | np.isclose(angle, 2 * np.pi / 3))
-        & (c == cell[2, 2])
+            np.isclose(a, b)
+            & (np.isclose(angle, np.pi / 3) | np.isclose(angle, 2 * np.pi / 3))
+            & (c == cell[2, 2])
     )
 
 
@@ -212,7 +213,7 @@ def rotation_matrix_to_euler(R: np.ndarray, axes: str = "sxyz", eps: float = 1e-
 
 
 def decompose_affine_transform(
-    affined_transform: np.ndarray,
+        affined_transform: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     ZS = np.linalg.cholesky(np.dot(affined_transform.T, affined_transform)).T
 
@@ -249,18 +250,6 @@ def pretty_print_transform(transform):
     )
 
 
-def _label_to_index_generator(labels: np.ndarray, first_label: int = 0):
-    labels = labels.flatten()
-    labels_order = labels.argsort()
-    sorted_labels = labels[labels_order]
-    indices = np.arange(0, len(labels) + 1)[labels_order]
-    index = np.arange(first_label, np.max(labels) + 1)
-    lo = np.searchsorted(sorted_labels, index, side="left")
-    hi = np.searchsorted(sorted_labels, index, side="right")
-    for i, (l, h) in enumerate(zip(lo, hi)):
-        yield indices[l:h]
-
-
 def merge_close_atoms(atoms: Atoms, tol: float = 1e-7) -> Atoms:
     """
     Merge atoms that are closer in distance than a given tolerance.
@@ -291,7 +280,7 @@ def merge_close_atoms(atoms: Atoms, tol: float = 1e-7) -> Atoms:
             linkage(pdist(points), method="complete"), tol, criterion="distance"
         )
 
-        for i, cluster in enumerate(_label_to_index_generator(clusters, 1)):
+        for i, cluster in enumerate(label_to_index_generator(clusters, 1)):
             new_points[k + i] = np.mean(points[cluster], axis=0)
             new_numbers[k + i] = unique
 
@@ -341,9 +330,9 @@ def shrink_cell(atoms: Atoms, repetitions=(2, 3), tol=1e-6):
 
 
 def rotation_matrix_from_plane(
-    plane: Union[
-        str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
-    ] = "xy"
+        plane: Union[
+            str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+        ] = "xy"
 ):
     x_vector, y_vector = plane
 
@@ -363,10 +352,10 @@ def rotation_matrix_from_plane(
 
 
 def rotate_atoms_to_plane(
-    atoms: Atoms,
-    plane: Union[
-        str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
-    ] = "xy",
+        atoms: Atoms,
+        plane: Union[
+            str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+        ] = "xy",
 ) -> Atoms:
     if plane == "xy":
         return atoms
@@ -386,7 +375,7 @@ def flip_atoms(atoms: Atoms, axis: int = 2) -> Atoms:
 
 
 def best_orthogonal_box(
-    cell: np.ndarray, max_repetitions: int = 5, eps: float = 1e-12
+        cell: np.ndarray, max_repetitions: int = 5, eps: float = 1e-12
 ) -> np.ndarray:
     zero_vectors = np.linalg.norm(cell, axis=0) < eps
 
@@ -402,9 +391,9 @@ def best_orthogonal_box(
     a, b, c = cell
     vectors = np.abs(
         (
-            (k[:, None] * a[None])[:, None, None]
-            + (l[:, None] * b[None])[None, :, None]
-            + (m[:, None] * c[None])[None, None, :]
+                (k[:, None] * a[None])[:, None, None]
+                + (l[:, None] * b[None])[None, :, None]
+                + (m[:, None] * c[None])[None, None, :]
         )
     )
 
@@ -438,16 +427,16 @@ def best_orthogonal_box(
 
 
 def orthogonalize_cell(
-    atoms: Atoms,
-    box: Tuple[float, float, float] = None,
-    max_repetitions: int = 5,
-    return_transform: bool = False,
-    allow_transform: bool = True,
-    origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-    plane: Union[
-        str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
-    ] = "xy",
-    tolerance: float = 0.01,
+        atoms: Atoms,
+        box: Tuple[float, float, float] = None,
+        max_repetitions: int = 5,
+        return_transform: bool = False,
+        allow_transform: bool = True,
+        origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        plane: Union[
+            str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+        ] = "xy",
+        tolerance: float = 0.01,
 ):
     """
     Make the cell of an ASE atoms object orthogonal. This is accomplished by repeating the cell until lattice vectors
@@ -521,9 +510,9 @@ def orthogonalize_cell(
 
 
 def atoms_in_cell(
-    atoms: Atoms,
-    margin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-    origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        atoms: Atoms,
+        margin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
 ) -> Atoms:
     scaled_positions = atoms.get_scaled_positions(wrap=False)
     scaled_margins = np.array(margin) / atoms.cell.lengths()
@@ -537,13 +526,13 @@ def atoms_in_cell(
 
 
 def cut_box(
-    atoms: Atoms,
-    box: Tuple[float, float, float] = None,
-    plane: Union[
-        str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
-    ] = "xy",
-    origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-    margin: Union[float, Tuple[float, float, float]] = 0.0,
+        atoms: Atoms,
+        box: Tuple[float, float, float] = None,
+        plane: Union[
+            str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+        ] = "xy",
+        origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        margin: Union[float, Tuple[float, float, float]] = 0.0,
 ) -> Atoms:
     if box is None:
         box = best_orthogonal_box(atoms.cell)
@@ -595,9 +584,9 @@ def cut_box(
 
 
 def pad_atoms(
-    atoms: Atoms,
-    margins: Union[float, Tuple[float, float, float]],
-    directions: str = "xyz",
+        atoms: Atoms,
+        margins: Union[float, Tuple[float, float, float]],
+        directions: str = "xyz",
 ) -> Atoms:
     """
     Repeat the atoms in x and y, retaining only the repeated atoms within the margin distance from the cell boundary.

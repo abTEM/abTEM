@@ -391,7 +391,7 @@ class Potential(PotentialBuilder):
                  atoms: Union[Atoms, AbstractFrozenPhonons] = None,
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
-                 slice_thickness: Union[float, Tuple[float, ...]] = .5,
+                 slice_thickness: Union[float, Tuple[float, ...]] = 1,
                  parametrization: Union[str, Parametrization] = 'lobato',
                  projection: str = 'infinite',
                  integral_method: str = None,
