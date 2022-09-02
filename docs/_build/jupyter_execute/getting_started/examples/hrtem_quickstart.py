@@ -30,8 +30,8 @@ carbon.wrap()
 
 
 cluster = Decahedron('Au', 
-                     10, # Number of atoms on the facets perpendicular to the five fold axis.
-                     2, # Number of atoms on the facets parallel to the five fold axis.
+                     10, # Number of atoms on the facets perpendicular to the five-fold axis.
+                     2, # Number of atoms on the facets parallel to the five-fold axis.
                      0 # Depth of re-entrence at the pentagon corners.
                     )
 

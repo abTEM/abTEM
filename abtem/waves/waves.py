@@ -108,7 +108,7 @@ class Waves(HasArray, WavesLikeMixin):
     ----------
     array : array
         Complex array defining one or more 2d wave functions. The second-to-last and last dimensions are the wave
-        function y and x axis, respectively.
+        function y- and x-axis, respectively.
     energy : float
         Electron energy [eV].
     extent : one or two float
@@ -376,6 +376,28 @@ class Waves(HasArray, WavesLikeMixin):
 
         metadata = copy(self.metadata)
 
+        metadata['label'] = 'intensity'
+        metadata['units'] = 'arb. unit'
+
+        return Images(array,
+                      sampling=self.sampling,
+                      ensemble_axes_metadata=self.ensemble_axes_metadata,
+                      metadata=metadata)
+
+    def as_complex_image(self):
+        """
+        Calculate the complex array of the wave functions at the image plane.
+
+        Rerturns
+        -------
+        intensity_images : Images
+            The wave function intensity.
+        """
+
+        array = self.array
+
+        metadata = copy(self.metadata)
+
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
 
@@ -405,7 +427,7 @@ class Waves(HasArray, WavesLikeMixin):
                     Downsample to the antialias cutoff scattering angle.
 
                 ``valid`` :
-                    Downsample to the largest rectangle inside the circle with a the radius defined by the antialias
+                    Downsample to the largest rectangle inside the circle with a radius defined by the antialias
                     cutoff scattering angle.
 
                 float :
@@ -533,6 +555,81 @@ class Waves(HasArray, WavesLikeMixin):
             diffraction_patterns = diffraction_patterns.block_direct(
                 radius=block_direct
             )
+
+        return diffraction_patterns
+
+    def as_complex_diffraction(
+        self,
+        max_angle: Union[str, float, None] = 'cutoff',
+        block_direct: Union[bool, float] = False,
+        fftshift: bool = True,
+        parity: str = 'same'
+        ) -> DiffractionPatterns:
+        """
+        Calculate the complex array of the wave functions at the diffraction plane.
+
+        Parameters
+        ----------
+        max_angle : {'cutoff', 'valid'} or float
+            Maximum scattering angle of the diffraction patterns.
+
+                ``cutoff`` :
+                    The maximum scattering angle will be the cutoff of the antialias aperture.
+
+                ``valid`` :
+                    The maximum scattering angle will be the largest rectangle that fits inside the circular antialias
+                    aperture.
+
+        block_direct : bool or float
+            If true the direct beam is masked.
+        fftshift : bool
+            If true, shift the zero-angle component to the center of the diffraction patterns.
+        parity : {'same', 'even', 'odd', 'none'}
+            The parity of the shape of the diffraction patterns.
+
+        Returns
+        -------
+        diffraction_patterns : DiffractionPatterns
+        """
+
+        def _as_complex_diffraction(array, new_gpts, fftshift):
+            array = self.array
+            xp = get_array_module(array)
+
+            array =  fft2(xp.fft.fftshift(array))
+
+            if array.shape[-2:] != new_gpts:
+                array = fft_crop(array, new_shape=array.shape[:-2] + new_gpts)
+
+            if fftshift:
+                array =  xp.fft.ifftshift(array, axes=(-1, -2))
+
+
+            return array
+
+        xp = get_array_module(self.array)
+        new_gpts = self._gpts_within_angle(max_angle, parity=parity)
+        validate_gpts(new_gpts)
+
+        if self.is_lazy:
+            pattern = self.array.map_blocks(_as_complex_diffraction, new_gpts=new_gpts, fftshift=fftshift,
+                                            chunks=self.array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
+                                            meta=xp.array((), dtype=xp.float32))
+        else:
+            pattern = _as_complex_diffraction(self.array, new_gpts=new_gpts, fftshift=fftshift)
+
+        metadata = copy(self.metadata)
+        metadata['label'] = 'intensity'
+        metadata['units'] = 'arb. unit'
+
+        diffraction_patterns = DiffractionPatterns(pattern,
+                                                   sampling=self.fourier_space_sampling,
+                                                   fftshift=fftshift,
+                                                   ensemble_axes_metadata=self.ensemble_axes_metadata,
+                                                   metadata=metadata)
+
+        if block_direct:
+            diffraction_patterns = diffraction_patterns.block_direct(radius=block_direct)
 
         return diffraction_patterns
 
@@ -751,6 +848,7 @@ class Waves(HasArray, WavesLikeMixin):
 
 
 class WavesBuilder(WavesLikeMixin):
+
     def __init__(self, transforms):
 
         if transforms is None:
@@ -1343,7 +1441,7 @@ class Probe(WavesBuilder):
             A detector or a list of detectors defining how the wave functions should be converted to measurements after
             running the multislice algorithm. See abtem.measure.detect for a list of implemented detectors.
         chunks : int, optional
-            Specifices the number of wave functions in each chunk of a the created dask array. If None, the number
+            Specifices the number of wave functions in each chunk of the created dask array. If None, the number
             of chunks are automatically estimated based on the "dask.chunk-size" parameter in the configuration.
         lazy : boolean, optional
             If True, create the measurements lazily, otherwise, calculate instantly. If None, this defaults to the value

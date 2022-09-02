@@ -15,6 +15,6 @@
 # 
 # where $\lambda$ is the relativistic electron wavelength. As an example, consider a case where we want to simulate 80 keV electron scattering up to angles of 200 mrads. Plugging these values into the above equation gives a sampling of $\sim0.052$ Å, i.e. we require at least 0.05 Å pixel size in order to reach a maximum scattering angle of 200 mrads. In practice, you should ensure that the simulation is converged with respect to pixel size.
 # 
-# The maximum scattering angles in the $x$- and $y$-direction of the wave functions object can obtained
+# The maximum scattering angles in the $x$- and $y$-direction of the wave functions object can be obtained
 # 
 # print(f'Maximal simulated scattering angles = {waves.cutoff_angles[0]:.3f} mrad')

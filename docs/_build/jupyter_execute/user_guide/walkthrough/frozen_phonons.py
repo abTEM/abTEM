@@ -19,12 +19,12 @@ abtem.config.set({'fft':'fftw'})
 # 
 # The atoms in real materials are not stationary, they vibrate around their position in the crystal due to thermal and zero-point vibrations. 
 # 
-# Vibrational scattering scattering (or electron-phonon scattering) is responsible for features including diffuse backgrounds and Kikuchi lines as well as for a large part of the high-angle scattering measured in annular dark-field measurements.
+# Vibrational scattering (or electron-phonon scattering) is responsible for features including diffuse backgrounds and Kikuchi lines as well as for a large part of the high-angle scattering measured in annular dark-field measurements.
 # 
 # The frozen phonon approximation is a simple, if somewhat brute, approach to numerically simulate the effects of thermal vibrations. In the Frozen phonon approximation, the intensity is averaged over several frozen snapshots of the atomic model as it vibrates. Hence, each frozen phonon captures the atomic model with its atoms displaced by a different random offset.
 # 
 # ## Kikuchi lines in SrTiO<sub>3</sub> 
-# We simulate SrTiO<sub>3</sub>(100) with frozen phonons. In order to observe visible Kikuchi lines, the sample needs some thickness, hence the unit cell is repeated 80 times along the $z$-direction. We also need too repeat the atoms in $x$ and $y$, otherwise the structure is just a repetition of the same unit with displaced atoms. 
+# We simulate SrTiO<sub>3</sub>(100) with frozen phonons. In order to observe visible Kikuchi lines, the sample needs some thickness, hence the unit cell is repeated 80 times along the $z$-direction. We also need to repeat the atoms in $x$ and $y$, otherwise the structure is just a repetition of the same unit with displaced atoms.
 
 # In[2]:
 

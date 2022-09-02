@@ -40,6 +40,6 @@ Open code from articles using abTEM is available in our [repository](https://git
 
 ## Contact
 * Write the [maintainer](https://github.com/jacobjma) directly
-* Bug reports and development: [github issues](https://github.com/jacobjma/abTEM/issues)
+* Bug reports and development: [GitHub issues](https://github.com/jacobjma/abTEM/issues)
 
 Please send us bug reports, patches, code, ideas and questions.

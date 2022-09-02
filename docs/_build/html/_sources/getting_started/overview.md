@@ -21,7 +21,7 @@ objects in
 
 ## Implemented in Python
 
-abTEM works with the Atomic Simulation Environment and the density functional theory code GPAW to provide an seamless
+abTEM works with the Atomic Simulation Environment and the density functional theory code GPAW to provide a seamless
 environment for simulating images from first principles.
 
 ## Speed and scale

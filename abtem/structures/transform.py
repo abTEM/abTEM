@@ -128,7 +128,7 @@ def is_cell_valid(atoms: Atoms, tol: float = 1e-12) -> bool:
 def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     """
     Standardize the cell of an ASE atoms object. The atoms are rotated so one of the lattice vectors in the xy-plane
-    aligns with the x-axis, then all of the lattice vectors are made positive.
+    aligns with the x-axis, then all the lattice vectors are made positive.
 
     Parameters
     ----------

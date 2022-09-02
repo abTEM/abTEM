@@ -373,7 +373,7 @@ abtem.show_atoms(orthogonal_graphene, show_periodic=True);
 pretty_print_transform(transform)
 
 
-# A common, less trivial example, is the creation of models with a specific rotation relative to the beam. Here, we want to view FCC gold at a 10 degree angle.
+# A common, less trivial example, is the creation of models with a specific rotation relative to the beam. Here, we want to view FCC gold at a 10-degree angle.
 
 # In[ ]:
 
