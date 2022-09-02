@@ -661,13 +661,14 @@ title="Print to PDF"
                 
   <div class="cell tag_hide-input docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
-<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
-<span class="kn">from</span> <span class="nn">ase.io</span> <span class="kn">import</span> <span class="n">read</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 <span class="kn">from</span> <span class="nn">ase.build</span> <span class="kn">import</span> <span class="n">mx2</span>
+<span class="kn">from</span> <span class="nn">ase.io</span> <span class="kn">import</span> <span class="n">read</span>
 
 <span class="kn">import</span> <span class="nn">abtem</span>
-<span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s1">&#39;local_diagnostics.progress_bar&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">});</span>
+
+<span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s2">&quot;local_diagnostics.progress_bar&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">});</span>
 </pre></div>
 </div>
 </div>
@@ -693,7 +694,7 @@ title="Print to PDF"
 <p>Next, we create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> with a sampling of <span class="math notranslate nohighlight">\(0.05 \ \mathrm{Å}\)</span> and a slice thickness of <span class="math notranslate nohighlight">\(1 \ \mathrm{Å}\)</span>. A <code class="docutils literal notranslate"><span class="pre">Probe</span></code> with an energy of <span class="math notranslate nohighlight">\(80 \ \mathrm{keV}\)</span>, a convergence semiangle of <span class="math notranslate nohighlight">\(30 \ \mathrm{mrad}\)</span>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">.05</span><span class="p">,</span> <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span> <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 
 <span class="n">probe</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">taper</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
 </pre></div>
@@ -711,10 +712,12 @@ title="Print to PDF"
 <p>The scan types may be visualized by adding them to a <code class="docutils literal notranslate"><span class="pre">matplotlib</span></code> plot.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">line_scan</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">LineScan</span><span class="p">(</span><span class="n">start</span> <span class="o">=</span> <span class="p">[</span><span class="n">potential</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> 
-                     <span class="n">end</span> <span class="o">=</span>   <span class="p">[</span><span class="n">potential</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="mi">5</span><span class="p">,</span> <span class="n">potential</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="mi">3</span><span class="p">],</span> 
-                     <span class="n">gpts</span> <span class="o">=</span> <span class="mi">100</span><span class="p">,</span>
-                     <span class="n">endpoint</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">line_scan</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">LineScan</span><span class="p">(</span>
+    <span class="n">start</span><span class="o">=</span><span class="p">[</span><span class="n">potential</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+    <span class="n">end</span><span class="o">=</span><span class="p">[</span><span class="n">potential</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="mi">5</span><span class="p">,</span> <span class="n">potential</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="mi">3</span><span class="p">],</span>
+    <span class="n">gpts</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span>
+    <span class="n">endpoint</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span>
 
 <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">potential</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
 <span class="n">line_scan</span><span class="o">.</span><span class="n">add_to_plot</span><span class="p">(</span><span class="n">ax</span><span class="p">)</span>
@@ -759,11 +762,13 @@ chunks  80.31 MiB  (100, 318, 331)  1 chunks  numpy.ndarray
 <p>The integration region is given by an inner and outer radius in <span class="math notranslate nohighlight">\(mrad\)</span>. Below we create a detector for BF, MAADF and HAADF.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">bright</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">AnnularDetector</span><span class="p">(</span><span class="n">inner</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">outer</span> <span class="o">=</span> <span class="mi">30</span><span class="p">)</span>
-<span class="n">maadf</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">AnnularDetector</span><span class="p">(</span><span class="n">inner</span> <span class="o">=</span> <span class="mi">50</span><span class="p">,</span> <span class="n">outer</span> <span class="o">=</span> <span class="mi">120</span><span class="p">)</span>
-<span class="n">haadf</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">AnnularDetector</span><span class="p">(</span><span class="n">inner</span> <span class="o">=</span> <span class="mi">90</span><span class="p">,</span> <span class="n">outer</span> <span class="o">=</span> <span class="mi">200</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">bright</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">AnnularDetector</span><span class="p">(</span><span class="n">inner</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">outer</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+<span class="n">maadf</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">AnnularDetector</span><span class="p">(</span><span class="n">inner</span><span class="o">=</span><span class="mi">50</span><span class="p">,</span> <span class="n">outer</span><span class="o">=</span><span class="mi">120</span><span class="p">)</span>
+<span class="n">haadf</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">AnnularDetector</span><span class="p">(</span><span class="n">inner</span><span class="o">=</span><span class="mi">90</span><span class="p">,</span> <span class="n">outer</span><span class="o">=</span><span class="mi">200</span><span class="p">)</span>
 
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;Maximum simulated scattering angle: </span><span class="si">{</span><span class="nb">min</span><span class="p">(</span><span class="n">exit_waves_line</span><span class="o">.</span><span class="n">cutoff_angles</span><span class="p">)</span><span class="si">:</span><span class="s1">.1f</span><span class="si">}</span><span class="s1"> mrad&#39;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span>
+    <span class="sa">f</span><span class="s2">&quot;Maximum simulated scattering angle: </span><span class="si">{</span><span class="nb">min</span><span class="p">(</span><span class="n">exit_waves_line</span><span class="o">.</span><span class="n">cutoff_angles</span><span class="p">)</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> mrad&quot;</span>
+<span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -811,9 +816,9 @@ chunks  400 B    (100,)   1 chunks  numpy.ndarray
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">,</span> <span class="n">ax3</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span>
-<span class="n">measurements</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s1">&#39;Bright field&#39;</span><span class="p">)</span>
-<span class="n">measurements</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s1">&#39;MAADF&#39;</span><span class="p">);</span>
-<span class="n">measurements</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax3</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s1">&#39;HAADF&#39;</span><span class="p">);</span>
+<span class="n">measurements</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;Bright field&quot;</span><span class="p">)</span>
+<span class="n">measurements</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;MAADF&quot;</span><span class="p">)</span>
+<span class="n">measurements</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax3</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;HAADF&quot;</span><span class="p">)</span>
 
 <span class="n">fig</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
 </pre></div>
@@ -835,7 +840,7 @@ chunks  400 B    (100,)   1 chunks  numpy.ndarray
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">sampling</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">ctf</span><span class="o">.</span><span class="n">nyquist_sampling</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;Nyquist sampling: </span><span class="si">{</span><span class="n">sampling</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Nyquist sampling: </span><span class="si">{</span><span class="n">sampling</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -847,10 +852,9 @@ chunks  400 B    (100,)   1 chunks  numpy.ndarray
 </div>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">grid_scan</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">GridScan</span><span class="o">.</span><span class="n">from_fractional_coordinates</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> 
-                                                       <span class="n">start</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> 
-                                                       <span class="n">end</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span> <span class="o">/</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">1</span> <span class="o">/</span> <span class="mi">3</span><span class="p">],</span>
-                                                       <span class="n">sampling</span> <span class="o">=</span> <span class="n">sampling</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">grid_scan</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">GridScan</span><span class="o">.</span><span class="n">from_fractional_coordinates</span><span class="p">(</span>
+    <span class="n">potential</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">end</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span> <span class="o">/</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">1</span> <span class="o">/</span> <span class="mi">3</span><span class="p">],</span> <span class="n">sampling</span><span class="o">=</span><span class="n">sampling</span>
+<span class="p">)</span>
 
 <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">potential</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
 <span class="n">grid_scan</span><span class="o">.</span><span class="n">add_to_plot</span><span class="p">(</span><span class="n">ax</span><span class="p">)</span>
@@ -864,9 +868,7 @@ chunks  400 B    (100,)   1 chunks  numpy.ndarray
 <p>We create the task graph for the STEM simulation resulting in a list of <code class="docutils literal notranslate"><span class="pre">Images</span></code>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">measurements</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> 
-                          <span class="n">scan</span><span class="o">=</span><span class="n">grid_scan</span><span class="p">,</span> 
-                          <span class="n">detectors</span><span class="o">=</span><span class="n">all_detectors</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">measurements</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="n">scan</span><span class="o">=</span><span class="n">grid_scan</span><span class="p">,</span> <span class="n">detectors</span><span class="o">=</span><span class="n">all_detectors</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -874,7 +876,7 @@ chunks  400 B    (100,)   1 chunks  numpy.ndarray
 <p>It is convenient to stack the measurements into a single <code class="docutils literal notranslate"><span class="pre">Images</span></code>, now they can be saved as a single file.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">measurements</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span><span class="n">measurements</span><span class="p">,</span> <span class="p">[</span><span class="s1">&#39;BF&#39;</span><span class="p">,</span> <span class="s1">&#39;MAADF&#39;</span><span class="p">,</span> <span class="s1">&#39;HAADF&#39;</span><span class="p">])</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">measurements</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span><span class="n">measurements</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;BF&quot;</span><span class="p">,</span> <span class="s2">&quot;MAADF&quot;</span><span class="p">,</span> <span class="s2">&quot;HAADF&quot;</span><span class="p">])</span>
 </pre></div>
 </div>
 </div>
@@ -882,7 +884,7 @@ chunks  400 B    (100,)   1 chunks  numpy.ndarray
 <p>We write the <code class="docutils literal notranslate"><span class="pre">Images</span></code> to disk directly, this will trigger the computations to run.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">measurements</span><span class="o">.</span><span class="n">to_zarr</span><span class="p">(</span><span class="s1">&#39;mos2_stem_measurements.zarr&#39;</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">measurements</span><span class="o">.</span><span class="n">to_zarr</span><span class="p">(</span><span class="s2">&quot;mos2_stem_measurements.zarr&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -890,12 +892,11 @@ chunks  400 B    (100,)   1 chunks  numpy.ndarray
 <p>We show the resulting <code class="docutils literal notranslate"><span class="pre">Images</span></code> below.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">imported_images</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">from_zarr</span><span class="p">(</span><span class="s1">&#39;mos2_stem_measurements.zarr&#39;</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">imported_images</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">from_zarr</span><span class="p">(</span><span class="s2">&quot;mos2_stem_measurements.zarr&quot;</span><span class="p">)</span>
 
-<span class="n">imported_images</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> 
-                     <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> 
-                     <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;axes_pad&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">},</span> 
-                     <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">5</span><span class="p">));</span>
+<span class="n">imported_images</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">},</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+<span class="p">);</span>
 </pre></div>
 </div>
 </div>
@@ -910,7 +911,7 @@ chunks  400 B    (100,)   1 chunks  numpy.ndarray
 <p>We saved a lot of computations by scanning at the Nyquist frequency, however, the result is quite pixelated. To fix this we interpolate the images to a sampling of <span class="math notranslate nohighlight">\(~ 0.1 \ \mathrm{Å / pixel}\)</span>. <code class="docutils literal notranslate"><span class="pre">abTEM</span></code>s default interpolation algorithm is Fourier space padding, however, spline interpolation is also available, which may be more appropriate if the image in non-periodic.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">interpolated_measurement</span> <span class="o">=</span> <span class="n">measurements</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="n">sampling</span><span class="o">=</span><span class="mf">.1</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">interpolated_measurement</span> <span class="o">=</span> <span class="n">measurements</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="n">sampling</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -923,9 +924,9 @@ chunks  400 B    (100,)   1 chunks  numpy.ndarray
 <p>We apply a Gaussian blur with a standard deviation of <span class="math notranslate nohighlight">\(0.3 \ \mathrm{Å}\)</span> (corresponding to a source of approximately that size).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">blurred_measurement</span> <span class="o">=</span> <span class="n">interpolated_measurement</span><span class="o">.</span><span class="n">gaussian_filter</span><span class="p">(</span><span class="mf">.3</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">blurred_measurement</span> <span class="o">=</span> <span class="n">interpolated_measurement</span><span class="o">.</span><span class="n">gaussian_filter</span><span class="p">(</span><span class="mf">0.3</span><span class="p">)</span>
 
-<span class="n">blurred_measurement</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span><span class="mi">4</span><span class="p">));</span>
+<span class="n">blurred_measurement</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">4</span><span class="p">));</span>
 </pre></div>
 </div>
 </div>
@@ -952,7 +953,7 @@ chunks  400 B    (100,)   1 chunks  numpy.ndarray
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">noisy_measurement</span> <span class="o">=</span> <span class="n">tiled_measurement</span><span class="o">.</span><span class="n">poisson_noise</span><span class="p">(</span><span class="n">dose_per_area</span><span class="o">=</span><span class="mf">5e4</span><span class="p">)</span>
 
-<span class="n">noisy_measurement</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span><span class="mi">4</span><span class="p">));</span>
+<span class="n">noisy_measurement</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">4</span><span class="p">));</span>
 </pre></div>
 </div>
 </div>
@@ -985,7 +986,9 @@ chunks  400 B    (100,)   1 chunks  numpy.ndarray
 <p>We run the scanned multislice simulations.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">flexible_measurement</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="n">scan</span><span class="o">=</span><span class="n">grid_scan</span><span class="p">,</span> <span class="n">detectors</span><span class="o">=</span><span class="n">flexible_detector</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">flexible_measurement</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span>
+    <span class="n">potential</span><span class="p">,</span> <span class="n">scan</span><span class="o">=</span><span class="n">grid_scan</span><span class="p">,</span> <span class="n">detectors</span><span class="o">=</span><span class="n">flexible_detector</span>
+<span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -1020,18 +1023,18 @@ chunks  15.82 kiB  (10, 15, 27, 1)  2 chunks  numpy.ndarray
 <p>We can reproduce the same BF, MAADF and HAADF measurements as above by integrating the <code class="docutils literal notranslate"><span class="pre">PolarMeasurements</span></code>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">stacked</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">stack</span><span class="p">([</span>
-    <span class="n">flexible_measurement</span><span class="o">.</span><span class="n">integrate_radial</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">30</span><span class="p">),</span>
-    <span class="n">flexible_measurement</span><span class="o">.</span><span class="n">integrate_radial</span><span class="p">(</span><span class="mi">50</span><span class="p">,</span> <span class="mi">120</span><span class="p">),</span>
-    <span class="n">flexible_measurement</span><span class="o">.</span><span class="n">integrate_radial</span><span class="p">(</span><span class="mi">90</span><span class="p">,</span> <span class="mi">200</span><span class="p">),</span>
-<span class="p">],</span>
-    <span class="p">(</span><span class="s1">&#39;BF&#39;</span><span class="p">,</span> <span class="s1">&#39;MAADF&#39;</span><span class="p">,</span> <span class="s1">&#39;HAADF&#39;</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">stacked</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="n">flexible_measurement</span><span class="o">.</span><span class="n">integrate_radial</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">30</span><span class="p">),</span>
+        <span class="n">flexible_measurement</span><span class="o">.</span><span class="n">integrate_radial</span><span class="p">(</span><span class="mi">50</span><span class="p">,</span> <span class="mi">120</span><span class="p">),</span>
+        <span class="n">flexible_measurement</span><span class="o">.</span><span class="n">integrate_radial</span><span class="p">(</span><span class="mi">90</span><span class="p">,</span> <span class="mi">200</span><span class="p">),</span>
+    <span class="p">],</span>
+    <span class="p">(</span><span class="s2">&quot;BF&quot;</span><span class="p">,</span> <span class="s2">&quot;MAADF&quot;</span><span class="p">,</span> <span class="s2">&quot;HAADF&quot;</span><span class="p">),</span>
 <span class="p">)</span>
 
-<span class="n">stacked</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> 
-             <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> 
-             <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;axes_pad&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">},</span> 
-             <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">5</span><span class="p">));</span>
+<span class="n">stacked</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">},</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+<span class="p">);</span>
 </pre></div>
 </div>
 </div>
@@ -1047,11 +1050,9 @@ chunks  15.82 kiB  (10, 15, 27, 1)  2 chunks  numpy.ndarray
 into <span class="math notranslate nohighlight">\(2\)</span> radial regions, each of which are divided into <span class="math notranslate nohighlight">\(4\)</span> azimuthal regions. The detector regions are rotated by <span class="math notranslate nohighlight">\(45 \ \mathrm{deg.}\)</span> with respect to the principal cartesian axes.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">segmented_detector</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">SegmentedDetector</span><span class="p">(</span><span class="n">inner</span> <span class="o">=</span> <span class="mi">40</span><span class="p">,</span> 
-                                       <span class="n">outer</span> <span class="o">=</span> <span class="mi">80</span><span class="p">,</span> 
-                                       <span class="n">nbins_radial</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span> 
-                                       <span class="n">nbins_azimuthal</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span> 
-                                       <span class="n">rotation</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">/</span> <span class="mi">4</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">segmented_detector</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">SegmentedDetector</span><span class="p">(</span>
+    <span class="n">inner</span><span class="o">=</span><span class="mi">40</span><span class="p">,</span> <span class="n">outer</span><span class="o">=</span><span class="mi">80</span><span class="p">,</span> <span class="n">nbins_radial</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">nbins_azimuthal</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">rotation</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">/</span> <span class="mi">4</span>
+<span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -1070,7 +1071,9 @@ into <span class="math notranslate nohighlight">\(2\)</span> radial regions, eac
 <p>We run the scanned multislice simulations. The resulting <code class="docutils literal notranslate"><span class="pre">PolarMeasurement</span></code> is 4d, the first two (ensemble) axes represents the scan directions and the</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">segmented_measurement</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="n">scan</span><span class="o">=</span><span class="n">grid_scan</span><span class="p">,</span> <span class="n">detectors</span><span class="o">=</span><span class="n">segmented_detector</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">segmented_measurement</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span>
+    <span class="n">potential</span><span class="p">,</span> <span class="n">scan</span><span class="o">=</span><span class="n">grid_scan</span><span class="p">,</span> <span class="n">detectors</span><span class="o">=</span><span class="n">segmented_detector</span>
+<span class="p">)</span>
 
 <span class="n">segmented_measurement</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
 </pre></div>
@@ -1109,12 +1112,13 @@ chunks  -         -               - chunks  numpy.ndarray
 <p>Below we calculate the differential signals in the <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span>. The differential signal in the <span class="math notranslate nohighlight">\(x\)</span>-direction is calculated as the intensity difference between detector regions 1 and 3, in the <span class="math notranslate nohighlight">\(y\)</span>-direction is obtained by subtracting the intensity difference between detector regions 0 and 2.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">differential</span> <span class="o">=</span> <span class="n">segmented_measurement</span><span class="o">.</span><span class="n">differentials</span><span class="p">(</span><span class="n">direction_1_plus</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,),</span>
-                                                   <span class="n">direction_1_minus</span> <span class="o">=</span> <span class="p">(</span><span class="mi">3</span><span class="p">,),</span>
-                                                   <span class="n">direction_2_plus</span> <span class="o">=</span> <span class="p">(</span><span class="mi">0</span><span class="p">,),</span>
-                                                   <span class="n">direction_2_minus</span> <span class="o">=</span> <span class="p">(</span><span class="mi">2</span><span class="p">,),</span>
-                                                   <span class="n">return_complex</span> <span class="o">=</span> <span class="kc">True</span>
-                                                   <span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">differential</span> <span class="o">=</span> <span class="n">segmented_measurement</span><span class="o">.</span><span class="n">differentials</span><span class="p">(</span>
+    <span class="n">direction_1_plus</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,),</span>
+    <span class="n">direction_1_minus</span><span class="o">=</span><span class="p">(</span><span class="mi">3</span><span class="p">,),</span>
+    <span class="n">direction_2_plus</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,),</span>
+    <span class="n">direction_2_minus</span><span class="o">=</span><span class="p">(</span><span class="mi">2</span><span class="p">,),</span>
+    <span class="n">return_complex</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -1123,15 +1127,16 @@ chunks  -         -               - chunks  numpy.ndarray
 <p>To show the results, we first interpolate and tile. The different representations of the complex parts are stacked to show an exploded plot.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">interpolated_differential</span> <span class="o">=</span> <span class="n">differential</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="mf">.05</span><span class="p">)</span><span class="o">.</span><span class="n">tile</span><span class="p">((</span><span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">interpolated_differential</span> <span class="o">=</span> <span class="n">differential</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="mf">0.05</span><span class="p">)</span><span class="o">.</span><span class="n">tile</span><span class="p">((</span><span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
 
-<span class="n">abtem</span><span class="o">.</span><span class="n">stack</span><span class="p">([</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span>
+    <span class="p">[</span>
         <span class="n">interpolated_differential</span><span class="o">.</span><span class="n">real</span><span class="p">(),</span>
         <span class="n">interpolated_differential</span><span class="o">.</span><span class="n">imag</span><span class="p">(),</span>
         <span class="n">interpolated_differential</span><span class="o">.</span><span class="n">abs</span><span class="p">(),</span>
-        <span class="n">interpolated_differential</span><span class="o">.</span><span class="n">phase</span><span class="p">()</span>
+        <span class="n">interpolated_differential</span><span class="o">.</span><span class="n">phase</span><span class="p">(),</span>
     <span class="p">],</span>
-    <span class="p">(</span><span class="s1">&#39;real&#39;</span><span class="p">,</span> <span class="s1">&#39;imag&#39;</span><span class="p">,</span> <span class="s1">&#39;abs&#39;</span><span class="p">,</span> <span class="s1">&#39;phase&#39;</span><span class="p">)</span>
+    <span class="p">(</span><span class="s2">&quot;real&quot;</span><span class="p">,</span> <span class="s2">&quot;imag&quot;</span><span class="p">,</span> <span class="s2">&quot;abs&quot;</span><span class="p">,</span> <span class="s2">&quot;phase&quot;</span><span class="p">),</span>
 <span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">4</span><span class="p">));</span>
 </pre></div>
 </div>
@@ -1143,11 +1148,14 @@ chunks  -         -               - chunks  numpy.ndarray
 <p>We can also display complex <code class="docutils literal notranslate"><span class="pre">Images</span></code> using <a class="reference external" href="https://en.wikipedia.org/wiki/Domain_coloring">domain coloring</a>. The phase is represented as a hue and the brightness is related to the absolute value.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">domain_coloring_kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;saturation_adjustment&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
-                          <span class="s1">&#39;abs_scaling&#39;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span> <span class="o">**</span> <span class="mf">1.7</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span> <span class="o">+</span> <span class="n">x</span> <span class="o">**</span> <span class="mf">1.7</span><span class="p">)</span> 
-                          <span class="p">}</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">domain_coloring_kwargs</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;saturation_adjustment&quot;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+    <span class="s2">&quot;abs_scaling&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span> <span class="o">**</span> <span class="mf">1.7</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span> <span class="o">+</span> <span class="n">x</span> <span class="o">**</span> <span class="mf">1.7</span><span class="p">),</span>
+<span class="p">}</span>
 
-<span class="p">(</span><span class="n">interpolated_differential</span> <span class="o">*</span> <span class="mf">1e3</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">domain_coloring_kwargs</span><span class="o">=</span><span class="n">domain_coloring_kwargs</span><span class="p">,</span> <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
+<span class="p">(</span><span class="n">interpolated_differential</span> <span class="o">*</span> <span class="mf">1e3</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+    <span class="n">domain_coloring_kwargs</span><span class="o">=</span><span class="n">domain_coloring_kwargs</span><span class="p">,</span> <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span>
+<span class="p">);</span>
 </pre></div>
 </div>
 </div>
@@ -1161,14 +1169,16 @@ chunks  -         -               - chunks  numpy.ndarray
 <p>The <code class="docutils literal notranslate"><span class="pre">PixelatedDetector</span></code> records the diffraction patterns for every probe position. Hence, a 2D scan with this detector results in a four-dimensional dataset. The 4D datasets can be used to reconstruct the results of all the other detector geometries, hence the only downside of this detector is the high memory or disk space requirements of storing the data.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">pixelated_detector</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">PixelatedDetector</span><span class="p">(</span><span class="n">max_angle</span> <span class="o">=</span> <span class="mi">100</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">pixelated_detector</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">PixelatedDetector</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">100</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
 </div>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">pixelated_measurements</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="n">scan</span><span class="o">=</span><span class="n">grid_scan</span><span class="p">,</span> <span class="n">detectors</span><span class="o">=</span><span class="n">pixelated_detector</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">pixelated_measurements</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span>
+    <span class="n">potential</span><span class="p">,</span> <span class="n">scan</span><span class="o">=</span><span class="n">grid_scan</span><span class="p">,</span> <span class="n">detectors</span><span class="o">=</span><span class="n">pixelated_detector</span>
+<span class="p">)</span>
 
 <span class="n">pixelated_measurements</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
 </pre></div>
@@ -1199,11 +1209,13 @@ chunks  -         -                 - chunks  numpy.ndarray
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">cropped_diffraction_pattern</span> <span class="o">=</span> <span class="n">pixelated_measurements</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">crop</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">80</span><span class="p">)</span>
 
-<span class="n">abtem</span><span class="o">.</span><span class="n">stack</span><span class="p">([</span>
-    <span class="n">cropped_diffraction_pattern</span><span class="p">,</span>
-    <span class="n">cropped_diffraction_pattern</span> <span class="o">**</span> <span class="mf">.1</span><span class="p">,</span>
-    <span class="n">cropped_diffraction_pattern</span><span class="o">.</span><span class="n">block_direct</span><span class="p">()],</span>
-    <span class="p">(</span><span class="s1">&#39;base&#39;</span><span class="p">,</span> <span class="s1">&#39;power scale&#39;</span><span class="p">,</span> <span class="s1">&#39;block direct&#39;</span><span class="p">)</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="n">cropped_diffraction_pattern</span><span class="p">,</span>
+        <span class="n">cropped_diffraction_pattern</span> <span class="o">**</span> <span class="mf">0.1</span><span class="p">,</span>
+        <span class="n">cropped_diffraction_pattern</span><span class="o">.</span><span class="n">block_direct</span><span class="p">(),</span>
+    <span class="p">],</span>
+    <span class="p">(</span><span class="s2">&quot;base&quot;</span><span class="p">,</span> <span class="s2">&quot;power scale&quot;</span><span class="p">,</span> <span class="s2">&quot;block direct&quot;</span><span class="p">),</span>
 <span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">4</span><span class="p">));</span>
 </pre></div>
 </div>
@@ -1221,13 +1233,16 @@ chunks  -         -                 - chunks  numpy.ndarray
 </div>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">interpolated_center_of_mass</span> <span class="o">=</span> <span class="n">center_of_mass</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="mf">.05</span><span class="p">)</span><span class="o">.</span><span class="n">tile</span><span class="p">((</span><span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">interpolated_center_of_mass</span> <span class="o">=</span> <span class="n">center_of_mass</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="mf">0.05</span><span class="p">)</span><span class="o">.</span><span class="n">tile</span><span class="p">((</span><span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
 
-<span class="n">domain_coloring_kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;saturation_adjustment&#39;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
-                          <span class="s1">&#39;abs_scaling&#39;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span> <span class="o">**</span> <span class="mf">1.5</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span> <span class="o">+</span> <span class="n">x</span> <span class="o">**</span> <span class="mf">1.5</span><span class="p">)</span> 
-                          <span class="p">}</span>
+<span class="n">domain_coloring_kwargs</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;saturation_adjustment&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
+    <span class="s2">&quot;abs_scaling&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span> <span class="o">**</span> <span class="mf">1.5</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span> <span class="o">+</span> <span class="n">x</span> <span class="o">**</span> <span class="mf">1.5</span><span class="p">),</span>
+<span class="p">}</span>
 
-<span class="n">interpolated_center_of_mass</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">domain_coloring_kwargs</span><span class="o">=</span><span class="n">domain_coloring_kwargs</span><span class="p">,</span> <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">interpolated_center_of_mass</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+    <span class="n">domain_coloring_kwargs</span><span class="o">=</span><span class="n">domain_coloring_kwargs</span><span class="p">,</span> <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span>
+<span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -1242,7 +1257,7 @@ chunks  -         -                 - chunks  numpy.ndarray
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">integrated_gradient</span> <span class="o">=</span> <span class="n">center_of_mass</span><span class="o">.</span><span class="n">integrate_gradient</span><span class="p">()</span>
 
-<span class="n">interpolated_integrated_gradient</span> <span class="o">=</span> <span class="n">integrated_gradient</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="mf">.05</span><span class="p">)</span><span class="o">.</span><span class="n">tile</span><span class="p">((</span><span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
+<span class="n">interpolated_integrated_gradient</span> <span class="o">=</span> <span class="n">integrated_gradient</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="mf">0.05</span><span class="p">)</span><span class="o">.</span><span class="n">tile</span><span class="p">((</span><span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
 
 <span class="n">interpolated_integrated_gradient</span><span class="o">.</span><span class="n">show</span><span class="p">();</span>
 </pre></div>

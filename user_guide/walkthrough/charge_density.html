@@ -50,8 +50,6 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
-    <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
-    <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Appendix" href="../appendix/appendix.html" />
@@ -523,8 +521,13 @@ title="Print to PDF"
     <nav id="bd-toc-nav" aria-label="Page">
         <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#dft-calculation">
-   DFT calculation
+  <a class="reference internal nav-link" href="#dft-calculation-of-hbn-with-gpaw">
+   DFT calculation of hBN with GPAW
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#importing-exporting-gpaw-calculations">
+   Importing/exporting GPAW calculations
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -557,8 +560,13 @@ title="Print to PDF"
                         <nav aria-label="Page">
                             <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#dft-calculation">
-   DFT calculation
+  <a class="reference internal nav-link" href="#dft-calculation-of-hbn-with-gpaw">
+   DFT calculation of hBN with GPAW
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#importing-exporting-gpaw-calculations">
+   Importing/exporting GPAW calculations
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -583,85 +591,65 @@ title="Print to PDF"
                 
   <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">abtem</span>
 <span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">from</span> <span class="nn">ase.build</span> <span class="kn">import</span> <span class="n">graphene</span>
 <span class="kn">from</span> <span class="nn">gpaw</span> <span class="kn">import</span> <span class="n">GPAW</span>
 
-<span class="kn">from</span> <span class="nn">abtem.potentials.gpaw</span> <span class="kn">import</span> <span class="n">GPAWPotential</span>
-<span class="kn">from</span> <span class="nn">abtem</span> <span class="kn">import</span> <span class="n">show_atoms</span><span class="p">,</span> <span class="n">Potential</span>
-<span class="kn">from</span> <span class="nn">ase.build</span> <span class="kn">import</span> <span class="n">graphene</span>
-<span class="c1">#from abtem import *</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<div class="output traceback highlight-ipythontb notranslate"><div class="highlight"><pre><span></span><span class="gt">---------------------------------------------------------------------------</span>
-<span class="ne">ModuleNotFoundError</span><span class="g g-Whitespace">                       </span>Traceback (most recent call last)
-<span class="o">~</span>\<span class="n">AppData</span>\<span class="n">Local</span>\<span class="n">Temp</span><span class="o">/</span><span class="n">ipykernel_23320</span><span class="o">/</span><span class="mf">1065073602.</span><span class="n">py</span> <span class="ow">in</span> <span class="o">&lt;</span><span class="n">module</span><span class="o">&gt;</span>
-<span class="g g-Whitespace">      </span><span class="mi">1</span> <span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
-<span class="g g-Whitespace">      </span><span class="mi">2</span> <span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
-<span class="ne">----&gt; </span><span class="mi">3</span> <span class="kn">from</span> <span class="nn">gpaw</span> <span class="kn">import</span> <span class="n">GPAW</span>
-<span class="g g-Whitespace">      </span><span class="mi">4</span> 
-<span class="g g-Whitespace">      </span><span class="mi">5</span> <span class="kn">from</span> <span class="nn">abtem.potentials.gpaw</span> <span class="kn">import</span> <span class="n">GPAWPotential</span>
-
-<span class="ne">ModuleNotFoundError</span>: No module named &#39;gpaw&#39;
+<span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s1">&#39;local_diagnostics.progress_bar&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">});</span>
 </pre></div>
 </div>
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="ab-initio-potentials-with-gpaw">
 <h1><em>ab initio</em> potentials with GPAW<a class="headerlink" href="#ab-initio-potentials-with-gpaw" title="Permalink to this headline">#</a></h1>
-<p>The independent atom model (IAM) neglects any effects due to bonding and charge transfer. However, since the nucleus and core electrons constitute most of the charge in an atom, this is often a good approximation. Nonetheless, the difference between the IAM and a more realistic model including the effects of bonding is measurable, at least in certain systems. This difference can obviously be important, since it contains all the chemistry of the system.</p>
-<p>Here we go beyond the independent atom model using density functional theory (DFT). Note that you need a working GPAW installation for this tutorial, see the <a class="reference external" href="https://wiki.fysik.dtu.dk/gpaw/">GPAW documentation</a> for more information.</p>
-<section id="dft-calculation">
-<h2>DFT calculation<a class="headerlink" href="#dft-calculation" title="Permalink to this headline">#</a></h2>
-<p>The first step for creating a DFT potential is to converge a DFT calculation.</p>
-<p>The unit cell for the DFT calculation does not have to be orthogonal, but the potential has to be made orthogonal before the multislice simulation. Only unit cells that can be thought of as an extruded parallelogram are allowed. If <code class="docutils literal notranslate"><span class="pre">standardize_cell</span></code> raises an error, abTEM is unable to use the DFT calculation.</p>
-<p>We will use the minimal hexagonal cell for our graphene DFT calculation.</p>
+<p>The independent atom model (IAM) neglects any effects due to bonding and charge transfer, this is typically a good approximation, because the core charge and electrons are responible for most of the potential. However, the difference between the IAM and a more realistic model including the effects of bonding is measurable, at least in certain systems. This difference is important, due to the importance of charge transfer in chemistry.</p>
+<p>Here we go beyond the independent atom model using density functional theory (DFT), to calculate a potential that includes charge transfer. Note that you need a working GPAW installation, see the <a class="reference external" href="https://wiki.fysik.dtu.dk/gpaw/">GPAW documentation</a> for more information.</p>
+<p><em>abTEM</em> supports and recommends GPAW, however, other codes may be used assuming you can obtain the electron charge density as a numpy array.</p>
+<section id="dft-calculation-of-hbn-with-gpaw">
+<h2>DFT calculation of hBN with GPAW<a class="headerlink" href="#dft-calculation-of-hbn-with-gpaw" title="Permalink to this headline">#</a></h2>
+<p>The first step to creating a DFT potential is to converge a DFT calculation. We claculate the minimal hexagonal cell of hexagonal-Boron-Nitride (hBN). The atomic model is created by modifying a graphene model.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">graphene</span><span class="p">()</span>
-<span class="n">atoms</span><span class="o">.</span><span class="n">center</span><span class="p">(</span><span class="n">vacuum</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">graphene</span><span class="p">(</span><span class="n">vacuum</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">a</span><span class="o">=</span><span class="mf">2.504</span><span class="p">)</span>
 
-<span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
-<span class="n">show_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">)</span>
-<span class="n">show_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">plane</span><span class="o">=</span><span class="s1">&#39;xz&#39;</span><span class="p">)</span>
+<span class="n">atoms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">number</span> <span class="o">=</span> <span class="mi">5</span>
+<span class="n">atoms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">number</span> <span class="o">=</span> <span class="mi">7</span>
+
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">legend</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">show_periodic</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
+<div class="cell_output docutils container">
+<img alt="../../_images/charge_density_2_0.png" src="../../_images/charge_density_2_0.png" />
 </div>
-<p>To run the DFT calculation, we use the <code class="docutils literal notranslate"><span class="pre">GPAW</span></code> calculator object. We set its real-space grid spacing to a small value of 0.1 Å and use a k-point grid of (3,3,1). The DFT real-space grid does not have to match the grid used in the multislice simulations.</p>
-<p>Running the method <code class="docutils literal notranslate"><span class="pre">.get_potential_energy</span></code> triggers the DFT self-consistent field cycle to run, resulting in the <code class="docutils literal notranslate"><span class="pre">GPAW</span></code> object now containing the converged PAW electron density.</p>
+</div>
+<p>To run the DFT calculation, we use the <code class="docutils literal notranslate"><span class="pre">GPAW</span></code> calculator. We use the default parameters, except for the k-points which have to be at least <code class="docutils literal notranslate"><span class="pre">(5,5,1)</span></code> for a cell of this tiny size.</p>
+<p>Running the method <code class="docutils literal notranslate"><span class="pre">get_potential_energy</span></code> triggers the DFT self-consistent field cycle to run, after which the <code class="docutils literal notranslate"><span class="pre">GPAW</span></code> object contains the converged PAW electron density.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">gpaw</span> <span class="o">=</span> <span class="n">GPAW</span><span class="p">(</span><span class="n">h</span><span class="o">=</span><span class="mf">.2</span><span class="p">,</span> <span class="n">txt</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">kpts</span><span class="o">=</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">gpaw</span> <span class="o">=</span> <span class="n">GPAW</span><span class="p">(</span><span class="n">txt</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">kpts</span><span class="o">=</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
 <span class="n">atoms</span><span class="o">.</span><span class="n">calc</span> <span class="o">=</span> <span class="n">gpaw</span>
 <span class="n">atoms</span><span class="o">.</span><span class="n">get_potential_energy</span><span class="p">()</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stderr highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>/home/jacob/miniconda3/envs/abtem-dask/lib/python3.9/site-packages/ase/utils/__init__.py:62: FutureWarning: convert_string_to_fd does not facilitate proper resource management.  Please use e.g. ase.utils.IOContext class instead.
-  warnings.warn(warning)
-</pre></div>
-</div>
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>-18.890373561723646
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>-19.369576502082047
 </pre></div>
 </div>
 </div>
 </div>
-<p>DFT calculations can be extremely computationally intensive, and may require massive parallelization. Running such simulations in a notebook is generally not recommended, hence, running the DFT calculation separately, and importing the GPAW calculator for the image simulation is typically a better workflow.</p>
-<p>The GPAW object can be written to and read from disk as follows (here supressing GPAW text output on read).</p>
+</section>
+<section id="importing-exporting-gpaw-calculations">
+<h2>Importing/exporting GPAW calculations<a class="headerlink" href="#importing-exporting-gpaw-calculations" title="Permalink to this headline">#</a></h2>
+<p>DFT calculations for image simulations can be extremely computationally intensive, and may require massive parallelization. Hence, your workflow will often require exporting the DFT calculation to a file, then importing it for your <em>abTEM</em> iam simulation. Exporting and importing from <code class="docutils literal notranslate"><span class="pre">GPAW</span></code> works as demonstrated below.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">gpaw</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s1">&#39;graphene.gpw&#39;</span><span class="p">)</span>
-</pre></div>
-</div>
-</div>
-</div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">gpaw</span> <span class="o">=</span> <span class="n">GPAW</span><span class="p">(</span><span class="s1">&#39;graphene.gpw&#39;</span><span class="p">,</span> <span class="n">txt</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">gpaw</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s2">&quot;hbn.gpw&quot;</span><span class="p">)</span>
+
+<span class="n">gpaw</span> <span class="o">=</span> <span class="n">GPAW</span><span class="p">(</span><span class="s2">&quot;hbn.gpw&quot;</span><span class="p">,</span> <span class="n">txt</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -669,67 +657,191 @@ title="Print to PDF"
 </section>
 <section id="using-the-gpaw-potential-in-abtem">
 <h2>Using the GPAW potential in abTEM<a class="headerlink" href="#using-the-gpaw-potential-in-abtem" title="Permalink to this headline">#</a></h2>
-<p>It is straightforward to calculate a DFT potential from a converged GPAW calculation. The <code class="docutils literal notranslate"><span class="pre">GPAWPotential</span></code> object just requires a converged GPAW calculator (containing also the atoms) instead of an <code class="docutils literal notranslate"><span class="pre">Atoms</span></code> object. Note that we can use a finer sampling than was used for the computational grid.</p>
+<p>It is straightforward to calculate a DFT potential from a converged GPAW calculation. The <code class="docutils literal notranslate"><span class="pre">GPAWPotential</span></code> object just requires a converged GPAW calculator.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">dft_pot</span> <span class="o">=</span> <span class="n">GPAWPotential</span><span class="p">(</span><span class="n">gpaw</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">.02</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_dft</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">GPAWPotential</span><span class="p">(</span><span class="n">gpaw</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span><span class="p">)</span><span class="o">.</span><span class="n">build</span><span class="p">()</span>
 </pre></div>
 </div>
 </div>
 </div>
-<p>The <code class="docutils literal notranslate"><span class="pre">.build</span></code> method converts the <code class="docutils literal notranslate"><span class="pre">GPAWPotential</span></code> to an <code class="docutils literal notranslate"><span class="pre">ArrayPotential</span></code>, representing the potential as a numpy array. This may be used in image simulations exactly the same way a potential derived from the IAM is used. Here we tile the potential by (3x2) in the <span class="math notranslate nohighlight">\(xy\)</span> plane to visualize a larger field of view.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">GPAWPotential</span></code> shares the same supertype as the standard potential, hence, they share most of their properties and methods.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">dft_array</span> <span class="o">=</span> <span class="n">dft_pot</span><span class="o">.</span><span class="n">build</span><span class="p">(</span><span class="n">compute</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-
-<span class="n">dft_potential</span> <span class="o">=</span> <span class="n">dft_array</span><span class="o">.</span><span class="n">tile</span><span class="p">((</span><span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
-</pre></div>
-</div>
-</div>
-</div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">dft_potential</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_dft</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(&lt;AxesSubplot:xlabel=&#39;x [Å]&#39;, ylabel=&#39;y [Å]&#39;&gt;,
- &lt;matplotlib.image.AxesImage at 0x7fb92d3d36d0&gt;)
-</pre></div>
-</div>
-<img alt="../../_images/charge_density_16_1.png" src="../../_images/charge_density_16_1.png" />
+<img alt="../../_images/charge_density_10_0.png" src="../../_images/charge_density_10_0.png" />
 </div>
 </div>
 </section>
 <section id="comparing-dft-to-iam">
 <h2>Comparing DFT to IAM<a class="headerlink" href="#comparing-dft-to-iam" title="Permalink to this headline">#</a></h2>
+<p>To show the difference that including charge trasnfer can have, we compare the DFT potential to an equivalent potential using the IAM. We make sure to set <code class="docutils literal notranslate"><span class="pre">projection=&quot;finite&quot;</span></code> to ensure that the projection integrals are done identically.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">abtem.structures</span> <span class="kn">import</span> <span class="n">orthogonalize_cell</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">gpaw</span><span class="o">.</span><span class="n">atoms</span>
 
-<span class="n">atoms</span> <span class="o">=</span> <span class="n">orthogonalize_cell</span><span class="p">(</span><span class="n">gpaw</span><span class="o">.</span><span class="n">atoms</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
-
-<span class="n">iam_potential</span> <span class="o">=</span> <span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">gpts</span><span class="o">=</span><span class="n">dft_potential</span><span class="o">.</span><span class="n">gpts</span><span class="p">)</span><span class="o">.</span><span class="n">build</span><span class="p">(</span><span class="n">compute</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">potential_iam</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span>
+    <span class="n">atoms</span><span class="p">,</span> <span class="n">gpts</span><span class="o">=</span><span class="n">potential_dft</span><span class="o">.</span><span class="n">gpts</span><span class="p">,</span> <span class="n">projection</span><span class="o">=</span><span class="s2">&quot;finite&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">build</span><span class="p">()</span>
 </pre></div>
 </div>
 </div>
 </div>
 <p>Note that the zero level of the potential is set to 0 for both the IAM and DFT potentials to facilitate comparison. This makes their calculated relative difference diverge near the atom cores, which is here accounted for by setting diverging values to <code class="docutils literal notranslate"><span class="pre">nan</span></code> and coloring them with grey.</p>
+<p>To compare the potentials we convert them to <code class="docutils literal notranslate"><span class="pre">Images</span></code> by projecting them.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">projected_iam</span> <span class="o">=</span> <span class="n">iam_potential</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../_images/charge_density_15_0.png" src="../../_images/charge_density_15_0.png" />
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">a</span> <span class="o">=</span> <span class="n">potential_iam</span><span class="o">.</span><span class="n">project</span><span class="p">()</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
+<span class="n">b</span><span class="o">=</span> <span class="n">potential_dft</span><span class="o">.</span><span class="n">project</span><span class="p">()</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
+<span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">-</span> <span class="n">b</span><span class="o">.</span><span class="n">min</span><span class="p">()</span>
+<span class="n">a</span> <span class="o">=</span> <span class="n">a</span><span class="o">-</span> <span class="n">a</span><span class="o">.</span><span class="n">min</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">plt</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">a</span><span class="o">-</span><span class="n">b</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;matplotlib.image.AxesImage at 0x7f959ea75a30&gt;
+</pre></div>
+</div>
+<img alt="../../_images/charge_density_17_1.png" src="../../_images/charge_density_17_1.png" />
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">difference</span> <span class="o">=</span> <span class="n">potential_iam</span><span class="o">.</span><span class="n">project</span><span class="p">()</span> <span class="o">-</span> <span class="n">potential_dft</span><span class="o">.</span><span class="n">project</span><span class="p">()</span>
+<span class="c1">#relative_difference = (potential_iam.project() - potential_dft.project()) / potential_iam.project()</span>
+
+<span class="n">iam_projected</span> <span class="o">=</span> <span class="n">potential_iam</span><span class="o">.</span><span class="n">project</span><span class="p">()</span>
+<span class="n">iam_projected</span> <span class="o">=</span> <span class="n">iam_projected</span> <span class="o">-</span> <span class="n">iam_projected</span><span class="o">.</span><span class="n">min</span><span class="p">()</span>
+
+<span class="n">dft_projected</span> <span class="o">=</span> <span class="n">difference</span> <span class="o">=</span> <span class="n">potential_dft</span><span class="o">.</span><span class="n">project</span><span class="p">()</span> 
+<span class="n">dft_projected</span> <span class="o">=</span> <span class="n">dft_projected</span> <span class="o">-</span> <span class="n">dft_projected</span><span class="o">.</span><span class="n">min</span><span class="p">()</span>
+
+<span class="p">((</span><span class="n">iam_projected</span><span class="o">-</span><span class="n">dft_projected</span><span class="p">)</span> <span class="o">/</span> <span class="n">dft_projected</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">vmin</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="c1">#(difference / potential_iam.project()).show(vmin=-.5, vmax=.5)</span>
+<span class="c1">#relative_difference.show(vmin=-.5, vmax=.5)</span>
+<span class="c1">#relative_difference.show(vmin=.01, vmax=.01)</span>
+<span class="c1">#fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16, 4))</span>
+
+<span class="c1">#().show(cmap=&#39;bwr&#39;, cbar=True, vmin=-14, vmax=14);</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stderr highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>/opt/anaconda3/envs/abtem-dask/lib/python3.8/site-packages/dask/core.py:121: RuntimeWarning: invalid value encountered in true_divide
+  return func(*(_execute_task(a, cache) for a in args))
+</pre></div>
+</div>
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(&lt;Figure size 432x288 with 2 Axes&gt;, &lt;Axes:xlabel=&#39;x [Å]&#39;, ylabel=&#39;y [Å]&#39;&gt;)
+</pre></div>
+</div>
+<img alt="../../_images/charge_density_18_2.png" src="../../_images/charge_density_18_2.png" />
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="p">(</span><span class="n">difference</span> <span class="o">/</span> <span class="n">potential_iam</span><span class="o">.</span><span class="n">project</span><span class="p">())</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>0.33360052
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">relative_difference</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>14.070984
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_iam</span><span class="o">.</span><span class="n">project</span><span class="p">()</span><span class="o">.</span><span class="n">re</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measure.measure.Images object at 0x7fca267c1670&gt;
+-------------------------------------------------------
+
+type           label    coordinates
+-------------  -------  ------------------
+RealSpaceAxis  x [Å]    0.00 0.05 ... 2.45
+RealSpaceAxis  y [Å]    0.00 0.05 ... 4.29
+
+        bytes      shape     count     type
+------  ---------  --------  --------  -------------
+array   17.33 kiB  (51, 87)  6 tasks   float32
+chunks  17.33 kiB  (51, 87)  1 chunks  numpy.ndarray
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">projected_iam</span> <span class="o">=</span> <span class="n">potential_iam</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
 <span class="n">projected_iam</span> <span class="o">-=</span> <span class="n">projected_iam</span><span class="o">.</span><span class="n">min</span><span class="p">()</span>
 
-<span class="n">projected_dft</span> <span class="o">=</span> <span class="n">dft_potential</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-<span class="n">projected_dft</span> <span class="o">-=</span> <span class="n">projected_dft</span><span class="o">.</span><span class="n">min</span><span class="p">()</span>
+<span class="c1">#projected_dft = potential_dft.array.sum(0)</span>
+<span class="c1">#projected_dft -= projected_dft.min()</span>
 
-<span class="n">absolute_difference</span> <span class="o">=</span> <span class="n">projected_iam</span> <span class="o">-</span> <span class="n">projected_dft</span>
+<span class="c1">#absolute_difference = projected_iam - projected_dft</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output traceback highlight-ipythontb notranslate"><div class="highlight"><pre><span></span><span class="gt">---------------------------------------------------------------------------</span>
+<span class="ne">AttributeError</span><span class="g g-Whitespace">                            </span>Traceback (most recent call last)
+<span class="o">&lt;</span><span class="n">ipython</span><span class="o">-</span><span class="nb">input</span><span class="o">-</span><span class="mi">19</span><span class="o">-</span><span class="mi">11</span><span class="n">a4f061a788</span><span class="o">&gt;</span> <span class="ow">in</span> <span class="o">&lt;</span><span class="n">module</span><span class="o">&gt;</span>
+<span class="g g-Whitespace">      </span><span class="mi">1</span> <span class="n">projected_iam</span> <span class="o">=</span> <span class="n">potential_iam</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
+<span class="ne">----&gt; </span><span class="mi">2</span> <span class="n">projected_iam</span> <span class="o">-=</span> <span class="n">projected_iam</span><span class="o">.</span><span class="n">min</span><span class="p">()</span>
+<span class="g g-Whitespace">      </span><span class="mi">3</span> 
+<span class="g g-Whitespace">      </span><span class="mi">4</span> <span class="c1">#projected_dft = potential_dft.array.sum(0)</span>
+<span class="g g-Whitespace">      </span><span class="mi">5</span> <span class="c1">#projected_dft -= projected_dft.min()</span>
 
-<span class="n">valid</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">projected_iam</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span>
-<span class="n">relative_difference</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">projected_iam</span><span class="p">)</span>
-<span class="n">relative_difference</span><span class="p">[:]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span>
-<span class="n">relative_difference</span><span class="p">[</span><span class="n">valid</span><span class="p">]</span> <span class="o">=</span> <span class="mi">100</span> <span class="o">*</span> <span class="p">(</span><span class="n">projected_iam</span><span class="p">[</span><span class="n">valid</span><span class="p">]</span> <span class="o">-</span> <span class="n">projected_dft</span><span class="p">[</span><span class="n">valid</span><span class="p">])</span> <span class="o">/</span> <span class="n">projected_iam</span><span class="p">[</span><span class="n">valid</span><span class="p">]</span>
+<span class="nn">~/PycharmProjects/abTEM_dask/abtem/core/array.py</span> in <span class="ni">__isub__</span><span class="nt">(self, other)</span>
+<span class="g g-Whitespace">    </span><span class="mi">294</span> 
+<span class="g g-Whitespace">    </span><span class="mi">295</span>     <span class="k">def</span> <span class="fm">__isub__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s1">&#39;T&#39;</span><span class="p">:</span>
+<span class="ne">--&gt; </span><span class="mi">296</span>         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_in_place_arithmetic</span><span class="p">(</span><span class="n">other</span><span class="p">,</span> <span class="s1">&#39;__isub__&#39;</span><span class="p">)</span>
+<span class="g g-Whitespace">    </span><span class="mi">297</span> 
+<span class="g g-Whitespace">    </span><span class="mi">298</span>     <span class="k">def</span> <span class="fm">__add__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s1">&#39;T&#39;</span><span class="p">:</span>
+
+<span class="nn">~/PycharmProjects/abTEM_dask/abtem/core/array.py</span> in <span class="ni">_in_place_arithmetic</span><span class="nt">(self, other, func)</span>
+<span class="g g-Whitespace">    </span><span class="mi">274</span> 
+<span class="g g-Whitespace">    </span><span class="mi">275</span>     <span class="k">def</span> <span class="nf">_in_place_arithmetic</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">,</span> <span class="n">func</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s1">&#39;T&#39;</span><span class="p">:</span>
+<span class="ne">--&gt; </span><span class="mi">276</span>         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_lazy</span> <span class="ow">or</span> <span class="n">other</span><span class="o">.</span><span class="n">is_lazy</span><span class="p">:</span>
+<span class="g g-Whitespace">    </span><span class="mi">277</span>             <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s1">&#39;inplace arithmetic operation not implemented for lazy measurement&#39;</span><span class="p">)</span>
+<span class="g g-Whitespace">    </span><span class="mi">278</span>         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_arithmetic</span><span class="p">(</span><span class="n">other</span><span class="p">,</span> <span class="n">func</span><span class="p">)</span>
+
+<span class="ne">AttributeError</span>: &#39;numpy.float32&#39; object has no attribute &#39;is_lazy&#39;
 </pre></div>
 </div>
 </div>
@@ -740,22 +852,30 @@ title="Print to PDF"
 
 <span class="n">extent</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="n">dft_potential</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">0</span><span class="p">,</span> <span class="n">dft_potential</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">1</span><span class="p">]]</span>
 
-<span class="n">im1</span> <span class="o">=</span> <span class="n">ax1</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">projected_dft</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s1">&#39;cividis&#39;</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="mi">300</span><span class="p">,</span> <span class="n">extent</span><span class="o">=</span><span class="n">extent</span><span class="p">)</span>
-<span class="n">im2</span> <span class="o">=</span> <span class="n">ax2</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">absolute_difference</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">vmin</span><span class="o">=-</span><span class="mi">15</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="mi">15</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s1">&#39;seismic&#39;</span><span class="p">,</span> <span class="n">extent</span><span class="o">=</span><span class="n">extent</span><span class="p">)</span>
-<span class="n">im3</span> <span class="o">=</span> <span class="n">ax3</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">relative_difference</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">vmin</span><span class="o">=-</span><span class="mi">40</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="mi">40</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s1">&#39;seismic&#39;</span><span class="p">,</span> <span class="n">extent</span><span class="o">=</span><span class="n">extent</span><span class="p">)</span>
+<span class="n">im1</span> <span class="o">=</span> <span class="n">ax1</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">projected_dft</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s2">&quot;cividis&quot;</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="mi">300</span><span class="p">,</span> <span class="n">extent</span><span class="o">=</span><span class="n">extent</span><span class="p">)</span>
+<span class="n">im2</span> <span class="o">=</span> <span class="n">ax2</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span>
+    <span class="n">absolute_difference</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">vmin</span><span class="o">=-</span><span class="mi">15</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="mi">15</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s2">&quot;seismic&quot;</span><span class="p">,</span> <span class="n">extent</span><span class="o">=</span><span class="n">extent</span>
+<span class="p">)</span>
+<span class="n">im3</span> <span class="o">=</span> <span class="n">ax3</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span>
+    <span class="n">relative_difference</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">vmin</span><span class="o">=-</span><span class="mi">40</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="mi">40</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s2">&quot;seismic&quot;</span><span class="p">,</span> <span class="n">extent</span><span class="o">=</span><span class="n">extent</span>
+<span class="p">)</span>
 
-<span class="n">labels</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;Projected potential [eV / e Å]&#39;</span><span class="p">,</span> <span class="s1">&#39;Absolute difference [eV / e Å]&#39;</span><span class="p">,</span> <span class="s1">&#39;Relative difference [%]&#39;</span><span class="p">)</span>
+<span class="n">labels</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="s2">&quot;Projected potential [eV / e Å]&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;Absolute difference [eV / e Å]&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;Relative difference [%]&quot;</span><span class="p">,</span>
+<span class="p">)</span>
 
 <span class="k">for</span> <span class="n">ax</span><span class="p">,</span> <span class="n">im</span><span class="p">,</span> <span class="n">label</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">((</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">,</span> <span class="n">ax3</span><span class="p">),</span> <span class="p">(</span><span class="n">im1</span><span class="p">,</span> <span class="n">im2</span><span class="p">,</span> <span class="n">im3</span><span class="p">),</span> <span class="n">labels</span><span class="p">):</span>
-    <span class="n">ax</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s1">&#39;x [Å]&#39;</span><span class="p">)</span>
-    <span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s1">&#39;y [Å]&#39;</span><span class="p">)</span>
+    <span class="n">ax</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">&quot;x [Å]&quot;</span><span class="p">)</span>
+    <span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;y [Å]&quot;</span><span class="p">)</span>
 
     <span class="n">fig</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">im</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">label</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/charge_density_21_0.png" src="../../_images/charge_density_21_0.png" />
+<img alt="../../_images/charge_density_24_0.png" src="../../_images/charge_density_24_0.png" />
 </div>
 </div>
 </section>
@@ -770,16 +890,16 @@ title="Print to PDF"
         },
         codeMirrorConfig: {
             theme: "abcdef",
-            mode: "dask-gpu"
+            mode: "abtem-dask"
         },
         kernelOptions: {
-            kernelName: "dask-gpu",
+            kernelName: "abtem-dask",
             path: "./user_guide/walkthrough"
         },
         predefinedOutput: true
     }
     </script>
-    <script>kernelName = 'dask-gpu'</script>
+    <script>kernelName = 'abtem-dask'</script>
 
               </div>
               

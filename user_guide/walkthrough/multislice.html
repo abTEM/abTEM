@@ -526,16 +526,45 @@ title="Print to PDF"
   <a class="reference internal nav-link" href="#multislice-simulations-with-plane-waves">
    Multislice simulations with plane waves
   </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#electron-diffraction-patterns">
+     Electron diffraction patterns
+    </a>
+   </li>
+  </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#multislice-simulation-with-a-probe">
-   Multislice simulation with a probe
+  <a class="reference internal nav-link" href="#writing-wave-functions">
+   Writing wave functions
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#thickness-series">
    Thickness series
   </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#multislice-simulation-with-a-probe">
+   Multislice simulation with a probe
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#self-interaction">
+     Self-interaction
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#probe-position">
+     Probe position
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#convergent-beam-electron-diffraction">
+     Convergent beam electron diffraction
+    </a>
+   </li>
+  </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#small-angle-beam-tilt">
@@ -565,16 +594,45 @@ title="Print to PDF"
   <a class="reference internal nav-link" href="#multislice-simulations-with-plane-waves">
    Multislice simulations with plane waves
   </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#electron-diffraction-patterns">
+     Electron diffraction patterns
+    </a>
+   </li>
+  </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#multislice-simulation-with-a-probe">
-   Multislice simulation with a probe
+  <a class="reference internal nav-link" href="#writing-wave-functions">
+   Writing wave functions
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#thickness-series">
    Thickness series
   </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#multislice-simulation-with-a-probe">
+   Multislice simulation with a probe
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#self-interaction">
+     Self-interaction
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#probe-position">
+     Probe position
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#convergent-beam-electron-diffraction">
+     Convergent beam electron diffraction
+    </a>
+   </li>
+  </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#small-angle-beam-tilt">
@@ -595,38 +653,77 @@ title="Print to PDF"
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="o">%</span><span class="k">matplotlib</span> inline
 
-<span class="kn">from</span> <span class="nn">ase.io</span> <span class="kn">import</span> <span class="n">read</span>
+<span class="kn">import</span> <span class="nn">abtem</span>
 <span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 <span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">from</span> <span class="nn">ase.build</span> <span class="kn">import</span> <span class="n">bulk</span>
 
-<span class="kn">import</span> <span class="nn">abtem</span>
-<span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s1">&#39;local_diagnostics.progress_bar&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">});</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s2">&quot;local_diagnostics.progress_bar&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">});</span>
 </pre></div>
 </div>
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="multislice-simulations">
 <h1>Multislice simulations<a class="headerlink" href="#multislice-simulations" title="Permalink to this headline">#</a></h1>
-<p>The multislice algorithm works by propagating the <span class="math notranslate nohighlight">\(xy\)</span> part of the wave function slice-by-slice forward along the optical axis (which in abTEM is by definition the positive <span class="math notranslate nohighlight">\(z\)</span> direction).
-One forward step through a slice of the potential consists of a transmission and a propagation. In the weak-phase approximation the transmission through a slice is just a phase shift proportional to the magnitude of the potential within that. To complete the multislice step, the transmitted wave is propagated by a distance corresponding to the thickness of the slice using the Fresnel free-space approximation.</p>
+<p>In our introduction to potentials, we described how to integrate the potential into a series of thin slices <span class="math notranslate nohighlight">\(V_n\)</span> along the optical axis (see <a class="reference internal" href="potentials.html#equation-eq-potentials-slice">(1)</a>). Given the wave function, moving fast along the optical axis and at the entrance of the <span class="math notranslate nohighlight">\(n\)</span>’th slice, <span class="math notranslate nohighlight">\(\phi_n(\vec{r})\)</span>, the wave function at exit of that slice may be written (see appendix)</p>
+<div class="math notranslate nohighlight">
+\[
+    \phi_{n + 1}(\vec{r}) = p(\vec{r}) * \left[t_n(\vec{r}) \phi_n(\vec{r}) \right]
+\]</div>
+<p>where</p>
+<div class="math notranslate nohighlight">
+\[
+    p(\vec{r}) = \frac{1}{i \lambda \Delta z}\exp\left[\frac{i\pi}{\lambda \Delta z} r^2 \right]
+\]</div>
+<p>is the Fresnel free space operator for propagation by <span class="math notranslate nohighlight">\(\Delta z\)</span> along the <span class="math notranslate nohighlight">\(z\)</span>-axis, <span class="math notranslate nohighlight">\(*\)</span> is the convolution operator and</p>
+<div class="math notranslate nohighlight">
+\[
+    t(\vec{r}) = \exp\left[i\sigma V_n(\vec{r})\right] 
+\]</div>
+<p>is the transmission function which applies a phase shift proportional to the magnitude of the potential, the proportionality constant, <span class="math notranslate nohighlight">\(\sigma\)</span>, is usually called the interaction constant. Using the Fourier convolution theorem we can write Eq. as</p>
+<div class="math notranslate nohighlight">
+\[
+    \phi_{n+1}(\vec{r}) = \mathcal{F}^{-1} \left\{P(\vec{k}) \ \mathcal{F}\left[t(\vec{r}) \phi_n(\vec{r})\right] \right\}  := \mathcal{M}_n \phi_n(\vec{r}) \quad ,
+\]</div>
+<p>where</p>
+<div class="math notranslate nohighlight">
+\[
+    P(\vec{k}) = \exp(-i \pi \lambda k^2 \Delta z)
+\]</div>
+<p>is the Fresnel free space propagator in Fourier space and <span class="math notranslate nohighlight">\(\mathcal{F}\)</span> and <span class="math notranslate nohighlight">\(\mathcal{F}^{-1}\)</span> is the Fourier transform and its inverse.</p>
+<p>For brevity we defined the multislice operator, <span class="math notranslate nohighlight">\(\mathcal{M}_n\)</span>, acting on a wave function to step it forward through the <span class="math notranslate nohighlight">\(n\)</span>’th slice. Thus given an initial wave function <span class="math notranslate nohighlight">\(\phi_0\)</span>, we can obtain the exit wave function for a potential with slice indices <span class="math notranslate nohighlight">\(n=0,1,\ldots N\)</span> by sequentially applying these operators</p>
+<div class="math notranslate nohighlight">
+\[
+    \phi_{exit}(\vec{r}) := \phi_{N}(\vec{r}) = \mathcal{M}_N \mathcal{M}_{N-1} \ldots \mathcal{M}_{0} \phi_0(\vec{r}) \quad .
+\]</div>
 <section id="multislice-simulations-with-plane-waves">
 <h2>Multislice simulations with plane waves<a class="headerlink" href="#multislice-simulations-with-plane-waves" title="Permalink to this headline">#</a></h2>
 <p>Below we create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> and a <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code>:</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="s1">&#39;./data/STO_LTO.cif&#39;</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">bulk</span><span class="p">(</span><span class="s2">&quot;Au&quot;</span><span class="p">,</span> <span class="n">cubic</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span>
 
-<span class="n">potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">.05</span><span class="p">)</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">show_periodic</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mf">0.9</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../_images/multislice_2_0.png" src="../../_images/multislice_2_0.png" />
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span><span class="p">)</span>
 
-<span class="n">wave</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">PlaneWave</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">300e3</span><span class="p">)</span>
+<span class="n">plane_wave</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">PlaneWave</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">300e3</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
 </div>
-<p>We create a task graph for running a simulation with the multislice algorithm by calling <code class="docutils literal notranslate"><span class="pre">multislice</span></code>.</p>
+<p>We create a task graph for running the multislice algorithm by calling <code class="docutils literal notranslate"><span class="pre">multislice</span></code> producing an exit wave function.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">pw_exit_wave</span> <span class="o">=</span> <span class="n">wave</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave</span> <span class="o">=</span> <span class="n">plane_wave</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -634,7 +731,7 @@ One forward step through a slice of the potential consists of a transmission and
 <p>To execute the task graph, we call <code class="docutils literal notranslate"><span class="pre">compute</span></code>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">pw_exit_wave</span><span class="o">.</span><span class="n">compute</span><span class="p">();</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave</span><span class="o">.</span><span class="n">compute</span><span class="p">();</span>
 </pre></div>
 </div>
 </div>
@@ -643,38 +740,51 @@ One forward step through a slice of the potential consists of a transmission and
 <p class="admonition-title">Note</p>
 <p>Notice that we did not provide the sampling or extent of the wave function above, instead the wave function adopted the grid of the potential. A <code class="docutils literal notranslate"><span class="pre">GridUndefinedError</span></code> will be thrown if the grid is not defined for both the wave function and potential.</p>
 </div>
-<p>We can write the wave function to disk and read it again.</p>
+<p>We can show the intensity of the resulting exit wave function.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">pw_exit_wave</span><span class="o">.</span><span class="n">to_zarr</span><span class="p">(</span><span class="s1">&#39;data/srtio3_110_exit_wave.zarr&#39;</span><span class="p">,</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</pre></div>
-</div>
-</div>
-</div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">imported_wave</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">from_zarr</span><span class="p">(</span><span class="s1">&#39;data/srtio3_110_exit_wave.zarr&#39;</span><span class="p">)</span>
-
-<span class="k">assert</span> <span class="n">imported_wave</span> <span class="o">==</span> <span class="n">pw_exit_wave</span>
-</pre></div>
-</div>
-</div>
-</div>
-<p>We can now show the intensity of the resulting exit wave function.</p>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">pw_exit_wave</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">();</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/multislice_12_0.png" src="../../_images/multislice_12_0.png" />
+<img alt="../../_images/multislice_10_0.png" src="../../_images/multislice_10_0.png" />
 </div>
 </div>
-<p>We also show the Fourier space intensity (i.e. the diffraction pattern). When getting the diffraction pattern, we set <code class="docutils literal notranslate"><span class="pre">block_direct=True</span></code> to block the direct beam. The direct beam typically has a much higher intensity than the scattered beams and thus can’t be show it on the same scale.</p>
+<section id="electron-diffraction-patterns">
+<h3>Electron diffraction patterns<a class="headerlink" href="#electron-diffraction-patterns" title="Permalink to this headline">#</a></h3>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">pw_exit_wave</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">block_direct</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">max_angle</span><span class="o">=</span><span class="mi">21</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">units</span><span class="o">=</span><span class="s1">&#39;mrad&#39;</span><span class="p">);</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">block_direct</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">max_angle</span><span class="o">=</span><span class="mi">35</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measure.measure.DiffractionPatterns object at 0x1d4c2dbaef0&gt;
+-------------------------------------------------------------------
+
+type              label       coordinates
+----------------  ----------  --------------------
+FourierSpaceAxis  kx [1 / Å]  -1.96 -1.72 ... 1.96
+FourierSpaceAxis  ky [1 / Å]  -1.96 -1.72 ... 1.96
+
+        bytes     shape     count     type
+------  --------  --------  --------  -------------
+array   1.13 kiB  (17, 17)  -         float32
+chunks  -         -         - chunks  numpy.ndarray
+</pre></div>
+</div>
+</div>
+</div>
+<p>We set <code class="docutils literal notranslate"><span class="pre">block_direct=True</span></code> to block the direct beam. The direct beam typically has a much higher intensity than the scattered beams and thus it may not be possible to show it on the same scale.</p>
+<p>The diffraction spots looks like squares. This is because the incoming beam is a periodic (and effectively infinite) plane wave, hence the diffraction spots are points with no size. However, we are discretizing the wave function on a square grid (i.e. pixels), hence the spots can only be as small as single pixels.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
+
+<span class="c1"># .show(</span>
+<span class="c1">#    ax=ax2, units=&quot;mrad&quot;, cbar=True</span>
+<span class="c1"># );</span>
 </pre></div>
 </div>
 </div>
@@ -682,105 +792,336 @@ One forward step through a slice of the potential consists of a transmission and
 <img alt="../../_images/multislice_14_0.png" src="../../_images/multislice_14_0.png" />
 </div>
 </div>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>The diffraction spot looks like squares. This is because the incoming beam is a periodic (and effectively infinite) plane wave, hence the diffraction spots are points with no size. However, we are discretizing the wave function on a square grid (i.e. pixels), hence the spots can only be as small as single pixels.</p>
-</div>
 </section>
-<section id="multislice-simulation-with-a-probe">
-<h2>Multislice simulation with a probe<a class="headerlink" href="#multislice-simulation-with-a-probe" title="Permalink to this headline">#</a></h2>
-<p>For a probe, we need to provide the convergence semiangle (in mrad) via <code class="docutils literal notranslate"><span class="pre">semiangle_cutoff</span></code>.</p>
+</section>
+<section id="writing-wave-functions">
+<h2>Writing wave functions<a class="headerlink" href="#writing-wave-functions" title="Permalink to this headline">#</a></h2>
+<p>As one should expect the wave functions can be written to disk (and read again).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">probe</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">200e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
-</pre></div>
-</div>
-</div>
-</div>
-<p>We want to position the probe on an atom hence we obtain the <code class="docutils literal notranslate"><span class="pre">xy</span></code> position of one of the atoms.</p>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">position</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">positions</span><span class="p">[</span><span class="mi">0</span><span class="p">][:</span><span class="mi">2</span><span class="p">]</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave</span><span class="o">.</span><span class="n">to_zarr</span><span class="p">(</span><span class="s2">&quot;./data/exit_wave.zarr&quot;</span><span class="p">,</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
-<span class="n">positions</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">tile</span><span class="p">(</span><span class="n">position</span><span class="p">[</span><span class="kc">None</span><span class="p">],</span> <span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
-<span class="n">positions</span><span class="p">[:,</span><span class="mi">0</span><span class="p">]</span> <span class="o">+=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="o">-</span><span class="mf">.5</span><span class="p">,</span> <span class="mf">.5</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
-</pre></div>
-</div>
-</div>
-</div>
-<p>We then simulate the exit wave via a multislice simulation of the probe placed at this position.</p>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">probe_exit_wave</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">scan</span><span class="o">=</span><span class="n">positions</span><span class="p">,</span> <span class="n">potential</span><span class="o">=</span><span class="n">potential</span><span class="p">)</span>
+<span class="n">imported_wave</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">from_zarr</span><span class="p">(</span><span class="s2">&quot;./data/exit_wave.zarr&quot;</span><span class="p">)</span>
 
-<span class="n">probe_exit_wave</span><span class="o">.</span><span class="n">compute</span><span class="p">();</span>
+<span class="k">assert</span> <span class="n">imported_wave</span> <span class="o">==</span> <span class="n">exit_wave</span>
 </pre></div>
 </div>
-</div>
-</div>
-<p>The convergent-beam electron diffraction (CBED) pattern can be calculated in the same manner as the ED pattern. We again display the result on a log scale. Note that to get more useful results, we should go back and increase our sampling of the potential.</p>
-<div class="cell tag_full-width docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">cbed_diffraction_pattern</span> <span class="o">=</span> <span class="n">probe_exit_wave</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">40</span><span class="p">)</span>
-
-<span class="n">ax</span><span class="p">,</span> <span class="n">im</span> <span class="o">=</span> <span class="n">cbed_diffraction_pattern</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">units</span> <span class="o">=</span> <span class="s1">&#39;mrad&#39;</span><span class="p">,</span> 
-                                       <span class="n">explode</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> 
-                                       <span class="n">figsize</span> <span class="o">=</span> <span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> 
-                                       <span class="n">common_color_scale</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> 
-                                       <span class="n">cbar</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> 
-                                       <span class="n">image_grid_kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;axes_pad&#39;</span><span class="p">:</span> <span class="mf">.05</span><span class="p">})</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<img alt="../../_images/multislice_23_0.png" src="../../_images/multislice_23_0.png" />
 </div>
 </div>
 </section>
 <section id="thickness-series">
 <h2>Thickness series<a class="headerlink" href="#thickness-series" title="Permalink to this headline">#</a></h2>
-<p>CBED is often used for determining sample the thickness by comparing an experiment to a thickness series.</p>
+<p><em>abTEM</em> allows us to obtain the wave function at the intermediate steps of the multislice algorithm, thus we can see how the wave function evolves as it passes through the potential. To create such a <em>thickness series</em> we set the <code class="docutils literal notranslate"><span class="pre">exit_planes</span></code> keyword, this may be given as a tuple of the slice indices (<span class="math notranslate nohighlight">\(n\)</span>) to return, or just a single integer to indicate the step between slice indices.</p>
+<p>Below we create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> as above with <code class="docutils literal notranslate"><span class="pre">exit_planes=12</span></code>, resulting in the <em>ensemble</em> of wave functions <span class="math notranslate nohighlight">\(\phi_n(\vec{r})\)</span> with <span class="math notranslate nohighlight">\(n=0,12,24,\ldots\)</span>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_thickness</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">exit_planes</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_series</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span>
+    <span class="n">atoms</span><span class="p">,</span> <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span> <span class="n">exit_planes</span><span class="o">=</span><span class="mi">12</span>
+<span class="p">)</span>
 
-<span class="n">wave_thickness</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">PlaneWave</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">300e3</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">.05</span><span class="p">,</span> <span class="n">normalize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</pre></div>
-</div>
-</div>
-</div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_waves_thickness</span> <span class="o">=</span> <span class="n">wave</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">potential_thickness</span><span class="p">)</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
-</pre></div>
-</div>
-</div>
-</div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_patterns_thickness</span> <span class="o">=</span> <span class="n">exit_waves_thickness</span><span class="p">[::</span><span class="mi">3</span><span class="p">]</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span><span class="o">.</span><span class="n">block_direct</span><span class="p">()</span>
-</pre></div>
-</div>
-</div>
-</div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_patterns_thickness</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> 
-                                      <span class="n">figsize</span> <span class="o">=</span> <span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
-                                      <span class="n">common_color_scale</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-                                      <span class="n">cbar</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-                                      <span class="n">image_grid_kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;axes_pad&#39;</span><span class="p">:</span> <span class="mf">.05</span><span class="p">},</span>
-                                      <span class="p">);</span>
+<span class="n">exit_wave_series</span> <span class="o">=</span> <span class="n">plane_wave</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">potential_series</span><span class="p">)</span>
+
+<span class="n">exit_wave_series</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/multislice_28_0.png" src="../../_images/multislice_28_0.png" />
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.waves.Waves object at 0x1d4c2eb83a0&gt;
+-------------------------------------------------
+
+type           label    coordinates
+-------------  -------  --------------------
+ThicknessAxis  z [Å]    0.00 11.94 ... 40.80
+RealSpaceAxis  x [Å]    0.00 0.05 ... 4.03
+RealSpaceAxis  y [Å]    0.00 0.05 ... 4.03
+
+        bytes       shape        count     type
+------  ----------  -----------  --------  -------------
+array   262.66 kiB  (5, 82, 82)  4 tasks   complex64
+chunks  262.66 kiB  (5, 82, 82)  1 chunks  numpy.ndarray
+</pre></div>
+</div>
+</div>
+</div>
+<p>We show the wave function intensity as an exploded plot.</p>
+<div class="cell tag_full-width docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave_series</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+    <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../_images/multislice_21_0.png" src="../../_images/multislice_21_0.png" />
 </div>
 </div>
 </section>
+<section id="multislice-simulation-with-a-probe">
+<h2>Multislice simulation with a probe<a class="headerlink" href="#multislice-simulation-with-a-probe" title="Permalink to this headline">#</a></h2>
+<p>We create our initial wave function as a convergent electron beam with an energy of <span class="math notranslate nohighlight">\(200 \ \mathrm{keV}\)</span> and a convergence semiangle of <span class="math notranslate nohighlight">\(30 \ \mathrm{mrad}\)</span>.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">probe</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span>
+    <span class="n">energy</span><span class="o">=</span><span class="mf">200e3</span><span class="p">,</span>
+    <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span>
+    <span class="n">defocus</span><span class="o">=</span><span class="mi">80</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>There are two additional considerations to take into when performing multislice simulations with probes: self-interaction errors and probe placement.</p>
+<section id="self-interaction">
+<h3>Self-interaction<a class="headerlink" href="#self-interaction" title="Permalink to this headline">#</a></h3>
+<p>Self-interaction errors happen when the probe overlaps with its periodic images. We see this happening below, the signs are that the probe does not have a circular symmetry, even though there are no non-symmetric aberrations.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">probe</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
+
+<span class="n">probe</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">();</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../_images/multislice_25_0.png" src="../../_images/multislice_25_0.png" />
+</div>
+</div>
+<p>We get rid of self-interaction by increasing the extent of the potential until the probe intensity is sufficiently small at the boundary. Note that the potential should be large enough so there is no periodic overlap through all the slices of the multislice algorithm.</p>
+<p>The potential may be extended by modifying the atoms, however, for crystals we can also use the <code class="docutils literal notranslate"><span class="pre">CrystalPotential</span></code>. Here we repeat the potential used above by <span class="math notranslate nohighlight">\(2\)</span> in and <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span>.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">tiled_potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">CrystalPotential</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">exit_planes</span><span class="o">=</span><span class="mi">12</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>We run the multislice algorithm below</p>
+<p>We plot the resulting thickness</p>
+<div class="cell tag_full-width docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave_probe</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">potential</span><span class="o">=</span><span class="n">tiled_potential</span><span class="p">)</span>
+
+<span class="n">exit_wave_probe</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+    <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../_images/multislice_29_0.png" src="../../_images/multislice_29_0.png" />
+</div>
+</div>
+</section>
+<section id="probe-position">
+<h3>Probe position<a class="headerlink" href="#probe-position" title="Permalink to this headline">#</a></h3>
+<p>Above, the probe was placed (by default) at the center of the potential, later we will learn scan the probe for STEM simulations. Here, we manually select a few positions.</p>
+<p>We create an array of <span class="math notranslate nohighlight">\(5\)</span> probe positions across the center of the potential.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">center</span> <span class="o">=</span> <span class="n">tiled_potential</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span> <span class="n">tiled_potential</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="mi">2</span>
+
+<span class="n">positions</span> <span class="o">=</span> <span class="n">center</span> <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="o">-</span><span class="mf">1.04</span><span class="p">,</span> <span class="mf">1.04</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">5</span><span class="p">)])</span><span class="o">.</span><span class="n">T</span>
+
+<span class="n">positions</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>array([[3.04, 4.08],
+       [3.56, 4.08],
+       [4.08, 4.08],
+       [4.6 , 4.08],
+       [5.12, 4.08]])
+</pre></div>
+</div>
+</div>
+</div>
+<p>Running the multislice algorithm we obtain an ensemble of <span class="math notranslate nohighlight">\(5\)</span> wave functions, one for each of the positions.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave_probe_positioned</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span>
+    <span class="n">scan</span><span class="o">=</span><span class="n">positions</span><span class="p">,</span> <span class="n">potential</span><span class="o">=</span><span class="n">abtem</span><span class="o">.</span><span class="n">CrystalPotential</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+<span class="p">)</span>
+
+<span class="n">exit_wave_probe_positioned</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+    <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../_images/multislice_33_0.png" src="../../_images/multislice_33_0.png" />
+</div>
+</div>
+</section>
+<section id="convergent-beam-electron-diffraction">
+<h3>Convergent beam electron diffraction<a class="headerlink" href="#convergent-beam-electron-diffraction" title="Permalink to this headline">#</a></h3>
+<p>The diffraction pattern can be calculated in the same manner as the ED pattern.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave_probe_positioned</span><span class="p">[:,</span> <span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">40</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+    <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output traceback highlight-ipythontb notranslate"><div class="highlight"><pre><span></span><span class="gt">---------------------------------------------------------------------------</span>
+<span class="ne">RuntimeError</span><span class="g g-Whitespace">                              </span>Traceback (most recent call last)
+<span class="o">~</span>\<span class="n">AppData</span>\<span class="n">Local</span>\<span class="n">Temp</span><span class="o">/</span><span class="n">ipykernel_36696</span><span class="o">/</span><span class="mf">339955603.</span><span class="n">py</span> <span class="ow">in</span> <span class="o">&lt;</span><span class="n">module</span><span class="o">&gt;</span>
+<span class="ne">----&gt; </span><span class="mi">1</span> <span class="n">exit_wave_probe_positioned</span><span class="p">[:,</span> <span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">40</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+<span class="g g-Whitespace">      </span><span class="mi">2</span>     <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<span class="g g-Whitespace">      </span><span class="mi">3</span>     <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+<span class="g g-Whitespace">      </span><span class="mi">4</span>     <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
+<span class="g g-Whitespace">      </span><span class="mi">5</span> <span class="p">);</span>
+
+<span class="nn">c:\users\jacob\pycharmprojects\abtem_dask\abtem\core\array.py</span> in <span class="ni">__getitem__</span><span class="nt">(self, items)</span>
+<span class="g g-Whitespace">    </span><span class="mi">348</span> 
+<span class="g g-Whitespace">    </span><span class="mi">349</span>     <span class="k">def</span> <span class="fm">__getitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">items</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s1">&#39;T&#39;</span><span class="p">:</span>
+<span class="ne">--&gt; </span><span class="mi">350</span>         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_items</span><span class="p">(</span><span class="n">items</span><span class="p">)</span>
+<span class="g g-Whitespace">    </span><span class="mi">351</span> 
+<span class="g g-Whitespace">    </span><span class="mi">352</span>     <span class="k">def</span> <span class="nf">to_delayed</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+
+<span class="nn">c:\users\jacob\pycharmprojects\abtem_dask\abtem\core\array.py</span> in <span class="ni">get_items</span><span class="nt">(self, items, keep_dims)</span>
+<span class="g g-Whitespace">    </span><span class="mi">318</span> 
+<span class="g g-Whitespace">    </span><span class="mi">319</span>         <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">items</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">items</span><span class="p">)</span> <span class="o">&gt;</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">):</span>
+<span class="ne">--&gt; </span><span class="mi">320</span>             <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s1">&#39;base axes cannot be indexed&#39;</span><span class="p">)</span>
+<span class="g g-Whitespace">    </span><span class="mi">321</span> 
+<span class="g g-Whitespace">    </span><span class="mi">322</span>         <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">item</span><span class="p">,</span> <span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="o">...</span><span class="p">),</span> <span class="nb">type</span><span class="p">(</span><span class="kc">None</span><span class="p">)))</span> <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">items</span><span class="p">):</span>
+
+<span class="ne">RuntimeError</span>: base axes cannot be indexed
+</pre></div>
+</div>
+</div>
+</div>
+<p>As we can see above the Fourier space pixel size is rather large. We improve Fourier space sampling by tiling</p>
+<div class="cell tag_full-width docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">cbed_diffraction_pattern</span><span class="p">[:,</span> <span class="mi">2</span><span class="p">]</span> <span class="o">=</span> <span class="n">probe_exit_wave</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">40</span><span class="p">)</span>
+
+<span class="n">ax</span><span class="p">,</span> <span class="n">im</span> <span class="o">=</span> <span class="n">cbed_diffraction_pattern</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+    <span class="n">units</span><span class="o">=</span><span class="s2">&quot;mrad&quot;</span><span class="p">,</span>
+    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+    <span class="n">common_color_scale</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output traceback highlight-ipythontb notranslate"><div class="highlight"><pre><span></span><span class="gt">---------------------------------------------------------------------------</span>
+<span class="ne">NameError</span><span class="g g-Whitespace">                                 </span>Traceback (most recent call last)
+<span class="o">~</span>\<span class="n">AppData</span>\<span class="n">Local</span>\<span class="n">Temp</span><span class="o">/</span><span class="n">ipykernel_36696</span><span class="o">/</span><span class="mf">317571043.</span><span class="n">py</span> <span class="ow">in</span> <span class="o">&lt;</span><span class="n">module</span><span class="o">&gt;</span>
+<span class="ne">----&gt; </span><span class="mi">1</span> <span class="n">cbed_diffraction_pattern</span><span class="p">[:,</span> <span class="mi">2</span><span class="p">]</span> <span class="o">=</span> <span class="n">probe_exit_wave</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">40</span><span class="p">)</span>
+<span class="g g-Whitespace">      </span><span class="mi">2</span> 
+<span class="g g-Whitespace">      </span><span class="mi">3</span> <span class="n">ax</span><span class="p">,</span> <span class="n">im</span> <span class="o">=</span> <span class="n">cbed_diffraction_pattern</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+<span class="g g-Whitespace">      </span><span class="mi">4</span>     <span class="n">units</span><span class="o">=</span><span class="s2">&quot;mrad&quot;</span><span class="p">,</span>
+<span class="g g-Whitespace">      </span><span class="mi">5</span>     <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+
+<span class="ne">NameError</span>: name &#39;probe_exit_wave&#39; is not defined
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">probe_exit_wave</span><span class="o">.</span><span class="n">diffraction_patterns</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">cbed_diffraction_pattern</span> <span class="o">=</span> <span class="n">probe_exit_wave</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">200</span><span class="p">)</span>
+
+<span class="n">ax</span><span class="p">,</span> <span class="n">im</span> <span class="o">=</span> <span class="n">cbed_diffraction_pattern</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+    <span class="n">units</span><span class="o">=</span><span class="s2">&quot;mrad&quot;</span><span class="p">,</span>
+    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+    <span class="n">common_color_scale</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">power</span><span class="o">=</span><span class="mf">0.2</span><span class="p">,</span>
+    <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+</section>
 <section id="small-angle-beam-tilt">
 <h2>Small-angle beam tilt<a class="headerlink" href="#small-angle-beam-tilt" title="Permalink to this headline">#</a></h2>
+<p>Small amounts of beam tilt (or equivalently sample tilt) may be included by a small modification to the propagator function</p>
+<div class="math notranslate nohighlight">
+\[
+    P(\vec{k}) = \exp\left[-i \pi \lambda k^2 \Delta z + 2 \pi i \Delta z (k_x \tan\theta_x + k_y \tan\theta_y)\right]
+\]</div>
+<p>where <span class="math notranslate nohighlight">\(\theta_x\)</span>, <span class="math notranslate nohighlight">\(\theta_y\)</span> is the beam tilt in the <span class="math notranslate nohighlight">\(x\)</span>, <span class="math notranslate nohighlight">\(y\)</span> directions. This is equivalent to shifting the wave function between slices and is only valid for small tilts of no more that about <span class="math notranslate nohighlight">\(1 \ \mathrm{deg}\)</span>.</p>
+<p>Beam tilt may be included using the tilt keyword, below we</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">tilt_x</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">distributions</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+
+<span class="n">probe_tilt</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span>
+    <span class="n">energy</span><span class="o">=</span><span class="mf">200e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span> <span class="n">defocus</span><span class="o">=</span><span class="mi">80</span><span class="p">,</span> <span class="n">tilt</span><span class="o">=</span><span class="p">(</span><span class="n">tilt_x</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
+<span class="p">)</span>
+<span class="n">probe_tilt</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">tiled_potential</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave_tilt</span> <span class="o">=</span> <span class="n">probe_tilt</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span>
+    <span class="n">potential</span><span class="o">=</span><span class="n">abtem</span><span class="o">.</span><span class="n">CrystalPotential</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+<span class="p">)</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
+
+<span class="c1"># probe_tilt.build().compute()</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave_tilt</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">base_tilt</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(0.0, 0.0)
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave_tilt</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+    <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../_images/multislice_45_0.png" src="../../_images/multislice_45_0.png" />
+</div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Beam tilt also has a strong interaction with with the aberrations of the electron optics, see our introduction to the contrast transfer function for details.</p>
+</div>
 </section>
 </section>
 

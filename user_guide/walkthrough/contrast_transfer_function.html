@@ -617,12 +617,13 @@ title="Print to PDF"
                 
   <div class="cell tag_hide-input docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">ase.io</span> <span class="kn">import</span> <span class="n">read</span>
-<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 <span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">from</span> <span class="nn">ase.io</span> <span class="kn">import</span> <span class="n">read</span>
 
 <span class="kn">import</span> <span class="nn">abtem</span>
-<span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s1">&#39;local_diagnostics.progress_bar&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">});</span>
+
+<span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s2">&quot;local_diagnostics.progress_bar&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">});</span>
 </pre></div>
 </div>
 </div>
@@ -698,9 +699,9 @@ title="Print to PDF"
 <p>We create a <code class="docutils literal notranslate"><span class="pre">CTF</span></code> for an electron energy of <span class="math notranslate nohighlight">\(300 \ \mathrm{keV}\)</span>, a spherical aberration of <span class="math notranslate nohighlight">\(-7~\mu \mathrm{m}\)</span> (remember that abTEM uses units of Å) and the <a class="reference external" href="https://en.wikipedia.org/wiki/High-resolution_transmission_electron_microscopy">Scherzer defocus</a> (here <span class="math notranslate nohighlight">\(-45.5 \ \mathrm{Å}\)</span>).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">Cs</span> <span class="o">=</span> <span class="o">-</span><span class="mf">20e-6</span> <span class="o">*</span> <span class="mf">1e10</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">Cs</span> <span class="o">=</span> <span class="o">-</span><span class="mf">30e-6</span> <span class="o">*</span> <span class="mf">1e10</span>
 
-<span class="n">ctf</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">CTF</span><span class="p">(</span><span class="n">Cs</span><span class="o">=</span><span class="n">Cs</span><span class="p">,</span> <span class="n">energy</span><span class="o">=</span><span class="mf">300e3</span><span class="p">)</span>
+<span class="n">ctf</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">CTF</span><span class="p">(</span><span class="n">Cs</span><span class="o">=</span><span class="n">Cs</span><span class="p">,</span> <span class="n">energy</span><span class="o">=</span><span class="mf">200e3</span><span class="p">)</span>
 <span class="n">ctf</span><span class="o">.</span><span class="n">defocus</span> <span class="o">=</span> <span class="n">ctf</span><span class="o">.</span><span class="n">scherzer_defocus</span>
 
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;defocus = </span><span class="si">{</span><span class="n">ctf</span><span class="o">.</span><span class="n">defocus</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> Å&quot;</span><span class="p">)</span>
@@ -708,7 +709,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>defocus = -76.85 Å
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>defocus = -106.23 Å
 </pre></div>
 </div>
 </div>
@@ -716,7 +717,7 @@ title="Print to PDF"
 <p>This can also be accomplished by setting the parameters with a dictionary.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">aberrations</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;C10&#39;</span><span class="p">:</span> <span class="o">-</span><span class="n">ctf</span><span class="o">.</span><span class="n">defocus</span><span class="p">,</span> <span class="s1">&#39;C30&#39;</span><span class="p">:</span> <span class="n">Cs</span><span class="p">}</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">aberrations</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;C10&quot;</span><span class="p">:</span> <span class="o">-</span><span class="n">ctf</span><span class="o">.</span><span class="n">defocus</span><span class="p">,</span> <span class="s2">&quot;C30&quot;</span><span class="p">:</span> <span class="n">Cs</span><span class="p">}</span>
 
 <span class="n">ctf</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">CTF</span><span class="p">(</span><span class="n">aberrations</span><span class="o">=</span><span class="n">aberrations</span><span class="p">,</span> <span class="n">energy</span><span class="o">=</span><span class="n">ctf</span><span class="o">.</span><span class="n">energy</span><span class="p">)</span>
 </pre></div>
@@ -731,11 +732,13 @@ title="Print to PDF"
 <p>To perform this operation, we use the <code class="docutils literal notranslate"><span class="pre">apply_ctf</span></code> method. Here we apply the CTF to the exit wave from an earlier tutorial.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">PlaneWave</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">300e3</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">.05</span><span class="p">)</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">read</span><span class="p">(</span><span class="s1">&#39;./data/STO_LTO.cif&#39;</span><span class="p">))</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">PlaneWave</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">200e3</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span><span class="p">)</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span>
+    <span class="n">read</span><span class="p">(</span><span class="s2">&quot;./data/STO_LTO.cif&quot;</span><span class="p">)</span>
+<span class="p">)</span>
 
-<span class="n">image_wave</span> <span class="o">=</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">apply_ctf</span><span class="p">(</span><span class="n">ctf</span><span class="p">)</span><span class="o">.</span><span class="n">tile</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+<span class="n">image_wave</span> <span class="o">=</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">apply_ctf</span><span class="p">(</span><span class="n">ctf</span><span class="p">)</span>
 
-<span class="n">image_wave</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
+<span class="n">image_wave</span><span class="o">.</span><span class="n">tile</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
@@ -746,7 +749,7 @@ title="Print to PDF"
 <p>We can get a radial <code class="docutils literal notranslate"><span class="pre">LineProfile</span></code> up to a given angle to preview the CTF. We show <em>by convention</em> the imaginary part of complex exponential of the phase error.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">ctf</span><span class="o">.</span><span class="n">profiles</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">50</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">units</span><span class="o">=</span><span class="s1">&#39;mrad&#39;</span><span class="p">);</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">ctf</span><span class="o">.</span><span class="n">profiles</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">50</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">units</span><span class="o">=</span><span class="s2">&quot;mrad&quot;</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
@@ -783,7 +786,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>semiangle cutoff: 27.72 mrad
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>semiangle cutoff: 26.61 mrad
 </pre></div>
 </div>
 </div>
@@ -792,11 +795,11 @@ title="Print to PDF"
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">image_wave</span> <span class="o">=</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">apply_ctf</span><span class="p">(</span><span class="n">ctf</span><span class="p">)</span>
 
-<span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">11</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
+<span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">11</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
 
-<span class="n">ctf</span><span class="o">.</span><span class="n">profiles</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">units</span><span class="o">=</span><span class="s1">&#39;mrad&#39;</span><span class="p">)</span>
+<span class="n">ctf</span><span class="o">.</span><span class="n">profiles</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">units</span><span class="o">=</span><span class="s2">&quot;mrad&quot;</span><span class="p">)</span>
 
-<span class="n">image_wave</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
+<span class="n">image_wave</span><span class="o">.</span><span class="n">tile</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
@@ -837,16 +840,16 @@ title="Print to PDF"
 <p>Blurring can also be caused by all kinds of noise leading to a random deflection of the image relative to the detector, such as vibrations, drift of the stage, and magnetic noise fields resulting from eddy currents in the material of the lenses. Assuming that the image deflection is small and follows a Gaussian distribution, this can be included as an additional envelope</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">ctf</span><span class="o">.</span><span class="n">focal_spread</span> <span class="o">=</span> <span class="mi">20</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">ctf</span><span class="o">.</span><span class="n">focal_spread</span> <span class="o">=</span> <span class="mi">30</span>
 <span class="n">ctf</span><span class="o">.</span><span class="n">angular_spread</span> <span class="o">=</span> <span class="mi">5</span>
 
-<span class="n">image_wave</span> <span class="o">=</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">apply_ctf</span><span class="p">(</span><span class="n">ctf</span><span class="p">)</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span>
+<span class="n">image_wave</span> <span class="o">=</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">apply_ctf</span><span class="p">(</span><span class="n">ctf</span><span class="p">)</span><span class="c1">#.intensity()</span>
 
 <span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">11</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
 
 <span class="n">ctf</span><span class="o">.</span><span class="n">profiles</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">)</span>
 
-<span class="n">image_wave</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
+<span class="n">image_wave</span><span class="o">.</span><span class="n">tile</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span><span class="mi">1</span><span class="p">))</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>

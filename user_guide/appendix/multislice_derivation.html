@@ -530,9 +530,9 @@ title="Print to PDF"
 <p>The energy of the incident electron waves (100 - 1000 keV) are much higher than the specimen potential, which provides only minor perturbations on the forward motion of the electrons. Hence, it is useful to write the wave function, <span class="math notranslate nohighlight">\(\psi\)</span>, of the propagating electrons as a slowly varying plane wave along the optical axis, <span class="math notranslate nohighlight">\(z\)</span>, with an amplitude modulation</p>
 <div class="math notranslate nohighlight">
 \[
-    \psi(\vec{r}) = \phi(\vec{r})\exp(2\pi iz/\lambda) \quad ,
+    \psi(x,y,z) = \phi(x,y)\exp(2\pi iz/\lambda) \quad ,
 \]</div>
-<p>where <span class="math notranslate nohighlight">\(\vec{r} = (x,y,z)\)</span> and <span class="math notranslate nohighlight">\(\lambda\)</span> is the de Broglie wavelength of the electrons. Substituting this into the Schrödinger equation we obtain</p>
+<p>where <span class="math notranslate nohighlight">\((x,y,z)\)</span> are the three real-space coordinates and <span class="math notranslate nohighlight">\(\lambda\)</span> is the de Broglie wavelength of the electrons. Substituting this into the Schrödinger equation we obtain</p>
 <div class="math notranslate nohighlight">
 \[
     -\frac{\hbar^2}{2m} \left[\nabla_{xy}^2 + \frac{\partial^2}{\partial z^2} + \frac{4\pi i}{\lambda}\frac{\partial}{\partial z} + \frac{2meV(\vec{r})}{\hbar^2}  \right] \phi(\vec{r}) = 0 \qquad \nabla_{xy}^2 = \frac{\partial^2}{\partial x^2} + \frac{\partial^2}{\partial y^2} \quad .
@@ -555,7 +555,7 @@ title="Print to PDF"
 <p>where <span class="math notranslate nohighlight">\(*\)</span> represents a convolution. The transmission function, <span class="math notranslate nohighlight">\(t(r)\)</span>, for the portion of the potential between <span class="math notranslate nohighlight">\(z\)</span> and <span class="math notranslate nohighlight">\(z+\Delta z\)</span> is</p>
 <div class="math notranslate nohighlight">
 \[
-    t(\vec{r}) = \exp\left[i\sigma \int_z^{z+\Delta z} V(\vec{r}) dz'\right] \quad ,
+    t(x,y) = \exp\left[i\sigma \int_z^{z+\Delta z} V(x,y,z) dz'\right] \quad ,
 \]</div>
 <p>and the Fresnel propagator <span class="math notranslate nohighlight">\(p(x, y, \Delta z)\)</span> is</p>
 <div class="math notranslate nohighlight">
@@ -566,7 +566,7 @@ title="Print to PDF"
 <p>Convolutions can be performed efficiently by utilizing the Fast Fourier Transform (FFT). The implemented form of Eq. the single slice propagation is</p>
 <div class="math notranslate nohighlight">
 \[
-    \phi_{z + \Delta z}(x,y) = \mathcal{F}^{-1}\{P(k_x, k_y, \Delta z) \mathcal{F}[t(\vec{r}) \phi(\vec{r})] \} \quad ,
+    \phi_{z + \Delta z}(x,y) = p(x,y) * \left[t(\vec{r}) \phi(\vec{r}) \right] = \mathcal{F}^{-1}\{P(k_x, k_y, \Delta z) \ \mathcal{F}[t(\vec{r}) \phi(\vec{r})] \} \quad ,
 \]</div>
 <p>where <span class="math notranslate nohighlight">\(P\)</span> is the Fourier transform of the fresnel propagator. The computational cost for the FFT scales as <span class="math notranslate nohighlight">\(N \log(N)\)</span> with the number of samples <span class="math notranslate nohighlight">\(N\)</span>.</p>
 </section>
@@ -580,16 +580,16 @@ title="Print to PDF"
         },
         codeMirrorConfig: {
             theme: "abcdef",
-            mode: "abtem"
+            mode: "abtem-dask"
         },
         kernelOptions: {
-            kernelName: "abtem",
+            kernelName: "abtem-dask",
             path: "./user_guide/appendix"
         },
         predefinedOutput: true
     }
     </script>
-    <script>kernelName = 'abtem'</script>
+    <script>kernelName = 'abtem-dask'</script>
 
               </div>
               

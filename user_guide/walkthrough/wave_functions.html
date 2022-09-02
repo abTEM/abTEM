@@ -533,8 +533,8 @@ title="Print to PDF"
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#measuring-the-wave-function">
-   Measuring the wave function
+  <a class="reference internal nav-link" href="#visualizing-the-wave-function">
+   Visualizing the wave function
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -572,8 +572,8 @@ title="Print to PDF"
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#measuring-the-wave-function">
-   Measuring the wave function
+  <a class="reference internal nav-link" href="#visualizing-the-wave-function">
+   Visualizing the wave function
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -595,11 +595,12 @@ title="Print to PDF"
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="o">%</span><span class="k">matplotlib</span> inline
 
-<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 <span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 
 <span class="kn">import</span> <span class="nn">abtem</span>
-<span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s1">&#39;local_diagnostics.progress_bar&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">});</span>
+
+<span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s2">&quot;local_diagnostics.progress_bar&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">});</span>
 </pre></div>
 </div>
 </div>
@@ -607,10 +608,10 @@ title="Print to PDF"
 <section class="tex2jax_ignore mathjax_ignore" id="wave-functions">
 <h1>Wave functions<a class="headerlink" href="#wave-functions" title="Permalink to this headline">#</a></h1>
 <p>The multislice algorithm works by propagating the <span class="math notranslate nohighlight">\(xy\)</span> part of the wave function (defined as <span class="math notranslate nohighlight">\(\phi\)</span> in the <span class="xref myst">appendix</span>) through the electrostatic potential. To initiate this process, we need to assume the initial conditions for the wave function, i.e. the wave function describing the electron beam formed by the electron optics before the sample.</p>
-<p>abTEM defines three types of wave functions:</p>
+<p><em>abTEM</em> defines three types of wave functions:</p>
 <ul class="simple">
 <li><p><a class="reference internal" href="#wave-functions-plane-wave"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code></span></a>: Simulate HRTEM, SAED or other imaging modes with plane wave illumination.</p></li>
-<li><p><a class="reference internal" href="#wave-functions-probe"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">Probe</span></code></span></a>: Simulate CBED, STEM, 4D-STEM or other imaging modes with a converged electron beam.</p></li>
+<li><p><a class="reference internal" href="#wave-functions-probe"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">Probe</span></code></span></a>: Simulate CBED, STEM or other imaging modes with a converged electron beam.</p></li>
 <li><p><span class="xref myst"><code class="docutils literal notranslate"><span class="pre">Waves</span></code></span>: Defines any custom wave function. The <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> and <code class="docutils literal notranslate"><span class="pre">Probe</span></code> can be turned into <code class="docutils literal notranslate"><span class="pre">Waves</span></code>.</p></li>
 </ul>
 <div class="admonition seealso">
@@ -644,7 +645,7 @@ title="Print to PDF"
 <p>The relativistic wavelength in Ångstrom, derived from the energy, is accessed as:</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;Wavelength: </span><span class="si">{</span><span class="n">plane_wave</span><span class="o">.</span><span class="n">wavelength</span><span class="si">:</span><span class="s1">.4f</span><span class="si">}</span><span class="s1"> Å&#39;</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Wavelength: </span><span class="si">{</span><span class="n">plane_wave</span><span class="o">.</span><span class="n">wavelength</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2"> Å&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -668,8 +669,8 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.waves.Waves object at 0x7fc2a222a460&gt;
---------------------------------------------------
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.waves.Waves object at 0x1d1eb50eb90&gt;
+-------------------------------------------------
 
 type           label    coordinates
 -------------  -------  ------------------
@@ -684,7 +685,6 @@ chunks  512.00 kiB  (256, 256)  1 chunks  numpy.ndarray
 </div>
 </div>
 </div>
-<p>The output above is the standard “repr” for <em>abTEM</em> objects. (TODO: explain)</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">Waves</span></code> describe the wave function as a complex <code class="docutils literal notranslate"><span class="pre">dask</span></code> array accessed below:</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -754,7 +754,7 @@ chunks  512.00 kiB  (256, 256)  1 chunks  numpy.ndarray
 </div>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>In the above, the plane wave was normalized to be one in every grid point, i.e. the intensity per area is constant when the grid is changed. This is not always the natural choice, see the <span class="xref myst">appendix</span> for more information on wave function normalization in abTEM.</p>
+<p>In the above, the plane wave was normalized to be one in every grid point, i.e. the intensity per area is constant when the grid is changed. This is not always the natural choice, see the <span class="xref myst">appendix</span> for more information on wave function normalization in <em>abTEM</em>.</p>
 </div>
 </section>
 <section id="probe-wave-functions">
@@ -776,52 +776,49 @@ chunks  512.00 kiB  (256, 256)  1 chunks  numpy.ndarray
 \]</div>
 <div class="admonition seealso">
 <p class="admonition-title">See also</p>
-<p>The contrast transfer function of the <code class="docutils literal notranslate"><span class="pre">Probe</span></code> is introduced here.</p>
+<p>The contrast transfer function is introduced in detail here.</p>
 </div>
 <p>We create a probe with a <code class="docutils literal notranslate"><span class="pre">sampling</span></code> of <span class="math notranslate nohighlight">\(0.05 \ \mathrm{Å}\)</span>, an <code class="docutils literal notranslate"><span class="pre">extent</span></code> of <span class="math notranslate nohighlight">\(10\times 10\)</span> <span class="math notranslate nohighlight">\(\mathrm{Å}^2\)</span>, an <code class="docutils literal notranslate"><span class="pre">energy</span></code> of <span class="math notranslate nohighlight">\(100 \ \mathrm{keV}\)</span>, a convergence semiangle (<code class="docutils literal notranslate"><span class="pre">semiangle_cutoff</span></code>) of <span class="math notranslate nohighlight">\(30 \ \mathrm{mrad}\)</span> and a <code class="docutils literal notranslate"><span class="pre">defocus</span></code> of <span class="math notranslate nohighlight">\(35 \ \mathrm{Å}\)</span>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">probe</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span><span class="n">sampling</span> <span class="o">=</span> <span class="mf">0.05</span><span class="p">,</span> 
-                    <span class="n">extent</span> <span class="o">=</span> <span class="mi">20</span><span class="p">,</span> 
-                    <span class="n">energy</span> <span class="o">=</span> <span class="mf">100e3</span><span class="p">,</span> 
-                    <span class="n">semiangle_cutoff</span> <span class="o">=</span> <span class="mi">30</span><span class="p">,</span>
-                    <span class="n">defocus</span> <span class="o">=</span> <span class="mi">50</span><span class="p">,</span>
-                   <span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">probe</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span>
+    <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span>
+    <span class="n">extent</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span>
+    <span class="n">energy</span><span class="o">=</span><span class="mf">100e3</span><span class="p">,</span>
+    <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span>
+    <span class="n">defocus</span><span class="o">=</span><span class="mi">50</span><span class="p">,</span>
+<span class="p">)</span>
 </pre></div>
 </div>
 </div>
 </div>
-<p>The <code class="docutils literal notranslate"><span class="pre">Probe</span></code> may also be turned into <code class="docutils literal notranslate"><span class="pre">Waves</span></code> using the <code class="docutils literal notranslate"><span class="pre">.build</span></code> method.</p>
+</section>
+<section id="visualizing-the-wave-function">
+<h2>Visualizing the wave function<a class="headerlink" href="#visualizing-the-wave-function" title="Permalink to this headline">#</a></h2>
+<p>To visualize the wave function using <em>abTEM</em>’s builtin visualization module, we first have to convert it to a measurement type. The most common methods are <code class="docutils literal notranslate"><span class="pre">intensity</span></code> and <code class="docutils literal notranslate"><span class="pre">diffraction_patterns</span></code>, which will return a measurement as an <code class="docutils literal notranslate"><span class="pre">Images</span></code> and <code class="docutils literal notranslate"><span class="pre">DiffractionPatterns</span></code> type, respectively.</p>
+<div class="admonition seealso">
+<p class="admonition-title">See also</p>
+<p>All the different measurement types implemented in <em>abtem</em> are introduced here.</p>
+</div>
+<p>The real space intensity (or <span class="math notranslate nohighlight">\(\|\phi\|^2\)</span>) is calculated and shown below.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">probe</span><span class="o">.</span><span class="n">build</span><span class="p">()</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">intensity</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span>
+
+<span class="n">intensity</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.waves.Waves object at 0x7fc2a222a460&gt;
---------------------------------------------------
-
-type           label    coordinates
--------------  -------  -------------------
-RealSpaceAxis  x [Å]    0.00 0.05 ... 19.95
-RealSpaceAxis  y [Å]    0.00 0.05 ... 19.95
-
-        bytes     shape       count     type
-------  --------  ----------  --------  -------------
-array   1.22 MiB  (400, 400)  4 tasks   complex64
-chunks  1.22 MiB  (400, 400)  1 chunks  numpy.ndarray
-</pre></div>
+<img alt="../../_images/wave_functions_17_0.png" src="../../_images/wave_functions_17_0.png" />
 </div>
 </div>
-</div>
-<p>We show the intensity of the probe in Fourier and real space below (i.e. <span class="math notranslate nohighlight">\(\|\hat{\phi}\|^2\)</span> and <span class="math notranslate nohighlight">\(\|\phi\|^2\)</span>), respectively.</p>
+<p>The Fourier-space intensity (or <span class="math notranslate nohighlight">\(\|\hat{\phi}\|^2\)</span>) is calculated and shown below. We set <code class="docutils literal notranslate"><span class="pre">max_angle=60</span></code> to only include angles up to <span class="math notranslate nohighlight">\(60 \ \mathrm{mrad}\)</span>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_patterns</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">60</span><span class="p">)</span>
 
-<span class="n">probe</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">parity</span><span class="o">=</span><span class="s1">&#39;odd&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s1">&#39;Fourier space probe intensity&#39;</span><span class="p">)</span>
-<span class="n">probe</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s1">&#39;real space probe intensity&#39;</span><span class="p">);</span>
+<span class="n">diffraction_patterns</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
@@ -838,72 +835,17 @@ chunks  1.22 MiB  (400, 400)  1 chunks  numpy.ndarray
 </pre></div>
 </div>
 </div>
-</section>
-<section id="measuring-the-wave-function">
-<h2>Measuring the wave function<a class="headerlink" href="#measuring-the-wave-function" title="Permalink to this headline">#</a></h2>
-<p>In experiments, we cannot access the complex wave function, we have to measure its intensity. We just used the methods <code class="docutils literal notranslate"><span class="pre">intensity</span></code> and <code class="docutils literal notranslate"><span class="pre">diffraction_patterns</span></code>, these methods turn the wave function into a “measurement type”, in this case <code class="docutils literal notranslate"><span class="pre">Images</span></code> and <code class="docutils literal notranslate"><span class="pre">DiffractionPatterns</span></code>, respectively.</p>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">images</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span>
-
-<span class="n">images</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measure.measure.Images object at 0x7fc2a220a4d0&gt;
--------------------------------------------------------
-
-type           label    coordinates
--------------  -------  -------------------
-RealSpaceAxis  x [Å]    0.00 0.05 ... 19.95
-RealSpaceAxis  y [Å]    0.00 0.05 ... 19.95
-
-        bytes       shape       count     type
-------  ----------  ----------  --------  -------------
-array   625.00 kiB  (400, 400)  5 tasks   float32
-chunks  625.00 kiB  (400, 400)  1 chunks  numpy.ndarray
-</pre></div>
-</div>
-</div>
-</div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_patterns</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">()</span>
-
-<span class="n">diffraction_patterns</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measure.measure.DiffractionPatterns object at 0x7fc2a220be30&gt;
---------------------------------------------------------------------
-
-type              label       coordinates
-----------------  ----------  -------------------
-FourierSpaceAxis  kx [1 / Å]  0.00 0.05 ... 13.25
-FourierSpaceAxis  ky [1 / Å]  0.00 0.05 ... 13.25
-
-        bytes       shape       count     type
-------  ----------  ----------  --------  -------------
-array   276.39 kiB  (266, 266)  5 tasks   float32
-chunks  276.39 kiB  (266, 266)  1 chunks  numpy.ndarray
-</pre></div>
-</div>
-</div>
-</div>
-<p>abTEM implements several more measurement types, each measurement type provides different methods for post-processing and analysis. See our introduction to “measurements”.</p>
-<p>As an example, we can use <code class="docutils literal notranslate"><span class="pre">interpolate_line_at_position</span></code> to create a <code class="docutils literal notranslate"><span class="pre">LineProfile</span></code> across the center of the probe intensity.</p>
+<p>Showing a lineprofile sometimes provides a more understable visualization. We use <code class="docutils literal notranslate"><span class="pre">interpolate_line_at_position</span></code> to create a <code class="docutils literal notranslate"><span class="pre">LineProfile</span></code> across the center of the probe intensity.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">lineprofile</span> <span class="o">=</span> <span class="n">images</span><span class="o">.</span><span class="n">interpolate_line_at_position</span><span class="p">(</span><span class="n">center</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">10</span><span class="p">),</span> <span class="n">angle</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">extent</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
 
-<span class="n">lineprofile</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">title</span><span class="o">=</span><span class="s1">&#39;probe lineprofile&#39;</span><span class="p">);</span>
+<span class="n">lineprofile</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">title</span><span class="o">=</span><span class="s2">&quot;probe lineprofile&quot;</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/wave_functions_25_0.png" src="../../_images/wave_functions_25_0.png" />
+<img alt="../../_images/wave_functions_22_0.png" src="../../_images/wave_functions_22_0.png" />
 </div>
 </div>
 </section>
@@ -913,14 +855,15 @@ chunks  276.39 kiB  (266, 266)  1 chunks  numpy.ndarray
 <p>As an example we create a <code class="docutils literal notranslate"><span class="pre">Probe</span></code> with a series of <span class="math notranslate nohighlight">\(5\)</span> defocii ranging from <span class="math notranslate nohighlight">\(\mathrm{0}\)</span> to <span class="math notranslate nohighlight">\(200 \ \mathrm{Å}\)</span>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">defocus_series</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">distributions</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">200</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">defocus_series</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">distributions</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
 
-<span class="n">probe_focal_series</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span><span class="n">sampling</span> <span class="o">=</span> <span class="mf">0.05</span><span class="p">,</span> 
-                                 <span class="n">extent</span> <span class="o">=</span> <span class="mi">20</span><span class="p">,</span> 
-                                 <span class="n">energy</span> <span class="o">=</span> <span class="mf">100e3</span><span class="p">,</span> 
-                                 <span class="n">semiangle_cutoff</span> <span class="o">=</span> <span class="mi">30</span><span class="p">,</span>
-                                 <span class="n">defocus</span> <span class="o">=</span> <span class="n">defocus_series</span><span class="p">,</span>
-                                <span class="p">)</span>
+<span class="n">probe_focal_series</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span>
+    <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span>
+    <span class="n">extent</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span>
+    <span class="n">energy</span><span class="o">=</span><span class="mf">100e3</span><span class="p">,</span>
+    <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span>
+    <span class="n">defocus</span><span class="o">=</span><span class="n">defocus_series</span><span class="p">,</span>
+<span class="p">)</span>
 
 <span class="n">waves_focal_series</span> <span class="o">=</span> <span class="n">probe_focal_series</span><span class="o">.</span><span class="n">build</span><span class="p">()</span>
 </pre></div>
@@ -935,12 +878,12 @@ chunks  276.39 kiB  (266, 266)  1 chunks  numpy.ndarray
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.waves.Waves object at 0x7fc2a222a460&gt;
---------------------------------------------------
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.waves.Waves object at 0x1d1eb50eb90&gt;
+-------------------------------------------------
 
 type           label    coordinates
 -------------  -------  ------------------------
-ParameterAxis  C10 [Å]  -0.00 -50.00 ... -200.00
+ParameterAxis  C10 [Å]  -0.00 -25.00 ... -100.00
 RealSpaceAxis  x [Å]    0.00 0.05 ... 19.95
 RealSpaceAxis  y [Å]    0.00 0.05 ... 19.95
 
@@ -955,12 +898,14 @@ chunks  6.10 MiB  (5, 400, 400)  1 chunks  numpy.ndarray
 <p>We show an exploded plot of the ensemble below.</p>
 <div class="cell tag_full-width docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">waves_focal_series</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">image_grid_kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;axes_pad&#39;</span><span class="p">:</span> <span class="mf">.05</span><span class="p">});</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">waves_focal_series</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">}</span>
+<span class="p">);</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/wave_functions_31_0.png" src="../../_images/wave_functions_31_0.png" />
+<img alt="../../_images/wave_functions_28_0.png" src="../../_images/wave_functions_28_0.png" />
 </div>
 </div>
 <div class="admonition tip">
@@ -971,44 +916,59 @@ chunks  6.10 MiB  (5, 400, 400)  1 chunks  numpy.ndarray
 </div>
 <p><em>Note: This requires using a matplotlib backend that supports interactivity.</em></p>
 </div>
-<p>The <code class="docutils literal notranslate"><span class="pre">Waves</span></code> can have any number of ensemble dimensions, for example,</p>
+<p>line_profiles</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">scan</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">GridScan</span><span class="p">(</span><span class="n">start</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">),</span> <span class="n">end</span><span class="o">=</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span><span class="mi">20</span><span class="p">),</span> <span class="n">gpts</span><span class="o">=</span><span class="mi">200</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">line_profiles</span> <span class="o">=</span> <span class="n">waves_focal_series</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span><span class="o">.</span><span class="n">interpolate_line_at_position</span><span class="p">(</span>
+    <span class="n">center</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">10</span><span class="p">),</span> <span class="n">angle</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">extent</span><span class="o">=</span><span class="mi">10</span>
+<span class="p">)</span>
 
-<span class="n">waves_scanned</span> <span class="o">=</span> <span class="n">probe_focal_series</span><span class="o">.</span><span class="n">build</span><span class="p">(</span><span class="n">scan</span><span class="o">=</span><span class="n">scan</span><span class="p">)</span>
-
-<span class="n">waves_scanned</span>
+<span class="n">line_profiles</span><span class="o">.</span><span class="n">show</span><span class="p">();</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stderr highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>/Users/jacobmadsen/PycharmProjects/abTEM_dask/abtem/waves/waves.py:746: PerformanceWarning: Increasing number of chunks by factor of 40
+<img alt="../../_images/wave_functions_31_0.png" src="../../_images/wave_functions_31_0.png" />
+</div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">Waves</span></code> can have any number of ensemble dimensions, for example, we can add two additional axes representing an <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span> scan direction as below, thus producing a 5d wave function.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">scan</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">GridScan</span><span class="p">(</span><span class="n">start</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="n">end</span><span class="o">=</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">20</span><span class="p">),</span> <span class="n">gpts</span><span class="o">=</span><span class="mi">100</span><span class="p">)</span>
+
+<span class="n">waves_focal_series_scanned</span> <span class="o">=</span> <span class="n">probe_focal_series</span><span class="o">.</span><span class="n">build</span><span class="p">(</span><span class="n">scan</span><span class="o">=</span><span class="n">scan</span><span class="p">)</span>
+
+<span class="n">waves_focal_series_scanned</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stderr highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>c:\users\jacob\pycharmprojects\abtem_dask\abtem\waves\waves.py:746: PerformanceWarning: Increasing number of chunks by factor of 20
   array = da.blockwise(partial_build,
 </pre></div>
 </div>
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.waves.Waves object at 0x7fc2a222a460&gt;
---------------------------------------------------
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.waves.Waves object at 0x1d1eb50eb90&gt;
+-------------------------------------------------
 
 type           label    coordinates
 -------------  -------  ------------------------
-ParameterAxis  C10 [Å]  -0.00 -50.00 ... -200.00
-ScanAxis       x [Å]    0.00 0.10 ... 19.90
-ScanAxis       y [Å]    0.00 0.10 ... 19.90
+ParameterAxis  C10 [Å]  -0.00 -25.00 ... -100.00
+ScanAxis       x [Å]    0.00 0.20 ... 19.80
+ScanAxis       y [Å]    0.00 0.20 ... 19.80
 RealSpaceAxis  x [Å]    0.00 0.05 ... 19.95
 RealSpaceAxis  y [Å]    0.00 0.05 ... 19.95
 
-        bytes       shape                    count        type
-------  ----------  -----------------------  -----------  -------------
-array   238.42 GiB  (5, 200, 200, 400, 400)  4091 tasks   complex64
-chunks  122.07 MiB  (5, 4, 5, 400, 400)      2000 chunks  numpy.ndarray
+        bytes       shape                    count       type
+------  ----------  -----------------------  ----------  -------------
+array   59.60 GiB   (5, 100, 100, 400, 400)  1046 tasks  complex64
+chunks  122.07 MiB  (5, 4, 5, 400, 400)      500 chunks  numpy.ndarray
 </pre></div>
 </div>
 </div>
 </div>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>
-<p>Be careful when adding ensemble dimensions without also applying a reduction operation (e.g. taking an ensemble mean or applying a detector). The above wave function ensemble would require <span class="math notranslate nohighlight">\(\sim240 \ \mathrm{GiB}\)</span>(!) of memory to store.</p>
+<p>Be careful when adding ensemble dimensions without also applying a reduction operation (e.g. taking an ensemble mean or applying a detector). The above wave function ensemble would require <span class="math notranslate nohighlight">\(\sim 60 \ \mathrm{GiB}\)</span>(!) of memory to store.</p>
 </div>
 </section>
 </section>

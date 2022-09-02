@@ -540,7 +540,7 @@ title="Open an issue"
 <span class="sd">    ----------</span>
 <span class="sd">    array : array</span>
 <span class="sd">        Complex array defining one or more 2d wave functions. The second-to-last and last dimensions are the wave</span>
-<span class="sd">        function y and x axis, respectively.</span>
+<span class="sd">        function y- and x-axis, respectively.</span>
 <span class="sd">    energy : float</span>
 <span class="sd">        Electron energy [eV].</span>
 <span class="sd">    extent : one or two float</span>
@@ -757,7 +757,7 @@ title="Open an issue"
 <span class="sd">                    Downsample to the antialias cutoff scattering angle.</span>
 
 <span class="sd">                ``valid`` :</span>
-<span class="sd">                    Downsample to the largest rectangle inside the circle with a the radius defined by the antialias</span>
+<span class="sd">                    Downsample to the largest rectangle inside the circle with a radius defined by the antialias</span>
 <span class="sd">                    cutoff scattering angle.</span>
 
 <span class="sd">                float :</span>
@@ -1574,7 +1574,7 @@ title="Open an issue"
 <span class="sd">            A detector or a list of detectors defining how the wave functions should be converted to measurements after</span>
 <span class="sd">            running the multislice algorithm. See abtem.measure.detect for a list of implemented detectors.</span>
 <span class="sd">        chunks : int, optional</span>
-<span class="sd">            Specifices the number of wave functions in each chunk of a the created dask array. If None, the number</span>
+<span class="sd">            Specifices the number of wave functions in each chunk of the created dask array. If None, the number</span>
 <span class="sd">            of chunks are automatically estimated based on the &quot;dask.chunk-size&quot; parameter in the configuration.</span>
 <span class="sd">        lazy : boolean, optional</span>
 <span class="sd">            If True, create the measurements lazily, otherwise, calculate instantly. If None, this defaults to the value</span>

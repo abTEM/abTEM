@@ -675,23 +675,23 @@ title="Print to PDF"
 \]</div>
 <p>where <span class="math notranslate nohighlight">\(\Delta_{q}\)</span> is the Fourier space sampling rate. The complex expansion coefficients <span class="math notranslate nohighlight">\(C_{nm}\)</span> may be chosen to select a specified probe position or phase error. Since the Fourier space probe wave function is zero beyond the convergence semi-angle, we may limit the number of terms in the expansion by a cutoff <span class="math notranslate nohighlight">\(\alpha_{max}\)</span>. Thus only the terms fulfilling</p>
 <div class="math notranslate nohighlight" id="equation-eq-prism-cutoff">
-<span class="eqno">(1)<a class="headerlink" href="#equation-eq-prism-cutoff" title="Permalink to this equation">#</a></span>\[
+<span class="eqno">(2)<a class="headerlink" href="#equation-eq-prism-cutoff" title="Permalink to this equation">#</a></span>\[
     \sqrt{n ^ 2 + m ^ 2} \lambda \Delta_q \leq \alpha_{max}
 \]</div>
 <p>needs to be included in the expansion.</p>
 <p>We use the symbol <span class="math notranslate nohighlight">\(\mathcal{M}\)</span> to represent the application of the multislice algorithm (see appendix Eq. ), thus the exit wave is given by</p>
 <div class="math notranslate nohighlight" id="equation-eq-prism">
-<span class="eqno">(2)<a class="headerlink" href="#equation-eq-prism" title="Permalink to this equation">#</a></span>\[
+<span class="eqno">(3)<a class="headerlink" href="#equation-eq-prism" title="Permalink to this equation">#</a></span>\[
     \phi_{exit}(\vec{r}) = \mathcal{M} \sum_{nm} C_{nm} S_{nm} = \sum_{nm} C_{nm} \mathcal{M} S_{nm} \quad ,
 \]</div>
 <p>where the second equality uses that the multislice algorithm is coherent.</p>
 <p>The PRISM algorithm for STEM simulations may be summarised as two consecutive stages:</p>
 <p><strong>Multislice stage:</strong> Build the PRISM scattering matrix by applying the multislice algorithm to each plane wave of the expansion, i.e. calculate the set of waves <span class="math notranslate nohighlight">\(\mathcal{M} S_{nm}\)</span>.</p>
-<p><strong>Reduction stage:</strong> For each probe position, perform the reduction in Eq. <a class="reference internal" href="#equation-eq-prism">(2)</a> with a set of expansion coefficients determined by the probe position.</p>
+<p><strong>Reduction stage:</strong> For each probe position, perform the reduction in Eq. <a class="reference internal" href="#equation-eq-prism">(3)</a> with a set of expansion coefficients determined by the probe position.</p>
 </section>
 <section id="the-smatrix">
 <h2>The <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code><a class="headerlink" href="#the-smatrix" title="Permalink to this headline">#</a></h2>
-<p>We import the atomic model of the SrTiO<sub>3</sub>/LaTiO<sub>3</sub> interface created <a class="reference internal" href="atomic_models.html#user-guide-walkthrough-atomic-models"><span class="std std-ref">here</span></a> and make a <code class="docutils literal notranslate"><span class="pre">Potential</span></code>.</p>
+<p>We import the atomic model of the SrTiO<sub>3</sub>/LaTiO<sub>3</sub> interface created <a class="reference internal" href="atomic_models-Copy1.html#user-guide-walkthrough-atomic-models"><span class="std std-ref">here</span></a> and make a <code class="docutils literal notranslate"><span class="pre">Potential</span></code>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="s1">&#39;./data/STO_LTO.cif&#39;</span><span class="p">)</span> 
@@ -706,7 +706,7 @@ title="Print to PDF"
 <img alt="../../_images/prism_2_0.png" src="../../_images/prism_2_0.png" />
 </div>
 </div>
-<p>In <em>abTEM</em>, the PRISM scattering matrix (i.e. the set of waves <span class="math notranslate nohighlight">\(\mathcal{M} S_{nm}\)</span>) is represented by the <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code>. The expansion cutoff angle, <span class="math notranslate nohighlight">\(\alpha_{max}\)</span>, is given as <code class="docutils literal notranslate"><span class="pre">planewave_cutoff</span></code>. In addition to <span class="math notranslate nohighlight">\(\alpha_{max}\)</span>, the number of plane wave in the expansion increases with the energy and the extent of the potential, because they, respectively, decrease <span class="math notranslate nohighlight">\(\lambda\)</span> and <span class="math notranslate nohighlight">\(\Delta_q\)</span> in Eq. <a class="reference internal" href="#equation-eq-prism-cutoff">(1)</a>.</p>
+<p>In <em>abTEM</em>, the PRISM scattering matrix (i.e. the set of waves <span class="math notranslate nohighlight">\(\mathcal{M} S_{nm}\)</span>) is represented by the <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code>. The expansion cutoff angle, <span class="math notranslate nohighlight">\(\alpha_{max}\)</span>, is given as <code class="docutils literal notranslate"><span class="pre">planewave_cutoff</span></code>. In addition to <span class="math notranslate nohighlight">\(\alpha_{max}\)</span>, the number of plane wave in the expansion increases with the energy and the extent of the potential, because they, respectively, decrease <span class="math notranslate nohighlight">\(\lambda\)</span> and <span class="math notranslate nohighlight">\(\Delta_q\)</span> in Eq. <a class="reference internal" href="#equation-eq-prism-cutoff">(2)</a>.</p>
 <p>We create an <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code> representing the SrTiO<sub>3</sub>/LaTiO<sub>3</sub> model for an energy of <span class="math notranslate nohighlight">\(150 \ \mathrm{keV}\)</span> and an expansion cutoff angle of <span class="math notranslate nohighlight">\(20 \ \mathrm{mrad}\)</span>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">

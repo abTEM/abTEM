@@ -572,7 +572,7 @@ V(r) = V_{tol} \quad ,
 <p>where <span class="math notranslate nohighlight">\(V_{tol}\)</span> is the error at the cut-off. The equation is solved for each species. The use of the cut-off radius creates a discontinuity; hence, abTEM uses a tapering near the cut-off. <span class="math notranslate nohighlight">\(V_{cut}\)</span> can be modified using the <code class="docutils literal notranslate"><span class="pre">cutoff_tolerance</span></code> argument of the <code class="docutils literal notranslate"><span class="pre">Potential</span></code> or <code class="docutils literal notranslate"><span class="pre">AtomicPotential</span></code> objects. abTEM uses a tapering cutoff starting at <span class="math notranslate nohighlight">\(85 \ \%\)</span> of the full cutoff.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython2 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">abtem.potentials.integrals</span> <span class="kn">import</span> <span class="n">ProjectionQuadratureRule</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">abtem.potentials.integrals</span> <span class="kn">import</span> <span class="n">ProjectionQuadratureRule</span>
 
 <span class="n">integrator</span> <span class="o">=</span> <span class="n">ProjectionQuadratureRule</span><span class="p">()</span>
 

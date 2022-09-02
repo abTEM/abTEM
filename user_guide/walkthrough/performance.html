@@ -521,9 +521,16 @@ title="Print to PDF"
     <nav id="bd-toc-nav" aria-label="Page">
         <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#configuration">
-   Configuration
+  <a class="reference internal nav-link" href="#ffts">
+   FFTs
   </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#fft-library-only-on-cpu">
+     FFT Library (only on CPU)
+    </a>
+   </li>
+  </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#dask">
@@ -533,6 +540,18 @@ title="Print to PDF"
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#gpus">
    GPUs
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#multiple-gpus">
+     Multiple GPUs
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#memory">
+   Memory
   </a>
  </li>
 </ul>
@@ -555,9 +574,16 @@ title="Print to PDF"
                         <nav aria-label="Page">
                             <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#configuration">
-   Configuration
+  <a class="reference internal nav-link" href="#ffts">
+   FFTs
   </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#fft-library-only-on-cpu">
+     FFT Library (only on CPU)
+    </a>
+   </li>
+  </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#dask">
@@ -567,6 +593,18 @@ title="Print to PDF"
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#gpus">
    GPUs
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#multiple-gpus">
+     Multiple GPUs
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#memory">
+   Memory
   </a>
  </li>
 </ul>
@@ -579,21 +617,83 @@ title="Print to PDF"
                 
               <div>
                 
-  <section class="tex2jax_ignore mathjax_ignore" id="performance-parallelization-and-gpus">
+  <div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">abtem</span>
+</pre></div>
+</div>
+</div>
+</div>
+<section class="tex2jax_ignore mathjax_ignore" id="performance-parallelization-and-gpus">
 <h1>Performance, parallelization and GPUs<a class="headerlink" href="#performance-parallelization-and-gpus" title="Permalink to this headline">#</a></h1>
-<p>Large STEM calculations</p>
-<section id="configuration">
-<h2>Configuration<a class="headerlink" href="#configuration" title="Permalink to this headline">#</a></h2>
+<p>The cost of running simulations of transmission electron microscopy can range from seconds to weeks depending on factors such as sample size, number of probe positions and the hardware used to run the code. Here, we go through how optimize <em>abTEM</em> to get your simulations running as fast as possible.</p>
+<section id="ffts">
+<h2>FFTs<a class="headerlink" href="#ffts" title="Permalink to this headline">#</a></h2>
+<p>The <a class="reference external" href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">fast Fourier transform (FFT)</a> is the most important dependent algorithm for running the multislice algorithm. Hence, the speed of your simulation depends on how fast your computer can run the FFT. This will depend on your hardware, the implementation of the FFT and the grid points of your simulation.</p>
+<section id="fft-library-only-on-cpu">
+<h3>FFT Library (only on CPU)<a class="headerlink" href="#fft-library-only-on-cpu" title="Permalink to this headline">#</a></h3>
+<p><em>abTEM</em> implements two implementations of the FFT: Intels Math Kernel Library FFT (<a class="reference external" href="https://github.com/IntelPython/mkl_fft"><code class="docutils literal notranslate"><span class="pre">mkl_fft</span></code></a>) and the “Fastest Fourier Transform in the West” (FFTW) through the Python wrapper <a class="reference external" href="https://pyfftw.readthedocs.io/en/latest/"><code class="docutils literal notranslate"><span class="pre">pyfftw</span></code></a>. You can set the FFT library using the <em>abTEM</em>s configs (see here TODOXXX).</p>
+<p>You can modify the configurations temporarily using the code below to use FFTW for the session:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s1">&#39;fft&#39;</span><span class="p">:</span> <span class="s1">&#39;fftw&#39;</span><span class="p">})</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;dask.config.set at 0x7fbb72a30e80&gt;
+</pre></div>
+</div>
+</div>
+</div>
+<p>to use MKL you can use this command:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s1">&#39;fft&#39;</span><span class="p">:</span> <span class="s1">&#39;mkl&#39;</span><span class="p">})</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;dask.config.set at 0x7fbb72a301c0&gt;
+</pre></div>
+</div>
+</div>
+</div>
+</section>
 </section>
 <section id="dask">
 <h2>Dask<a class="headerlink" href="#dask" title="Permalink to this headline">#</a></h2>
-<p><em>abTEM</em> is parallelized using <a class="reference external" href="https://dask.org/">Dask</a> <span id="id1">[<a class="reference internal" href="../../library/bibliography.html#id10" title="Dask Development Team. Dask: Library for dynamic task scheduling. 2016. URL: https://dask.org.">DaskDTeam16</a>]</span>.</p>
+<p><em>abTEM</em> is built on <a class="reference external" href="https://dask.org/">Dask</a> <span id="id1">[<a class="reference internal" href="../../library/bibliography.html#id10" title="Dask Development Team. Dask: Library for dynamic task scheduling. 2016. URL: https://dask.org.">DaskDTeam16</a>]</span>. All <em>abTEM</em> simulations runs by building <em>Dask</em> task graph for the simulation, the task graph is then executed using one of the <em>Dask</em> schedulers. This happens automatically, however, if you are running simulations, you may want</p>
+<p>On a local system (a laptop or desktop), your calculation is parallelized automatically. Nonetheless, it is possible that your calculation runs faster using a distributed scheduler, this will also provide</p>
+<p>Nonetheless, you may benefit from knowing about , on larger systems (e.g. HPC clusters), it is necessary.</p>
+<p><em>abTEM</em> uses the</p>
+<p>as *abTEM</p>
+<p><a class="reference external" href="https://docs.dask.org/en/stable/scheduling.html">https://docs.dask.org/en/stable/scheduling.html</a></p>
 <p>Parallel computation in abTEM whether it is running on a laptop or a High Performance Computing cluster is parallelized through .</p>
 <p>Some knowledge of Dask may be required to run abTEM effectively on large multi-CPU/GPU systems, however, if you are just running abTEM on your own computer, this tutorial gets you started. If you want a quick introduction to Dask, we recommend thishttps://www.youtube.com/watch?v=nnndxbr_Xq4&amp;t=66s) short youtube video.</p>
 </section>
 <section id="gpus">
 <h2>GPUs<a class="headerlink" href="#gpus" title="Permalink to this headline">#</a></h2>
-<p>Almost every part . This is possible through</p>
+<p>Almost every part of <em>abTEM</em> is implemented on GPU using the <code class="docutils literal notranslate"><span class="pre">CuPy</span></code> library. If you have a single GPU and a working installation of CuPy, you can use your GPU by changing the configs as below:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s1">&#39;device&#39;</span><span class="p">:</span> <span class="s1">&#39;gpu&#39;</span><span class="p">})</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;dask.config.set at 0x7fbb6cca5580&gt;
+</pre></div>
+</div>
+</div>
+</div>
+<section id="multiple-gpus">
+<h3>Multiple GPUs<a class="headerlink" href="#multiple-gpus" title="Permalink to this headline">#</a></h3>
+<p>TODO: improve multigpu instructions</p>
+</section>
+</section>
+<section id="memory">
+<h2>Memory<a class="headerlink" href="#memory" title="Permalink to this headline">#</a></h2>
 </section>
 </section>
 
