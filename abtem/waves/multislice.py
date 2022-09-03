@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Union, Tuple, List, Dict
 import numpy as np
 
 from abtem.core.antialias import AntialiasAperture
-from abtem.core.axes import TiltAxis, AxisMetadata
+from abtem.core.axes import AxisAlignedTiltAxis, AxisMetadata
 from abtem.core.backend import get_array_module, HasDevice
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import energy2wavelength, HasAcceleratorMixin, Accelerator
@@ -109,13 +109,11 @@ class FresnelPropagator:
 
         for i in range(len(waves.ensemble_shape)):
             axis = waves.ensemble_axes_metadata[i]
-            if isinstance(axis, TiltAxis):
+            if isinstance(axis, AxisAlignedTiltAxis):
                 j = plane_to_axes(axis.direction)[0]
-                k = spatial_frequencies((waves.gpts[j],), (waves.sampling[j],), xp=xp)[
-                    0
-                ]
+                k = spatial_frequencies((waves.gpts[j],), (waves.sampling[j],), xp=xp)
                 tilts = xp.array(axis.values)[:, None]
-                shift = tilt_shift(k[None], tilts, thickness)
+                shift = tilt_shift(k[0][None], tilts, thickness)
                 shift, array = expand_dims_to_match(
                     shift, array, match_dims=[(-1,), (-2 + j,)]
                 )

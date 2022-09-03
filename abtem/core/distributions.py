@@ -41,7 +41,7 @@ class Distribution(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         pass
 
 
-class DistributionFromValues1D(Distribution):
+class DistributionFromValues(Distribution):
     def __init__(
         self, values: np.ndarray, weights: np.ndarray, ensemble_mean: bool = True
     ):
@@ -56,7 +56,7 @@ class DistributionFromValues1D(Distribution):
 
     @property
     def dimensions(self):
-        return 1
+        return self.shape[1]
 
     @property
     def shape(self):
@@ -103,12 +103,15 @@ class DistributionFromValues1D(Distribution):
     def weights(self):
         return self._weights
 
-    def combine(self, other: "DistributionFromValues1D") -> "AxisAlignedDistributionND":
+    def combine(self, other: "DistributionFromValues") -> "AxisAlignedDistributionND":
         return AxisAlignedDistributionND([self, other])
 
 
 class AxisAlignedDistributionND(Distribution):
     def __init__(self, distributions: List[Distribution]):
+        for distribution in distributions:
+            assert distribution.dimensions == 1
+
         self._distributions = distributions
 
     @property
@@ -172,7 +175,7 @@ class AxisAlignedDistributionND(Distribution):
 
 def from_values(
     values: Sequence[Number], weights: np.ndarray = None, ensemble_mean: bool = False
-) -> DistributionFromValues1D:
+) -> DistributionFromValues:
     """
     Returns a distribution from user defined values and weights.
 
@@ -188,7 +191,7 @@ def from_values(
     if weights is None:
         weights = np.ones(len(values))
     values = np.array(values)
-    return DistributionFromValues1D(
+    return DistributionFromValues(
         values=values, weights=weights, ensemble_mean=ensemble_mean
     )
 
@@ -199,7 +202,7 @@ def uniform(
     num_samples: int,
     endpoint: bool = True,
     ensemble_mean: bool = False,
-) -> DistributionFromValues1D:
+) -> DistributionFromValues:
     """
     Return a distribution with uniformly weighted values, the values are evenly spaced over a specified interval.
     As an example, this distribution may be used for simulating a focal series.
@@ -221,7 +224,7 @@ def uniform(
     values = np.linspace(start=low, stop=high, num=num_samples, endpoint=endpoint)
     weights = np.ones(len(values))
     values = np.array(values)
-    return DistributionFromValues1D(
+    return DistributionFromValues(
         values=values, weights=weights, ensemble_mean=ensemble_mean
     )
 
@@ -295,7 +298,7 @@ def gaussian(
             raise RuntimeError()
 
         distributions.append(
-            DistributionFromValues1D(
+            DistributionFromValues(
                 values=values, weights=weights, ensemble_mean=ensemble_mean[i]
             )
         )

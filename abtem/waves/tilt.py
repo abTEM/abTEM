@@ -2,7 +2,7 @@ from typing import Union, TYPE_CHECKING, Tuple, List
 
 import dask.array as da
 
-from abtem.core.axes import TiltAxis, AxisMetadata
+from abtem.core.axes import AxisAlignedTiltAxis, AxisMetadata
 from abtem.core.backend import get_array_module
 from abtem.core.distributions import Distribution, AxisAlignedDistributionND
 from abtem.waves.transfer import (
@@ -36,6 +36,12 @@ def validate_tilt(tilt):
     return tilt
 
 
+class BeamTilt(EnsembleFromDistributionsMixin, WaveTransform):
+    def __init__(self, tilt: Union[Tuple[float, float], Distribution]):
+        self._tilt = tilt
+
+
+
 
 class AxisAlignedBeamTilt(EnsembleFromDistributionsMixin, WaveTransform):
     def __init__(self, tilt: Union[float, Distribution] = 0.0, direction: str = "x"):
@@ -65,7 +71,7 @@ class AxisAlignedBeamTilt(EnsembleFromDistributionsMixin, WaveTransform):
     def ensemble_axes_metadata(self) -> List[AxisMetadata]:
         if isinstance(self.tilt, Distribution):
             return [
-                TiltAxis(
+                AxisAlignedTiltAxis(
                     label=f"tilt_{self._direction}",
                     values=tuple(self.tilt.values),
                     direction=self._direction,

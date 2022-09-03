@@ -143,15 +143,15 @@ class GPAWPotential(PotentialBuilder):
             gd = calculator.gd
             nt_sG = calculator.nt_sG
 
-        gridrefinement = self.gridrefinement
-        if np.isscalar(self.gridrefinement):
-            gridrefinement = (gridrefinement,) * 3
+        #gridrefinement = self.gridrefinement
+        #if np.isscalar(self.gridrefinement):
+        #    gridrefinement = (gridrefinement,) * 3
 
-        if not all([r == 1 for r in gridrefinement]):
-            cell_cv = gd.cell_cv
-            N_c = tuple(n_c * r for n_c, r in zip(gd.N_c, gridrefinement))
-            nt_sG = fft_interpolate(nt_sG, new_shape=N_c).astype(np.float64)
-            gd = gd.new_descriptor(N_c=N_c, cell_cv=cell_cv)
+        #if not all([r == 1 for r in gridrefinement]):
+        #    cell_cv = gd.cell_cv
+        #    N_c = tuple(n_c * r for n_c, r in zip(gd.N_c, gridrefinement))
+        #    nt_sG = fft_interpolate(nt_sG, new_shape=N_c).astype(np.float64)
+        #    gd = gd.new_descriptor(N_c=N_c, cell_cv=cell_cv)
 
         random_atoms = self.frozen_phonons.randomize(atoms)
 
@@ -162,6 +162,7 @@ class GPAWPotential(PotentialBuilder):
                                         gd=gd,
                                         D_asp=calculator.D_asp,
                                         setups=gpaw.setups,
+                                        gridrefinement=self.gridrefinement,
                                         atoms=random_atoms)
 
     def generate_slices(self, first_slice: int = 0, last_slice: int = None):

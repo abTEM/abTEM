@@ -166,9 +166,15 @@ class NonLinearAxis(OrdinalAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
-class TiltAxis(NonLinearAxis):
+class AxisAlignedTiltAxis(NonLinearAxis):
     units: str = "mrad"
     direction: str = "x"
+    _ensemble_mean: bool = False
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
+class TiltAxis(NonLinearAxis):
+    units: str = "mrad"
     _ensemble_mean: bool = False
 
 
