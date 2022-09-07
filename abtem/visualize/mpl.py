@@ -1,10 +1,12 @@
 """Module for plotting atoms, images, line scans, and diffraction patterns."""
+from numbers import Number
 from typing import Union, Tuple, TYPE_CHECKING, List
 
 import cplot
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
+from matplotlib.collections import EllipseCollection
 from matplotlib.offsetbox import AnchoredText
 from matplotlib.patheffects import withStroke
 from mpl_toolkits.axes_grid1 import ImageGrid, make_axes_locatable
@@ -381,3 +383,70 @@ def show_measurements_1d(
         ax.legend()
 
     return ax
+
+
+def plot_diffraction_pattern(
+    diffraction_pattern,
+    cell_edges,
+    spot_scale: float = 1,
+    figsize=(6, 6),
+    spot_threshold: float = 0.01,
+    annotate_kwargs=None,
+):
+    from abtem.measure.indexing import map_all_bin_indices_to_miller_indices
+    import matplotlib
+
+    if annotate_kwargs is None:
+        annotate_kwargs = {}
+
+    bins, hkl = map_all_bin_indices_to_miller_indices(
+        diffraction_pattern.array, diffraction_pattern.sampling, cell_edges
+    )
+    intensities = diffraction_pattern.select_frequency_bin(bins)
+    max_intensity = intensities.max()
+
+    include = intensities > max_intensity * spot_threshold
+
+    bins, hkl, intensities = bins[include], hkl[include], intensities[include]
+
+    coordinates = bins * diffraction_pattern.sampling
+    coordinates = coordinates / coordinates.max()
+
+    max_step = (
+        max([np.max(np.diff(np.sort(coordinates[:, i]))) for i in (0, 1)]) * spot_scale
+    )
+    scales = intensities / intensities.max() * max_step
+
+    norm = matplotlib.colors.Normalize(vmin=0, vmax=intensities.max())
+    cmap = matplotlib.cm.get_cmap("viridis")
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    ax.add_collection(
+        EllipseCollection(
+            widths=scales,
+            heights=scales,
+            angles=0.0,
+            units="xy",
+            facecolors=cmap(norm(intensities)),
+            offsets=coordinates,
+            transOffset=ax.transData,
+        )
+    )
+
+    for i, coordinate in enumerate(coordinates):
+        if np.all(hkl[i] >= 0):
+            t = ax.annotate(
+                "".join(map(str, list(hkl[i]))),
+                coordinate,
+                ha="center",
+                va="center",
+                size=12,
+                **annotate_kwargs,
+            )
+            t.set_path_effects([withStroke(foreground="w", linewidth=3)])
+
+    ax.axis("equal")
+    ax.set_xlim([-1.0 - max_step / 2.0, 1.0 + max_step / 2.0])
+    ax.set_ylim([-1.0 - max_step / 2.0, 1.0 + max_step / 2.0])
+    ax.axis("off")

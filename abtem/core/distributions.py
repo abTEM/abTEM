@@ -60,7 +60,7 @@ class DistributionFromValues(Distribution):
 
     @property
     def shape(self):
-        return self.values.shape
+        return self.values.shape[0],
 
     def divide(self, chunks: Union[int, Tuple[int, ...]] = 1, lazy: bool = True):
         if isinstance(chunks, int):

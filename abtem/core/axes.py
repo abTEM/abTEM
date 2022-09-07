@@ -173,7 +173,7 @@ class AxisAlignedTiltAxis(NonLinearAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
-class TiltAxis(NonLinearAxis):
+class TiltAxis(OrdinalAxis):
     units: str = "mrad"
     _ensemble_mean: bool = False
 

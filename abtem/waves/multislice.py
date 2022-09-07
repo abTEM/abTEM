@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Union, Tuple, List, Dict
 import numpy as np
 
 from abtem.core.antialias import AntialiasAperture
-from abtem.core.axes import AxisAlignedTiltAxis, AxisMetadata
+from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module, HasDevice
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import energy2wavelength, HasAcceleratorMixin, Accelerator
@@ -20,7 +20,6 @@ from abtem.potentials.potentials import (
 )
 from abtem.structures.transform import plane_to_axes
 from abtem.waves.base import WavesLikeMixin
-from abtem.waves.tilt import AxisAlignedBeamTilt
 
 if TYPE_CHECKING:
     from abtem.waves.waves import Waves
@@ -288,7 +287,6 @@ def multislice_and_detect(
             extra_ensemble_axes_shape=extra_ensemble_axes_shape,
             extra_ensemble_axes_metadata=extra_ensemble_axes_metadata,
         )
-        print(measurements[detectors[0]].shape)
 
     else:
         measurements = {}

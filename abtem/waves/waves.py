@@ -1,5 +1,6 @@
 """Module to describe electron waves and their propagation."""
 import itertools
+import warnings
 from abc import abstractmethod
 from copy import copy
 from functools import partial
@@ -10,7 +11,7 @@ import numpy as np
 from ase import Atoms
 
 from abtem.core.array import HasArray, validate_lazy, ComputableList
-from abtem.core.axes import AxisMetadata, AxisAlignedTiltAxis
+from abtem.core.axes import AxisMetadata, TiltAxis
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
 from abtem.core.complex import abs2
@@ -173,7 +174,7 @@ class Waves(HasArray, WavesLikeMixin):
         return tuple(
             i
             for i, axis in enumerate(self.ensemble_axes_metadata)
-            if isinstance(axis, AxisAlignedTiltAxis)
+            if isinstance(axis, TiltAxis)
         )
 
     @property
@@ -376,13 +377,15 @@ class Waves(HasArray, WavesLikeMixin):
 
         metadata = copy(self.metadata)
 
-        metadata['label'] = 'intensity'
-        metadata['units'] = 'arb. unit'
+        metadata["label"] = "intensity"
+        metadata["units"] = "arb. unit"
 
-        return Images(array,
-                      sampling=self.sampling,
-                      ensemble_axes_metadata=self.ensemble_axes_metadata,
-                      metadata=metadata)
+        return Images(
+            array,
+            sampling=self.sampling,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=metadata,
+        )
 
     def as_complex_image(self):
         """
@@ -560,11 +563,11 @@ class Waves(HasArray, WavesLikeMixin):
 
     def as_complex_diffraction(
         self,
-        max_angle: Union[str, float, None] = 'cutoff',
+        max_angle: Union[str, float, None] = "cutoff",
         block_direct: Union[bool, float] = False,
         fftshift: bool = True,
-        parity: str = 'same'
-        ) -> DiffractionPatterns:
+        parity: str = "same",
+    ) -> DiffractionPatterns:
         """
         Calculate the complex array of the wave functions at the diffraction plane.
 
@@ -596,14 +599,13 @@ class Waves(HasArray, WavesLikeMixin):
             array = self.array
             xp = get_array_module(array)
 
-            array =  fft2(xp.fft.fftshift(array))
+            array = fft2(xp.fft.fftshift(array))
 
             if array.shape[-2:] != new_gpts:
                 array = fft_crop(array, new_shape=array.shape[:-2] + new_gpts)
 
             if fftshift:
-                array =  xp.fft.ifftshift(array, axes=(-1, -2))
-
+                array = xp.fft.ifftshift(array, axes=(-1, -2))
 
             return array
 
@@ -612,24 +614,34 @@ class Waves(HasArray, WavesLikeMixin):
         validate_gpts(new_gpts)
 
         if self.is_lazy:
-            pattern = self.array.map_blocks(_as_complex_diffraction, new_gpts=new_gpts, fftshift=fftshift,
-                                            chunks=self.array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
-                                            meta=xp.array((), dtype=xp.float32))
+            pattern = self.array.map_blocks(
+                _as_complex_diffraction,
+                new_gpts=new_gpts,
+                fftshift=fftshift,
+                chunks=self.array.chunks[:-2] + ((new_gpts[0],), (new_gpts[1],)),
+                meta=xp.array((), dtype=xp.float32),
+            )
         else:
-            pattern = _as_complex_diffraction(self.array, new_gpts=new_gpts, fftshift=fftshift)
+            pattern = _as_complex_diffraction(
+                self.array, new_gpts=new_gpts, fftshift=fftshift
+            )
 
         metadata = copy(self.metadata)
-        metadata['label'] = 'intensity'
-        metadata['units'] = 'arb. unit'
+        metadata["label"] = "intensity"
+        metadata["units"] = "arb. unit"
 
-        diffraction_patterns = DiffractionPatterns(pattern,
-                                                   sampling=self.fourier_space_sampling,
-                                                   fftshift=fftshift,
-                                                   ensemble_axes_metadata=self.ensemble_axes_metadata,
-                                                   metadata=metadata)
+        diffraction_patterns = DiffractionPatterns(
+            pattern,
+            sampling=self.fourier_space_sampling,
+            fftshift=fftshift,
+            ensemble_axes_metadata=self.ensemble_axes_metadata,
+            metadata=metadata,
+        )
 
         if block_direct:
-            diffraction_patterns = diffraction_patterns.block_direct(radius=block_direct)
+            diffraction_patterns = diffraction_patterns.block_direct(
+                radius=block_direct
+            )
 
         return diffraction_patterns
 
@@ -848,7 +860,6 @@ class Waves(HasArray, WavesLikeMixin):
 
 
 class WavesBuilder(WavesLikeMixin):
-
     def __init__(self, transforms):
 
         if transforms is None:
@@ -1008,15 +1019,17 @@ class WavesBuilder(WavesLikeMixin):
             detectors=detectors,
         )
 
-        array = da.blockwise(
-            partial_build,
-            symbols,
-            *args,
-            adjust_chunks=adjust_chunks,
-            new_axes=new_axes,
-            concatenate=True,
-            meta=np.array((), dtype=object)
-        )
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Increasing number of chunks")
+            array = da.blockwise(
+                partial_build,
+                symbols,
+                *args,
+                adjust_chunks=adjust_chunks,
+                new_axes=new_axes,
+                concatenate=True,
+                meta=np.array((), dtype=object)
+            )
 
         return finalize_lazy_measurements(
             array,

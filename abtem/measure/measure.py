@@ -1185,6 +1185,40 @@ class AbstractMeasurement1d(AbstractMeasurement):
     def base_axes_metadata(self) -> List[Union[RealSpaceAxis, FourierSpaceAxis]]:
         pass
 
+    def width(self, height: float = 0.5):
+        """
+        Calculate the width at half maximum of a 1d measurement, typically a probe profile.
+
+        Parameters
+        ----------
+        probe_profile : Measurement
+            Probe profile measurement.
+
+        Returns
+        -------
+        float
+        """
+
+        def calculate_widths(array, sampling, height):
+            xp = get_array_module(array)
+            array = array - xp.max(array, axis=-1, keepdims=True) * height
+
+            widths = xp.zeros(array.shape[:-1], dtype=np.float32)
+            for i in np.ndindex(array.shape[:-1]):
+                zero_crossings = xp.where(xp.diff(xp.sign(array[i]), axis=-1))[0]
+                left, right = zero_crossings[0], zero_crossings[-1]
+                widths[i] = (right - left) * sampling
+
+            return widths
+
+        return self.array.map_blocks(
+            calculate_widths,
+            drop_axis=(len(self.array.shape) - 1,),
+            dtype=np.float32,
+            sampling=self.sampling,
+            height=height,
+        )
+
     def interpolate(
         self,
         sampling: float = None,
@@ -2193,6 +2227,9 @@ class DiffractionPatterns(AbstractMeasurement):
                 radius = max(self.angular_sampling) * 1.0001
 
         return self.bandlimit(radius, outer=np.inf)
+
+    def center_bin(self):
+        return self.array.shape[0] // 2, self.array.shape[1] // 2
 
     def select_frequency_bin(self, bins):
         bins = np.array(bins)
