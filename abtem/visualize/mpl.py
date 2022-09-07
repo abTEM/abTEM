@@ -181,12 +181,7 @@ def show_measurement_2d_exploded(
             else:
                 image_grid_kwargs["axes_pad"] = 0.1
 
-        axes = ImageGrid(
-            fig,
-            111,
-            nrows_ncols=(nrows, ncols),
-            **image_grid_kwargs,
-        )
+        axes = ImageGrid(fig, 111, nrows_ncols=(nrows, ncols), **image_grid_kwargs,)
     elif isinstance(axes, Axes):
         axes = [axes]
         fig = None
@@ -389,8 +384,10 @@ def plot_diffraction_pattern(
     diffraction_pattern,
     cell_edges,
     spot_scale: float = 1,
+    ax: Axes = None,
     figsize=(6, 6),
     spot_threshold: float = 0.01,
+    title=None,
     annotate_kwargs=None,
 ):
     from abtem.measure.indexing import map_all_bin_indices_to_miller_indices
@@ -400,7 +397,7 @@ def plot_diffraction_pattern(
         annotate_kwargs = {}
 
     bins, hkl = map_all_bin_indices_to_miller_indices(
-        diffraction_pattern.array, diffraction_pattern.sampling, cell_edges
+        diffraction_pattern.array, diffraction_pattern.sampling, cell_edges,
     )
     intensities = diffraction_pattern.select_frequency_bin(bins)
     max_intensity = intensities.max()
@@ -420,7 +417,11 @@ def plot_diffraction_pattern(
     norm = matplotlib.colors.Normalize(vmin=0, vmax=intensities.max())
     cmap = matplotlib.cm.get_cmap("viridis")
 
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+
+    if title:
+        ax.set_title(title)
 
     ax.add_collection(
         EllipseCollection(
@@ -434,10 +435,16 @@ def plot_diffraction_pattern(
         )
     )
 
+    k = bins * diffraction_pattern.sampling
+    include = ((np.arctan2(k[:, 0], k[:, 1]) + np.pi) % (2 * np.pi)) <= (2 * np.pi / 6)
+
+    label_mode = "all"
+    label_mode = "quadrant"
+
     for i, coordinate in enumerate(coordinates):
-        if np.all(hkl[i] >= 0):
+        if include[i] or label_mode == "all":
             t = ax.annotate(
-                "".join(map(str, list(hkl[i]))),
+                "".join(map(str, list(np.round(hkl[i],1)))),
                 coordinate,
                 ha="center",
                 va="center",
@@ -450,3 +457,5 @@ def plot_diffraction_pattern(
     ax.set_xlim([-1.0 - max_step / 2.0, 1.0 + max_step / 2.0])
     ax.set_ylim([-1.0 - max_step / 2.0, 1.0 + max_step / 2.0])
     ax.axis("off")
+
+    return ax

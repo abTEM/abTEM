@@ -273,7 +273,11 @@ class HasArray(HasAxes, CopyMixin):
         return self.__class__(**kwargs)
 
     def _in_place_arithmetic(self, other, func) -> 'T':
-        if self.is_lazy or other.is_lazy:
+        #if hasattr(other, 'array'):
+        #    self.check_is_compatible(other)
+        #    other = other.array
+
+        if self.is_lazy or (hasattr(other, "is_lazy") and other.is_lazy):
             raise RuntimeError('inplace arithmetic operation not implemented for lazy measurement')
         return self._arithmetic(other, func)
 

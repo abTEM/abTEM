@@ -66,7 +66,10 @@ def is_cell_hexagonal(atoms: Atoms) -> bool:
     atoms : ASE atoms object
         The atoms that should be checked.
     """
-    cell = atoms.get_cell()
+    if isinstance(atoms, Atoms):
+        cell = atoms.get_cell()
+    else:
+        cell = atoms
 
     a = np.linalg.norm(cell[0], axis=0)
     b = np.linalg.norm(cell[1], axis=0)

@@ -224,6 +224,12 @@ class AbstractMeasurement(
         valid = xp.abs(self.array) >= min_relative_tol * self.array.max()
         difference._array[valid] /= self.array[valid]
         difference._array[valid == 0] = difference.array.min()
+
+        difference._array *= 100.
+
+        difference.metadata["label"] = "Relative difference"
+        difference.metadata["units"] = "%"
+
         # else:
         #    difference._array[:] /= self.array
 

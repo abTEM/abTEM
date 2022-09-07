@@ -1,8 +1,14 @@
 from numbers import Number
 
 import numpy as np
+from ase.cell import Cell
 
 from abtem.core.utils import label_to_index
+from abtem.structures.transform import (
+    is_cell_hexagonal,
+    is_cell_orthogonal,
+    standardize_cell,
+)
 
 
 def central_bin_index(array):
@@ -30,10 +36,25 @@ def find_linearly_independent_row(array, row, tol: float = 1e-6):
 
 
 def find_independent_spots(array):
-    ind = np.array(np.unravel_index(np.argsort(-array, axis=None), array.shape)).T
-    ind = ind - central_bin_index(array)
-    spot_0 = ind[0]
-    spot_1 = find_linearly_independent_row(ind[1:], spot_0)
+    import matplotlib.pyplot as plt
+
+    spots = array > array.max() * 1e-2
+    half = central_bin_index(array)
+    spots = spots[half[0] :, half[1] :]
+
+    spots = np.array(np.where(spots)).T
+    # print(spots)
+
+    # plt.imshow(spots)
+    # plt.show()
+
+    # print(array )
+
+    # sss
+    # ind = np.array(np.unravel_index(np.argsort(-array, axis=None), array.shape)).T
+    # ind = ind - central_bin_index(array)
+    spot_0 = spots[0]
+    spot_1 = find_linearly_independent_row(spots[1:], spot_0)
     return spot_0, spot_1
 
 
@@ -102,25 +123,49 @@ def bin_index_to_orthorhombic_miller(array, sampling, cell_edges):
     return (bin1, bin2), (hkl1, hkl2)
 
 
-def validate_cell_edges(cell_edges):
+def validate_cell_edges(cell):
 
-    if isinstance(cell_edges, Number):
-        cell_edges = [cell_edges]
+    if isinstance(cell, Number):
+        cell = [cell]
 
-    if len(cell_edges) == 1:
-        cell_edges = cell_edges * 3
-    elif len(cell_edges) == 2:
-        cell_edges = [cell_edges[0]] * 2 + [cell_edges[1]]
-    elif len(cell_edges) != 3:
+    if not isinstance(cell, Cell):
+        if len(cell) == 1:
+            cell_edges = cell * 3
+        elif len(cell) == 2:
+            cell_edges = [cell[0]] * 2 + [cell[1]]
+        elif len(cell) != 3:
+            raise RuntimeError()
+        else:
+            raise RuntimeError()
+
+        hexagonal = False
+
+    elif is_cell_hexagonal(cell):
+        lengths = cell.lengths()
+        cell_edges = [lengths[0], np.sqrt(3) * lengths[1], lengths[2]]
+        hexagonal = True
+    elif is_cell_orthogonal(cell):
+        cell_edges = list(np.diag(cell))
+        hexagonal = False
+    else:
         raise RuntimeError()
 
-    return cell_edges
+    return cell_edges, hexagonal
 
 
-def map_all_bin_indices_to_miller_indices(array, sampling, cell_edges, tolerance=1e-6):
+def miller_to_miller_bravais(hkl):
+    h, k, l = hkl[:, 0], hkl[:, 1], hkl[:, 2]
+    HKIL = np.zeros((len(hkl), 4), dtype=int)
 
-    cell_edges = validate_cell_edges(cell_edges)
+    HKIL[:, 0] = 2 * h - k
+    HKIL[:, 1] = 2 * k - h
+    HKIL[:, 2] = -HKIL[:, 0] - HKIL[:, 1]
+    HKIL[:, 3] = l
+    return HKIL
 
+
+def map_all_bin_indices_to_miller_indices(array, sampling, cell, tolerance=1e-6):
+    cell_edges, hexagonal = validate_cell_edges(cell)
     (v1, v2), (u1, u2) = bin_index_to_orthorhombic_miller(array, sampling, cell_edges)
 
     bins = frequency_bin_indices(array.shape)
@@ -130,38 +175,63 @@ def map_all_bin_indices_to_miller_indices(array, sampling, cell_edges, tolerance
     mask = np.all(np.abs(hkl - np.round(hkl)) < tolerance, axis=1)
     hkl = hkl[mask].astype(int)
     bins = bins[mask]
+
+    if hexagonal:
+        hkl[:, 1] = hkl[:, :-1].sum(axis=1) / 2
+
     return bins, hkl
+
+
+def is_equivalent(hkl, hexagonal=True):
+
+    if hexagonal:
+        lengths = np.sum(miller_to_miller_bravais(hkl) ** 2, axis=1)
+    else:
+        lengths = np.sum(hkl ** 2, axis=1)
+
+    opposite = np.all(hkl[:, None] == -hkl[None], axis=2)
 
 
 def tabulate_diffraction_pattern(
     diffraction_pattern,
-    cell_edges,
+    cell,
     return_data_frame: bool = False,
     normalize: bool = True,
-    threshold: float = 0.01,
+    threshold: float = 0.000,
 ):
     # if len(diffraction_pattern.ensemble_shape) > 0:
     # raise NotImplementedError("tabulating not implemented for ensembles, select a single pattern by indexing")
 
-    cell_edges = validate_cell_edges(cell_edges)
+    # cell_edges, hexagonal = validate_cell_edges(cell)
 
     bins, hkl = map_all_bin_indices_to_miller_indices(
-        diffraction_pattern.array, diffraction_pattern.sampling, cell_edges
+        diffraction_pattern.array, diffraction_pattern.sampling, cell
     )
+
+    k = bins * diffraction_pattern.sampling
+    include = ((np.arctan2(k[:, 0], k[:, 1]) + np.pi) % (2 * np.pi)) <= (2 * np.pi / 6)
+
+    bins = bins[include]
+    hkl = hkl[include]
+
+    order = np.lexsort(np.rot90(hkl))
+    hkl, bins = hkl[order], bins[order]
+
     intensities = diffraction_pattern.select_frequency_bin(bins)
 
-    lengths = np.sum(hkl ** 2, axis=1)
-    _, labels = np.unique(lengths, return_inverse=True)
-
-    table = {}
-    for indices in label_to_index(labels):
-        i = np.lexsort(np.rot90(np.cumsum(hkl[indices], axis=1)))[-1]
-        key = "".join(map(str, list(hkl[indices][i])))
-        intensity = intensities[indices].mean()
-        table[key] = intensity
+    table = {
+        "".join(map(str, list(hkli))): intensity
+        for intensity, hkli in zip(intensities, hkl)
+    }
 
     max_intensity = max(table.values())
-    normalization = max_intensity if normalize else 1.
+
+    if normalize is True:
+        normalization = max_intensity
+    elif isinstance(normalize, str):
+        normalization = table[normalize]
+    else:
+        normalization = 1.0
 
     table = {
         key: [value / normalization]
