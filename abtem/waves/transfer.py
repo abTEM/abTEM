@@ -226,7 +226,8 @@ class EnsembleFromDistributionsMixin:
     @property
     def _num_ensemble_axes(self):
         return sum(
-            len(distribution.shape) for distribution in self._distribution_properties
+            len(distribution.shape)
+            for distribution in self._distribution_properties.values()
         )
 
     @property
@@ -343,8 +344,7 @@ class Aperture(EnsembleFromDistributionsMixin, AbstractAperture):
             semiangle_cutoff = np.max(semiangle_cutoff.values)
 
         super().__init__(
-            energy=energy,
-            semiangle_cutoff=semiangle_cutoff,
+            energy=energy, semiangle_cutoff=semiangle_cutoff,
         )
 
     @property
@@ -415,9 +415,7 @@ class Aperture(EnsembleFromDistributionsMixin, AbstractAperture):
 
 class TemporalEnvelope(EnsembleFromDistributionsMixin, AbstractTransfer):
     def __init__(
-        self,
-        focal_spread: Union[float, Distribution],
-        energy: float = None,
+        self, focal_spread: Union[float, Distribution], energy: float = None,
     ):
         self._accelerator = Accelerator(energy=energy)
         self._focal_spread = focal_spread
@@ -900,9 +898,7 @@ class CTF(EnsembleFromDistributionsMixin, AbstractAperture):
             delegate_property("_aperture", "semiangle_cutoff"),
         )
         setattr(
-            self.__class__,
-            "taper",
-            delegate_property("_aperture", "taper"),
+            self.__class__, "taper", delegate_property("_aperture", "taper"),
         )
         setattr(
             self.__class__,
@@ -1036,29 +1032,29 @@ class CTF(EnsembleFromDistributionsMixin, AbstractAperture):
 
         return array
 
-    def image(self, gpts, max_angle):
-
-        angular_sampling = 2 * max_angle / gpts[0], 2 * max_angle / gpts[1]
-
-        fourier_space_sampling = (
-            angular_sampling[0] / (self.wavelength * 1e3),
-            angular_sampling[1] / (self.wavelength * 1e3),
-        )
-
-        sampling = 1 / (fourier_space_sampling[0] * gpts[0]), 1 / (
-            fourier_space_sampling[1] * gpts[1]
-        )
-
-        alpha, phi = self._polar_spatial_frequencies_from_grid(
-            gpts=gpts, sampling=sampling, wavelength=self.wavelength, xp=np
-        )
-
-        array = np.fft.fftshift(self.evaluate_with_alpha_and_phi(alpha, phi))
-
-        # array = np.fft.fftshift(self.evaluate(waves))
-        return DiffractionPatterns(
-            array, sampling=fourier_space_sampling, metadata={"energy": self.energy}
-        )
+    # def image(self, gpts, max_angle):
+    #
+    #     angular_sampling = 2 * max_angle / gpts[0], 2 * max_angle / gpts[1]
+    #
+    #     fourier_space_sampling = (
+    #         angular_sampling[0] / (self.wavelength * 1e3),
+    #         angular_sampling[1] / (self.wavelength * 1e3),
+    #     )
+    #
+    #     sampling = 1 / (fourier_space_sampling[0] * gpts[0]), 1 / (
+    #         fourier_space_sampling[1] * gpts[1]
+    #     )
+    #
+    #     alpha, phi = self. #_polar_spatial_frequencies_from_grid(
+    #         gpts=gpts, sampling=sampling, wavelength=self.wavelength, xp=np
+    #     )
+    #
+    #     array = np.fft.fftshift(self.evaluate_with_alpha_and_phi(alpha, phi))
+    #
+    #     # array = np.fft.fftshift(self.evaluate(waves))
+    #     return DiffractionPatterns(
+    #         array, sampling=fourier_space_sampling, metadata={"energy": self.energy}
+    #     )
 
     # def point_spread_function(self, waves):
     #     alpha, phi = self._polar_spatial_frequencies_from_waves(waves)
@@ -1090,7 +1086,10 @@ class CTF(EnsembleFromDistributionsMixin, AbstractAperture):
         metadata = {"energy": self.energy}
         profiles = [
             FourierSpaceLineProfiles(
-                -aberrations.imag * envelope, sampling=sampling, metadata=metadata
+                -aberrations.imag * envelope,
+                sampling=sampling,
+                metadata=metadata,
+                ensemble_axes_metadata=self.aberrations.ensemble_axes_metadata,
             )
         ]
 

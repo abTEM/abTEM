@@ -1,5 +1,4 @@
 """Module for plotting atoms, images, line scans, and diffraction patterns."""
-from numbers import Number
 from typing import Union, Tuple, TYPE_CHECKING, List
 
 import cplot
@@ -12,8 +11,9 @@ from matplotlib.patheffects import withStroke
 from mpl_toolkits.axes_grid1 import ImageGrid, make_axes_locatable
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
-from abtem.core.axes import OrdinalAxis
 from abtem.core.backend import copy_to_device
+from abtem.measure.indexing import miller_to_miller_bravais, find_equivalent_spots, validate_cell_edges
+from abtem.visualize.complex_plot import get_colors, add_colorbar_arg, add_colorbar_abs
 
 if TYPE_CHECKING:
     from abtem.measure.measure import (
@@ -35,23 +35,21 @@ def add_imshow(
     power,
     vmin,
     vmax,
-    domain_coloring_kwargs=None,
+    complex_coloring_kwargs=None,
     **kwargs,
 ):
     if power != 1:
         array = array ** power
         vmin = array.min() if vmin is None else vmin ** power
         vmax = array.max() if vmax is None else vmax ** power
-        # vmin = vmin ** power
-        # vmax = vmax ** power
 
     array = array.T
 
     if np.iscomplexobj(array):
-        if domain_coloring_kwargs is None:
-            domain_coloring_kwargs = {}
+        if complex_coloring_kwargs is None:
+            complex_coloring_kwargs = {}
 
-        array = cplot.get_srgb1(array, **domain_coloring_kwargs)
+        array = get_colors(array, vmin=vmin, vmax=vmax, **complex_coloring_kwargs)
 
     im = ax.imshow(array, extent=extent, origin="lower", vmin=vmin, vmax=vmax, **kwargs)
 
@@ -129,7 +127,7 @@ def show_measurement_2d_exploded(
     imshow_kwargs: dict = None,
     anchored_text_kwargs: dict = None,
     anchored_size_bar_kwargs: dict = None,
-    domain_coloring_kwargs: dict = None,
+    complex_coloring_kwargs: dict = None,
     axes: Axes = None,
 ):
     measurements = measurements.to_cpu().compute()
@@ -141,10 +139,9 @@ def show_measurement_2d_exploded(
         {} if anchored_size_bar_kwargs is None else anchored_size_bar_kwargs
     )
 
-    if domain_coloring_kwargs is None:
-        domain_coloring_kwargs = {
-            "abs_scaling": lambda x: x / (x + 1),
-            "saturation_adjustment": 1.38,
+    if complex_coloring_kwargs is None:
+        complex_coloring_kwargs = {
+            "saturation": 3,
         }
 
     if cbar and not np.iscomplexobj(measurements.array):
@@ -239,7 +236,7 @@ def show_measurement_2d_exploded(
             vmin=vmin,
             vmax=vmax,
             cmap=cmap,
-            domain_coloring_kwargs=domain_coloring_kwargs,
+            complex_coloring_kwargs=complex_coloring_kwargs,
             **imshow_kwargs,
         )
 
@@ -265,13 +262,20 @@ def show_measurement_2d_exploded(
                 from cplot._main import _add_colorbar_arg, _add_colorbar_abs
 
                 divider = make_axes_locatable(ax)
-                cax1 = divider.append_axes("right", size="5%", pad=0.3)
-                cax2 = divider.append_axes("right", size="5%", pad=0.5)
+                cax1 = divider.append_axes("right", size="5%", pad=0.2)
+                cax2 = divider.append_axes("right", size="5%", pad=0.4)
 
-                _add_colorbar_abs(cax2, domain_coloring_kwargs["abs_scaling"], 10)
-                _add_colorbar_arg(cax1, domain_coloring_kwargs["saturation_adjustment"])
+                add_colorbar_arg(cax1, complex_coloring_kwargs["saturation"])
 
-                # vmin = np.abs(measurement.array).min() if vmin is None else vmin
+                vmin = np.abs(measurement.array).min() if vmin is None else vmin
+                vmax = np.abs(measurement.array).max() if vmax is None else vmax
+
+                add_colorbar_abs(cax2, vmin, vmax)
+
+                #_add_colorbar_abs(cax2, domain_coloring_kwargs["abs_scaling"], 10)
+                #_add_colorbar_arg(cax1, domain_coloring_kwargs["saturation_adjustment"])
+
+                #
                 # vmax = np.abs(measurement.array).max() if vmax is None else vmax
                 # add_domain_coloring_cbar(ax,
                 #                         domain_coloring_kwargs['abs_scaling'],
@@ -382,7 +386,7 @@ def show_measurements_1d(
 
 def plot_diffraction_pattern(
     diffraction_pattern,
-    cell_edges,
+    cell,
     spot_scale: float = 1,
     ax: Axes = None,
     figsize=(6, 6),
@@ -397,7 +401,7 @@ def plot_diffraction_pattern(
         annotate_kwargs = {}
 
     bins, hkl = map_all_bin_indices_to_miller_indices(
-        diffraction_pattern.array, diffraction_pattern.sampling, cell_edges,
+        diffraction_pattern.array, diffraction_pattern.sampling, cell,
     )
     intensities = diffraction_pattern.select_frequency_bin(bins)
     max_intensity = intensities.max()
@@ -435,16 +439,22 @@ def plot_diffraction_pattern(
         )
     )
 
-    k = bins * diffraction_pattern.sampling
-    include = ((np.arctan2(k[:, 0], k[:, 1]) + np.pi) % (2 * np.pi)) <= (2 * np.pi / 6)
+    _, hexagonal = validate_cell_edges(cell)
+    include = find_equivalent_spots(hkl, intensities, hexagonal=hexagonal)
 
-    label_mode = "all"
-    label_mode = "quadrant"
+    #label_mode = "all"
+    #label_mode = "quadrant"
 
     for i, coordinate in enumerate(coordinates):
-        if include[i] or label_mode == "all":
+        if include[i]:# or label_mode == "all":
+            if hexagonal:
+                spot = miller_to_miller_bravais(hkl[i][None])[0]
+            else:
+                spot = hkl[i]
+
+
             t = ax.annotate(
-                "".join(map(str, list(np.round(hkl[i],1)))),
+                "".join(map(str, list(spot))),
                 coordinate,
                 ha="center",
                 va="center",

@@ -11,7 +11,7 @@ import numpy as np
 from ase import Atoms
 
 from abtem.core.array import HasArray, validate_lazy, ComputableList
-from abtem.core.axes import AxisMetadata, TiltAxis
+from abtem.core.axes import AxisMetadata, TiltAxis, AxisAlignedTiltAxis
 from abtem.core.backend import get_array_module, validate_device
 from abtem.core.chunks import validate_chunks
 from abtem.core.complex import abs2
@@ -174,7 +174,7 @@ class Waves(HasArray, WavesLikeMixin):
         return tuple(
             i
             for i, axis in enumerate(self.ensemble_axes_metadata)
-            if isinstance(axis, TiltAxis)
+            if isinstance(axis, (TiltAxis, AxisAlignedTiltAxis))
         )
 
     @property
@@ -357,7 +357,7 @@ class Waves(HasArray, WavesLikeMixin):
 
         """
         xp = get_array_module(self.array)
-        arr = xp.exp(np.pi * 1.0j * shift) * self.array
+        arr = xp.exp(1.0j * shift) * self.array
 
         kwargs = self.copy_kwargs(exclude=("array",))
 

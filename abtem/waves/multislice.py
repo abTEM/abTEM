@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Union, Tuple, List, Dict
 import numpy as np
 
 from abtem.core.antialias import AntialiasAperture
-from abtem.core.axes import AxisMetadata
+from abtem.core.axes import AxisMetadata, AxisAlignedTiltAxis
 from abtem.core.backend import get_array_module, HasDevice
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import energy2wavelength, HasAcceleratorMixin, Accelerator

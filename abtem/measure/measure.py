@@ -1027,7 +1027,7 @@ class Images(AbstractMeasurement):
         image_grid_kwargs: dict = None,
         imshow_kwargs: dict = None,
         anchored_text_kwargs: dict = None,
-        domain_coloring_kwargs: dict = None,
+        complex_coloring_kwargs: dict = None,
     ) -> Axes:
         """
         Show the image(s) using matplotlib.
@@ -1130,7 +1130,7 @@ class Images(AbstractMeasurement):
             image_grid_kwargs=image_grid_kwargs,
             imshow_kwargs=imshow_kwargs,
             anchored_text_kwargs=anchored_text_kwargs,
-            domain_coloring_kwargs=domain_coloring_kwargs,
+            complex_coloring_kwargs=complex_coloring_kwargs,
             axes=ax,
         )
 
@@ -2285,7 +2285,7 @@ class DiffractionPatterns(AbstractMeasurement):
         image_grid_kwargs: dict = None,
         imshow_kwargs: dict = None,
         anchored_text_kwargs: dict = None,
-        domain_coloring_kwargs: dict = None,
+        complex_coloring_kwargs: dict = None,
     ) -> Axes:
         """
         Show the image(s) using matplotlib.
@@ -2409,7 +2409,7 @@ class DiffractionPatterns(AbstractMeasurement):
             image_grid_kwargs=image_grid_kwargs,
             imshow_kwargs=imshow_kwargs,
             anchored_text_kwargs=anchored_text_kwargs,
-            domain_coloring_kwargs=domain_coloring_kwargs,
+            complex_coloring_kwargs=complex_coloring_kwargs,
             axes=ax,
         )
 

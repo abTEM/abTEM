@@ -2,12 +2,13 @@ from numbers import Number
 
 import numpy as np
 from ase.cell import Cell
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
 
 from abtem.core.utils import label_to_index
 from abtem.structures.transform import (
     is_cell_hexagonal,
     is_cell_orthogonal,
-    standardize_cell,
 )
 
 
@@ -36,8 +37,6 @@ def find_linearly_independent_row(array, row, tol: float = 1e-6):
 
 
 def find_independent_spots(array):
-    import matplotlib.pyplot as plt
-
     spots = array > array.max() * 1e-2
     half = central_bin_index(array)
     spots = spots[half[0] :, half[1] :]
@@ -182,14 +181,53 @@ def map_all_bin_indices_to_miller_indices(array, sampling, cell, tolerance=1e-6)
     return bins, hkl
 
 
-def is_equivalent(hkl, hexagonal=True):
-
+def equivalent_miller_indices(hkl, hexagonal=True):
     if hexagonal:
-        lengths = np.sum(miller_to_miller_bravais(hkl) ** 2, axis=1)
-    else:
-        lengths = np.sum(hkl ** 2, axis=1)
+        hkl = miller_to_miller_bravais(hkl)
 
-    opposite = np.all(hkl[:, None] == -hkl[None], axis=2)
+    is_negation = np.zeros((len(hkl), len(hkl)), dtype=bool)
+
+    for i in range(hkl.shape[1]):
+        negated = hkl.copy()
+        negated[:, i] = -negated[:, i]
+        is_negation += np.all(hkl[:, None] == negated[None], axis=2)
+
+    is_negation += np.all(hkl[:, None] == -hkl[None], axis=2)
+
+    sorted = np.sort(hkl, axis=1)
+    is_permutation = np.all(sorted[:, None] == sorted[None], axis=-1)
+
+    is_connected = is_negation + is_permutation
+
+    n, labels = connected_components(csr_matrix(is_connected))
+
+    return labels
+
+
+def split_at_threshold(values, threshold):
+    order = np.argsort(values)
+    max_value = values.max()
+
+    split = (np.diff(values[order]) > (max_value * threshold)) * (
+        np.diff(values[order]) > 1e-6
+    )
+
+    split = np.insert(split, 0, False)
+    return np.cumsum(split)[np.argsort(order)]
+
+
+def find_equivalent_spots(hkl, intensities, threshold=0.01, hexagonal: bool = True):
+
+    labels = equivalent_miller_indices(hkl, hexagonal)
+
+    spots = np.zeros(len(hkl), dtype=bool)
+    for indices in label_to_index(labels):
+        sub_labels = split_at_threshold(intensities[indices], threshold)
+        for sub_indices in label_to_index(sub_labels):
+            order = np.lexsort(np.rot90(hkl[indices][sub_indices]))
+            spots[indices[sub_indices[order][-1]]] = True
+
+    return spots
 
 
 def tabulate_diffraction_pattern(
@@ -197,27 +235,26 @@ def tabulate_diffraction_pattern(
     cell,
     return_data_frame: bool = False,
     normalize: bool = True,
-    threshold: float = 0.000,
+    spot_threshold: float = 0.01,
 ):
     # if len(diffraction_pattern.ensemble_shape) > 0:
     # raise NotImplementedError("tabulating not implemented for ensembles, select a single pattern by indexing")
-
-    # cell_edges, hexagonal = validate_cell_edges(cell)
 
     bins, hkl = map_all_bin_indices_to_miller_indices(
         diffraction_pattern.array, diffraction_pattern.sampling, cell
     )
 
-    k = bins * diffraction_pattern.sampling
-    include = ((np.arctan2(k[:, 0], k[:, 1]) + np.pi) % (2 * np.pi)) <= (2 * np.pi / 6)
+    intensities = diffraction_pattern.select_frequency_bin(bins)
 
-    bins = bins[include]
-    hkl = hkl[include]
+    _, hexagonal = validate_cell_edges(cell)
+    include = find_equivalent_spots(hkl, intensities=intensities, hexagonal=hexagonal)
+    hkl, bins, intensities = hkl[include], bins[include], intensities[include]
+
+    if hexagonal:
+        hkl = miller_to_miller_bravais(hkl)
 
     order = np.lexsort(np.rot90(hkl))
-    hkl, bins = hkl[order], bins[order]
-
-    intensities = diffraction_pattern.select_frequency_bin(bins)
+    hkl, bins, intensities = hkl[order], bins[order], intensities[order]
 
     table = {
         "".join(map(str, list(hkli))): intensity
@@ -236,11 +273,12 @@ def tabulate_diffraction_pattern(
     table = {
         key: [value / normalization]
         for key, value in table.items()
-        if value / max_intensity > threshold
+        if value / max_intensity > spot_threshold
     }
 
     if return_data_frame:
         import pandas as pd
+
         return pd.DataFrame.from_dict(table)
 
     return table
