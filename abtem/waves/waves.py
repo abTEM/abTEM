@@ -481,7 +481,7 @@ class Waves(HasArray, WavesLikeMixin):
         max_angle: Union[str, float, None] = "cutoff",
         block_direct: Union[bool, float] = False,
         fftshift: bool = True,
-        parity: str = "odd",
+        parity: str = "same",
     ) -> DiffractionPatterns:
         """
         Calculate the intensity of the wave functions at the diffraction plane.
