@@ -6,7 +6,7 @@ from libertem.executor.inline import InlineJobExecutor
 from libertem.io.dataset.memory import MemoryDataSet
 from ptychography40.reconstruction.ssb import SSB_UDF, generate_masks
 
-from abtem.measure.measure import Images
+from abtem.measurements.core import Images
 
 
 def make_ssb_params(measurements, cutoff=1., cutoff_freq=np.inf, method='shift'):

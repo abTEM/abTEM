@@ -5,10 +5,12 @@ from collections import defaultdict
 import numpy as np
 from ase import units
 from ase.data import chemical_symbols, atomic_numbers
+from gpaw.atom.aeatom import AllElectronAtom
 from scipy.interpolate import interp1d
 
 from abtem.core.electron_configurations import electron_configurations, config_str_to_config_tuples
 from abtem.potentials.utils import eps0
+
 
 
 class GPAWParametrization:

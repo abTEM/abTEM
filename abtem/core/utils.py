@@ -52,7 +52,6 @@ def safe_equality(a, b, exclude=()):
 
         try:
             equal = value == b.__dict__[key]
-
         except (KeyError, TypeError):
             return False
 

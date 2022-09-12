@@ -18,15 +18,15 @@ from abtem.core.energy import Accelerator
 from abtem.core.fft import fft2
 from abtem.core.grid import Grid, GridUndefinedError
 from abtem.core.intialize import initialize
-from abtem.measure.detect import (
-    AbstractDetector,
+from abtem.measurements.detectors import (
+    Detector,
     validate_detectors,
     WavesDetector,
     FlexibleAnnularDetector,
 )
-from abtem.measure.measure import AbstractMeasurement
+from abtem.measurements.core import Measurement
 from abtem.potentials.potentials import AbstractPotential, validate_potential
-from abtem.waves.base import WavesLikeMixin
+from abtem.waves.core import WavesLikeMixin
 from abtem.waves.multislice import (
     allocate_multislice_measurements,
     multislice_and_detect,
@@ -41,7 +41,7 @@ from abtem.waves.prism_utils import (
 )
 from abtem.waves.scan import AbstractScan, validate_scan, GridScan
 from abtem.waves.transfer import CTF
-from abtem.waves.waves import Waves, Probe, finalize_lazy_measurements
+from abtem.waves.core import Waves, Probe, finalize_lazy_measurements
 
 
 class AbstractSMatrix(WavesLikeMixin):
@@ -112,7 +112,7 @@ class SMatrixArray(HasArray, AbstractSMatrix):
             extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True
         )
         self._accelerator = Accelerator(energy=energy)
-        self._beam_tilt = BeamTilt(tilt=tilt)
+        #self._beam_tilt = BeamTilt(tilt=tilt)
 
         self._ensemble_axes_metadata = (
             [] if ensemble_axes_metadata is None else ensemble_axes_metadata
@@ -131,7 +131,7 @@ class SMatrixArray(HasArray, AbstractSMatrix):
 
     @property
     def tilt(self):
-        return self._beam_tilt.tilt
+        return (0.,0.)
 
     @property
     def device(self):
@@ -300,9 +300,9 @@ class SMatrixArray(HasArray, AbstractSMatrix):
         self,
         scan: AbstractScan,
         ctf: CTF,
-        detectors: List[AbstractDetector],
+        detectors: List[Detector],
         reduction_max_batch: int,
-    ) -> Tuple[Union[AbstractMeasurement, Waves], ...]:
+    ) -> Tuple[Union[Measurement, Waves], ...]:
 
         dummy_probes = self.dummy_probes(scan=scan, ctf=ctf)
 
@@ -460,7 +460,7 @@ class SMatrixArray(HasArray, AbstractSMatrix):
         self,
         scan: AbstractScan = None,
         ctf: CTF = None,
-        detectors: Union[AbstractDetector, List[AbstractDetector]] = None,
+        detectors: Union[Detector, List[Detector]] = None,
         reduction_max_batch: Union[int, str] = "auto",
         rechunk_scheme: Union[Tuple[int, int], str] = "auto",
     ):
@@ -472,7 +472,7 @@ class SMatrixArray(HasArray, AbstractSMatrix):
         ----------
         detectors : List of Detector objects
             The detectors recording the measurements.
-        positions : Scan object
+        scan : Scan object
             Scan defining the positions of the probe wave functions.
         ctf: CTF object, optional
             The probe contrast transfer function. Default is None (aperture is set by the planewave cutoff).
@@ -575,7 +575,7 @@ class SMatrixArray(HasArray, AbstractSMatrix):
         self,
         scan: AbstractScan = None,
         ctf: CTF = None,
-        detectors: Union[AbstractDetector, List[AbstractDetector]] = None,
+        detectors: Union[Detector, List[Detector]] = None,
         reduction_max_batch: Union[int, str] = "auto",
         rechunk_scheme: Union[Tuple[int, int], str] = "auto",
     ):
@@ -670,7 +670,7 @@ class SMatrix(AbstractSMatrix):
         self._downsample = downsample
 
         self._accelerator = Accelerator(energy=energy)
-        self._beam_tilt = BeamTilt(tilt=tilt)
+        #self._beam_tilt = BeamTilt(tilt=tilt)
 
         self._normalize = normalize
         self._store_on_host = store_on_host
@@ -697,7 +697,7 @@ class SMatrix(AbstractSMatrix):
 
     @property
     def tilt(self):
-        return self._beam_tilt.tilt
+        return (0,0)
 
     def round_gpts_to_interpolation(self):
         rounded = round_gpts_to_multiple_of_interpolation(self.gpts, self.interpolation)
@@ -996,12 +996,12 @@ class SMatrix(AbstractSMatrix):
     def scan(
         self,
         scan: Union[np.ndarray, AbstractScan] = None,
-        detectors: Union[AbstractDetector, List[AbstractDetector]] = None,
+        detectors: Union[Detector, List[Detector]] = None,
         ctf: Union[CTF, Dict] = None,
         multislice_max_batch: Union[str, int] = "auto",
         reduction_max_batch: Union[str, int] = "auto",
         lazy: bool = None,
-    ) -> Union[Waves, AbstractMeasurement, List[AbstractMeasurement]]:
+    ) -> Union[Waves, Measurement, List[Measurement]]:
 
         """
         Scan the probe across the potential and record a measurement for each detector.
@@ -1035,7 +1035,7 @@ class SMatrix(AbstractSMatrix):
     def reduce(
         self,
         scan: Union[np.ndarray, AbstractScan] = None,
-        detectors: Union[AbstractDetector, List[AbstractDetector]] = None,
+        detectors: Union[Detector, List[Detector]] = None,
         ctf: Union[CTF, Dict] = None,
         multislice_max_batch: Union[str, int] = "auto",
         reduction_max_batch: Union[str, int] = "auto",

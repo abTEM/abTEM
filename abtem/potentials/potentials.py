@@ -26,7 +26,7 @@ from abtem.core.energy import HasAcceleratorMixin, Accelerator, energy2sigma
 from abtem.core.ensemble import Ensemble
 from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.utils import generate_chunks, EqualityMixin, CopyMixin
-from abtem.measure.measure import Images
+from abtem.measurements.core import Images
 from abtem.potentials.integrals import (
     ProjectionQuadratureRule,
     GaussianProjectionIntegrals,

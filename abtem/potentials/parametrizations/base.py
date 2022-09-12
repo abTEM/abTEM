@@ -8,7 +8,7 @@ from abtem.core.axes import OrdinalAxis
 from abtem.core.utils import EqualityMixin
 
 # Vacuum permitivity in ASE units
-from abtem.measure.measure import FourierSpaceLineProfiles, LineProfiles
+from abtem.measurements.core import FourierSpaceLineProfiles, RealSpaceLineProfiles
 
 eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 
@@ -80,7 +80,7 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
 
         if name in real_space_funcs:
             r = np.arange(sampling, cutoff, sampling)
-            return LineProfiles(func(r)[None], sampling=sampling, ensemble_axes_metadata=ensemble_axes_metadata)
+            return RealSpaceLineProfiles(func(r)[None], sampling=sampling, ensemble_axes_metadata=ensemble_axes_metadata)
 
         elif name in fourier_space_funcs:
             k = np.arange(0., cutoff, sampling)

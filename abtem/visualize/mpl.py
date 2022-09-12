@@ -12,13 +12,13 @@ from mpl_toolkits.axes_grid1 import ImageGrid, make_axes_locatable
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
 from abtem.core.backend import copy_to_device
-from abtem.measure.indexing import miller_to_miller_bravais, find_equivalent_spots, validate_cell_edges
+from abtem.measurements.indexing import miller_to_miller_bravais, find_equivalent_spots, validate_cell_edges
 from abtem.visualize.complex_plot import get_colors, add_colorbar_arg, add_colorbar_abs
 
 if TYPE_CHECKING:
-    from abtem.measure.measure import (
-        AbstractMeasurement,
-        LineProfiles,
+    from abtem.measurements.core import (
+        Measurement,
+        RealSpaceLineProfiles,
         FourierSpaceLineProfiles,
     )
 
@@ -102,7 +102,7 @@ def add_sizebar(ax, label, **kwargs):
 
 
 def show_measurement_2d_exploded(
-    measurements: "AbstractMeasurement",
+    measurements: "Measurement",
     figsize: Tuple[int, int],
     super_title: Union[str, bool],
     sub_title: bool,
@@ -331,7 +331,7 @@ def add_plot(x: np.ndarray, y: np.ndarray, ax: Axes, label: str = None, **kwargs
 
 
 def show_measurements_1d(
-    measurements: Union["LineProfiles", "FourierSpaceLineProfiles"],
+    measurements: Union["RealSpaceLineProfiles", "FourierSpaceLineProfiles"],
     float_formatting: str,
     extent=None,
     ax: Axes = None,
@@ -390,11 +390,12 @@ def plot_diffraction_pattern(
     spot_scale: float = 1,
     ax: Axes = None,
     figsize=(6, 6),
-    spot_threshold: float = 0.01,
+    spot_threshold: float = 0.02,
     title=None,
     annotate_kwargs=None,
+intensity_split=1.,
 ):
-    from abtem.measure.indexing import map_all_bin_indices_to_miller_indices
+    from abtem.measurements.indexing import map_all_bin_indices_to_miller_indices
     import matplotlib
 
     if annotate_kwargs is None:
@@ -406,9 +407,9 @@ def plot_diffraction_pattern(
     intensities = diffraction_pattern.select_frequency_bin(bins)
     max_intensity = intensities.max()
 
-    include = intensities > max_intensity * spot_threshold
+    #include = intensities > max_intensity * spot_threshold
 
-    bins, hkl, intensities = bins[include], hkl[include], intensities[include]
+    #bins, hkl, intensities = bins[include], hkl[include], intensities[include]
 
     coordinates = bins * diffraction_pattern.sampling
     coordinates = coordinates / coordinates.max()
@@ -440,10 +441,8 @@ def plot_diffraction_pattern(
     )
 
     _, hexagonal = validate_cell_edges(cell)
-    include = find_equivalent_spots(hkl, intensities, hexagonal=hexagonal)
 
-    #label_mode = "all"
-    #label_mode = "quadrant"
+    include = find_equivalent_spots(hkl, intensities, hexagonal=hexagonal, intensity_split=intensity_split)
 
     for i, coordinate in enumerate(coordinates):
         if include[i]:# or label_mode == "all":

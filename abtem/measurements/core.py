@@ -24,7 +24,7 @@ from abtem.core.fft import fft2, fft_interpolate, fft_crop
 from abtem.core.grid import adjusted_gpts
 from abtem.core.interpolate import interpolate_bilinear
 from abtem.core.utils import CopyMixin, EqualityMixin
-from abtem.measure.utils import polar_detector_bins, sum_run_length_encoded
+from abtem.measurements.utils import polar_detector_bins, sum_run_length_encoded
 from abtem.potentials.temperature import validate_seeds
 from abtem.visualize.mpl import show_measurement_2d_exploded, show_measurements_1d
 
@@ -36,7 +36,7 @@ else:
     interpolate_bilinear_cuda = None
 
 if TYPE_CHECKING:
-    from abtem.waves.base import WavesLikeMixin
+    from abtem.waves.core import WavesLikeMixin
 
 T = TypeVar("T", bound="AbstractMeasurement")
 
@@ -84,13 +84,13 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
 
 
 def scanned_measurement_type(
-    measurement: Union["AbstractMeasurement", "WavesLikeMixin"]
-) -> Type["AbstractMeasurement"]:
+    measurement: Union["Measurement", "WavesLikeMixin"]
+) -> Type["Measurement"]:
     if len(measurement.scan_axes) == 0:
         return SinglePointMeasurement
 
     elif len(measurement.scan_axes) == 1:
-        return LineProfiles
+        return RealSpaceLineProfiles
 
     elif len(measurement.scan_axes) == 2:
         return Images
@@ -102,7 +102,7 @@ def scanned_measurement_type(
         )
 
 
-class AbstractMeasurement(
+class Measurement(
     HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABCMeta
 ):
     def __init__(
@@ -225,7 +225,7 @@ class AbstractMeasurement(
         difference._array[valid] /= self.array[valid]
         difference._array[valid == 0] = difference.array.min()
 
-        difference._array *= 100.
+        difference._array *= 100.0
 
         difference.metadata["label"] = "Relative difference"
         difference.metadata["units"] = "%"
@@ -384,12 +384,10 @@ class AbstractMeasurement(
             raise RuntimeError()
 
         axes_base = _to_hyperspy_axes_metadata(
-            self.base_axes_metadata,
-            self.base_shape,
+            self.base_axes_metadata, self.base_shape,
         )
         axes_extra = _to_hyperspy_axes_metadata(
-            self.ensemble_axes_metadata,
-            self.ensemble_shape,
+            self.ensemble_axes_metadata, self.ensemble_shape,
         )
 
         array = np.transpose(
@@ -427,7 +425,7 @@ def interpolate_stack(array, positions, mode, order, **kwargs):
     return output
 
 
-class Images(AbstractMeasurement):
+class Images(Measurement):
     _base_dims = 2
 
     def __init__(
@@ -797,7 +795,7 @@ class Images(AbstractMeasurement):
         width: float = 0.0,
         order: int = 3,
         endpoint: bool = False,
-    ) -> "LineProfiles":
+    ) -> "RealSpaceLineProfiles":
         """
         Interpolate image along a line.
 
@@ -818,7 +816,7 @@ class Images(AbstractMeasurement):
 
         Returns
         -------
-        line_profiles : LineProfiles
+        line_profiles : RealSpaceLineProfiles
         """
 
         from abtem.waves.scan import LineScan
@@ -871,7 +869,7 @@ class Images(AbstractMeasurement):
         if width:
             array = array.mean(-1)
 
-        return LineProfiles(
+        return RealSpaceLineProfiles(
             array=array,
             sampling=scan.sampling,
             ensemble_axes_metadata=self.ensemble_axes_metadata,
@@ -1135,14 +1133,14 @@ class Images(AbstractMeasurement):
         )
 
 
-class SinglePointMeasurement(AbstractMeasurement):
+class SinglePointMeasurement(Measurement):
     _base_dims = 0
 
     def __init__(self, array, ensemble_axes_metadata, metadata):
         super().__init__(array, ensemble_axes_metadata, metadata)
 
 
-class AbstractMeasurement1d(AbstractMeasurement):
+class AbstractMeasurement1d(Measurement):
     _base_dims = 1
 
     def __init__(
@@ -1281,8 +1279,12 @@ class AbstractMeasurement1d(AbstractMeasurement):
         kwargs["sampling"] = sampling
         return self.__class__(**kwargs)
 
+# class LineProfiles(AbstractMeasurement1d):
+#
+#     def __init__(self):
+#         pass
 
-class LineProfiles(AbstractMeasurement1d):
+class RealSpaceLineProfiles(AbstractMeasurement1d):
     def __init__(
         self,
         array: np.ndarray,
@@ -1302,7 +1304,7 @@ class LineProfiles(AbstractMeasurement1d):
     def base_axes_metadata(self) -> List[RealSpaceAxis]:
         return [RealSpaceAxis(label="r", sampling=self.sampling, units="Å")]
 
-    def tile(self, reps: int) -> "LineProfiles":
+    def tile(self, reps: int) -> "RealSpaceLineProfiles":
         kwargs = self.copy_kwargs(exclude=("array",))
         xp = get_array_module(self.array)
         reps = (1,) * (len(self.array.shape) - 1) + (reps,)
@@ -1444,13 +1446,13 @@ def _fourier_space_bilinear_nodes_and_weight(
 
 def _reduced_scanned_images_or_line_profiles(
     new_array, old_measurement
-) -> Union[LineProfiles, Images, np.ndarray]:
-    if scanned_measurement_type(old_measurement) is LineProfiles:
+) -> Union[RealSpaceLineProfiles, Images, np.ndarray]:
+    if scanned_measurement_type(old_measurement) is RealSpaceLineProfiles:
         sampling = old_measurement.ensemble_axes_metadata[-1].sampling
 
         ensemble_axes_metadata = old_measurement.ensemble_axes_metadata[:-1]
 
-        return LineProfiles(
+        return RealSpaceLineProfiles(
             new_array,
             sampling=sampling,
             ensemble_axes_metadata=ensemble_axes_metadata,
@@ -1478,7 +1480,7 @@ def _reduced_scanned_images_or_line_profiles(
         return new_array
 
 
-class DiffractionPatterns(AbstractMeasurement):
+class DiffractionPatterns(Measurement):
     _base_dims = 2
 
     def __init__(
@@ -1637,6 +1639,14 @@ class DiffractionPatterns(AbstractMeasurement):
             limits[1][1] * self.wavelength * 1e3,
         )
         return limits
+
+    @property
+    def coordinates(self) -> Tuple[np.ndarray, np.ndarray]:
+        """Angular coordinates."""
+        return (
+            self.axes_metadata[-2].coordinates(self.base_shape[-2]),
+            self.axes_metadata[-1].coordinates(self.base_shape[-1]),
+        )
 
     @property
     def angular_coordinates(self) -> Tuple[np.ndarray, np.ndarray]:
@@ -1915,20 +1925,11 @@ class DiffractionPatterns(AbstractMeasurement):
 
             new_shape = array.shape[:-2] + (nbins_radial, nbins_azimuthal)
 
-            array = array.reshape(
-                (
-                    -1,
-                    array.shape[-2] * array.shape[-1],
-                )
-            )[..., np.concatenate(indices)]
+            array = array.reshape((-1, array.shape[-2] * array.shape[-1],))[
+                ..., np.concatenate(indices)
+            ]
 
-            result = xp.zeros(
-                (
-                    array.shape[0],
-                    len(indices),
-                ),
-                dtype=xp.float32,
-            )
+            result = xp.zeros((array.shape[0], len(indices),), dtype=xp.float32,)
 
             if xp is cp:
                 sum_run_length_encoded_cuda(array, result, separators)
@@ -1945,15 +1946,8 @@ class DiffractionPatterns(AbstractMeasurement):
                 nbins_azimuthal=nbins_azimuthal,
                 sampling=self.angular_sampling,
                 drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
-                chunks=self.array.chunks[:-2]
-                + (
-                    (nbins_radial,),
-                    (nbins_azimuthal,),
-                ),
-                new_axis=(
-                    len(self.shape) - 2,
-                    len(self.shape) - 1,
-                ),
+                chunks=self.array.chunks[:-2] + ((nbins_radial,), (nbins_azimuthal,),),
+                new_axis=(len(self.shape) - 2, len(self.shape) - 1,),
                 meta=xp.array((), dtype=xp.float32),
             )
         else:
@@ -2083,7 +2077,7 @@ class DiffractionPatterns(AbstractMeasurement):
         com = com_x + 1.0j * com_y
         return com
 
-    def center_of_mass(self) -> Union[Images, LineProfiles]:
+    def center_of_mass(self, units: str = "reciprocal") -> Union[Images, RealSpaceLineProfiles]:
         """
         Calculate center of mass images or line profiles from diffraction patterns. The results are complex type where
         the real and imaginary part represents the x and y component.
@@ -2092,10 +2086,15 @@ class DiffractionPatterns(AbstractMeasurement):
         -------
         com_images : Images
 
-        com_line_profiles : LineProfiles
+        com_line_profiles : RealSpaceLineProfiles
         """
 
-        x, y = self.angular_coordinates
+        if units in angular_units:
+            x, y = self.angular_coordinates
+        elif units in reciprocal_units:
+            x, y = self.coordinates
+        else:
+            raise ValueError()
 
         xp = get_array_module(self.array)
 
@@ -2414,7 +2413,7 @@ class DiffractionPatterns(AbstractMeasurement):
         )
 
 
-class PolarMeasurements(AbstractMeasurement):
+class PolarMeasurements(Measurement):
     _base_dims = 2
 
     def __init__(
@@ -2503,7 +2502,7 @@ class PolarMeasurements(AbstractMeasurement):
 
     def integrate_radial(
         self, inner: float, outer: float
-    ) -> Union[Images, LineProfiles]:
+    ) -> Union[Images, RealSpaceLineProfiles]:
         return self.integrate(radial_limits=(inner, outer))
 
     def integrate(
@@ -2511,7 +2510,7 @@ class PolarMeasurements(AbstractMeasurement):
         radial_limits: Tuple[float, float] = None,
         azimuthal_limits: Tuple[float, float] = None,
         detector_regions: Sequence[int] = None,
-    ) -> Union[Images, LineProfiles]:
+    ) -> Union[Images, RealSpaceLineProfiles]:
 
         if detector_regions is not None:
             if (radial_limits is not None) or (azimuthal_limits is not None):

@@ -340,7 +340,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
         return partial(self._from_partitioned_args_func, **kwargs)
 
     @staticmethod
-    def _frozen_phonons_args(atoms, seeds):
+    def _frozen_phonon(atoms, seeds):
         arr = np.zeros((1,), dtype=object)
         arr.itemset(0, {'atoms': atoms, 'seeds': seeds, 'num_configs': len(seeds)})
         return arr
@@ -359,10 +359,10 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
             if lazy:
                 lazy_atoms = dask.delayed(atoms)
-                lazy_frozen_phonon = dask.delayed(self._frozen_phonons_args)(atoms=lazy_atoms, seeds=seeds)
+                lazy_frozen_phonon = dask.delayed(self._frozen_phonon)(atoms=lazy_atoms, seeds=seeds)
                 array.itemset(i, da.from_delayed(lazy_frozen_phonon, shape=(1,), dtype=object))
             else:
-                array.itemset(i, self._frozen_phonons_args(atoms=atoms, seeds=seeds))
+                array.itemset(i, self._frozen_phonon(atoms=atoms, seeds=seeds))
 
         if lazy:
             array = da.concatenate(list(array))

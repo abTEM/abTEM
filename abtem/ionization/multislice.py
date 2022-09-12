@@ -6,7 +6,7 @@ from ase import Atoms
 from abtem.core.antialias import AntialiasAperture
 from abtem.core.backend import get_array_module, copy_to_device
 from abtem.core.complex import complex_exponential
-from abtem.measure.measure import Images
+from abtem.measurements.core import Images
 from abtem.potentials.potentials import validate_potential
 from abtem.structures.slicing import SliceIndexedAtoms
 from abtem.waves.multislice import FresnelPropagator, multislice_step, allocate_multislice_measurements

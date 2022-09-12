@@ -12,7 +12,6 @@ cupy:
 fftw:
   threads: 1
   planning_effort: FFTW_MEASURE
-mkl:
-  threads: 1
-prism:
-  interpolation-gpts-warning: true
+warnings:
+  prism-interpolation-gpts: true
+  dask-blockwise-performance: false

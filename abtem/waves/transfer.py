@@ -4,10 +4,9 @@ import itertools
 from abc import abstractmethod
 from collections import defaultdict
 from functools import partial, reduce
-from typing import Mapping, Union, TYPE_CHECKING, Dict, List
+from typing import Union, TYPE_CHECKING, Dict, List
 
 import numpy as np
-from matplotlib.axes import Axes
 
 from abtem import stack
 from abtem.core.axes import ParameterAxis, OrdinalAxis, AxisMetadata
@@ -16,8 +15,6 @@ from abtem.core.complex import complex_exponential
 from abtem.core.distributions import Distribution
 from abtem.core.energy import Accelerator, HasAcceleratorMixin, energy2wavelength
 from abtem.core.ensemble import Ensemble, EmptyEnsemble
-from abtem.core.fft import ifft2
-from abtem.core.grid import Grid, polar_spatial_frequencies
 from abtem.core.utils import (
     expand_dims_to_match,
     CopyMixin,
@@ -25,10 +22,10 @@ from abtem.core.utils import (
     dictionary_property,
     delegate_property,
 )
-from abtem.measure.measure import FourierSpaceLineProfiles, DiffractionPatterns, Images
+from abtem.measurements.core import FourierSpaceLineProfiles
 
 if TYPE_CHECKING:
-    from abtem.waves.waves import Waves, WavesLikeMixin
+    from abtem.waves.core import Waves, WavesLikeMixin
 
 #: Symbols for the polar representation of all optical aberrations up to the fifth order.
 polar_symbols = (
@@ -75,6 +72,16 @@ class WaveTransform(Ensemble, EqualityMixin, CopyMixin):
     @property
     def metadata(self):
         return {}
+
+    @property
+    @abstractmethod
+    def ensemble_shape(self):
+        pass
+
+    @property
+    @abstractmethod
+    def ensemble_axes_metadata(self):
+        pass
 
     def __add__(self, other: "WaveTransform") -> "CompositeWaveTransform":
         wave_transforms = []
@@ -468,28 +475,33 @@ class SpatialEnvelope(EnsembleFromDistributionsMixin, AbstractTransfer):
         angular_spread: Union[float, Distribution],
         energy: float = None,
         aberrations: "Aberrations" = None,
+        **kwargs,
     ):
 
         self._angular_spread = angular_spread
 
-        if aberrations is None or isinstance(aberrations, dict):
-            aberrations = Aberrations(parameters=aberrations)
+        if aberrations is None:
+            aberrations = {}
+            aberrations.update(kwargs)
+            aberrations = Aberrations(energy=energy, parameters=aberrations)
+
+        self._aberrations = aberrations
 
         super().__init__(energy=energy)
 
-        self._aberrations = aberrations
+        # self._aberrations = aberrations
         self._aberrations._accelerator = self._accelerator
 
         for symbol in polar_symbols:
             setattr(self.__class__, symbol, delegate_property("_aberrations", symbol))
 
-        self._distributions = ("angular_spread",) + polar_symbols
+        self._distributions = polar_symbols + ("angular_spread",)
 
     @property
     def ensemble_axes_metadata(self) -> List[AxisMetadata]:
-        axes_metadata = []
+        axes_metadata = self.aberrations.ensemble_axes_metadata
         if isinstance(self.angular_spread, Distribution):
-            axes_metadata += [
+            axes_metadata = axes_metadata + [
                 ParameterAxis(
                     label="angular spread",
                     values=tuple(self.angular_spread.values),
@@ -498,7 +510,7 @@ class SpatialEnvelope(EnsembleFromDistributionsMixin, AbstractTransfer):
                 )
             ]
 
-        return axes_metadata + self.aberrations.ensemble_axes_metadata
+        return axes_metadata
 
     @property
     def aberrations(self):
@@ -517,11 +529,11 @@ class SpatialEnvelope(EnsembleFromDistributionsMixin, AbstractTransfer):
     ) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
 
-        args = (self.angular_spread,) + tuple(self.aberrations.parameters.values())
+        args = tuple(self.aberrations.parameters.values()) + (self.angular_spread,)
 
         unpacked, _ = unpack_distributions(*args, shape=alpha.shape, xp=xp)
-        angular_spread = unpacked[0] / 1e3
-        parameters = dict(zip(polar_symbols, unpacked[1:]))
+        angular_spread = unpacked[-1] / 1e3
+        parameters = dict(zip(polar_symbols, unpacked[:-1]))
 
         alpha = xp.array(alpha)
         alpha = xp.expand_dims(alpha, axis=tuple(range(0, self._num_ensemble_axes)))
@@ -632,7 +644,7 @@ class Aberrations(EnsembleFromDistributionsMixin, AbstractTransfer):
         self,
         energy: float = None,
         parameters: Dict[str, Union[float, Distribution]] = None,
-        **kwargs
+        **kwargs,
     ):
 
         for key in kwargs.keys():
@@ -822,7 +834,7 @@ class CTF(EnsembleFromDistributionsMixin, AbstractAperture):
         focal_spread: float = 0.0,
         angular_spread: float = 0.0,
         aberrations: Union[dict, Aberrations] = None,
-        **kwargs
+        **kwargs,
     ):
 
         """
@@ -886,19 +898,16 @@ class CTF(EnsembleFromDistributionsMixin, AbstractAperture):
         self._spatial_envelope._accelerator = self._accelerator
         self._temporal_envelope._accelerator = self._accelerator
 
-        self._distributions = (
-            "semiangle_cutoff",
-            "focal_spread",
+        self._distributions = polar_symbols + (
             "angular_spread",
-        ) + polar_symbols
+            "focal_spread",
+            "semiangle_cutoff",
+        )
 
         setattr(
             self.__class__,
-            "semiangle_cutoff",
-            delegate_property("_aperture", "semiangle_cutoff"),
-        )
-        setattr(
-            self.__class__, "taper", delegate_property("_aperture", "taper"),
+            "angular_spread",
+            delegate_property("_spatial_envelope", "angular_spread"),
         )
         setattr(
             self.__class__,
@@ -907,8 +916,11 @@ class CTF(EnsembleFromDistributionsMixin, AbstractAperture):
         )
         setattr(
             self.__class__,
-            "angular_spread",
-            delegate_property("_spatial_envelope", "angular_spread"),
+            "semiangle_cutoff",
+            delegate_property("_aperture", "semiangle_cutoff"),
+        )
+        setattr(
+            self.__class__, "taper", delegate_property("_aperture", "taper"),
         )
 
         for symbol in polar_symbols:
@@ -953,9 +965,9 @@ class CTF(EnsembleFromDistributionsMixin, AbstractAperture):
     @property
     def ensemble_axes_metadata(self):
         return (
-            self.aperture.ensemble_axes_metadata
-            + self.spatial_envelope.ensemble_axes_metadata
+            self.spatial_envelope.ensemble_axes_metadata
             + self.temporal_envelope.ensemble_axes_metadata
+            + self.aperture.ensemble_axes_metadata
         )
 
     # @property
@@ -1014,6 +1026,8 @@ class CTF(EnsembleFromDistributionsMixin, AbstractAperture):
             array, new_array = expand_dims_to_match(
                 array, new_array, match_dims=[old_match_dims, new_match_dims]
             )
+            # print(new_match_dims, old_match_dims)
+            # print(array.shape, new_array.shape, self.spatial_envelope.ensemble_shape)
             array = array * new_array
 
         if self.temporal_envelope.focal_spread != 0.0:

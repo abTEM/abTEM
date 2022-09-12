@@ -56,7 +56,10 @@ class DistributionFromValues(Distribution):
 
     @property
     def dimensions(self):
-        return self.shape[1]
+        if len(self.shape) > 1:
+            return self.shape[1]
+
+        return 1
 
     @property
     def shape(self):

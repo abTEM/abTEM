@@ -20,7 +20,7 @@ from abtem.core.grid import HasGridMixin, Grid, polar_spatial_frequencies
 from abtem.core.electron_configurations import electron_configurations
 from abtem.ionization.utils import check_valid_quantum_number, config_str_to_config_tuples, \
     remove_electron_from_config_str
-from abtem.measure.measure import Images
+from abtem.measurements.core import Images
 from abtem.core.utils import generate_chunks
 from abtem.potentials.potentials import AbstractPotential
 

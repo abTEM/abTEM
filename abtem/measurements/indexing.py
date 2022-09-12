@@ -216,13 +216,13 @@ def split_at_threshold(values, threshold):
     return np.cumsum(split)[np.argsort(order)]
 
 
-def find_equivalent_spots(hkl, intensities, threshold=0.01, hexagonal: bool = True):
+def find_equivalent_spots(hkl, intensities, intensity_split=1.0, hexagonal: bool = True):
 
     labels = equivalent_miller_indices(hkl, hexagonal)
 
     spots = np.zeros(len(hkl), dtype=bool)
     for indices in label_to_index(labels):
-        sub_labels = split_at_threshold(intensities[indices], threshold)
+        sub_labels = split_at_threshold(intensities[indices], intensity_split)
         for sub_indices in label_to_index(sub_labels):
             order = np.lexsort(np.rot90(hkl[indices][sub_indices]))
             spots[indices[sub_indices[order][-1]]] = True
@@ -236,6 +236,7 @@ def tabulate_diffraction_pattern(
     return_data_frame: bool = False,
     normalize: bool = True,
     spot_threshold: float = 0.01,
+    intensity_split=1.0,
 ):
     # if len(diffraction_pattern.ensemble_shape) > 0:
     # raise NotImplementedError("tabulating not implemented for ensembles, select a single pattern by indexing")
@@ -247,7 +248,7 @@ def tabulate_diffraction_pattern(
     intensities = diffraction_pattern.select_frequency_bin(bins)
 
     _, hexagonal = validate_cell_edges(cell)
-    include = find_equivalent_spots(hkl, intensities=intensities, hexagonal=hexagonal)
+    include = find_equivalent_spots(hkl, intensities=intensities, hexagonal=hexagonal, intensity_split=intensity_split)
     hkl, bins, intensities = hkl[include], bins[include], intensities[include]
 
     if hexagonal:

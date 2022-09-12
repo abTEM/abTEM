@@ -22,7 +22,7 @@ from abtem.potentials.potentials import AbstractPotential
 from abtem.waves.transfer import WaveTransform
 
 if TYPE_CHECKING:
-    from abtem.waves.waves import Waves
+    from abtem.waves.core import Waves
 
 
 def validate_scan(scan, probe=None):

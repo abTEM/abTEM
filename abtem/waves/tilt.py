@@ -12,7 +12,7 @@ from abtem.waves.transfer import (
 )
 
 if TYPE_CHECKING:
-    from abtem.waves.waves import Waves
+    from abtem.waves.core import Waves
 
 
 def validate_tilt(tilt):

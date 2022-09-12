@@ -11,18 +11,19 @@ from abtem.core.events import Events, watch, HasEventsMixin
 from abtem.core.fft import fft2_convolve
 from abtem.core.grid import spatial_frequencies, HasGridMixin, Grid
 from abtem.core.utils import expand_dims_to_match
-from abtem.measure.detect import AbstractDetector
-from abtem.measure.measure import AbstractMeasurement
+from abtem.measurements.detectors import Detector
+from abtem.measurements.core import Measurement
 from abtem.potentials.potentials import (
     AbstractPotential,
     TransmissionFunction,
     PotentialArray,
 )
 from abtem.structures.transform import plane_to_axes
-from abtem.waves.base import WavesLikeMixin
+
 
 if TYPE_CHECKING:
-    from abtem.waves.waves import Waves
+    from abtem.waves.core import Waves
+    from abtem.waves.core import WavesLikeMixin
 
 
 def fresnel_propagator(
@@ -148,10 +149,10 @@ class FresnelPropagator:
 
 def allocate_multislice_measurements(
     waves: "WavesLikeMixin",
-    detectors: List[AbstractDetector],
+    detectors: List[Detector],
     extra_ensemble_axes_shape: Tuple[int, ...] = None,
     extra_ensemble_axes_metadata: List[AxisMetadata] = None,
-) -> Dict[AbstractDetector, AbstractMeasurement]:
+) -> Dict[Detector, Measurement]:
     measurements = {}
     for detector in detectors:
         xp = get_array_module(detector.measurement_meta(waves))
@@ -240,11 +241,11 @@ def multislice_step(
 def multislice_and_detect(
     waves: "Waves",
     potential: AbstractPotential,
-    detectors: List[AbstractDetector],
+    detectors: List[Detector],
     conjugate: bool = False,
     transpose: bool = False,
 ) -> Union[
-    Tuple[Union[AbstractMeasurement, "Waves"], ...], AbstractMeasurement, "Waves"
+    Tuple[Union[Measurement, "Waves"], ...], Measurement, "Waves"
 ]:
     """
     Run the multislice algorithm given a batch of wave functions and a potential.
@@ -257,7 +258,7 @@ def multislice_and_detect(
         A potential as `abtem.potentials.AbstractPotential`.
     detectors : detector, list of detectors, optional
         A detector or a list of detectors defining how the wave functions should be converted to measurements after
-        running the multislice algorithm. See abtem.measure.detect for a list of implemented detectors.
+        running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.
     conjugate : bool, optional
         If True, use the conjugate of the transmission function. Default is False.
     transpose : bool, optional
