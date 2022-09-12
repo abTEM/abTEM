@@ -169,7 +169,7 @@ def show_measurement_2d_exploded(
     )
 
     if axes is None:
-        fig = plt.figure(1, figsize)
+        fig = plt.figure(1, figsize, clear=True)
 
         if "axes_pad" not in image_grid_kwargs:
             if sub_title:
@@ -180,8 +180,8 @@ def show_measurement_2d_exploded(
 
         axes = ImageGrid(fig, 111, nrows_ncols=(nrows, ncols), **image_grid_kwargs,)
     elif isinstance(axes, Axes):
+        fig = axes.get_figure()
         axes = [axes]
-        fig = None
 
     if x_label is True:
         x_label = measurements.base_axes_metadata[-2].format_label()
@@ -259,8 +259,6 @@ def show_measurement_2d_exploded(
                 cbar_label = cbar_labels
 
             if np.iscomplexobj(array):
-                from cplot._main import _add_colorbar_arg, _add_colorbar_abs
-
                 divider = make_axes_locatable(ax)
                 cax1 = divider.append_axes("right", size="5%", pad=0.2)
                 cax2 = divider.append_axes("right", size="5%", pad=0.4)
