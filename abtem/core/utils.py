@@ -1,6 +1,7 @@
 """Module for various convenient utilities."""
 import copy
 import inspect
+import warnings
 from typing import Tuple
 
 import numpy as np
@@ -55,10 +56,14 @@ def safe_equality(a, b, exclude=()):
         except (KeyError, TypeError):
             return False
 
-        try:
-            equal = np.allclose(value, b.__dict__[key])
-        except (ValueError, TypeError):
-            pass
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', r'Creating an ndarray from nested sequences')
+            # TODO: properly handle this warning
+
+            try:
+                equal = np.allclose(value, b.__dict__[key])
+            except (ValueError, TypeError):
+                pass
 
         if equal is False:
             return False

@@ -12,7 +12,11 @@ from mpl_toolkits.axes_grid1 import ImageGrid, make_axes_locatable
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
 from abtem.core.backend import copy_to_device
-from abtem.measurements.indexing import miller_to_miller_bravais, find_equivalent_spots, validate_cell_edges
+from abtem.measurements.indexing import (
+    miller_to_miller_bravais,
+    find_equivalent_spots,
+    validate_cell_edges,
+)
 from abtem.visualize.complex_plot import get_colors, add_colorbar_arg, add_colorbar_abs
 
 if TYPE_CHECKING:
@@ -270,8 +274,8 @@ def show_measurement_2d_exploded(
 
                 add_colorbar_abs(cax2, vmin, vmax)
 
-                #_add_colorbar_abs(cax2, domain_coloring_kwargs["abs_scaling"], 10)
-                #_add_colorbar_arg(cax1, domain_coloring_kwargs["saturation_adjustment"])
+                # _add_colorbar_abs(cax2, domain_coloring_kwargs["abs_scaling"], 10)
+                # _add_colorbar_arg(cax1, domain_coloring_kwargs["saturation_adjustment"])
 
                 #
                 # vmax = np.abs(measurement.array).max() if vmax is None else vmax
@@ -391,7 +395,7 @@ def plot_diffraction_pattern(
     spot_threshold: float = 0.02,
     title=None,
     annotate_kwargs=None,
-intensity_split=1.,
+    intensity_split: float = 1.0,
 ):
     from abtem.measurements.indexing import map_all_bin_indices_to_miller_indices
     import matplotlib
@@ -405,9 +409,9 @@ intensity_split=1.,
     intensities = diffraction_pattern.select_frequency_bin(bins)
     max_intensity = intensities.max()
 
-    #include = intensities > max_intensity * spot_threshold
+    # include = intensities > max_intensity * spot_threshold
 
-    #bins, hkl, intensities = bins[include], hkl[include], intensities[include]
+    # bins, hkl, intensities = bins[include], hkl[include], intensities[include]
 
     coordinates = bins * diffraction_pattern.sampling
     coordinates = coordinates / coordinates.max()
@@ -440,15 +444,18 @@ intensity_split=1.,
 
     _, hexagonal = validate_cell_edges(cell)
 
-    include = find_equivalent_spots(hkl, intensities, hexagonal=hexagonal, intensity_split=intensity_split)
+    include = find_equivalent_spots(
+        hkl, intensities, hexagonal=hexagonal, intensity_split=intensity_split
+    )
+
+    spot_threshold
 
     for i, coordinate in enumerate(coordinates):
-        if include[i]:# or label_mode == "all":
+        if include[i]:  # or label_mode == "all":
             if hexagonal:
                 spot = miller_to_miller_bravais(hkl[i][None])[0]
             else:
                 spot = hkl[i]
-
 
             t = ax.annotate(
                 "".join(map(str, list(spot))),
