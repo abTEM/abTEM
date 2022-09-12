@@ -45,7 +45,6 @@ def superpose_deltas(positions: np.ndarray, array: np.ndarray, slice_index=None,
         if device_name_from_array_module(xp) == 'cpu':
             xp.add.at(array, (i, j), v)
         else:
-            print(array.dtype, v.dtype, i.dtype)
             cupyx.scatter_add(array, (i, j), v)
     else:
         raise NotImplementedError
