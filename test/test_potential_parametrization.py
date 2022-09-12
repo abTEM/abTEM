@@ -11,7 +11,7 @@ from utils import array_is_close
 
 try:
     from gpaw import GPAW
-    from abtem.potentials.gpaw import GPAWParametrization
+    from abtem.potentials.gpaw.parametrization import GPAWParametrization
 except ImportError:
     pass
 

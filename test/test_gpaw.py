@@ -89,7 +89,7 @@ def test_gpaw_vs_iam(gpaw_calculator_no_bonding):
     gpaw_potential -= gpaw_potential.min()
 
     iam_potential = Potential(gpaw_calculator_no_bonding.atoms, gpts=gpaw_potential.shape,
-                              integral_space='real', projection='finite').build().project().array
+                              projection='finite').build().project().array
 
     iam_potential -= iam_potential.min()
     assert np.allclose(iam_potential, gpaw_potential, rtol=1e-3, atol=5)

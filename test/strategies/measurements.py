@@ -6,7 +6,7 @@ from hypothesis.extra import numpy as numpy_strats
 
 from abtem.core.axes import ScanAxis
 from abtem.core.backend import get_array_module
-from abtem.measure.measure import Images, DiffractionPatterns, LineProfiles, PolarMeasurements
+from abtem.measurements.core import Images, DiffractionPatterns, RealSpaceLineProfiles, PolarMeasurements
 from . import core as core_st
 
 
@@ -70,7 +70,7 @@ def line_profiles(draw, lazy=False, device='cpu', min_value=0., min_base_side=1)
 
     array = core_st.random_array(shape, chunks=chunks, device=device, min_value=min_value)
 
-    return LineProfiles(array=array, sampling=sampling, ensemble_axes_metadata=axes, metadata=metadata)
+    return RealSpaceLineProfiles(array=array, sampling=sampling, ensemble_axes_metadata=axes, metadata=metadata)
 
 
 @st.composite

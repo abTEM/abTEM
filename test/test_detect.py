@@ -4,9 +4,9 @@ import pytest
 from hypothesis import given, assume
 
 import strategies as abtem_st
-from abtem import LineProfiles, Images
-from abtem.measure.detect import AnnularDetector, FlexibleAnnularDetector, PixelatedDetector
-from abtem.waves.waves import Probe
+from abtem import RealSpaceLineProfiles, Images
+from abtem.measurements.detectors import AnnularDetector, FlexibleAnnularDetector, PixelatedDetector
+from abtem.waves.core import Probe
 from utils import gpu
 
 
@@ -31,7 +31,9 @@ def test_detect(data, detector, lazy, device):
     assert measurement.dtype == detector.measurement_dtype
     assert measurement.base_shape == detector.measurement_shape(waves)
     assert type(measurement) == detector.measurement_type(waves)
+    print(measurement.base_axes_metadata[0] == detector.measurement_axes_metadata(waves)[0])
     assert measurement.base_axes_metadata == detector.measurement_axes_metadata(waves)
+
 
     if detector.to_cpu:
         assert measurement.device == 'cpu'
@@ -58,7 +60,7 @@ def test_annular_detector(data, lazy, device):
     assert measurement.base_shape == waves.scan_shape[-2:]
 
     if len(waves.scan_axes) == 1:
-        assert type(measurement) == LineProfiles
+        assert type(measurement) == RealSpaceLineProfiles
     elif len(waves.scan_axes) > 1:
         assert type(measurement) == Images
 

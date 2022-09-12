@@ -2,7 +2,7 @@ import numpy as np
 from ase import Atoms
 
 from abtem.potentials.potentials import Potential
-from abtem.waves.waves import PlaneWave
+from abtem.waves.core import PlaneWave
 import pytest
 
 

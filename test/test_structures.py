@@ -7,7 +7,7 @@ from ase.data import chemical_symbols
 from ase.data import reference_states
 from hypothesis import given
 
-from abtem.structures.structures import orthogonalize_cell, shrink_cell, merge_close_atoms, cut_box
+from abtem.structures.transform import orthogonalize_cell, shrink_cell, merge_close_atoms, cut_box
 
 
 def fcc(orthogonal=False):

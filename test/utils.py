@@ -8,7 +8,7 @@ from hypothesis import assume
 from abtem.core.backend import get_array_module, cp
 from abtem.potentials.potentials import Potential
 from abtem.potentials.temperature import AbstractFrozenPhonons
-from abtem.waves.waves import Waves
+from abtem.waves.core import Waves
 
 
 def assert_array_matches_device(array, device):

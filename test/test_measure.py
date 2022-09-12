@@ -6,8 +6,8 @@ from hypothesis.strategies import composite
 
 import strategies as abtem_st
 from abtem.core.axes import ScanAxis, OrdinalAxis
-from abtem.measure.measure import Images, DiffractionPatterns, LineProfiles
-from abtem.waves.waves import Probe
+from abtem.measurements.core import Images, DiffractionPatterns, RealSpaceLineProfiles
+from abtem.waves.core import Probe
 from utils import ensure_is_tuple, gpu, array_is_close
 
 
@@ -17,7 +17,7 @@ def test_scanned_measurement_type():
     ensemble_axes_metadata = [ScanAxis(), OrdinalAxis(values=(1,) * 10), ScanAxis()]
     measurement = DiffractionPatterns(array, sampling=.1, ensemble_axes_metadata=ensemble_axes_metadata,
                                       metadata={'energy': 100e3})
-    assert isinstance(measurement.integrate_radial(inner=0, outer=10), LineProfiles)
+    assert isinstance(measurement.integrate_radial(inner=0, outer=10), RealSpaceLineProfiles)
 
     ensemble_axes_metadata = [OrdinalAxis(values=(1,) * 10), ScanAxis(), ScanAxis()]
     measurement = DiffractionPatterns(array, sampling=.1, ensemble_axes_metadata=ensemble_axes_metadata,

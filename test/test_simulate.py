@@ -4,7 +4,7 @@ import pytest
 from hypothesis import given, reproduce_failure
 
 from abtem import PixelatedDetector, AnnularDetector
-from abtem.waves.waves import Probe, PlaneWave
+from abtem.waves.core import Probe, PlaneWave
 from abtem.waves.scan import CustomScan, LineScan, GridScan
 from abtem.potentials.potentials import Potential
 
@@ -64,7 +64,6 @@ def test_multislice_detect_with_frozen_phonons(data, waves_builder, device, ense
     frozen_phonons = data.draw(abtem_st.frozen_phonons(ensemble_mean=ensemble_mean))
 
     detector = PixelatedDetector(max_angle=None)
-
     exit_waves = waves.multislice(frozen_phonons, detectors=detector, lazy=lazy)
 
     if ensemble_mean:

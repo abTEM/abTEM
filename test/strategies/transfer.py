@@ -39,7 +39,6 @@ def aberrations(draw, allow_distribution=True):
 @st.composite
 def aperture(draw, allow_distribution=True):
     semiangle_cutoff = draw(parameter(min_value=5, max_value=20, allow_distribution=allow_distribution))
-    normalize = draw(st.booleans())
     energy = draw(core_st.energy())
     taper = draw(st.floats(min_value=0., max_value=1.))
     return Aperture(semiangle_cutoff=semiangle_cutoff, energy=energy, taper=taper)
@@ -48,9 +47,8 @@ def aperture(draw, allow_distribution=True):
 @st.composite
 def temporal_envelope(draw, allow_distribution=True):
     focal_spread = draw(parameter(min_value=5, max_value=20, allow_distribution=allow_distribution))
-    normalize = draw(st.booleans())
     energy = draw(core_st.energy())
-    return TemporalEnvelope(focal_spread=focal_spread, energy=energy, normalize=normalize)
+    return TemporalEnvelope(focal_spread=focal_spread, energy=energy)
 
 
 @st.composite
@@ -58,7 +56,6 @@ def spatial_envelope(draw, allow_distribution=True):
     return SpatialEnvelope(
         angular_spread=draw(parameter(min_value=5, max_value=20, allow_distribution=allow_distribution)),
         energy=draw(core_st.energy()),
-        normalize=draw(st.booleans()),
         aberrations=draw(aberrations()))
 
 

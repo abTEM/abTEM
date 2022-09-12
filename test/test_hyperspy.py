@@ -6,6 +6,10 @@ from hypothesis import given
 
 import strategies as abtem_st
 from utils import gpu
+try:
+    import hyperspy
+except ImportError:
+    hyperspy = None
 
 
 @given(data=st.data())
@@ -17,7 +21,7 @@ from utils import gpu
     abtem_st.diffraction_patterns,
     abtem_st.polar_measurements
 ])
-@pytest.mark.skipif('hyperspy' not in sys.modules, reason="requires gpaw")
+@pytest.mark.skipif('hyperspy' not in sys.modules, reason="requires hyperspy")
 def test_hyperspy(data, measurement, lazy, device):
     measurement = data.draw(measurement(lazy=lazy, device=device))
     hyperspy_signal = measurement.to_hyperspy()

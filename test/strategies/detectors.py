@@ -1,7 +1,7 @@
 import hypothesis.strategies as st
 import numpy as np
 
-from abtem.measure.detect import AnnularDetector, FlexibleAnnularDetector, SegmentedDetector, PixelatedDetector, \
+from abtem.measurements.detectors import AnnularDetector, FlexibleAnnularDetector, SegmentedDetector, PixelatedDetector, \
     WavesDetector
 from . import core as core_st
 
