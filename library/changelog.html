@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,6 +34,7 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
     <script src="../_static/clipboard.min.js"></script>
     <script src="../_static/copybutton.js"></script>
@@ -52,9 +53,9 @@ const thebe_selector_output = ".output, .cell_output"
     <script async="async" src="../_static/sphinx-thebe.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="prev" title="Contributing" href="contributing.html" />
+    <link rel="prev" title="Bibliography" href="bibliography.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -187,7 +188,7 @@ const thebe_selector_output = ".output, .cell_output"
    </li>
    <li class="toctree-l2">
     <a class="reference internal" href="../user_guide/walkthrough/performance.html">
-     Performance, parallelization and GPUs
+     Parallelization, Dask and GPUs
     </a>
    </li>
    <li class="toctree-l2">
@@ -282,8 +283,8 @@ const thebe_selector_output = ".output, .cell_output"
 </p>
 <ul class="current nav bd-sidenav">
  <li class="toctree-l1 has-children">
-  <a class="reference internal" href="api.html">
-   API Reference
+  <a class="reference internal" href="api/api.html">
+   API
   </a>
   <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
   <label for="toctree-checkbox-4">
@@ -291,21 +292,75 @@ const thebe_selector_output = ".output, .cell_output"
    </i>
   </label>
   <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="_autosummary/abtem.waves.waves.Probe.html">
-     abtem.waves.waves.Probe
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="api/waves.html">
+     waves
     </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
+    <label for="toctree-checkbox-5">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="api/_autosummary/abtem.waves.core.Probe.html">
+       Probe
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="api/_autosummary/abtem.waves.core.PlaneWave.html">
+       PlaneWave
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="api/_autosummary/abtem.waves.core.Waves.html">
+       Waves
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="api/_autosummary/abtem.waves.transfer.WaveTransform.html">
+       WaveTransform
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="api/measure.html">
+     measurements
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/>
+    <label for="toctree-checkbox-6">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="api/_autosummary/abtem.measurements.core.Measurement.html">
+       Measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="api/_autosummary/abtem.measurements.detectors.Detector.html">
+       Detector
+      </a>
+     </li>
+    </ul>
    </li>
   </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="bibliography.html">
-   Bibliography
+  <a class="reference internal" href="config.html">
+   Configuration
   </a>
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="contributing.html">
    Contributing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="bibliography.html">
+   Bibliography
   </a>
  </li>
  <li class="toctree-l1 current active">
@@ -493,7 +548,7 @@ title="Print to PDF"
               <div>
                 
   <section class="tex2jax_ignore mathjax_ignore" id="changelog">
-<h1>Changelog<a class="headerlink" href="#changelog" title="Permalink to this headline">#</a></h1>
+<h1>Changelog<a class="headerlink" href="#changelog" title="Permalink to this heading">#</a></h1>
 </section>
 
     <script type="text/x-thebe-config">
@@ -523,11 +578,11 @@ title="Print to PDF"
                 
     <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="contributing.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="bibliography.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Contributing</p>
+            <p class="prev-next-title">Bibliography</p>
         </div>
     </a>
 </div>

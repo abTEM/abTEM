@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,6 +34,7 @@
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
     <script src="../_static/jquery.js"></script>
     <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../_static/doctools.js"></script>
     <script src="../_static/clipboard.min.js"></script>
     <script src="../_static/copybutton.js"></script>
@@ -55,7 +56,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Walkthrough" href="../user_guide/walkthrough/walkthrough.html" />
     <link rel="prev" title="Installation" href="install.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -188,7 +189,7 @@ const thebe_selector_output = ".output, .cell_output"
    </li>
    <li class="toctree-l2">
     <a class="reference internal" href="../user_guide/walkthrough/performance.html">
-     Performance, parallelization and GPUs
+     Parallelization, Dask and GPUs
     </a>
    </li>
    <li class="toctree-l2">
@@ -283,8 +284,8 @@ const thebe_selector_output = ".output, .cell_output"
 </p>
 <ul class="nav bd-sidenav">
  <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../library/api.html">
-   API Reference
+  <a class="reference internal" href="../library/api/api.html">
+   API
   </a>
   <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
   <label for="toctree-checkbox-4">
@@ -292,21 +293,75 @@ const thebe_selector_output = ".output, .cell_output"
    </i>
   </label>
   <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../library/_autosummary/abtem.waves.waves.Probe.html">
-     abtem.waves.waves.Probe
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../library/api/waves.html">
+     waves
     </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
+    <label for="toctree-checkbox-5">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../library/api/_autosummary/abtem.waves.core.Probe.html">
+       Probe
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../library/api/_autosummary/abtem.waves.core.PlaneWave.html">
+       PlaneWave
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../library/api/_autosummary/abtem.waves.core.Waves.html">
+       Waves
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../library/api/_autosummary/abtem.waves.transfer.WaveTransform.html">
+       WaveTransform
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../library/api/measure.html">
+     measurements
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/>
+    <label for="toctree-checkbox-6">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../library/api/_autosummary/abtem.measurements.core.Measurement.html">
+       Measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../library/api/_autosummary/abtem.measurements.detectors.Detector.html">
+       Detector
+      </a>
+     </li>
+    </ul>
    </li>
   </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library/bibliography.html">
-   Bibliography
+  <a class="reference internal" href="../library/config.html">
+   Configuration
   </a>
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../library/contributing.html">
    Contributing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library/bibliography.html">
+   Bibliography
   </a>
  </li>
  <li class="toctree-l1">
@@ -571,9 +626,9 @@ title="Print to PDF"
               <div>
                 
   <section class="tex2jax_ignore mathjax_ignore" id="the-basics">
-<h1>The basics<a class="headerlink" href="#the-basics" title="Permalink to this headline">#</a></h1>
+<h1>The basics<a class="headerlink" href="#the-basics" title="Permalink to this heading">#</a></h1>
 <section id="the-objects">
-<h2>The objects<a class="headerlink" href="#the-objects" title="Permalink to this headline">#</a></h2>
+<h2>The objects<a class="headerlink" href="#the-objects" title="Permalink to this heading">#</a></h2>
 <div class="sd-container-fluid sd-sphinx-override sd-mb-4 docutils">
 <div class="sd-row docutils">
 <div class="sd-col sd-d-flex-column sd-col-4 sd-col-xs-4 sd-col-sm-4 sd-col-md-4 sd-col-lg-4 sd-border-1 docutils">
@@ -633,16 +688,16 @@ title="Print to PDF"
 </div>
 </section>
 <section id="mixing-and-matching">
-<h2>Mixing and matching<a class="headerlink" href="#mixing-and-matching" title="Permalink to this headline">#</a></h2>
+<h2>Mixing and matching<a class="headerlink" href="#mixing-and-matching" title="Permalink to this heading">#</a></h2>
 </section>
 <section id="ensembles">
-<h2>Ensembles<a class="headerlink" href="#ensembles" title="Permalink to this headline">#</a></h2>
+<h2>Ensembles<a class="headerlink" href="#ensembles" title="Permalink to this heading">#</a></h2>
 </section>
 <section id="interoperating">
-<h2>Interoperating<a class="headerlink" href="#interoperating" title="Permalink to this headline">#</a></h2>
+<h2>Interoperating<a class="headerlink" href="#interoperating" title="Permalink to this heading">#</a></h2>
 </section>
 <section id="where-to-go-from-here">
-<h2>Where to go from here?<a class="headerlink" href="#where-to-go-from-here" title="Permalink to this headline">#</a></h2>
+<h2>Where to go from here?<a class="headerlink" href="#where-to-go-from-here" title="Permalink to this heading">#</a></h2>
 </section>
 </section>
 

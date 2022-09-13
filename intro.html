@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,6 +34,7 @@
     <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
     <script src="_static/jquery.js"></script>
     <script src="_static/underscore.js"></script>
+    <script src="_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="_static/doctools.js"></script>
     <script src="_static/clipboard.min.js"></script>
     <script src="_static/copybutton.js"></script>
@@ -54,7 +55,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="search" title="Search" href="search.html" />
     <link rel="next" title="Overview" href="getting_started/overview.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -186,8 +187,16 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="user_guide/walkthrough/performance.html">
-     Performance, parallelization and GPUs
+    <a class="reference internal" href="user_guide/walkthrough/charge_density.html">
+     <em>
+      ab initio
+     </em>
+     potentials with GPAW
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="user_guide/walkthrough/partial_coherence.html">
+     Partial coherence
     </a>
    </li>
    <li class="toctree-l2">
@@ -196,11 +205,8 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="user_guide/walkthrough/charge_density.html">
-     <em>
-      ab initio
-     </em>
-     potentials with GPAW
+    <a class="reference internal" href="user_guide/walkthrough/performance.html">
+     Parallelization, Dask and GPUs
     </a>
    </li>
   </ul>
@@ -282,8 +288,8 @@ const thebe_selector_output = ".output, .cell_output"
 </p>
 <ul class="nav bd-sidenav">
  <li class="toctree-l1 has-children">
-  <a class="reference internal" href="library/api.html">
-   API Reference
+  <a class="reference internal" href="library/api/api.html">
+   API
   </a>
   <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
   <label for="toctree-checkbox-4">
@@ -291,21 +297,75 @@ const thebe_selector_output = ".output, .cell_output"
    </i>
   </label>
   <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="library/_autosummary/abtem.waves.waves.Probe.html">
-     abtem.waves.waves.Probe
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="library/api/waves.html">
+     waves
     </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
+    <label for="toctree-checkbox-5">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="library/api/_autosummary/abtem.waves.core.Probe.html">
+       Probe
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="library/api/_autosummary/abtem.waves.core.PlaneWave.html">
+       PlaneWave
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="library/api/_autosummary/abtem.waves.core.Waves.html">
+       Waves
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="library/api/_autosummary/abtem.waves.transfer.WaveTransform.html">
+       WaveTransform
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="library/api/measure.html">
+     measurements
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/>
+    <label for="toctree-checkbox-6">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="library/api/_autosummary/abtem.measurements.core.Measurement.html">
+       Measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="library/api/_autosummary/abtem.measurements.detectors.Detector.html">
+       Detector
+      </a>
+     </li>
+    </ul>
    </li>
   </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="library/bibliography.html">
-   Bibliography
+  <a class="reference internal" href="library/config.html">
+   Configuration
   </a>
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="library/contributing.html">
    Contributing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="library/bibliography.html">
+   Bibliography
   </a>
  </li>
  <li class="toctree-l1">
@@ -493,7 +553,7 @@ title="Print to PDF"
               <div>
                 
   <section class="tex2jax_ignore mathjax_ignore" id="welcome-to-abtem">
-<h1>Welcome to abTEM<a class="headerlink" href="#welcome-to-abtem" title="Permalink to this headline">#</a></h1>
+<h1>Welcome to abTEM<a class="headerlink" href="#welcome-to-abtem" title="Permalink to this heading">#</a></h1>
 <p>abTEM - ab initio Transmission Electron Microscopy in Python</p>
 <p>abTEM is a flexible open-source package for simulating Transmission Electron Microscopy experiments. The Python API
 allows for easy integration with other simulation codes and analysis tools accessible from Python, while utilization of
@@ -535,7 +595,7 @@ or reproducing publication results.</p>
 <p class="sd-card-text">The reference guide contains a detailed description of the <em>abTEM</em> API. The reference describes how the methods work and
 which parameters can be used. It assumes that you have an understanding of the key concepts.</p>
 </div>
-<a class="sd-stretched-link reference internal" href="library/api.html#api-reference"><span class="std std-ref"></span></a></div>
+<span class="sd-stretched-link"></span></div>
 </div>
 </div>
 </div>

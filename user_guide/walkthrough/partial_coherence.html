@@ -1,12 +1,12 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
 
-    <title>Partial coherence with plane waves &#8212; abTEM Documentation</title>
+    <title>Partial coherence &#8212; abTEM Documentation</title>
     
   <!-- Loaded before other Sphinx assets -->
   <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -34,6 +34,7 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
@@ -52,8 +53,10 @@ const thebe_selector_output = ".output, .cell_output"
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="PRISM" href="prism.html" />
+    <link rel="prev" title="ab initio potentials with GPAW" href="charge_density.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -138,17 +141,17 @@ const thebe_selector_output = ".output, .cell_output"
   User guide
  </span>
 </p>
-<ul class="nav bd-sidenav">
- <li class="toctree-l1 has-children">
+<ul class="current nav bd-sidenav">
+ <li class="toctree-l1 current active has-children">
   <a class="reference internal" href="walkthrough.html">
    Walkthrough
   </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
+  <input checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
   <label for="toctree-checkbox-1">
    <i class="fas fa-chevron-down">
    </i>
   </label>
-  <ul>
+  <ul class="current">
    <li class="toctree-l2">
     <a class="reference internal" href="atomic_models.html">
      Atomic models with ASE
@@ -185,8 +188,16 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="performance.html">
-     Performance, parallelization and GPUs
+    <a class="reference internal" href="charge_density.html">
+     <em>
+      ab initio
+     </em>
+     potentials with GPAW
+    </a>
+   </li>
+   <li class="toctree-l2 current active">
+    <a class="current reference internal" href="#">
+     Partial coherence
     </a>
    </li>
    <li class="toctree-l2">
@@ -195,11 +206,8 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="charge_density.html">
-     <em>
-      ab initio
-     </em>
-     potentials with GPAW
+    <a class="reference internal" href="performance.html">
+     Parallelization, Dask and GPUs
     </a>
    </li>
   </ul>
@@ -281,8 +289,8 @@ const thebe_selector_output = ".output, .cell_output"
 </p>
 <ul class="nav bd-sidenav">
  <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../../library/api.html">
-   API Reference
+  <a class="reference internal" href="../../library/api/api.html">
+   API
   </a>
   <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
   <label for="toctree-checkbox-4">
@@ -290,21 +298,75 @@ const thebe_selector_output = ".output, .cell_output"
    </i>
   </label>
   <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../library/_autosummary/abtem.waves.waves.Probe.html">
-     abtem.waves.waves.Probe
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/waves.html">
+     waves
     </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
+    <label for="toctree-checkbox-5">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.Probe.html">
+       Probe
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.PlaneWave.html">
+       PlaneWave
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.Waves.html">
+       Waves
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.transfer.WaveTransform.html">
+       WaveTransform
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/measure.html">
+     measurements
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/>
+    <label for="toctree-checkbox-6">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.core.Measurement.html">
+       Measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.detectors.Detector.html">
+       Detector
+      </a>
+     </li>
+    </ul>
    </li>
   </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library/bibliography.html">
-   Bibliography
+  <a class="reference internal" href="../../library/config.html">
+   Configuration
   </a>
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../../library/contributing.html">
    Contributing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library/bibliography.html">
+   Bibliography
   </a>
  </li>
  <li class="toctree-l1">
@@ -519,8 +581,13 @@ title="Print to PDF"
     <nav id="bd-toc-nav" aria-label="Page">
         <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#partial-temporal-coherence-with-plane-waves">
-   Partial temporal coherence with plane waves
+  <a class="reference internal nav-link" href="#partial-coherence-with-plane-waves">
+   Partial coherence with plane waves
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#partial-coherence-with-probes">
+   Partial coherence with probes
   </a>
  </li>
 </ul>
@@ -532,7 +599,7 @@ title="Print to PDF"
         <div class="col pl-md-3 pl-lg-5 content-container">
             <!-- Table of contents that is only displayed when printing the page -->
             <div id="jb-print-docs-body" class="onlyprint">
-                <h1>Partial coherence with plane waves</h1>
+                <h1>Partial coherence</h1>
                 <!-- Table of contents -->
                 <div id="print-main-content">
                     <div id="jb-print-toc">
@@ -543,8 +610,13 @@ title="Print to PDF"
                         <nav aria-label="Page">
                             <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#partial-temporal-coherence-with-plane-waves">
-   Partial temporal coherence with plane waves
+  <a class="reference internal nav-link" href="#partial-coherence-with-plane-waves">
+   Partial coherence with plane waves
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#partial-coherence-with-probes">
+   Partial coherence with probes
   </a>
  </li>
 </ul>
@@ -559,9 +631,13 @@ title="Print to PDF"
                 
   <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">abtem</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="o">%</span><span class="k">config</span> InlineBackend.rc = {&quot;figure.dpi&quot;: 72, &#39;figure.figsize&#39;: (6.0, 4.0)}
+<span class="o">%</span><span class="k">matplotlib</span> inline
+
+<span class="kn">import</span> <span class="nn">abtem</span>
 <span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 <span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">from</span> <span class="nn">ase.build</span> <span class="kn">import</span> <span class="n">mx2</span>
 <span class="kn">from</span> <span class="nn">ase.io</span> <span class="kn">import</span> <span class="n">read</span>
 
 <span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s2">&quot;local_diagnostics.progress_bar&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">});</span>
@@ -569,69 +645,148 @@ title="Print to PDF"
 </div>
 </div>
 </div>
+<section class="tex2jax_ignore mathjax_ignore" id="partial-coherence">
+<h1>Partial coherence<a class="headerlink" href="#partial-coherence" title="Permalink to this heading">#</a></h1>
+<p>In our introduction to the contrast transfer function, we described how partial coherence may be approximated by multiplication with an envelope function. This approach is not always appropriate for simulating experiments with plane wave illumination and it is never appropriate for simulating experiments with a convergent beam.</p>
 <section id="partial-coherence-with-plane-waves">
-<h1>Partial coherence with plane waves<a class="headerlink" href="#partial-coherence-with-plane-waves" title="Permalink to this headline">#</a></h1>
+<h2>Partial coherence with plane waves<a class="headerlink" href="#partial-coherence-with-plane-waves" title="Permalink to this heading">#</a></h2>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">PlaneWave</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">200e3</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span><span class="p">)</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span>
-    <span class="n">read</span><span class="p">(</span><span class="s2">&quot;./data/STO_LTO.cif&quot;</span><span class="p">)</span>
-<span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">PlaneWave</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span><span class="p">)</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">mx2</span><span class="p">(</span><span class="n">vacuum</span><span class="o">=</span><span class="mi">2</span><span class="p">))</span>
 </pre></div>
 </div>
 </div>
 </div>
-<section id="partial-temporal-coherence-with-plane-waves">
-<h2>Partial temporal coherence with plane waves<a class="headerlink" href="#partial-temporal-coherence-with-plane-waves" title="Permalink to this headline">#</a></h2>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">Cs</span> <span class="o">=</span> <span class="o">-</span><span class="mf">30e-6</span> <span class="o">*</span> <span class="mf">1e10</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">Cs</span> <span class="o">=</span> <span class="o">-</span><span class="mf">20e-6</span> <span class="o">*</span> <span class="mf">1e10</span>
+<span class="n">focal_spread</span> <span class="o">=</span> <span class="mf">52.50</span>
 
-<span class="n">ctf_quasi_coherent</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">CTF</span><span class="p">(</span><span class="n">Cs</span><span class="o">=</span><span class="n">Cs</span><span class="p">,</span> <span class="n">energy</span><span class="o">=</span><span class="mf">200e3</span><span class="p">)</span>
-<span class="n">ctf_quasi_coherent</span><span class="o">.</span><span class="n">defocus</span> <span class="o">=</span> <span class="n">ctf_quasi_coherent</span><span class="o">.</span><span class="n">scherzer_defocus</span>
-<span class="n">ctf_quasi_coherent</span><span class="o">.</span><span class="n">focal_spread</span> <span class="o">=</span> <span class="mi">20</span>
+<span class="c1"># Create coherent CTF</span>
+<span class="n">ctf_coherent</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">CTF</span><span class="p">(</span><span class="n">Cs</span><span class="o">=</span><span class="n">Cs</span><span class="p">,</span> <span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">)</span>
+<span class="n">ctf_coherent</span><span class="o">.</span><span class="n">defocus</span> <span class="o">=</span> <span class="n">ctf_coherent</span><span class="o">.</span><span class="n">scherzer_defocus</span>
+<span class="n">ctf_coherent</span><span class="o">.</span><span class="n">semiangle_cutoff</span> <span class="o">=</span> <span class="n">ctf_coherent</span><span class="o">.</span><span class="n">crossover_angle</span>
 
+<span class="c1"># Create CTF with temporal coherence envelope</span>
+<span class="n">ctf_quasi_coherent</span> <span class="o">=</span> <span class="n">ctf_coherent</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+<span class="n">ctf_quasi_coherent</span><span class="o">.</span><span class="n">focal_spread</span> <span class="o">=</span> <span class="n">focal_spread</span>
+
+<span class="c1"># Run multislice and get intensity</span>
+<span class="n">image_coherent</span> <span class="o">=</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">apply_ctf</span><span class="p">(</span><span class="n">ctf_coherent</span><span class="p">)</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span>
 <span class="n">image_quasi_coherent</span> <span class="o">=</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">apply_ctf</span><span class="p">(</span><span class="n">ctf_quasi_coherent</span><span class="p">)</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span>
-
-<span class="n">ctf_quasi_coherent</span><span class="o">.</span><span class="n">profiles</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">();</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">ctf_quasi_coherent</span><span class="o">.</span><span class="n">profiles</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">();</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/partial_coherence_4_0.png" src="../../_images/partial_coherence_4_0.png" />
+<img alt="../../_images/partial_coherence_5_0.png" src="../../_images/partial_coherence_5_0.png" />
 </div>
 </div>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">ctf_incoherent</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">CTF</span><span class="p">(</span><span class="n">Cs</span><span class="o">=</span><span class="n">Cs</span><span class="p">,</span> <span class="n">energy</span><span class="o">=</span><span class="mf">200e3</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">ctf_incoherent</span> <span class="o">=</span> <span class="n">ctf_coherent</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
 
 <span class="n">defocus</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">distributions</span><span class="o">.</span><span class="n">gaussian</span><span class="p">(</span>
-    <span class="n">center</span><span class="o">=</span><span class="n">ctf_incoherent</span><span class="o">.</span><span class="n">scherzer_defocus</span><span class="p">,</span> <span class="n">standard_deviation</span><span class="o">=</span><span class="mi">25</span><span class="p">,</span> <span class="n">num_samples</span><span class="o">=</span><span class="mi">31</span>
+    <span class="n">center</span><span class="o">=</span><span class="n">ctf_incoherent</span><span class="o">.</span><span class="n">scherzer_defocus</span><span class="p">,</span>
+    <span class="n">standard_deviation</span><span class="o">=</span><span class="n">focal_spread</span><span class="p">,</span>
+    <span class="n">num_samples</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+    <span class="n">sampling_limit</span><span class="o">=</span><span class="mf">1.</span><span class="p">,</span>
 <span class="p">)</span>
 
 <span class="n">ctf_incoherent</span><span class="o">.</span><span class="n">defocus</span> <span class="o">=</span> <span class="n">defocus</span>
-
-<span class="n">image_incoherent</span> <span class="o">=</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">apply_ctf</span><span class="p">(</span><span class="n">ctf_incoherent</span><span class="p">)</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
 </div>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span>
-    <span class="p">[</span><span class="n">image_quasi_coherent</span><span class="p">,</span> <span class="n">image_incoherent</span><span class="p">],</span> <span class="p">(</span><span class="s2">&quot;quasi-coherent&quot;</span><span class="p">,</span> <span class="s2">&quot;incoherent&quot;</span><span class="p">)</span>
-<span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">images_incoherent</span> <span class="o">=</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">apply_ctf</span><span class="p">(</span><span class="n">ctf_incoherent</span><span class="p">)</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span>
+
+<span class="n">images_incoherent</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measure.measure.Images object at 0x7fc7b0623420&gt;
+-------------------------------------------------------
+
+type           label    coordinates
+-------------  -------  -----------------------
+ParameterAxis  C10 [Å]  164.42 138.17 ... 59.42
+RealSpaceAxis  x [Å]    0.00 0.05 ... 3.13
+RealSpaceAxis  y [Å]    0.00 0.05 ... 5.46
+
+        bytes       shape         count     type
+------  ----------  ------------  --------  -------------
+array   138.75 kiB  (5, 64, 111)  7 tasks   float32
+chunks  138.75 kiB  (5, 64, 111)  1 chunks  numpy.ndarray
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">images_incoherent</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+    <span class="n">common_color_scale</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
+    <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../_images/partial_coherence_8_0.png" src="../../_images/partial_coherence_8_0.png" />
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">image_incoherent</span> <span class="o">=</span> <span class="n">images_incoherent</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="n">stack</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span>
+    <span class="p">[</span><span class="n">image_coherent</span><span class="p">,</span> <span class="n">image_quasi_coherent</span><span class="p">,</span> <span class="n">image_incoherent</span><span class="p">],</span>
+    <span class="p">(</span><span class="s2">&quot;coherent&quot;</span><span class="p">,</span> <span class="s2">&quot;quasi-coherent&quot;</span><span class="p">,</span> <span class="s2">&quot;incoherent&quot;</span><span class="p">),</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">stack</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
     <span class="n">common_color_scale</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
     <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
     <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
     <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
 <span class="p">);</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/partial_coherence_6_0.png" src="../../_images/partial_coherence_6_0.png" />
+<img alt="../../_images/partial_coherence_10_0.png" src="../../_images/partial_coherence_10_0.png" />
 </div>
 </div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">stack</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span><span class="o">.</span><span class="n">interpolate_line</span><span class="p">(</span><span class="n">start</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="n">end</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">stack</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span><span class="o">.</span><span class="n">show</span><span class="p">();</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../_images/partial_coherence_11_0.png" src="../../_images/partial_coherence_11_0.png" />
+</div>
+</div>
+</section>
+<section id="partial-coherence-with-probes">
+<h2>Partial coherence with probes<a class="headerlink" href="#partial-coherence-with-probes" title="Permalink to this heading">#</a></h2>
 </section>
 </section>
 
@@ -662,6 +817,20 @@ title="Print to PDF"
                 
     <!-- Previous / next buttons -->
 <div class='prev-next-area'>
+    <a class='left-prev' id="prev-link" href="charge_density.html" title="previous page">
+        <i class="fas fa-angle-left"></i>
+        <div class="prev-next-info">
+            <p class="prev-next-subtitle">previous</p>
+            <p class="prev-next-title"><em>ab initio</em> potentials with GPAW</p>
+        </div>
+    </a>
+    <a class='right-next' id="next-link" href="prism.html" title="next page">
+    <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">PRISM</p>
+    </div>
+    <i class="fas fa-angle-right"></i>
+    </a>
 </div>
             </footer>
         </div>

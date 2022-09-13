@@ -1,12 +1,12 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
 
-    <title>Performance, parallelization and GPUs &#8212; abTEM Documentation</title>
+    <title>Parallelization, Dask and GPUs &#8212; abTEM Documentation</title>
     
   <!-- Loaded before other Sphinx assets -->
   <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -34,6 +34,7 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
@@ -55,7 +56,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="PRISM" href="prism.html" />
     <link rel="prev" title="Frozen phonons" href="frozen_phonons.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -188,7 +189,7 @@ const thebe_selector_output = ".output, .cell_output"
    </li>
    <li class="toctree-l2 current active">
     <a class="current reference internal" href="#">
-     Performance, parallelization and GPUs
+     Parallelization, Dask and GPUs
     </a>
    </li>
    <li class="toctree-l2">
@@ -283,8 +284,8 @@ const thebe_selector_output = ".output, .cell_output"
 </p>
 <ul class="nav bd-sidenav">
  <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../../library/api.html">
-   API Reference
+  <a class="reference internal" href="../../library/api/api.html">
+   API
   </a>
   <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
   <label for="toctree-checkbox-4">
@@ -292,21 +293,75 @@ const thebe_selector_output = ".output, .cell_output"
    </i>
   </label>
   <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../library/_autosummary/abtem.waves.waves.Probe.html">
-     abtem.waves.waves.Probe
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/waves.html">
+     waves
     </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
+    <label for="toctree-checkbox-5">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.Probe.html">
+       Probe
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.PlaneWave.html">
+       PlaneWave
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.Waves.html">
+       Waves
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.transfer.WaveTransform.html">
+       WaveTransform
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/measure.html">
+     measurements
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/>
+    <label for="toctree-checkbox-6">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.core.Measurement.html">
+       Measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.detectors.Detector.html">
+       Detector
+      </a>
+     </li>
+    </ul>
    </li>
   </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library/bibliography.html">
-   Bibliography
+  <a class="reference internal" href="../../library/config.html">
+   Configuration
   </a>
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../../library/contributing.html">
    Contributing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library/bibliography.html">
+   Bibliography
   </a>
  </li>
  <li class="toctree-l1">
@@ -521,21 +576,28 @@ title="Print to PDF"
     <nav id="bd-toc-nav" aria-label="Page">
         <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#ffts">
-   FFTs
+  <a class="reference internal nav-link" href="#basics-of-dask-in-abtem">
+   Basics of
+   <em>
+    Dask
+   </em>
+   in
+   <em>
+    abTEM
+   </em>
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#fft-library-only-on-cpu">
-     FFT Library (only on CPU)
+    <a class="reference internal nav-link" href="#scheduler-overview">
+     Scheduler overview
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#dask-distributed">
+     Dask distributed
     </a>
    </li>
   </ul>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#dask">
-   Dask
-  </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#gpus">
@@ -563,7 +625,7 @@ title="Print to PDF"
         <div class="col pl-md-3 pl-lg-5 content-container">
             <!-- Table of contents that is only displayed when printing the page -->
             <div id="jb-print-docs-body" class="onlyprint">
-                <h1>Performance, parallelization and GPUs</h1>
+                <h1>Parallelization, Dask and GPUs</h1>
                 <!-- Table of contents -->
                 <div id="print-main-content">
                     <div id="jb-print-toc">
@@ -574,21 +636,28 @@ title="Print to PDF"
                         <nav aria-label="Page">
                             <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#ffts">
-   FFTs
+  <a class="reference internal nav-link" href="#basics-of-dask-in-abtem">
+   Basics of
+   <em>
+    Dask
+   </em>
+   in
+   <em>
+    abTEM
+   </em>
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#fft-library-only-on-cpu">
-     FFT Library (only on CPU)
+    <a class="reference internal nav-link" href="#scheduler-overview">
+     Scheduler overview
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#dask-distributed">
+     Dask distributed
     </a>
    </li>
   </ul>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#dask">
-   Dask
-  </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#gpus">
@@ -620,64 +689,335 @@ title="Print to PDF"
   <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">abtem</span>
+<span class="kn">from</span> <span class="nn">ase.build</span> <span class="kn">import</span> <span class="n">bulk</span>
 </pre></div>
 </div>
 </div>
 </div>
-<section class="tex2jax_ignore mathjax_ignore" id="performance-parallelization-and-gpus">
-<h1>Performance, parallelization and GPUs<a class="headerlink" href="#performance-parallelization-and-gpus" title="Permalink to this headline">#</a></h1>
-<p>The cost of running simulations of transmission electron microscopy can range from seconds to weeks depending on factors such as sample size, number of probe positions and the hardware used to run the code. Here, we go through how optimize <em>abTEM</em> to get your simulations running as fast as possible.</p>
-<section id="ffts">
-<h2>FFTs<a class="headerlink" href="#ffts" title="Permalink to this headline">#</a></h2>
-<p>The <a class="reference external" href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">fast Fourier transform (FFT)</a> is the most important dependent algorithm for running the multislice algorithm. Hence, the speed of your simulation depends on how fast your computer can run the FFT. This will depend on your hardware, the implementation of the FFT and the grid points of your simulation.</p>
-<section id="fft-library-only-on-cpu">
-<h3>FFT Library (only on CPU)<a class="headerlink" href="#fft-library-only-on-cpu" title="Permalink to this headline">#</a></h3>
-<p><em>abTEM</em> implements two implementations of the FFT: Intels Math Kernel Library FFT (<a class="reference external" href="https://github.com/IntelPython/mkl_fft"><code class="docutils literal notranslate"><span class="pre">mkl_fft</span></code></a>) and the “Fastest Fourier Transform in the West” (FFTW) through the Python wrapper <a class="reference external" href="https://pyfftw.readthedocs.io/en/latest/"><code class="docutils literal notranslate"><span class="pre">pyfftw</span></code></a>. You can set the FFT library using the <em>abTEM</em>s configs (see here TODOXXX).</p>
-<p>You can modify the configurations temporarily using the code below to use FFTW for the session:</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s1">&#39;fft&#39;</span><span class="p">:</span> <span class="s1">&#39;fftw&#39;</span><span class="p">})</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s2">&quot;fft&quot;</span><span class="p">:</span> <span class="s2">&quot;fftw&quot;</span><span class="p">})</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;dask.config.set at 0x7fbb72a30e80&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;dask.config.set at 0x7f997c985d90&gt;
 </pre></div>
 </div>
 </div>
 </div>
-<p>to use MKL you can use this command:</p>
+<section class="tex2jax_ignore mathjax_ignore" id="parallelization-dask-and-gpus">
+<h1>Parallelization, Dask and GPUs<a class="headerlink" href="#parallelization-dask-and-gpus" title="Permalink to this heading">#</a></h1>
+<p>The time cost of running multislice simulations can range from milliseconds to weeks depending on sample size, number of probe positions, inclusion of phonons and many other factors. <em>abTEM</em> utilizes the <em>Dask</em> library to make the best use of your available hardware to speed up your calculation, whether you are running it on a laptop or a high performance computing cluster.</p>
+<p>We try to make the default options as optimal as possible, hence if you are running your code on a local machine the following instruction are not required. Nonetheless, it might be iteresting to understand how your code is parallelized, you might also gain some insights by trying different schedulers and using some of the diagnostic tools we introduce. If you are running <em>abTEM</em> on a distributed computing systems you should read on. If you are an experienced Dask user, most of what you already know can be applied to <em>abTEM</em>.</p>
+<section id="basics-of-dask-in-abtem">
+<h2>Basics of <em>Dask</em> in <em>abTEM</em><a class="headerlink" href="#basics-of-dask-in-abtem" title="Permalink to this heading">#</a></h2>
+<p><em>abTEM</em> is built on <a class="reference external" href="https://docs.dask.org/en/stable/array.html">Dask Array</a><span id="id1">[<a class="reference internal" href="../../library/bibliography.html#id10" title="Dask Development Team. Dask: Library for dynamic task scheduling. 2016. URL: https://dask.org.">DaskDTeam16</a>]</span>, hence most method calls in <em>abTEM</em> produces or modifies a <em>Dask</em> array behind the scenes. A <em>Dask</em> array is “lazy”, this means that when we create it, we only create the tasks necessary for computing it, but those tasks are yet to run.</p>
+<p>Below we create the tasks for running the multislice algorithm many times with different frozen phonon configurations over a grid of initial scan positions.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s1">&#39;fft&#39;</span><span class="p">:</span> <span class="s1">&#39;mkl&#39;</span><span class="p">})</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">bulk</span><span class="p">(</span><span class="s2">&quot;Au&quot;</span><span class="p">,</span> <span class="n">cubic</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+<span class="n">fp</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">FrozenPhonons</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">num_configs</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span> <span class="n">sigmas</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">ensemble_mean</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+<span class="n">potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">fp</span><span class="p">,</span> <span class="n">gpts</span><span class="o">=</span><span class="mi">512</span><span class="p">,</span> <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+
+<span class="n">probe</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">100e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
+
+<span class="n">scan</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">GridScan</span><span class="o">.</span><span class="n">from_fractional_coordinates</span><span class="p">(</span>
+    <span class="n">potential</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="n">end</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span> <span class="o">/</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">1</span> <span class="o">/</span> <span class="mi">4</span><span class="p">)</span>
+<span class="p">)</span>
+
+<span class="n">probes</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="n">detectors</span><span class="o">=</span><span class="n">abtem</span><span class="o">.</span><span class="n">WavesDetector</span><span class="p">(),</span> <span class="n">scan</span><span class="o">=</span><span class="n">scan</span><span class="p">)</span>
+
+<span class="n">probes</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;dask.config.set at 0x7fbb72a301c0&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.core.Waves object at 0x7f997bd5e970&gt;
+-------------------------------------------------
+
+type               label           coordinates
+-----------------  --------------  -------------------
+FrozenPhononsAxis  Frozen phonons  -
+ScanAxis           x [Å]           0.00 0.41 ... 3.67
+ScanAxis           y [Å]           0.00 0.41 ... 3.67
+RealSpaceAxis      x [Å]           0.00 0.03 ... 16.29
+RealSpaceAxis      y [Å]           0.00 0.03 ... 16.29
+
+        bytes       shape                  count      type
+------  ----------  ---------------------  ---------  -------------
+array   1.56 GiB    (8, 10, 10, 512, 512)  100 tasks  complex64
+chunks  112.00 MiB  (1, 8, 7, 512, 512)    32 chunks  numpy.ndarray
+</pre></div>
+</div>
+</div>
+</div>
+<p>The result is a 1d grid of phonon configurations of a 2d grid of probe positions of 2d wave functions, which can be represented as a 5d <em>Dask</em> array.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">probes</span><span class="o">.</span><span class="n">array</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_html"><table>
+<tr>
+<td>
+<table>
+  <thead>
+    <tr><td> </td><th> Array </th><th> Chunk </th></tr>
+  </thead>
+  <tbody>
+    <tr><th> Bytes </th><td> 1.56 GiB </td> <td> 112.00 MiB </td></tr>
+    <tr><th> Shape </th><td> (8, 10, 10, 512, 512) </td> <td> (1, 8, 7, 512, 512) </td></tr>
+    <tr><th> Count </th><td> 100 Tasks </td><td> 32 Chunks </td></tr>
+    <tr><th> Type </th><td> complex64 </td><td> numpy.ndarray </td></tr>
+  </tbody>
+</table>
+</td>
+<td>
+<svg width="382" height="186" style="stroke:rgb(0,0,0);stroke-width:1" >
+
+  <!-- Horizontal lines -->
+  <line x1="0" y1="0" x2="28" y2="0" style="stroke-width:2" />
+  <line x1="0" y1="3" x2="28" y2="3" />
+  <line x1="0" y1="6" x2="28" y2="6" />
+  <line x1="0" y1="10" x2="28" y2="10" />
+  <line x1="0" y1="13" x2="28" y2="13" />
+  <line x1="0" y1="17" x2="28" y2="17" />
+  <line x1="0" y1="20" x2="28" y2="20" />
+  <line x1="0" y1="24" x2="28" y2="24" />
+  <line x1="0" y1="27" x2="28" y2="27" style="stroke-width:2" />
+
+  <!-- Vertical lines -->
+  <line x1="0" y1="0" x2="0" y2="27" style="stroke-width:2" />
+  <line x1="23" y1="0" x2="23" y2="27" />
+  <line x1="28" y1="0" x2="28" y2="27" style="stroke-width:2" />
+
+  <!-- Colored Rectangle -->
+  <polygon points="0.0,0.0 28.897464417751184,0.0 28.897464417751184,27.675387197907465 0.0,27.675387197907465" style="fill:#ECB172A0;stroke-width:0"/>
+
+  <!-- Text -->
+  <text x="14.448732" y="47.675387" font-size="1.0rem" font-weight="100" text-anchor="middle" >10</text>
+  <text x="48.897464" y="13.837694" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(0,48.897464,13.837694)">8</text>
+
+
+  <!-- Horizontal lines -->
+  <line x1="98" y1="0" x2="114" y2="16" style="stroke-width:2" />
+  <line x1="98" y1="120" x2="114" y2="136" style="stroke-width:2" />
+
+  <!-- Vertical lines -->
+  <line x1="98" y1="0" x2="98" y2="120" style="stroke-width:2" />
+  <line x1="109" y1="11" x2="109" y2="131" />
+  <line x1="114" y1="16" x2="114" y2="136" style="stroke-width:2" />
+
+  <!-- Colored Rectangle -->
+  <polygon points="98.0,0.0 114.99850848103011,16.998508481030107 114.99850848103011,136.99850848103011 98.0,120.0" style="fill:#ECB172A0;stroke-width:0"/>
+
+  <!-- Horizontal lines -->
+  <line x1="98" y1="0" x2="218" y2="0" style="stroke-width:2" />
+  <line x1="109" y1="11" x2="229" y2="11" />
+  <line x1="114" y1="16" x2="234" y2="16" style="stroke-width:2" />
+
+  <!-- Vertical lines -->
+  <line x1="98" y1="0" x2="114" y2="16" style="stroke-width:2" />
+  <line x1="218" y1="0" x2="234" y2="16" style="stroke-width:2" />
+
+  <!-- Colored Rectangle -->
+  <polygon points="98.0,0.0 218.0,0.0 234.99850848103011,16.998508481030107 114.99850848103011,16.998508481030107" style="fill:#ECB172A0;stroke-width:0"/>
+
+  <!-- Horizontal lines -->
+  <line x1="114" y1="16" x2="234" y2="16" style="stroke-width:2" />
+  <line x1="114" y1="136" x2="234" y2="136" style="stroke-width:2" />
+
+  <!-- Vertical lines -->
+  <line x1="114" y1="16" x2="114" y2="136" style="stroke-width:2" />
+  <line x1="234" y1="16" x2="234" y2="136" style="stroke-width:2" />
+
+  <!-- Colored Rectangle -->
+  <polygon points="114.99850848103011,16.998508481030107 234.99850848103011,16.998508481030107 234.99850848103011,136.99850848103011 114.99850848103011,136.99850848103011" style="fill:#ECB172A0;stroke-width:0"/>
+
+  <!-- Text -->
+  <text x="174.998508" y="156.998508" font-size="1.0rem" font-weight="100" text-anchor="middle" >512</text>
+  <text x="254.998508" y="76.998508" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(-90,254.998508,76.998508)">512</text>
+  <text x="96.499254" y="148.499254" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(45,96.499254,148.499254)">10</text>
+</svg>
+</td>
+</tr>
+</table></div></div>
+</div>
+<p>The result takes up about 1.5 GB, this is not large enough to choke modern computers, hence we could compute it. However, if the simulation was larger this might not be true, hence we shall apply a reduction before computing. We can reduce the base wave function dimensions by applying</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">measurement</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">AnnularDetector</span><span class="p">(</span><span class="n">inner</span><span class="o">=</span><span class="mi">50</span><span class="p">,</span> <span class="n">outer</span><span class="o">=</span><span class="mi">150</span><span class="p">)</span><span class="o">.</span><span class="n">detect</span><span class="p">(</span><span class="n">build_probe</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">measurement</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.core.Images object at 0x7f997b0338d0&gt;
+---------------------------------------------------------
+
+type           label    coordinates
+-------------  -------  ------------------
+RealSpaceAxis  x [Å]    0.00 0.41 ... 3.67
+RealSpaceAxis  y [Å]    0.00 0.41 ... 3.67
+
+        bytes    shape     count      type
+------  -------  --------  ---------  -------------
+array   400 B    (10, 10)  224 tasks  float32
+chunks  224 B    (8, 7)    4 chunks   numpy.ndarray
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">measurement</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 11.7s
+</pre></div>
+</div>
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.core.Images object at 0x7f997b0338d0&gt;
+---------------------------------------------------------
+
+type               label           coordinates
+-----------------  --------------  ------------------
+FrozenPhononsAxis  Frozen phonons  -
+RealSpaceAxis      x [Å]           0.00 0.41 ... 3.67
+RealSpaceAxis      y [Å]           0.00 0.41 ... 3.67
+
+        bytes     shape        count     type
+------  --------  -----------  --------  -------------
+array   3.12 kiB  (8, 10, 10)  -         float32
+chunks  -         -            - chunks  numpy.ndarray
+</pre></div>
+</div>
+</div>
+</div>
+<p>When accessing the <code class="docutils literal notranslate"><span class="pre">array</span></code> property we get the <em>Dask</em> array</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">measurement</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(&lt;Figure size 432x288 with 2 Axes&gt;, &lt;Axes:xlabel=&#39;x [Å]&#39;, ylabel=&#39;y [Å]&#39;&gt;)
+</pre></div>
+</div>
+<img alt="../../_images/performance_11_1.png" src="../../_images/performance_11_1.png" />
+</div>
+</div>
+<p>The multislice algorithms requires running several interdependent tasks, we call this a <a class="reference external" href="https://docs.dask.org/en/stable/graphs.html">task graph</a>. All <em>abTEM</em> simulations runs by building a <em>Dask</em> task graph for the simulation, then executing that task graph using one of the <em>Dask</em> schedulers.</p>
+<section id="scheduler-overview">
+<h3>Scheduler overview<a class="headerlink" href="#scheduler-overview" title="Permalink to this heading">#</a></h3>
+<p>Modern computers have multiple CPU cores which are capable of performing independent tasks in parallel. When execute <code class="docutils literal notranslate"><span class="pre">compute</span></code> one of the <em>Dask</em> schedulers will assign your available computing resources to unfinished tasks, until all the required tasks for your simulation are finished, then your result is returned.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">build_probe</span><span class="o">.</span><span class="n">compute</span><span class="p">();</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  0.7s
+</pre></div>
+</div>
+</div>
+</div>
+<p>For most cases, the default settings are good choices. However, sometimes you may want to use different <em>Dask</em> scheduler. Every keyword argument provided to the <code class="docutils literal notranslate"><span class="pre">compute</span></code> method in <em>abTEM</em> are forwarded to <em>Dask</em>. Hence, everything described in <a class="reference external" href="https://docs.dask.org/en/stable/scheduler-overview.html"><em>Dask</em>s scheduler overview</a> also applies to <em>abTEM</em>. For example, we can use the scheduler keyword.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">probe</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">fp</span><span class="p">)</span><span class="o">.</span><span class="n">compute</span><span class="p">(</span><span class="n">scheduler</span><span class="o">=</span><span class="s2">&quot;processes&quot;</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  8.3s
+</pre></div>
+</div>
+</div>
+</div>
+<p>Using <code class="docutils literal notranslate"><span class="pre">abtem.config.set</span></code> this can be used either as a context manager, or to set the scheduler globally.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># As a context manager</span>
+<span class="k">with</span> <span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">scheduler</span><span class="o">=</span><span class="s2">&quot;processes&quot;</span><span class="p">):</span>
+    <span class="n">probe</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">fp</span><span class="p">)</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
+
+<span class="c1"># Set globally</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">scheduler</span><span class="o">=</span><span class="s2">&quot;processes&quot;</span><span class="p">)</span>
+<span class="n">probe</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">fp</span><span class="p">)</span><span class="o">.</span><span class="n">compute</span><span class="p">();</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  7.7s
+[########################################] | 100% Completed |  7.5s
+</pre></div>
+</div>
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.core.Waves object at 0x7fd9a9514cb0&gt;
+-------------------------------------------------
+
+type               label           coordinates
+-----------------  --------------  -------------------
+FrozenPhononsAxis  Frozen phonons  -
+RealSpaceAxis      x [Å]           0.00 0.08 ... 40.72
+RealSpaceAxis      y [Å]           0.00 0.08 ... 40.72
+
+        bytes     shape          count     type
+------  --------  -------------  --------  -------------
+array   4.00 MiB  (2, 512, 512)  -         complex64
+chunks  -         -              - chunks  numpy.ndarray
+</pre></div>
+</div>
+</div>
+</div>
+<p>Additionally, each scheduler may take a few extra keywords specific to that scheduler. For example, the multiprocessing and threaded schedulers each take a num_workers keyword, which sets the number of processes or threads to use (defaults to number of cores). This can be set by passing the keyword when calling compute:</p>
+</section>
+<section id="dask-distributed">
+<h3>Dask distributed<a class="headerlink" href="#dask-distributed" title="Permalink to this heading">#</a></h3>
+<p>everything below may also be used , the Dask distributed scheduler provides a great diagnostic tool
+YOu can</p>
+<p>Since <em>abTEM</em> just creates a <em>Dask</em> task graph,</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span>This happens automatically, however, to get 
+
+if you are running simulations, you may want 
+
+On a local system (a laptop or desktop), your calculation is parallelized automatically. Nonetheless, it is possible that your calculation runs faster using a distributed scheduler, this will also provide 
+
+
+Nonetheless, you may benefit from knowing about , on larger systems (e.g. HPC clusters), it is necessary.
+
+*abTEM* uses the 
+
+as *abTEM
+
+
+https://docs.dask.org/en/stable/scheduling.html
+
+Parallel computation in abTEM whether it is running on a laptop or a High Performance Computing cluster is parallelized through . 
+
+Some knowledge of Dask may be required to run abTEM effectively on large multi-CPU/GPU systems, however, if you are just running abTEM on your own computer, this tutorial gets you started. If you want a quick introduction to Dask, we recommend thishttps://www.youtube.com/watch?v=nnndxbr_Xq4&amp;t=66s) short youtube video.
 </pre></div>
 </div>
 </div>
 </div>
 </section>
-</section>
-<section id="dask">
-<h2>Dask<a class="headerlink" href="#dask" title="Permalink to this headline">#</a></h2>
-<p><em>abTEM</em> is built on <a class="reference external" href="https://dask.org/">Dask</a> <span id="id1">[<a class="reference internal" href="../../library/bibliography.html#id10" title="Dask Development Team. Dask: Library for dynamic task scheduling. 2016. URL: https://dask.org.">DaskDTeam16</a>]</span>. All <em>abTEM</em> simulations runs by building <em>Dask</em> task graph for the simulation, the task graph is then executed using one of the <em>Dask</em> schedulers. This happens automatically, however, if you are running simulations, you may want</p>
-<p>On a local system (a laptop or desktop), your calculation is parallelized automatically. Nonetheless, it is possible that your calculation runs faster using a distributed scheduler, this will also provide</p>
-<p>Nonetheless, you may benefit from knowing about , on larger systems (e.g. HPC clusters), it is necessary.</p>
-<p><em>abTEM</em> uses the</p>
-<p>as *abTEM</p>
-<p><a class="reference external" href="https://docs.dask.org/en/stable/scheduling.html">https://docs.dask.org/en/stable/scheduling.html</a></p>
-<p>Parallel computation in abTEM whether it is running on a laptop or a High Performance Computing cluster is parallelized through .</p>
-<p>Some knowledge of Dask may be required to run abTEM effectively on large multi-CPU/GPU systems, however, if you are just running abTEM on your own computer, this tutorial gets you started. If you want a quick introduction to Dask, we recommend thishttps://www.youtube.com/watch?v=nnndxbr_Xq4&amp;t=66s) short youtube video.</p>
 </section>
 <section id="gpus">
-<h2>GPUs<a class="headerlink" href="#gpus" title="Permalink to this headline">#</a></h2>
+<h2>GPUs<a class="headerlink" href="#gpus" title="Permalink to this heading">#</a></h2>
 <p>Almost every part of <em>abTEM</em> is implemented on GPU using the <code class="docutils literal notranslate"><span class="pre">CuPy</span></code> library. If you have a single GPU and a working installation of CuPy, you can use your GPU by changing the configs as below:</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s1">&#39;device&#39;</span><span class="p">:</span> <span class="s1">&#39;gpu&#39;</span><span class="p">})</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s2">&quot;device&quot;</span><span class="p">:</span> <span class="s2">&quot;gpu&quot;</span><span class="p">})</span>
 </pre></div>
 </div>
 </div>
@@ -688,12 +1028,11 @@ title="Print to PDF"
 </div>
 </div>
 <section id="multiple-gpus">
-<h3>Multiple GPUs<a class="headerlink" href="#multiple-gpus" title="Permalink to this headline">#</a></h3>
-<p>TODO: improve multigpu instructions</p>
+<h3>Multiple GPUs<a class="headerlink" href="#multiple-gpus" title="Permalink to this heading">#</a></h3>
 </section>
 </section>
 <section id="memory">
-<h2>Memory<a class="headerlink" href="#memory" title="Permalink to this headline">#</a></h2>
+<h2>Memory<a class="headerlink" href="#memory" title="Permalink to this heading">#</a></h2>
 </section>
 </section>
 

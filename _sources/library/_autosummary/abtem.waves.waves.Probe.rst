@@ -17,7 +17,6 @@
       ~Probe.base_waves_partial
       ~Probe.build
       ~Probe.check_axes_metadata
-      ~Probe.complex_images
       ~Probe.copy
       ~Probe.copy_kwargs
       ~Probe.find_axes_type
@@ -48,7 +47,6 @@
       ~Probe.base_axes
       ~Probe.base_axes_metadata
       ~Probe.base_shape
-      ~Probe.ctf
       ~Probe.cutoff_angles
       ~Probe.device
       ~Probe.energy

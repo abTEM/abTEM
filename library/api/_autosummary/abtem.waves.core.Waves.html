@@ -1,0 +1,1349 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>Waves &#8212; abTEM Documentation</title>
+    
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+<link href="../../../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+
+    
+  <link rel="stylesheet"
+    href="../../../_static/vendor/fontawesome/5.13.0/css/all.min.css">
+  <link rel="preload" as="font" type="font/woff2" crossorigin
+    href="../../../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
+  <link rel="preload" as="font" type="font/woff2" crossorigin
+    href="../../../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
+
+    <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css" />
+    <link rel="stylesheet" href="../../../_static/styles/sphinx-book-theme.css?digest=5115cc725059bd94278eecd172e13a965bf8f5a9" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/mystnb.css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-thebe.css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/design-style.b7bb847fb20b106c3d81b95245e65545.min.css" />
+    
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
+
+    <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
+    <script src="../../../_static/jquery.js"></script>
+    <script src="../../../_static/underscore.js"></script>
+    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../../../_static/doctools.js"></script>
+    <script src="../../../_static/clipboard.min.js"></script>
+    <script src="../../../_static/copybutton.js"></script>
+    <script src="../../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
+    <script>let toggleHintShow = 'Click to show';</script>
+    <script>let toggleHintHide = 'Click to hide';</script>
+    <script>let toggleOpenOnPrint = 'true';</script>
+    <script src="../../../_static/togglebutton.js"></script>
+    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown, .tag_hide_input div.cell_input, .tag_hide-input div.cell_input, .tag_hide_output div.cell_output, .tag_hide-output div.cell_output, .tag_hide_cell.cell, .tag_hide-cell.cell';</script>
+    <script src="../../../_static/design-tabs.js"></script>
+    <script>const THEBE_JS_URL = "https://unpkg.com/thebe@0.8.2/lib/index.js"
+const thebe_selector = ".thebe,.cell"
+const thebe_selector_input = "pre"
+const thebe_selector_output = ".output, .cell_output"
+</script>
+    <script async="async" src="../../../_static/sphinx-thebe.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="WaveTransform" href="abtem.waves.transfer.WaveTransform.html" />
+    <link rel="prev" title="PlaneWave" href="abtem.waves.core.PlaneWave.html" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="docsearch:language" content="en">
+    
+
+    <!-- Google Analytics -->
+    
+  </head>
+  <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="60">
+<!-- Checkboxes to toggle the left sidebar -->
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle navigation sidebar">
+<label class="overlay overlay-navbar" for="__navigation">
+    <div class="visually-hidden">Toggle navigation sidebar</div>
+</label>
+<!-- Checkboxes to toggle the in-page toc -->
+<input type="checkbox" class="sidebar-toggle" name="__page-toc" id="__page-toc" aria-label="Toggle in-page Table of Contents">
+<label class="overlay overlay-pagetoc" for="__page-toc">
+    <div class="visually-hidden">Toggle in-page Table of Contents</div>
+</label>
+<!-- Headers at the top -->
+<div class="announcement header-item noprint"></div>
+<div class="header header-item noprint"></div>
+
+    
+    <div class="container-fluid" id="banner"></div>
+
+    
+
+    <div class="container-xl">
+      <div class="row">
+          
+<!-- Sidebar -->
+<div class="bd-sidebar noprint" id="site-navigation">
+    <div class="bd-sidebar__content">
+        <div class="bd-sidebar__top"><div class="navbar-brand-box">
+    <a class="navbar-brand text-wrap" href="../../../index.html">
+      
+        <!-- `logo` is deprecated in Sphinx 4.0, so remove this when we stop supporting 3 -->
+        
+      
+      
+      <img src="../../../_static/logo.png" class="logo" alt="logo">
+      
+      
+      <h1 class="site-logo" id="site-title">abTEM Documentation</h1>
+      
+    </a>
+</div><form class="bd-search d-flex align-items-center" action="../../../search.html" method="get">
+  <i class="icon fas fa-search"></i>
+  <input type="search" class="form-control" name="q" id="search-input" placeholder="Search this book..." aria-label="Search this book..." autocomplete="off" >
+</form><nav class="bd-links" id="bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item active">
+        
+        <ul class="nav bd-sidenav bd-sidenav__home-link">
+            <li class="toctree-l1">
+                <a class="reference internal" href="../../../intro.html">
+                    Welcome to abTEM
+                </a>
+            </li>
+        </ul>
+        <p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Get started
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../../getting_started/overview.html">
+   Overview
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../../getting_started/install.html">
+   Installation
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../../getting_started/basics.html">
+   The basics
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  User guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../../user_guide/walkthrough/walkthrough.html">
+   Walkthrough
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
+  <label for="toctree-checkbox-1">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/atomic_models.html">
+     Atomic models with ASE
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/potentials.html">
+     Potentials
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/wave_functions.html">
+     Wave functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/multislice.html">
+     Multislice simulations
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/contrast_transfer_function.html">
+     Contrast Transfer Function
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/scan_and_detect.html">
+     Scan and detect
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/frozen_phonons.html">
+     Frozen phonons
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/performance.html">
+     Parallelization, Dask and GPUs
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/prism.html">
+     PRISM
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/charge_density.html">
+     <em>
+      ab initio
+     </em>
+     potentials with GPAW
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../../user_guide/appendix/appendix.html">
+   Appendix
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+  <label for="toctree-checkbox-2">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/appendix/multislice_derivation.html">
+     Deriving the Multislice Algorithm
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/appendix/normalization.html">
+     Wave Function Normalization
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/appendix/antialiasing.html">
+     Antialiasing and Sampling
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/appendix/ensembles.html">
+     Ensembles
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/appendix/visualized_aberrations.html">
+     Visualized aberrations
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../../user_guide/examples/examples.html">
+   Example gallery
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
+  <label for="toctree-checkbox-3">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/cbed_quickstart.html">
+     CBED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/hrtem_quickstart.html">
+     HRTEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/prism_quickstart.html">
+     PRISM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/examples/notebooks/hbn_dft_iam.html">
+     DFT vs. IAM in hBN diffraction
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Library
+ </span>
+</p>
+<ul class="current nav bd-sidenav">
+ <li class="toctree-l1 current active has-children">
+  <a class="reference internal" href="../api.html">
+   API
+  </a>
+  <input checked="" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
+  <label for="toctree-checkbox-4">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul class="current">
+   <li class="toctree-l2 current active has-children">
+    <a class="reference internal" href="../waves.html">
+     waves
+    </a>
+    <input checked="" class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
+    <label for="toctree-checkbox-5">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul class="current">
+     <li class="toctree-l3">
+      <a class="reference internal" href="abtem.waves.core.Probe.html">
+       Probe
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="abtem.waves.core.PlaneWave.html">
+       PlaneWave
+      </a>
+     </li>
+     <li class="toctree-l3 current active">
+      <a class="current reference internal" href="#">
+       Waves
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="abtem.waves.transfer.WaveTransform.html">
+       WaveTransform
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../measure.html">
+     measurements
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/>
+    <label for="toctree-checkbox-6">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="abtem.measurements.core.Measurement.html">
+       Measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="abtem.measurements.detectors.Detector.html">
+       Detector
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../config.html">
+   Configuration
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributing.html">
+   Contributing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../bibliography.html">
+   Bibliography
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../changelog.html">
+   Changelog
+  </a>
+ </li>
+</ul>
+
+    </div>
+</nav></div>
+        <div class="bd-sidebar__bottom">
+             <!-- To handle the deprecated key -->
+            
+            <div class="navbar_extra_footer">
+            Powered by <a href="https://jupyterbook.org">Jupyter Book</a>
+            </div>
+            
+        </div>
+    </div>
+    <div id="rtd-footer-container"></div>
+</div>
+
+
+          
+
+
+          
+<!-- A tiny helper pixel to detect if we've scrolled -->
+<div class="sbt-scroll-pixel-helper"></div>
+<!-- Main content -->
+<div class="col py-0 content-container">
+    
+    <div class="header-article row sticky-top noprint">
+        
+
+
+
+<div class="col py-1 d-flex header-article-main">
+    <div class="header-article__left">
+        
+        <label for="__navigation"
+  class="headerbtn"
+  data-toggle="tooltip"
+data-placement="right"
+title="Toggle navigation"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-bars"></i>
+  </span>
+
+</label>
+
+        
+    </div>
+    <div class="header-article__right">
+<button onclick="toggleFullScreen()"
+  class="headerbtn"
+  data-toggle="tooltip"
+data-placement="bottom"
+title="Fullscreen mode"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+<div class="menu-dropdown menu-dropdown-repository-buttons">
+  <button class="headerbtn menu-dropdown__trigger"
+      aria-label="Source repositories">
+      <i class="fab fa-github"></i>
+  </button>
+  <div class="menu-dropdown__content">
+    <ul>
+      <li>
+        <a href="https://github.com/executablebooks/jupyter-book"
+   class="headerbtn"
+   data-toggle="tooltip"
+data-placement="left"
+title="Source repository"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="headerbtn__text-container">repository</span>
+</a>
+
+      </li>
+      
+      <li>
+        <a href="https://github.com/executablebooks/jupyter-book/issues/new?title=Issue%20on%20page%20%2Flibrary/api/_autosummary/abtem.waves.core.Waves.html&body=Your%20issue%20content%20here."
+   class="headerbtn"
+   data-toggle="tooltip"
+data-placement="left"
+title="Open an issue"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="headerbtn__text-container">open issue</span>
+</a>
+
+      </li>
+      
+    </ul>
+  </div>
+</div>
+
+<div class="menu-dropdown menu-dropdown-download-buttons">
+  <button class="headerbtn menu-dropdown__trigger"
+      aria-label="Download this page">
+      <i class="fas fa-download"></i>
+  </button>
+  <div class="menu-dropdown__content">
+    <ul>
+      <li>
+        <a href="../../../_sources/library/api/_autosummary/abtem.waves.core.Waves.rst"
+   class="headerbtn"
+   data-toggle="tooltip"
+data-placement="left"
+title="Download source file"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="headerbtn__text-container">.rst</span>
+</a>
+
+      </li>
+      
+      <li>
+        
+<button onclick="printPdf(this)"
+  class="headerbtn"
+  data-toggle="tooltip"
+data-placement="left"
+title="Print to PDF"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="headerbtn__text-container">.pdf</span>
+</button>
+
+      </li>
+      
+    </ul>
+  </div>
+</div>
+
+    </div>
+</div>
+
+<!-- Table of contents -->
+<div class="col-md-3 bd-toc show noprint">
+</div>
+    </div>
+    <div class="article row">
+        <div class="col pl-md-3 pl-lg-5 content-container">
+            <!-- Table of contents that is only displayed when printing the page -->
+            <div id="jb-print-docs-body" class="onlyprint">
+                <h1>Waves</h1>
+                <!-- Table of contents -->
+                <div id="print-main-content">
+                    <div id="jb-print-toc">
+                        
+                    </div>
+                </div>
+            </div>
+            <main id="main-content" role="main">
+                
+              <div>
+                
+  <section id="waves">
+<h1>Waves<a class="headerlink" href="#waves" title="Permalink to this heading">#</a></h1>
+<dl class="py class">
+<dt class="sig sig-object py" id="abtem.waves.core.Waves">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.waves.core.</span></span><span class="sig-name descname"><span class="pre">Waves</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">energy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">extent</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fourier_space</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_axes_metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves/core.html#Waves"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.core.Waves" title="Permalink to this definition">#</a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">HasArray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">WavesLikeMixin</span></code></p>
+<p>Waves define a batch of arbitrary 2D wave functions defined by a complex numpy or cupy array.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>array</strong> (<em>array</em>) – Complex array defining one or more 2d wave functions. The second-to-last and last dimensions are the wave
+function y- and x-axis, respectively.</p></li>
+<li><p><strong>energy</strong> (<em>float</em>) – Electron energy [eV].</p></li>
+<li><p><strong>extent</strong> (<em>one</em><em> or </em><em>two float</em>) – Extent of wave functions in x and y [Å].</p></li>
+<li><p><strong>sampling</strong> (<em>one</em><em> or </em><em>two float</em>) – Sampling of wave functions in x and y [1 / Å].</p></li>
+<li><p><strong>tilt</strong> (<em>two float</em><em>, </em><em>optional</em>) – Small angle beam tilt [mrad]. Implemented by shifting the wave function at every slice. Default is (0., 0.).</p></li>
+<li><p><strong>fourier_space</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, the wave functions are assumed to be represented in Fourier space instead of real space.</p></li>
+<li><p><strong>ensemble_axes_metadata</strong> (<em>list of AxesMetadata</em>) – Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.</p></li>
+<li><p><strong>metadata</strong> (<em>dict</em>) – A dictionary defining simulation metadata. All items will be added to the metadata of measurements derived from
+the waves.</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.waves.core.Waves.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">energy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">extent</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fourier_space</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_axes_metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves/core.html#Waves.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.core.Waves.__init__" title="Permalink to this definition">#</a></dt>
+<dd></dd></dl>
+
+<p class="rubric">Methods</p>
+<table class="autosummary longtable table autosummary">
+<colgroup>
+<col style="width: 10%" />
+<col style="width: 90%" />
+</colgroup>
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.waves.core.Waves.__init__" title="abtem.waves.core.Waves.__init__"><code class="xref py py-obj docutils literal notranslate"><span class="pre">__init__</span></code></a>(array[, energy, extent, sampling, ...])</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.waves.core.Waves.apply_ctf" title="abtem.waves.core.Waves.apply_ctf"><code class="xref py py-obj docutils literal notranslate"><span class="pre">apply_ctf</span></code></a>([ctf, max_batch])</p></td>
+<td><p>Apply the aberrations and apertures of a Contrast Transfer Function to the wave functions.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.waves.core.Waves.apply_transform" title="abtem.waves.core.Waves.apply_transform"><code class="xref py py-obj docutils literal notranslate"><span class="pre">apply_transform</span></code></a>(transform[, max_batch])</p></td>
+<td><p>Apply wave function transformation to the wave functions.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.waves.core.Waves.as_complex_diffraction" title="abtem.waves.core.Waves.as_complex_diffraction"><code class="xref py py-obj docutils literal notranslate"><span class="pre">as_complex_diffraction</span></code></a>([max_angle, ...])</p></td>
+<td><p>Calculate the complex array of the wave functions at the diffraction plane.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.waves.core.Waves.as_complex_image" title="abtem.waves.core.Waves.as_complex_image"><code class="xref py py-obj docutils literal notranslate"><span class="pre">as_complex_image</span></code></a>()</p></td>
+<td><p>Calculate the complex array of the wave functions at the image plane.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">check_axes_metadata</span></code>()</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">check_is_compatible</span></code>(other)</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">complex_images</span></code>()</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">compute</span></code>([progress_bar])</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">convolve</span></code>(kernel, axes_metadata[, out_space])</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">copy</span></code>()</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">copy_kwargs</span></code>([exclude, cls])</p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code></p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.waves.core.Waves.copy_to_device" title="abtem.waves.core.Waves.copy_to_device"><code class="xref py py-obj docutils literal notranslate"><span class="pre">copy_to_device</span></code></a>(device)</p></td>
+<td><p>Copy array to specified device.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.waves.core.Waves.diffraction_patterns" title="abtem.waves.core.Waves.diffraction_patterns"><code class="xref py py-obj docutils literal notranslate"><span class="pre">diffraction_patterns</span></code></a>([max_angle, ...])</p></td>
+<td><p>Calculate the intensity of the wave functions at the diffraction plane.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.waves.core.Waves.downsample" title="abtem.waves.core.Waves.downsample"><code class="xref py py-obj docutils literal notranslate"><span class="pre">downsample</span></code></a>([max_angle, gpts, normalization])</p></td>
+<td><p>Downsample the wave function to a lower maximum scattering angle.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">ensure_fourier_space</span></code>([in_place])</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">ensure_lazy</span></code>([chunks])</p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">ensure_real_space</span></code>([in_place])</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">expand_dims</span></code>([axis, axis_metadata])</p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">find_axes_type</span></code>(cls)</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">fresnel_propagator</span></code>(thickness)</p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">FresnelPropagator</span></code></p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">from_array_and_metadata</span></code>(array, axes_metadata)</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">from_partitioned_args</span></code>()</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.waves.core.Waves.from_zarr" title="abtem.waves.core.Waves.from_zarr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">from_zarr</span></code></a>(url[, chunks])</p></td>
+<td><p>Read wave functions from a hdf5 file.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_items</span></code>(items[, keep_dims])</p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.waves.core.Waves.intensity" title="abtem.waves.core.Waves.intensity"><code class="xref py py-obj docutils literal notranslate"><span class="pre">intensity</span></code></a>()</p></td>
+<td><p>Calculate the intensity of the wave functions at the image plane.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">match_grid</span></code>(other[, check_match])</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">max</span></code>([axes])</p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">mean</span></code>([axes])</p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">min</span></code>([axes])</p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.waves.core.Waves.multislice" title="abtem.waves.core.Waves.multislice"><code class="xref py py-obj docutils literal notranslate"><span class="pre">multislice</span></code></a>(potential[, detectors, ...])</p></td>
+<td><p>Propagate and transmit wave function through the provided potential using the multislice algorithm.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.waves.core.Waves.phase_shift" title="abtem.waves.core.Waves.phase_shift"><code class="xref py py-obj docutils literal notranslate"><span class="pre">phase_shift</span></code></a>(shift)</p></td>
+<td><p>Shift the phase of the wave functions by</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">rechunk</span></code>(*args, **kwargs)</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">renormalize</span></code>([space])</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.waves.core.Waves.show" title="abtem.waves.core.Waves.show"><code class="xref py py-obj docutils literal notranslate"><span class="pre">show</span></code></a>(**kwargs)</p></td>
+<td><p>Show the wave function intensities.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">squeeze</span></code>([axis])</p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">std</span></code>([axes])</p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sum</span></code>([axes])</p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.waves.core.Waves.tile" title="abtem.waves.core.Waves.tile"><code class="xref py py-obj docutils literal notranslate"><span class="pre">tile</span></code></a>(repetitions[, normalization])</p></td>
+<td><p>Tile wave functions.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_cpu</span></code>()</p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_delayed</span></code>()</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_gpu</span></code>()</p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.waves.core.Waves.to_zarr" title="abtem.waves.core.Waves.to_zarr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_zarr</span></code></a>(url[, compute, overwrite])</p></td>
+<td><p>Write wave functions to a zarr file.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">visualize_graph</span></code>(**kwargs)</p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+<p class="rubric">Attributes</p>
+<table class="autosummary longtable table autosummary">
+<colgroup>
+<col style="width: 10%" />
+<col style="width: 90%" />
+</colgroup>
+<tbody>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">accelerator</span></code></p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">Accelerator</span></code></p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">angular_sampling</span></code></p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">antialias_cutoff_gpts</span></code></p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>]</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">antialias_valid_gpts</span></code></p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>]</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">array</span></code></p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Union</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">Array</span></code>]</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">axes_metadata</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">base_axes</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">base_axes_metadata</span></code></p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">List</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">AxisMetadata</span></code>]</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">base_shape</span></code></p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>]</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">base_tilt</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">chunks</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">cutoff_angles</span></code></p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">device</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">dtype</span></code></p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p>&lt;attribute 'base' of 'numpy.dtype' objects&gt;</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">energy</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">ensemble_axes</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">ensemble_axes_metadata</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">ensemble_shape</span></code></p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>]</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">extent</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">fourier_space</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">fourier_space_axes_metadata</span></code></p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">List</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">AxisMetadata</span></code>]</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">fourier_space_sampling</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">full_cutoff_angles</span></code></p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">gpts</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">grid</span></code></p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">Grid</span></code></p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">is_complex</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">is_lazy</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">metadata</span></code></p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">Dict</span></code></p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_axes</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_base_axes</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_ensemble_axes</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">num_scan_axes</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">rectangle_cutoff_angles</span></code></p></td>
+<td><p><dl class="field-list simple">
+<dt class="field-odd">rtype</dt>
+<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]</p>
+</dd>
+</dl>
+</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sampling</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scan_axes</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scan_axes_metadata</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scan_sampling</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scan_shape</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">shape</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">tilt_axes</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">tilt_axes_metadata</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">wavelength</span></code></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.waves.core.Waves.apply_ctf">
+<span class="sig-name descname"><span class="pre">apply_ctf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ctf</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_batch</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves/core.html#Waves.apply_ctf"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.core.Waves.apply_ctf" title="Permalink to this definition">#</a></dt>
+<dd><p>Apply the aberrations and apertures of a Contrast Transfer Function to the wave functions.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>ctf</strong> (<em>CTF</em><em>, </em><em>optional</em>) – Contrast Transfer Function to be applied.</p></li>
+<li><p><strong>max_batch</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of wave functions in each chunk of the Dask array. If None, the number of chunks are
+automatically estimated based on “dask.chunk-size” in the user configuration.</p></li>
+<li><p><strong>kwargs</strong> – Provide the parameters of the contrast transfer function as keyword arguments. See <cite>abtem.transfer.CTF</cite>.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>aberrated_waves</strong> – The wave functions with the contrast transfer function applied.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><a class="reference internal" href="#abtem.waves.core.Waves" title="abtem.waves.core.Waves">Waves</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.waves.core.Waves.apply_transform">
+<span class="sig-name descname"><span class="pre">apply_transform</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">transform</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_batch</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves/core.html#Waves.apply_transform"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.core.Waves.apply_transform" title="Permalink to this definition">#</a></dt>
+<dd><p>Apply wave function transformation to the wave functions.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>transform</strong> (<a class="reference internal" href="abtem.waves.transfer.WaveTransform.html#abtem.waves.transfer.WaveTransform" title="abtem.waves.transfer.WaveTransform"><em>WaveTransform</em></a>) – Wave function transformation to apply.</p></li>
+<li><p><strong>max_batch</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of wave functions in each chunk of the Dask array. If None, the number of chunks are
+automatically estimated based on “dask.chunk-size” in the user configuration.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>transformed_waves</strong></p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><a class="reference internal" href="#abtem.waves.core.Waves" title="abtem.waves.core.Waves">Waves</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.waves.core.Waves.as_complex_diffraction">
+<span class="sig-name descname"><span class="pre">as_complex_diffraction</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">max_angle</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'cutoff'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_direct</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fftshift</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">parity</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'same'</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves/core.html#Waves.as_complex_diffraction"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.core.Waves.as_complex_diffraction" title="Permalink to this definition">#</a></dt>
+<dd><p>Calculate the complex array of the wave functions at the diffraction plane.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>max_angle</strong> (<em>{'cutoff'</em><em>, </em><em>'valid'}</em><em> or </em><em>float</em>) – <p>Maximum scattering angle of the diffraction patterns.</p>
+<blockquote>
+<div><dl class="simple">
+<dt><code class="docutils literal notranslate"><span class="pre">cutoff</span></code> :</dt><dd><p>The maximum scattering angle will be the cutoff of the antialias aperture.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">valid</span></code> :</dt><dd><p>The maximum scattering angle will be the largest rectangle that fits inside the circular antialias
+aperture.</p>
+</dd>
+</dl>
+</div></blockquote>
+</p></li>
+<li><p><strong>block_direct</strong> (<em>bool</em><em> or </em><em>float</em>) – If true the direct beam is masked.</p></li>
+<li><p><strong>fftshift</strong> (<em>bool</em>) – If true, shift the zero-angle component to the center of the diffraction patterns.</p></li>
+<li><p><strong>parity</strong> (<em>{'same'</em><em>, </em><em>'even'</em><em>, </em><em>'odd'</em><em>, </em><em>'none'}</em>) – The parity of the shape of the diffraction patterns.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>diffraction_patterns</strong></p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>DiffractionPatterns</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.waves.core.Waves.as_complex_image">
+<span class="sig-name descname"><span class="pre">as_complex_image</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves/core.html#Waves.as_complex_image"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.core.Waves.as_complex_image" title="Permalink to this definition">#</a></dt>
+<dd><p>Calculate the complex array of the wave functions at the image plane.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns</dt>
+<dd class="field-odd"><p><strong>intensity_images</strong> – The wave function intensity.</p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p>Images</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.waves.core.Waves.copy_to_device">
+<span class="sig-name descname"><span class="pre">copy_to_device</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">device</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.waves.core.Waves.copy_to_device" title="Permalink to this definition">#</a></dt>
+<dd><p>Copy array to specified device.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.waves.core.Waves.diffraction_patterns">
+<span class="sig-name descname"><span class="pre">diffraction_patterns</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">max_angle</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'cutoff'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_direct</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fftshift</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">parity</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'same'</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves/core.html#Waves.diffraction_patterns"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.core.Waves.diffraction_patterns" title="Permalink to this definition">#</a></dt>
+<dd><p>Calculate the intensity of the wave functions at the diffraction plane.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>max_angle</strong> (<em>{'cutoff'</em><em>, </em><em>'valid'}</em><em> or </em><em>float</em>) – <p>Maximum scattering angle of the diffraction patterns.</p>
+<blockquote>
+<div><dl class="simple">
+<dt><code class="docutils literal notranslate"><span class="pre">cutoff</span></code> :</dt><dd><p>The maximum scattering angle will be the cutoff of the antialias aperture.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">valid</span></code> :</dt><dd><p>The maximum scattering angle will be the largest rectangle that fits inside the circular antialias
+aperture.</p>
+</dd>
+</dl>
+</div></blockquote>
+</p></li>
+<li><p><strong>block_direct</strong> (<em>bool</em><em> or </em><em>float</em>) – If true the direct beam is masked.</p></li>
+<li><p><strong>fftshift</strong> (<em>bool</em>) – If true, shift the zero-angle component to the center of the diffraction patterns.</p></li>
+<li><p><strong>parity</strong> (<em>{'same'</em><em>, </em><em>'even'</em><em>, </em><em>'odd'</em><em>, </em><em>'none'}</em>) – The parity of the shape of the diffraction patterns.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>diffraction_patterns</strong></p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>DiffractionPatterns</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.waves.core.Waves.downsample">
+<span class="sig-name descname"><span class="pre">downsample</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">max_angle</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'cutoff'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gpts</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">normalization</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'values'</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves/core.html#Waves.downsample"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.core.Waves.downsample" title="Permalink to this definition">#</a></dt>
+<dd><p>Downsample the wave function to a lower maximum scattering angle.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>max_angle</strong> (<em>{'cutoff'</em><em>, </em><em>'valid'}</em><em> or </em><em>float</em><em>, </em><em>optional</em>) – <p>If not False, the scattering matrix is downsampled to a maximum given scattering angle after running the
+multislice algorithm.</p>
+<blockquote>
+<div><dl class="simple">
+<dt><code class="docutils literal notranslate"><span class="pre">cutoff</span></code> :</dt><dd><p>Downsample to the antialias cutoff scattering angle.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">valid</span></code> :</dt><dd><p>Downsample to the largest rectangle inside the circle with a radius defined by the antialias
+cutoff scattering angle.</p>
+</dd>
+<dt>float :</dt><dd><p>Downsample to a maximum scattering angle specified by a float.</p>
+</dd>
+</dl>
+</div></blockquote>
+</p></li>
+<li><p><strong>gpts</strong> (<em>two int</em><em>, </em><em>optional</em>) – Number of grid points of the waves after downsampling. If given, <cite>max_angle</cite> is not used.</p></li>
+<li><p><strong>normalization</strong> (<em>{'values'</em><em>, </em><em>'amplitude'}</em>) – <dl>
+<dt>The normalization parameter determines the preserved quantity after normalization.</dt><dd><p><code class="docutils literal notranslate"><span class="pre">values</span></code> :
+The pixelwise values of the wave function are preserved.</p>
+<p><code class="docutils literal notranslate"><span class="pre">amplitude</span></code> :
+The total amplitude of the wave function is preserved.</p>
+</dd>
+</dl>
+</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>The downsampled wave functions.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><a class="reference internal" href="#abtem.waves.core.Waves" title="abtem.waves.core.Waves">Waves</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.waves.core.Waves.from_zarr">
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_zarr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'auto'</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.waves.core.Waves.from_zarr" title="Permalink to this definition">#</a></dt>
+<dd><p>Read wave functions from a hdf5 file.</p>
+<dl class="simple">
+<dt>url<span class="classifier">str</span></dt><dd><p>Location of the data, typically a path to a local file. A URL can also include a protocol specifier like
+s3:// for remote data.</p>
+</dd>
+</dl>
+<p>chunks : int, optional</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.waves.core.Waves.intensity">
+<span class="sig-name descname"><span class="pre">intensity</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves/core.html#Waves.intensity"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.core.Waves.intensity" title="Permalink to this definition">#</a></dt>
+<dd><p>Calculate the intensity of the wave functions at the image plane.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns</dt>
+<dd class="field-odd"><p><strong>intensity_images</strong> – The wave function intensity.</p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p>Images</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.waves.core.Waves.multislice">
+<span class="sig-name descname"><span class="pre">multislice</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">potential</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">detectors</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">conjugate</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">transpose</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves/core.html#Waves.multislice"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.core.Waves.multislice" title="Permalink to this definition">#</a></dt>
+<dd><p>Propagate and transmit wave function through the provided potential using the multislice algorithm.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>potential</strong> (<em>Potential</em>) – The potential through which to propagate the wave function.</p></li>
+<li><p><strong>detectors</strong> (<a class="reference internal" href="abtem.measurements.detectors.Detector.html#abtem.measurements.detectors.Detector" title="abtem.measurements.detectors.Detector"><em>Detector</em></a><em> or </em><em>list of Detector</em>) – A detector or a list of detectors defining how the wave functions should be converted to measurements after
+running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.</p></li>
+<li><p><strong>conjugate</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, use the conjugate of the transmission function. Default is False.</p></li>
+<li><p><strong>transpose</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, reverse the order of propagation and transmission. Default is False.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>exit_waves</strong> – Wave function(s) at the exit plane(s) of the potential.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><a class="reference internal" href="#abtem.waves.core.Waves" title="abtem.waves.core.Waves">Waves</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.waves.core.Waves.phase_shift">
+<span class="sig-name descname"><span class="pre">phase_shift</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">shift</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves/core.html#Waves.phase_shift"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.core.Waves.phase_shift" title="Permalink to this definition">#</a></dt>
+<dd><p>Shift the phase of the wave functions by</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>shift</strong> – </p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.waves.core.Waves.show">
+<span class="sig-name descname"><span class="pre">show</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves/core.html#Waves.show"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.core.Waves.show" title="Permalink to this definition">#</a></dt>
+<dd><p>Show the wave function intensities.</p>
+<dl class="simple">
+<dt>kwargs :</dt><dd><p>Keyword arguments for the <cite>abtem.measurements.Images.show</cite> method.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.waves.core.Waves.tile">
+<span class="sig-name descname"><span class="pre">tile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">repetitions</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">normalization</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'values'</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves/core.html#Waves.tile"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.core.Waves.tile" title="Permalink to this definition">#</a></dt>
+<dd><p>Tile wave functions.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>repetitions</strong> (<em>two int</em>) – The number of repetitions of the wave functions along the x- and y-axis.</p></li>
+<li><p><strong>normalization</strong> (<em>{'intensity'</em><em>, </em><em>'values'}</em>) – </p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>tiled_wave_functions</strong></p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><a class="reference internal" href="#abtem.waves.core.Waves" title="abtem.waves.core.Waves">Waves</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.waves.core.Waves.to_zarr">
+<span class="sig-name descname"><span class="pre">to_zarr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">overwrite</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.waves.core.Waves.to_zarr" title="Permalink to this definition">#</a></dt>
+<dd><p>Write wave functions to a zarr file.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>url</strong> (<em>str</em>) – Location of the data, typically a path to a local file. A URL can also include a protocol specifier like
+s3:// for remote data.</p></li>
+<li><p><strong>overwrite</strong> (<em>bool</em>) – If given array already exists, overwrite=False will cause an error, where overwrite=True will replace the
+existing data.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+
+    <script type="text/x-thebe-config">
+    {
+        requestKernel: true,
+        binderOptions: {
+            repo: "binder-examples/jupyter-stacks-datascience",
+            ref: "master",
+        },
+        codeMirrorConfig: {
+            theme: "abcdef",
+            mode: "python"
+        },
+        kernelOptions: {
+            kernelName: "python3",
+            path: "./library/api/_autosummary"
+        },
+        predefinedOutput: true
+    }
+    </script>
+    <script>kernelName = 'python3'</script>
+
+              </div>
+              
+            </main>
+            <footer class="footer-article noprint">
+                
+    <!-- Previous / next buttons -->
+<div class='prev-next-area'>
+    <a class='left-prev' id="prev-link" href="abtem.waves.core.PlaneWave.html" title="previous page">
+        <i class="fas fa-angle-left"></i>
+        <div class="prev-next-info">
+            <p class="prev-next-subtitle">previous</p>
+            <p class="prev-next-title">PlaneWave</p>
+        </div>
+    </a>
+    <a class='right-next' id="next-link" href="abtem.waves.transfer.WaveTransform.html" title="next page">
+    <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">WaveTransform</p>
+    </div>
+    <i class="fas fa-angle-right"></i>
+    </a>
+</div>
+            </footer>
+        </div>
+    </div>
+    <div class="footer-content row">
+        <footer class="col footer"><p>
+  
+    By The abTEM developers<br/>
+  
+      &copy; Copyright 2022.<br/>
+</p>
+        </footer>
+    </div>
+    
+</div>
+
+
+      </div>
+    </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script src="../../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
+
+
+  </body>
+</html>

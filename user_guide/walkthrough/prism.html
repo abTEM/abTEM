@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,6 +34,7 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
@@ -55,9 +56,9 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="ab initio potentials with GPAW" href="charge_density.html" />
-    <link rel="prev" title="Performance, parallelization and GPUs" href="performance.html" />
+    <link rel="prev" title="Parallelization, Dask and GPUs" href="performance.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -190,7 +191,7 @@ const thebe_selector_output = ".output, .cell_output"
    </li>
    <li class="toctree-l2">
     <a class="reference internal" href="performance.html">
-     Performance, parallelization and GPUs
+     Parallelization, Dask and GPUs
     </a>
    </li>
    <li class="toctree-l2 current active">
@@ -285,8 +286,8 @@ const thebe_selector_output = ".output, .cell_output"
 </p>
 <ul class="nav bd-sidenav">
  <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../../library/api.html">
-   API Reference
+  <a class="reference internal" href="../../library/api/api.html">
+   API
   </a>
   <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
   <label for="toctree-checkbox-4">
@@ -294,21 +295,75 @@ const thebe_selector_output = ".output, .cell_output"
    </i>
   </label>
   <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../library/_autosummary/abtem.waves.waves.Probe.html">
-     abtem.waves.waves.Probe
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/waves.html">
+     waves
     </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
+    <label for="toctree-checkbox-5">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.Probe.html">
+       Probe
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.PlaneWave.html">
+       PlaneWave
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.Waves.html">
+       Waves
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.transfer.WaveTransform.html">
+       WaveTransform
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/measure.html">
+     measurements
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/>
+    <label for="toctree-checkbox-6">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.core.Measurement.html">
+       Measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.detectors.Detector.html">
+       Detector
+      </a>
+     </li>
+    </ul>
    </li>
   </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library/bibliography.html">
-   Bibliography
+  <a class="reference internal" href="../../library/config.html">
+   Configuration
   </a>
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../../library/contributing.html">
    Contributing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library/bibliography.html">
+   Bibliography
   </a>
  </li>
  <li class="toctree-l1">
@@ -641,14 +696,13 @@ title="Print to PDF"
 <span class="kn">from</span> <span class="nn">ase.io</span> <span class="kn">import</span> <span class="n">read</span>
 
 <span class="kn">import</span> <span class="nn">abtem</span>
-<span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s1">&#39;fft&#39;</span><span class="p">:</span><span class="s1">&#39;fftw&#39;</span><span class="p">})</span>
 <span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s1">&#39;local_diagnostics.progress_bar&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">});</span>
 </pre></div>
 </div>
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="prism">
-<h1>PRISM<a class="headerlink" href="#prism" title="Permalink to this headline">#</a></h1>
+<span id="getting-started-user-guide-contrast-transfer-function"></span><h1>PRISM<a class="headerlink" href="#prism" title="Permalink to this heading">#</a></h1>
 <p>Multslice simulations of STEM images is computationally expensive because the selectron cattering have to be calculated from scratch at each probe position. This can be mitigated by using parallel hardware or GPUs, see our introduction to distributed parallelization and GPUs.</p>
 <p>An alternative, that does not require more hardware, is to use the PRISM algorithm <span id="id1">[<a class="reference internal" href="../../library/bibliography.html#id7" title="Colin Ophus. A fast image simulation algorithm for scanning transmission electron microscopy. Advanced Structural and Chemical Imaging, 2017.">Oph17</a>]</span>. At zero cost to accuracy, PRISM almost always speeds up simulations of images with many probe positions. Introducing approximations in the form of Fourier space interpolation, PRISM can reach speedups of several 100 times at a minor cost to the accuracy.</p>
 <p>The downside to PRISM is an increased memory requirement, which can be prohibitive, especially if a requirement of good Fourier space sampling prohibits interpolation. A solution to this issue is using the partitioned PRISM algorithm introduced at the end of this document.</p>
@@ -657,7 +711,7 @@ title="Print to PDF"
 <p>Our PRISM quickstart example provides a basic template for doing STEM simulations with PRISM in <em>abTEM</em>.</p>
 </div>
 <section id="the-prism-scattering-matrix">
-<h2>The PRISM scattering matrix<a class="headerlink" href="#the-prism-scattering-matrix" title="Permalink to this headline">#</a></h2>
+<h2>The PRISM scattering matrix<a class="headerlink" href="#the-prism-scattering-matrix" title="Permalink to this heading">#</a></h2>
 <p>We derive the PRISM algorithm from the perspective of writing the (discretized) probe wave function as an expansion of plane waves.</p>
 <div class="math notranslate nohighlight">
 \[
@@ -675,22 +729,22 @@ title="Print to PDF"
 \]</div>
 <p>where <span class="math notranslate nohighlight">\(\Delta_{q}\)</span> is the Fourier space sampling rate. The complex expansion coefficients <span class="math notranslate nohighlight">\(C_{nm}\)</span> may be chosen to select a specified probe position or phase error. Since the Fourier space probe wave function is zero beyond the convergence semi-angle, we may limit the number of terms in the expansion by a cutoff <span class="math notranslate nohighlight">\(\alpha_{max}\)</span>. Thus only the terms fulfilling</p>
 <div class="math notranslate nohighlight" id="equation-eq-prism-cutoff">
-<span class="eqno">(2)<a class="headerlink" href="#equation-eq-prism-cutoff" title="Permalink to this equation">#</a></span>\[
+<span class="eqno">(4)<a class="headerlink" href="#equation-eq-prism-cutoff" title="Permalink to this equation">#</a></span>\[
     \sqrt{n ^ 2 + m ^ 2} \lambda \Delta_q \leq \alpha_{max}
 \]</div>
 <p>needs to be included in the expansion.</p>
 <p>We use the symbol <span class="math notranslate nohighlight">\(\mathcal{M}\)</span> to represent the application of the multislice algorithm (see appendix Eq. ), thus the exit wave is given by</p>
 <div class="math notranslate nohighlight" id="equation-eq-prism">
-<span class="eqno">(3)<a class="headerlink" href="#equation-eq-prism" title="Permalink to this equation">#</a></span>\[
+<span class="eqno">(5)<a class="headerlink" href="#equation-eq-prism" title="Permalink to this equation">#</a></span>\[
     \phi_{exit}(\vec{r}) = \mathcal{M} \sum_{nm} C_{nm} S_{nm} = \sum_{nm} C_{nm} \mathcal{M} S_{nm} \quad ,
 \]</div>
 <p>where the second equality uses that the multislice algorithm is coherent.</p>
 <p>The PRISM algorithm for STEM simulations may be summarised as two consecutive stages:</p>
 <p><strong>Multislice stage:</strong> Build the PRISM scattering matrix by applying the multislice algorithm to each plane wave of the expansion, i.e. calculate the set of waves <span class="math notranslate nohighlight">\(\mathcal{M} S_{nm}\)</span>.</p>
-<p><strong>Reduction stage:</strong> For each probe position, perform the reduction in Eq. <a class="reference internal" href="#equation-eq-prism">(3)</a> with a set of expansion coefficients determined by the probe position.</p>
+<p><strong>Reduction stage:</strong> For each probe position, perform the reduction in Eq. <a class="reference internal" href="#equation-eq-prism">(5)</a> with a set of expansion coefficients determined by the probe position.</p>
 </section>
 <section id="the-smatrix">
-<h2>The <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code><a class="headerlink" href="#the-smatrix" title="Permalink to this headline">#</a></h2>
+<h2>The <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code><a class="headerlink" href="#the-smatrix" title="Permalink to this heading">#</a></h2>
 <p>We import the atomic model of the SrTiO<sub>3</sub>/LaTiO<sub>3</sub> interface created <a class="reference internal" href="atomic_models-Copy1.html#user-guide-walkthrough-atomic-models"><span class="std std-ref">here</span></a> and make a <code class="docutils literal notranslate"><span class="pre">Potential</span></code>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -706,7 +760,7 @@ title="Print to PDF"
 <img alt="../../_images/prism_2_0.png" src="../../_images/prism_2_0.png" />
 </div>
 </div>
-<p>In <em>abTEM</em>, the PRISM scattering matrix (i.e. the set of waves <span class="math notranslate nohighlight">\(\mathcal{M} S_{nm}\)</span>) is represented by the <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code>. The expansion cutoff angle, <span class="math notranslate nohighlight">\(\alpha_{max}\)</span>, is given as <code class="docutils literal notranslate"><span class="pre">planewave_cutoff</span></code>. In addition to <span class="math notranslate nohighlight">\(\alpha_{max}\)</span>, the number of plane wave in the expansion increases with the energy and the extent of the potential, because they, respectively, decrease <span class="math notranslate nohighlight">\(\lambda\)</span> and <span class="math notranslate nohighlight">\(\Delta_q\)</span> in Eq. <a class="reference internal" href="#equation-eq-prism-cutoff">(2)</a>.</p>
+<p>In <em>abTEM</em>, the PRISM scattering matrix (i.e. the set of waves <span class="math notranslate nohighlight">\(\mathcal{M} S_{nm}\)</span>) is represented by the <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code>. The expansion cutoff angle, <span class="math notranslate nohighlight">\(\alpha_{max}\)</span>, is given as <code class="docutils literal notranslate"><span class="pre">planewave_cutoff</span></code>. In addition to <span class="math notranslate nohighlight">\(\alpha_{max}\)</span>, the number of plane wave in the expansion increases with the energy and the extent of the potential, because they, respectively, decrease <span class="math notranslate nohighlight">\(\lambda\)</span> and <span class="math notranslate nohighlight">\(\Delta_q\)</span> in Eq. <a class="reference internal" href="#equation-eq-prism-cutoff">(4)</a>.</p>
 <p>We create an <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code> representing the SrTiO<sub>3</sub>/LaTiO<sub>3</sub> model for an energy of <span class="math notranslate nohighlight">\(150 \ \mathrm{keV}\)</span> and an expansion cutoff angle of <span class="math notranslate nohighlight">\(20 \ \mathrm{mrad}\)</span>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -729,19 +783,48 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.prism.SMatrixArray object at 0x7fd3e63448c0&gt;
----------------------------------------------------------
+<div class="output traceback highlight-ipythontb notranslate"><div class="highlight"><pre><span></span><span class="gt">---------------------------------------------------------------------------</span>
+<span class="ne">AttributeError</span><span class="g g-Whitespace">                            </span>Traceback (most recent call last)
+<span class="o">&lt;</span><span class="n">ipython</span><span class="o">-</span><span class="nb">input</span><span class="o">-</span><span class="mi">5</span><span class="o">-</span><span class="n">a44023de1b54</span><span class="o">&gt;</span> <span class="ow">in</span> <span class="o">&lt;</span><span class="n">module</span><span class="o">&gt;</span>
+<span class="ne">----&gt; </span><span class="mi">1</span> <span class="n">s_matrix_array</span> <span class="o">=</span> <span class="n">s_matrix</span><span class="o">.</span><span class="n">build</span><span class="p">()</span>
+<span class="g g-Whitespace">      </span><span class="mi">2</span> <span class="n">s_matrix_array</span>
 
-type           label    coordinates
--------------  -------  -------------------
-OrdinalAxis    (n, m)   -
-RealSpaceAxis  x [Å]    0.00 0.04 ... 11.11
-RealSpaceAxis  y [Å]    0.00 0.04 ... 23.63
+<span class="nn">~/PycharmProjects/abTEM_dask/abtem/waves/prism.py</span> in <span class="ni">build</span><span class="nt">(self, lazy, max_batch)</span>
+<span class="g g-Whitespace">    </span><span class="mi">967</span>                 <span class="n">concatenate</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<span class="g g-Whitespace">    </span><span class="mi">968</span>                 <span class="n">meta</span><span class="o">=</span><span class="n">xp</span><span class="o">.</span><span class="n">array</span><span class="p">((),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">complex64</span><span class="p">),</span>
+<span class="ne">--&gt; </span><span class="mi">969</span>                 <span class="o">**</span><span class="p">{</span><span class="s2">&quot;s_matrix_partial&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_s_matrix_partial</span><span class="p">()}</span>
+<span class="g g-Whitespace">    </span><span class="mi">970</span>             <span class="p">)</span>
+<span class="g g-Whitespace">    </span><span class="mi">971</span> 
 
-        bytes       shape            count     type
-------  ----------  ---------------  --------  -------------
-array   385.00 MiB  (375, 252, 534)  18 tasks  complex64
-chunks  51.33 MiB   (50, 252, 534)   8 chunks  numpy.ndarray
+<span class="nn">~/PycharmProjects/abTEM_dask/abtem/waves/prism.py</span> in <span class="ni">_s_matrix_partial</span><span class="nt">(self)</span>
+<span class="g g-Whitespace">    </span><span class="mi">872</span>             <span class="n">s_matrix</span><span class="p">,</span>
+<span class="g g-Whitespace">    </span><span class="mi">873</span>             <span class="n">potential_partial</span><span class="o">=</span><span class="n">potential_partial</span><span class="p">,</span>
+<span class="ne">--&gt; </span><span class="mi">874</span>             <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">copy_kwargs</span><span class="p">(</span><span class="n">exclude</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;potential&quot;</span><span class="p">,))</span>
+<span class="g g-Whitespace">    </span><span class="mi">875</span>         <span class="p">)</span>
+<span class="g g-Whitespace">    </span><span class="mi">876</span> 
+
+<span class="nn">~/PycharmProjects/abTEM_dask/abtem/core/utils.py</span> in <span class="ni">copy_kwargs</span><span class="nt">(self, exclude, cls)</span>
+<span class="g g-Whitespace">     </span><span class="mi">35</span>         <span class="n">exclude</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_exclude_from_copy</span> <span class="o">+</span> <span class="n">exclude</span>
+<span class="g g-Whitespace">     </span><span class="mi">36</span>         <span class="n">keys</span> <span class="o">=</span> <span class="p">[</span><span class="n">key</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_arg_keys</span><span class="p">(</span><span class="bp">cls</span><span class="p">)</span> <span class="k">if</span> <span class="n">key</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">exclude</span><span class="p">]</span>
+<span class="ne">---&gt; </span><span class="mi">37</span>         <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="n">key</span><span class="p">:</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">))</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">keys</span><span class="p">}</span>
+<span class="g g-Whitespace">     </span><span class="mi">38</span>         <span class="k">return</span> <span class="n">kwargs</span>
+<span class="g g-Whitespace">     </span><span class="mi">39</span> 
+
+<span class="nn">~/PycharmProjects/abTEM_dask/abtem/core/utils.py</span> in <span class="ni">&lt;dictcomp&gt;</span><span class="nt">(.0)</span>
+<span class="g g-Whitespace">     </span><span class="mi">35</span>         <span class="n">exclude</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_exclude_from_copy</span> <span class="o">+</span> <span class="n">exclude</span>
+<span class="g g-Whitespace">     </span><span class="mi">36</span>         <span class="n">keys</span> <span class="o">=</span> <span class="p">[</span><span class="n">key</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_arg_keys</span><span class="p">(</span><span class="bp">cls</span><span class="p">)</span> <span class="k">if</span> <span class="n">key</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">exclude</span><span class="p">]</span>
+<span class="ne">---&gt; </span><span class="mi">37</span>         <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="n">key</span><span class="p">:</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">))</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">keys</span><span class="p">}</span>
+<span class="g g-Whitespace">     </span><span class="mi">38</span>         <span class="k">return</span> <span class="n">kwargs</span>
+<span class="g g-Whitespace">     </span><span class="mi">39</span> 
+
+<span class="nn">~/PycharmProjects/abTEM_dask/abtem/waves/prism.py</span> in <span class="ni">tilt</span><span class="nt">(self)</span>
+<span class="g g-Whitespace">    </span><span class="mi">698</span>     <span class="nd">@property</span>
+<span class="g g-Whitespace">    </span><span class="mi">699</span>     <span class="k">def</span> <span class="nf">tilt</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="ne">--&gt; </span><span class="mi">700</span>         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_beam_tilt</span><span class="o">.</span><span class="n">tilt</span>
+<span class="g g-Whitespace">    </span><span class="mi">701</span> 
+<span class="g g-Whitespace">    </span><span class="mi">702</span>     <span class="k">def</span> <span class="nf">round_gpts_to_interpolation</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+
+<span class="ne">AttributeError</span>: &#39;SMatrix&#39; object has no attribute &#39;_beam_tilt&#39;
 </pre></div>
 </div>
 </div>
@@ -795,7 +878,7 @@ Ratio: 5.4
 <p>The reduction stage is typically significantly faster than the multislice stage, however, this depends completely on the number of slices in the potential. Using PRISM the present example took about 1 min 30s on a mid-range laptop, while the equivalent conventional multislice algorithm took 6 min, hence the actual speedup from using PRISM was about a factor of 4.</p>
 </section>
 <section id="prism-interpolation">
-<h2>PRISM interpolation<a class="headerlink" href="#prism-interpolation" title="Permalink to this headline">#</a></h2>
+<h2>PRISM interpolation<a class="headerlink" href="#prism-interpolation" title="Permalink to this heading">#</a></h2>
 <p>The real speedup with PRISM comes when introducing interpolation. Choosing the interpolation factors <span class="math notranslate nohighlight">\((f_n, f_m)\)</span> the wave vectors should fulfill</p>
 <div class="math notranslate nohighlight">
 \[
@@ -894,7 +977,7 @@ Ratio: 5.4
 </div>
 <p>In the above we interpolated by twice the factor in <span class="math notranslate nohighlight">\(y\)</span> compared to <span class="math notranslate nohighlight">\(x\)</span>. Interpolation effectively repeats the probe, hence the “window” that the repeated probes shrinks as interpolation increases. Hence when the potential extent is larger, we can interpolate by a larger factor before the probes starts to get squeezed.</p>
 <section id="choosing-the-interpolation">
-<h3>Choosing the interpolation<a class="headerlink" href="#choosing-the-interpolation" title="Permalink to this headline">#</a></h3>
+<h3>Choosing the interpolation<a class="headerlink" href="#choosing-the-interpolation" title="Permalink to this heading">#</a></h3>
 <p>Choosing an appropriate interpolation factor can</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -922,10 +1005,10 @@ Ratio: 5.4
 </section>
 </section>
 <section id="prism-with-phase-aberrations">
-<h2>PRISM with phase aberrations<a class="headerlink" href="#prism-with-phase-aberrations" title="Permalink to this headline">#</a></h2>
+<h2>PRISM with phase aberrations<a class="headerlink" href="#prism-with-phase-aberrations" title="Permalink to this heading">#</a></h2>
 </section>
 <section id="parallel-reduction-in-abtem">
-<h2>Parallel reduction in <em>abTEM</em><a class="headerlink" href="#parallel-reduction-in-abtem" title="Permalink to this headline">#</a></h2>
+<h2>Parallel reduction in <em>abTEM</em><a class="headerlink" href="#parallel-reduction-in-abtem" title="Permalink to this heading">#</a></h2>
 </section>
 </section>
 
@@ -960,7 +1043,7 @@ Ratio: 5.4
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Performance, parallelization and GPUs</p>
+            <p class="prev-next-title">Parallelization, Dask and GPUs</p>
         </div>
     </a>
     <a class='right-next' id="next-link" href="charge_density.html" title="next page">

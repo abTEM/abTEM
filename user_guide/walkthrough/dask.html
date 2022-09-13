@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,6 +34,7 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
@@ -53,7 +54,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -186,7 +187,7 @@ const thebe_selector_output = ".output, .cell_output"
    </li>
    <li class="toctree-l2">
     <a class="reference internal" href="performance.html">
-     Performance, parallelization and GPUs
+     Parallelization, Dask and GPUs
     </a>
    </li>
    <li class="toctree-l2">
@@ -281,8 +282,8 @@ const thebe_selector_output = ".output, .cell_output"
 </p>
 <ul class="nav bd-sidenav">
  <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../../library/api.html">
-   API Reference
+  <a class="reference internal" href="../../library/api/api.html">
+   API
   </a>
   <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
   <label for="toctree-checkbox-4">
@@ -290,21 +291,75 @@ const thebe_selector_output = ".output, .cell_output"
    </i>
   </label>
   <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../library/_autosummary/abtem.waves.waves.Probe.html">
-     abtem.waves.waves.Probe
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/waves.html">
+     waves
     </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
+    <label for="toctree-checkbox-5">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.Probe.html">
+       Probe
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.PlaneWave.html">
+       PlaneWave
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.Waves.html">
+       Waves
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.transfer.WaveTransform.html">
+       WaveTransform
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/measure.html">
+     measurements
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/>
+    <label for="toctree-checkbox-6">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.core.Measurement.html">
+       Measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.detectors.Detector.html">
+       Detector
+      </a>
+     </li>
+    </ul>
    </li>
   </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library/bibliography.html">
-   Bibliography
+  <a class="reference internal" href="../../library/config.html">
+   Configuration
   </a>
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../../library/contributing.html">
    Contributing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library/bibliography.html">
+   Bibliography
   </a>
  </li>
  <li class="toctree-l1">
@@ -583,11 +638,10 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="abtem-and-dask">
-<h1>abTEM and Dask<a class="headerlink" href="#abtem-and-dask" title="Permalink to this headline">#</a></h1>
+<h1>abTEM and Dask<a class="headerlink" href="#abtem-and-dask" title="Permalink to this heading">#</a></h1>
 <p>Parallel computation in abTEM whether it is running on a laptop or a High Performance Computing cluster goes through <a class="reference external" href="https://dask.org/">Dask</a>. Some knowledge of Dask may be required to run abTEM effectively on large multi-CPU/GPU systems, however, if you are just running abTEM on your own computer, this tutorial gets you started. If you want a quick introduction to Dask, we recommend <a class="reference external" href="https://www.youtube.com/watch?v=nnndxbr_Xq4&amp;t=66s">this</a> short youtube video.</p>
 <section id="lazy-computations-and-task-graphs">
-<h2>Lazy computations and task graphs<a class="headerlink" href="#lazy-computations-and-task-graphs" title="Permalink to this headline">#</a></h2>
-<p>Computations in abTEM can be <em>lazy</em> (otherwise called <em>delayed</em>), as an example this means that we can create the tasks required for building a probe wave function without actually running that calculation.</p>
+<h2>Lazy computations and task graphs<a class="headerlink" href="#lazy-computations-and-task-graphs" title="Permalink to this heading">#</a></h2>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">probe</span> <span class="o">=</span> <span class="n">Probe</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">,</span> <span class="n">extent</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">gpts</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
@@ -877,7 +931,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="the-task-scheduler-and-deployment-of-abtem">
-<h2>The task scheduler and deployment of abTEM<a class="headerlink" href="#the-task-scheduler-and-deployment-of-abtem" title="Permalink to this headline">#</a></h2>
+<h2>The task scheduler and deployment of abTEM<a class="headerlink" href="#the-task-scheduler-and-deployment-of-abtem" title="Permalink to this heading">#</a></h2>
 <p>After the task graph is generated, it has to be executed on parallel hardware, this is the job of a <a class="reference external" href="https://docs.dask.org/en/stable/scheduling.html">task scheduler</a>. The execution of abTEM simulation can be customized by passing the same arguments avaiable for Dask collections. For example:</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">

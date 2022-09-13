@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -33,6 +33,7 @@
     <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
     <script src="_static/jquery.js"></script>
     <script src="_static/underscore.js"></script>
+    <script src="_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="_static/doctools.js"></script>
     <script src="_static/clipboard.min.js"></script>
     <script src="_static/copybutton.js"></script>
@@ -52,7 +53,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="index" title="Index" href="#" />
     <link rel="search" title="Search" href="search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="None">
+    <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
@@ -184,8 +185,16 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="user_guide/walkthrough/performance.html">
-     Performance, parallelization and GPUs
+    <a class="reference internal" href="user_guide/walkthrough/charge_density.html">
+     <em>
+      ab initio
+     </em>
+     potentials with GPAW
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="user_guide/walkthrough/partial_coherence.html">
+     Partial coherence
     </a>
    </li>
    <li class="toctree-l2">
@@ -194,11 +203,8 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="user_guide/walkthrough/charge_density.html">
-     <em>
-      ab initio
-     </em>
-     potentials with GPAW
+    <a class="reference internal" href="user_guide/walkthrough/performance.html">
+     Parallelization, Dask and GPUs
     </a>
    </li>
   </ul>
@@ -280,8 +286,8 @@ const thebe_selector_output = ".output, .cell_output"
 </p>
 <ul class="nav bd-sidenav">
  <li class="toctree-l1 has-children">
-  <a class="reference internal" href="library/api.html">
-   API Reference
+  <a class="reference internal" href="library/api/api.html">
+   API
   </a>
   <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
   <label for="toctree-checkbox-4">
@@ -289,21 +295,75 @@ const thebe_selector_output = ".output, .cell_output"
    </i>
   </label>
   <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="library/_autosummary/abtem.waves.waves.Probe.html">
-     abtem.waves.waves.Probe
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="library/api/waves.html">
+     waves
     </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
+    <label for="toctree-checkbox-5">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="library/api/_autosummary/abtem.waves.core.Probe.html">
+       Probe
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="library/api/_autosummary/abtem.waves.core.PlaneWave.html">
+       PlaneWave
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="library/api/_autosummary/abtem.waves.core.Waves.html">
+       Waves
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="library/api/_autosummary/abtem.waves.transfer.WaveTransform.html">
+       WaveTransform
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="library/api/measure.html">
+     measurements
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/>
+    <label for="toctree-checkbox-6">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="library/api/_autosummary/abtem.measurements.core.Measurement.html">
+       Measurement
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="library/api/_autosummary/abtem.measurements.detectors.Detector.html">
+       Detector
+      </a>
+     </li>
+    </ul>
    </li>
   </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="library/bibliography.html">
-   Bibliography
+  <a class="reference internal" href="library/config.html">
+   Configuration
   </a>
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="library/contributing.html">
    Contributing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="library/bibliography.html">
+   Bibliography
   </a>
  </li>
  <li class="toctree-l1">
@@ -449,21 +509,193 @@ title="Open an issue"
 
 <div class="genindex-jumpbox">
  <a href="#_"><strong>_</strong></a>
+ | <a href="#A"><strong>A</strong></a>
+ | <a href="#B"><strong>B</strong></a>
+ | <a href="#C"><strong>C</strong></a>
+ | <a href="#D"><strong>D</strong></a>
+ | <a href="#F"><strong>F</strong></a>
+ | <a href="#I"><strong>I</strong></a>
+ | <a href="#M"><strong>M</strong></a>
  | <a href="#P"><strong>P</strong></a>
+ | <a href="#S"><strong>S</strong></a>
+ | <a href="#T"><strong>T</strong></a>
+ | <a href="#W"><strong>W</strong></a>
  
 </div>
 <h2 id="_">_</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="library/_autosummary/abtem.waves.waves.Probe.html#abtem.waves.waves.Probe.__init__">__init__() (abtem.waves.waves.Probe method)</a>
+      <li><a href="library/api/_autosummary/abtem.measurements.core.Measurement.html#abtem.measurements.core.Measurement.__init__">__init__() (abtem.measurements.core.Measurement method)</a>
+
+      <ul>
+        <li><a href="library/api/_autosummary/abtem.measurements.detectors.Detector.html#abtem.measurements.detectors.Detector.__init__">(abtem.measurements.detectors.Detector method)</a>
 </li>
+        <li><a href="library/api/_autosummary/abtem.waves.core.PlaneWave.html#abtem.waves.core.PlaneWave.__init__">(abtem.waves.core.PlaneWave method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.waves.core.Probe.html#abtem.waves.core.Probe.__init__">(abtem.waves.core.Probe method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.waves.core.Waves.html#abtem.waves.core.Waves.__init__">(abtem.waves.core.Waves method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.waves.transfer.WaveTransform.html#abtem.waves.transfer.WaveTransform.__init__">(abtem.waves.transfer.WaveTransform method)</a>
+</li>
+      </ul></li>
+  </ul></td>
+</tr></table>
+
+<h2 id="A">A</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.waves.core.Probe.html#abtem.waves.core.Probe.aberrations">aberrations (abtem.waves.core.Probe property)</a>
+</li>
+      <li><a href="library/api/_autosummary/abtem.waves.core.Probe.html#abtem.waves.core.Probe.aperture">aperture (abtem.waves.core.Probe property)</a>
+</li>
+      <li><a href="library/api/_autosummary/abtem.waves.core.Waves.html#abtem.waves.core.Waves.apply_ctf">apply_ctf() (abtem.waves.core.Waves method)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.waves.core.Waves.html#abtem.waves.core.Waves.apply_transform">apply_transform() (abtem.waves.core.Waves method)</a>
+</li>
+      <li><a href="library/api/_autosummary/abtem.waves.core.Waves.html#abtem.waves.core.Waves.as_complex_diffraction">as_complex_diffraction() (abtem.waves.core.Waves method)</a>
+</li>
+      <li><a href="library/api/_autosummary/abtem.waves.core.Waves.html#abtem.waves.core.Waves.as_complex_image">as_complex_image() (abtem.waves.core.Waves method)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="B">B</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.waves.core.PlaneWave.html#abtem.waves.core.PlaneWave.build">build() (abtem.waves.core.PlaneWave method)</a>
+
+      <ul>
+        <li><a href="library/api/_autosummary/abtem.waves.core.Probe.html#abtem.waves.core.Probe.build">(abtem.waves.core.Probe method)</a>
+</li>
+      </ul></li>
+  </ul></td>
+</tr></table>
+
+<h2 id="C">C</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.measurements.core.Measurement.html#abtem.measurements.core.Measurement.copy_to_device">copy_to_device() (abtem.measurements.core.Measurement method)</a>
+
+      <ul>
+        <li><a href="library/api/_autosummary/abtem.waves.core.Waves.html#abtem.waves.core.Waves.copy_to_device">(abtem.waves.core.Waves method)</a>
+</li>
+      </ul></li>
+  </ul></td>
+</tr></table>
+
+<h2 id="D">D</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.measurements.detectors.Detector.html#abtem.measurements.detectors.Detector">Detector (class in abtem.measurements.detectors)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.waves.core.Waves.html#abtem.waves.core.Waves.diffraction_patterns">diffraction_patterns() (abtem.waves.core.Waves method)</a>
+</li>
+      <li><a href="library/api/_autosummary/abtem.waves.core.Waves.html#abtem.waves.core.Waves.downsample">downsample() (abtem.waves.core.Waves method)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="F">F</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.measurements.core.Measurement.html#abtem.measurements.core.Measurement.from_zarr">from_zarr() (abtem.measurements.core.Measurement class method)</a>
+
+      <ul>
+        <li><a href="library/api/_autosummary/abtem.waves.core.Waves.html#abtem.waves.core.Waves.from_zarr">(abtem.waves.core.Waves class method)</a>
+</li>
+      </ul></li>
+  </ul></td>
+</tr></table>
+
+<h2 id="I">I</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.waves.core.Waves.html#abtem.waves.core.Waves.intensity">intensity() (abtem.waves.core.Waves method)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="M">M</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.measurements.core.Measurement.html#abtem.measurements.core.Measurement">Measurement (class in abtem.measurements.core)</a>
+</li>
+      <li><a href="library/api/_autosummary/abtem.waves.core.PlaneWave.html#abtem.waves.core.PlaneWave.multislice">multislice() (abtem.waves.core.PlaneWave method)</a>
+
+      <ul>
+        <li><a href="library/api/_autosummary/abtem.waves.core.Probe.html#abtem.waves.core.Probe.multislice">(abtem.waves.core.Probe method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.waves.core.Waves.html#abtem.waves.core.Waves.multislice">(abtem.waves.core.Waves method)</a>
+</li>
+      </ul></li>
   </ul></td>
 </tr></table>
 
 <h2 id="P">P</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="library/_autosummary/abtem.waves.waves.Probe.html#abtem.waves.waves.Probe">Probe (class in abtem.waves.waves)</a>
+      <li><a href="library/api/_autosummary/abtem.waves.core.Waves.html#abtem.waves.core.Waves.phase_shift">phase_shift() (abtem.waves.core.Waves method)</a>
+</li>
+      <li><a href="library/api/_autosummary/abtem.waves.core.PlaneWave.html#abtem.waves.core.PlaneWave">PlaneWave (class in abtem.waves.core)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.measurements.core.Measurement.html#abtem.measurements.core.Measurement.poisson_noise">poisson_noise() (abtem.measurements.core.Measurement method)</a>
+</li>
+      <li><a href="library/api/_autosummary/abtem.waves.core.Probe.html#abtem.waves.core.Probe">Probe (class in abtem.waves.core)</a>
+</li>
+      <li><a href="library/api/_autosummary/abtem.waves.core.Probe.html#abtem.waves.core.Probe.profile">profile() (abtem.waves.core.Probe method)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="S">S</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.waves.core.Probe.html#abtem.waves.core.Probe.scan">scan() (abtem.waves.core.Probe method)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.waves.core.Probe.html#abtem.waves.core.Probe.show">show() (abtem.waves.core.Probe method)</a>
+
+      <ul>
+        <li><a href="library/api/_autosummary/abtem.waves.core.Waves.html#abtem.waves.core.Waves.show">(abtem.waves.core.Waves method)</a>
+</li>
+      </ul></li>
+  </ul></td>
+</tr></table>
+
+<h2 id="T">T</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.waves.core.Waves.html#abtem.waves.core.Waves.tile">tile() (abtem.waves.core.Waves method)</a>
+</li>
+      <li><a href="library/api/_autosummary/abtem.measurements.core.Measurement.html#abtem.measurements.core.Measurement.to_hyperspy">to_hyperspy() (abtem.measurements.core.Measurement method)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.measurements.core.Measurement.html#abtem.measurements.core.Measurement.to_zarr">to_zarr() (abtem.measurements.core.Measurement method)</a>
+
+      <ul>
+        <li><a href="library/api/_autosummary/abtem.waves.core.Waves.html#abtem.waves.core.Waves.to_zarr">(abtem.waves.core.Waves method)</a>
+</li>
+      </ul></li>
+  </ul></td>
+</tr></table>
+
+<h2 id="W">W</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.waves.core.Waves.html#abtem.waves.core.Waves">Waves (class in abtem.waves.core)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.waves.transfer.WaveTransform.html#abtem.waves.transfer.WaveTransform">WaveTransform (class in abtem.waves.transfer)</a>
 </li>
   </ul></td>
 </tr></table>
