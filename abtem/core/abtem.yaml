@@ -9,6 +9,8 @@ dask:
   chunk-size-gpu: 512 MB
 cupy:
   fft-cache-size: 0 MB
+mkl:
+  threads: 1
 fftw:
   threads: 1
   planning_effort: FFTW_MEASURE

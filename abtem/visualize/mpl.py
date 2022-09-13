@@ -448,8 +448,6 @@ def plot_diffraction_pattern(
         hkl, intensities, hexagonal=hexagonal, intensity_split=intensity_split
     )
 
-    spot_threshold
-
     for i, coordinate in enumerate(coordinates):
         if include[i]:  # or label_mode == "all":
             if hexagonal:

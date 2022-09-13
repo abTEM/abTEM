@@ -55,6 +55,8 @@ def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
             )
 
             return fftw_obj()
+        elif config.get("fft") == "numpy":
+            return getattr(np.fft, func_name)(x, **kwargs)
         else:
             raise RuntimeError()
 
