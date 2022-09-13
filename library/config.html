@@ -188,8 +188,16 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user_guide/walkthrough/performance.html">
-     Parallelization, Dask and GPUs
+    <a class="reference internal" href="../user_guide/walkthrough/charge_density.html">
+     <em>
+      ab initio
+     </em>
+     potentials with GPAW
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user_guide/walkthrough/partial_coherence.html">
+     Partial coherence
     </a>
    </li>
    <li class="toctree-l2">
@@ -198,11 +206,8 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user_guide/walkthrough/charge_density.html">
-     <em>
-      ab initio
-     </em>
-     potentials with GPAW
+    <a class="reference internal" href="../user_guide/walkthrough/performance.html">
+     Parallelization, Dask and GPUs
     </a>
    </li>
   </ul>
@@ -626,6 +631,8 @@ defaults before they are used to configure the build.</p>
 <span class="w">  </span><span class="nt">chunk-size-gpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512 MB</span><span class="w"></span>
 <span class="nt">cupy</span><span class="p">:</span><span class="w"></span>
 <span class="w">  </span><span class="nt">fft-cache-size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0 MB</span><span class="w"></span>
+<span class="nt">mkl</span><span class="p">:</span><span class="w"></span>
+<span class="w">  </span><span class="nt">threads</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span><span class="w"></span>
 <span class="nt">fftw</span><span class="p">:</span><span class="w"></span>
 <span class="w">  </span><span class="nt">threads</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span><span class="w"></span>
 <span class="w">  </span><span class="nt">planning_effort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">FFTW_MEASURE</span><span class="w"></span>
