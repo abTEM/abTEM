@@ -263,16 +263,25 @@ def show_measurement_2d_exploded(
                 cbar_label = cbar_labels
 
             if np.iscomplexobj(array):
-                divider = make_axes_locatable(ax)
-                cax1 = divider.append_axes("right", size="5%", pad=0.2)
-                cax2 = divider.append_axes("right", size="5%", pad=0.4)
+                #print(ax)
+                #divider = make_axes_locatable(axes)
+                bbox_ax = ax.get_position()
+                #print(ax.)
+
+                # fig.add_axes() adds the colorbar axes
+                # they're bounded by [x0, y0, x_width, y_width]
+                cax1 = fig.add_axes([1.01, bbox_ax.y0, 0.02, bbox_ax.y1 - bbox_ax.y0])
+                #cbar_im1a = plt.colorbar(im1a, cax=cbar_im1a_ax)
+
+                #cax1 = divider.append_axes("right", size="5%", pad=0.2)
+                #cax2 = divider.append_axes("right", size="5%", pad=0.4)
 
                 add_colorbar_arg(cax1, complex_coloring_kwargs["saturation"])
 
-                vmin = np.abs(measurement.array).min() if vmin is None else vmin
-                vmax = np.abs(measurement.array).max() if vmax is None else vmax
+                #vmin = np.abs(measurement.array).min() if vmin is None else vmin
+                #vmax = np.abs(measurement.array).max() if vmax is None else vmax
 
-                add_colorbar_abs(cax2, vmin, vmax)
+                #add_colorbar_abs(cax2, vmin, vmax)
 
                 # _add_colorbar_abs(cax2, domain_coloring_kwargs["abs_scaling"], 10)
                 # _add_colorbar_arg(cax1, domain_coloring_kwargs["saturation_adjustment"])

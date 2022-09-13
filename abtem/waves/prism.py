@@ -112,7 +112,7 @@ class SMatrixArray(HasArray, AbstractSMatrix):
             extent=extent, gpts=array.shape[-2:], sampling=sampling, lock_gpts=True
         )
         self._accelerator = Accelerator(energy=energy)
-        #self._beam_tilt = BeamTilt(tilt=tilt)
+        # self._beam_tilt = BeamTilt(tilt=tilt)
 
         self._ensemble_axes_metadata = (
             [] if ensemble_axes_metadata is None else ensemble_axes_metadata
@@ -131,7 +131,7 @@ class SMatrixArray(HasArray, AbstractSMatrix):
 
     @property
     def tilt(self):
-        return (0.,0.)
+        return (0.0, 0.0)
 
     @property
     def device(self):
@@ -241,6 +241,7 @@ class SMatrixArray(HasArray, AbstractSMatrix):
 
         positions = scan.get_positions()
         positions = xp.asarray(positions)
+
         coefficients = prism_coefficients(
             positions, ctf=ctf, wave_vectors=self.wave_vectors, xp=xp
         )
@@ -256,19 +257,22 @@ class SMatrixArray(HasArray, AbstractSMatrix):
             array = wrapped_crop_2d(array, crop_corner, size)
 
             array = xp.tensordot(coefficients, array, axes=[-1, -3])
-            array = batch_crop_2d(array, corners, self.cropping_window)
-        else:
 
+            if len(self.waves.shape) > 3:
+                array = xp.moveaxis(array, -3, 0)
+
+            array = batch_crop_2d(array, corners, self.cropping_window)
+
+        else:
             array = xp.tensordot(coefficients, array, axes=[-1, -3])
 
-        if len(self.waves.shape) > 3:
-            num_extra_axes = len(self.waves.shape) - 3
-            source = range(len(scan.shape))
-            dest = range(num_extra_axes, num_extra_axes + len(scan.shape))
-            array = xp.moveaxis(array, source, dest)
+            if len(self.waves.shape) > 3:
+                array = xp.moveaxis(array, -3, 0)
 
         ensemble_axes_metadata = (
-            self.waves.ensemble_axes_metadata[:-1] + scan.ensemble_axes_metadata
+            self.waves.ensemble_axes_metadata[:-1]
+            + ctf.ensemble_axes_metadata
+            + scan.ensemble_axes_metadata
         )
         waves = Waves(
             array,
@@ -314,11 +318,15 @@ class SMatrixArray(HasArray, AbstractSMatrix):
         )
 
         for _, slics, sub_scan in scan.generate_blocks(reduction_max_batch):
-            waves = self.reduce_to_waves(sub_scan, ctf)
-            indices = (slice(None),) * (len(self.waves.shape) - 3) + slics
 
-            for detector, measurement in measurements.items():
-                measurement.array[indices] = detector.detect(waves).array
+            for _, ctf_slics, sub_ctf in ctf.generate_blocks(1):
+                waves = self.reduce_to_waves(sub_scan, sub_ctf)
+                indices = (
+                    (slice(None),) * (len(self.waves.shape) - 3) + ctf_slics + slics
+                )
+
+                for detector, measurement in measurements.items():
+                    measurement.array[indices] = detector.detect(waves).array
 
         return tuple(measurements.values())
 
@@ -396,6 +404,8 @@ class SMatrixArray(HasArray, AbstractSMatrix):
             assert len(rechunk_scheme) == 2
         else:
             raise RuntimeError
+
+
 
         return tuple(
             equal_sized_chunks(n, num_chunks=nsc)
@@ -490,6 +500,9 @@ class SMatrixArray(HasArray, AbstractSMatrix):
         if ctf is None:
             ctf = CTF(energy=self.waves.energy, semiangle_cutoff=self.planewave_cutoff)
 
+        if ctf.semiangle_cutoff == np.inf:
+            ctf.semiangle_cutoff = self.planewave_cutoff
+
         squeeze_scan = False
         if scan is None:
             squeeze_scan = True
@@ -512,7 +525,7 @@ class SMatrixArray(HasArray, AbstractSMatrix):
 
             scan, scan_chunks = scan.sort_into_extents(self._chunk_extents())
 
-            chunks = s_matrix.chunks[:-3] + (1, 1)
+            chunks = s_matrix.chunks[:-3] + (1,) * len(ctf.ensemble_shape) + (1, 1)
 
             array = da.map_overlap(
                 self.lazy_reduce,
@@ -540,7 +553,9 @@ class SMatrixArray(HasArray, AbstractSMatrix):
                     array.shape[:-2] + (array.shape[-2] * array.shape[-1],)
                 )
 
-            chunks = self.chunks[:-3] + scan_chunks
+            ctf_chunks = tuple((n,) for n in ctf.ensemble_shape)
+
+            chunks = self.chunks[:-3] + ctf_chunks + scan_chunks
 
             measurements = finalize_lazy_measurements(
                 array,
@@ -670,7 +685,7 @@ class SMatrix(AbstractSMatrix):
         self._downsample = downsample
 
         self._accelerator = Accelerator(energy=energy)
-        #self._beam_tilt = BeamTilt(tilt=tilt)
+        # self._beam_tilt = BeamTilt(tilt=tilt)
 
         self._normalize = normalize
         self._store_on_host = store_on_host
@@ -697,7 +712,7 @@ class SMatrix(AbstractSMatrix):
 
     @property
     def tilt(self):
-        return (0,0)
+        return (0, 0)
 
     def round_gpts_to_interpolation(self):
         rounded = round_gpts_to_multiple_of_interpolation(self.gpts, self.interpolation)
@@ -1000,6 +1015,7 @@ class SMatrix(AbstractSMatrix):
         ctf: Union[CTF, Dict] = None,
         multislice_max_batch: Union[str, int] = "auto",
         reduction_max_batch: Union[str, int] = "auto",
+        rechunk_scheme: Union[Tuple[int, int], str] = "auto",
         lazy: bool = None,
     ) -> Union[Waves, Measurement, List[Measurement]]:
 
@@ -1030,6 +1046,7 @@ class SMatrix(AbstractSMatrix):
             detectors=detectors,
             reduction_max_batch=reduction_max_batch,
             ctf=ctf,
+            rechunk_scheme=rechunk_scheme,
         )
 
     def reduce(

@@ -5,6 +5,7 @@ import numpy as np
 from abtem.core.backend import get_array_module, cp
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import energy2wavelength
+from abtem.core.utils import expand_dims_to_match
 
 
 def batch_crop_2d(array: np.ndarray, corners: np.ndarray, new_shape: Tuple[int, int]):
@@ -12,8 +13,14 @@ def batch_crop_2d(array: np.ndarray, corners: np.ndarray, new_shape: Tuple[int, 
 
     if len(array.shape) > 3:
         old_shape = array.shape
+
+        batch_shape = array.shape[:-len(corners.shape) - 1]
         array = array.reshape((-1,) + array.shape[-2:])
         corners = corners.reshape((-1, 2))
+
+        if batch_shape:
+            assert array.shape[0] == corners.shape[0] * np.prod(batch_shape)
+            corners = np.tile(corners, (np.prod(batch_shape), 1))
     else:
         old_shape = None
 
@@ -163,5 +170,10 @@ def prism_coefficients(positions, ctf, wave_vectors, xp):
 
     coefficients = complex_exponential(-2. * xp.pi * positions[..., 0, None] * wave_vectors[:, 0][None])
     coefficients *= complex_exponential(-2. * xp.pi * positions[..., 1, None] * wave_vectors[:, 1][None])
-    coefficients *= basis
+
+    basis, coefficients = expand_dims_to_match(
+        basis, coefficients, match_dims=[(-1,), (-1,)]
+    )
+    coefficients = coefficients * basis
+
     return coefficients

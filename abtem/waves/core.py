@@ -1062,7 +1062,11 @@ class _WavesFactory(WavesLikeMixin):
     def _base_waves_partial(self):
         pass
 
-    def insert_transform(self, transform, index=-1):
+    def insert_transform(self, transform, index=None):
+
+        if index is None:
+            index = len(self._transforms)
+
         self._transforms.insert_transform(index, transform)
         return self
 
