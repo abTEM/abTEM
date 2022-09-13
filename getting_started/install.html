@@ -188,8 +188,16 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user_guide/walkthrough/performance.html">
-     Parallelization, Dask and GPUs
+    <a class="reference internal" href="../user_guide/walkthrough/charge_density.html">
+     <em>
+      ab initio
+     </em>
+     potentials with GPAW
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user_guide/walkthrough/partial_coherence.html">
+     Partial coherence
     </a>
    </li>
    <li class="toctree-l2">
@@ -198,11 +206,13 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../user_guide/walkthrough/charge_density.html">
-     <em>
-      ab initio
-     </em>
-     potentials with GPAW
+    <a class="reference internal" href="../user_guide/walkthrough/performance.html">
+     Parallelization, Dask and GPUs
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user_guide/walkthrough/core_loss.html">
+     Core loss EELS
     </a>
    </li>
   </ul>
@@ -623,16 +633,16 @@ title="Print to PDF"
 <h1>Installation<a class="headerlink" href="#installation" title="Permalink to this heading">#</a></h1>
 <p>There are two ways to install the abTEM package, using pip or conda:</p>
 <div class="sd-tab-set docutils">
-<input checked="checked" id="56e60b4f-953b-4cce-9323-2ecd28e6aeaa" name="aa2f8411-6a91-42a3-84ca-ca60ff424c8a" type="radio">
-</input><label class="sd-tab-label" for="56e60b4f-953b-4cce-9323-2ecd28e6aeaa">
+<input checked="checked" id="d9f04ae6-f44e-410d-9af7-7f223d0f9a49" name="131ad8b8-ce2e-4c9e-b376-eb3ac83600c8" type="radio">
+</input><label class="sd-tab-label" for="d9f04ae6-f44e-410d-9af7-7f223d0f9a49">
 conda</label><div class="sd-tab-content docutils">
 <p>Install abtem using conda:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">conda</span> <span class="n">install</span> <span class="o">-</span><span class="n">c</span> <span class="n">conda</span><span class="o">-</span><span class="n">forge</span> <span class="n">abtem</span>
 </pre></div>
 </div>
 </div>
-<input id="a6c0a32f-217d-45b8-b60a-4840796d6212" name="aa2f8411-6a91-42a3-84ca-ca60ff424c8a" type="radio">
-</input><label class="sd-tab-label" for="a6c0a32f-217d-45b8-b60a-4840796d6212">
+<input id="4bfe017a-d448-40d7-9f23-4fe23ee312cc" name="131ad8b8-ce2e-4c9e-b376-eb3ac83600c8" type="radio">
+</input><label class="sd-tab-label" for="4bfe017a-d448-40d7-9f23-4fe23ee312cc">
 pip</label><div class="sd-tab-content docutils">
 <p>Install abtem using pip:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">abtem</span>
@@ -652,16 +662,16 @@ pip</label><div class="sd-tab-content docutils">
 of <a class="reference external" href="https://wiki.fysik.dtu.dk/gpaw/index.html">GPAW</a>. See <a class="reference external" href="https://wiki.fysik.dtu.dk/gpaw/install.html">here</a> for
 detailed installation instructions.</p>
 <div class="sd-tab-set docutils">
-<input checked="checked" id="5a74dbdd-56b2-4f2e-a521-552dad31f30c" name="adf9b259-785b-4198-a62f-033a4e1af447" type="radio">
-</input><label class="sd-tab-label" for="5a74dbdd-56b2-4f2e-a521-552dad31f30c">
+<input checked="checked" id="d80cc912-0598-4189-bbeb-4755c54bbb4d" name="6baddc7d-3dd4-4aa5-9238-762f9af5c08f" type="radio">
+</input><label class="sd-tab-label" for="d80cc912-0598-4189-bbeb-4755c54bbb4d">
 conda</label><div class="sd-tab-content docutils">
 <p>Install gpaw using conda:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">conda</span> <span class="n">install</span> <span class="o">-</span><span class="n">c</span> <span class="n">conda</span><span class="o">-</span><span class="n">forge</span> <span class="n">gpaw</span>
 </pre></div>
 </div>
 </div>
-<input id="5910a769-7296-4cd8-a8c4-f096b4630712" name="adf9b259-785b-4198-a62f-033a4e1af447" type="radio">
-</input><label class="sd-tab-label" for="5910a769-7296-4cd8-a8c4-f096b4630712">
+<input id="e054f1e0-dfb1-4c68-a21f-739cfdc15b1a" name="6baddc7d-3dd4-4aa5-9238-762f9af5c08f" type="radio">
+</input><label class="sd-tab-label" for="e054f1e0-dfb1-4c68-a21f-739cfdc15b1a">
 pip</label><div class="sd-tab-content docutils">
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Install</span> <span class="n">gpaw</span> <span class="n">using</span> <span class="n">pip</span><span class="p">:</span>
 <span class="n">pip</span> <span class="n">install</span> <span class="n">gpaw</span>
@@ -679,16 +689,16 @@ pip</label><div class="sd-tab-content docutils">
 <p>GPU calculations with abTEM require a working installation of <a class="reference external" href="https://cupy.dev/">CuPy</a>.
 See <a class="reference external" href="https://docs.cupy.dev/en/stable/install.html">here</a> for detailed installation instructions.</p>
 <div class="sd-tab-set docutils">
-<input checked="checked" id="3b1c6389-199b-4773-a122-214856c51b3f" name="1dd8816b-526d-4aee-8a6e-36f39797d841" type="radio">
-</input><label class="sd-tab-label" for="3b1c6389-199b-4773-a122-214856c51b3f">
+<input checked="checked" id="1894ea81-b4c2-49f8-a408-344c83fcf23e" name="4f701736-1da3-4bf2-ab8a-f1b0c2b96fe7" type="radio">
+</input><label class="sd-tab-label" for="1894ea81-b4c2-49f8-a408-344c83fcf23e">
 conda</label><div class="sd-tab-content docutils">
 <p>Install CuPy using conda:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">conda</span> <span class="n">install</span> <span class="o">-</span><span class="n">c</span> <span class="n">conda</span><span class="o">-</span><span class="n">forge</span> <span class="n">cupy</span>
 </pre></div>
 </div>
 </div>
-<input id="49b5921a-fc1e-4820-82e7-df18bd79c621" name="1dd8816b-526d-4aee-8a6e-36f39797d841" type="radio">
-</input><label class="sd-tab-label" for="49b5921a-fc1e-4820-82e7-df18bd79c621">
+<input id="f72e0c66-a770-4075-a72e-424debd5815d" name="4f701736-1da3-4bf2-ab8a-f1b0c2b96fe7" type="radio">
+</input><label class="sd-tab-label" for="f72e0c66-a770-4075-a72e-424debd5815d">
 pip</label><div class="sd-tab-content docutils">
 <p>Install <a class="reference external" href="https://developer.nvidia.com/cuda-toolkit">CUDA Toolkit</a>.</p>
 <p>Install CuPy using pip:</p>

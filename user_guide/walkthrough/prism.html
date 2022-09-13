@@ -55,8 +55,8 @@ const thebe_selector_output = ".output, .cell_output"
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ab initio potentials with GPAW" href="charge_density.html" />
-    <link rel="prev" title="Parallelization, Dask and GPUs" href="performance.html" />
+    <link rel="next" title="Parallelization, Dask and GPUs" href="performance.html" />
+    <link rel="prev" title="Partial coherence" href="partial_coherence.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -190,8 +190,16 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="performance.html">
-     Parallelization, Dask and GPUs
+    <a class="reference internal" href="charge_density.html">
+     <em>
+      ab initio
+     </em>
+     potentials with GPAW
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="partial_coherence.html">
+     Partial coherence
     </a>
    </li>
    <li class="toctree-l2 current active">
@@ -200,11 +208,13 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="charge_density.html">
-     <em>
-      ab initio
-     </em>
-     potentials with GPAW
+    <a class="reference internal" href="performance.html">
+     Parallelization, Dask and GPUs
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="core_loss.html">
+     Core loss EELS
     </a>
    </li>
   </ul>
@@ -745,7 +755,7 @@ title="Print to PDF"
 </section>
 <section id="the-smatrix">
 <h2>The <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code><a class="headerlink" href="#the-smatrix" title="Permalink to this heading">#</a></h2>
-<p>We import the atomic model of the SrTiO<sub>3</sub>/LaTiO<sub>3</sub> interface created <a class="reference internal" href="atomic_models-Copy1.html#user-guide-walkthrough-atomic-models"><span class="std std-ref">here</span></a> and make a <code class="docutils literal notranslate"><span class="pre">Potential</span></code>.</p>
+<p>We import the atomic model of the SrTiO<sub>3</sub>/LaTiO<sub>3</sub> interface created <a class="reference internal" href="atomic_models.html#user-guide-walkthrough-atomic-models"><span class="std std-ref">here</span></a> and make a <code class="docutils literal notranslate"><span class="pre">Potential</span></code>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="s1">&#39;./data/STO_LTO.cif&#39;</span><span class="p">)</span> 
@@ -1039,17 +1049,17 @@ Ratio: 5.4
                 
     <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="performance.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="partial_coherence.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Parallelization, Dask and GPUs</p>
+            <p class="prev-next-title">Partial coherence</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="charge_density.html" title="next page">
+    <a class='right-next' id="next-link" href="performance.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title"><em>ab initio</em> potentials with GPAW</p>
+        <p class="prev-next-title">Parallelization, Dask and GPUs</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>
