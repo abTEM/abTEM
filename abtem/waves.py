@@ -783,7 +783,7 @@ class Probe(_Scanable, HasEventMixin):
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
                  energy: float = None,
-                 semiangle_cutoff: float = None,
+                 semiangle_cutoff: float = 30.,
                  ctf: CTF = None,
                  tilt: Tuple[float, float] = None,
                  device: str = 'cpu',
@@ -1766,6 +1766,18 @@ class SMatrix(_Scanable, HasEventMixin):
         Small angle beam tilt [mrad].
     device : str, optional
         The calculations will be carried out on this device. Default is 'cpu'.
+    downsample : {'cutoff', 'valid'} or float or bool
+        If not False, the scattering matrix is downsampled to a maximum given scattering angle after running the
+        multislice algorithm.
+            ``cutoff`` or True :
+                Downsample to the antialias cutoff scattering angle.
+
+            ``valid`` :
+                Downsample to the largest rectangle inside the circle with a radius defined by the antialias cutoff
+                scattering angle.
+
+            float :
+                Downsample to a maximum scattering angle specified by a float.
     storage : str, optional
         The scattering matrix will be stored on this device. Default is None (uses the option chosen for device).
     kwargs :
@@ -1783,6 +1795,7 @@ class SMatrix(_Scanable, HasEventMixin):
                  sampling: Union[float, Sequence[float]] = None,
                  tilt: Tuple[float, float] = None,
                  device: str = 'cpu',
+                 downsample: bool = True,
                  storage: str = None,
                  **kwargs):
 
@@ -1827,6 +1840,7 @@ class SMatrix(_Scanable, HasEventMixin):
         if storage is None:
             storage = device
 
+        self._downsample = downsample
         self._storage = storage
         self._num_partitions = num_partitions
 
@@ -1838,6 +1852,10 @@ class SMatrix(_Scanable, HasEventMixin):
     @ctf.setter
     def ctf(self, value):
         self._ctf = value
+
+    @property
+    def downsample(self):
+        return self._downsample
 
     @property
     def expansion_cutoff(self) -> float:
@@ -1897,7 +1915,8 @@ class SMatrix(_Scanable, HasEventMixin):
                              multislice_pbar=False,
                              plane_waves_pbar=multislice_pbar)
 
-            S = S.downsample('limit')
+            if self._downsample:
+                S = S.downsample('limit')
 
             for indices, exit_probes in S._generate_probes(scan, max_batch_probes, max_batch_expansion):
                 yield indices, exit_probes
