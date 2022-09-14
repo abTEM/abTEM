@@ -1,5 +1,6 @@
 """Module to describe electron waves and their propagation."""
 from copy import copy
+from typing import Iterable
 from typing import Union, Sequence, Tuple, List, Dict
 
 import h5py
@@ -10,7 +11,7 @@ from ase import Atoms
 from abtem.base_classes import Grid, Accelerator, cache_clear_callback, Cache, cached_method, \
     HasGridMixin, HasAcceleratorMixin, HasEventMixin, AntialiasFilter, Event, HasBeamTiltMixin, BeamTilt, \
     AntialiasAperture, HasAntialiasAperture
-from abtem.detect import AbstractDetector
+from abtem.detect import AbstractDetector, PixelatedDetector
 from abtem.device import get_array_module, get_device_function, asnumpy, get_array_module_from_device, \
     copy_to_device, get_available_memory, HasDeviceMixin, get_device_from_array
 from abtem.measure import calibrations_from_grid, Measurement, block_zeroth_order_spot, probe_profile
@@ -19,9 +20,6 @@ from abtem.scan import AbstractScan, GridScan
 from abtem.transfer import CTF
 from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, subdivide_into_batches, periodic_crop, \
     fft_crop, fourier_translation_operator, array_row_intersection
-from abtem.structures import SlicedAtoms
-from abtem.ionization import SubshellTransitions
-from typing import Iterable
 
 
 class FresnelPropagator:
@@ -2005,6 +2003,10 @@ class SMatrix(_Scanable, HasEventMixin):
 
         detectors = self._validate_detectors(detectors)
         measurements = self.validate_scan_measurements(detectors, scan, measurements)
+
+        for detector in detectors:
+            if isinstance(detector, PixelatedDetector) and self.downsample and detector.max_angle is None:
+                raise RuntimeError("disable SMatrix downsample to detect full diffraction pattern")
 
         probe_generator = self._generate_probes(scan,
                                                 potential,
