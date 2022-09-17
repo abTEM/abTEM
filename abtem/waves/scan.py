@@ -314,9 +314,10 @@ class LineScan(AbstractScan):
         end : two float, optional
             Scan end as a fraction of the extent of the potential.
         sampling : float or two float
-
+            Sampling rate of scan positions [1 / Å]. Provide one of gpts or sampling. If not provided the sampling will
+            match the Nyquist sampling of the probe in a multislice simulation.
         endpoint : bool or two bool
-
+            If True, end is the last positions. Otherwise, it those positions are not included. Default is False.
         Returns
         -------
         grid_scan : GridScan

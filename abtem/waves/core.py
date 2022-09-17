@@ -64,8 +64,8 @@ def _extract_measurement(array, index):
     return array
 
 
-def finalize_lazy_measurements(
-        arrays, waves, detectors, extra_ensemble_axes_metadata=None, chunks=None
+def _finalize_lazy_measurements(
+    arrays, waves, detectors, extra_ensemble_axes_metadata=None, chunks=None
 ):
     measurements = []
     for i, detector in enumerate(detectors):
@@ -124,7 +124,7 @@ def ensure_parity(n, even, v=1):
     return n
 
 
-class WavesLikeMixin(
+class _WavesLikeMixin(
     HasGridMixin, HasAcceleratorMixin, HasAxes, HasDevice, CopyMixin, EqualityMixin
 ):
     _base_axes = (-2, -1)
@@ -191,7 +191,7 @@ class WavesLikeMixin(
         return self._gpts_within_angle("cutoff", "same")
 
     def _gpts_within_angle(
-            self, angle: Union[None, float, str], parity: str = "same"
+        self, angle: Union[None, float, str], parity: str = "same"
     ) -> Tuple[int, int]:
 
         if angle is None:
@@ -260,7 +260,7 @@ class WavesLikeMixin(
         )
 
     def _validate_potential(
-            self, potential: Union[Atoms, AbstractPotential]
+        self, potential: Union[Atoms, AbstractPotential]
     ) -> AbstractPotential:
         if isinstance(potential, Atoms):
             potential = Potential(potential)
@@ -272,7 +272,7 @@ class WavesLikeMixin(
         return 2 * 4 * np.prod(self.gpts)
 
 
-class Waves(HasArray, WavesLikeMixin):
+class Waves(HasArray, _WavesLikeMixin):
     """
     Waves define a batch of arbitrary 2D wave functions defined by a complex numpy or cupy array.
 
@@ -287,8 +287,6 @@ class Waves(HasArray, WavesLikeMixin):
         Extent of wave functions in x and y [Å].
     sampling : one or two float
         Sampling of wave functions in x and y [1 / Å].
-    tilt : two float, optional
-        Small angle beam tilt [mrad]. Implemented by shifting the wave function at every slice. Default is (0., 0.).
     fourier_space : bool, optional
         If True, the wave functions are assumed to be represented in Fourier space instead of real space.
     ensemble_axes_metadata : list of AxesMetadata
@@ -301,14 +299,14 @@ class Waves(HasArray, WavesLikeMixin):
     _base_dims = 2
 
     def __init__(
-            self,
-            array: np.ndarray,
-            energy: float = None,
-            extent: Union[float, Tuple[float, float]] = None,
-            sampling: Union[float, Tuple[float, float]] = None,
-            fourier_space: bool = False,
-            ensemble_axes_metadata: List[AxisMetadata] = None,
-            metadata: Dict = None,
+        self,
+        array: np.ndarray,
+        energy: float = None,
+        extent: Union[float, Tuple[float, float]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
+        fourier_space: bool = False,
+        ensemble_axes_metadata: List[AxisMetadata] = None,
+        metadata: Dict = None,
     ):
 
         if len(array.shape) < 2:
@@ -326,12 +324,6 @@ class Waves(HasArray, WavesLikeMixin):
 
         self._fourier_space = fourier_space
         self.check_axes_metadata()
-
-    # def fourier_space_measurements(self):
-    #     waves = self.ensure_fourier_space(in_place=False)
-    #     return DiffractionPatterns(waves.array, sampling=self.sampling,
-    #                                ensemble_axes_metadata=self.ensemble_axes_metadata,
-    #                                metadata=self.metadata)
 
     @property
     def base_tilt(self):
@@ -400,10 +392,10 @@ class Waves(HasArray, WavesLikeMixin):
         return alpha, phi
 
     def convolve(
-            self,
-            kernel: np.ndarray,
-            axes_metadata: List[AxisMetadata],
-            out_space: str = "in_space",
+        self,
+        kernel: np.ndarray,
+        axes_metadata: List[AxisMetadata],
+        out_space: str = "in_space",
     ):
 
         if out_space == "in_space":
@@ -458,7 +450,7 @@ class Waves(HasArray, WavesLikeMixin):
         return waves
 
     def tile(
-            self, repetitions: Tuple[int, int], normalization: str = "values"
+        self, repetitions: Tuple[int, int], normalization: str = "values"
     ) -> "Waves":
         """
         Tile wave functions.
@@ -515,17 +507,17 @@ class Waves(HasArray, WavesLikeMixin):
         d["fourier_space"] = False
         return self.__class__(**d)
 
-    def phase_shift(self, shift):
+    def phase_shift(self, shift: float):
         """
         Shift the phase of the wave functions by
 
         Parameters
         ----------
-        shift :
+        shift : float
 
         Returns
         -------
-
+        phase_shifted_waves
         """
         xp = get_array_module(self.array)
         arr = xp.exp(1.0j * shift) * self.array
@@ -583,10 +575,10 @@ class Waves(HasArray, WavesLikeMixin):
         )
 
     def downsample(
-            self,
-            max_angle: Union[str, float] = "cutoff",
-            gpts: Tuple[int, int] = None,
-            normalization: str = "values",
+        self,
+        max_angle: Union[str, float] = "cutoff",
+        gpts: Tuple[int, int] = None,
+        normalization: str = "values",
     ) -> "Waves":
         """
         Downsample the wave function to a lower maximum scattering angle.
@@ -648,11 +640,11 @@ class Waves(HasArray, WavesLikeMixin):
         return self.__class__(**kwargs)
 
     def diffraction_patterns(
-            self,
-            max_angle: Union[str, float, None] = "cutoff",
-            block_direct: Union[bool, float] = False,
-            fftshift: bool = True,
-            parity: str = "same",
+        self,
+        max_angle: Union[str, float, None] = "cutoff",
+        block_direct: Union[bool, float] = False,
+        fftshift: bool = True,
+        parity: str = "odd",
     ) -> DiffractionPatterns:
         """
         Calculate the intensity of the wave functions at the diffraction plane.
@@ -733,11 +725,11 @@ class Waves(HasArray, WavesLikeMixin):
         return diffraction_patterns
 
     def as_complex_diffraction(
-            self,
-            max_angle: Union[str, float, None] = "cutoff",
-            block_direct: Union[bool, float] = False,
-            fftshift: bool = True,
-            parity: str = "same",
+        self,
+        max_angle: Union[str, float, None] = "cutoff",
+        block_direct: Union[bool, float] = False,
+        fftshift: bool = True,
+        parity: str = "same",
     ) -> DiffractionPatterns:
         """
         Calculate the complex array of the wave functions at the diffraction plane.
@@ -824,7 +816,7 @@ class Waves(HasArray, WavesLikeMixin):
         return waves.array
 
     def apply_transform(
-            self, transform: WaveTransform, max_batch: int = None
+        self, transform: WaveTransform, max_batch: int = None
     ) -> "Waves":
         """
         Apply wave function transformation to the wave functions.
@@ -879,7 +871,7 @@ class Waves(HasArray, WavesLikeMixin):
 
             kwargs["array"] = array
             kwargs["ensemble_axes_metadata"] = (
-                    transform.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
+                transform.ensemble_axes_metadata + kwargs["ensemble_axes_metadata"]
             )
             return self.__class__(**kwargs)
         else:
@@ -932,11 +924,11 @@ class Waves(HasArray, WavesLikeMixin):
         return arr
 
     def multislice(
-            self,
-            potential: AbstractPotential,
-            detectors: Union[Detector, List[Detector]] = None,
-            conjugate: bool = False,
-            transpose: bool = False,
+        self,
+        potential: AbstractPotential,
+        detectors: Union[Detector, List[Detector]] = None,
+        conjugate: bool = False,
+        transpose: bool = False,
     ) -> "Waves":
         """
         Propagate and transmit wave function through the provided potential using the multislice algorithm.
@@ -995,7 +987,7 @@ class Waves(HasArray, WavesLikeMixin):
                 meta=np.array((), dtype=np.complex64)
             )
 
-            return finalize_lazy_measurements(
+            return _finalize_lazy_measurements(
                 arrays,
                 self,
                 detectors,
@@ -1030,7 +1022,7 @@ class Waves(HasArray, WavesLikeMixin):
         return self.intensity().show(**kwargs)
 
 
-class _WavesFactory(WavesLikeMixin):
+class _WavesFactory(_WavesLikeMixin):
     def __init__(self, transforms: List[WaveTransform]):
 
         if transforms is None:
@@ -1115,11 +1107,11 @@ class _WavesFactory(WavesLikeMixin):
         return arr
 
     def _lazy_build_multislice_detect(
-            self,
-            detectors,
-            max_batch=None,
-            potential=None,
-            multislice_func=multislice_and_detect,
+        self,
+        detectors,
+        max_batch=None,
+        potential=None,
+        multislice_func=multislice_and_detect,
     ):
 
         args = ()
@@ -1206,7 +1198,7 @@ class _WavesFactory(WavesLikeMixin):
                 meta=np.array((), dtype=object)
             )
 
-        return finalize_lazy_measurements(
+        return _finalize_lazy_measurements(
             array,
             waves=self,
             detectors=detectors,
@@ -1237,15 +1229,15 @@ class PlaneWave(_WavesFactory):
     """
 
     def __init__(
-            self,
-            extent: Union[float, Tuple[float, float]] = None,
-            gpts: Union[int, Tuple[int, int]] = None,
-            sampling: Union[float, Tuple[float, float]] = None,
-            energy: float = None,
-            normalize: bool = False,
-            tilt: Tuple[float, float] = (0.0, 0.0),
-            device: str = None,
-            extra_transforms=None,
+        self,
+        extent: Union[float, Tuple[float, float]] = None,
+        gpts: Union[int, Tuple[int, int]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
+        energy: float = None,
+        normalize: bool = False,
+        tilt: Tuple[float, float] = (0.0, 0.0),
+        device: str = None,
+        extra_transforms=None,
     ):
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
@@ -1295,7 +1287,7 @@ class PlaneWave(_WavesFactory):
         )
 
     def build(
-            self, lazy: bool = None, max_batch="auto", keep_ensemble_dims: bool = False
+        self, lazy: bool = None, max_batch="auto", keep_ensemble_dims: bool = False
     ) -> Waves:
         """
         Build the plane wave function as a Waves object.
@@ -1323,13 +1315,13 @@ class PlaneWave(_WavesFactory):
         return waves
 
     def multislice(
-            self,
-            potential: Union[AbstractPotential, Atoms],
-            detectors: Detector = None,
-            lazy: bool = None,
-            max_batch: Union[int, str] = "auto",
-            ctf: CTF = None,
-            transition_potentials=None,
+        self,
+        potential: Union[AbstractPotential, Atoms],
+        detectors: Detector = None,
+        lazy: bool = None,
+        max_batch: Union[int, str] = "auto",
+        ctf: CTF = None,
+        transition_potentials=None,
     ) -> Waves:
         """
         Build plane wave function and propagate it through the potential. The grid of the two will be matched.
@@ -1389,13 +1381,13 @@ class PlaneWave(_WavesFactory):
 
 class Probe(_WavesFactory):
     """
-    The probe represents a stack of electron probe wave functions for simulating scanning transmission
-    electron microscopy.
+    The probe represents a stack of electron probe wave functions for simulating experiments with a convergent beam,
+    such as CBED and STEM.
 
     Parameters
     ----------
     semiangle_cutoff : float
-        The cutoff semiangle of the aperture [mrad].
+        The cutoff semiangle of the aperture [mrad]. This argument is unused if you provide a custom aperture.
     extent : two float, optional
         Lateral extent of wave functions [Å].
     gpts : two ints, optional
@@ -1405,7 +1397,8 @@ class Probe(_WavesFactory):
     energy : float, optional
         Electron energy [eV].
     taper : float, optional
-        Taper the edge of the default aperture [mrad]. Default is 2.0.
+        Taper the edge of the default aperture [mrad]. Default is 2.0. This argument is unused if you provide a custom
+        aperture.
     tilt : two float, two 1d Distribution, 2d Distribution, optional
         Small angle beam tilt [mrad].
     device : str, optional
@@ -1413,7 +1406,7 @@ class Probe(_WavesFactory):
     aperture : BaseAperture
         A custom aperture, the provided aperture should inherit from :class:`.BaseAperture`.
     aberrations : dict or Aberrations
-        The phase aberrations as a dictionary where each
+        The phase aberrations as a dictionary.
     extra_transforms : list of :class:`.WaveTransform`
         A list of wave function transforms which will be applied after the aperture, but before any additional
         transforms, .e.g. scans.
@@ -1423,21 +1416,21 @@ class Probe(_WavesFactory):
     """
 
     def __init__(
-            self,
-            semiangle_cutoff: float = None,
-            extent: Union[float, Tuple[float, float]] = None,
-            gpts: Union[int, Tuple[int, int]] = None,
-            sampling: Union[float, Tuple[float, float]] = None,
-            energy: float = None,
-            taper: float = 2.0,
-            tilt: Tuple[
-                Union[float, Distribution], Union[float, Distribution], Distribution
-            ] = (0.0, 0.0,),
-            device: str = None,
-            aperture: Aperture = None,
-            aberrations: Union[Aberrations, dict] = None,
-            extra_transforms: List[WaveTransform] = None,
-            **kwargs
+        self,
+        semiangle_cutoff: float = None,
+        extent: Union[float, Tuple[float, float]] = None,
+        gpts: Union[int, Tuple[int, int]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
+        energy: float = None,
+        taper: float = 2.0,
+        tilt: Tuple[
+            Union[float, Distribution], Union[float, Distribution], Distribution
+        ] = (0.0, 0.0,),
+        device: str = None,
+        aperture: Aperture = None,
+        aberrations: Union[Aberrations, dict] = None,
+        extra_transforms: List[WaveTransform] = None,
+        **kwargs
     ):
 
         self._accelerator = Accelerator(energy=energy)
@@ -1477,7 +1470,12 @@ class Probe(_WavesFactory):
 
     @classmethod
     def from_ctf(cls, ctf, **kwargs):
-        return cls(aperture=ctf.aperture, aberrations=ctf.aberrations, **kwargs)
+        return cls(
+            semiangle_cutoff=ctf.semiangle_cutoff,
+            taper=ctf.taper,
+            aberrations=ctf.parameters,
+            **kwargs
+        )
 
     @property
     def aperture(self) -> Aperture:
@@ -1528,21 +1526,20 @@ class Probe(_WavesFactory):
         )
 
     def build(
-            self,
-            scan: Union[tuple, str, AbstractScan] = None,
-            max_batch: Union[int, str] = None,
-            lazy: bool = None,
+        self,
+        scan: Union[tuple, str, AbstractScan] = None,
+        max_batch: Union[int, str] = "auto",
+        lazy: bool = None,
     ) -> Waves:
-
         """
         Build probe wave functions at the provided positions.
 
         Parameters
         ----------
-        scan : scan object or array of xy-positions
+        scan : Scan or array of xy-positions
             Positions of the probe wave functions
         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If None, the number of chunks are
+            The number of wave functions in each chunk of the Dask array. If "auto", the number of chunks are
             automatically estimated based on "dask.chunk-size" in the user configuration.
         lazy : boolean, optional
             If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
@@ -1592,13 +1589,13 @@ class Probe(_WavesFactory):
         return waves
 
     def multislice(
-            self,
-            potential: Union[AbstractPotential, Atoms],
-            scan: AbstractScan = None,
-            detectors: Detector = None,
-            max_batch: Union[int, str] = "auto",
-            transition_potentials=None,
-            lazy: bool = None,
+        self,
+        potential: Union[AbstractPotential, Atoms],
+        scan: AbstractScan = None,
+        detectors: Detector = None,
+        max_batch: Union[int, str] = "auto",
+        transition_potentials=None,
+        lazy: bool = None,
     ) -> Union[Measurement, Waves, List[Union[Measurement, Waves]]]:
         """
         Build probe wave functions at the provided positions and run the multislice algorithm using the wave functions
@@ -1682,13 +1679,13 @@ class Probe(_WavesFactory):
         return measurements
 
     def scan(
-            self,
-            potential: Union[Atoms, AbstractPotential],
-            scan: Union[AbstractScan, np.ndarray, Sequence] = None,
-            detectors: Union[Detector, Sequence[Detector]] = None,
-            max_batch: Union[int, str] = "auto",
-            transition_potentials=None,
-            lazy: bool = None,
+        self,
+        potential: Union[Atoms, AbstractPotential],
+        scan: Union[AbstractScan, np.ndarray, Sequence] = None,
+        detectors: Union[Detector, Sequence[Detector]] = None,
+        max_batch: Union[int, str] = "auto",
+        transition_potentials=None,
+        lazy: bool = None,
     ) -> Union[Measurement, Waves, List[Union[Measurement, Waves]]]:
         """
         Build probe wave functions at the provided positions and propagate them through the potential.

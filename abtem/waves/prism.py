@@ -26,7 +26,7 @@ from abtem.measurements.detectors import (
 )
 from abtem.measurements.core import Measurement
 from abtem.potentials.potentials import AbstractPotential, validate_potential
-from abtem.waves.core import WavesLikeMixin
+from abtem.waves.core import _WavesLikeMixin
 from abtem.waves.multislice import (
     allocate_multislice_measurements,
     multislice_and_detect,
@@ -41,10 +41,10 @@ from abtem.waves.prism_utils import (
 )
 from abtem.waves.scan import AbstractScan, validate_scan, GridScan
 from abtem.waves.transfer import CTF
-from abtem.waves.core import Waves, Probe, finalize_lazy_measurements
+from abtem.waves.core import Waves, Probe, _finalize_lazy_measurements
 
 
-class AbstractSMatrix(WavesLikeMixin):
+class AbstractSMatrix(_WavesLikeMixin):
     @property
     @abstractmethod
     def wave_vectors(self):
@@ -557,7 +557,7 @@ class SMatrixArray(HasArray, AbstractSMatrix):
 
             chunks = self.chunks[:-3] + ctf_chunks + scan_chunks
 
-            measurements = finalize_lazy_measurements(
+            measurements = _finalize_lazy_measurements(
                 array,
                 waves=dummy_probes,
                 detectors=detectors,
@@ -617,7 +617,7 @@ def round_gpts_to_multiple_of_interpolation(
 
 class SMatrix(AbstractSMatrix):
     """
-    The SMatrix may be used for creating scattering matrices and simulating STEM experiments using the PRISM algorithm.
+    The SMatrix may be used for simulating STEM experiments using the PRISM algorithm.
 
     Parameters
     ----------

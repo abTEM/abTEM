@@ -36,7 +36,7 @@ else:
     interpolate_bilinear_cuda = None
 
 if TYPE_CHECKING:
-    from abtem.waves.core import WavesLikeMixin
+    from abtem.waves.core import _WavesLikeMixin
 
 T = TypeVar("T", bound="AbstractMeasurement")
 
@@ -84,7 +84,7 @@ def _to_hyperspy_axes_metadata(axes_metadata, shape):
 
 
 def scanned_measurement_type(
-    measurement: Union["Measurement", "WavesLikeMixin"]
+    measurement: Union["Measurement", "_WavesLikeMixin"]
 ) -> Type["Measurement"]:
     if len(measurement.scan_axes) == 0:
         return SinglePointMeasurement
