@@ -323,11 +323,10 @@ def multislice_and_detect(
                     index = ()
 
                     if potential_configuration.ensemble_shape:
-                        index += (potential_index,)
+                        index += potential_index
 
                     if len(potential_configuration.exit_planes) > 1:
                         index += (exit_plane_index,)
-
 
                     measurements[detector].array[index] = new_measurement.array
                 else:
