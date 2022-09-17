@@ -7,6 +7,7 @@ from functools import partial, reduce
 from typing import Union, TYPE_CHECKING, Dict, List
 
 import numpy as np
+import re
 
 from abtem import stack
 from abtem.core.axes import ParameterAxis, OrdinalAxis, AxisMetadata
@@ -25,47 +26,47 @@ from abtem.core.utils import (
 from abtem.measurements.core import FourierSpaceLineProfiles
 
 if TYPE_CHECKING:
-    from abtem.waves.core import Waves, WavesLikeMixin
+    from abtem.waves.core import Waves, _WavesLikeMixin
 
 #: Symbols for the polar representation of all optical aberrations up to the fifth order.
-polar_symbols = (
-    "C10",
-    "C12",
-    "phi12",
-    "C21",
-    "phi21",
-    "C23",
-    "phi23",
-    "C30",
-    "C32",
-    "phi32",
-    "C34",
-    "phi34",
-    "C41",
-    "phi41",
-    "C43",
-    "phi43",
-    "C45",
-    "phi45",
-    "C50",
-    "C52",
-    "phi52",
-    "C54",
-    "phi54",
-    "C56",
-    "phi56",
-)
+# polar_symbols = (
+#     "C10",
+#     "C12",
+#     "phi12",
+#     "C21",
+#     "phi21",
+#     "C23",
+#     "phi23",
+#     "C30",
+#     "C32",
+#     "phi32",
+#     "C34",
+#     "phi34",
+#     "C41",
+#     "phi41",
+#     "C43",
+#     "phi43",
+#     "C45",
+#     "phi45",
+#     "C50",
+#     "C52",
+#     "phi52",
+#     "C54",
+#     "phi54",
+#     "C56",
+#     "phi56",
+# )
 
 #: Aliases for the most commonly used optical aberrations.
-polar_aliases = {
-    "defocus": "C10",
-    "astigmatism": "C12",
-    "astigmatism_angle": "phi12",
-    "coma": "C21",
-    "coma_angle": "phi21",
-    "Cs": "C30",
-    "C5": "C50",
-}
+# polar_aliases = {
+#     "defocus": "C10",
+#     "astigmatism": "C12",
+#     "astigmatism_angle": "phi12",
+#     "coma": "C21",
+#     "coma_angle": "phi21",
+#     "Cs": "C30",
+#     "C5": "C50",
+# }
 
 
 class WaveTransform(Ensemble, EqualityMixin, CopyMixin):
@@ -155,7 +156,7 @@ class CompositeWaveTransform(WaveTransform):
         ]
         return tuple(itertools.chain(*ensemble_shape))
 
-    def apply(self, waves: "WavesLikeMixin"):
+    def apply(self, waves: "_WavesLikeMixin"):
         waves.grid.check_is_defined()
 
         for wave_transform in reversed(self.wave_transforms):
@@ -469,37 +470,173 @@ class TemporalEnvelope(EnsembleFromDistributionsMixin, AbstractTransfer):
         return array
 
 
-class SpatialEnvelope(EnsembleFromDistributionsMixin, AbstractTransfer):
+def dictionary_property(name, key):
+    def getter(self):
+        try:
+            return getattr(self, name)[key]
+        except KeyError:
+            return 0.0
+
+    def setter(self, value):
+        getattr(self, name)[key] = value
+
+    return property(getter, setter)
+
+
+class HasPhaseAberrations:
+    _parameters: dict
+    C10: Union[float, Distribution] = dictionary_property("_parameters", "C10")
+    C12: Union[float, Distribution] = dictionary_property("_parameters", "C12")
+    phi12: Union[float, Distribution] = dictionary_property("_parameters", "phi12")
+    C21: Union[float, Distribution] = dictionary_property("_parameters", "C21")
+    phi21: Union[float, Distribution] = dictionary_property("_parameters", "phi21")
+    C23: Union[float, Distribution] = dictionary_property("_parameters", "C23")
+    phi23: Union[float, Distribution] = dictionary_property("_parameters", "phi23")
+    C30: Union[float, Distribution] = dictionary_property("_parameters", "C30")
+    C32: Union[float, Distribution] = dictionary_property("_parameters", "C32")
+    phi32: Union[float, Distribution] = dictionary_property("_parameters", "phi32")
+    C34: Union[float, Distribution] = dictionary_property("_parameters", "C34")
+    phi34: Union[float, Distribution] = dictionary_property("_parameters", "phi34")
+    C41: Union[float, Distribution] = dictionary_property("_parameters", "C41")
+    phi41: Union[float, Distribution] = dictionary_property("_parameters", "phi41")
+    C43: Union[float, Distribution] = dictionary_property("_parameters", "C43")
+    phi43: Union[float, Distribution] = dictionary_property("_parameters", "phi43")
+    C45: Union[float, Distribution] = dictionary_property("_parameters", "C45")
+    phi45: Union[float, Distribution] = dictionary_property("_parameters", "phi45")
+    C50: Union[float, Distribution] = dictionary_property("_parameters", "C50")
+    C52: Union[float, Distribution] = dictionary_property("_parameters", "C52")
+    phi52: Union[float, Distribution] = dictionary_property("_parameters", "phi52")
+    C54: Union[float, Distribution] = dictionary_property("_parameters", "C54")
+    phi54: Union[float, Distribution] = dictionary_property("_parameters", "phi54")
+    C56: Union[float, Distribution] = dictionary_property("_parameters", "C56")
+    phi56: Union[float, Distribution] = dictionary_property("_parameters", "phi56")
+    astigmatism: Union[float, Distribution] = dictionary_property("_parameters", "C12")
+    astigmatism_angle: Union[float, Distribution] = dictionary_property(
+        "_parameters", "phi12"
+    )
+    coma: Union[float, Distribution] = dictionary_property("_parameters", "C21")
+    coma_angle: Union[float, Distribution] = dictionary_property("_parameters", "phi21")
+    Cs: Union[float, Distribution] = dictionary_property("_parameters", "C30")
+    C5: Union[float, Distribution] = dictionary_property("_parameters", "C5")
+
+    @property
+    def defocus(self) -> Union[float, Distribution]:
+        return -self.C10
+
+    @defocus.setter
+    def defocus(self, value: Union[float, Distribution]):
+        self.C10 = -value
+
+    @classmethod
+    def _coefficient_symbols(cls):
+        return tuple(var for var in dir(cls) if re.fullmatch("C[0-9][0-9]", var))
+
+    @classmethod
+    def _angular_symbols(cls):
+        return tuple(
+            var
+            for var in dir(HasPhaseAberrations)
+            if re.fullmatch("phi[0-9][0-9]", var)
+        )
+
+    @classmethod
+    def _symbols(cls):
+        return cls._coefficient_symbols() + cls._angular_symbols()
+
+    @classmethod
+    def _aliases(self):
+        return {
+            "defocus": "C10",
+            "astigmatism": "C12",
+            "astigmatism_angle": "phi12",
+            "coma": "C21",
+            "coma_angle": "phi21",
+            "Cs": "C30",
+            "C5": "C50",
+        }
+
+    def _default_parameters(self):
+        return {symbol: 0.0 for symbol in self._symbols()}
+
+    def _check_is_valid_aberrations(self, aberrations):
+        for key in aberrations.keys():
+            if (key not in polar_symbols) and (key not in polar_aliases.keys()):
+                raise ValueError("{} not a recognized phase aberration".format(key))
+
+    @property
+    def _phase_aberrations_ensemble_axes_metadata(self) -> List[AxisMetadata]:
+        axes_metadata = []
+        for parameter_name, value in self._parameters.items():
+            if isinstance(value, Distribution):
+                axes_metadata += [
+                    ParameterAxis(
+                        label=parameter_name,
+                        values=tuple(value.values),
+                        units="Å",
+                        _ensemble_mean=value.ensemble_mean,
+                    )
+                ]
+        return axes_metadata
+
+    @property
+    def parameters(self) -> Dict[str, Union[float, Distribution]]:
+        """The parameters."""
+        return self._parameters
+
+    def set_aberrations(self, parameters: Dict[str, Union[float, Distribution]]):
+        """
+        Set the phase of the phase aberration.
+
+        Parameters
+        ----------
+        parameters: dict
+            Mapping from aberration symbols to their corresponding values.
+        """
+
+        for symbol, value in parameters.items():
+            if symbol in self._symbols():
+                self._parameters[symbol] = value
+
+            elif symbol == "defocus":
+                self._parameters[self._aliases()[symbol]] = -value
+
+            elif symbol in self._aliases().keys():
+                self._parameters[self._aliases()[symbol]] = value
+
+            else:
+                raise ValueError("{} not a recognized parameter".format(symbol))
+
+
+polar_symbols = HasPhaseAberrations._symbols()
+
+polar_aliases = HasPhaseAberrations._aliases()
+
+
+class SpatialEnvelope(
+    HasPhaseAberrations, EnsembleFromDistributionsMixin, AbstractTransfer
+):
     def __init__(
         self,
         angular_spread: Union[float, Distribution],
         energy: float = None,
-        aberrations: "Aberrations" = None,
+        parameters: dict = None,
         **kwargs,
     ):
+        super().__init__(energy=energy)
 
         self._angular_spread = angular_spread
 
-        if aberrations is None:
-            aberrations = {}
-            aberrations.update(kwargs)
-            aberrations = Aberrations(energy=energy, parameters=aberrations)
+        parameters = {} if parameters is None else parameters
+        parameters.update(kwargs)
+        self._parameters = self._default_parameters()
 
-        self._aberrations = aberrations
-
-        super().__init__(energy=energy)
-
-        # self._aberrations = aberrations
-        self._aberrations._accelerator = self._accelerator
-
-        for symbol in polar_symbols:
-            setattr(self.__class__, symbol, delegate_property("_aberrations", symbol))
+        self.set_aberrations(parameters)
 
         self._distributions = polar_symbols + ("angular_spread",)
 
     @property
     def ensemble_axes_metadata(self) -> List[AxisMetadata]:
-        axes_metadata = self.aberrations.ensemble_axes_metadata
+        axes_metadata = self._phase_aberrations_ensemble_axes_metadata
         if isinstance(self.angular_spread, Distribution):
             axes_metadata = axes_metadata + [
                 ParameterAxis(
@@ -509,12 +646,7 @@ class SpatialEnvelope(EnsembleFromDistributionsMixin, AbstractTransfer):
                     _ensemble_mean=self.angular_spread.ensemble_mean,
                 )
             ]
-
         return axes_metadata
-
-    @property
-    def aberrations(self):
-        return self._aberrations
 
     @property
     def angular_spread(self):
@@ -529,7 +661,7 @@ class SpatialEnvelope(EnsembleFromDistributionsMixin, AbstractTransfer):
     ) -> Union[float, np.ndarray]:
         xp = get_array_module(alpha)
 
-        args = tuple(self.aberrations.parameters.values()) + (self.angular_spread,)
+        args = tuple(self.parameters.values()) + (self.angular_spread,)
 
         unpacked, _ = unpack_distributions(*args, shape=alpha.shape, xp=xp)
         angular_spread = unpacked[-1] / 1e3
@@ -639,57 +771,28 @@ class SpatialEnvelope(EnsembleFromDistributionsMixin, AbstractTransfer):
         return array
 
 
-class Aberrations(EnsembleFromDistributionsMixin, AbstractTransfer):
+class Aberrations(
+    HasPhaseAberrations, EnsembleFromDistributionsMixin, AbstractTransfer
+):
     def __init__(
         self,
         energy: float = None,
         parameters: Dict[str, Union[float, Distribution]] = None,
         **kwargs,
     ):
-
-        for key in kwargs.keys():
-            if (key not in polar_symbols) and (key not in polar_aliases.keys()):
-                raise ValueError("{} not a recognized parameter".format(key))
+        super().__init__(energy=energy)
 
         parameters = {} if parameters is None else parameters
-
         parameters.update(kwargs)
+        self._parameters = self._default_parameters()
 
-        self._parameters = dict(zip(polar_symbols, [0.0] * len(polar_symbols)))
-        self.set_parameters(parameters)
-
-        for symbol in polar_symbols:
-            setattr(self.__class__, symbol, dictionary_property("_parameters", symbol))
-
-        for alias, symbol in polar_aliases.items():
-            if alias != "defocus":
-                setattr(
-                    self.__class__, alias, dictionary_property("_parameters", symbol)
-                )
+        self.set_aberrations(parameters)
 
         self._distributions = polar_symbols
 
-        super().__init__(energy=energy)
-
     @property
-    def parameters(self) -> Dict[str, Union[float, Distribution]]:
-        """The parameters."""
-        return self._parameters
-
-    @property
-    def ensemble_axes_metadata(self) -> List[AxisMetadata]:
-        axes_metadata = []
-        for parameter_name, value in self._parameters.items():
-            if isinstance(value, Distribution):
-                axes_metadata += [
-                    ParameterAxis(
-                        label=parameter_name,
-                        values=tuple(value.values),
-                        units="Å",
-                        _ensemble_mean=value.ensemble_mean,
-                    )
-                ]
-        return axes_metadata
+    def ensemble_axes_metadata(self):
+        return self._phase_aberrations_ensemble_axes_metadata
 
     @property
     def defocus(self) -> Union[float, Distribution]:
@@ -801,31 +904,8 @@ class Aberrations(EnsembleFromDistributionsMixin, AbstractTransfer):
 
         return array
 
-    def set_parameters(self, parameters: Dict[str, Union[float, Distribution]]):
-        """
-        Set the phase of the phase aberration.
 
-        Parameters
-        ----------
-        parameters: dict
-            Mapping from aberration symbols to their corresponding values.
-        """
-
-        for symbol, value in parameters.items():
-            if symbol in self._parameters.keys():
-                self._parameters[symbol] = value
-
-            elif symbol == "defocus":
-                self._parameters[polar_aliases[symbol]] = -value
-
-            elif symbol in polar_aliases.keys():
-                self._parameters[polar_aliases[symbol]] = value
-
-            else:
-                raise ValueError("{} not a recognized parameter".format(symbol))
-
-
-class CTF(EnsembleFromDistributionsMixin, AbstractAperture):
+class CTF(HasPhaseAberrations, EnsembleFromDistributionsMixin, AbstractAperture):
     def __init__(
         self,
         energy: float = None,
@@ -833,7 +913,7 @@ class CTF(EnsembleFromDistributionsMixin, AbstractAperture):
         taper: float = 0.0,
         focal_spread: float = 0.0,
         angular_spread: float = 0.0,
-        aberrations: Union[dict, Aberrations] = None,
+        parameters: dict = None,
         **kwargs,
     ):
 
@@ -874,29 +954,18 @@ class CTF(EnsembleFromDistributionsMixin, AbstractAperture):
         .. [1] Kirkland, E. J. (2010). Advanced Computing in Electron Microscopy (2nd ed.). Springer.
 
         """
-
-        if aberrations is None:
-            aberrations = {}
-        elif not hasattr(aberrations, "update"):
-            aberrations = copy.deepcopy(aberrations.parameters)
-
-        aberrations.update(kwargs)
-
-        self._aberrations = Aberrations(energy=energy, parameters=aberrations)
-        self._aperture = Aperture(
-            energy=energy, semiangle_cutoff=semiangle_cutoff, taper=taper
-        )
-        self._spatial_envelope = SpatialEnvelope(
-            angular_spread=angular_spread, aberrations=self._aberrations
-        )
-        self._temporal_envelope = TemporalEnvelope(focal_spread=focal_spread)
-
         super().__init__(energy=energy, semiangle_cutoff=semiangle_cutoff)
 
-        self._aberrations._accelerator = self._accelerator
-        self._aperture._accelerator = self._accelerator
-        self._spatial_envelope._accelerator = self._accelerator
-        self._temporal_envelope._accelerator = self._accelerator
+        parameters = {} if parameters is None else parameters
+        parameters.update(kwargs)
+        self._parameters = self._default_parameters()
+
+        self.set_aberrations(parameters)
+
+        self._angular_spread = angular_spread
+        self._focal_spread = focal_spread
+        self._semiangle_cutoff = semiangle_cutoff
+        self._taper = taper
 
         self._distributions = polar_symbols + (
             "angular_spread",
@@ -904,39 +973,14 @@ class CTF(EnsembleFromDistributionsMixin, AbstractAperture):
             "semiangle_cutoff",
         )
 
-        setattr(
-            self.__class__,
-            "angular_spread",
-            delegate_property("_spatial_envelope", "angular_spread"),
-        )
-        setattr(
-            self.__class__,
-            "focal_spread",
-            delegate_property("_temporal_envelope", "focal_spread"),
-        )
-        setattr(
-            self.__class__,
-            "semiangle_cutoff",
-            delegate_property("_aperture", "semiangle_cutoff"),
-        )
-        setattr(
-            self.__class__, "taper", delegate_property("_aperture", "taper"),
-        )
-
-        for symbol in polar_symbols:
-            setattr(self.__class__, symbol, delegate_property("_aberrations", symbol))
-
-        for alias in polar_aliases.keys():
-            setattr(self.__class__, alias, delegate_property("_aberrations", alias))
-
     @property
     def scherzer_defocus(self):
         self.accelerator.check_is_defined()
 
-        if self.aberrations.Cs == 0.0:  # noqa
+        if self.Cs == 0.0:
             raise ValueError()
 
-        return scherzer_defocus(self.aberrations.Cs, self.energy)  # noqa
+        return scherzer_defocus(self.Cs, self.energy)
 
     @property
     def crossover_angle(self):
@@ -944,101 +988,100 @@ class CTF(EnsembleFromDistributionsMixin, AbstractAperture):
 
     @property
     def point_resolution(self):
-        return point_resolution(self.aberrations.Cs, self.energy)  # noqa
+        return point_resolution(self.Cs, self.energy)
 
     @property
-    def aberrations(self):
-        return self._aberrations
+    def _aberrations(self):
+        return Aberrations(parameters=self.parameters, energy=self.energy)
 
     @property
-    def aperture(self):
-        return self._aperture
+    def _aperture(self):
+        return Aperture(
+            semiangle_cutoff=self.semiangle_cutoff, taper=self.taper, energy=self.energy
+        )
 
     @property
-    def spatial_envelope(self):
-        return self._spatial_envelope
+    def _spatial_envelope(self):
+        return SpatialEnvelope(
+            parameters=self.parameters,
+            angular_spread=self.angular_spread,
+            energy=self.energy,
+        )
 
     @property
-    def temporal_envelope(self):
-        return self._temporal_envelope
+    def _temporal_envelope(self):
+        return TemporalEnvelope(
+            focal_spread=self.focal_spread,
+            energy=self.energy,
+        )
 
     @property
     def ensemble_axes_metadata(self):
         return (
-            self.spatial_envelope.ensemble_axes_metadata
-            + self.temporal_envelope.ensemble_axes_metadata
-            + self.aperture.ensemble_axes_metadata
+            self._spatial_envelope.ensemble_axes_metadata
+            + self._temporal_envelope.ensemble_axes_metadata
+            + self._aperture.ensemble_axes_metadata
         )
 
-    # @property
-    # def defocus(self) -> float:
-    #     """The defocus [Å]."""
-    #     return self.aberrations.defocus
-    #
-    # @defocus.setter
-    # def defocus(self, value: float):
-    #     self.aberrations.defocus = value
-    #
-    # @property
-    # def taper(self) -> float:
-    #     return self.aperture.taper
-    #
-    # @property
-    # def semiangle_cutoff(self) -> float:
-    #     """The semi-angle cutoff [mrad]."""
-    #     return self.aperture.semiangle_cutoff
-    #
-    # @semiangle_cutoff.setter
-    # def semiangle_cutoff(self, value: float):
-    #     self.aperture.semiangle_cutoff = value
-    #
-    # @property
-    # def focal_spread(self) -> float:
-    #     """The focal spread [Å]."""
-    #     return self.temporal_envelope.focal_spread
-    #
-    # @focal_spread.setter
-    # def focal_spread(self, value: float):
-    #     """The angular spread [mrad]."""
-    #     self.temporal_envelope.focal_spread = value
-    #
-    # @property
-    # def angular_spread(self) -> float:
-    #     return self.spatial_envelope.angular_spread
-    #
-    # @angular_spread.setter
-    # def angular_spread(self, value: float):
-    #     self.spatial_envelope.angular_spread = value
+    @property
+    def taper(self) -> float:
+        return self._taper
+
+    @property
+    def semiangle_cutoff(self) -> float:
+        """The semi-angle cutoff [mrad]."""
+        return self._semiangle_cutoff
+
+    @semiangle_cutoff.setter
+    def semiangle_cutoff(self, value: float):
+        self._semiangle_cutoff = value
+
+    @property
+    def focal_spread(self) -> float:
+        """The focal spread [Å]."""
+        return self._focal_spread
+
+    @focal_spread.setter
+    def focal_spread(self, value: float):
+        """The angular spread [mrad]."""
+        self._focal_spread = value
+
+    @property
+    def angular_spread(self) -> float:
+        return self._angular_spread
+
+    @angular_spread.setter
+    def angular_spread(self, value: float):
+        self._angular_spread = value
 
     def evaluate_with_alpha_and_phi(self, alpha, phi):
-        array = self.aberrations.evaluate_with_alpha_and_phi(alpha, phi)
+        array = self._aberrations.evaluate_with_alpha_and_phi(alpha, phi)
 
-        if self.spatial_envelope.angular_spread != 0.0:
-            new_aberrations_dims = tuple(range(self.aberrations.ensemble_dims))
+        if self._spatial_envelope.angular_spread != 0.0:
+            new_aberrations_dims = tuple(range(self._aberrations.ensemble_dims))
             old_match_dims = new_aberrations_dims + (-2, -1)
 
-            added_dims = int(hasattr(self.spatial_envelope.angular_spread, "values"))
+            added_dims = int(hasattr(self._spatial_envelope.angular_spread, "values"))
             new_match_dims = tuple(
-                range(self.spatial_envelope.ensemble_dims - added_dims)
+                range(self._spatial_envelope.ensemble_dims - added_dims)
             ) + (-2, -1)
 
-            new_array = self.spatial_envelope.evaluate_with_alpha_and_phi(alpha, phi)
+            new_array = self._spatial_envelope.evaluate_with_alpha_and_phi(alpha, phi)
             array, new_array = expand_dims_to_match(
                 array, new_array, match_dims=[old_match_dims, new_match_dims]
             )
-            # print(new_match_dims, old_match_dims)
-            # print(array.shape, new_array.shape, self.spatial_envelope.ensemble_shape)
+
             array = array * new_array
 
-        if self.temporal_envelope.focal_spread != 0.0:
-            new_array = self.temporal_envelope.evaluate_with_alpha_and_phi(alpha, phi)
+        if self._temporal_envelope.focal_spread != 0.0:
+            new_array = self._temporal_envelope.evaluate_with_alpha_and_phi(alpha, phi)
             array, new_array = expand_dims_to_match(
                 array, new_array, match_dims=[(-2, -1), (-2, -1)]
             )
             array = array * new_array
 
-        if self.aperture.semiangle_cutoff != np.inf:
-            new_array = self.aperture.evaluate_with_alpha_and_phi(alpha, phi)
+        if self._aperture.semiangle_cutoff != np.inf:
+            new_array = self._aperture.evaluate_with_alpha_and_phi(alpha, phi)
             array, new_array = expand_dims_to_match(
                 array, new_array, match_dims=[(-2, -1), (-2, -1)]
             )
@@ -1046,52 +1089,24 @@ class CTF(EnsembleFromDistributionsMixin, AbstractAperture):
 
         return array
 
-    # def image(self, gpts, max_angle):
-    #
-    #     angular_sampling = 2 * max_angle / gpts[0], 2 * max_angle / gpts[1]
-    #
-    #     fourier_space_sampling = (
-    #         angular_sampling[0] / (self.wavelength * 1e3),
-    #         angular_sampling[1] / (self.wavelength * 1e3),
-    #     )
-    #
-    #     sampling = 1 / (fourier_space_sampling[0] * gpts[0]), 1 / (
-    #         fourier_space_sampling[1] * gpts[1]
-    #     )
-    #
-    #     alpha, phi = self. #_polar_spatial_frequencies_from_grid(
-    #         gpts=gpts, sampling=sampling, wavelength=self.wavelength, xp=np
-    #     )
-    #
-    #     array = np.fft.fftshift(self.evaluate_with_alpha_and_phi(alpha, phi))
-    #
-    #     # array = np.fft.fftshift(self.evaluate(waves))
-    #     return DiffractionPatterns(
-    #         array, sampling=fourier_space_sampling, metadata={"energy": self.energy}
-    #     )
-
-    # def point_spread_function(self, waves):
-    #     alpha, phi = self._polar_spatial_frequencies_from_waves(waves)
-    #     xp = get_array_module(waves.device)
-    #     array = xp.fft.fftshift(ifft2(self.evaluate_with_alpha_and_phi(alpha, phi)))
-    #     return Images(array, sampling=waves.sampling, metadata={'energy': self.energy})
-
     def profiles(self, max_angle: float = None, phi: float = 0.0):
         if max_angle is None:
-            if self.aperture.semiangle_cutoff == np.inf:
+            if self.semiangle_cutoff == np.inf:
                 max_angle = 50
             else:
-                max_angle = self.aperture.semiangle_cutoff * 1.6
+                max_angle = self.semiangle_cutoff * 1.6
 
         sampling = max_angle / 1000.0 / 1000.0
         alpha = np.arange(0, max_angle / 1000.0, sampling)
 
-        aberrations = self.aberrations.evaluate_with_alpha_and_phi(alpha, phi)
-        spatial_envelope = self.spatial_envelope.evaluate_with_alpha_and_phi(alpha, phi)
-        temporal_envelope = self.temporal_envelope.evaluate_with_alpha_and_phi(
+        aberrations = self._aberrations.evaluate_with_alpha_and_phi(alpha, phi)
+        spatial_envelope = self._spatial_envelope.evaluate_with_alpha_and_phi(
             alpha, phi
         )
-        aperture = self.aperture.evaluate_with_alpha_and_phi(alpha, phi)
+        temporal_envelope = self._temporal_envelope.evaluate_with_alpha_and_phi(
+            alpha, phi
+        )
+        aperture = self._aperture.evaluate_with_alpha_and_phi(alpha, phi)
         envelope = aperture * temporal_envelope * spatial_envelope
 
         sampling = alpha[1] / energy2wavelength(self.energy)
@@ -1103,26 +1118,26 @@ class CTF(EnsembleFromDistributionsMixin, AbstractAperture):
                 -aberrations.imag * envelope,
                 sampling=sampling,
                 metadata=metadata,
-                ensemble_axes_metadata=self.aberrations.ensemble_axes_metadata,
+                ensemble_axes_metadata=self._aberrations.ensemble_axes_metadata,
             )
         ]
 
-        if self.aperture.semiangle_cutoff != np.inf:
+        if self._aperture.semiangle_cutoff != np.inf:
             profiles += [
                 FourierSpaceLineProfiles(aperture, sampling=sampling, metadata=metadata)
             ]
             axis_metadata += ["aperture"]
 
         if (
-            self.temporal_envelope.focal_spread > 0.0
-            and self.spatial_envelope.angular_spread > 0.0
+            self._temporal_envelope.focal_spread > 0.0
+            and self._spatial_envelope.angular_spread > 0.0
         ):
             profiles += [
                 FourierSpaceLineProfiles(envelope, sampling=sampling, metadata=metadata)
             ]
             axis_metadata += ["envelope"]
 
-        if self.temporal_envelope.focal_spread > 0.0:
+        if self._temporal_envelope.focal_spread > 0.0:
             profiles += [
                 FourierSpaceLineProfiles(
                     temporal_envelope, sampling=sampling, metadata=metadata
@@ -1130,7 +1145,7 @@ class CTF(EnsembleFromDistributionsMixin, AbstractAperture):
             ]
             axis_metadata += ["temporal"]
 
-        if self.spatial_envelope.angular_spread > 0.0:
+        if self._spatial_envelope.angular_spread > 0.0:
             profiles += [
                 FourierSpaceLineProfiles(
                     spatial_envelope, sampling=sampling, metadata=metadata

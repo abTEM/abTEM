@@ -23,7 +23,7 @@ from abtem.structures.transform import plane_to_axes
 
 if TYPE_CHECKING:
     from abtem.waves.core import Waves
-    from abtem.waves.core import WavesLikeMixin
+    from abtem.waves.core import _WavesLikeMixin
 
 
 def fresnel_propagator(
@@ -148,7 +148,7 @@ class FresnelPropagator:
 
 
 def allocate_multislice_measurements(
-    waves: "WavesLikeMixin",
+    waves: "_WavesLikeMixin",
     detectors: List[Detector],
     extra_ensemble_axes_shape: Tuple[int, ...] = None,
     extra_ensemble_axes_metadata: List[AxisMetadata] = None,

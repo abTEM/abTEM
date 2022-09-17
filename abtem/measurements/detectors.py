@@ -18,7 +18,7 @@ from abtem.measurements.core import (
 )
 
 if TYPE_CHECKING:
-    from abtem.waves.core import WavesLikeMixin
+    from abtem.waves.core import _WavesLikeMixin
     from abtem.waves.core import Waves
 
 
@@ -69,14 +69,14 @@ class Detector(CopyMixin, metaclass=ABCMeta):
     def to_cpu(self):
         return self._to_cpu
 
-    def measurement_meta(self, waves: "WavesLikeMixin"):
+    def measurement_meta(self, waves: "_WavesLikeMixin"):
         if self.to_cpu:
             return np.array((), dtype=self.measurement_dtype)
         else:
             xp = get_array_module(waves.device)
             return xp.array((), dtype=self.measurement_dtype)
 
-    def measurement_metadata(self, waves: "WavesLikeMixin") -> dict:
+    def measurement_metadata(self, waves: "_WavesLikeMixin") -> dict:
         return waves.metadata
 
     @property
@@ -85,15 +85,15 @@ class Detector(CopyMixin, metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def measurement_shape(self, waves: "WavesLikeMixin") -> Tuple:
+    def measurement_shape(self, waves: "_WavesLikeMixin") -> Tuple:
         pass
 
     @abstractmethod
-    def measurement_type(self, waves: "WavesLikeMixin"):
+    def measurement_type(self, waves: "_WavesLikeMixin"):
         pass
 
     @abstractmethod
-    def measurement_axes_metadata(self, waves: "WavesLikeMixin"):
+    def measurement_axes_metadata(self, waves: "_WavesLikeMixin"):
         pass
 
     @abstractmethod
@@ -101,7 +101,7 @@ class Detector(CopyMixin, metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def angular_limits(self, waves: "WavesLikeMixin") -> Tuple[float, float]:
+    def angular_limits(self, waves: "_WavesLikeMixin") -> Tuple[float, float]:
         pass
 
 
@@ -163,13 +163,13 @@ class AnnularDetector(Detector):
     def offset(self) -> Tuple[float, float]:
         return self._offset
 
-    def measurement_metadata(self, waves: "WavesLikeMixin") -> dict:
+    def measurement_metadata(self, waves: "_WavesLikeMixin") -> dict:
         metadata = super().measurement_metadata(waves)
         metadata["label"] = "intensity"
         metadata["units"] = "arb. unit"
         return metadata
 
-    def angular_limits(self, waves: "WavesLikeMixin") -> Tuple[float, float]:
+    def angular_limits(self, waves: "_WavesLikeMixin") -> Tuple[float, float]:
         if self.inner is not None:
             inner = self.inner
         else:
@@ -182,10 +182,10 @@ class AnnularDetector(Detector):
 
         return inner, outer
 
-    def measurement_axes_metadata(self, waves: "WavesLikeMixin"):
+    def measurement_axes_metadata(self, waves: "_WavesLikeMixin"):
         return []
 
-    def measurement_shape(self, waves: "WavesLikeMixin") -> Tuple:
+    def measurement_shape(self, waves: "_WavesLikeMixin") -> Tuple:
         return ()
 
     @property
@@ -193,11 +193,11 @@ class AnnularDetector(Detector):
         return np.float32
 
     def measurement_type(
-        self, waves: "WavesLikeMixin"
+        self, waves: "_WavesLikeMixin"
     ) -> Union[type(RealSpaceLineProfiles), type(Images)]:
         return scanned_measurement_type(waves)
 
-    def detect(self, waves: "WavesLikeMixin") -> Images:
+    def detect(self, waves: "_WavesLikeMixin") -> Images:
 
         if self.outer is None:
             outer = np.floor(min(waves.cutoff_angles))
@@ -667,7 +667,7 @@ class PixelatedDetector(Detector):
 
         Parameters
         ----------
-        waves: Waves object
+        waves: Waves
             The batch of wave functions to detect.
 
         Returns
