@@ -1,7 +1,7 @@
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given, assume
+from hypothesis import given, assume, reproduce_failure
 
 import strategies as abtem_st
 from abtem import GridScan, WavesDetector
@@ -10,68 +10,95 @@ from utils import gpu, assert_array_matches_device
 
 
 @given(data=st.data())
-@pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('device', ['cpu', gpu])
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
 def test_prism_matches_probe(data, lazy, device):
     s_matrix = data.draw(abtem_st.s_matrix(device=device))
 
     s_matrix = s_matrix.round_gpts_to_interpolation()
     probe = s_matrix.dummy_probes()
 
-    s_matrix_diffraction_patterns = s_matrix.reduce(lazy=lazy).diffraction_patterns(max_angle=None)
-    probe_diffraction_patterns = probe.build(lazy=lazy).diffraction_patterns(max_angle=None)
+    s_matrix_diffraction_patterns = s_matrix.reduce(lazy=lazy).diffraction_patterns(
+        max_angle=None
+    )
+    probe_diffraction_patterns = probe.build(lazy=lazy).diffraction_patterns(
+        max_angle=None
+    )
 
-    assert np.allclose(s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array)
+    assert np.allclose(
+        s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array
+    )
 
 
 @given(data=st.data())
-@pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('device', ['cpu', gpu])
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
 def test_prism_matches_probe_with_interpolation(data, lazy, device):
     s_matrix = data.draw(abtem_st.s_matrix(device=device, max_interpolation=3))
 
     s_matrix = s_matrix.round_gpts_to_interpolation()
     probe = s_matrix.dummy_probes()
 
-    s_matrix_diffraction_patterns = s_matrix.reduce(lazy=lazy).diffraction_patterns(max_angle=None)
-    probe_diffraction_patterns = probe.build(lazy=lazy).diffraction_patterns(max_angle=None)
+    s_matrix_diffraction_patterns = s_matrix.reduce(lazy=lazy).diffraction_patterns(
+        max_angle=None
+    )
+    probe_diffraction_patterns = probe.build(lazy=lazy).diffraction_patterns(
+        max_angle=None
+    )
 
-    assert np.allclose(s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array)
+    assert np.allclose(
+        s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array
+    )
 
 
 @given(data=st.data())
-@pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('device', ['cpu', gpu])
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
 def test_prism_matches_probe_with_multislice(data, lazy, device):
     potential = data.draw(abtem_st.potential(device=device))
-    s_matrix = data.draw(abtem_st.s_matrix(potential=potential, max_interpolation=1, device=device))
+    s_matrix = data.draw(
+        abtem_st.s_matrix(potential=potential, max_interpolation=1, device=device)
+    )
 
     s_matrix = s_matrix.round_gpts_to_interpolation()
     probe = s_matrix.dummy_probes()
 
-    s_matrix_diffraction_patterns = s_matrix.reduce(lazy=lazy).diffraction_patterns(None)
-    probe_diffraction_patterns = probe.multislice(potential=potential, lazy=lazy).diffraction_patterns(None)
+    s_matrix_diffraction_patterns = s_matrix.reduce(lazy=lazy).diffraction_patterns(
+        None
+    )
+    probe_diffraction_patterns = probe.multislice(
+        potential=potential, lazy=lazy
+    ).diffraction_patterns(None)
 
-    assert np.allclose(s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array)
+    assert np.allclose(
+        s_matrix_diffraction_patterns.array, probe_diffraction_patterns.array
+    )
 
 
 @given(data=st.data())
-@pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('device', ['cpu', gpu])
-@pytest.mark.parametrize('interpolation', [True, False])
-@pytest.mark.parametrize('detector', [
-    abtem_st.segmented_detector,
-    abtem_st.flexible_annular_detector,
-    abtem_st.pixelated_detector,
-    abtem_st.waves_detector,
-    abtem_st.annular_detector
-])
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("interpolation", [True, False])
+@pytest.mark.parametrize(
+    "detector",
+    [
+        abtem_st.segmented_detector,
+        abtem_st.flexible_annular_detector,
+        abtem_st.pixelated_detector,
+        abtem_st.waves_detector,
+        abtem_st.annular_detector,
+    ],
+)
 def test_prism_scan(data, interpolation, detector, lazy, device):
     potential = data.draw(abtem_st.potential(device=device, ensemble_mean=False))
 
     max_interpolation = 3 if interpolation else 1
 
-    s_matrix = data.draw(abtem_st.s_matrix(potential=potential, max_interpolation=max_interpolation, device=device))
+    s_matrix = data.draw(
+        abtem_st.s_matrix(
+            potential=potential, max_interpolation=max_interpolation, device=device
+        )
+    )
     detector = data.draw(detector())
 
     s_matrix = s_matrix.round_gpts_to_interpolation()
@@ -82,85 +109,121 @@ def test_prism_scan(data, interpolation, detector, lazy, device):
     measurement = s_matrix.scan(scan=scan, detectors=detector, lazy=lazy)
 
     measurement_shape = detector.measurement_shape(probe)
-    assert measurement.shape == potential.ensemble_shape + scan.ensemble_shape + measurement_shape
+    assert (
+        measurement.shape
+        == potential.ensemble_shape + scan.ensemble_shape + measurement_shape
+    )
     assert measurement.dtype == detector.measurement_dtype
 
     measurement = measurement.compute()
-    assert measurement.shape == potential.ensemble_shape + scan.ensemble_shape + measurement_shape
+    assert (
+        measurement.shape
+        == potential.ensemble_shape + scan.ensemble_shape + measurement_shape
+    )
     assert measurement.dtype == detector.measurement_dtype
 
 
+# @reproduce_failure('6.54.6', b'AXicY2DABxgJMXFqRFZu0YAkwwoACyYAxA==')
 @given(data=st.data())
-@pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('device', ['cpu', gpu])
-@pytest.mark.parametrize('interpolation', [True, False])
-@pytest.mark.parametrize('detector', [
-    abtem_st.segmented_detector,
-    abtem_st.flexible_annular_detector,
-    abtem_st.pixelated_detector,
-    abtem_st.waves_detector,
-    abtem_st.annular_detector
-])
-def test_s_matrix_matches_probe_no_interpolation(data, interpolation, detector, lazy, device):
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+# @pytest.mark.parametrize('interpolation', [True, False])
+@pytest.mark.parametrize(
+    "detector",
+    [
+        abtem_st.segmented_detector,
+        abtem_st.flexible_annular_detector,
+        abtem_st.pixelated_detector,
+        abtem_st.waves_detector,
+        abtem_st.annular_detector,
+    ],
+)
+def test_s_matrix_matches_probe_no_interpolation(data, detector, lazy, device):
     potential = data.draw(abtem_st.potential(device=device, ensemble_mean=False))
     detector = data.draw(detector())
-    s_matrix = data.draw(abtem_st.s_matrix(potential=potential, max_interpolation=1, device=device))
+    s_matrix = data.draw(
+        abtem_st.s_matrix(potential=potential, max_interpolation=1, device=device)
+    )
 
     s_matrix = s_matrix.round_gpts_to_interpolation()
     probe = s_matrix.dummy_probes()
 
     scan = GridScan()
-    assume((max(detector.angular_limits(probe)) <= max(probe.cutoff_angles)) or isinstance(detector, WavesDetector))
+    assume(
+        (max(detector.angular_limits(probe)) < min(probe.cutoff_angles))
+        or isinstance(detector, WavesDetector)
+    )
 
     s_matrix_measurement = s_matrix.scan(scan=scan, detectors=detector, lazy=lazy)
-    probe_measurement = probe.scan(potential=potential, scan=scan, detectors=detector, lazy=lazy)
+    probe_measurement = probe.scan(
+        potential=potential, scan=scan, detectors=detector, lazy=lazy
+    )
 
     assert s_matrix_measurement == probe_measurement
 
 
 @given(data=st.data())
-@pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('device', ['cpu', gpu])
-@pytest.mark.parametrize('interpolation', [True, False])
-@pytest.mark.parametrize('detector', [
-    abtem_st.segmented_detector,
-    abtem_st.flexible_annular_detector,
-    abtem_st.pixelated_detector,
-    abtem_st.waves_detector,
-    abtem_st.annular_detector
-])
+@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("device", ["cpu", gpu])
+@pytest.mark.parametrize("interpolation", [True, False])
+@pytest.mark.parametrize(
+    "detector",
+    [
+        abtem_st.segmented_detector,
+        abtem_st.flexible_annular_detector,
+        abtem_st.pixelated_detector,
+        abtem_st.waves_detector,
+        abtem_st.annular_detector,
+    ],
+)
 def test_prism_scan(data, interpolation, detector, lazy, device):
     potential = data.draw(abtem_st.potential(device=device, ensemble_mean=False))
 
     max_interpolation = 3 if interpolation else 1
 
-    s_matrix = data.draw(abtem_st.s_matrix(potential=potential, max_interpolation=max_interpolation, device=device))
+    s_matrix = data.draw(
+        abtem_st.s_matrix(
+            potential=potential, max_interpolation=max_interpolation, device=device
+        )
+    )
     detector = data.draw(detector())
 
     s_matrix = s_matrix.round_gpts_to_interpolation()
     probe = s_matrix.dummy_probes()
 
     scan = GridScan()
+    assume(
+        (max(detector.angular_limits(probe)) < min(probe.cutoff_angles))
+        or isinstance(detector, WavesDetector)
+    )
+
     measurement = s_matrix.scan(scan=scan, detectors=detector, lazy=lazy)
 
-    # scan.match_probe(probe)
-    # measurement_shape = detector.measurement_shape(probe)
-    # assert measurement.shape == potential.ensemble_shape + scan.ensemble_shape + measurement_shape
-    # assert measurement.dtype == detector.measurement_dtype
-    #
-    # measurement = measurement.compute()
-    # assert measurement.shape == potential.ensemble_shape + scan.ensemble_shape + measurement_shape
-    # assert measurement.dtype == detector.measurement_dtype
+    scan.match_probe(probe)
+    measurement_shape = detector.measurement_shape(probe)
+    assert (
+        measurement.shape
+        == potential.ensemble_shape + scan.ensemble_shape + measurement_shape
+    )
+    assert measurement.dtype == detector.measurement_dtype
+
+    measurement = measurement.compute()
+    assert (
+        measurement.shape
+        == potential.ensemble_shape + scan.ensemble_shape + measurement_shape
+    )
+    assert measurement.dtype == detector.measurement_dtype
 
 
 @given(data=st.data())
-@pytest.mark.parametrize('lazy', [False, True])
+@pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.skipif(cp is None, reason="no gpu")
 def test_s_matrix_store_on_host(data, lazy):
-    potential = data.draw(abtem_st.potential(device='gpu', ensemble_mean=False))
+    potential = data.draw(abtem_st.potential(device="gpu", ensemble_mean=False))
     s_matrix = data.draw(abtem_st.s_matrix(potential=potential))
     s_matrix = s_matrix.build().compute()
-    assert_array_matches_device(s_matrix.array, 'cpu')
+    assert_array_matches_device(s_matrix.array, "cpu")
+
 
 # @given(data=st.data())
 # @pytest.mark.parametrize('lazy', [True, False])

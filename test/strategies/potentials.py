@@ -13,7 +13,7 @@ from . import core as core_st
 
 @st.composite
 def atoms(draw,
-          min_side_length=1.,
+          min_side_length=3,
           max_side_length=5.,
           min_thickness=.5,
           max_thickness=4.,

@@ -266,7 +266,7 @@ def test_from_array_and_metadata(data, has_array, lazy, device):
 def test_concatenates_with_self(data, has_array, lazy, device):
     has_array = data.draw(has_array(lazy=lazy, device=device))
 
-    axis = data.draw(st.integers(min_value=0, max_value=len(has_array.shape) - 1))
+    axis = data.draw(st.integers(min_value=0, max_value=len(has_array.ensemble_shape)))
     assume(has_array.axes_metadata[axis]._concatenate)
 
     concatenated = concatenate((has_array, has_array), axis=axis)

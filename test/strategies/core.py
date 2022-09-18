@@ -160,6 +160,6 @@ def random_array(shape,
     array = (random_state.rand(*shape) * (max_value - min_value) + min_value).astype(dtype)
 
     if np.iscomplexobj(array):
-        array.imag = (random_state.rand(*shape) * (max_value - min_value) + min_value).astype(dtype)
+        array.imag = (random_state.rand(*shape) * (max_value - min_value) + min_value).astype(np.float32)
 
     return array

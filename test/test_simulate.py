@@ -90,7 +90,6 @@ def test_s_matrix_multislice_detect_with_frozen_phonons(data, waves_builder, dev
     exit_waves = waves.multislice(frozen_phonons).reduce(detectors=detector)
 
     if ensemble_mean:
-        # assert exit_waves.shape == waves.shape
         assert len(exit_waves.shape) == len(waves.shape) - 1
     else:
         assert exit_waves.shape[0] == len(frozen_phonons)

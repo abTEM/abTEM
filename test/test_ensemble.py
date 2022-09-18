@@ -4,7 +4,7 @@ from operator import mul
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given
+from hypothesis import given, reproduce_failure
 
 import strategies as abtem_st
 from abtem.core.ensemble import concatenate_array_blocks
@@ -99,7 +99,6 @@ def test_array_waves_transform(data, ensemble, chunks):
     array = ensemble.evaluate(waves)
 
     blocks = concatenate_array_blocks(blocks)
-
     assert array.shape[:-2] == ensemble.ensemble_shape
     assert blocks.shape[:-2] == ensemble.ensemble_shape
     assert np.allclose(blocks, array)

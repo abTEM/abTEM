@@ -39,13 +39,13 @@ def probe(
 
 
 @st.composite
-def plane_wave(draw, device="cpu", allow_distribution=True):
+def plane_wave(draw, device="cpu", normalize=False, allow_distribution=True):
     gpts = draw(core_st.gpts())
     extent = draw(core_st.extent())
     energy = draw(core_st.energy())
     # aberrations = draw(transfer_st.random_aberrations(allow_distribution=allow_distribution))
     # aperture = draw(transfer_st.random_aperture(allow_distribution=allow_distribution))
-    return PlaneWave(gpts=gpts, extent=extent, energy=energy, device=device)
+    return PlaneWave(gpts=gpts, extent=extent, energy=energy, device=device, normalize=normalize)
 
 
 @st.composite

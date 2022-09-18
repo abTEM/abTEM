@@ -10,7 +10,7 @@ from . import scan as scan_st
 
 @st.composite
 def uniform_distribution(draw, min_value=-100., max_value=100.):
-    num = draw(st.integers(min_value=1, max_value=10))
+    num = draw(st.integers(min_value=1, max_value=3))
     low = draw(st.floats(min_value=min_value, max_value=max_value))
     extent = draw(st.floats(min_value=0., max_value=max_value - low))
     return distributions.uniform(low=low, high=low + extent, num_samples=num)
@@ -56,7 +56,7 @@ def spatial_envelope(draw, allow_distribution=True):
     return SpatialEnvelope(
         angular_spread=draw(parameter(min_value=5, max_value=20, allow_distribution=allow_distribution)),
         energy=draw(core_st.energy()),
-        aberrations=draw(aberrations()))
+        **draw(aberrations()).parameters)
 
 
 @st.composite
@@ -78,7 +78,7 @@ def composite_wave_transform(draw, allow_distribution=True):
 @st.composite
 def ctf(draw, allow_distribution=True):
     return CTF(
-        aberrations=draw(aberrations(allow_distribution=allow_distribution)),
+        **draw(aberrations(allow_distribution=allow_distribution)).parameters,
         semiangle_cutoff=draw(parameter(min_value=5, max_value=20, allow_distribution=allow_distribution)),
         angular_spread=draw(parameter(min_value=5, max_value=20, allow_distribution=allow_distribution)),
         focal_spread=draw(parameter(min_value=5, max_value=20, allow_distribution=allow_distribution)),
