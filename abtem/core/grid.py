@@ -10,12 +10,14 @@ from abtem.core.utils import CopyMixin, EqualityMixin
 
 def validate_gpts(gpts):
     if not all(gpts):
-        raise ValueError('gpts must be greater than 0')
+        raise ValueError("gpts must be greater than 0")
 
 
-def adjusted_gpts(target_sampling: Tuple[float, ...],
-                  old_sampling: Tuple[float, ...],
-                  old_gpts: Tuple[int, ...]) -> Tuple[Tuple[float, ...], Tuple[int, ...]]:
+def adjusted_gpts(
+    target_sampling: Tuple[float, ...],
+    old_sampling: Tuple[float, ...],
+    old_gpts: Tuple[int, ...],
+) -> Tuple[Tuple[float, ...], Tuple[int, ...]]:
     new_sampling = ()
     new_gpts = ()
     for d_target, d, n in zip(target_sampling, old_sampling, old_gpts):
@@ -29,6 +31,13 @@ def adjusted_gpts(target_sampling: Tuple[float, ...],
 
 class GridUndefinedError(Exception):
     pass
+
+
+def safe_divide(a, b):
+    if b == 0.:
+        return 0.
+    else:
+        return a / b
 
 
 class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
@@ -51,15 +60,17 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
         If true include the grid endpoint. Default is False. For periodic grids the endpoint should not be included.
     """
 
-    def __init__(self,
-                 extent: Union[float, Sequence[float]] = None,
-                 gpts: Union[int, Sequence[int]] = None,
-                 sampling: Union[float, Sequence[float]] = None,
-                 dimensions: int = 2,
-                 endpoint: Union[bool, Sequence[bool]] = False,
-                 lock_extent: bool = False,
-                 lock_gpts: bool = False,
-                 lock_sampling: bool = False):
+    def __init__(
+        self,
+        extent: Union[float, Sequence[float]] = None,
+        gpts: Union[int, Sequence[int]] = None,
+        sampling: Union[float, Sequence[float]] = None,
+        dimensions: int = 2,
+        endpoint: Union[bool, Sequence[bool]] = False,
+        lock_extent: bool = False,
+        lock_gpts: bool = False,
+        lock_sampling: bool = False,
+    ):
 
         self._dimensions = dimensions
 
@@ -93,7 +104,9 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
     def _validate(self, value, dtype):
         if isinstance(value, (np.ndarray, list, tuple)):
             if len(value) != self.dimensions:
-                raise RuntimeError('Grid value length of {} != {}'.format(len(value), self._dimensions))
+                raise RuntimeError(
+                    "Grid value length of {} != {}".format(len(value), self._dimensions)
+                )
             return tuple((map(dtype, value)))
 
         if isinstance(value, (int, float, complex)):
@@ -102,7 +115,7 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
         if value is None:
             return value
 
-        raise RuntimeError('Invalid grid property ({})'.format(value))
+        raise RuntimeError("Invalid grid property ({})".format(value))
 
     def __len__(self) -> int:
         return self.dimensions
@@ -126,7 +139,7 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
     @watch
     def extent(self, extent: Union[float, Sequence[float]]):
         if self._lock_extent:
-            raise RuntimeError('Extent cannot be modified')
+            raise RuntimeError("Extent cannot be modified")
 
         extent = self._validate(extent, dtype=float)
 
@@ -147,7 +160,7 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
     @watch
     def gpts(self, gpts: Union[int, Sequence[int]]):
         if self._lock_gpts:
-            raise RuntimeError('Grid gpts cannot be modified')
+            raise RuntimeError("Grid gpts cannot be modified")
 
         gpts = self._validate(gpts, dtype=int)
 
@@ -169,7 +182,7 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
     @watch
     def sampling(self, sampling):
         if self._lock_sampling:
-            raise RuntimeError('Sampling cannot be modified')
+            raise RuntimeError("Sampling cannot be modified")
 
         sampling = self._validate(sampling, dtype=float)
 
@@ -188,21 +201,31 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
     @property
     def fourier_space_sampling(self) -> Tuple[float, float]:
         self.check_is_defined()
-        return 1 / (self.gpts[0] * self.sampling[0]), 1 / (self.gpts[1] * self.sampling[1])
+        return 1 / (self.gpts[0] * self.sampling[0]), 1 / (
+            self.gpts[1] * self.sampling[1]
+        )
 
     def _adjust_extent(self, gpts: tuple, sampling: tuple):
         if (gpts is not None) & (sampling is not None):
-            self._extent = tuple((n - 1) * d if e else n * d for n, d, e in zip(gpts, sampling, self._endpoint))
+            self._extent = tuple(
+                (n - 1) * d if e else n * d
+                for n, d, e in zip(gpts, sampling, self._endpoint)
+            )
             self._extent = self._validate(self._extent, float)
 
     def _adjust_gpts(self, extent: tuple, sampling: tuple):
         if (extent is not None) & (sampling is not None):
-            self._gpts = tuple(int(np.ceil(r / d)) + 1 if e else int(np.ceil(r / d))
-                               for r, d, e in zip(extent, sampling, self._endpoint))
+            self._gpts = tuple(
+                int(np.ceil(r / d)) + 1 if e else int(np.ceil(r / d))
+                for r, d, e in zip(extent, sampling, self._endpoint)
+            )
 
     def _adjust_sampling(self, extent: tuple, gpts: tuple):
         if (extent is not None) & (gpts is not None):
-            self._sampling = tuple(r / (n - 1) if e else r / n for r, n, e in zip(extent, gpts, self._endpoint))
+            self._sampling = tuple(
+                safe_divide(r, (n - 1)) if e else safe_divide(r, n)
+                for r, n, e in zip(extent, gpts, self._endpoint)
+            )
             self._sampling = self._validate(self._sampling, float)
 
     def check_is_defined(self):
@@ -211,15 +234,15 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
         """
 
         if self.extent is None:
-            raise GridUndefinedError('grid extent is not defined')
+            raise GridUndefinedError("grid extent is not defined")
 
         elif self.gpts is None:
-            raise GridUndefinedError('grid gpts are not defined')
+            raise GridUndefinedError("grid gpts are not defined")
 
         elif self.gpts is None:
-            raise GridUndefinedError('grid sampling is not defined')
+            raise GridUndefinedError("grid sampling is not defined")
 
-    def match(self, other: Union['Grid', 'HasGridMixin'], check_match: bool = False):
+    def match(self, other: Union["Grid", "HasGridMixin"], check_match: bool = False):
         """
         Set the parameters of this grid to match another grid.
 
@@ -239,7 +262,9 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
 
         if other.extent is None:
             other.extent = self.extent
-        elif np.any(np.array(self.extent, np.float32) != np.array(other.extent, np.float32)):
+        elif np.any(
+            np.array(self.extent, np.float32) != np.array(other.extent, np.float32)
+        ):
             self.extent = other.extent
 
         # if (self.gpts is None) & (other.gpts is None):
@@ -252,7 +277,9 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
 
         if other.sampling is None:
             other.sampling = self.sampling
-        elif np.any(np.array(self.sampling, np.float32) != np.array(other.sampling, np.float32)):
+        elif np.any(
+            np.array(self.sampling, np.float32) != np.array(other.sampling, np.float32)
+        ):
             self.sampling = other.sampling
 
     def check_match(self, other):
@@ -267,11 +294,17 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
 
         if (self.extent is not None) & (other.extent is not None):
             if not np.all(np.isclose(self.extent, other.extent)):
-                raise RuntimeError('Inconsistent grid extent ({} != {})'.format(self.extent, other.extent))
+                raise RuntimeError(
+                    "Inconsistent grid extent ({} != {})".format(
+                        self.extent, other.extent
+                    )
+                )
 
         if (self.gpts is not None) & (other.gpts is not None):
             if not np.all(self.gpts == other.gpts):
-                raise RuntimeError('Inconsistent grid gpts ({} != {})'.format(self.gpts, other.gpts))
+                raise RuntimeError(
+                    "Inconsistent grid gpts ({} != {})".format(self.gpts, other.gpts)
+                )
 
     def round_to_power(self, power: int = 2):
         """
@@ -284,7 +317,9 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
             The gpts will be a power of this number.
         """
 
-        self.gpts = tuple(power ** np.ceil(np.log(n) / np.log(power)) for n in self.gpts)
+        self.gpts = tuple(
+            power ** np.ceil(np.log(n) / np.log(power)) for n in self.gpts
+        )
 
 
 class HasGridMixin:
@@ -327,10 +362,9 @@ class HasGridMixin:
         return self
 
 
-def spatial_frequencies(gpts: Tuple[int, ...],
-                        sampling: Tuple[float, ...],
-                        return_grid: bool = False,
-                        xp=np):
+def spatial_frequencies(
+    gpts: Tuple[int, ...], sampling: Tuple[float, ...], return_grid: bool = False, xp=np
+):
     """
     Calculate spatial frequencies of a grid.
 
@@ -353,7 +387,7 @@ def spatial_frequencies(gpts: Tuple[int, ...],
         out += (xp.fft.fftfreq(n, d).astype(np.float32),)
 
     if return_grid:
-        return xp.meshgrid(*out, indexing='ij')
+        return xp.meshgrid(*out, indexing="ij")
     else:
         return out
 

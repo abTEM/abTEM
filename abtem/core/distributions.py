@@ -78,8 +78,8 @@ class DistributionFromValues(Distribution):
             zip(np.cumsum((0,) + chunks), np.cumsum(chunks))
         ):
             blocks[i] = self.__class__(
-                self.values[start:stop],
-                weights=self.weights[start:stop],
+                self.values[start:stop].copy(),
+                weights=self.weights[start:stop].copy(),
                 ensemble_mean=self.ensemble_mean,
             )
 

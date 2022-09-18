@@ -265,18 +265,19 @@ class EnsembleFromDistributionsMixin:
         blocks = ()
         for distribution, n in zip(distributions.values(), chunks):
             blocks += (distribution.divide(n, lazy=lazy),)
+
         return blocks
 
     @classmethod
     def _partial_wave_transform(cls, *args, keys, **kwargs):
         assert len(args) == len(keys)
-        kwargs.update({key: arg for key, arg in zip(keys, args)})
+        kwargs = {**kwargs, **{key: arg for key, arg in zip(keys, args)}}
         transform = cls(**kwargs)  # noqa
         return transform
 
     def from_partitioned_args(self):
-        kwargs = self.copy_kwargs()
         keys = tuple(self._distribution_properties.keys())
+        kwargs = self.copy_kwargs()
         return partial(self._partial_wave_transform, keys=keys, **kwargs)
 
     @property
@@ -347,9 +348,6 @@ class Aperture(EnsembleFromDistributionsMixin, AbstractAperture):
         self._taper = taper
         self._accelerator = Accelerator(energy=energy)
         self._distributions = ("semiangle_cutoff",)
-
-        if isinstance(semiangle_cutoff, Distribution):
-            semiangle_cutoff = np.max(semiangle_cutoff.values)
 
         super().__init__(
             energy=energy, semiangle_cutoff=semiangle_cutoff,
@@ -581,7 +579,7 @@ class HasPhaseAberrations:
     @property
     def parameters(self) -> Dict[str, Union[float, Distribution]]:
         """The parameters."""
-        return self._parameters
+        return copy.deepcopy(self._parameters)
 
     def set_aberrations(self, parameters: Dict[str, Union[float, Distribution]]):
         """
@@ -627,7 +625,7 @@ class SpatialEnvelope(
         self._angular_spread = angular_spread
 
         parameters = {} if parameters is None else parameters
-        parameters.update(kwargs)
+        parameters = {**parameters, **kwargs}
         self._parameters = self._default_parameters()
 
         self.set_aberrations(parameters)
@@ -783,7 +781,7 @@ class Aberrations(
         super().__init__(energy=energy)
 
         parameters = {} if parameters is None else parameters
-        parameters.update(kwargs)
+        parameters = {**parameters, **kwargs}
         self._parameters = self._default_parameters()
 
         self.set_aberrations(parameters)
@@ -900,7 +898,7 @@ class Aberrations(
         array = complex_exponential(-array)
 
         if weights is not None:
-            array = xp.asarray(weights) * array
+            array = xp.asarray(weights, dtype=xp.float32) * array
 
         return array
 
@@ -957,7 +955,8 @@ class CTF(HasPhaseAberrations, EnsembleFromDistributionsMixin, AbstractAperture)
         super().__init__(energy=energy, semiangle_cutoff=semiangle_cutoff)
 
         parameters = {} if parameters is None else parameters
-        parameters.update(kwargs)
+        parameters = {**parameters, **kwargs}
+
         self._parameters = self._default_parameters()
 
         self.set_aberrations(parameters)

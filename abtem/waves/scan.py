@@ -102,10 +102,6 @@ class AbstractScan(WaveTransform, metaclass=ABCMeta):
         axes_metadata = self.ensemble_axes_metadata
         return waves.convolve(array, axes_metadata)
 
-    def copy(self):
-        """Make a copy."""
-        return deepcopy(self)
-
 
 class SourceOffset(AbstractScan):
     def __init__(self, distribution):
@@ -481,7 +477,7 @@ class LineScan(AbstractScan):
 
     @property
     def default_ensemble_chunks(self):
-        return ("auto",)
+        return "auto",
 
     def sort_into_extents(self, extents):
         raise NotImplementedError

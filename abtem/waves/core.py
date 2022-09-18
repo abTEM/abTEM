@@ -58,7 +58,7 @@ from abtem.waves.transfer import (
 
 def _extract_measurement(array, index):
     if array.size == 0:
-        return array
+        return array #np.zeros((7,0,64,1), dtype=np.float32)
 
     array = array.item()[index].array
     return array
@@ -909,12 +909,12 @@ class Waves(HasArray, _WavesLikeMixin):
         return self.apply_transform(ctf, max_batch=max_batch)
 
     @staticmethod
-    def _lazy_multislice(*args, potential_partial, waves_partial, detectors):
+    def _lazy_multislice(*args, potential_partial, waves_partial, detectors, **kwargs):
         potential = potential_partial(*(arg.item() for arg in args[:1]))
         waves = waves_partial(*args[-1:])
 
         measurements = waves.multislice(
-            potential, detectors=detectors, keep_ensemble_dims=True
+            potential, detectors=detectors, **kwargs
         )
         measurements = (
             (measurements,) if hasattr(measurements, "array") else measurements
@@ -1033,19 +1033,6 @@ class _WavesFactory(_WavesLikeMixin):
 
         self._transforms = transforms
 
-    @property
-    @abstractmethod
-    def named_transforms(self):
-        pass
-
-    @property
-    def extra_transforms(self):
-        return [
-            transform
-            for transform in self.transforms
-            if not transform in self.named_transforms
-        ]
-
     @abstractmethod
     def metadata(self):
         pass
@@ -1108,9 +1095,9 @@ class _WavesFactory(_WavesLikeMixin):
 
     def _lazy_build_multislice_detect(
         self,
-        detectors,
-        max_batch=None,
-        potential=None,
+        detectors: List[Detector],
+        max_batch: int = None,
+        potential: AbstractPotential = None,
         multislice_func=multislice_and_detect,
     ):
 
@@ -1237,14 +1224,18 @@ class PlaneWave(_WavesFactory):
         normalize: bool = False,
         tilt: Tuple[float, float] = (0.0, 0.0),
         device: str = None,
-        extra_transforms=None,
+        extra_transforms: List[WaveTransform] = None,
     ):
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
         self._accelerator = Accelerator(energy=energy)
-        self._beam_tilt = validate_tilt(tilt=tilt)
+        self._tilt = validate_tilt(tilt=tilt)
         self._normalize = normalize
         self._device = validate_device(device)
+
+        extra_transforms = [] if extra_transforms is None else extra_transforms
+
+        extra_transforms = extra_transforms + [self._tilt]
 
         super().__init__(transforms=extra_transforms)
 
@@ -1254,7 +1245,7 @@ class PlaneWave(_WavesFactory):
 
     @property
     def metadata(self):
-        return {"energy": self.energy}
+        return {"energy": self.energy, **self._tilt.metadata}
 
     @property
     def shape(self):
@@ -1417,7 +1408,7 @@ class Probe(_WavesFactory):
 
     def __init__(
         self,
-        semiangle_cutoff: float = None,
+        semiangle_cutoff: float,
         extent: Union[float, Tuple[float, float]] = None,
         gpts: Union[int, Tuple[int, int]] = None,
         sampling: Union[float, Tuple[float, float]] = None,
@@ -1425,7 +1416,10 @@ class Probe(_WavesFactory):
         taper: float = 2.0,
         tilt: Tuple[
             Union[float, Distribution], Union[float, Distribution], Distribution
-        ] = (0.0, 0.0,),
+        ] = (
+            0.0,
+            0.0,
+        ),
         device: str = None,
         aperture: Aperture = None,
         aberrations: Union[Aberrations, dict] = None,
@@ -1459,8 +1453,7 @@ class Probe(_WavesFactory):
 
         self._device = validate_device(device)
 
-        if extra_transforms is None:
-            extra_transforms = []
+        extra_transforms = [] if extra_transforms is None else extra_transforms
 
         transforms = extra_transforms + [self._tilt, self.aperture, self.aberrations]
 

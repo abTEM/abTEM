@@ -142,7 +142,7 @@ def prism_wave_vectors(cutoff: float, extent: Tuple[float, float], energy: float
     kx, ky = np.meshgrid(kx, ky, indexing='ij')
     kx = kx[mask]
     ky = ky[mask]
-    return xp.asarray((kx, ky)).T
+    return xp.asarray([kx, ky]).T
 
 
 def plane_waves(wave_vectors: np.ndarray,

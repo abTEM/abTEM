@@ -170,9 +170,11 @@ def allocate_multislice_measurements(
             shape = extra_ensemble_axes_shape + shape
             axes_metadata = extra_ensemble_axes_metadata + axes_metadata
 
+        metadata = detector.measurement_metadata(waves)
+
         array = xp.zeros(shape, dtype=detector.measurement_dtype)
         measurements[detector] = measurement_type.from_array_and_metadata(
-            array, axes_metadata=axes_metadata, metadata=waves.metadata
+            array, axes_metadata=axes_metadata, metadata=metadata
         )
 
     return measurements

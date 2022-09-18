@@ -18,14 +18,15 @@ from abtem.core.energy import Accelerator
 from abtem.core.fft import fft2
 from abtem.core.grid import Grid, GridUndefinedError
 from abtem.core.intialize import initialize
+from abtem.measurements.core import Measurement
 from abtem.measurements.detectors import (
     Detector,
     validate_detectors,
     WavesDetector,
     FlexibleAnnularDetector,
 )
-from abtem.measurements.core import Measurement
 from abtem.potentials.potentials import AbstractPotential, validate_potential
+from abtem.waves.core import Waves, Probe, _finalize_lazy_measurements
 from abtem.waves.core import _WavesLikeMixin
 from abtem.waves.multislice import (
     allocate_multislice_measurements,
@@ -41,7 +42,6 @@ from abtem.waves.prism_utils import (
 )
 from abtem.waves.scan import AbstractScan, validate_scan, GridScan
 from abtem.waves.transfer import CTF
-from abtem.waves.core import Waves, Probe, _finalize_lazy_measurements
 
 
 class AbstractSMatrix(_WavesLikeMixin):
@@ -405,8 +405,6 @@ class SMatrixArray(HasArray, AbstractSMatrix):
         else:
             raise RuntimeError
 
-
-
         return tuple(
             equal_sized_chunks(n, num_chunks=nsc)
             for n, nsc in zip(self.gpts, num_chunks)
@@ -449,8 +447,19 @@ class SMatrixArray(HasArray, AbstractSMatrix):
             ),
         )
 
-        if num_positions == 0:
-            raise RuntimeError()
+        # if num_positions == 0:
+        #
+        #     measurements = []
+        #
+        #     for detector in detectors:
+        #         measurement_type =
+        #
+        #
+        #
+        #     measurements = [for detector in detectors]
+        #     return
+
+        #    return np.array((), dtype=object)
 
         scan = scan.select_block(block_index, scan_chunks)
 

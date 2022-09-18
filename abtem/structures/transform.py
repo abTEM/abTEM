@@ -515,7 +515,6 @@ def orthogonalize_cell(
 def atoms_in_cell(
         atoms: Atoms,
         margin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-        origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
 ) -> Atoms:
     scaled_positions = atoms.get_scaled_positions(wrap=False)
     scaled_margins = np.array(margin) / atoms.cell.lengths()
@@ -579,8 +578,8 @@ def cut_box(
 
     new_atoms.positions[:] += center_translate - margin_translate
 
-    new_atoms = atoms_in_box(new_atoms, box, margin=margin)
     new_atoms.cell = box
+    new_atoms = atoms_in_cell(new_atoms, margin=margin)
 
     # new_atoms = wrap_with_tolerance(new_atoms)
     return new_atoms

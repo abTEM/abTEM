@@ -166,6 +166,13 @@ class NonLinearAxis(OrdinalAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
+class PlasmonAxis(OrdinalAxis):
+    units: str = "Å, mrad, rad"
+    label: str = "depths, radial angles, azimuthal angles"
+    _ensemble_mean: bool = False
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
 class AxisAlignedTiltAxis(NonLinearAxis):
     units: str = "mrad"
     direction: str = "x"

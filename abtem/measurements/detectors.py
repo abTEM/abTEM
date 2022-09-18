@@ -197,14 +197,14 @@ class AnnularDetector(Detector):
     ) -> Union[type(RealSpaceLineProfiles), type(Images)]:
         return scanned_measurement_type(waves)
 
-    def detect(self, waves: "_WavesLikeMixin") -> Images:
+    def detect(self, waves: "Waves") -> Images:
 
         if self.outer is None:
             outer = np.floor(min(waves.cutoff_angles))
         else:
             outer = self.outer
 
-        diffraction_patterns = waves.diffraction_patterns(max_angle="cutoff")
+        diffraction_patterns = waves.diffraction_patterns(max_angle="cutoff", parity="same")
         measurement = diffraction_patterns.integrate_radial(
             inner=self.inner, outer=outer
         )
@@ -339,7 +339,7 @@ class AbstractRadialDetector(Detector):
     def detect(self, waves: "Waves"):
         inner, outer = self.angular_limits(waves)
 
-        measurement = waves.diffraction_patterns(max_angle="cutoff")
+        measurement = waves.diffraction_patterns(max_angle="cutoff", parity="same")
 
         measurement = measurement.polar_binning(
             nbins_radial=self._calculate_nbins_radial(waves),
@@ -677,7 +677,7 @@ class PixelatedDetector(Detector):
         """
 
         if self.fourier_space:
-            measurements = waves.diffraction_patterns(max_angle=self.max_angle)
+            measurements = waves.diffraction_patterns(max_angle=self.max_angle, parity="same")
 
         else:
             measurements = waves.intensity()

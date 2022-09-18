@@ -207,6 +207,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
         of every frozen phonon is returned.
     seeds: int or sequence of int
         Seed for the random number generator(rng), or one seed for each rng in the frozen phonon ensemble.
+
     """
 
     def __init__(self,

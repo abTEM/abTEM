@@ -365,10 +365,11 @@ class PotentialBuilder(AbstractPotential):
                     for j, slic in enumerate(
                         potential.generate_slices(first_slice, last_slice)
                     ):
-                        array[i, j] = slic.array
+                        array[i, j] = slic.array[0]
             else:
                 for j, slic in enumerate(self.generate_slices(first_slice, last_slice)):
-                    array[j] = slic.array
+
+                    array[j] = slic.array[0]
 
         potential = PotentialArray(
             array,

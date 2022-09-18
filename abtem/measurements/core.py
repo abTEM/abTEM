@@ -1772,6 +1772,7 @@ class DiffractionPatterns(Measurement):
         return self.__class__(**kwargs)
 
     def _check_integration_limits(self, inner: float, outer: float):
+
         if inner >= outer:
             raise RuntimeError(
                 f"inner detection ({inner} mrad) angle exceeds outer detection angle"

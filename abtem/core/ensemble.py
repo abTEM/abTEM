@@ -132,7 +132,6 @@ class Ensemble(metaclass=ABCMeta):
     @staticmethod
     def wrap_from_partitioned_args(*args, from_partitioned_args, **kwargs):
         blocks = tuple(arg.item() for arg in args)
-
         arr = np.empty((1,) * len(args), dtype=object)
         arr.itemset(0, from_partitioned_args(*blocks, **kwargs))
         return arr
