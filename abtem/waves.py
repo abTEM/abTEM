@@ -1,5 +1,6 @@
 """Module to describe electron waves and their propagation."""
 from copy import copy
+from typing import Iterable
 from typing import Union, Sequence, Tuple, List, Dict
 
 import h5py
@@ -10,7 +11,7 @@ from ase import Atoms
 from abtem.base_classes import Grid, Accelerator, cache_clear_callback, Cache, cached_method, \
     HasGridMixin, HasAcceleratorMixin, HasEventMixin, AntialiasFilter, Event, HasBeamTiltMixin, BeamTilt, \
     AntialiasAperture, HasAntialiasAperture
-from abtem.detect import AbstractDetector
+from abtem.detect import AbstractDetector, PixelatedDetector
 from abtem.device import get_array_module, get_device_function, asnumpy, get_array_module_from_device, \
     copy_to_device, get_available_memory, HasDeviceMixin, get_device_from_array
 from abtem.measure import calibrations_from_grid, Measurement, block_zeroth_order_spot, probe_profile
@@ -19,9 +20,6 @@ from abtem.scan import AbstractScan, GridScan
 from abtem.transfer import CTF
 from abtem.utils import polar_coordinates, ProgressBar, spatial_frequencies, subdivide_into_batches, periodic_crop, \
     fft_crop, fourier_translation_operator, array_row_intersection
-from abtem.structures import SlicedAtoms
-from abtem.ionization import SubshellTransitions
-from typing import Iterable
 
 
 class FresnelPropagator:
@@ -783,14 +781,14 @@ class Probe(_Scanable, HasEventMixin):
                  gpts: Union[int, Tuple[int, int]] = None,
                  sampling: Union[float, Tuple[float, float]] = None,
                  energy: float = None,
-                 aperture: float = None,
+                 semiangle_cutoff: float = 30.,
                  ctf: CTF = None,
                  tilt: Tuple[float, float] = None,
                  device: str = 'cpu',
                  **kwargs):
 
         if ctf is None:
-            ctf = CTF(energy=energy, aperture=aperture, **kwargs)
+            ctf = CTF(energy=energy, semiangle_cutoff=semiangle_cutoff, **kwargs)
 
         if ctf.energy is None:
             ctf.energy = energy
@@ -1766,6 +1764,18 @@ class SMatrix(_Scanable, HasEventMixin):
         Small angle beam tilt [mrad].
     device : str, optional
         The calculations will be carried out on this device. Default is 'cpu'.
+    downsample : {'cutoff', 'valid'} or float or bool
+        If not False, the scattering matrix is downsampled to a maximum given scattering angle after running the
+        multislice algorithm.
+            ``cutoff`` or True :
+                Downsample to the antialias cutoff scattering angle.
+
+            ``valid`` :
+                Downsample to the largest rectangle inside the circle with a radius defined by the antialias cutoff
+                scattering angle.
+
+            float :
+                Downsample to a maximum scattering angle specified by a float.
     storage : str, optional
         The scattering matrix will be stored on this device. Default is None (uses the option chosen for device).
     kwargs :
@@ -1783,6 +1793,7 @@ class SMatrix(_Scanable, HasEventMixin):
                  sampling: Union[float, Sequence[float]] = None,
                  tilt: Tuple[float, float] = None,
                  device: str = 'cpu',
+                 downsample: bool = True,
                  storage: str = None,
                  **kwargs):
 
@@ -1827,6 +1838,7 @@ class SMatrix(_Scanable, HasEventMixin):
         if storage is None:
             storage = device
 
+        self._downsample = downsample
         self._storage = storage
         self._num_partitions = num_partitions
 
@@ -1838,6 +1850,10 @@ class SMatrix(_Scanable, HasEventMixin):
     @ctf.setter
     def ctf(self, value):
         self._ctf = value
+
+    @property
+    def downsample(self):
+        return self._downsample
 
     @property
     def expansion_cutoff(self) -> float:
@@ -1897,7 +1913,8 @@ class SMatrix(_Scanable, HasEventMixin):
                              multislice_pbar=False,
                              plane_waves_pbar=multislice_pbar)
 
-            S = S.downsample('limit')
+            if self._downsample:
+                S = S.downsample('limit')
 
             for indices, exit_probes in S._generate_probes(scan, max_batch_probes, max_batch_expansion):
                 yield indices, exit_probes
@@ -1986,6 +2003,10 @@ class SMatrix(_Scanable, HasEventMixin):
 
         detectors = self._validate_detectors(detectors)
         measurements = self.validate_scan_measurements(detectors, scan, measurements)
+
+        for detector in detectors:
+            if isinstance(detector, PixelatedDetector) and self.downsample and detector.max_angle is None:
+                raise RuntimeError("disable SMatrix downsample to detect full diffraction pattern")
 
         probe_generator = self._generate_probes(scan,
                                                 potential,

@@ -189,7 +189,7 @@ def epie(measurement: Measurement,
     calibrations = calibrations_from_grid(probe_guess.gpts, probe_guess.sampling, names=['x', 'y'], units='Å')
 
     probe_guess._device = device
-    probe_guess = probe_guess.build(np.array([0, 0])).array[0]
+    probe_guess = probe_guess.build(np.array([0, 0])).array
 
     result = _run_epie(diffraction_patterns.shape[-2:],
                        probe_guess,

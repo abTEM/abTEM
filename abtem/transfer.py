@@ -54,6 +54,8 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         The 1/e width image deflections due to vibrations and thermal magnetic noise [Å].
     energy: float
         The electron energy of the wave functions this contrast transfer function will be applied to [eV].
+    phase_shift : float, optional
+        A constant phase shift [radians].
     parameters: dict
         Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in Å
         and angles should be given in radians.
@@ -73,8 +75,8 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
                  angular_spread: float = 0.,
                  gaussian_spread: float = 0.,
                  energy: float = None,
+                 phase_shift: float = 0.,
                  parameters: Mapping[str, float] = None,
-                 aperture=None,
                  **kwargs):
 
         for key in kwargs.keys():
@@ -93,11 +95,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         self._gaussian_spread = gaussian_spread
 
         self._parameters = dict(zip(polar_symbols, [0.] * len(polar_symbols)))
-
-        self._aperture = aperture
-
-        if self._aperture is not None:
-            self._aperture.accelerator.match(self)
+        self._phase_shift = phase_shift
 
         if parameters is None:
             parameters = {}
@@ -222,9 +220,6 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
                           alpha: Union[float, np.ndarray],
                           phi: Union[float, np.ndarray] = None) -> Union[float, np.ndarray]:
 
-        if self._aperture is not None:
-            return self._aperture.evaluate(alpha, phi)
-
         xp = get_array_module(alpha)
         semiangle_cutoff = self.semiangle_cutoff / 1000
 
@@ -318,7 +313,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
                        p['C54'] * xp.cos(4 * (phi - p['phi54'])) +
                        p['C56'] * xp.cos(6 * (phi - p['phi56']))))
 
-        array = 2 * xp.pi / self.wavelength * array
+        array = 2 * xp.pi / self.wavelength * array + self._phase_shift
         return array
 
     def evaluate_aberrations(self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]) -> \
@@ -330,7 +325,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
     def evaluate(self, alpha: Union[float, np.ndarray], phi: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
         array = self.evaluate_aberrations(alpha, phi)
 
-        if (self.semiangle_cutoff < np.inf) or (self._aperture is not None):
+        if self.semiangle_cutoff < np.inf:
             array *= self.evaluate_aperture(alpha, phi)
 
         if self.focal_spread > 0.:
@@ -360,7 +355,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
     def evaluate_on_grid(self, gpts=None, extent=None, sampling=None, xp=np):
         return self.evaluate(*self._polar_coordinates(gpts, extent, sampling, xp))
 
-    def profiles(self, max_semiangle: float = None, phi: float = 0.):
+    def profiles(self, max_semiangle: float = None, phi: float = 0., reciprocal_units: bool = False):
         if max_semiangle is None:
             if self._semiangle_cutoff == np.inf:
                 max_semiangle = 50
@@ -376,7 +371,11 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         gaussian_envelope = self.evaluate_gaussian_envelope(alpha)
         envelope = aperture * temporal_envelope * spatial_envelope * gaussian_envelope
 
-        calibration = Calibration(offset=0., sampling=(alpha[1] - alpha[0]) * 1000., units='mrad', name='alpha')
+        if reciprocal_units:
+            calibration = Calibration(offset=0., sampling=(alpha[1] - alpha[0]) / self.wavelength, units='1 / Å',
+                                      name='k')
+        else:
+            calibration = Calibration(offset=0., sampling=(alpha[1] - alpha[0]) * 1000., units='mrad', name='alpha')
 
         profiles = {}
         profiles['ctf'] = Measurement(aberrations.imag * envelope, calibrations=[calibration], name='CTF')
@@ -472,7 +471,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         else:
             return canvas.figure
 
-    def show(self, max_semiangle: float = None, phi: float = 0, ax=None, **kwargs):
+    def show(self, max_semiangle: float = None, phi: float = 0, ax=None, reciprocal_units: bool = False, **kwargs):
         """
         Show the contrast transfer function.
 
@@ -496,7 +495,7 @@ class CTF(HasAcceleratorMixin, HasEventMixin):
         if ax is None:
             ax = plt.subplot()
 
-        for key, profile in self.profiles(max_semiangle, phi).items():
+        for key, profile in self.profiles(max_semiangle, phi, reciprocal_units=reciprocal_units).items():
             if not np.all(profile.array == 1.):
                 ax, lines = profile.show(legend=True, ax=ax, **kwargs)
 
