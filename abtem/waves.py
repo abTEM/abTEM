@@ -1369,7 +1369,7 @@ class SMatrixArray(_Scanable, HasEventMixin):
 
         positions = self._validate_positions(positions)
 
-        coefficients = self._get_coefficients(positions)
+        coefficients = self._get_coefficients(positions).astype(xp.complex64)
 
         if self.interpolated_gpts != self.gpts:
             crop_corner, size, corners = self._get_requisite_crop(positions, return_per_position=True)
