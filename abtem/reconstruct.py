@@ -3,9 +3,9 @@ import numpy as np
 from abtem.device import get_array_module, get_scipy_module
 from abtem.measure import Measurement, Calibration
 from abtem.utils import ProgressBar, fft_shift
-from abtem.waves import Probe
+from abtem.waves import FresnelPropagator, Probe, Waves
 from typing import Union, Sequence
-from abtem.potentials import TransmissionFunction
+from abtem.potentials import PotentialArray, TransmissionFunction
 
 def _epie_update_function(f: np.ndarray,
                           g: np.ndarray,
