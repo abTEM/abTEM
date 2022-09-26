@@ -1420,6 +1420,8 @@ def intgrad2d(CoM_measurements: Tuple[Measurement, Measurement], maxiter: int = 
         iCoM = _intgrad2d((CoMx.array, CoMy.array), sampling=sampling)
         return Measurement(iCoM, CoMx.calibrations)
     else:
+        if alpha is None:
+            alpha = 1.0
         iCoM, error = _intgrad2d_iterative((CoMx.array, CoMy.array), sampling=sampling, maxiter=maxiter, alpha=alpha, return_iterations=return_iterations)
 
         if return_iterations:
@@ -1465,17 +1467,38 @@ def _intgrad2d_iterative(gradient: np.ndarray, sampling: Tuple[float, float] = N
     error    = 0.
     j        = 0
 
+    dx       = np.zeros_like(gx)
+    dy       = np.zeros_like(gy)
+    icom     = np.zeros_like(gx)
+
+    error_iterations = []
     if return_iterations:
         icom_iterations  = []
-        error_iterations = []
 
     while j < maxiter:
-        icom_hat = (np.fft.fft2(gx) * grid_ikx + np.fft.fft2(gy) * grid_iky) / (2j * np.pi * k)
-        icom     = np.real(np.fft.ifft2(icom_hat))
 
+        dx      += gx
+        dy      += gy
+
+        icom_hat = (np.fft.fft2(dx) * grid_ikx + np.fft.fft2(dy) * grid_iky) / (2j * np.pi * k * alpha)
+        icom_j   = np.real(np.fft.ifft2(icom_hat))*alpha
+
+        dx       = (np.roll(icom_j,(-1,0),axis=(0,1)) - np.roll(icom_j,(1,0),axis=(0,1))) / 2.
+        dy       = (np.roll(icom_j,(0,-1),axis=(0,1)) - np.roll(icom_j,(0,1),axis=(0,1))) / 2.
+
+        xDiff    = gx - dx
+        yDiff    = gy - dy
+        error    = np.sqrt(np.mean((xDiff - np.mean(xDiff))**2 + (yDiff - np.mean(yDiff))**2))
+        
+        error_iterations.append(error)
         if return_iterations:
-            icom_iterations.append(icom)
-            error_iterations.append(error)
+            icom_iterations.append(icom_j)
+        
+        icom    += icom_j
+
+        if j > 0:
+            if error_iterations[j] > error_iterations[j-1]:
+                alpha /= 2.
 
         pbar.update(1)
         j += 1
