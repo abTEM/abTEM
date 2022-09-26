@@ -1321,7 +1321,7 @@ def intgrad2d(gradient: np.ndarray, sampling: Tuple[float, float] = None):
     k[k == 0] = 1e-12
     That = (np.fft.fft2(gx) * grid_ikx + np.fft.fft2(gy) * grid_iky) / (2j * np.pi * k)
     T = np.real(np.fft.ifft2(That))
-    T -= T.min()
+    #T -= T.min()
     return T
 
 
