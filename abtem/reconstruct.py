@@ -209,7 +209,7 @@ def _run_epie_ms(object: Union[np.ndarray, Sequence[int]],
     if probe.shape != diffraction_patterns.shape[1:]:
         raise ValueError()
 
-    if probe.shape != object_tf.array.shape[-2:]:
+    if probe.shape != object.shape[-2:]:
         raise ValueError()
 
     if return_iterations:
@@ -243,7 +243,7 @@ def _run_epie_ms(object: Union[np.ndarray, Sequence[int]],
                             extent=extent,
                             sampling=sampling) for slice_id in range(num_slices)]
     
-    exit_waves     = [Waves(xp.ones((int(object_dims[0]), int(object_dims[1])), dtype=xp.complex64),
+    exit_waves     = [Waves(xp.ones_like(object[0]),
                             energy=energy,
                             extent=extent,
                             sampling=sampling) for slice_id in range(num_slices)]
