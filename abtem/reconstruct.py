@@ -45,7 +45,7 @@ def _epie_regularization(tf: PotentialArray, gamma: float = 1.):
     
     return tf
 
-def _run_epie(object_dims: Sequence[int],
+def _run_epie(object: Union[np.ndarray, Sequence[int]],
               probe: np.ndarray,
               diffraction_patterns: np.ndarray,
               positions: np.ndarray,
@@ -57,9 +57,10 @@ def _run_epie(object_dims: Sequence[int],
               fix_com: bool = False,
               return_iterations: bool = False,
               seed=None):
+    
     xp = get_array_module(probe)
 
-    object_dims = xp.array(object_dims)
+    object = xp.array(object)
     probe = xp.array(probe)
 
     if len(diffraction_patterns.shape) != 3:
@@ -68,9 +69,9 @@ def _run_epie(object_dims: Sequence[int],
     if len(diffraction_patterns) != len(positions):
         raise ValueError()
 
-    if object_dims.shape == (2,):
-        object = xp.ones((int(object_dims[0]), int(object_dims[1])), dtype=xp.complex64)
-    elif len(object_dims.shape) != 2:
+    if object.shape == (2,):
+        object = xp.ones((int(object[0]), int(object[1])), dtype=xp.complex64)
+    elif len(object.shape) != 2:
         raise ValueError()
 
     if probe.shape != diffraction_patterns.shape[1:]:
@@ -104,8 +105,8 @@ def _run_epie(object_dims: Sequence[int],
         inner_pbar.reset()
         SSE = 0.
         for j in indices:
+        
             position = xp.array(positions[j])
-
             diffraction_pattern = xp.array(diffraction_patterns[j])
             illuminated_object = fft_shift(object, old_position - position)
 
@@ -130,7 +131,6 @@ def _run_epie(object_dims: Sequence[int],
             com = center_of_mass(xp.fft.fftshift(xp.abs(probe) ** 2))
             probe = xp.fft.ifftshift(fft_shift(probe, - xp.array(com)))
 
-        #SSE = SSE / np.prod(diffraction_patterns.shape)
         SSE = SSE / len(positions)
 
 
@@ -154,7 +154,7 @@ def _run_epie(object_dims: Sequence[int],
     else:
         return object, probe, SSE
 
-def _run_epie_ms(object_dims: Sequence[int],
+def _run_epie_ms(object: Union[np.ndarray, Sequence[int]],
                  probe: np.ndarray,
                  diffraction_patterns: np.ndarray,
                  positions: np.ndarray,
@@ -174,7 +174,7 @@ def _run_epie_ms(object_dims: Sequence[int],
                  seed=None):
     
     if num_slices == 1:
-        return _run_epie(object_dims,
+        return _run_epie(object,
                         probe,
                         diffraction_patterns,
                         positions,
@@ -192,8 +192,7 @@ def _run_epie_ms(object_dims: Sequence[int],
 
     xp          = get_array_module(probe)
         
-    object_dims = xp.array(object_dims)
-    
+    object      = xp.array(object)
     probe       = xp.array(probe)
 
     if len(diffraction_patterns.shape) != 3:
@@ -202,17 +201,11 @@ def _run_epie_ms(object_dims: Sequence[int],
     if len(diffraction_patterns) != len(positions):
         raise ValueError()
 
-    if object_dims.shape == (2,):
-        object_tf = TransmissionFunction(
-            xp.ones((num_slices,) + (int(object_dims[0]), int(object_dims[1])), dtype=xp.complex64),
-            slice_thicknesses=slice_thicknesses,
-            extent=extent,
-            sampling=sampling,
-            energy=energy
-        )
-    elif len(object_dims.shape) != 2:
+    if object.shape == (2,):
+        object = xp.ones((num_slices,) + (int(object[0]), int(object[1])), dtype=xp.complex64)
+    elif len(object.shape) != 3:
         raise ValueError()
-
+        
     if probe.shape != diffraction_patterns.shape[1:]:
         raise ValueError()
 
@@ -227,6 +220,12 @@ def _run_epie_ms(object_dims: Sequence[int],
     if seed is not None:
         np.random.seed(seed)
     
+    object_tf = TransmissionFunction(object,
+            slice_thicknesses=slice_thicknesses,
+            extent=extent,
+            sampling=sampling,
+            energy=energy)
+
     propagator               = FresnelPropagator()
     antialias_filter         = AntialiasFilter()
     diffraction_patterns     = np.fft.ifftshift(np.sqrt(diffraction_patterns), axes=(-2, -1))
@@ -248,7 +247,7 @@ def _run_epie_ms(object_dims: Sequence[int],
                             energy=energy,
                             extent=extent,
                             sampling=sampling) for slice_id in range(num_slices)]
-    
+        
     while k < maxiter:
         indices      = np.arange(len(positions))
         np.random.shuffle(indices)
@@ -326,7 +325,6 @@ def _run_epie_ms(object_dims: Sequence[int],
             com             = center_of_mass(xp.fft.fftshift(xp.abs(probe[0].array) ** 2))
             probe[0]._array = xp.fft.ifftshift(fft_shift(probe[0].array, - xp.array(com)))
         
-        #SSE = SSE / np.prod(diffraction_patterns.shape)
         SSE = SSE / len(positions)
         
         if return_iterations:
@@ -351,7 +349,8 @@ def _run_epie_ms(object_dims: Sequence[int],
     
     
 def epie(measurement: Measurement,
-         probe_guess: Probe,
+         probe_guess: Union[Probe,np.ndarray],
+         object_guess: np.ndarray = None,
          maxiter: int = 5,
          num_slices: int = 1,
          slice_thicknesses: Union[float, Sequence[float]] = None,
@@ -419,6 +418,14 @@ def epie(measurement: Measurement,
                          diffraction_patterns.shape[-1]) // 2) - diffraction_patterns.shape[-1] // 2
         diffraction_patterns = np.pad(diffraction_patterns, ((0,) * 2, (padding_x,) * 2, (padding_y,) * 2))
 
+    if not isinstance(probe_guess, Probe):
+        
+        if energy is None:
+            raise ValueError()
+
+        probe_guess = Waves(probe_guess,energy=energy)
+        probe_guess._grid._lock_gpts = False
+
     extent = (probe_guess.wavelength * 1e3 / measurement.calibrations[2].sampling,
               probe_guess.wavelength * 1e3 / measurement.calibrations[3].sampling)
 
@@ -433,7 +440,6 @@ def epie(measurement: Measurement,
     probe_guess.extent = extent
     probe_guess.gpts = diffraction_patterns.shape[-2:]
 
-    #calibrations = calibrations_from_grid(probe_guess.gpts, probe_guess.sampling, names=['x', 'y'], units='Å')
     calibrations_probe = ()
     for name, d in zip(['x','y'], sampling):
         calibrations_probe += (Calibration(0., d, units='Å', name=name, endpoint=False),)
@@ -449,9 +455,16 @@ def epie(measurement: Measurement,
         calibrations_object = calibrations_probe
 
     probe_guess._device = device
-    probe_guess = probe_guess.build(np.array([0, 0])).array
-    
-    result = _run_epie_ms(diffraction_patterns.shape[-2:],
+
+    if isinstance(probe_guess,Probe):
+        probe_guess = probe_guess.build(np.array([0, 0])).array
+    else:
+        probe_guess = np.fft.ifftshift(probe_guess.array)
+   
+    if object_guess is None:
+        object_guess = diffraction_patterns.shape[-2:]
+
+    result = _run_epie_ms(object_guess,
                           probe_guess,
                           diffraction_patterns,
                           positions,
