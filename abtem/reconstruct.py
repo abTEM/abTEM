@@ -6,6 +6,7 @@ from abtem.utils import ProgressBar, fft_shift
 from abtem.waves import FresnelPropagator, Probe, Waves
 from typing import Union, Sequence
 from abtem.potentials import PotentialArray, TransmissionFunction
+from abtem.base_classes import AntialiasFilter
 
 def _epie_update_function(f: np.ndarray,
                           g: np.ndarray,
@@ -227,6 +228,7 @@ def _run_epie_ms(object_dims: Sequence[int],
         np.random.seed(seed)
     
     propagator               = FresnelPropagator()
+    antialias_filter         = AntialiasFilter()
     diffraction_patterns     = np.fft.ifftshift(np.sqrt(diffraction_patterns), axes=(-2, -1))
     
         
@@ -260,10 +262,11 @@ def _run_epie_ms(object_dims: Sequence[int],
 
             diffraction_pattern      = xp.array(diffraction_patterns[j])
             object_tf._array         = fft_shift(object_tf.array, old_position - position)
+            object_tf._array         = antialias_filter._bandlimit(object_tf._array)
             
             # Forward Multislice
             for t_index, _, t in object_tf.generate_transmission_functions(energy=energy,max_batch=1):
-                
+
                 wave                 = probe[t_index].copy()
                 exit_waves[t_index]  = t.transmit(wave)
                 
