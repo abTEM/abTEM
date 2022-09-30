@@ -21,7 +21,7 @@ from abtem.utils import energy2wavelength
 from abtem.utils import fft_interpolate_2d
 from abtem.utils import periodic_crop, tapered_cutoff
 from abtem.visualize.mpl import show_measurement_2d, show_measurement_1d
-from abtem.utils import ProgressBar
+
 
 class Calibration:
     """
@@ -1296,6 +1296,34 @@ def calculate_fwhm(probe_profile: Measurement) -> float:
     return fwhm
 
 
+def intgrad2d(gradient: np.ndarray, sampling: Tuple[float, float] = None):
+    """
+    Perform Fourier-space integration of gradient.
+
+    Parameters
+    ----------
+    gradient : two np.ndarrays
+        The x- and y-components of the gradient.
+    sampling : two float
+        Lateral sampling of the gradients. Default is 1.0.
+
+    Returns
+    -------
+    np.ndarray
+        Integrated center of mass measurement
+    """
+    gx, gy = gradient
+    (nx, ny) = gx.shape
+    ikx = np.fft.fftfreq(nx, d=sampling[0])
+    iky = np.fft.fftfreq(ny, d=sampling[1])
+    grid_ikx, grid_iky = np.meshgrid(ikx, iky, indexing='ij')
+    k = grid_ikx ** 2 + grid_iky ** 2
+    k[k == 0] = 1e-12
+    That = (np.fft.fft2(gx) * grid_ikx + np.fft.fft2(gy) * grid_iky) / (2j * np.pi * k)
+    T = np.real(np.fft.ifft2(That))
+    T -= T.min()
+    return T
+
 
 def bandlimit(measurement: Measurement, cutoff: float, taper: float = .1, band_type='lowpass'):
     """
@@ -1381,7 +1409,7 @@ def center_of_mass(measurement: Measurement, return_magnitude=False, return_icom
 
         sampling = (measurement.calibrations[0].sampling, measurement.calibrations[1].sampling)
 
-        icom = _intgrad2d((com[..., 0], com[..., 1]), sampling)
+        icom = intgrad2d((com[..., 0], com[..., 1]), sampling)
         return Measurement(icom, measurement.calibrations[:-2])
     elif return_magnitude:
         magnitude = np.sqrt(com[..., 0] ** 2 + com[..., 1] ** 2)
@@ -1391,124 +1419,6 @@ def center_of_mass(measurement: Measurement, return_magnitude=False, return_icom
         return (Measurement(com[..., 0], measurement.calibrations[:-2], units='mrad', name='com_x'),
                 Measurement(com[..., 1], measurement.calibrations[:-2], units='mrad', name='com_y'))
 
-def intgrad2d(CoM_measurements: Tuple[Measurement, Measurement], maxiter: int = 1, alpha: float = None, return_iterations: bool = False, return_error: bool = False):
-    """
-    Perform Fourier-space integration of gradient.
-
-    Parameters
-    ----------
-    CoM_measurements : two center-of-mass measurement objects
-        The x- and y-components of the gradient.
-    maxiter : integer
-        Maximum number of iterations. If maxiter > 1, an iterative algorithm is used.
-    alpha: float
-        The update stepsize for the iterative algorithm.
-    return_iterations: bool
-        If true, return a list of iCoM and errors
-
-    Returns
-    -------
-    Measurement
-        Integrated center of mass measurement
-    """
-    
-    CoMx, CoMy = CoM_measurements
-    (nx, ny)   = CoMx.array.shape
-    sampling   = (CoMx.calibrations[0].sampling, CoMx.calibrations[1].sampling)
-
-    if maxiter == 1:
-        iCoM = _intgrad2d((CoMx.array, CoMy.array), sampling=sampling)
-        return Measurement(iCoM, CoMx.calibrations)
-    else:
-        if alpha is None:
-            alpha = 1.0
-        iCoM, error = _intgrad2d_iterative((CoMx.array, CoMy.array), sampling=sampling, maxiter=maxiter, alpha=alpha, return_iterations=return_iterations)
-
-        if return_iterations:
-            icom_iterations  = [Measurement(icom, CoMx.calibrations) for icom in iCoM]
-            if return_error: 
-                return icom_iterations, error
-            else:
-                return icom_iterations
-        else:
-            if return_error:
-                return Measurement(iCoM, CoMx.calibrations), error
-            else:
-                return Measurement(iCoM, CoMx.calibrations)
-
-
-def _intgrad2d(gradient: np.ndarray, sampling: Tuple[float, float] = None):
-    
-    gx, gy = gradient
-    (nx, ny) = gx.shape
-    ikx = np.fft.fftfreq(nx, d=sampling[0])
-    iky = np.fft.fftfreq(ny, d=sampling[1])
-    grid_ikx, grid_iky = np.meshgrid(ikx, iky, indexing='ij')
-    k = grid_ikx ** 2 + grid_iky ** 2
-    k[k == 0] = 1e-12
-    That = (np.fft.fft2(gx) * grid_ikx + np.fft.fft2(gy) * grid_iky) / (2j * np.pi * k)
-    T = np.real(np.fft.ifft2(That))
-    #T -= T.min()
-    
-    return T
-
-
-def _intgrad2d_iterative(gradient: np.ndarray, sampling: Tuple[float, float] = None, maxiter: int = 5, alpha: float = 1., return_iterations: bool = False):
-    
-    gx, gy = gradient
-    (nx, ny) = gx.shape
-    ikx = np.fft.fftfreq(nx, d=sampling[0])
-    iky = np.fft.fftfreq(ny, d=sampling[1])
-    grid_ikx, grid_iky = np.meshgrid(ikx, iky, indexing='ij')
-    k = grid_ikx ** 2 + grid_iky ** 2
-    k[k == 0] = 1e-12
-
-    pbar     = ProgressBar(total=maxiter)
-    error    = 0.
-    j        = 0
-
-    dx       = np.zeros_like(gx)
-    dy       = np.zeros_like(gy)
-    icom     = np.zeros_like(gx)
-
-    error_iterations = []
-    if return_iterations:
-        icom_iterations  = []
-
-    while j < maxiter:
-
-        dx      += gx
-        dy      += gy
-
-        icom_hat = (np.fft.fft2(dx) * grid_ikx + np.fft.fft2(dy) * grid_iky) / (2j * np.pi * k * alpha)
-        icom_j   = np.real(np.fft.ifft2(icom_hat))*alpha
-
-        dx       = (np.roll(icom_j,(-1,0),axis=(0,1)) - np.roll(icom_j,(1,0),axis=(0,1))) / 2.
-        dy       = (np.roll(icom_j,(0,-1),axis=(0,1)) - np.roll(icom_j,(0,1),axis=(0,1))) / 2.
-
-        xDiff    = gx - dx
-        yDiff    = gy - dy
-        error    = np.sqrt(np.mean((xDiff - np.mean(xDiff))**2 + (yDiff - np.mean(yDiff))**2))
-        
-        error_iterations.append(error)
-        if return_iterations:
-            icom_iterations.append(icom_j)
-        
-        icom    += icom_j
-
-        if j > 0:
-            if error_iterations[j] > error_iterations[j-1]:
-                alpha /= 2.
-
-        pbar.update(1)
-        j += 1
-
-    pbar.close()
-
-    if return_iterations:
-        return icom_iterations, error_iterations
-    else:
-        return icom, error
 
 def rotational_average(measurement: Measurement) -> Measurement:
     """
