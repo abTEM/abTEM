@@ -1,505 +1,784 @@
 import numpy as np
-
-from abtem.device import get_array_module, get_scipy_module
+from abtem.device import get_scipy_module, get_array_module_from_device
 from abtem.measure import Measurement, Calibration
 from abtem.utils import ProgressBar, fft_shift
 from abtem.waves import FresnelPropagator, Probe, Waves
-from typing import Union, Sequence
-from abtem.potentials import PotentialArray, TransmissionFunction
+from typing import Union, Sequence, Iterable
 from abtem.base_classes import AntialiasFilter
 
-def _epie_update_function(f: np.ndarray,
-                          g: np.ndarray,
-                          delta_psi:np.ndarray,
-                          alpha: float = 1.):
-    
-    xp = get_array_module(f)
-    return f + alpha * delta_psi * xp.conj(g) / (xp.max(xp.abs(g)) ** 2)
-
-def _epie_simultaneous_update_function(f: np.ndarray,
-                                       g: np.ndarray,
-                                       delta_psi:np.ndarray,
-                                       alpha: float = 1.,
-                                       beta: float = 1.):
-    
-    return _epie_update_function(f,g,delta_psi,alpha), _epie_update_function(g,f,delta_psi,beta)
-
-
-def _epie_regularization(tf: PotentialArray, gamma: float = 1.):
-    
-    array     = tf.array
-    xp        = get_array_module(array)
-    nz,nx,ny  = array.shape
-    sampling  = (tf.slice_thicknesses[0],)+tf.sampling
-    
-    ikz       = xp.fft.fftfreq(nz, d=sampling[0])
-    ikx       = xp.fft.fftfreq(nx, d=sampling[1])
-    iky       = xp.fft.fftfreq(ny, d=sampling[2])
-    grid_ikz, grid_ikx, grid_iky = xp.meshgrid(ikz, ikx, iky, indexing='ij')
-    
-    kz        = grid_ikz**2 * gamma**2
-    kxy       = grid_ikx**2 + grid_iky**2
-    
-    weight    = 1-2/xp.pi*xp.arctan2(kz,kxy)
-    tf._array = xp.fft.ifftn(xp.fft.fftn(array)*weight)
-    
-    return tf
-
-def _run_epie(object: Union[np.ndarray, Sequence[int]],
-              probe: np.ndarray,
-              diffraction_patterns: np.ndarray,
-              positions: np.ndarray,
-              maxiter: int,
-              alpha: float = 1.,
-              beta: float = 1.,
-              verbose: bool = False,
-              fix_probe: bool = False,
-              fix_com: bool = False,
-              return_iterations: bool = False,
-              seed=None):
-    
-    xp = get_array_module(probe)
-
-    object = xp.array(object)
-    probe = xp.array(probe)
-
-    if len(diffraction_patterns.shape) != 3:
-        raise ValueError()
-
-    if len(diffraction_patterns) != len(positions):
-        raise ValueError()
-
-    if object.shape == (2,):
-        object = xp.ones((int(object[0]), int(object[1])), dtype=xp.complex64)
-    elif len(object.shape) != 2:
-        raise ValueError()
-
-    if probe.shape != diffraction_patterns.shape[1:]:
-        raise ValueError()
-
-    if probe.shape != object.shape:
-        raise ValueError()
-
-    if return_iterations:
-        object_iterations = []
-        probe_iterations = []
-        SSE_iterations = []
-
-    if seed is not None:
-        np.random.seed(seed)
-
-    diffraction_patterns     = np.fft.ifftshift(np.sqrt(diffraction_patterns), axes=(-2, -1))
-
-    SSE = 0.
-    k = 0
-    outer_pbar = ProgressBar(total=maxiter)
-    inner_pbar = ProgressBar(total=len(positions),leave=False)
-
-    center_of_mass = get_scipy_module(xp).ndimage.center_of_mass
-
-    while k < maxiter:
-        indices = np.arange(len(positions))
-        np.random.shuffle(indices)
-
-        old_position = xp.array((0., 0.))
-        inner_pbar.reset()
-        SSE = 0.
-        for j in indices:
-        
-            position = xp.array(positions[j])
-            diffraction_pattern = xp.array(diffraction_patterns[j])
-            illuminated_object = fft_shift(object, old_position - position)
-
-            g = illuminated_object * probe
-            gprime = xp.fft.ifft2(diffraction_pattern * xp.exp(1j * xp.angle(xp.fft.fft2(g))))
-
-            object = illuminated_object + alpha * (gprime - g) * xp.conj(probe) / (xp.max(xp.abs(probe)) ** 2)
-            old_position = position
-
-            if not fix_probe:
-                probe = probe + beta * (gprime - g) * xp.conj(illuminated_object) / (
-                        xp.max(xp.abs(illuminated_object)) ** 2)
-
-            
-            SSE += xp.sum(xp.abs(xp.fft.fft2(g)) - diffraction_pattern)**2
-
-            inner_pbar.update(1)
-
-        object = fft_shift(object, position)
-
-        if fix_com:
-            com = center_of_mass(xp.fft.fftshift(xp.abs(probe) ** 2))
-            probe = xp.fft.ifftshift(fft_shift(probe, - xp.array(com)))
-
-        SSE = SSE / len(positions)
-
-
-        if return_iterations:
-            object_iterations.append(object)
-            probe_iterations.append(probe)
-            SSE_iterations.append(SSE)
-            
-        if verbose:
-            print(f'Iteration {k:<{len(str(maxiter))}}, SSE = {float(SSE):.3e}')
-
-        outer_pbar.update(1)
-
-        k += 1
-
-    inner_pbar.close()
-    outer_pbar.close()
-
-    if return_iterations:
-        return object_iterations, probe_iterations, SSE_iterations
-    else:
-        return object, probe, SSE
-
-def _run_epie_ms(object: Union[np.ndarray, Sequence[int]],
-                 probe: np.ndarray,
-                 diffraction_patterns: np.ndarray,
-                 positions: np.ndarray,
-                 maxiter: int,
-                 num_slices: int = 1,
-                 slice_thicknesses: Union[float, Sequence[float]] = None,
-                 energy=None,
-                 extent=None,
-                 sampling=None,
-                 alpha: float = 1.,
-                 beta: float = 1.,
-                 gamma: float = None,
-                 verbose: bool = False,
-                 fix_probe: bool = False,
-                 fix_com: bool = False,
-                 return_iterations: bool = False,
-                 seed=None):
-    
-    if num_slices == 1:
-        return _run_epie(object,
-                        probe,
-                        diffraction_patterns,
-                        positions,
-                        maxiter=maxiter,
-                        alpha=alpha,
-                        beta=beta,
-                        verbose=verbose,
-                        fix_probe=fix_probe,
-                        fix_com=fix_com,
-                        return_iterations=return_iterations,
-                        seed=seed)
-    
-    if slice_thicknesses is None: 
-        raise ValueError()
-
-    xp          = get_array_module(probe)
-        
-    object      = xp.array(object)
-    probe       = xp.array(probe)
-
-    if len(diffraction_patterns.shape) != 3:
-        raise ValueError()
-
-    if len(diffraction_patterns) != len(positions):
-        raise ValueError()
-
-    if object.shape == (2,):
-        object = xp.ones((num_slices,) + (int(object[0]), int(object[1])), dtype=xp.complex64)
-    elif len(object.shape) != 3:
-        raise ValueError()
-        
-    if probe.shape != diffraction_patterns.shape[1:]:
-        raise ValueError()
-
-    if probe.shape != object.shape[-2:]:
-        raise ValueError()
-
-    if return_iterations:
-        object_iterations = []
-        probe_iterations  = []
-        SSE_iterations    = []
-
-    if seed is not None:
-        np.random.seed(seed)
-    
-    object_tf = TransmissionFunction(object,
-            slice_thicknesses=slice_thicknesses,
-            extent=extent,
-            sampling=sampling,
-            energy=energy)
-
-    propagator               = FresnelPropagator()
-    antialias_filter         = AntialiasFilter()
-    diffraction_patterns     = np.fft.ifftshift(np.sqrt(diffraction_patterns), axes=(-2, -1))
-    
-        
-    SSE            = 0.
-    k              = 0
-    outer_pbar     = ProgressBar(total=maxiter)
-    inner_pbar     = ProgressBar(total=len(positions),leave=False)
-
-    center_of_mass = get_scipy_module(xp).ndimage.center_of_mass
-    
-    probe          = [Waves(probe,
-                            energy=energy,
-                            extent=extent,
-                            sampling=sampling) for slice_id in range(num_slices)]
-    
-    exit_waves     = [Waves(xp.ones_like(object[0]),
-                            energy=energy,
-                            extent=extent,
-                            sampling=sampling) for slice_id in range(num_slices)]
-        
-    while k < maxiter:
-        indices      = np.arange(len(positions))
-        np.random.shuffle(indices)
-
-        old_position = xp.array((0., 0.))
-        inner_pbar.reset()
-        SSE          = 0.
-        
-        for j in indices:
-            position                 = xp.array(positions[j])
-
-            diffraction_pattern      = xp.array(diffraction_patterns[j])
-            object_tf._array         = fft_shift(object_tf.array, old_position - position)
-            object_tf._array         = antialias_filter._bandlimit(object_tf._array)
-            
-            # Forward Multislice
-            for t_index, _, t in object_tf.generate_transmission_functions(energy=energy,max_batch=1):
-
-                wave                 = probe[t_index].copy()
-                exit_waves[t_index]  = t.transmit(wave)
-                
-                if t_index + 1 < num_slices:
-                    probe[t_index+1] = propagator.propagate(wave, t.thickness,in_place=False)
-            
-            # Correct Modulus
-            g       = exit_waves[-1].array
-            g_prime = xp.fft.ifft2(diffraction_pattern * xp.exp(1j * xp.angle(xp.fft.fft2(g))))
-            
-            SSE    += xp.sum(xp.abs(xp.fft.fft2(g)) - diffraction_pattern)**2
-            
-            # Last Slice Update
-            object_tf._array[-1],probe[-1]._array = _epie_simultaneous_update_function(
-                object_tf.array[-1],
-                probe[-1].array,
-                g_prime-g,
-                alpha,
-                beta)
-            
-            # Backward Propagation & Update
-            for t_index in reversed(range(1,num_slices)):
-                
-                wave        = probe[t_index].copy()
-                g           = exit_waves[t_index-1].array
-                g_prime     = propagator.propagate(wave,-slice_thicknesses[t_index-1],in_place=False).array
-                
-                # Don't update probe at final iteration if fix_probe is True
-                # alternatively, we could just set beta = 0.
-                if t_index == 1 and fix_probe:
-                    object_tf._array[t_index-1] = _epie_update_function(
-                        object_tf.array[t_index-1],
-                        probe[t_index-1].array,
-                        g_prime-g,
-                        alpha)
-                    
-                # Otherwise update both probe and object
-                else:
-                    object_tf._array[t_index-1],probe[t_index-1]._array = _epie_simultaneous_update_function(
-                        object_tf.array[t_index-1],
-                        probe[t_index-1].array,
-                        g_prime-g,
-                        alpha,
-                        beta)
-
-            old_position    = position
-            
-            # Regularization
-            if gamma is not None:
-                object_tf   = _epie_regularization(object_tf,gamma=gamma)
-            
-            inner_pbar.update(1)
-            
-        object_tf._array    = fft_shift(object_tf.array, position)
-
-        if fix_com:
-            com             = center_of_mass(xp.fft.fftshift(xp.abs(probe[0].array) ** 2))
-            probe[0]._array = xp.fft.ifftshift(fft_shift(probe[0].array, - xp.array(com)))
-        
-        SSE = SSE / len(positions)
-        
-        if return_iterations:
-            object_iterations.append(object_tf.array)
-            probe_iterations.append(probe[0].array)
-            SSE_iterations.append(SSE)
-
-        if verbose:
-            print(f'Iteration {k:<{len(str(maxiter))}}, SSE = {float(SSE):.3e}')
-        
-        outer_pbar.update(1)
-
-        k += 1
-
-    inner_pbar.close()
-    outer_pbar.close()
-
-    if return_iterations:
-        return object_iterations, probe_iterations, SSE_iterations
-    else:
-        return object_tf.array, probe[0].array, SSE
-    
-    
-def epie(measurement: Measurement,
-         probe_guess: Union[Probe,np.ndarray],
-         object_guess: np.ndarray = None,
-         maxiter: int = 5,
-         num_slices: int = 1,
-         slice_thicknesses: Union[float, Sequence[float]] = None,
-         energy: float = None,
-         alpha: float = 1.,
-         beta: float = 1.,
-         gamma: float  = None,
-         verbose: bool = False,
-         fix_probe: bool = False,
-         fix_com: bool = False,
-         return_iterations: bool = False,
-         max_angle: float = None,
-         crop_to_valid: bool = False,
-         seed: int = None,
-         device: str = 'cpu'):
+def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Sequence[Measurement]],
+                                 probe_guesses           : Union[Probe,np.ndarray,Sequence[np.ndarray]],
+                                 object_guesses          : Union[np.ndarray,Sequence[np.ndarray]] = None,
+                                 max_angle               : float                                  = None,
+                                 crop_to_valid           : bool                                   = False,
+                                 energy                  : float                                  = None,
+                                 num_probes              : int                                    = None,
+                                 num_objects             : int                                    = None,
+                                 num_slices              : int                                    = None,
+                                 slice_thicknesses       : Union[float,Sequence[float]]           = None,
+                                 maxiter                 : int                                    = 5,
+                                 alpha                   : float                                  = 1.,
+                                 beta                    : float                                  = 1.,
+                                 damping                 : float                                  = 1.,
+                                 damping_rate            : float                                  = 0.995,
+                                 fix_probe               : bool                                   = False, 
+                                 fix_com                 : bool                                   = True,
+                                 return_iterations       : bool                                   = False,
+                                 verbose                 : bool                                   = False,
+                                 seed                    : int                                    = None,
+                                 functions_dictionary    : dict                                   = None,
+                                 device                  : str                                    = 'cpu'):
+   
     """
-    Reconstruct the phase of a 4D-STEM measurement using the multislice extended Ptychographical Iterative Engine.
-    See:
-    - https://doi.org/10.1016/j.ultramic.2009.05.012
-    - https://doi.org/10.1364/JOSAA.29.001606
+    Reconstruct the complex objects of 4D-STEM measurements using the Ptychographical Iterative Engine (PIE).
+    
+    The current implementation automatically handles the following common PIE extensions:
+    - regularized  PIE: See https://doi.org/10.1364/OPTICA.4.000736
+    - mixed-state  PIE: See https://doi.org/10.1038/s41467-020-16688-6
+    - multislice   PIE: See https://doi.org/10.1364/JOSAA.29.001606 
+    - simultaneous PIE: See example notebook
+    
+    Further, it allows the user to define custom functions for the four main steps of the algorithm.
+    See example notebook for a walkthrough.
+    
     Parameters
     ----------
-    measurement : Measurement object
-        4D-STEM measurement.
-    probe_guess : Probe object
-        The initial guess for the probe.
+    diffraction_measurements : Measurement object(s)
+        4D-STEM measurement(s).
+    probe_guesses  : Probe object(s) or np.ndarray(s)
+        The initial guess(es) for the probe(s).
+        If passed a tuple of Probe/np.ndarray objects, this will triger the mixed-state PIE algorithm with that many probes.
+    object_guesses : np.ndarray(s)
+        The initial guess(es) for the object(s).
+    max_angle : float, optional
+        The maximum reconstructed scattering angle. If this is larger than the input data, the data will be zero-padded.
+    crop_to_valid : bool
+        If true, the output is cropped to the scan area.
+    energy : float
+        The probe energy. Only necessary is probe_guesses is not a Probe object.
+    num_probes : int
+        If not None, this will trigger the mixed-state PIE algorithm with num_probes probes.
+    num_objects : int
+        If not None, this will trigger the mixed-state PIE algorithm with num_objects objects.
+    num_slices : int
+        If not None, this will trigger the multislice PIE algorithm with num_slices slices of thickness slice_thicknesses.
+    slice_thicknesses : float(s)
+        If not None, this will trigger the multislice PIE algorithm with num_slices slices of thickness slice_thicknesses.
     maxiter : int
         Run the algorithm for this many iterations.
-    num_slices: int
-        If num_slices > 1, the multislice ePIE algorithm will be used. See reference.
-    slice_thicknesses: float
-        The thicknesses of object slices in Å. If a float, the thickness is the same for all slices.
-        If a sequence, the length must equal num_slices.
     alpha : float
-        Controls the size of the iterative updates for the object. See reference.
+        Controls the regularization of the iterative updates for the object. See regularized PIE reference.
+        alpha=1, corresponds to ePIE with alpha=1. alpha < 1 regularizes towards true gradient descent.
     beta : float
-        Controls the size of the iterative updates for the probe. See reference.
-    gamma : float
-        Controls the size of the out-of-plane regularization. Default is None.
+        Controls the regularization of the iterative updates for the probe. See regularized PIE reference.
+        beta=1, corresponds to ePIE with beta=1. beta < 1 regularizes towards true gradient descent.
+    damping : float
+        Backwards-compatible parameter if user wants to run ePIE with alpha/beta != 1.
+    damping_rate: float
+        Per-iteration damping parameter to speed-up convergence if close to minimum.
+        If you want to run ePIE with alpha/beta != 1, set this to 1.0 and set damping appropriately.
     fix_probe : bool
         If True, the probe will not be updated by the algorithm. Default is False.
     fix_com : bool
         If True, the center of mass of the probe will be centered. Default is True.
     return_iterations : bool
         If True, return the reconstruction after every iteration. Default is False.
-    max_angle : float, optional
-        The maximum reconstructed scattering angle. If this is larger than the input data, the data will be zero-padded.
-    crop_to_valid : bool
-        If true, the output is cropped to the scan area.
+    verbose : bool
+        If True, prints the current error after every iteration. Default is False.
     seed : int, optional
         Seed the random number generator.
+    functions_dictionary : dict
+        If not None, it allows the user to specify custom functions for the algorithm steps. See example notebook.
     device : str
         Set the calculation device.
+        
     Returns
     -------
-    List of Measurement objects
+    Measurement objects of object(s), probe(s), and error
     """
 
-    diffraction_patterns = measurement.array.reshape((-1,) + measurement.array.shape[2:])
+    if num_slices is not None:
+        if slice_thicknesses is None:
+            raise ValueError()
+        else:
+            slice_thicknesses           = np.array(slice_thicknesses)
+            if slice_thicknesses.shape == ():
+                slice_thicknesses       = np.tile(slice_thicknesses, num_slices)
+                
+    
+    flat_dps, probes, objects, positions, calibrations, props = _prepare_pie_inputs(diffraction_measurements,
+                                                                                    probe_guesses,
+                                                                                    object_guesses,
+                                                                                    max_angle         = max_angle,
+                                                                                    energy            = energy,
+                                                                                    num_probes        = num_probes,
+                                                                                    num_objects       = num_objects,
+                                                                                    num_slices        = num_slices,
+                                                                                    slice_thicknesses = slice_thicknesses,
+                                                                                    device            = device)
+   
+    
+    if functions_dictionary is None:
+    
+        if not isinstance(diffraction_measurements,Iterable):
 
-    if max_angle:
-        padding_x = int((max_angle / abs(measurement.calibrations[-2].offset) *
-                         diffraction_patterns.shape[-2]) // 2) - diffraction_patterns.shape[-2] // 2
-        padding_y = int((max_angle / abs(measurement.calibrations[-1].offset) *
-                         diffraction_patterns.shape[-1]) // 2) - diffraction_patterns.shape[-1] // 2
-        diffraction_patterns = np.pad(diffraction_patterns, ((0,) * 2, (padding_x,) * 2, (padding_y,) * 2))
+            if isinstance(probes,tuple):
+                # Mixed-state PIE
+                _exit_wave_func              = _mixed_state_exit_wave_func
+                _amplitude_modification_func = _mixed_state_amplitude_modification_func
+                _update_func                 = _mixed_state_update_func
+                _update_center_of_mass_func  = _update_multiple_probes_center_of_mass_func
 
-    if not isinstance(probe_guess, Probe):
+            elif len(objects.shape) == 3:
+                # Multislice PIE
+                _exit_wave_func              = _multislice_exit_wave_func
+                _amplitude_modification_func = _multislice_amplitude_modification_func
+                _update_func                 = _multislice_update_func
+                _update_center_of_mass_func  = _update_single_probe_center_of_mass_func
+
+            else:
+                # Extended PIE
+                _exit_wave_func              = _epie_exit_wave_func
+                _amplitude_modification_func = _epie_amplitude_modification_func
+                _update_func                 = _epie_update_func
+                _update_center_of_mass_func  = _update_single_probe_center_of_mass_func
+
+        else:
+            # Simultaneous PIE
+            _exit_wave_func                  = _simultaneous_exit_wave_func
+            _amplitude_modification_func     = _simultaneous_amplitude_modification_func
+            _update_func                     = _simultaneous_update_func
+            _update_center_of_mass_func      = _update_single_probe_center_of_mass_func
         
-        if energy is None:
+    else:
+        _exit_wave_func                      = functions_dictionary['exit_wave_func']
+        _amplitude_modification_func         = functions_dictionary['amplitude_modification_func']
+        _update_func                         = functions_dictionary['update_func']
+        _update_center_of_mass_func          = functions_dictionary['update_center_of_mass_func']
+        
+    xp = get_array_module_from_device(device)
+    
+    if return_iterations:
+        objects_iterations = []
+        probes_iterations  = []
+        SSE_iterations     = []
+
+    if seed is not None:
+        np.random.seed(seed)
+        
+    flat_dps               = np.fft.ifftshift(np.sqrt(flat_dps),axes=(-2,-1))
+    
+    iteration              = 0
+    outer_pbar             = ProgressBar(total=maxiter)
+    inner_pbar             = ProgressBar(total=len(positions),leave=False)
+
+    center_of_mass         = get_scipy_module(xp).ndimage.center_of_mass
+    
+    propagator             = FresnelPropagator()
+    antialias_filter       = AntialiasFilter()
+    
+    while iteration < maxiter:
+        indices            = np.arange(len(positions))
+        np.random.shuffle(indices)
+        
+        old_position       = xp.array((0.,0.))
+        inner_pbar.reset()
+        SSE                = 0.0
+        
+        for j in indices:
+            
+            position       = xp.array(positions[j])
+            
+            if isinstance(diffraction_measurements,Iterable):
+                diffraction_patterns = tuple(xp.array(flat_dp[j]) for flat_dp in flat_dps)
+            else:
+                diffraction_patterns = xp.array(flat_dps[j])
+                
+            if isinstance(objects,tuple):
+                objects  = tuple(fft_shift(obj,old_position - position) for obj in objects)
+            else:
+                objects  = fft_shift(objects,old_position - position)
+
+            exit_waves, objects, probes = _exit_wave_func(objects,
+                                                          probes,
+                                                          xp                = xp,
+                                                          propagator        = propagator,
+                                                          antialias_filter  = antialias_filter,
+                                                          slice_thicknesses = slice_thicknesses,
+                                                          wave_properties   = props)
+
+        
+            modified_exit_waves, SSE    = _amplitude_modification_func(exit_waves,
+                                                                       diffraction_patterns,
+                                                                       SSE,
+                                                                       xp  = xp)
+
+            
+            objects, probes             = _update_func(exit_waves,
+                                                       modified_exit_waves,
+                                                       objects,
+                                                       probes,
+                                                       fix_probe          = fix_probe,
+                                                       alpha              = alpha,
+                                                       beta               = beta,
+                                                       damping            = damping,
+                                                       xp                 = xp,
+                                                       propagator         = propagator,
+                                                       slice_thicknesses  = slice_thicknesses,
+                                                       wave_properties    = props)
+            
+            old_position = position
+            inner_pbar.update(1)
+        
+        if isinstance(objects,tuple):
+            objects = tuple(fft_shift(obj,position) for obj in objects)
+        else:
+            objects = fft_shift(objects,position)
+        
+        if fix_com:
+            probes  = _update_center_of_mass_func(probes,center_of_mass,xp=xp)
+        
+        SSE        /= len(positions)
+        
+        if return_iterations:
+            objects_iterations.append(objects)
+            probes_iterations.append(probes)
+            SSE_iterations.append(SSE)
+            
+        if verbose:
+            print(f'Iteration {iteration:<{len(str(maxiter))}}, SSE = {float(SSE):.3e}')
+            
+            
+        damping   *= damping_rate
+        outer_pbar.update(1)
+        
+        iteration += 1
+        
+    inner_pbar.close()
+    outer_pbar.close()
+    
+    if isinstance(diffraction_measurements,Iterable):
+        valid_extent = (diffraction_measurements[0].calibration_limits[0][1] - diffraction_measurements[0].calibration_limits[0][0],
+                        diffraction_measurements[0].calibration_limits[1][1] - diffraction_measurements[0].calibration_limits[1][0])
+        
+    else:
+        valid_extent = (diffraction_measurements.calibration_limits[0][1] - diffraction_measurements.calibration_limits[0][0],
+                        diffraction_measurements.calibration_limits[1][1] - diffraction_measurements.calibration_limits[1][0])        
+    
+    if return_iterations:
+        
+        if isinstance(objects,tuple):
+            _objects_iterations    = []
+            for obj_iter in objects_iterations:
+                if crop_to_valid:
+                    _objects_iterations.append(tuple(Measurement(obj, calibrations).crop(valid_extent) for obj in obj_iter))
+                else:
+                    _objects_iterations.append(tuple(Measurement(obj, calibrations) for obj in obj_iter))
+            objects_iterations     = _objects_iterations
+        else:
+            if crop_to_valid:
+                objects_iterations = [Measurement(obj,calibrations).crop(valid_extent) for obj in objects_iterations]
+            else:
+                objects_iterations = [Measurement(obj,calibrations) for obj in objects_iterations]
+        
+        if isinstance(probes,tuple):
+            _probes_iterations     = []
+            for probe_iter in probes_iterations:
+                _probes_iterations.append(tuple(
+                    Measurement(np.fft.fftshift(probe),calibrations) for probe in probe_iter))
+            probes_iterations      = _probes_iterations
+        else:
+            probes_iterations      = [Measurement(np.fft.fftshift(probe),calibrations) for probe in probes_iterations]
+        
+        return objects_iterations, probes_iterations, SSE_iterations
+    
+    else:
+        if isinstance(objects,tuple):
+            if crop_to_valid:
+                objects            = tuple(Measurement(obj, calibrations).crop(valid_extent) for obj in objects)
+            else:
+                objects            = tuple(Measurement(obj, calibrations) for obj in objects)
+        else:
+            if crop_to_valid:
+                objects            = Measurement(objects, calibrations).crop(valid_extent)
+            else:
+                objects            = Measurement(objects, calibrations)
+        
+        if isinstance(probes,tuple):
+            probes                 = tuple(Measurement(np.fft.fftshift(probe),calibrations) for probe in probes)
+        else:
+            probes                 = Measurement(np.fft.fftshift(probes),calibrations)
+        
+        return objects, probes, SSE
+
+
+def _prepare_pie_inputs(diffraction_measurements : Union[Measurement, Sequence[Measurement]],
+                        probe_guesses            : Union[Probe,np.ndarray,Sequence[np.ndarray]],
+                        object_guesses           : Union[np.ndarray,Sequence[np.ndarray]] = None,
+                        max_angle                : float                                  = None,
+                        energy                   : float                                  = None,
+                        num_probes               : int                                    = None,
+                        num_objects              : int                                    = None,
+                        num_slices               : int                                    = None,
+                        slice_thicknesses        : np.ndarray                             = None,
+                        device                   : str                                    = 'cpu'):
+
+    xp = get_array_module_from_device(device)
+
+    # Flatten Diffraction Patterns
+    if isinstance(diffraction_measurements,Iterable):
+        diffraction_measurements_shape        = diffraction_measurements[0].array.shape
+        diffraction_measurements_calibrations = diffraction_measurements[0].calibrations
+
+        flat_diffraction_patterns             = tuple(
+            diffraction_measurement.array.reshape((-1,) + diffraction_measurements_shape[2:]) for
+            diffraction_measurement in diffraction_measurements)
+    else:
+        diffraction_measurements_shape        = diffraction_measurements.array.shape
+        diffraction_measurements_calibrations = diffraction_measurements.calibrations
+
+        flat_diffraction_patterns             = diffraction_measurements.array.reshape(
+            (-1,) + diffraction_measurements_shape[2:])
+
+    # Pad Diffraction Patterns
+    if max_angle:
+        padding_x = max(
+            int((max_angle / abs(diffraction_measurements_calibrations[-2].offset) *
+                 diffraction_measurements_shape[-2]) // 2) - diffraction_measurements_shape[-2] // 2, 0)
+        padding_y = max(
+            int((max_angle / abs(diffraction_measurements_calibrations[-1].offset) *
+                 diffraction_measurements_shape[-1]) // 2) - diffraction_measurements_shape[-1] // 2, 0)
+
+        if isinstance(diffraction_measurements,Iterable):
+            flat_diffraction_patterns      = tuple(
+                np.pad(flat_diffraction_pattern, ((0,0),(padding_x,padding_x),(padding_y,padding_y))) for
+                flat_diffraction_pattern in flat_diffraction_patterns)
+        else:
+            flat_diffraction_patterns = np.pad(flat_diffraction_patterns,
+                                               ((0,0),(padding_x,padding_x),(padding_y,padding_y)))
+
+
+    # Prepare Probes First Pass
+    if isinstance(probe_guesses, tuple):
+        num_probes    = len(probe_guesses)
+
+        if isinstance(probe_guesses[0],np.ndarray):
+
+            if energy is None:
+                raise ValueError()
+
+            _probe_guesses = []
+            for probe in probe_guesses:
+                _probe = Waves(np.fft.ifftshift(probe),energy=energy)
+                _probe._grid._lock_gpts = False
+                _probe_guesses.append(_probe)
+
+            probe_guesses = tuple(_probe_guesses)
+
+        else:
             raise ValueError()
 
-        probe_guess = Waves(probe_guess,energy=energy)
-        probe_guess._grid._lock_gpts = False
+        probe_wavelength  = probe_guesses[0].wavelength
+        energy            = probe_guesses[0].energy
 
-    extent = (probe_guess.wavelength * 1e3 / measurement.calibrations[2].sampling,
-              probe_guess.wavelength * 1e3 / measurement.calibrations[3].sampling)
+    else:
 
-    sampling = (extent[0] / diffraction_patterns.shape[-2],
-                extent[1] / diffraction_patterns.shape[-1])
+        if isinstance(probe_guesses,np.ndarray):
 
-    x = measurement.calibrations[0].coordinates(measurement.shape[0]) / sampling[0]
-    y = measurement.calibrations[1].coordinates(measurement.shape[1]) / sampling[1]
-    x, y = np.meshgrid(x, y, indexing='ij')
+            if energy is None:
+                raise ValueError()
+
+            _probe = Waves(np.fft.ifftshift(probe_guesses),energy=energy)
+            _probe._grid._lock_gpts = False
+
+            probe_guesses = _probe
+
+        probe_wavelength  = probe_guesses.wavelength
+        energy            = probe_guesses.energy
+
+
+    # Prepare Positions, Extent, and Sampling
+    extent    = (probe_wavelength * 1e3 / diffraction_measurements_calibrations[2].sampling,
+              probe_wavelength * 1e3 / diffraction_measurements_calibrations[3].sampling)
+
+    sampling  = (extent[0] / diffraction_measurements_shape[-2],
+                extent[1] / diffraction_measurements_shape[-1])
+
+    x         = diffraction_measurements_calibrations[0].coordinates(diffraction_measurements_shape[0]) / sampling[0]
+    y         = diffraction_measurements_calibrations[1].coordinates(diffraction_measurements_shape[1]) / sampling[1]
+    x, y      = np.meshgrid(x, y, indexing='ij')
     positions = np.array([x.ravel(), y.ravel()]).T
 
-    probe_guess.extent = extent
-    probe_guess.gpts = diffraction_patterns.shape[-2:]
-
-    calibrations_probe = ()
+    calibrations = ()
     for name, d in zip(['x','y'], sampling):
-        calibrations_probe += (Calibration(0., d, units='Å', name=name, endpoint=False),)
-        
-    if num_slices > 1:
-        slice_thicknesses = np.array(slice_thicknesses)
-        if slice_thicknesses.shape == ():
-            slice_thicknesses = np.tile(slice_thicknesses, num_slices)
-            
-        calibrations_object = (Calibration(0.,slice_thicknesses[0],
-                                           units='Å',name='z',endpoint=False) ,)+calibrations_probe
+        calibrations += (Calibration(0., d, units='Å', name=name, endpoint=False),)
+
+    if num_slices is not None:
+        calibrations  = (Calibration(0.,slice_thicknesses[0],units='Å', name='z',endpoint=False),) + calibrations
+
+
+    # Prepare Probes 2nd Pass
+    if isinstance(probe_guesses, tuple):
+
+        _probe_guesses    = []
+        for probe in probe_guesses:
+            probe.extent  = extent
+            probe.gpts    = diffraction_measurements_shape[-2:]
+            probe._device = device
+            _probe_guesses.append(xp.array(probe.array))
+
+        probe_guesses     = tuple(_probe_guesses)
+
     else:
-        calibrations_object = calibrations_probe
 
-    probe_guess._device = device
+        probe_guesses.extent  = extent
+        probe_guesses.gpts    = diffraction_measurements_shape[-2:]
+        probe_guesses._device = device
 
-    if isinstance(probe_guess,Probe):
-        probe_guess = probe_guess.build(np.array([0, 0])).array
+        if isinstance(probe_guesses,Probe):
+            probe_guesses      = probe_guesses.build(np.array([0,0])).array
+        else:
+            probe_guesses      = xp.array(probe_guesses.array)
+
+        # SVD Decomposition
+        if num_probes is not None:
+
+            u, s, v               = xp.linalg.svd(probe_guesses,full_matrices=True)
+
+            for i in range(num_probes):
+                probe_guesses     = tuple(xp.array(s[i] *xp.outer(u.T[i], v[i])) for i in range(num_probes))
+        else:
+            if num_objects is not None:
+                probe_guesses     = (probe_guesses,)
+
+            if num_slices is not None:
+                _probe_guesses    = xp.zeros((num_slices,)+diffraction_measurements_shape[-2:],dtype=xp.complex64)
+                _probe_guesses[0] = probe_guesses
+                probe_guesses     = _probe_guesses
+
+
+    # Prepare Objects
+    if object_guesses is None:
+
+        object_shape  = diffraction_measurements_shape[-2:]
+        if num_slices is not None:
+            object_shape = (num_slices,) + object_shape
+        if num_objects is None:
+
+            if isinstance(diffraction_measurements,Iterable):
+                num_objects    = len(diffraction_measurements)
+                object_guesses = tuple(xp.ones(object_shape,dtype=xp.complex64) for obj in range(num_objects))
+
+            elif num_probes is None:
+                object_guesses = xp.ones(object_shape,dtype=xp.complex64)
+            else:
+                object_guesses = (xp.ones(object_shape,dtype=xp.complex64),)
+        else:
+            object_guesses = tuple(xp.ones(object_shape,dtype=xp.complex64) for obj in range(num_objects))
+
     else:
-        probe_guess = np.fft.ifftshift(probe_guess.array)
-   
-    if object_guess is None:
-        object_guess = diffraction_patterns.shape[-2:]
 
-    result = _run_epie_ms(object_guess,
-                          probe_guess,
-                          diffraction_patterns,
-                          positions,
-                          maxiter=maxiter,
-                          num_slices=num_slices,
-                          slice_thicknesses=slice_thicknesses,
-                          energy=energy,
-                          extent=extent,
-                          sampling=sampling,
-                          alpha=alpha,
-                          beta=beta,
-                          gamma=gamma,
-                          verbose=verbose,
-                          return_iterations=return_iterations,
-                          fix_probe=fix_probe,
-                          fix_com=fix_com,
-                          seed=seed)
+        if isinstance(object_guesses,tuple):
+            num_objects    = len(object_guesses)
+            object_guesses = tuple(xp.array(obj) for obj in object_guesses)
 
-    valid_extent = (measurement.calibration_limits[0][1] - measurement.calibration_limits[0][0],
-                    measurement.calibration_limits[1][1] - measurement.calibration_limits[1][0])
+        else:
+            object_guesses = xp.array(object_guesses)
 
-    if return_iterations:
-        object_iterations = [Measurement(obj, calibrations = calibrations_object) for obj in result[0]]
-        probe_iterations = [Measurement(np.fft.fftshift(probe), calibrations=calibrations_probe) for probe in result[1]]
 
-        if crop_to_valid:
-            object_iterations = [object_iteration.crop(valid_extent) for object_iteration in object_iterations]
+    return flat_diffraction_patterns, probe_guesses, object_guesses, positions, calibrations, (energy,extent,sampling)
 
-        return object_iterations, probe_iterations, result[2]
-    else:
-        object = Measurement(result[0], calibrations=calibrations_object)
+### common CoM update functions
 
-        if crop_to_valid:
-            result = object.crop(valid_extent)
+def _update_single_probe_center_of_mass_func(probe_array:np.ndarray,
+                                             center_of_mass,
+                                             xp=np):
+    com         = center_of_mass(xp.fft.fftshift(xp.abs(probe_array) ** 2))
+    probe_array = xp.fft.ifftshift(fft_shift(probe_array, - xp.array(com)))
 
-        return (object,
-                Measurement(np.fft.fftshift(result[1]), calibrations=calibrations_probe),
-                result[2])
+    return probe_array
+
+def _update_multiple_probes_center_of_mass_func(probes:Sequence[np.ndarray],
+                                                center_of_mass,
+                                                xp=np):
+    _probes = []
+    for probe_array in probes:
+        com           = center_of_mass(xp.fft.fftshift(xp.abs(probe_array) ** 2))
+        _probes.append(xp.fft.ifftshift(fft_shift(probe_array, - xp.array(com))))
+
+    return tuple(_probes)
+
+### e-PIE functions
+
+def _epie_exit_wave_func(object_array:np.ndarray,
+                         probe_array:np.ndarray,
+                         xp = np,
+                         **kwargs):
+    return object_array * probe_array, object_array, probe_array
+
+
+def _epie_amplitude_modification_func(exit_wave_array:np.ndarray,
+                                      diffraction_pattern:np.ndarray,
+                                      sse:float,
+                                      xp = np,
+                                      **kwargs):
+    exit_wave_array_fft = xp.fft.fft2(exit_wave_array)
+    sse                += xp.mean(xp.abs(xp.abs(exit_wave_array_fft) - diffraction_pattern)**2)
+    modified_exit_wave  = xp.fft.ifft2(diffraction_pattern * xp.exp(1j * xp.angle(exit_wave_array_fft)))
+    return modified_exit_wave, sse
+
+def _epie_update_func(exit_wave_array:np.ndarray,
+                      modified_exit_wave_array:np.ndarray,
+                      object_array:np.ndarray,
+                      probe_array:np.ndarray,
+                      fix_probe: bool = False,
+                      alpha: float = 1.,
+                      beta: float = 1.,
+                      damping: float = 1.,
+                      xp = np,
+                      **kwargs):
+
+    exit_wave_diff    = modified_exit_wave_array - exit_wave_array
+    probe_conj        = xp.conj(probe_array)
+    obj_conj          = xp.conj(object_array)
+    probe_abs_squared = xp.abs(probe_array)**2
+    obj_abs_squared   = xp.abs(object_array)**2
+
+    object_array     += damping * probe_conj*exit_wave_diff / (
+                        (1-alpha)*probe_abs_squared + alpha*xp.max(probe_abs_squared))
+
+    if not fix_probe:
+        probe_array  += damping * obj_conj*exit_wave_diff / (
+                        (1-beta)*obj_abs_squared + beta*xp.max(obj_abs_squared))
+
+    return object_array, probe_array
+
+### multislice-PIE functions
+
+def _multislice_exit_wave_func(object_array:np.ndarray,
+                               probe_array:np.ndarray,
+                               xp = np,
+                               propagator:FresnelPropagator = None,
+                               antialias_filter:AntialiasFilter = None,
+                               slice_thicknesses:np.ndarray=None,
+                               wave_properties:tuple = None,
+                               **kwargs):
+
+    energy,extent,sampling = wave_properties
+    num_slices             = slice_thicknesses.shape[0]
+    exit_waves_array       = xp.empty_like(object_array)
+
+    object_array = antialias_filter._bandlimit(object_array)
+
+    for s in range(num_slices):
+        exit_waves_array[s]  = object_array[s]*probe_array[s]
+
+        if s+1 < num_slices:
+            exit_waves_waves = Waves(exit_waves_array[s],energy=energy,extent=extent,sampling=sampling)
+            probe_array[s+1] = propagator.propagate(exit_waves_waves,slice_thicknesses[s],in_place=False).array
+
+    return exit_waves_array, object_array, probe_array
+
+def _multislice_amplitude_modification_func(exit_wave_array:np.ndarray,
+                                            diffraction_pattern:np.ndarray,
+                                            sse:float,
+                                            xp = np,
+                                            **kwargs):
+
+    modified_exit_wave_array     = xp.empty_like(exit_wave_array)
+
+    exit_wave_array_fft          = xp.fft.fft2(exit_wave_array[-1])
+    sse                         += xp.mean(xp.abs(xp.abs(exit_wave_array_fft) - diffraction_pattern)**2)
+    modified_exit_wave_array[-1] = xp.fft.ifft2(diffraction_pattern * xp.exp(1j * xp.angle(exit_wave_array_fft)))
+
+    return modified_exit_wave_array, sse
+
+def _multislice_update_func(exit_waves_array:np.ndarray,
+                            modified_exit_waves_array:np.ndarray,
+                            object_array:np.ndarray,
+                            probe_array:np.ndarray,
+                            fix_probe: bool = False,
+                            alpha: float = 1.,
+                            beta: float = 1.,
+                            damping: float = 1.,
+                            xp = np,
+                            propagator:FresnelPropagator=None,
+                            slice_thicknesses:np.ndarray = None,
+                            wave_properties:tuple = None,
+                            **kwargs):
+
+    energy,extent,sampling   = wave_properties
+    num_slices               = slice_thicknesses.shape[0]
+
+    for s in reversed(range(num_slices)):
+
+        exit_wave            = exit_waves_array[s]
+        modified_exit_wave   = modified_exit_waves_array[s]
+
+        exit_wave_diff       = modified_exit_wave - exit_wave
+        probe_conj           = xp.conj(probe_array[s])
+        obj_conj             = xp.conj(object_array[s])
+        probe_abs_squared    = xp.abs(probe_array[s])**2
+        obj_abs_squared      = xp.abs(object_array[s])**2
+
+        object_array[s]     += damping * probe_conj*exit_wave_diff / (
+                        (1-alpha)*probe_abs_squared + alpha*xp.max(probe_abs_squared))
+
+        if not fix_probe:
+            probe_array[s]  += damping * obj_conj*exit_wave_diff / (
+                            (1-beta)*obj_abs_squared + beta*xp.max(obj_abs_squared))
+
+        if s > 0:
+            probe_wave = Waves(probe_array[s],energy=energy,extent=extent,sampling=sampling)
+            modified_exit_waves_array[s-1] = propagator.propagate(probe_wave,-slice_thicknesses[s-1],in_place=False).array
+
+    return object_array, probe_array
+
+### mix-PIE functions
+
+def _mixed_state_exit_wave_func(objects :Sequence[np.ndarray],
+                                probes  :Sequence[np.ndarray],
+                                xp = np,
+                                **kwargs):
+
+    num_objects      = len(objects)
+    num_probes       = len(probes)
+    shape            = objects[0].shape
+
+    exit_waves_array = xp.empty((num_objects,num_probes)+shape,dtype=xp.complex64)
+
+    for l in range(num_objects):
+        for k in range(num_probes):
+            exit_waves_array[l,k] = objects[l]*probes[k]
+
+    return exit_waves_array, objects, probes
+
+def _mixed_state_amplitude_modification_func(exit_wave_arrays:np.ndarray,
+                                             diffraction_pattern:np.ndarray,
+                                             sse:float,
+                                             xp = np,
+                                             **kwargs):
+
+    num_objects, num_probes   = exit_wave_arrays.shape[:2]
+    modified_exit_wave_arrays = xp.empty_like(exit_wave_arrays)
+
+    exit_wave_arrays_fft      = xp.fft.fft2(exit_wave_arrays,axes=(-2,-1))
+    intensity_norm            = xp.sqrt(xp.sum(xp.abs(exit_wave_arrays_fft)**2,axis=(0,1)))
+    sse                      += xp.mean(xp.abs(intensity_norm - diffraction_pattern)**2)
+
+    for l in range(num_objects):
+        for k in range(num_probes):
+            exit_wave_fft     = exit_wave_arrays_fft[l,k]
+            modified_exit_wave_arrays[l,k] = xp.fft.ifft2(diffraction_pattern*xp.exp(1j*xp.angle(exit_wave_fft)))
+
+    return modified_exit_wave_arrays, sse
+
+def _mixed_state_update_func(exit_wave_arrays:np.ndarray,
+                             modified_exit_wave_arrays:np.ndarray,
+                             objects:Sequence[np.ndarray],
+                             probes:Sequence[np.ndarray],
+                             fix_probe: bool = False,
+                             alpha: float = 1.,
+                             beta: float = 1.,
+                             damping: float = 1.,
+                             xp = np,
+                             **kwargs):
+
+    num_objects, num_probes  = exit_wave_arrays.shape[:2]
+    exit_wave_differences   = modified_exit_wave_arrays - exit_wave_arrays
+
+    probes_array            = xp.array(probes)
+    probes_array_conj       = xp.conj(probes_array)
+    probes_squared_norm     = xp.sum(xp.abs(probes_array)**2,axis=0)
+    objects_array           = xp.array(objects)
+    objects_array_conj      = xp.conj(objects_array)
+    objects_squared_norm    = xp.sum(xp.abs(objects_array)**2,axis=0)
+
+
+    objects = tuple(objects[l] + damping*xp.sum(probes_array_conj*exit_wave_differences[l],axis=0)/(
+                    (1-alpha)*probes_squared_norm + alpha*xp.max(probes_squared_norm))
+          for l in range(num_objects))
+
+    if not fix_probe:
+        probes = tuple(probes[k] + damping*xp.sum(objects_array_conj*exit_wave_differences[:,k],axis=0)/(
+                        (1-beta)*objects_squared_norm + beta*xp.max(objects_squared_norm))
+              for k in range(num_probes))
+
+    return objects, probes
+
+### sim-PIE functions
+def _simultaneous_exit_wave_func(objects:Sequence[np.ndarray],
+                                 probe_array:np.ndarray,
+                                 xp = np,
+                                 **kwargs):
+
+    electrostatic_object, magnetic_object = objects
+    exit_wave_forward = electrostatic_object*magnetic_object*probe_array
+    exit_wave_reverse = electrostatic_object*xp.conj(magnetic_object)*probe_array
+
+    return (exit_wave_forward,exit_wave_reverse), objects, probe_array
+
+def _simultaneous_amplitude_modification_func(exit_waves:Sequence[np.ndarray],
+                                              diffraction_patterns:Sequence[np.ndarray],
+                                              sse:float,
+                                              xp = np,
+                                              **kwargs):
+
+    exit_wave_forward, exit_wave_reverse     = exit_waves
+    diffraction_forward, diffraction_reverse = diffraction_patterns
+
+    exit_wave_forward_fft = xp.fft.fft2(exit_wave_forward)
+    exit_wave_reverse_fft = xp.fft.fft2(exit_wave_reverse)
+
+    sse                  += xp.mean(xp.abs(xp.abs(exit_wave_forward_fft) - diffraction_forward)**2)/2
+    sse                  += xp.mean(xp.abs(xp.abs(exit_wave_reverse_fft) - diffraction_reverse)**2)/2
+
+    modified_exit_wave_forward = xp.fft.ifft2(diffraction_forward * xp.exp(1j * xp.angle(exit_wave_forward_fft)))
+    modified_exit_wave_reverse = xp.fft.ifft2(diffraction_reverse * xp.exp(1j * xp.angle(exit_wave_reverse_fft)))
+
+    return (modified_exit_wave_forward,modified_exit_wave_reverse), sse
+
+def _simultaneous_update_func(exit_waves:Sequence[np.ndarray],
+                              modified_exit_waves:Sequence[np.ndarray],
+                              objects:Sequence[np.ndarray],
+                              probe_array:np.ndarray,
+                              fix_probe: bool = False,
+                              alpha: float = 1.,
+                              beta: float = 1.,
+                              damping:float=1.,
+                              xp = np,
+                              **kwargs):
+
+    exit_wave_forward,exit_wave_reverse                   = exit_waves
+    modified_exit_wave_forward,modified_exit_wave_reverse = modified_exit_waves
+    electrostatic_object, magnetic_object                 = objects
+
+    exit_wave_diff_forward   = modified_exit_wave_forward - exit_wave_forward
+    exit_wave_diff_reverse   = modified_exit_wave_reverse - exit_wave_reverse
+
+    probe_conj                                            = xp.conj(probe_array)
+    electrostatic_conj                                    = xp.conj(electrostatic_object)
+    magnetic_conj                                         = xp.conj(magnetic_object)
+
+    probe_magnetic_abs_squared                            = xp.abs(probe_array*magnetic_object)**2
+    probe_electrostatic_abs_squared                       = xp.abs(probe_array*electrostatic_object)**2
+    electrostatic_magnetic_abs_squared                    = xp.abs(electrostatic_object*magnetic_object)**2
+
+    _electrostatic_object = electrostatic_object + damping*((probe_conj*magnetic_conj*exit_wave_diff_forward +
+                                                             probe_conj*magnetic_object*exit_wave_diff_reverse)/(
+            (1-alpha)*probe_magnetic_abs_squared + alpha*xp.max(probe_magnetic_abs_squared)))/2
+
+    _magnetic_object      = magnetic_object + damping*((probe_conj*electrostatic_conj*exit_wave_diff_forward -
+                                                        probe_conj*electrostatic_conj*exit_wave_diff_reverse)/(
+            (1-alpha)*probe_electrostatic_abs_squared + alpha*xp.max(probe_electrostatic_abs_squared)))/2
+
+    if not fix_probe:
+        probe_array       = probe_array + damping*((electrostatic_conj*magnetic_conj*exit_wave_diff_forward +
+                                                    electrostatic_conj*magnetic_object*exit_wave_diff_reverse)/(
+            (1-beta)*electrostatic_magnetic_abs_squared + beta*xp.max(electrostatic_magnetic_abs_squared)))/2
+
+    electrostatic_object  = _electrostatic_object
+    magnetic_object       = _magnetic_object
+
+    return (electrostatic_object,magnetic_object), probe_array
+
