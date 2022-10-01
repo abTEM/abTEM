@@ -134,7 +134,7 @@ def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Se
                 _exit_wave_func              = _multislice_exit_wave_func
                 _amplitude_modification_func = _multislice_amplitude_modification_func
                 _update_func                 = _multislice_update_func
-                _update_center_of_mass_func  = _update_single_probe_center_of_mass_func
+                _update_center_of_mass_func  = _update_single_probe_first_index_center_of_mass_func
 
             else:
                 # Extended PIE
@@ -488,7 +488,7 @@ def _prepare_pie_inputs(diffraction_measurements : Union[Measurement, Sequence[M
 
     return flat_diffraction_patterns, probe_guesses, object_guesses, positions, calibrations, (energy,extent,sampling)
 
-### common CoM update functions
+### CoM update functions
 
 def _update_single_probe_center_of_mass_func(probe_array:np.ndarray,
                                              center_of_mass,
@@ -507,6 +507,14 @@ def _update_multiple_probes_center_of_mass_func(probes:Sequence[np.ndarray],
         _probes.append(xp.fft.ifftshift(fft_shift(probe_array, - xp.array(com))))
 
     return tuple(_probes)
+
+def _update_single_probe_first_index_center_of_mass_func(probe_array:np.ndarray,
+                                                         center_of_mass,
+                                                         xp=np):
+    com            = center_of_mass(xp.fft.fftshift(xp.abs(probe_array[0]) ** 2))
+    probe_array[0] = xp.fft.ifftshift(fft_shift(probe_array[0], - xp.array(com)))
+
+    return probe_array
 
 ### e-PIE functions
 
@@ -624,7 +632,7 @@ def _multislice_update_func(exit_waves_array:np.ndarray,
         object_array[s]     += damping * probe_conj*exit_wave_diff / (
                         (1-alpha)*probe_abs_squared + alpha*xp.max(probe_abs_squared))
 
-        if not fix_probe:
+        if not fix_probe or s > 0:
             probe_array[s]  += damping * obj_conj*exit_wave_diff / (
                             (1-beta)*obj_abs_squared + beta*xp.max(obj_abs_squared))
 
