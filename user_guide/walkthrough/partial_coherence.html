@@ -51,6 +51,8 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
+    <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+    <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="PRISM" href="prism.html" />
@@ -207,7 +209,7 @@ const thebe_selector_output = ".output, .cell_output"
    </li>
    <li class="toctree-l2">
     <a class="reference internal" href="performance.html">
-     Parallelization, Dask and GPUs
+     Parallelization and Dask
     </a>
    </li>
    <li class="toctree-l2">
@@ -304,7 +306,7 @@ const thebe_selector_output = ".output, .cell_output"
   </label>
   <ul>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/waves.html">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.html">
      waves
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
@@ -314,30 +316,30 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.Probe.html">
-       Probe
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.BaseWaves.html">
+       BaseWaves
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.PlaneWave.html">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.PlaneWave.html">
        PlaneWave
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.Waves.html">
-       Waves
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.Probe.html">
+       Probe
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.transfer.WaveTransform.html">
-       WaveTransform
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.Waves.html">
+       Waves
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/measure.html">
-     measurements
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.html">
+     potentials
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/>
     <label for="toctree-checkbox-6">
@@ -346,13 +348,508 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.core.Measurement.html">
-       Measurement
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.BasePotential.html">
+       BasePotential
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.detectors.Detector.html">
-       Detector
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.CrystalPotential.html">
+       CrystalPotential
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.Potential.html">
+       Potential
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.PotentialArray.html">
+       PotentialArray
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.TransmissionFunction.html">
+       TransmissionFunction
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.html">
+     scan
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" type="checkbox"/>
+    <label for="toctree-checkbox-7">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.BaseScan.html">
+       BaseScan
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.CustomScan.html">
+       CustomScan
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.GridScan.html">
+       GridScan
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.LineScan.html">
+       LineScan
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.SourceOffset.html">
+       SourceOffset
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.html">
+     detectors
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" type="checkbox"/>
+    <label for="toctree-checkbox-8">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.validate_detectors.html">
+       validate_detectors
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html">
+       AbstractRadialDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
+       AnnularDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.BaseDetector.html">
+       BaseDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.FlexibleAnnularDetector.html">
+       FlexibleAnnularDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.PixelatedDetector.html">
+       PixelatedDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.SegmentedDetector.html">
+       SegmentedDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.WavesDetector.html">
+       WavesDetector
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.html">
+     measurements
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" type="checkbox"/>
+    <label for="toctree-checkbox-9">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html">
+       BaseMeasurement
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.DiffractionPatterns.html">
+       DiffractionPatterns
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html">
+       FourierSpaceLineProfiles
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.Images.html">
+       Images
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.PolarMeasurements.html">
+       PolarMeasurements
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html">
+       RealSpaceLineProfiles
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html">
+       SinglePointMeasurement
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.html">
+     transfer
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" type="checkbox"/>
+    <label for="toctree-checkbox-10">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.cartesian2polar.html">
+       cartesian2polar
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.nyquist_sampling.html">
+       nyquist_sampling
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.point_resolution.html">
+       point_resolution
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.polar2cartesian.html">
+       polar2cartesian
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.scherzer_defocus.html">
+       scherzer_defocus
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Aberrations.html">
+       Aberrations
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Aperture.html">
+       Aperture
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.BaseAperture.html">
+       BaseAperture
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Bullseye.html">
+       Bullseye
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.CTF.html">
+       CTF
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.SpatialEnvelope.html">
+       SpatialEnvelope
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.TemporalEnvelope.html">
+       TemporalEnvelope
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Vortex.html">
+       Vortex
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.html">
+     distributions
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" type="checkbox"/>
+    <label for="toctree-checkbox-11">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.from_values.html">
+       from_values
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.gaussian.html">
+       gaussian
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.uniform.html">
+       uniform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
+       AxisAlignedDistributionND
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
+       BaseDistribution
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.DistributionFromValues.html">
+       DistributionFromValues
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.html">
+     charge_density
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" type="checkbox"/>
+    <label for="toctree-checkbox-12">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.add_point_charges_fourier.html">
+       add_point_charges_fourier
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.integrate_gradient_fourier.html">
+       integrate_gradient_fourier
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.ChargeDensityPotential.html">
+       ChargeDensityPotential
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.html">
+     gpaw
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" type="checkbox"/>
+    <label for="toctree-checkbox-13">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html">
+       GPAWPotential
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.html">
+     visualize
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" type="checkbox"/>
+    <label for="toctree-checkbox-14">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.plot_diffraction_pattern.html">
+       plot_diffraction_pattern
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_atoms.html">
+       show_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_measurement_2d.html">
+       show_measurement_2d
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_measurements_1d.html">
+       show_measurements_1d
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.html">
+     atoms
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" type="checkbox"/>
+    <label for="toctree-checkbox-15">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.atoms_in_cell.html">
+       atoms_in_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_box.html">
+       best_orthogonal_box
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_box.html">
+       cut_box
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.decompose_affine_transform.html">
+       decompose_affine_transform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.flip_atoms.html">
+       flip_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_hexagonal.html">
+       is_cell_hexagonal
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_orthogonal.html">
+       is_cell_orthogonal
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_valid.html">
+       is_cell_valid
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.merge_close_atoms.html">
+       merge_close_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.orthogonalize_cell.html">
+       orthogonalize_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.pad_atoms.html">
+       pad_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.plane_to_axes.html">
+       plane_to_axes
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.pretty_print_transform.html">
+       pretty_print_transform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotate_atoms_to_plane.html">
+       rotate_atoms_to_plane
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotation_matrix_from_plane.html">
+       rotation_matrix_from_plane
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotation_matrix_to_euler.html">
+       rotation_matrix_to_euler
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.shrink_cell.html">
+       shrink_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.standardize_cell.html">
+       standardize_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.wrap_with_tolerance.html">
+       wrap_with_tolerance
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.html">
+     multislice
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" type="checkbox"/>
+    <label for="toctree-checkbox-16">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
+       allocate_multislice_measurements
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.fresnel_propagator.html">
+       fresnel_propagator
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
+       multislice_and_detect
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_step.html">
+       multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.tilt_shift.html">
+       tilt_shift
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.FresnelPropagator.html">
+       FresnelPropagator
       </a>
      </li>
     </ul>
@@ -650,6 +1147,7 @@ title="Print to PDF"
 </div>
 </div>
 </div>
+<p>(walkthrough:partial_coherence)</p>
 <section class="tex2jax_ignore mathjax_ignore" id="partial-coherence">
 <h1>Partial coherence<a class="headerlink" href="#partial-coherence" title="Permalink to this heading">#</a></h1>
 <p>In our introduction to the contrast transfer function, we described how partial coherence may be approximated by multiplication with an envelope function. This approach is not always appropriate for simulating experiments with plane wave illumination and it is never appropriate for simulating experiments with a convergent beam.</p>
@@ -693,6 +1191,25 @@ title="Print to PDF"
 <img alt="../../_images/partial_coherence_5_0.png" src="../../_images/partial_coherence_5_0.png" />
 </div>
 </div>
+<div class="math notranslate nohighlight">
+\[
+    I_{incoherent} = \int_{-\infty}^{\infty} p(\Delta f) I(\Delta f)  \ \mathrm{d} \Delta f
+\]</div>
+<p>The image intensity given an exit wave function, <span class="math notranslate nohighlight">\(\psi_{exit}\)</span>, and the phase aberrations, <span class="math notranslate nohighlight">\(\chi(\Delta f)\)</span>, with the defocus, <span class="math notranslate nohighlight">\(\Delta f\)</span>, may be written
+$<span class="math notranslate nohighlight">\(
+    I(\Delta f) = \left\| \mathcal{F^{-1}}\left[ \hat{\psi}_{exit} \exp(-i \chi(\Delta f) \right] \right\|^2 \quad ,
+\)</span>$
+where for clarity we have omitted the coordinates.</p>
+<p>where</p>
+<div class="math notranslate nohighlight">
+\[
+    p(\Delta f) = \frac{1}{\sigma\sqrt{2\pi}} \exp\left(\frac{(\Delta f_0 - \Delta f) ^ 2}{2\sigma ^ 2}\right)
+\]</div>
+<p>where <span class="math notranslate nohighlight">\(\sigma\)</span> is the focal spread</p>
+<p>We approximate Eq. as a Riemann sum
+$<span class="math notranslate nohighlight">\(
+    I_{incoherent} = \sum_{\Delta f_n} p(\Delta f_n) I(\Delta f_n)
+\)</span>$</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">ctf_incoherent</span> <span class="o">=</span> <span class="n">ctf_coherent</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
@@ -700,11 +1217,23 @@ title="Print to PDF"
 <span class="n">defocus</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">distributions</span><span class="o">.</span><span class="n">gaussian</span><span class="p">(</span>
     <span class="n">center</span><span class="o">=</span><span class="n">ctf_incoherent</span><span class="o">.</span><span class="n">scherzer_defocus</span><span class="p">,</span>
     <span class="n">standard_deviation</span><span class="o">=</span><span class="n">focal_spread</span><span class="p">,</span>
-    <span class="n">num_samples</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
-    <span class="n">sampling_limit</span><span class="o">=</span><span class="mf">1.</span><span class="p">,</span>
+    <span class="n">num_samples</span><span class="o">=</span><span class="mi">7</span><span class="p">,</span>
+    <span class="n">sampling_limit</span><span class="o">=</span><span class="mf">1.21</span><span class="p">,</span>
 <span class="p">)</span>
 
 <span class="n">ctf_incoherent</span><span class="o">.</span><span class="n">defocus</span> <span class="o">=</span> <span class="n">defocus</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="mi">1</span><span class="o">/</span><span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="mi">1</span><span class="o">/</span><span class="mi">2</span><span class="p">)</span> <span class="o">*</span> <span class="mi">2</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>1.2130613194252668
 </pre></div>
 </div>
 </div>
@@ -718,19 +1247,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measure.measure.Images object at 0x7fc7b0623420&gt;
--------------------------------------------------------
-
-type           label    coordinates
--------------  -------  -----------------------
-ParameterAxis  C10 [Å]  164.42 138.17 ... 59.42
-RealSpaceAxis  x [Å]    0.00 0.05 ... 3.13
-RealSpaceAxis  y [Å]    0.00 0.05 ... 5.46
-
-        bytes       shape         count     type
-------  ----------  ------------  --------  -------------
-array   138.75 kiB  (5, 64, 111)  7 tasks   float32
-chunks  138.75 kiB  (5, 64, 111)  1 chunks  numpy.ndarray
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.Images object at 0x7f900d693850&gt;
 </pre></div>
 </div>
 </div>
@@ -748,7 +1265,7 @@ chunks  138.75 kiB  (5, 64, 111)  1 chunks  numpy.ndarray
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/partial_coherence_8_0.png" src="../../_images/partial_coherence_8_0.png" />
+<img alt="../../_images/partial_coherence_10_0.png" src="../../_images/partial_coherence_10_0.png" />
 </div>
 </div>
 <div class="cell docutils container">
@@ -776,7 +1293,7 @@ chunks  138.75 kiB  (5, 64, 111)  1 chunks  numpy.ndarray
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/partial_coherence_10_0.png" src="../../_images/partial_coherence_10_0.png" />
+<img alt="../../_images/partial_coherence_12_0.png" src="../../_images/partial_coherence_12_0.png" />
 </div>
 </div>
 <div class="cell docutils container">
@@ -786,7 +1303,7 @@ chunks  138.75 kiB  (5, 64, 111)  1 chunks  numpy.ndarray
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/partial_coherence_11_0.png" src="../../_images/partial_coherence_11_0.png" />
+<img alt="../../_images/partial_coherence_13_0.png" src="../../_images/partial_coherence_13_0.png" />
 </div>
 </div>
 </section>

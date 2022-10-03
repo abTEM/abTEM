@@ -1,0 +1,1733 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>abtem.visualize &#8212; abTEM Documentation</title>
+    
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+
+    
+  <link rel="stylesheet"
+    href="../../_static/vendor/fontawesome/5.13.0/css/all.min.css">
+  <link rel="preload" as="font" type="font/woff2" crossorigin
+    href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
+  <link rel="preload" as="font" type="font/woff2" crossorigin
+    href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
+
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
+    <link rel="stylesheet" href="../../_static/styles/sphinx-book-theme.css?digest=5115cc725059bd94278eecd172e13a965bf8f5a9" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/togglebutton.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/mystnb.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sphinx-thebe.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/design-style.b7bb847fb20b106c3d81b95245e65545.min.css" />
+    
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
+
+    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/jquery.js"></script>
+    <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <script src="../../_static/clipboard.min.js"></script>
+    <script src="../../_static/copybutton.js"></script>
+    <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
+    <script>let toggleHintShow = 'Click to show';</script>
+    <script>let toggleHintHide = 'Click to hide';</script>
+    <script>let toggleOpenOnPrint = 'true';</script>
+    <script src="../../_static/togglebutton.js"></script>
+    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown, .tag_hide_input div.cell_input, .tag_hide-input div.cell_input, .tag_hide_output div.cell_output, .tag_hide-output div.cell_output, .tag_hide_cell.cell, .tag_hide-cell.cell';</script>
+    <script src="../../_static/design-tabs.js"></script>
+    <script>const THEBE_JS_URL = "https://unpkg.com/thebe@0.8.2/lib/index.js"
+const thebe_selector = ".thebe,.cell"
+const thebe_selector_input = "pre"
+const thebe_selector_output = ".output, .cell_output"
+</script>
+    <script async="async" src="../../_static/sphinx-thebe.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="docsearch:language" content="en">
+    
+
+    <!-- Google Analytics -->
+    
+  </head>
+  <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="60">
+<!-- Checkboxes to toggle the left sidebar -->
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle navigation sidebar">
+<label class="overlay overlay-navbar" for="__navigation">
+    <div class="visually-hidden">Toggle navigation sidebar</div>
+</label>
+<!-- Checkboxes to toggle the in-page toc -->
+<input type="checkbox" class="sidebar-toggle" name="__page-toc" id="__page-toc" aria-label="Toggle in-page Table of Contents">
+<label class="overlay overlay-pagetoc" for="__page-toc">
+    <div class="visually-hidden">Toggle in-page Table of Contents</div>
+</label>
+<!-- Headers at the top -->
+<div class="announcement header-item noprint"></div>
+<div class="header header-item noprint"></div>
+
+    
+    <div class="container-fluid" id="banner"></div>
+
+    
+
+    <div class="container-xl">
+      <div class="row">
+          
+<!-- Sidebar -->
+<div class="bd-sidebar noprint" id="site-navigation">
+    <div class="bd-sidebar__content">
+        <div class="bd-sidebar__top"><div class="navbar-brand-box">
+    <a class="navbar-brand text-wrap" href="../../index.html">
+      
+        <!-- `logo` is deprecated in Sphinx 4.0, so remove this when we stop supporting 3 -->
+        
+      
+      
+      <img src="../../_static/logo.png" class="logo" alt="logo">
+      
+      
+      <h1 class="site-logo" id="site-title">abTEM Documentation</h1>
+      
+    </a>
+</div><form class="bd-search d-flex align-items-center" action="../../search.html" method="get">
+  <i class="icon fas fa-search"></i>
+  <input type="search" class="form-control" name="q" id="search-input" placeholder="Search this book..." aria-label="Search this book..." autocomplete="off" >
+</form><nav class="bd-links" id="bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item active">
+        
+        <ul class="nav bd-sidenav bd-sidenav__home-link">
+            <li class="toctree-l1">
+                <a class="reference internal" href="../../intro.html">
+                    Welcome to abTEM
+                </a>
+            </li>
+        </ul>
+        <p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Get started
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../getting_started/overview.html">
+   Overview
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../getting_started/install.html">
+   Installation
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../getting_started/basics.html">
+   The basics
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  User guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../user_guide/walkthrough/walkthrough.html">
+   Walkthrough
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
+  <label for="toctree-checkbox-1">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/atomic_models.html">
+     Atomic models with ASE
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/potentials.html">
+     Potentials
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/wave_functions.html">
+     Wave functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/multislice.html">
+     Multislice simulations
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/contrast_transfer_function.html">
+     Contrast Transfer Function
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/scan_and_detect.html">
+     Scan and detect
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/frozen_phonons.html">
+     Frozen phonons
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/charge_density.html">
+     <em>
+      ab initio
+     </em>
+     potentials with GPAW
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/partial_coherence.html">
+     Partial coherence
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/prism.html">
+     PRISM
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/performance.html">
+     Parallelization and Dask
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/core_loss.html">
+     Core loss EELS
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../user_guide/appendix/appendix.html">
+   Appendix
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+  <label for="toctree-checkbox-2">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/appendix/multislice_derivation.html">
+     Deriving the Multislice Algorithm
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/appendix/normalization.html">
+     Wave Function Normalization
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/appendix/antialiasing.html">
+     Antialiasing and Sampling
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/appendix/ensembles.html">
+     Ensembles
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/appendix/visualized_aberrations.html">
+     Visualized aberrations
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../user_guide/examples/examples.html">
+   Example gallery
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
+  <label for="toctree-checkbox-3">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/cbed_quickstart.html">
+     CBED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/hrtem_quickstart.html">
+     HRTEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/prism_quickstart.html">
+     PRISM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/hbn_dft_iam.html">
+     DFT vs. IAM in hBN diffraction
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Library
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../library/api/api.html">
+   API
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
+  <label for="toctree-checkbox-4">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.html">
+     waves
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
+    <label for="toctree-checkbox-5">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.BaseWaves.html">
+       BaseWaves
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.PlaneWave.html">
+       PlaneWave
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.Probe.html">
+       Probe
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.Waves.html">
+       Waves
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.html">
+     potentials
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/>
+    <label for="toctree-checkbox-6">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.BasePotential.html">
+       BasePotential
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.CrystalPotential.html">
+       CrystalPotential
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.Potential.html">
+       Potential
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.PotentialArray.html">
+       PotentialArray
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.TransmissionFunction.html">
+       TransmissionFunction
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.html">
+     scan
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" type="checkbox"/>
+    <label for="toctree-checkbox-7">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.BaseScan.html">
+       BaseScan
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.CustomScan.html">
+       CustomScan
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.GridScan.html">
+       GridScan
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.LineScan.html">
+       LineScan
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.SourceOffset.html">
+       SourceOffset
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.html">
+     detectors
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" type="checkbox"/>
+    <label for="toctree-checkbox-8">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.validate_detectors.html">
+       validate_detectors
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html">
+       AbstractRadialDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
+       AnnularDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.BaseDetector.html">
+       BaseDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.FlexibleAnnularDetector.html">
+       FlexibleAnnularDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.PixelatedDetector.html">
+       PixelatedDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.SegmentedDetector.html">
+       SegmentedDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.WavesDetector.html">
+       WavesDetector
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.html">
+     measurements
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" type="checkbox"/>
+    <label for="toctree-checkbox-9">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html">
+       BaseMeasurement
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.DiffractionPatterns.html">
+       DiffractionPatterns
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html">
+       FourierSpaceLineProfiles
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.Images.html">
+       Images
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.PolarMeasurements.html">
+       PolarMeasurements
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html">
+       RealSpaceLineProfiles
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html">
+       SinglePointMeasurement
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.html">
+     transfer
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" type="checkbox"/>
+    <label for="toctree-checkbox-10">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.cartesian2polar.html">
+       cartesian2polar
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.nyquist_sampling.html">
+       nyquist_sampling
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.point_resolution.html">
+       point_resolution
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.polar2cartesian.html">
+       polar2cartesian
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.scherzer_defocus.html">
+       scherzer_defocus
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Aberrations.html">
+       Aberrations
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Aperture.html">
+       Aperture
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.BaseAperture.html">
+       BaseAperture
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Bullseye.html">
+       Bullseye
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.CTF.html">
+       CTF
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.SpatialEnvelope.html">
+       SpatialEnvelope
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.TemporalEnvelope.html">
+       TemporalEnvelope
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Vortex.html">
+       Vortex
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.html">
+     distributions
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" type="checkbox"/>
+    <label for="toctree-checkbox-11">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.from_values.html">
+       from_values
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.gaussian.html">
+       gaussian
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.uniform.html">
+       uniform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
+       AxisAlignedDistributionND
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
+       BaseDistribution
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.DistributionFromValues.html">
+       DistributionFromValues
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.html">
+     charge_density
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" type="checkbox"/>
+    <label for="toctree-checkbox-12">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.add_point_charges_fourier.html">
+       add_point_charges_fourier
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.integrate_gradient_fourier.html">
+       integrate_gradient_fourier
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.ChargeDensityPotential.html">
+       ChargeDensityPotential
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.html">
+     gpaw
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" type="checkbox"/>
+    <label for="toctree-checkbox-13">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html">
+       GPAWPotential
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.html">
+     visualize
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" type="checkbox"/>
+    <label for="toctree-checkbox-14">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.plot_diffraction_pattern.html">
+       plot_diffraction_pattern
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_atoms.html">
+       show_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_measurement_2d.html">
+       show_measurement_2d
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_measurements_1d.html">
+       show_measurements_1d
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.html">
+     atoms
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" type="checkbox"/>
+    <label for="toctree-checkbox-15">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.atoms_in_cell.html">
+       atoms_in_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_box.html">
+       best_orthogonal_box
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_box.html">
+       cut_box
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.decompose_affine_transform.html">
+       decompose_affine_transform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.flip_atoms.html">
+       flip_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_hexagonal.html">
+       is_cell_hexagonal
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_orthogonal.html">
+       is_cell_orthogonal
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_valid.html">
+       is_cell_valid
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.merge_close_atoms.html">
+       merge_close_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.orthogonalize_cell.html">
+       orthogonalize_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.pad_atoms.html">
+       pad_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.plane_to_axes.html">
+       plane_to_axes
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.pretty_print_transform.html">
+       pretty_print_transform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotate_atoms_to_plane.html">
+       rotate_atoms_to_plane
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotation_matrix_from_plane.html">
+       rotation_matrix_from_plane
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotation_matrix_to_euler.html">
+       rotation_matrix_to_euler
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.shrink_cell.html">
+       shrink_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.standardize_cell.html">
+       standardize_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.wrap_with_tolerance.html">
+       wrap_with_tolerance
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.html">
+     multislice
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" type="checkbox"/>
+    <label for="toctree-checkbox-16">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
+       allocate_multislice_measurements
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.fresnel_propagator.html">
+       fresnel_propagator
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
+       multislice_and_detect
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_step.html">
+       multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.tilt_shift.html">
+       tilt_shift
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.FresnelPropagator.html">
+       FresnelPropagator
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library/config.html">
+   Configuration
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library/contributing.html">
+   Contributing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library/bibliography.html">
+   Bibliography
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library/changelog.html">
+   Changelog
+  </a>
+ </li>
+</ul>
+
+    </div>
+</nav></div>
+        <div class="bd-sidebar__bottom">
+             <!-- To handle the deprecated key -->
+            
+            <div class="navbar_extra_footer">
+            Powered by <a href="https://jupyterbook.org">Jupyter Book</a>
+            </div>
+            
+        </div>
+    </div>
+    <div id="rtd-footer-container"></div>
+</div>
+
+
+          
+
+
+          
+<!-- A tiny helper pixel to detect if we've scrolled -->
+<div class="sbt-scroll-pixel-helper"></div>
+<!-- Main content -->
+<div class="col py-0 content-container">
+    
+    <div class="header-article row sticky-top noprint">
+        
+
+
+
+<div class="col py-1 d-flex header-article-main">
+    <div class="header-article__left">
+        
+        <label for="__navigation"
+  class="headerbtn"
+  data-toggle="tooltip"
+data-placement="right"
+title="Toggle navigation"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-bars"></i>
+  </span>
+
+</label>
+
+        
+    </div>
+    <div class="header-article__right">
+<button onclick="toggleFullScreen()"
+  class="headerbtn"
+  data-toggle="tooltip"
+data-placement="bottom"
+title="Fullscreen mode"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+<div class="menu-dropdown menu-dropdown-repository-buttons">
+  <button class="headerbtn menu-dropdown__trigger"
+      aria-label="Source repositories">
+      <i class="fab fa-github"></i>
+  </button>
+  <div class="menu-dropdown__content">
+    <ul>
+      <li>
+        <a href="https://github.com/executablebooks/jupyter-book"
+   class="headerbtn"
+   data-toggle="tooltip"
+data-placement="left"
+title="Source repository"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="headerbtn__text-container">repository</span>
+</a>
+
+      </li>
+      
+      <li>
+        <a href="https://github.com/executablebooks/jupyter-book/issues/new?title=Issue%20on%20page%20%2F_modules/abtem/visualize.html&body=Your%20issue%20content%20here."
+   class="headerbtn"
+   data-toggle="tooltip"
+data-placement="left"
+title="Open an issue"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="headerbtn__text-container">open issue</span>
+</a>
+
+      </li>
+      
+    </ul>
+  </div>
+</div>
+
+    </div>
+</div>
+
+<!-- Table of contents -->
+<div class="col-md-3 bd-toc show noprint">
+</div>
+    </div>
+    <div class="article row">
+        <div class="col pl-md-3 pl-lg-5 content-container">
+            <!-- Table of contents that is only displayed when printing the page -->
+            <div id="jb-print-docs-body" class="onlyprint">
+                <h1></h1>
+                <!-- Table of contents -->
+                <div id="print-main-content">
+                    <div id="jb-print-toc">
+                        
+                    </div>
+                </div>
+            </div>
+            <main id="main-content" role="main">
+                
+              <div>
+                
+  <h1>Source code for abtem.visualize</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Module for plotting atoms, images, line scans, and diffraction patterns.&quot;&quot;&quot;</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">TYPE_CHECKING</span><span class="p">,</span> <span class="n">List</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Union</span><span class="p">,</span> <span class="n">Tuple</span>
+
+<span class="kn">import</span> <span class="nn">matplotlib</span>
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">from</span> <span class="nn">ase</span> <span class="kn">import</span> <span class="n">Atoms</span>
+<span class="kn">from</span> <span class="nn">ase.cell</span> <span class="kn">import</span> <span class="n">Cell</span>
+<span class="kn">from</span> <span class="nn">ase.data</span> <span class="kn">import</span> <span class="n">covalent_radii</span><span class="p">,</span> <span class="n">chemical_symbols</span>
+<span class="kn">from</span> <span class="nn">ase.data.colors</span> <span class="kn">import</span> <span class="n">jmol_colors</span>
+<span class="kn">from</span> <span class="nn">cplot._colors</span> <span class="kn">import</span> <span class="n">get_srgb1</span>
+<span class="kn">from</span> <span class="nn">matplotlib</span> <span class="kn">import</span> <span class="n">cm</span><span class="p">,</span> <span class="n">colors</span>
+<span class="kn">from</span> <span class="nn">matplotlib.axes</span> <span class="kn">import</span> <span class="n">Axes</span>
+<span class="kn">from</span> <span class="nn">matplotlib.collections</span> <span class="kn">import</span> <span class="n">EllipseCollection</span>
+<span class="kn">from</span> <span class="nn">matplotlib.collections</span> <span class="kn">import</span> <span class="n">PatchCollection</span>
+<span class="kn">from</span> <span class="nn">matplotlib.lines</span> <span class="kn">import</span> <span class="n">Line2D</span>
+<span class="kn">from</span> <span class="nn">matplotlib.offsetbox</span> <span class="kn">import</span> <span class="n">AnchoredText</span>
+<span class="kn">from</span> <span class="nn">matplotlib.patches</span> <span class="kn">import</span> <span class="n">Circle</span>
+<span class="kn">from</span> <span class="nn">matplotlib.patheffects</span> <span class="kn">import</span> <span class="n">withStroke</span>
+<span class="kn">from</span> <span class="nn">mpl_toolkits.axes_grid1</span> <span class="kn">import</span> <span class="n">ImageGrid</span><span class="p">,</span> <span class="n">make_axes_locatable</span>
+<span class="kn">from</span> <span class="nn">mpl_toolkits.axes_grid1.anchored_artists</span> <span class="kn">import</span> <span class="n">AnchoredSizeBar</span>
+
+<span class="kn">from</span> <span class="nn">abtem.core.backend</span> <span class="kn">import</span> <span class="n">copy_to_device</span>
+<span class="kn">from</span> <span class="nn">abtem.core.indexing</span> <span class="kn">import</span> <span class="n">map_all_bin_indices_to_miller_indices</span>
+<span class="kn">from</span> <span class="nn">abtem.core.indexing</span> <span class="kn">import</span> <span class="p">(</span>
+    <span class="n">miller_to_miller_bravais</span><span class="p">,</span>
+    <span class="n">find_equivalent_spots</span><span class="p">,</span>
+    <span class="n">validate_cell_edges</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span> <span class="nn">abtem.core.utils</span> <span class="kn">import</span> <span class="n">label_to_index</span>
+<span class="kn">from</span> <span class="nn">abtem.atoms</span> <span class="kn">import</span> <span class="n">pad_atoms</span><span class="p">,</span> <span class="n">plane_to_axes</span>
+
+<span class="k">if</span> <span class="n">TYPE_CHECKING</span><span class="p">:</span>
+    <span class="kn">from</span> <span class="nn">abtem.measurements</span> <span class="kn">import</span> <span class="p">(</span>
+        <span class="n">DiffractionPatterns</span><span class="p">,</span>
+        <span class="n">BaseMeasurement</span><span class="p">,</span>
+        <span class="n">RealSpaceLineProfiles</span><span class="p">,</span>
+        <span class="n">FourierSpaceLineProfiles</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="kn">from</span> <span class="nn">abtem.core.indexing</span> <span class="kn">import</span> <span class="n">IndexedDiffractionPattern</span>
+
+
+<span class="k">def</span> <span class="nf">_get_complex_colors</span><span class="p">(</span>
+    <span class="n">z</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">vmin</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">vmax</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">saturation</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">2.0</span>
+<span class="p">):</span>
+    <span class="n">abs_z</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">z</span><span class="p">)</span>
+    <span class="n">angle_z</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">angle</span><span class="p">(</span><span class="n">z</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">vmin</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">vmin</span> <span class="o">=</span> <span class="n">abs_z</span><span class="o">.</span><span class="n">min</span><span class="p">()</span>
+
+    <span class="k">if</span> <span class="n">vmax</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">vmax</span> <span class="o">=</span> <span class="n">abs_z</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
+
+    <span class="n">vmin_rel</span> <span class="o">=</span> <span class="p">(</span><span class="n">vmin</span> <span class="o">-</span> <span class="n">abs_z</span><span class="o">.</span><span class="n">min</span><span class="p">())</span> <span class="o">/</span> <span class="n">abs_z</span><span class="o">.</span><span class="n">ptp</span><span class="p">()</span>
+    <span class="n">vmax_rel</span> <span class="o">=</span> <span class="p">(</span><span class="n">vmax</span> <span class="o">-</span> <span class="n">abs_z</span><span class="o">.</span><span class="n">max</span><span class="p">())</span> <span class="o">/</span> <span class="n">abs_z</span><span class="o">.</span><span class="n">ptp</span><span class="p">()</span>
+
+    <span class="n">abs_scaled</span> <span class="o">=</span> <span class="p">(</span><span class="n">abs_z</span> <span class="o">-</span> <span class="n">abs_z</span><span class="o">.</span><span class="n">min</span><span class="p">())</span> <span class="o">/</span> <span class="n">abs_z</span><span class="o">.</span><span class="n">ptp</span><span class="p">()</span> <span class="o">*</span> <span class="p">(</span>
+        <span class="mi">1</span> <span class="o">-</span> <span class="n">vmax_rel</span> <span class="o">-</span> <span class="n">vmin_rel</span>
+    <span class="p">)</span> <span class="o">+</span> <span class="n">vmin_rel</span>
+
+    <span class="n">abs_scaled</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">abs_scaled</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">inf</span><span class="p">)</span>
+    <span class="n">z_scaled</span> <span class="o">=</span> <span class="n">abs_scaled</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="mf">1.0</span><span class="n">j</span> <span class="o">*</span> <span class="n">angle_z</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">get_srgb1</span><span class="p">(</span><span class="n">z_scaled</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="p">,</span> <span class="n">saturation</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_add_colorbar_abs</span><span class="p">(</span><span class="n">cax</span><span class="p">,</span> <span class="n">vmin</span><span class="p">,</span> <span class="n">vmax</span><span class="p">):</span>
+    <span class="n">norm</span> <span class="o">=</span> <span class="n">colors</span><span class="o">.</span><span class="n">Normalize</span><span class="p">(</span><span class="n">vmin</span><span class="o">=</span><span class="n">vmin</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="n">vmax</span><span class="p">)</span>
+    <span class="n">cb0</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">cm</span><span class="o">.</span><span class="n">ScalarMappable</span><span class="p">(</span><span class="n">norm</span><span class="o">=</span><span class="n">norm</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="n">cm</span><span class="o">.</span><span class="n">gray</span><span class="p">),</span> <span class="n">cax</span><span class="o">=</span><span class="n">cax</span><span class="p">,)</span>
+    <span class="n">cb0</span><span class="o">.</span><span class="n">set_label</span><span class="p">(</span><span class="s2">&quot;abs&quot;</span><span class="p">,</span> <span class="n">rotation</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">ha</span><span class="o">=</span><span class="s2">&quot;center&quot;</span><span class="p">,</span> <span class="n">va</span><span class="o">=</span><span class="s2">&quot;top&quot;</span><span class="p">)</span>
+    <span class="n">cb0</span><span class="o">.</span><span class="n">ax</span><span class="o">.</span><span class="n">yaxis</span><span class="o">.</span><span class="n">set_label_coords</span><span class="p">(</span><span class="mf">0.5</span><span class="p">,</span> <span class="o">-</span><span class="mf">0.03</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_add_colorbar_arg</span><span class="p">(</span><span class="n">cax</span><span class="p">,</span> <span class="n">saturation_adjustment</span><span class="p">:</span> <span class="nb">float</span><span class="p">):</span>
+    <span class="n">z</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="mi">1</span><span class="n">j</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="o">-</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">,</span> <span class="mi">256</span><span class="p">))</span>
+    <span class="n">rgb_vals</span> <span class="o">=</span> <span class="n">get_srgb1</span><span class="p">(</span>
+        <span class="n">z</span><span class="p">,</span>
+        <span class="n">abs_scaling</span><span class="o">=</span><span class="k">lambda</span> <span class="n">z</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">full_like</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">),</span>
+        <span class="n">saturation_adjustment</span><span class="o">=</span><span class="n">saturation_adjustment</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">rgba_vals</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">pad</span><span class="p">(</span><span class="n">rgb_vals</span><span class="p">,</span> <span class="p">((</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)),</span> <span class="n">constant_values</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+    <span class="n">newcmp</span> <span class="o">=</span> <span class="n">colors</span><span class="o">.</span><span class="n">ListedColormap</span><span class="p">(</span><span class="n">rgba_vals</span><span class="p">)</span>
+    <span class="c1">#</span>
+    <span class="n">norm</span> <span class="o">=</span> <span class="n">colors</span><span class="o">.</span><span class="n">Normalize</span><span class="p">(</span><span class="n">vmin</span><span class="o">=-</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">)</span>
+
+    <span class="n">cb1</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">cm</span><span class="o">.</span><span class="n">ScalarMappable</span><span class="p">(</span><span class="n">norm</span><span class="o">=</span><span class="n">norm</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="n">newcmp</span><span class="p">),</span> <span class="n">cax</span><span class="o">=</span><span class="n">cax</span><span class="p">)</span>
+
+    <span class="n">cb1</span><span class="o">.</span><span class="n">set_label</span><span class="p">(</span><span class="s2">&quot;arg&quot;</span><span class="p">,</span> <span class="n">rotation</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">ha</span><span class="o">=</span><span class="s2">&quot;center&quot;</span><span class="p">,</span> <span class="n">va</span><span class="o">=</span><span class="s2">&quot;top&quot;</span><span class="p">)</span>
+    <span class="n">cb1</span><span class="o">.</span><span class="n">ax</span><span class="o">.</span><span class="n">yaxis</span><span class="o">.</span><span class="n">set_label_coords</span><span class="p">(</span><span class="mf">0.5</span><span class="p">,</span> <span class="o">-</span><span class="mf">0.03</span><span class="p">)</span>
+    <span class="n">cb1</span><span class="o">.</span><span class="n">set_ticks</span><span class="p">([</span><span class="o">-</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">,</span> <span class="o">-</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">+</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">])</span>
+    <span class="n">cb1</span><span class="o">.</span><span class="n">set_ticklabels</span><span class="p">(</span>
+        <span class="p">[</span><span class="sa">r</span><span class="s2">&quot;$-\pi$&quot;</span><span class="p">,</span> <span class="sa">r</span><span class="s2">&quot;$-\dfrac{\pi}</span><span class="si">{2}</span><span class="s2">$&quot;</span><span class="p">,</span> <span class="s2">&quot;$0$&quot;</span><span class="p">,</span> <span class="sa">r</span><span class="s2">&quot;$\dfrac{\pi}</span><span class="si">{2}</span><span class="s2">$&quot;</span><span class="p">,</span> <span class="sa">r</span><span class="s2">&quot;$\pi$&quot;</span><span class="p">]</span>
+    <span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_add_imshow</span><span class="p">(</span>
+    <span class="n">ax</span><span class="p">,</span>
+    <span class="n">array</span><span class="p">,</span>
+    <span class="n">extent</span><span class="p">,</span>
+    <span class="n">title</span><span class="p">,</span>
+    <span class="n">x_label</span><span class="p">,</span>
+    <span class="n">y_label</span><span class="p">,</span>
+    <span class="n">x_ticks</span><span class="p">,</span>
+    <span class="n">y_ticks</span><span class="p">,</span>
+    <span class="n">power</span><span class="p">,</span>
+    <span class="n">vmin</span><span class="p">,</span>
+    <span class="n">vmax</span><span class="p">,</span>
+    <span class="n">complex_coloring_kwargs</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+    <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
+<span class="p">):</span>
+    <span class="k">if</span> <span class="n">power</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="n">array</span> <span class="o">=</span> <span class="n">array</span> <span class="o">**</span> <span class="n">power</span>
+        <span class="n">vmin</span> <span class="o">=</span> <span class="n">array</span><span class="o">.</span><span class="n">min</span><span class="p">()</span> <span class="k">if</span> <span class="n">vmin</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">vmin</span> <span class="o">**</span> <span class="n">power</span>
+        <span class="n">vmax</span> <span class="o">=</span> <span class="n">array</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="k">if</span> <span class="n">vmax</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">vmax</span> <span class="o">**</span> <span class="n">power</span>
+
+    <span class="n">array</span> <span class="o">=</span> <span class="n">array</span><span class="o">.</span><span class="n">T</span>
+
+    <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">iscomplexobj</span><span class="p">(</span><span class="n">array</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">complex_coloring_kwargs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">complex_coloring_kwargs</span> <span class="o">=</span> <span class="p">{}</span>
+
+        <span class="n">array</span> <span class="o">=</span> <span class="n">_get_complex_colors</span><span class="p">(</span>
+            <span class="n">array</span><span class="p">,</span> <span class="n">vmin</span><span class="o">=</span><span class="n">vmin</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="n">vmax</span><span class="p">,</span> <span class="o">**</span><span class="n">complex_coloring_kwargs</span>
+        <span class="p">)</span>
+
+    <span class="n">im</span> <span class="o">=</span> <span class="n">ax</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">extent</span><span class="o">=</span><span class="n">extent</span><span class="p">,</span> <span class="n">origin</span><span class="o">=</span><span class="s2">&quot;lower&quot;</span><span class="p">,</span> <span class="n">vmin</span><span class="o">=</span><span class="n">vmin</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="n">vmax</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">title</span><span class="p">:</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="n">title</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">x_label</span><span class="p">:</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="n">x_label</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">y_label</span><span class="p">:</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="n">y_label</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">x_ticks</span><span class="p">:</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">set_xticks</span><span class="p">([])</span>
+
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">y_ticks</span><span class="p">:</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">set_yticks</span><span class="p">([])</span>
+
+    <span class="k">return</span> <span class="n">im</span>
+
+
+<span class="k">def</span> <span class="nf">_add_panel_label</span><span class="p">(</span><span class="n">ax</span><span class="p">,</span> <span class="n">title</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="k">if</span> <span class="s2">&quot;loc&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">kwargs</span><span class="p">:</span>
+        <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;loc&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mi">2</span>
+
+    <span class="n">at</span> <span class="o">=</span> <span class="n">AnchoredText</span><span class="p">(</span>
+        <span class="n">title</span><span class="p">,</span> <span class="n">pad</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">borderpad</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">frameon</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>  <span class="c1"># loc=loc, prop=size,</span>
+    <span class="p">)</span>
+    <span class="n">ax</span><span class="o">.</span><span class="n">add_artist</span><span class="p">(</span><span class="n">at</span><span class="p">)</span>
+    <span class="n">at</span><span class="o">.</span><span class="n">txt</span><span class="o">.</span><span class="n">_text</span><span class="o">.</span><span class="n">set_path_effects</span><span class="p">([</span><span class="n">withStroke</span><span class="p">(</span><span class="n">foreground</span><span class="o">=</span><span class="s2">&quot;w&quot;</span><span class="p">,</span> <span class="n">linewidth</span><span class="o">=</span><span class="mi">3</span><span class="p">)])</span>
+    <span class="k">return</span> <span class="n">at</span>
+
+
+<span class="k">def</span> <span class="nf">_add_sizebar</span><span class="p">(</span><span class="n">ax</span><span class="p">,</span> <span class="n">label</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Draw a horizontal bar with length of 0.1 in data coordinates,</span>
+<span class="sd">    with a fixed label underneath.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="s2">&quot;loc&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">kwargs</span><span class="p">:</span>
+        <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;loc&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mi">3</span>
+
+    <span class="k">if</span> <span class="s2">&quot;borderpad&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">kwargs</span><span class="p">:</span>
+        <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;borderpad&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.5</span>
+
+    <span class="n">asb</span> <span class="o">=</span> <span class="n">AnchoredSizeBar</span><span class="p">(</span><span class="n">ax</span><span class="o">.</span><span class="n">transData</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">label</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+    <span class="n">ax</span><span class="o">.</span><span class="n">add_artist</span><span class="p">(</span><span class="n">asb</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_make_cbar_label</span><span class="p">(</span><span class="n">measurement</span><span class="p">):</span>
+    <span class="n">cbar_label</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">measurement</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;label&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;label&quot;</span> <span class="ow">in</span> <span class="n">measurement</span><span class="o">.</span><span class="n">metadata</span> <span class="k">else</span> <span class="s2">&quot;&quot;</span>
+    <span class="p">)</span>
+    <span class="n">cbar_label</span> <span class="o">+=</span> <span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot; [</span><span class="si">{</span><span class="n">measurement</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s1">&#39;units&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">]&quot;</span> <span class="k">if</span> <span class="s2">&quot;units&quot;</span> <span class="ow">in</span> <span class="n">measurement</span><span class="o">.</span><span class="n">metadata</span> <span class="k">else</span> <span class="s2">&quot;&quot;</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">cbar_label</span>
+
+
+<div class="viewcode-block" id="show_measurement_2d"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.visualize.show_measurement_2d.html#abtem.visualize.show_measurement_2d">[docs]</a><span class="k">def</span> <span class="nf">show_measurement_2d</span><span class="p">(</span>
+    <span class="n">measurements</span><span class="p">:</span> <span class="s2">&quot;BaseMeasurement&quot;</span><span class="p">,</span>
+    <span class="n">figsize</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span>
+    <span class="n">super_title</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">bool</span><span class="p">],</span>
+    <span class="n">sub_title</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">x_label</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">y_label</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">x_ticks</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">y_ticks</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">row_super_label</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">col_super_label</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">power</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">vmin</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">vmax</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">common_color_scale</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">cbar</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+    <span class="n">cbar_labels</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">float_formatting</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">cmap</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;viridis&quot;</span><span class="p">,</span>
+    <span class="n">extent</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">panel_labels</span><span class="p">:</span> <span class="nb">list</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">sizebar</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">image_grid_kwargs</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">imshow_kwargs</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">anchored_text_kwargs</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">anchored_size_bar_kwargs</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">complex_coloring_kwargs</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">axes</span><span class="p">:</span> <span class="n">Axes</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">):</span>
+    <span class="n">measurements</span> <span class="o">=</span> <span class="n">measurements</span><span class="o">.</span><span class="n">to_cpu</span><span class="p">()</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
+
+    <span class="n">imshow_kwargs</span> <span class="o">=</span> <span class="p">{}</span> <span class="k">if</span> <span class="n">imshow_kwargs</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">imshow_kwargs</span>
+    <span class="n">image_grid_kwargs</span> <span class="o">=</span> <span class="p">{}</span> <span class="k">if</span> <span class="n">image_grid_kwargs</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">image_grid_kwargs</span>
+    <span class="n">anchored_text_kwargs</span> <span class="o">=</span> <span class="p">{}</span> <span class="k">if</span> <span class="n">anchored_text_kwargs</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">anchored_text_kwargs</span>
+    <span class="n">anchored_size_bar_kwargs</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="p">{}</span> <span class="k">if</span> <span class="n">anchored_size_bar_kwargs</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">anchored_size_bar_kwargs</span>
+    <span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">complex_coloring_kwargs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">complex_coloring_kwargs</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">&quot;saturation&quot;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+        <span class="p">}</span>
+
+    <span class="k">if</span> <span class="n">cbar</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">iscomplexobj</span><span class="p">(</span><span class="n">measurements</span><span class="o">.</span><span class="n">array</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">common_color_scale</span><span class="p">:</span>
+            <span class="n">image_grid_kwargs</span><span class="p">[</span><span class="s2">&quot;cbar_mode&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;single&quot;</span>
+
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">image_grid_kwargs</span><span class="p">[</span><span class="s2">&quot;cbar_mode&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;each&quot;</span>
+            <span class="n">image_grid_kwargs</span><span class="p">[</span><span class="s2">&quot;cbar_pad&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.05</span>
+
+    <span class="n">measurements</span> <span class="o">=</span> <span class="n">measurements</span><span class="p">[(</span><span class="mi">0</span><span class="p">,)</span> <span class="o">*</span> <span class="nb">max</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">measurements</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">)</span> <span class="o">-</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">0</span><span class="p">)]</span>
+
+    <span class="k">if</span> <span class="n">common_color_scale</span> <span class="ow">and</span> <span class="n">np</span><span class="o">.</span><span class="n">iscomplexobj</span><span class="p">(</span><span class="n">measurements</span><span class="o">.</span><span class="n">array</span><span class="p">):</span>
+        <span class="n">vmin</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">measurements</span><span class="o">.</span><span class="n">array</span><span class="p">)</span><span class="o">.</span><span class="n">min</span><span class="p">()</span> <span class="k">if</span> <span class="n">vmin</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">vmin</span>
+        <span class="n">vmax</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">measurements</span><span class="o">.</span><span class="n">array</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="k">if</span> <span class="n">vmax</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">vmax</span>
+    <span class="k">elif</span> <span class="n">common_color_scale</span><span class="p">:</span>
+        <span class="n">vmin</span> <span class="o">=</span> <span class="n">measurements</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">min</span><span class="p">()</span> <span class="k">if</span> <span class="n">vmin</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">vmin</span>
+        <span class="n">vmax</span> <span class="o">=</span> <span class="n">measurements</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="k">if</span> <span class="n">vmax</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">vmax</span>
+
+    <span class="n">nrows</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">measurements</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">measurements</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="k">else</span> <span class="mi">1</span>
+    <span class="p">)</span>
+    <span class="n">ncols</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">measurements</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">measurements</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mi">1</span>
+    <span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">axes</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">fig</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="p">,</span> <span class="n">clear</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="s2">&quot;axes_pad&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">image_grid_kwargs</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">sub_title</span><span class="p">:</span>
+                <span class="n">image_grid_kwargs</span><span class="p">[</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.3</span>
+
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">image_grid_kwargs</span><span class="p">[</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.1</span>
+
+        <span class="n">axes</span> <span class="o">=</span> <span class="n">ImageGrid</span><span class="p">(</span><span class="n">fig</span><span class="p">,</span> <span class="mi">111</span><span class="p">,</span> <span class="n">nrows_ncols</span><span class="o">=</span><span class="p">(</span><span class="n">nrows</span><span class="p">,</span> <span class="n">ncols</span><span class="p">),</span> <span class="o">**</span><span class="n">image_grid_kwargs</span><span class="p">,)</span>
+    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">axes</span><span class="p">,</span> <span class="n">Axes</span><span class="p">):</span>
+        <span class="n">fig</span> <span class="o">=</span> <span class="n">axes</span><span class="o">.</span><span class="n">get_figure</span><span class="p">()</span>
+        <span class="n">axes</span> <span class="o">=</span> <span class="p">[</span><span class="n">axes</span><span class="p">]</span>
+
+    <span class="k">if</span> <span class="n">x_label</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">:</span>
+        <span class="n">x_label</span> <span class="o">=</span> <span class="n">measurements</span><span class="o">.</span><span class="n">base_axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">format_label</span><span class="p">()</span>
+
+    <span class="k">if</span> <span class="n">y_label</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">:</span>
+        <span class="n">y_label</span> <span class="o">=</span> <span class="n">measurements</span><span class="o">.</span><span class="n">base_axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">format_label</span><span class="p">()</span>
+
+    <span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">measurement</span> <span class="ow">in</span> <span class="n">measurements</span><span class="o">.</span><span class="n">iterate_ensemble</span><span class="p">(</span><span class="n">keep_dims</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+
+        <span class="n">title</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">measurement</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">super_title</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
+                <span class="n">title</span> <span class="o">=</span> <span class="n">super_title</span>
+            <span class="n">super_title</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">elif</span> <span class="nb">len</span><span class="p">(</span><span class="n">measurement</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">title</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">measurement</span><span class="o">.</span><span class="n">axes_metadata</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">format_title</span><span class="p">(</span><span class="n">float_formatting</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">sub_title</span>
+                <span class="k">else</span> <span class="kc">None</span>
+            <span class="p">)</span>
+            <span class="n">i</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ravel_multi_index</span><span class="p">((</span><span class="mi">0</span><span class="p">,)</span> <span class="o">+</span> <span class="n">index</span><span class="p">,</span> <span class="p">(</span><span class="n">nrows</span><span class="p">,</span> <span class="n">ncols</span><span class="p">))</span>
+        <span class="k">elif</span> <span class="nb">len</span><span class="p">(</span><span class="n">measurement</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">sub_title</span><span class="p">:</span>
+                <span class="n">titles</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span>
+                    <span class="n">axis</span><span class="o">.</span><span class="n">format_title</span><span class="p">(</span><span class="n">float_formatting</span><span class="p">)</span>
+                    <span class="k">for</span> <span class="n">axis</span> <span class="ow">in</span> <span class="n">measurement</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span>
+                <span class="p">)</span>
+                <span class="n">title</span> <span class="o">=</span> <span class="s2">&quot;, &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">titles</span><span class="p">)</span>
+
+            <span class="n">i</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ravel_multi_index</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="p">(</span><span class="n">nrows</span><span class="p">,</span> <span class="n">ncols</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">()</span>
+
+        <span class="n">ax</span> <span class="o">=</span> <span class="n">axes</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+
+        <span class="k">if</span> <span class="n">extent</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">extent</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="n">measurement</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">0</span><span class="p">,</span> <span class="n">measurement</span><span class="o">.</span><span class="n">extent</span><span class="p">[</span><span class="mi">1</span><span class="p">]]</span>
+
+        <span class="n">array</span> <span class="o">=</span> <span class="n">measurement</span><span class="o">.</span><span class="n">array</span><span class="p">[(</span><span class="mi">0</span><span class="p">,)</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">measurement</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">)]</span>
+
+        <span class="n">im</span> <span class="o">=</span> <span class="n">_add_imshow</span><span class="p">(</span>
+            <span class="n">ax</span><span class="o">=</span><span class="n">ax</span><span class="p">,</span>
+            <span class="n">array</span><span class="o">=</span><span class="n">array</span><span class="p">,</span>
+            <span class="n">title</span><span class="o">=</span><span class="n">title</span><span class="p">,</span>
+            <span class="n">extent</span><span class="o">=</span><span class="n">extent</span><span class="p">,</span>
+            <span class="n">x_label</span><span class="o">=</span><span class="n">x_label</span><span class="p">,</span>
+            <span class="n">y_label</span><span class="o">=</span><span class="n">y_label</span><span class="p">,</span>
+            <span class="n">x_ticks</span><span class="o">=</span><span class="n">x_ticks</span><span class="p">,</span>
+            <span class="n">y_ticks</span><span class="o">=</span><span class="n">y_ticks</span><span class="p">,</span>
+            <span class="n">power</span><span class="o">=</span><span class="n">power</span><span class="p">,</span>
+            <span class="n">vmin</span><span class="o">=</span><span class="n">vmin</span><span class="p">,</span>
+            <span class="n">vmax</span><span class="o">=</span><span class="n">vmax</span><span class="p">,</span>
+            <span class="n">cmap</span><span class="o">=</span><span class="n">cmap</span><span class="p">,</span>
+            <span class="n">complex_coloring_kwargs</span><span class="o">=</span><span class="n">complex_coloring_kwargs</span><span class="p">,</span>
+            <span class="o">**</span><span class="n">imshow_kwargs</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">panel_labels</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">_add_panel_label</span><span class="p">(</span><span class="n">ax</span><span class="p">,</span> <span class="n">panel_labels</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="o">**</span><span class="n">anchored_text_kwargs</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">cbar</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">cbar_labels</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">cbar_label</span> <span class="o">=</span> <span class="n">_make_cbar_label</span><span class="p">(</span><span class="n">measurement</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">cbar_label</span> <span class="o">=</span> <span class="n">cbar_labels</span>
+
+            <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">iscomplexobj</span><span class="p">(</span><span class="n">array</span><span class="p">):</span>
+                <span class="n">divider</span> <span class="o">=</span> <span class="n">make_axes_locatable</span><span class="p">(</span><span class="n">ax</span><span class="p">)</span>
+                <span class="n">cax1</span> <span class="o">=</span> <span class="n">divider</span><span class="o">.</span><span class="n">append_axes</span><span class="p">(</span><span class="s2">&quot;right&quot;</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="s2">&quot;5%&quot;</span><span class="p">,</span> <span class="n">pad</span><span class="o">=</span><span class="mf">0.2</span><span class="p">)</span>
+                <span class="n">cax2</span> <span class="o">=</span> <span class="n">divider</span><span class="o">.</span><span class="n">append_axes</span><span class="p">(</span><span class="s2">&quot;right&quot;</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="s2">&quot;5%&quot;</span><span class="p">,</span> <span class="n">pad</span><span class="o">=</span><span class="mf">0.4</span><span class="p">)</span>
+
+                <span class="n">_add_colorbar_arg</span><span class="p">(</span><span class="n">cax1</span><span class="p">,</span> <span class="n">complex_coloring_kwargs</span><span class="p">[</span><span class="s2">&quot;saturation&quot;</span><span class="p">])</span>
+
+                <span class="n">vmin</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">measurement</span><span class="o">.</span><span class="n">array</span><span class="p">)</span><span class="o">.</span><span class="n">min</span><span class="p">()</span> <span class="k">if</span> <span class="n">vmin</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">vmin</span>
+                <span class="n">vmax</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">measurement</span><span class="o">.</span><span class="n">array</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="k">if</span> <span class="n">vmax</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">vmax</span>
+
+                <span class="n">_add_colorbar_abs</span><span class="p">(</span><span class="n">cax2</span><span class="p">,</span> <span class="n">vmin</span><span class="p">,</span> <span class="n">vmax</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">try</span><span class="p">:</span>
+                    <span class="n">ax</span><span class="o">.</span><span class="n">cax</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">im</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">cbar_label</span><span class="p">)</span>
+                <span class="k">except</span> <span class="ne">AttributeError</span><span class="p">:</span>
+                    <span class="n">plt</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">im</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">cbar_label</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">sizebar</span><span class="p">:</span>
+            <span class="n">size</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">measurement</span><span class="o">.</span><span class="n">base_axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">sampling</span>
+                <span class="o">*</span> <span class="n">measurement</span><span class="o">.</span><span class="n">base_shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
+                <span class="o">/</span> <span class="mi">3</span>
+            <span class="p">)</span>
+            <span class="n">label</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">size</span><span class="si">:</span><span class="s2">&gt;</span><span class="si">{</span><span class="n">float_formatting</span><span class="si">}}</span><span class="s2"> </span><span class="si">{</span><span class="n">measurement</span><span class="o">.</span><span class="n">base_axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">units</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+            <span class="n">_add_sizebar</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">label</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="n">size</span><span class="p">,</span> <span class="o">**</span><span class="n">anchored_size_bar_kwargs</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">super_title</span> <span class="ow">is</span> <span class="kc">True</span> <span class="ow">and</span> <span class="s2">&quot;name&quot;</span> <span class="ow">in</span> <span class="n">measurements</span><span class="o">.</span><span class="n">metadata</span><span class="p">:</span>
+        <span class="n">fig</span><span class="o">.</span><span class="n">suptitle</span><span class="p">(</span><span class="n">measurements</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">])</span>
+
+    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">super_title</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
+
+        <span class="n">fig</span><span class="o">.</span><span class="n">suptitle</span><span class="p">(</span><span class="n">super_title</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">measurements</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">row_super_label</span><span class="p">:</span>
+        <span class="n">fig</span><span class="o">.</span><span class="n">supylabel</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">measurements</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">format_label</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">measurements</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="ow">and</span> <span class="n">col_super_label</span><span class="p">:</span>
+        <span class="n">fig</span><span class="o">.</span><span class="n">supylabel</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">measurements</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">format_label</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span></div>
+
+
+<span class="k">def</span> <span class="nf">_add_plot</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">ax</span><span class="p">:</span> <span class="n">Axes</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="n">y</span> <span class="o">=</span> <span class="n">copy_to_device</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">np</span><span class="p">)</span>
+    <span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">squeeze</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">squeeze</span><span class="p">(</span><span class="n">y</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">iscomplexobj</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">label</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">label</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+
+        <span class="n">line1</span> <span class="o">=</span> <span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="o">.</span><span class="n">real</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;Real </span><span class="si">{</span><span class="n">label</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="n">line2</span> <span class="o">=</span> <span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="o">.</span><span class="n">imag</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;Imag. </span><span class="si">{</span><span class="n">label</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="n">line</span> <span class="o">=</span> <span class="p">(</span><span class="n">line1</span><span class="p">,</span> <span class="n">line2</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">line</span> <span class="o">=</span> <span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">label</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">line</span>
+
+
+<div class="viewcode-block" id="show_measurements_1d"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.visualize.show_measurements_1d.html#abtem.visualize.show_measurements_1d">[docs]</a><span class="k">def</span> <span class="nf">show_measurements_1d</span><span class="p">(</span>
+    <span class="n">measurements</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="s2">&quot;RealSpaceLineProfiles&quot;</span><span class="p">,</span> <span class="s2">&quot;FourierSpaceLineProfiles&quot;</span><span class="p">],</span>
+    <span class="n">float_formatting</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">extent</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">ax</span><span class="p">:</span> <span class="n">Axes</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">x_label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">y_label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">title</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">figsize</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
+<span class="p">):</span>
+    <span class="k">if</span> <span class="n">ax</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="n">figsize</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">fig</span> <span class="o">=</span> <span class="n">ax</span><span class="o">.</span><span class="n">get_figure</span><span class="p">()</span>
+
+    <span class="k">if</span> <span class="n">title</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="s2">&quot;name&quot;</span> <span class="ow">in</span> <span class="n">measurements</span><span class="o">.</span><span class="n">metadata</span><span class="p">:</span>
+        <span class="n">title</span> <span class="o">=</span> <span class="n">measurements</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span>
+
+    <span class="k">if</span> <span class="n">title</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="n">title</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">extent</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">extent</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="n">measurements</span><span class="o">.</span><span class="n">extent</span><span class="p">]</span>
+
+    <span class="k">if</span> <span class="n">x_label</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">x_label</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">measurements</span><span class="o">.</span><span class="n">axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">label</span><span class="si">}</span><span class="s2"> [</span><span class="si">{</span><span class="n">measurements</span><span class="o">.</span><span class="n">axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">units</span><span class="si">}</span><span class="s2">]&quot;</span>
+
+    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="n">extent</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">extent</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">measurements</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">endpoint</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">line_profile</span> <span class="ow">in</span> <span class="n">measurements</span><span class="o">.</span><span class="n">iterate_ensemble</span><span class="p">(</span><span class="n">keep_dims</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+
+        <span class="n">labels</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">axis</span> <span class="ow">in</span> <span class="n">line_profile</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span><span class="p">:</span>
+            <span class="n">labels</span> <span class="o">+=</span> <span class="p">[</span><span class="n">axis</span><span class="o">.</span><span class="n">format_title</span><span class="p">(</span><span class="n">float_formatting</span><span class="p">)]</span>
+
+        <span class="n">label</span> <span class="o">=</span> <span class="s2">&quot;-&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">labels</span><span class="p">)</span>
+
+        <span class="n">_add_plot</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">line_profile</span><span class="o">.</span><span class="n">array</span><span class="p">,</span> <span class="n">ax</span><span class="p">,</span> <span class="n">label</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="n">ax</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="n">x_label</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">y_label</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="s2">&quot;label&quot;</span> <span class="ow">in</span> <span class="n">measurements</span><span class="o">.</span><span class="n">metadata</span><span class="p">:</span>
+        <span class="n">y_label</span> <span class="o">=</span> <span class="n">measurements</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;label&quot;</span><span class="p">]</span>
+        <span class="k">if</span> <span class="s2">&quot;units&quot;</span> <span class="ow">in</span> <span class="n">measurements</span><span class="o">.</span><span class="n">metadata</span><span class="p">:</span>
+            <span class="n">y_label</span> <span class="o">+=</span> <span class="sa">f</span><span class="s1">&#39; [</span><span class="si">{</span><span class="n">measurements</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;units&quot;</span><span class="p">]</span><span class="si">}</span><span class="s1">]&#39;</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="n">y_label</span><span class="p">)</span>
+
+    <span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="n">y_label</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">measurements</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">legend</span><span class="p">()</span>
+
+    <span class="k">return</span> <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span></div>
+
+
+<div class="viewcode-block" id="plot_diffraction_pattern"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.visualize.plot_diffraction_pattern.html#abtem.visualize.plot_diffraction_pattern">[docs]</a><span class="k">def</span> <span class="nf">plot_diffraction_pattern</span><span class="p">(</span>
+    <span class="n">indexed_diffraction_pattern</span><span class="p">:</span> <span class="s2">&quot;IndexedDiffractionPattern&quot;</span><span class="p">,</span>
+    <span class="c1"># cell: Union[float, Tuple[float, float], Tuple[float, float, float], Cell],</span>
+    <span class="n">spot_scale</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+    <span class="n">ax</span><span class="p">:</span> <span class="n">Axes</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">figsize</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">6</span><span class="p">),</span>
+    <span class="n">spot_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.02</span><span class="p">,</span>
+    <span class="n">title</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">annotate_kwargs</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">intensity_split</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+<span class="p">):</span>
+
+    <span class="k">if</span> <span class="n">annotate_kwargs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">annotate_kwargs</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="n">coordinates</span> <span class="o">=</span> <span class="n">indexed_diffraction_pattern</span><span class="o">.</span><span class="n">_vectors</span>
+    <span class="n">normalize_coordinates</span> <span class="o">=</span> <span class="n">coordinates</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
+
+    <span class="n">coordinates</span> <span class="o">=</span> <span class="n">coordinates</span> <span class="o">/</span> <span class="n">normalize_coordinates</span>
+
+    <span class="n">max_step</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="nb">max</span><span class="p">([</span><span class="n">np</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">diff</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">coordinates</span><span class="p">[:,</span> <span class="n">i</span><span class="p">])))</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)])</span> <span class="o">*</span> <span class="n">spot_scale</span>
+    <span class="p">)</span>
+    <span class="n">intensities</span> <span class="o">=</span> <span class="n">indexed_diffraction_pattern</span><span class="o">.</span><span class="n">intensities</span>
+
+    <span class="n">scales</span> <span class="o">=</span> <span class="n">intensities</span> <span class="o">/</span> <span class="n">intensities</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">*</span> <span class="n">max_step</span>
+
+    <span class="n">norm</span> <span class="o">=</span> <span class="n">matplotlib</span><span class="o">.</span><span class="n">colors</span><span class="o">.</span><span class="n">Normalize</span><span class="p">(</span><span class="n">vmin</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="n">intensities</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>
+    <span class="n">cmap</span> <span class="o">=</span> <span class="n">matplotlib</span><span class="o">.</span><span class="n">cm</span><span class="o">.</span><span class="n">get_cmap</span><span class="p">(</span><span class="s2">&quot;viridis&quot;</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">ax</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="n">figsize</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">fig</span> <span class="o">=</span> <span class="n">ax</span><span class="o">.</span><span class="n">get_figure</span><span class="p">()</span>
+
+    <span class="k">if</span> <span class="n">title</span><span class="p">:</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="n">title</span><span class="p">)</span>
+
+    <span class="n">ax</span><span class="o">.</span><span class="n">add_collection</span><span class="p">(</span>
+        <span class="n">EllipseCollection</span><span class="p">(</span>
+            <span class="n">widths</span><span class="o">=</span><span class="n">scales</span><span class="p">,</span>
+            <span class="n">heights</span><span class="o">=</span><span class="n">scales</span><span class="p">,</span>
+            <span class="n">angles</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>
+            <span class="n">units</span><span class="o">=</span><span class="s2">&quot;xy&quot;</span><span class="p">,</span>
+            <span class="n">facecolors</span><span class="o">=</span><span class="n">cmap</span><span class="p">(</span><span class="n">norm</span><span class="p">(</span><span class="n">intensities</span><span class="p">)),</span>
+            <span class="n">offsets</span><span class="o">=</span><span class="n">coordinates</span><span class="p">,</span>
+            <span class="n">transOffset</span><span class="o">=</span><span class="n">ax</span><span class="o">.</span><span class="n">transData</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="p">)</span>
+
+    <span class="n">indexed_diffraction_pattern</span> <span class="o">=</span> <span class="n">indexed_diffraction_pattern</span><span class="o">.</span><span class="n">remove_equivalent</span><span class="p">()</span>
+    <span class="n">coordinates</span> <span class="o">=</span> <span class="n">indexed_diffraction_pattern</span><span class="o">.</span><span class="n">_vectors</span>
+    <span class="n">coordinates</span> <span class="o">=</span> <span class="n">coordinates</span> <span class="o">/</span> <span class="n">normalize_coordinates</span>
+
+    <span class="n">miller_indices</span> <span class="o">=</span> <span class="n">indexed_diffraction_pattern</span><span class="o">.</span><span class="n">miller_indices</span>
+    <span class="c1"># _, hexagonal = validate_cell_edges(cell)</span>
+
+    <span class="c1"># include = find_equivalent_spots(</span>
+    <span class="c1">#     hkl, intensities, hexagonal=hexagonal, intensity_split=intensity_split</span>
+    <span class="c1"># )</span>
+
+    <span class="k">for</span> <span class="n">hkl</span><span class="p">,</span> <span class="n">coordinate</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">miller_indices</span><span class="p">,</span> <span class="n">coordinates</span><span class="p">):</span>
+        <span class="c1"># if include[i]:  # or label_mode == &quot;all&quot;:</span>
+        <span class="c1"># if hexagonal:</span>
+        <span class="c1">#     spot = miller_to_miller_bravais(hkl[i][None])[0]</span>
+        <span class="c1"># else:</span>
+        <span class="c1">#     spot = hkl[i]</span>
+        <span class="c1"># print(hkl, coordinate)</span>
+
+        <span class="n">t</span> <span class="o">=</span> <span class="n">ax</span><span class="o">.</span><span class="n">annotate</span><span class="p">(</span>
+            <span class="s2">&quot;&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="nb">map</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">hkl</span><span class="p">))),</span>
+            <span class="n">coordinate</span><span class="p">,</span>
+            <span class="n">ha</span><span class="o">=</span><span class="s2">&quot;center&quot;</span><span class="p">,</span>
+            <span class="n">va</span><span class="o">=</span><span class="s2">&quot;center&quot;</span><span class="p">,</span>
+            <span class="n">size</span><span class="o">=</span><span class="mi">12</span><span class="p">,</span>
+            <span class="o">**</span><span class="n">annotate_kwargs</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">t</span><span class="o">.</span><span class="n">set_path_effects</span><span class="p">([</span><span class="n">withStroke</span><span class="p">(</span><span class="n">foreground</span><span class="o">=</span><span class="s2">&quot;w&quot;</span><span class="p">,</span> <span class="n">linewidth</span><span class="o">=</span><span class="mi">3</span><span class="p">)])</span>
+
+    <span class="n">ax</span><span class="o">.</span><span class="n">axis</span><span class="p">(</span><span class="s2">&quot;equal&quot;</span><span class="p">)</span>
+    <span class="n">ax</span><span class="o">.</span><span class="n">set_xlim</span><span class="p">([</span><span class="o">-</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">max_step</span> <span class="o">/</span> <span class="mf">2.0</span><span class="p">,</span> <span class="mf">1.0</span> <span class="o">+</span> <span class="n">max_step</span> <span class="o">/</span> <span class="mf">2.0</span><span class="p">])</span>
+    <span class="n">ax</span><span class="o">.</span><span class="n">set_ylim</span><span class="p">([</span><span class="o">-</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">max_step</span> <span class="o">/</span> <span class="mf">2.0</span><span class="p">,</span> <span class="mf">1.0</span> <span class="o">+</span> <span class="n">max_step</span> <span class="o">/</span> <span class="mf">2.0</span><span class="p">])</span>
+    <span class="n">ax</span><span class="o">.</span><span class="n">axis</span><span class="p">(</span><span class="s2">&quot;off&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span></div>
+
+
+<span class="n">_cube</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="p">[[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">]],</span>
+        <span class="p">[[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">]],</span>
+        <span class="p">[[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]],</span>
+        <span class="p">[[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]],</span>
+        <span class="p">[[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">]],</span>
+        <span class="p">[[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">]],</span>
+        <span class="p">[[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]],</span>
+        <span class="p">[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">]],</span>
+        <span class="p">[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">]],</span>
+        <span class="p">[[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]],</span>
+        <span class="p">[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]],</span>
+        <span class="p">[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]],</span>
+    <span class="p">]</span>
+<span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_merge_columns</span><span class="p">(</span><span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span> <span class="n">plane</span><span class="p">,</span> <span class="n">tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Atoms</span><span class="p">:</span>
+    <span class="n">uniques</span><span class="p">,</span> <span class="n">labels</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">numbers</span><span class="p">,</span> <span class="n">return_inverse</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="n">new_atoms</span> <span class="o">=</span> <span class="n">Atoms</span><span class="p">(</span><span class="n">cell</span><span class="o">=</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">unique</span><span class="p">,</span> <span class="n">indices</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">uniques</span><span class="p">,</span> <span class="n">label_to_index</span><span class="p">(</span><span class="n">labels</span><span class="p">)):</span>
+        <span class="n">positions</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">positions</span><span class="p">[</span><span class="n">indices</span><span class="p">]</span>
+        <span class="n">positions</span> <span class="o">=</span> <span class="n">_merge_positions</span><span class="p">(</span><span class="n">positions</span><span class="p">,</span> <span class="n">plane</span><span class="p">,</span> <span class="n">tol</span><span class="p">)</span>
+        <span class="n">numbers</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">full</span><span class="p">((</span><span class="nb">len</span><span class="p">(</span><span class="n">positions</span><span class="p">),),</span> <span class="n">unique</span><span class="p">)</span>
+        <span class="n">new_atoms</span> <span class="o">+=</span> <span class="n">Atoms</span><span class="p">(</span><span class="n">positions</span><span class="o">=</span><span class="n">positions</span><span class="p">,</span> <span class="n">numbers</span><span class="o">=</span><span class="n">numbers</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">new_atoms</span>
+
+
+<span class="k">def</span> <span class="nf">_merge_positions</span><span class="p">(</span><span class="n">positions</span><span class="p">,</span> <span class="n">plane</span><span class="p">,</span> <span class="n">tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+    <span class="n">axes</span> <span class="o">=</span> <span class="n">plane_to_axes</span><span class="p">(</span><span class="n">plane</span><span class="p">)</span>
+    <span class="n">rounded_positions</span> <span class="o">=</span> <span class="n">tol</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="n">positions</span><span class="p">[:,</span> <span class="n">axes</span><span class="p">[:</span><span class="mi">2</span><span class="p">]]</span> <span class="o">/</span> <span class="n">tol</span><span class="p">)</span>
+    <span class="n">unique</span><span class="p">,</span> <span class="n">labels</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">rounded_positions</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">return_inverse</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="n">new_positions</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="nb">len</span><span class="p">(</span><span class="n">unique</span><span class="p">),</span> <span class="mi">3</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">label</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">label_to_index</span><span class="p">(</span><span class="n">labels</span><span class="p">)):</span>
+        <span class="n">top_atom</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">positions</span><span class="p">[</span><span class="n">label</span><span class="p">][:,</span> <span class="n">axes</span><span class="p">[</span><span class="mi">2</span><span class="p">]])</span>
+        <span class="n">new_positions</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="n">label</span><span class="p">][</span><span class="n">top_atom</span><span class="p">]</span>
+        <span class="c1"># new_positions[i, axes[2]] = np.max(positions[label][top_atom, axes[2]])</span>
+
+    <span class="k">return</span> <span class="n">new_positions</span>
+
+
+<div class="viewcode-block" id="show_atoms"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.visualize.show_atoms.html#abtem.visualize.show_atoms">[docs]</a><span class="k">def</span> <span class="nf">show_atoms</span><span class="p">(</span>
+    <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span>
+    <span class="n">plane</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;xy&quot;</span><span class="p">,</span>
+    <span class="n">ax</span><span class="p">:</span> <span class="n">Axes</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">scale</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.75</span><span class="p">,</span>
+    <span class="n">title</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">numbering</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">show_periodic</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">figsize</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">legend</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">merge</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-2</span><span class="p">,</span>
+<span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Display 2d projection of atoms as a Matplotlib plot.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    atoms : ASE Atoms</span>
+<span class="sd">        The atoms to be shown.</span>
+<span class="sd">    plane : str, two float</span>
+<span class="sd">        The projection plane given as a combination of &#39;x&#39; &#39;y&#39; and &#39;z&#39;, e.g. &#39;xy&#39;, or the as two floats representing the</span>
+<span class="sd">        azimuth and elevation angles in degrees of the viewing direction, e.g. (45, 45).</span>
+<span class="sd">    ax : matplotlib Axes, optional</span>
+<span class="sd">        If given the plots are added to the axes.</span>
+<span class="sd">    scale : float</span>
+<span class="sd">        Scaling factor for the atom display sizes. Default is 0.5.</span>
+<span class="sd">    title : str</span>
+<span class="sd">        Title of the displayed image. Default is None.</span>
+<span class="sd">    numbering : bool</span>
+<span class="sd">        Display the index of the Atoms as a number. Default is False.</span>
+<span class="sd">    show_periodic : bool</span>
+<span class="sd">        If True, show the periodic images of the atoms at the cell boundary.</span>
+<span class="sd">    figsize : two int, optional</span>
+<span class="sd">        The figure size given as width and height in inches, passed to matplotlib.pyplot.figure.</span>
+<span class="sd">    legend : bool</span>
+<span class="sd">        If True, add a legend indicating the color of the atomic species.</span>
+<span class="sd">    merge: float</span>
+<span class="sd">        Plotting large numbers of atoms can be slow. To speed up plotting atoms closer than the given value</span>
+<span class="sd">        (in Ångstrom) are merged.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">if</span> <span class="n">show_periodic</span><span class="p">:</span>
+        <span class="n">atoms</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="n">atoms</span> <span class="o">=</span> <span class="n">pad_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">margins</span><span class="o">=</span><span class="mf">1e-3</span><span class="p">)</span>
+
+    <span class="n">atoms</span> <span class="o">=</span> <span class="n">_merge_columns</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">plane</span><span class="p">,</span> <span class="n">merge</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">ax</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="n">figsize</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">fig</span> <span class="o">=</span> <span class="n">ax</span><span class="o">.</span><span class="n">get_figure</span><span class="p">()</span>
+
+    <span class="n">cell</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">cell</span>
+    <span class="n">axes</span> <span class="o">=</span> <span class="n">plane_to_axes</span><span class="p">(</span><span class="n">plane</span><span class="p">)</span>
+
+    <span class="n">cell_lines</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span>
+        <span class="p">[[</span><span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">line</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">cell</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">line</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">cell</span><span class="p">)]</span> <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">_cube</span><span class="p">]</span>
+    <span class="p">)</span>
+    <span class="n">cell_lines_x</span><span class="p">,</span> <span class="n">cell_lines_y</span> <span class="o">=</span> <span class="n">cell_lines</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">axes</span><span class="p">[</span><span class="mi">0</span><span class="p">]],</span> <span class="n">cell_lines</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">axes</span><span class="p">[</span><span class="mi">1</span><span class="p">]]</span>
+
+    <span class="k">for</span> <span class="n">cell_line_x</span><span class="p">,</span> <span class="n">cell_line_y</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">cell_lines_x</span><span class="p">,</span> <span class="n">cell_lines_y</span><span class="p">):</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">cell_line_x</span><span class="p">,</span> <span class="n">cell_line_y</span><span class="p">,</span> <span class="s2">&quot;k-&quot;</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">atoms</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">positions</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">positions</span><span class="p">[:,</span> <span class="n">axes</span><span class="p">[:</span><span class="mi">2</span><span class="p">]]</span>
+        <span class="n">order</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">argsort</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">positions</span><span class="p">[:,</span> <span class="n">axes</span><span class="p">[</span><span class="mi">2</span><span class="p">]])</span>
+        <span class="n">positions</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="n">order</span><span class="p">]</span>
+
+        <span class="n">colors</span> <span class="o">=</span> <span class="n">jmol_colors</span><span class="p">[</span><span class="n">atoms</span><span class="o">.</span><span class="n">numbers</span><span class="p">[</span><span class="n">order</span><span class="p">]]</span>
+        <span class="n">sizes</span> <span class="o">=</span> <span class="n">covalent_radii</span><span class="p">[</span><span class="n">atoms</span><span class="o">.</span><span class="n">numbers</span><span class="p">[</span><span class="n">order</span><span class="p">]]</span> <span class="o">*</span> <span class="n">scale</span>
+
+        <span class="n">circles</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">position</span><span class="p">,</span> <span class="n">size</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">positions</span><span class="p">,</span> <span class="n">sizes</span><span class="p">):</span>
+            <span class="n">circles</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">Circle</span><span class="p">(</span><span class="n">position</span><span class="p">,</span> <span class="n">size</span><span class="p">))</span>
+
+        <span class="n">coll</span> <span class="o">=</span> <span class="n">PatchCollection</span><span class="p">(</span><span class="n">circles</span><span class="p">,</span> <span class="n">facecolors</span><span class="o">=</span><span class="n">colors</span><span class="p">,</span> <span class="n">edgecolors</span><span class="o">=</span><span class="s2">&quot;black&quot;</span><span class="p">)</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">add_collection</span><span class="p">(</span><span class="n">coll</span><span class="p">)</span>
+
+        <span class="n">ax</span><span class="o">.</span><span class="n">axis</span><span class="p">(</span><span class="s2">&quot;equal&quot;</span><span class="p">)</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="n">plane</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">+</span> <span class="s2">&quot; [Å]&quot;</span><span class="p">)</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="n">plane</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="s2">&quot; [Å]&quot;</span><span class="p">)</span>
+
+        <span class="n">ax</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="n">title</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">numbering</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="p">(</span><span class="n">position</span><span class="p">,</span> <span class="n">size</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">positions</span><span class="p">,</span> <span class="n">sizes</span><span class="p">)):</span>
+                <span class="n">ax</span><span class="o">.</span><span class="n">annotate</span><span class="p">(</span>
+                    <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">order</span><span class="p">[</span><span class="n">i</span><span class="p">]),</span> <span class="n">xy</span><span class="o">=</span><span class="n">position</span><span class="p">,</span> <span class="n">ha</span><span class="o">=</span><span class="s2">&quot;center&quot;</span><span class="p">,</span> <span class="n">va</span><span class="o">=</span><span class="s2">&quot;center&quot;</span>
+                <span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">legend</span><span class="p">:</span>
+        <span class="n">legend_elements</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">Line2D</span><span class="p">(</span>
+                <span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+                <span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+                <span class="n">marker</span><span class="o">=</span><span class="s2">&quot;o&quot;</span><span class="p">,</span>
+                <span class="n">color</span><span class="o">=</span><span class="s2">&quot;w&quot;</span><span class="p">,</span>
+                <span class="n">markeredgecolor</span><span class="o">=</span><span class="s2">&quot;k&quot;</span><span class="p">,</span>
+                <span class="n">label</span><span class="o">=</span><span class="n">chemical_symbols</span><span class="p">[</span><span class="n">unique</span><span class="p">],</span>
+                <span class="n">markerfacecolor</span><span class="o">=</span><span class="n">jmol_colors</span><span class="p">[</span><span class="n">unique</span><span class="p">],</span>
+                <span class="n">markersize</span><span class="o">=</span><span class="mi">12</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="k">for</span> <span class="n">unique</span> <span class="ow">in</span> <span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">numbers</span><span class="p">)</span>
+        <span class="p">]</span>
+
+        <span class="n">ax</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">handles</span><span class="o">=</span><span class="n">legend_elements</span><span class="p">,</span> <span class="n">loc</span><span class="o">=</span><span class="s2">&quot;upper right&quot;</span><span class="p">)</span>
+    <span class="c1"># ax.set_xlim([0, np.max(cell_lines_x)])</span>
+    <span class="c1"># ax.set_ylim([0, np.max(cell_lines_y)])</span>
+
+    <span class="k">return</span> <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span></div>
+</pre></div>
+
+              </div>
+              
+            </main>
+            <footer class="footer-article noprint">
+                
+    <!-- Previous / next buttons -->
+<div class='prev-next-area'>
+</div>
+            </footer>
+        </div>
+    </div>
+    <div class="footer-content row">
+        <footer class="col footer"><p>
+  
+    By The abTEM developers<br/>
+  
+      &copy; Copyright 2022.<br/>
+</p>
+        </footer>
+    </div>
+    
+</div>
+
+
+      </div>
+    </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script src="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
+
+
+  </body>
+</html>

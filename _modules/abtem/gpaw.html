@@ -1,0 +1,1698 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>abtem.gpaw &#8212; abTEM Documentation</title>
+    
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+
+    
+  <link rel="stylesheet"
+    href="../../_static/vendor/fontawesome/5.13.0/css/all.min.css">
+  <link rel="preload" as="font" type="font/woff2" crossorigin
+    href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
+  <link rel="preload" as="font" type="font/woff2" crossorigin
+    href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
+
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
+    <link rel="stylesheet" href="../../_static/styles/sphinx-book-theme.css?digest=5115cc725059bd94278eecd172e13a965bf8f5a9" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/togglebutton.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/mystnb.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sphinx-thebe.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/design-style.b7bb847fb20b106c3d81b95245e65545.min.css" />
+    
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
+
+    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/jquery.js"></script>
+    <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <script src="../../_static/clipboard.min.js"></script>
+    <script src="../../_static/copybutton.js"></script>
+    <script src="../../_static/scripts/sphinx-book-theme.js?digest=9c920249402e914e316237a7dbc6769907cce411"></script>
+    <script>let toggleHintShow = 'Click to show';</script>
+    <script>let toggleHintHide = 'Click to hide';</script>
+    <script>let toggleOpenOnPrint = 'true';</script>
+    <script src="../../_static/togglebutton.js"></script>
+    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown, .tag_hide_input div.cell_input, .tag_hide-input div.cell_input, .tag_hide_output div.cell_output, .tag_hide-output div.cell_output, .tag_hide_cell.cell, .tag_hide-cell.cell';</script>
+    <script src="../../_static/design-tabs.js"></script>
+    <script>const THEBE_JS_URL = "https://unpkg.com/thebe@0.8.2/lib/index.js"
+const thebe_selector = ".thebe,.cell"
+const thebe_selector_input = "pre"
+const thebe_selector_output = ".output, .cell_output"
+</script>
+    <script async="async" src="../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="docsearch:language" content="en">
+    
+
+    <!-- Google Analytics -->
+    
+  </head>
+  <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="60">
+<!-- Checkboxes to toggle the left sidebar -->
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle navigation sidebar">
+<label class="overlay overlay-navbar" for="__navigation">
+    <div class="visually-hidden">Toggle navigation sidebar</div>
+</label>
+<!-- Checkboxes to toggle the in-page toc -->
+<input type="checkbox" class="sidebar-toggle" name="__page-toc" id="__page-toc" aria-label="Toggle in-page Table of Contents">
+<label class="overlay overlay-pagetoc" for="__page-toc">
+    <div class="visually-hidden">Toggle in-page Table of Contents</div>
+</label>
+<!-- Headers at the top -->
+<div class="announcement header-item noprint"></div>
+<div class="header header-item noprint"></div>
+
+    
+    <div class="container-fluid" id="banner"></div>
+
+    
+
+    <div class="container-xl">
+      <div class="row">
+          
+<!-- Sidebar -->
+<div class="bd-sidebar noprint" id="site-navigation">
+    <div class="bd-sidebar__content">
+        <div class="bd-sidebar__top"><div class="navbar-brand-box">
+    <a class="navbar-brand text-wrap" href="../../index.html">
+      
+        <!-- `logo` is deprecated in Sphinx 4.0, so remove this when we stop supporting 3 -->
+        
+      
+      
+      <img src="../../_static/logo.png" class="logo" alt="logo">
+      
+      
+      <h1 class="site-logo" id="site-title">abTEM Documentation</h1>
+      
+    </a>
+</div><form class="bd-search d-flex align-items-center" action="../../search.html" method="get">
+  <i class="icon fas fa-search"></i>
+  <input type="search" class="form-control" name="q" id="search-input" placeholder="Search this book..." aria-label="Search this book..." autocomplete="off" >
+</form><nav class="bd-links" id="bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item active">
+        
+        <ul class="nav bd-sidenav bd-sidenav__home-link">
+            <li class="toctree-l1">
+                <a class="reference internal" href="../../intro.html">
+                    Welcome to abTEM
+                </a>
+            </li>
+        </ul>
+        <p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Get started
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../getting_started/overview.html">
+   Overview
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../getting_started/install.html">
+   Installation
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../getting_started/basics.html">
+   The basics
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  User guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../user_guide/walkthrough/walkthrough.html">
+   Walkthrough
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
+  <label for="toctree-checkbox-1">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/atomic_models.html">
+     Atomic models with ASE
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/potentials.html">
+     Potentials
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/wave_functions.html">
+     Wave functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/multislice.html">
+     Multislice simulations
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/contrast_transfer_function.html">
+     Contrast Transfer Function
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/scan_and_detect.html">
+     Scan and detect
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/frozen_phonons.html">
+     Frozen phonons
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/charge_density.html">
+     <em>
+      ab initio
+     </em>
+     potentials with GPAW
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/partial_coherence.html">
+     Partial coherence
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/prism.html">
+     PRISM
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/performance.html">
+     Parallelization and Dask
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/core_loss.html">
+     Core loss EELS
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../user_guide/appendix/appendix.html">
+   Appendix
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+  <label for="toctree-checkbox-2">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/appendix/multislice_derivation.html">
+     Deriving the Multislice Algorithm
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/appendix/normalization.html">
+     Wave Function Normalization
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/appendix/antialiasing.html">
+     Antialiasing and Sampling
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/appendix/ensembles.html">
+     Ensembles
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/appendix/visualized_aberrations.html">
+     Visualized aberrations
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../user_guide/examples/examples.html">
+   Example gallery
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
+  <label for="toctree-checkbox-3">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/cbed_quickstart.html">
+     CBED quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/hrtem_quickstart.html">
+     HRTEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/prism_quickstart.html">
+     PRISM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/examples/notebooks/hbn_dft_iam.html">
+     DFT vs. IAM in hBN diffraction
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Library
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../library/api/api.html">
+   API
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
+  <label for="toctree-checkbox-4">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.html">
+     waves
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
+    <label for="toctree-checkbox-5">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.BaseWaves.html">
+       BaseWaves
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.PlaneWave.html">
+       PlaneWave
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.Probe.html">
+       Probe
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.Waves.html">
+       Waves
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.html">
+     potentials
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/>
+    <label for="toctree-checkbox-6">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.BasePotential.html">
+       BasePotential
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.CrystalPotential.html">
+       CrystalPotential
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.Potential.html">
+       Potential
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.PotentialArray.html">
+       PotentialArray
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.TransmissionFunction.html">
+       TransmissionFunction
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.html">
+     scan
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" type="checkbox"/>
+    <label for="toctree-checkbox-7">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.BaseScan.html">
+       BaseScan
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.CustomScan.html">
+       CustomScan
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.GridScan.html">
+       GridScan
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.LineScan.html">
+       LineScan
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.SourceOffset.html">
+       SourceOffset
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.html">
+     detectors
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" type="checkbox"/>
+    <label for="toctree-checkbox-8">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.validate_detectors.html">
+       validate_detectors
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html">
+       AbstractRadialDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
+       AnnularDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.BaseDetector.html">
+       BaseDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.FlexibleAnnularDetector.html">
+       FlexibleAnnularDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.PixelatedDetector.html">
+       PixelatedDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.SegmentedDetector.html">
+       SegmentedDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.WavesDetector.html">
+       WavesDetector
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.html">
+     measurements
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" type="checkbox"/>
+    <label for="toctree-checkbox-9">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html">
+       BaseMeasurement
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.DiffractionPatterns.html">
+       DiffractionPatterns
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html">
+       FourierSpaceLineProfiles
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.Images.html">
+       Images
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.PolarMeasurements.html">
+       PolarMeasurements
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html">
+       RealSpaceLineProfiles
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html">
+       SinglePointMeasurement
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.html">
+     transfer
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" type="checkbox"/>
+    <label for="toctree-checkbox-10">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.cartesian2polar.html">
+       cartesian2polar
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.nyquist_sampling.html">
+       nyquist_sampling
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.point_resolution.html">
+       point_resolution
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.polar2cartesian.html">
+       polar2cartesian
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.scherzer_defocus.html">
+       scherzer_defocus
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Aberrations.html">
+       Aberrations
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Aperture.html">
+       Aperture
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.BaseAperture.html">
+       BaseAperture
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Bullseye.html">
+       Bullseye
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.CTF.html">
+       CTF
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.SpatialEnvelope.html">
+       SpatialEnvelope
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.TemporalEnvelope.html">
+       TemporalEnvelope
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Vortex.html">
+       Vortex
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.html">
+     distributions
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" type="checkbox"/>
+    <label for="toctree-checkbox-11">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.from_values.html">
+       from_values
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.gaussian.html">
+       gaussian
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.uniform.html">
+       uniform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
+       AxisAlignedDistributionND
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
+       BaseDistribution
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.DistributionFromValues.html">
+       DistributionFromValues
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.html">
+     charge_density
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" type="checkbox"/>
+    <label for="toctree-checkbox-12">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.add_point_charges_fourier.html">
+       add_point_charges_fourier
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.integrate_gradient_fourier.html">
+       integrate_gradient_fourier
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.ChargeDensityPotential.html">
+       ChargeDensityPotential
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.html">
+     gpaw
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" type="checkbox"/>
+    <label for="toctree-checkbox-13">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html">
+       GPAWPotential
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.html">
+     visualize
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" type="checkbox"/>
+    <label for="toctree-checkbox-14">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.plot_diffraction_pattern.html">
+       plot_diffraction_pattern
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_atoms.html">
+       show_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_measurement_2d.html">
+       show_measurement_2d
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_measurements_1d.html">
+       show_measurements_1d
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.html">
+     atoms
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" type="checkbox"/>
+    <label for="toctree-checkbox-15">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.atoms_in_cell.html">
+       atoms_in_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_box.html">
+       best_orthogonal_box
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_box.html">
+       cut_box
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.decompose_affine_transform.html">
+       decompose_affine_transform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.flip_atoms.html">
+       flip_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_hexagonal.html">
+       is_cell_hexagonal
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_orthogonal.html">
+       is_cell_orthogonal
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_valid.html">
+       is_cell_valid
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.merge_close_atoms.html">
+       merge_close_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.orthogonalize_cell.html">
+       orthogonalize_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.pad_atoms.html">
+       pad_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.plane_to_axes.html">
+       plane_to_axes
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.pretty_print_transform.html">
+       pretty_print_transform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotate_atoms_to_plane.html">
+       rotate_atoms_to_plane
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotation_matrix_from_plane.html">
+       rotation_matrix_from_plane
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotation_matrix_to_euler.html">
+       rotation_matrix_to_euler
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.shrink_cell.html">
+       shrink_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.standardize_cell.html">
+       standardize_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.wrap_with_tolerance.html">
+       wrap_with_tolerance
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.html">
+     multislice
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" type="checkbox"/>
+    <label for="toctree-checkbox-16">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
+       allocate_multislice_measurements
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.fresnel_propagator.html">
+       fresnel_propagator
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
+       multislice_and_detect
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_step.html">
+       multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.tilt_shift.html">
+       tilt_shift
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.FresnelPropagator.html">
+       FresnelPropagator
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library/config.html">
+   Configuration
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library/contributing.html">
+   Contributing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library/bibliography.html">
+   Bibliography
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library/changelog.html">
+   Changelog
+  </a>
+ </li>
+</ul>
+
+    </div>
+</nav></div>
+        <div class="bd-sidebar__bottom">
+             <!-- To handle the deprecated key -->
+            
+            <div class="navbar_extra_footer">
+            Powered by <a href="https://jupyterbook.org">Jupyter Book</a>
+            </div>
+            
+        </div>
+    </div>
+    <div id="rtd-footer-container"></div>
+</div>
+
+
+          
+
+
+          
+<!-- A tiny helper pixel to detect if we've scrolled -->
+<div class="sbt-scroll-pixel-helper"></div>
+<!-- Main content -->
+<div class="col py-0 content-container">
+    
+    <div class="header-article row sticky-top noprint">
+        
+
+
+
+<div class="col py-1 d-flex header-article-main">
+    <div class="header-article__left">
+        
+        <label for="__navigation"
+  class="headerbtn"
+  data-toggle="tooltip"
+data-placement="right"
+title="Toggle navigation"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-bars"></i>
+  </span>
+
+</label>
+
+        
+    </div>
+    <div class="header-article__right">
+<button onclick="toggleFullScreen()"
+  class="headerbtn"
+  data-toggle="tooltip"
+data-placement="bottom"
+title="Fullscreen mode"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+<div class="menu-dropdown menu-dropdown-repository-buttons">
+  <button class="headerbtn menu-dropdown__trigger"
+      aria-label="Source repositories">
+      <i class="fab fa-github"></i>
+  </button>
+  <div class="menu-dropdown__content">
+    <ul>
+      <li>
+        <a href="https://github.com/executablebooks/jupyter-book"
+   class="headerbtn"
+   data-toggle="tooltip"
+data-placement="left"
+title="Source repository"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="headerbtn__text-container">repository</span>
+</a>
+
+      </li>
+      
+      <li>
+        <a href="https://github.com/executablebooks/jupyter-book/issues/new?title=Issue%20on%20page%20%2F_modules/abtem/gpaw.html&body=Your%20issue%20content%20here."
+   class="headerbtn"
+   data-toggle="tooltip"
+data-placement="left"
+title="Open an issue"
+>
+  
+
+<span class="headerbtn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="headerbtn__text-container">open issue</span>
+</a>
+
+      </li>
+      
+    </ul>
+  </div>
+</div>
+
+    </div>
+</div>
+
+<!-- Table of contents -->
+<div class="col-md-3 bd-toc show noprint">
+</div>
+    </div>
+    <div class="article row">
+        <div class="col pl-md-3 pl-lg-5 content-container">
+            <!-- Table of contents that is only displayed when printing the page -->
+            <div id="jb-print-docs-body" class="onlyprint">
+                <h1></h1>
+                <!-- Table of contents -->
+                <div id="print-main-content">
+                    <div id="jb-print-toc">
+                        
+                    </div>
+                </div>
+            </div>
+            <main id="main-content" role="main">
+                
+              <div>
+                
+  <h1>Source code for abtem.gpaw</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Module to handle ab initio electrostatic potentials from the DFT code GPAW.&quot;&quot;&quot;</span>
+<span class="kn">import</span> <span class="nn">contextlib</span>
+<span class="kn">import</span> <span class="nn">copy</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="kn">import</span> <span class="n">defaultdict</span>
+<span class="kn">from</span> <span class="nn">dataclasses</span> <span class="kn">import</span> <span class="n">dataclass</span>
+<span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">partial</span>
+<span class="kn">from</span> <span class="nn">math</span> <span class="kn">import</span> <span class="n">pi</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Any</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">TYPE_CHECKING</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">Union</span><span class="p">,</span> <span class="n">List</span>
+
+<span class="kn">import</span> <span class="nn">dask</span>
+<span class="kn">import</span> <span class="nn">dask.array</span> <span class="k">as</span> <span class="nn">da</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">from</span> <span class="nn">ase</span> <span class="kn">import</span> <span class="n">Atoms</span>
+<span class="kn">from</span> <span class="nn">ase</span> <span class="kn">import</span> <span class="n">units</span>
+<span class="kn">from</span> <span class="nn">ase.data</span> <span class="kn">import</span> <span class="n">chemical_symbols</span><span class="p">,</span> <span class="n">atomic_numbers</span>
+<span class="kn">from</span> <span class="nn">ase.io.trajectory</span> <span class="kn">import</span> <span class="n">read_atoms</span>
+<span class="kn">from</span> <span class="nn">ase.units</span> <span class="kn">import</span> <span class="n">Bohr</span>
+<span class="kn">from</span> <span class="nn">scipy.interpolate</span> <span class="kn">import</span> <span class="n">interp1d</span>
+
+<span class="kn">from</span> <span class="nn">abtem.charge_density</span> <span class="kn">import</span> <span class="n">_generate_slices</span>
+<span class="kn">from</span> <span class="nn">abtem.core.axes</span> <span class="kn">import</span> <span class="n">AxisMetadata</span>
+<span class="kn">from</span> <span class="nn">abtem.core.electron_configurations</span> <span class="kn">import</span> <span class="p">(</span>
+    <span class="n">electron_configurations</span><span class="p">,</span>
+    <span class="n">config_str_to_config_tuples</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span> <span class="nn">abtem.core.parametrizations.ewald</span> <span class="kn">import</span> <span class="n">EwaldParametrization</span>
+<span class="kn">from</span> <span class="nn">abtem.inelastic.phonons</span> <span class="kn">import</span> <span class="p">(</span>
+    <span class="n">DummyFrozenPhonons</span><span class="p">,</span>
+    <span class="n">FrozenPhonons</span><span class="p">,</span>
+    <span class="n">AbstractFrozenPhonons</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span> <span class="nn">abtem.potentials</span> <span class="kn">import</span> <span class="n">_PotentialBuilder</span><span class="p">,</span> <span class="n">Potential</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="kn">from</span> <span class="nn">gpaw</span> <span class="kn">import</span> <span class="n">GPAW</span>
+    <span class="kn">from</span> <span class="nn">gpaw.lfc</span> <span class="kn">import</span> <span class="n">LFC</span><span class="p">,</span> <span class="n">BasisFunctions</span>
+    <span class="kn">from</span> <span class="nn">gpaw.transformers</span> <span class="kn">import</span> <span class="n">Transformer</span>
+    <span class="kn">from</span> <span class="nn">gpaw.utilities</span> <span class="kn">import</span> <span class="n">unpack2</span>
+    <span class="kn">from</span> <span class="nn">gpaw</span> <span class="kn">import</span> <span class="n">GPAW</span>
+    <span class="kn">from</span> <span class="nn">gpaw.atom.aeatom</span> <span class="kn">import</span> <span class="n">AllElectronAtom</span>
+    <span class="kn">from</span> <span class="nn">gpaw.io</span> <span class="kn">import</span> <span class="n">Reader</span>
+    <span class="kn">from</span> <span class="nn">gpaw.density</span> <span class="kn">import</span> <span class="n">RealSpaceDensity</span>
+    <span class="kn">from</span> <span class="nn">gpaw.mpi</span> <span class="kn">import</span> <span class="n">SerialCommunicator</span>
+    <span class="kn">from</span> <span class="nn">gpaw.grid_descriptor</span> <span class="kn">import</span> <span class="n">GridDescriptor</span>
+    <span class="kn">from</span> <span class="nn">gpaw.utilities</span> <span class="kn">import</span> <span class="n">unpack_atomic_matrices</span>
+
+    <span class="k">if</span> <span class="n">TYPE_CHECKING</span><span class="p">:</span>
+        <span class="kn">from</span> <span class="nn">gpaw.setup</span> <span class="kn">import</span> <span class="n">Setups</span>
+<span class="k">except</span><span class="p">:</span>
+    <span class="n">GPAW</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">LFC</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">BasisFunctions</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">Transformer</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">unpack2</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">Setups</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">AllElectronAtom</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">Reader</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">SerialCommunicator</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">GridDescriptor</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">unpack_atomic_matrices</span> <span class="o">=</span> <span class="kc">None</span>
+
+
+<span class="k">def</span> <span class="nf">_safe_read_atoms</span><span class="p">(</span><span class="n">calculator</span><span class="p">,</span> <span class="n">clean</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">):</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">calculator</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
+        <span class="n">atoms</span> <span class="o">=</span> <span class="n">read_atoms</span><span class="p">(</span><span class="n">Reader</span><span class="p">(</span><span class="n">calculator</span><span class="p">)</span><span class="o">.</span><span class="n">atoms</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">atoms</span> <span class="o">=</span> <span class="n">calculator</span><span class="o">.</span><span class="n">atoms</span>
+
+    <span class="k">if</span> <span class="n">clean</span><span class="p">:</span>
+        <span class="n">atoms</span><span class="o">.</span><span class="n">constraints</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">atoms</span><span class="o">.</span><span class="n">calc</span> <span class="o">=</span> <span class="kc">True</span>
+
+    <span class="k">return</span> <span class="n">atoms</span>
+
+
+<span class="k">def</span> <span class="nf">_get_gpaw_setups</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">mode</span><span class="p">,</span> <span class="n">xc</span><span class="p">):</span>
+    <span class="n">gpaw</span> <span class="o">=</span> <span class="n">GPAW</span><span class="p">(</span><span class="n">txt</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="n">mode</span><span class="p">,</span> <span class="n">xc</span><span class="o">=</span><span class="n">xc</span><span class="p">)</span>
+    <span class="n">gpaw</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">atoms</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">gpaw</span><span class="o">.</span><span class="n">setups</span>
+
+
+<span class="nd">@dataclass</span>
+<span class="k">class</span> <span class="nc">_DummyGPAW</span><span class="p">:</span>
+    <span class="n">setup_mode</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">setup_xc</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">nt_sG</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+    <span class="n">gd</span><span class="p">:</span> <span class="n">Any</span>
+    <span class="n">D_asp</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+    <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">setups</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">gpaw</span> <span class="o">=</span> <span class="n">GPAW</span><span class="p">(</span><span class="n">txt</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">setup_mode</span><span class="p">,</span> <span class="n">xc</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">setup_xc</span><span class="p">)</span>
+        <span class="n">gpaw</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">atoms</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">gpaw</span><span class="o">.</span><span class="n">setups</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">from_gpaw</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">gpaw</span><span class="p">,</span> <span class="n">lazy</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">):</span>
+        <span class="c1"># if lazy:</span>
+        <span class="c1">#    return dask.delayed(cls.from_gpaw)(gpaw, lazy=False)</span>
+
+        <span class="n">atoms</span> <span class="o">=</span> <span class="n">gpaw</span><span class="o">.</span><span class="n">atoms</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="n">atoms</span><span class="o">.</span><span class="n">calc</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">&quot;setup_mode&quot;</span><span class="p">:</span> <span class="n">gpaw</span><span class="o">.</span><span class="n">parameters</span><span class="p">[</span><span class="s2">&quot;mode&quot;</span><span class="p">],</span>
+            <span class="s2">&quot;setup_xc&quot;</span><span class="p">:</span> <span class="n">gpaw</span><span class="o">.</span><span class="n">parameters</span><span class="p">[</span><span class="s2">&quot;xc&quot;</span><span class="p">],</span>
+            <span class="s2">&quot;nt_sG&quot;</span><span class="p">:</span> <span class="n">gpaw</span><span class="o">.</span><span class="n">density</span><span class="o">.</span><span class="n">nt_sG</span><span class="o">.</span><span class="n">copy</span><span class="p">(),</span>
+            <span class="s2">&quot;gd&quot;</span><span class="p">:</span> <span class="n">gpaw</span><span class="o">.</span><span class="n">density</span><span class="o">.</span><span class="n">gd</span><span class="o">.</span><span class="n">new_descriptor</span><span class="p">(</span><span class="n">comm</span><span class="o">=</span><span class="n">SerialCommunicator</span><span class="p">()),</span>
+            <span class="s2">&quot;D_asp&quot;</span><span class="p">:</span> <span class="nb">dict</span><span class="p">(</span><span class="n">gpaw</span><span class="o">.</span><span class="n">density</span><span class="o">.</span><span class="n">D_asp</span><span class="p">),</span>
+            <span class="s2">&quot;atoms&quot;</span><span class="p">:</span> <span class="n">atoms</span><span class="p">,</span>
+        <span class="p">}</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">from_file</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">lazy</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">lazy</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">dask</span><span class="o">.</span><span class="n">delayed</span><span class="p">(</span><span class="bp">cls</span><span class="o">.</span><span class="n">from_file</span><span class="p">)(</span><span class="n">path</span><span class="p">,</span> <span class="n">lazy</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+        <span class="n">reader</span> <span class="o">=</span> <span class="n">Reader</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+        <span class="n">atoms</span> <span class="o">=</span> <span class="n">read_atoms</span><span class="p">(</span><span class="n">reader</span><span class="o">.</span><span class="n">atoms</span><span class="p">)</span>
+
+        <span class="kn">from</span> <span class="nn">gpaw.calculator</span> <span class="kn">import</span> <span class="n">GPAW</span>
+
+        <span class="n">parameters</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">copy</span><span class="p">(</span><span class="n">GPAW</span><span class="o">.</span><span class="n">default_parameters</span><span class="p">)</span>
+        <span class="n">parameters</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">reader</span><span class="o">.</span><span class="n">parameters</span><span class="o">.</span><span class="n">asdict</span><span class="p">())</span>
+
+        <span class="n">setup_mode</span> <span class="o">=</span> <span class="n">parameters</span><span class="p">[</span><span class="s2">&quot;mode&quot;</span><span class="p">]</span>
+        <span class="n">setup_xc</span> <span class="o">=</span> <span class="n">parameters</span><span class="p">[</span><span class="s2">&quot;xc&quot;</span><span class="p">]</span>
+
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">setup_xc</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="s2">&quot;setup_name&quot;</span> <span class="ow">in</span> <span class="n">setup_xc</span><span class="p">:</span>
+            <span class="n">setup_xc</span> <span class="o">=</span> <span class="n">setup_xc</span><span class="p">[</span><span class="s2">&quot;setup_name&quot;</span><span class="p">]</span>
+
+        <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">setup_xc</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span>
+
+        <span class="n">density</span> <span class="o">=</span> <span class="n">reader</span><span class="o">.</span><span class="n">density</span><span class="o">.</span><span class="n">density</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span> <span class="o">**</span> <span class="mi">3</span>
+        <span class="n">gd</span> <span class="o">=</span> <span class="n">GridDescriptor</span><span class="p">(</span>
+            <span class="n">N_c</span><span class="o">=</span><span class="n">density</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">3</span><span class="p">:],</span>
+            <span class="n">cell_cv</span><span class="o">=</span><span class="n">atoms</span><span class="o">.</span><span class="n">get_cell</span><span class="p">()</span> <span class="o">/</span> <span class="n">Bohr</span><span class="p">,</span>
+            <span class="n">comm</span><span class="o">=</span><span class="n">SerialCommunicator</span><span class="p">(),</span>
+        <span class="p">)</span>
+
+        <span class="n">setups</span> <span class="o">=</span> <span class="n">_get_gpaw_setups</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">setup_mode</span><span class="p">,</span> <span class="n">setup_xc</span><span class="p">)</span>
+
+        <span class="n">D_asp</span> <span class="o">=</span> <span class="n">unpack_atomic_matrices</span><span class="p">(</span><span class="n">reader</span><span class="o">.</span><span class="n">density</span><span class="o">.</span><span class="n">atomic_density_matrices</span><span class="p">,</span> <span class="n">setups</span><span class="p">)</span>
+
+        <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">&quot;setup_mode&quot;</span><span class="p">:</span> <span class="n">setup_mode</span><span class="p">,</span>
+            <span class="s2">&quot;setup_xc&quot;</span><span class="p">:</span> <span class="n">setup_xc</span><span class="p">,</span>
+            <span class="s2">&quot;nt_sG&quot;</span><span class="p">:</span> <span class="n">density</span><span class="p">,</span>
+            <span class="s2">&quot;gd&quot;</span><span class="p">:</span> <span class="n">gd</span><span class="p">,</span>
+            <span class="s2">&quot;D_asp&quot;</span><span class="p">:</span> <span class="n">D_asp</span><span class="p">,</span>
+            <span class="s2">&quot;atoms&quot;</span><span class="p">:</span> <span class="n">atoms</span><span class="p">,</span>
+        <span class="p">}</span>
+        <span class="k">return</span> <span class="bp">cls</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">from_generic</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">calculator</span><span class="p">,</span> <span class="n">lazy</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">calculator</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
+            <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">from_file</span><span class="p">(</span><span class="n">calculator</span><span class="p">,</span> <span class="n">lazy</span><span class="o">=</span><span class="n">lazy</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">calculator</span><span class="p">,</span> <span class="s2">&quot;density&quot;</span><span class="p">):</span>
+            <span class="k">return</span> <span class="bp">cls</span><span class="o">.</span><span class="n">from_gpaw</span><span class="p">(</span><span class="n">calculator</span><span class="p">,</span> <span class="n">lazy</span><span class="o">=</span><span class="n">lazy</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">calculator</span><span class="p">,</span> <span class="bp">cls</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">calculator</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">()</span>
+
+
+<span class="k">def</span> <span class="nf">_interpolate_pseudo_density</span><span class="p">(</span><span class="n">nt_sg</span><span class="p">,</span> <span class="n">gd</span><span class="p">,</span> <span class="n">gridrefinement</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">gridrefinement</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">nt_sg</span><span class="p">,</span> <span class="n">gd</span>
+
+    <span class="k">assert</span> <span class="n">gridrefinement</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span>
+
+    <span class="n">iterations</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">gridrefinement</span><span class="p">)</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span>
+
+    <span class="n">finegd</span> <span class="o">=</span> <span class="n">gd</span>
+    <span class="n">n_sg</span> <span class="o">=</span> <span class="n">nt_sg</span>
+
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">iterations</span><span class="p">):</span>
+        <span class="n">finegd</span> <span class="o">=</span> <span class="n">gd</span><span class="o">.</span><span class="n">refine</span><span class="p">()</span>
+        <span class="n">interpolator</span> <span class="o">=</span> <span class="n">Transformer</span><span class="p">(</span><span class="n">gd</span><span class="p">,</span> <span class="n">finegd</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
+
+        <span class="n">n_sg</span> <span class="o">=</span> <span class="n">finegd</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">nt_sg</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+        <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">nt_sg</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]):</span>
+            <span class="n">interpolator</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">nt_sg</span><span class="p">[</span><span class="n">s</span><span class="p">],</span> <span class="n">n_sg</span><span class="p">[</span><span class="n">s</span><span class="p">])</span>
+
+        <span class="n">nt_sg</span> <span class="o">=</span> <span class="n">n_sg</span>
+        <span class="n">gd</span> <span class="o">=</span> <span class="n">finegd</span>
+
+    <span class="k">return</span> <span class="n">n_sg</span><span class="p">,</span> <span class="n">finegd</span>
+
+
+<span class="k">def</span> <span class="nf">_get_all_electron_density</span><span class="p">(</span>
+    <span class="n">nt_sG</span><span class="p">,</span> <span class="n">gd</span><span class="p">,</span> <span class="n">D_asp</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">setups</span><span class="p">,</span> <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span> <span class="n">gridrefinement</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span>
+<span class="p">):</span>
+    <span class="n">nspins</span> <span class="o">=</span> <span class="n">nt_sG</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">spos_ac</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">get_scaled_positions</span><span class="p">()</span> <span class="o">%</span> <span class="mf">1.0</span>
+
+    <span class="n">n_sg</span><span class="p">,</span> <span class="n">gd</span> <span class="o">=</span> <span class="n">_interpolate_pseudo_density</span><span class="p">(</span><span class="n">nt_sG</span><span class="p">,</span> <span class="n">gd</span><span class="p">,</span> <span class="n">gridrefinement</span><span class="p">)</span>
+
+    <span class="n">phi_aj</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">phit_aj</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">nc_a</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">nct_a</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">setup</span> <span class="ow">in</span> <span class="n">setups</span><span class="p">:</span>
+        <span class="n">phi_j</span><span class="p">,</span> <span class="n">phit_j</span><span class="p">,</span> <span class="n">nc</span><span class="p">,</span> <span class="n">nct</span> <span class="o">=</span> <span class="n">setup</span><span class="o">.</span><span class="n">get_partial_waves</span><span class="p">()[:</span><span class="mi">4</span><span class="p">]</span>
+        <span class="n">phi_aj</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">phi_j</span><span class="p">)</span>
+        <span class="n">phit_aj</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">phit_j</span><span class="p">)</span>
+        <span class="n">nc_a</span><span class="o">.</span><span class="n">append</span><span class="p">([</span><span class="n">nc</span><span class="p">])</span>
+        <span class="n">nct_a</span><span class="o">.</span><span class="n">append</span><span class="p">([</span><span class="n">nct</span><span class="p">])</span>
+
+    <span class="c1"># Create localized functions from splines</span>
+    <span class="n">phi</span> <span class="o">=</span> <span class="n">BasisFunctions</span><span class="p">(</span><span class="n">gd</span><span class="p">,</span> <span class="n">phi_aj</span><span class="p">)</span>
+    <span class="n">phit</span> <span class="o">=</span> <span class="n">BasisFunctions</span><span class="p">(</span><span class="n">gd</span><span class="p">,</span> <span class="n">phit_aj</span><span class="p">)</span>
+    <span class="n">nc</span> <span class="o">=</span> <span class="n">LFC</span><span class="p">(</span><span class="n">gd</span><span class="p">,</span> <span class="n">nc_a</span><span class="p">)</span>
+    <span class="n">nct</span> <span class="o">=</span> <span class="n">LFC</span><span class="p">(</span><span class="n">gd</span><span class="p">,</span> <span class="n">nct_a</span><span class="p">)</span>
+    <span class="n">phi</span><span class="o">.</span><span class="n">set_positions</span><span class="p">(</span><span class="n">spos_ac</span><span class="p">)</span>
+    <span class="n">phit</span><span class="o">.</span><span class="n">set_positions</span><span class="p">(</span><span class="n">spos_ac</span><span class="p">)</span>
+    <span class="n">nc</span><span class="o">.</span><span class="n">set_positions</span><span class="p">(</span><span class="n">spos_ac</span><span class="p">)</span>
+    <span class="n">nct</span><span class="o">.</span><span class="n">set_positions</span><span class="p">(</span><span class="n">spos_ac</span><span class="p">)</span>
+
+    <span class="n">I_sa</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">nspins</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">spos_ac</span><span class="p">)))</span>
+    <span class="n">a_W</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">phi</span><span class="o">.</span><span class="n">M_W</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">intc</span><span class="p">)</span>
+    <span class="n">W</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">phi</span><span class="o">.</span><span class="n">atom_indices</span><span class="p">:</span>
+        <span class="n">nw</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">phi</span><span class="o">.</span><span class="n">sphere_a</span><span class="p">[</span><span class="n">a</span><span class="p">]</span><span class="o">.</span><span class="n">M_w</span><span class="p">)</span>
+        <span class="n">a_W</span><span class="p">[</span><span class="n">W</span> <span class="p">:</span> <span class="n">W</span> <span class="o">+</span> <span class="n">nw</span><span class="p">]</span> <span class="o">=</span> <span class="n">a</span>
+        <span class="n">W</span> <span class="o">+=</span> <span class="n">nw</span>
+
+    <span class="n">x_W</span> <span class="o">=</span> <span class="n">phi</span><span class="o">.</span><span class="n">create_displacement_arrays</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+
+    <span class="n">rho_MM</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">phi</span><span class="o">.</span><span class="n">Mmax</span><span class="p">,</span> <span class="n">phi</span><span class="o">.</span><span class="n">Mmax</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">s</span><span class="p">,</span> <span class="n">I_a</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">I_sa</span><span class="p">):</span>
+        <span class="n">M1</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">a</span><span class="p">,</span> <span class="n">setup</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">setups</span><span class="p">):</span>
+            <span class="n">ni</span> <span class="o">=</span> <span class="n">setup</span><span class="o">.</span><span class="n">ni</span>
+            <span class="n">D_sp</span> <span class="o">=</span> <span class="n">D_asp</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">a</span> <span class="o">%</span> <span class="nb">len</span><span class="p">(</span><span class="n">D_asp</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">D_sp</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">D_sp</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">nspins</span><span class="p">,</span> <span class="n">ni</span> <span class="o">*</span> <span class="p">(</span><span class="n">ni</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">//</span> <span class="mi">2</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">I_a</span><span class="p">[</span><span class="n">a</span><span class="p">]</span> <span class="o">=</span> <span class="n">setup</span><span class="o">.</span><span class="n">Nct</span> <span class="o">/</span> <span class="n">nspins</span> <span class="o">-</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="mi">4</span> <span class="o">*</span> <span class="n">pi</span><span class="p">)</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span>
+                    <span class="n">D_sp</span><span class="p">[</span><span class="n">s</span><span class="p">],</span> <span class="n">setup</span><span class="o">.</span><span class="n">Delta_pL</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">]</span>
+                <span class="p">)</span>
+                <span class="n">I_a</span><span class="p">[</span><span class="n">a</span><span class="p">]</span> <span class="o">-=</span> <span class="n">setup</span><span class="o">.</span><span class="n">Nc</span> <span class="o">/</span> <span class="n">nspins</span>
+
+            <span class="c1"># rank = D_asp.partition.rank_a[a]</span>
+            <span class="c1"># D_asp.partition.comm.broadcast(D_sp, rank)</span>
+            <span class="n">M2</span> <span class="o">=</span> <span class="n">M1</span> <span class="o">+</span> <span class="n">ni</span>
+            <span class="n">rho_MM</span><span class="p">[</span><span class="n">M1</span><span class="p">:</span><span class="n">M2</span><span class="p">,</span> <span class="n">M1</span><span class="p">:</span><span class="n">M2</span><span class="p">]</span> <span class="o">=</span> <span class="n">unpack2</span><span class="p">(</span><span class="n">D_sp</span><span class="p">[</span><span class="n">s</span><span class="p">])</span>
+            <span class="n">M1</span> <span class="o">=</span> <span class="n">M2</span>
+
+        <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">n_sg</span><span class="p">[</span><span class="n">s</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">phi</span><span class="o">.</span><span class="n">gd</span><span class="o">.</span><span class="n">n_c</span><span class="p">)</span>
+        <span class="n">phi</span><span class="o">.</span><span class="n">lfc</span><span class="o">.</span><span class="n">ae_valence_density_correction</span><span class="p">(</span><span class="n">rho_MM</span><span class="p">,</span> <span class="n">n_sg</span><span class="p">[</span><span class="n">s</span><span class="p">],</span> <span class="n">a_W</span><span class="p">,</span> <span class="n">I_a</span><span class="p">,</span> <span class="n">x_W</span><span class="p">)</span>
+        <span class="n">phit</span><span class="o">.</span><span class="n">lfc</span><span class="o">.</span><span class="n">ae_valence_density_correction</span><span class="p">(</span><span class="o">-</span><span class="n">rho_MM</span><span class="p">,</span> <span class="n">n_sg</span><span class="p">[</span><span class="n">s</span><span class="p">],</span> <span class="n">a_W</span><span class="p">,</span> <span class="n">I_a</span><span class="p">,</span> <span class="n">x_W</span><span class="p">)</span>
+
+    <span class="n">a_W</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">nc</span><span class="o">.</span><span class="n">M_W</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">intc</span><span class="p">)</span>
+    <span class="n">W</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">nc</span><span class="o">.</span><span class="n">atom_indices</span><span class="p">:</span>
+        <span class="n">nw</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">nc</span><span class="o">.</span><span class="n">sphere_a</span><span class="p">[</span><span class="n">a</span><span class="p">]</span><span class="o">.</span><span class="n">M_w</span><span class="p">)</span>
+        <span class="n">a_W</span><span class="p">[</span><span class="n">W</span> <span class="p">:</span> <span class="n">W</span> <span class="o">+</span> <span class="n">nw</span><span class="p">]</span> <span class="o">=</span> <span class="n">a</span>
+        <span class="n">W</span> <span class="o">+=</span> <span class="n">nw</span>
+    <span class="n">scale</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">nspins</span>
+
+    <span class="k">for</span> <span class="n">s</span><span class="p">,</span> <span class="n">I_a</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">I_sa</span><span class="p">):</span>
+        <span class="n">nc</span><span class="o">.</span><span class="n">lfc</span><span class="o">.</span><span class="n">ae_core_density_correction</span><span class="p">(</span><span class="n">scale</span><span class="p">,</span> <span class="n">n_sg</span><span class="p">[</span><span class="n">s</span><span class="p">],</span> <span class="n">a_W</span><span class="p">,</span> <span class="n">I_a</span><span class="p">)</span>
+        <span class="n">nct</span><span class="o">.</span><span class="n">lfc</span><span class="o">.</span><span class="n">ae_core_density_correction</span><span class="p">(</span><span class="o">-</span><span class="n">scale</span><span class="p">,</span> <span class="n">n_sg</span><span class="p">[</span><span class="n">s</span><span class="p">],</span> <span class="n">a_W</span><span class="p">,</span> <span class="n">I_a</span><span class="p">)</span>
+        <span class="c1"># D_asp.partition.comm.sum(I_a)</span>
+
+        <span class="n">N_c</span> <span class="o">=</span> <span class="n">gd</span><span class="o">.</span><span class="n">N_c</span>
+        <span class="n">g_ac</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">around</span><span class="p">(</span><span class="n">N_c</span> <span class="o">*</span> <span class="n">spos_ac</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span> <span class="o">%</span> <span class="n">N_c</span> <span class="o">-</span> <span class="n">gd</span><span class="o">.</span><span class="n">beg_c</span>
+
+        <span class="k">for</span> <span class="n">I</span><span class="p">,</span> <span class="n">g_c</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">I_a</span><span class="p">,</span> <span class="n">g_ac</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">g_c</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span> <span class="ow">and</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">g_c</span> <span class="o">&lt;</span> <span class="n">gd</span><span class="o">.</span><span class="n">n_c</span><span class="p">):</span>
+                <span class="n">n_sg</span><span class="p">[</span><span class="n">s</span><span class="p">][</span><span class="nb">tuple</span><span class="p">(</span><span class="n">g_c</span><span class="p">)]</span> <span class="o">-=</span> <span class="n">I</span> <span class="o">/</span> <span class="n">gd</span><span class="o">.</span><span class="n">dv</span>
+
+    <span class="k">return</span> <span class="n">n_sg</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">/</span> <span class="n">Bohr</span> <span class="o">**</span> <span class="mi">3</span>
+
+
+<div class="viewcode-block" id="GPAWPotential"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html#abtem.gpaw.GPAWPotential">[docs]</a><span class="k">class</span> <span class="nc">GPAWPotential</span><span class="p">(</span><span class="n">_PotentialBuilder</span><span class="p">):</span>
+<div class="viewcode-block" id="GPAWPotential.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html#abtem.gpaw.GPAWPotential.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">calculators</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="s2">&quot;GPAW&quot;</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="s2">&quot;GPAW&quot;</span><span class="p">],</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="nb">str</span><span class="p">],</span>
+        <span class="n">gpts</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">sampling</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">slice_thickness</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+        <span class="n">exit_planes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">gridrefinement</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span>
+        <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">plane</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;xy&quot;</span><span class="p">,</span>
+        <span class="n">box</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">origin</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
+        <span class="n">periodic</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="n">repetitions</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
+        <span class="n">frozen_phonons</span><span class="p">:</span> <span class="n">AbstractFrozenPhonons</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+
+<span class="sd">        Calculate electrostatic potential from a converged DFT calculation using GPAW.</span>
+
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        calculators : GPAW calculator or path to GPAW calculator or list of calculators or paths</span>
+
+<span class="sd">        gpts : one or two int, optional</span>
+<span class="sd">            Number of grid points in x and y describing each slice of the potential. Provide either &quot;sampling&quot; or &quot;gpts&quot;.</span>
+<span class="sd">        sampling : one or two float, optional</span>
+<span class="sd">            Sampling of the potential in x and y [1 / Å]. Provide either &quot;sampling&quot; or &quot;gpts&quot;.</span>
+<span class="sd">        slice_thickness</span>
+<span class="sd">        exit_planes</span>
+<span class="sd">        gridrefinement</span>
+<span class="sd">        device</span>
+<span class="sd">        plane</span>
+<span class="sd">        box</span>
+<span class="sd">        origin</span>
+<span class="sd">        periodic</span>
+<span class="sd">        repetitions</span>
+<span class="sd">        frozen_phonons</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="k">if</span> <span class="n">GPAW</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+                <span class="s2">&quot;This functionality of abTEM requires GPAW, see https://wiki.fysik.dtu.dk/gpaw/.&quot;</span>
+            <span class="p">)</span>
+
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">calculators</span><span class="p">,</span> <span class="p">(</span><span class="nb">tuple</span><span class="p">,</span> <span class="nb">list</span><span class="p">)):</span>
+            <span class="n">atoms</span> <span class="o">=</span> <span class="n">_safe_read_atoms</span><span class="p">(</span><span class="n">calculators</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+            <span class="n">num_configs</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">calculators</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">frozen_phonons</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">()</span>
+
+            <span class="n">calculators</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="n">_DummyGPAW</span><span class="o">.</span><span class="n">from_generic</span><span class="p">(</span><span class="n">calculator</span><span class="p">)</span> <span class="k">for</span> <span class="n">calculator</span> <span class="ow">in</span> <span class="n">calculators</span>
+            <span class="p">]</span>
+
+            <span class="n">frozen_phonons</span> <span class="o">=</span> <span class="n">DummyFrozenPhonons</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">num_configs</span><span class="o">=</span><span class="n">num_configs</span><span class="p">)</span>
+
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">atoms</span> <span class="o">=</span> <span class="n">_safe_read_atoms</span><span class="p">(</span><span class="n">calculators</span><span class="p">)</span>
+
+            <span class="n">calculators</span> <span class="o">=</span> <span class="n">_DummyGPAW</span><span class="o">.</span><span class="n">from_generic</span><span class="p">(</span><span class="n">calculators</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">frozen_phonons</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">frozen_phonons</span> <span class="o">=</span> <span class="n">DummyFrozenPhonons</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">num_configs</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_calculators</span> <span class="o">=</span> <span class="n">calculators</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_frozen_phonons</span> <span class="o">=</span> <span class="n">frozen_phonons</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_gridrefinement</span> <span class="o">=</span> <span class="n">gridrefinement</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_repetitions</span> <span class="o">=</span> <span class="n">repetitions</span>
+
+        <span class="n">cell</span> <span class="o">=</span> <span class="n">frozen_phonons</span><span class="o">.</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span> <span class="o">*</span> <span class="n">repetitions</span>
+        <span class="n">frozen_phonons</span><span class="o">.</span><span class="n">atoms</span><span class="o">.</span><span class="n">calc</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
+            <span class="n">gpts</span><span class="o">=</span><span class="n">gpts</span><span class="p">,</span>
+            <span class="n">sampling</span><span class="o">=</span><span class="n">sampling</span><span class="p">,</span>
+            <span class="n">cell</span><span class="o">=</span><span class="n">cell</span><span class="p">,</span>
+            <span class="n">slice_thickness</span><span class="o">=</span><span class="n">slice_thickness</span><span class="p">,</span>
+            <span class="n">exit_planes</span><span class="o">=</span><span class="n">exit_planes</span><span class="p">,</span>
+            <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+            <span class="n">plane</span><span class="o">=</span><span class="n">plane</span><span class="p">,</span>
+            <span class="n">origin</span><span class="o">=</span><span class="n">origin</span><span class="p">,</span>
+            <span class="n">box</span><span class="o">=</span><span class="n">box</span><span class="p">,</span>
+            <span class="n">periodic</span><span class="o">=</span><span class="n">periodic</span><span class="p">,</span>
+        <span class="p">)</span></div>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">frozen_phonons</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_frozen_phonons</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">repetitions</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_repetitions</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">gridrefinement</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_gridrefinement</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">calculators</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_calculators</span>
+
+    <span class="k">def</span> <span class="nf">_get_all_electron_density</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+
+        <span class="n">calculator</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">calculators</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">calculators</span><span class="p">,</span> <span class="nb">list</span><span class="p">)</span>
+            <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">calculators</span>
+        <span class="p">)</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">calculator</span> <span class="o">=</span> <span class="n">calculator</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
+        <span class="k">except</span> <span class="ne">AttributeError</span><span class="p">:</span>
+            <span class="k">pass</span>
+
+        <span class="c1"># assert len(self.calculators) == 1</span>
+
+        <span class="n">calculator</span> <span class="o">=</span> <span class="n">_DummyGPAW</span><span class="o">.</span><span class="n">from_generic</span><span class="p">(</span><span class="n">calculator</span><span class="p">)</span>
+        <span class="n">atoms</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="o">.</span><span class="n">atoms</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">repetitions</span> <span class="o">!=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">):</span>
+            <span class="n">cell_cv</span> <span class="o">=</span> <span class="n">calculator</span><span class="o">.</span><span class="n">gd</span><span class="o">.</span><span class="n">cell_cv</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">repetitions</span>
+            <span class="n">N_c</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span>
+                <span class="n">n_c</span> <span class="o">*</span> <span class="n">rep</span> <span class="k">for</span> <span class="n">n_c</span><span class="p">,</span> <span class="n">rep</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">calculator</span><span class="o">.</span><span class="n">gd</span><span class="o">.</span><span class="n">N_c</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">repetitions</span><span class="p">)</span>
+            <span class="p">)</span>
+            <span class="n">gd</span> <span class="o">=</span> <span class="n">calculator</span><span class="o">.</span><span class="n">gd</span><span class="o">.</span><span class="n">new_descriptor</span><span class="p">(</span><span class="n">N_c</span><span class="o">=</span><span class="n">N_c</span><span class="p">,</span> <span class="n">cell_cv</span><span class="o">=</span><span class="n">cell_cv</span><span class="p">)</span>
+            <span class="n">atoms</span> <span class="o">=</span> <span class="n">atoms</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">repetitions</span>
+            <span class="n">nt_sG</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">tile</span><span class="p">(</span><span class="n">calculator</span><span class="o">.</span><span class="n">nt_sG</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">repetitions</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">gd</span> <span class="o">=</span> <span class="n">calculator</span><span class="o">.</span><span class="n">gd</span>
+            <span class="n">nt_sG</span> <span class="o">=</span> <span class="n">calculator</span><span class="o">.</span><span class="n">nt_sG</span>
+
+        <span class="c1"># gridrefinement = self.gridrefinement</span>
+        <span class="c1"># if np.isscalar(self.gridrefinement):</span>
+        <span class="c1">#    gridrefinement = (gridrefinement,) * 3</span>
+
+        <span class="c1"># if not all([r == 1 for r in gridrefinement]):</span>
+        <span class="c1">#    cell_cv = gd.cell_cv</span>
+        <span class="c1">#    N_c = tuple(n_c * r for n_c, r in zip(gd.N_c, gridrefinement))</span>
+        <span class="c1">#    nt_sG = fft_interpolate(nt_sG, new_shape=N_c).astype(np.float64)</span>
+        <span class="c1">#    gd = gd.new_descriptor(N_c=N_c, cell_cv=cell_cv)</span>
+
+        <span class="n">random_atoms</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="o">.</span><span class="n">randomize</span><span class="p">(</span><span class="n">atoms</span><span class="p">)</span>
+
+        <span class="n">gpaw</span> <span class="o">=</span> <span class="n">GPAW</span><span class="p">(</span><span class="n">txt</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="n">calculator</span><span class="o">.</span><span class="n">setup_mode</span><span class="p">,</span> <span class="n">xc</span><span class="o">=</span><span class="n">calculator</span><span class="o">.</span><span class="n">setup_xc</span><span class="p">)</span>
+        <span class="n">gpaw</span><span class="o">.</span><span class="n">initialize</span><span class="p">(</span><span class="n">random_atoms</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">_get_all_electron_density</span><span class="p">(</span>
+            <span class="n">nt_sG</span><span class="o">=</span><span class="n">nt_sG</span><span class="p">,</span>
+            <span class="n">gd</span><span class="o">=</span><span class="n">gd</span><span class="p">,</span>
+            <span class="n">D_asp</span><span class="o">=</span><span class="n">calculator</span><span class="o">.</span><span class="n">D_asp</span><span class="p">,</span>
+            <span class="n">setups</span><span class="o">=</span><span class="n">gpaw</span><span class="o">.</span><span class="n">setups</span><span class="p">,</span>
+            <span class="n">gridrefinement</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gridrefinement</span><span class="p">,</span>
+            <span class="n">atoms</span><span class="o">=</span><span class="n">random_atoms</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">generate_slices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">last_slice</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">last_slice</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+
+        <span class="n">atoms</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="o">.</span><span class="n">atoms</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">repetitions</span>
+        <span class="n">random_atoms</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="o">.</span><span class="n">randomize</span><span class="p">(</span><span class="n">atoms</span><span class="p">)</span>
+
+        <span class="n">ewald_parametrization</span> <span class="o">=</span> <span class="n">EwaldParametrization</span><span class="p">(</span><span class="n">width</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+        <span class="n">ewald_potential</span> <span class="o">=</span> <span class="n">Potential</span><span class="p">(</span>
+            <span class="n">atoms</span><span class="o">=</span><span class="n">random_atoms</span><span class="p">,</span>
+            <span class="n">gpts</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gpts</span><span class="p">,</span>
+            <span class="n">sampling</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sampling</span><span class="p">,</span>
+            <span class="n">parametrization</span><span class="o">=</span><span class="n">ewald_parametrization</span><span class="p">,</span>
+            <span class="n">slice_thickness</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">slice_thickness</span><span class="p">,</span>
+            <span class="n">projection</span><span class="o">=</span><span class="s2">&quot;finite&quot;</span><span class="p">,</span>
+            <span class="n">integral_method</span><span class="o">=</span><span class="s2">&quot;quadrature&quot;</span><span class="p">,</span>
+            <span class="n">plane</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">plane</span><span class="p">,</span>
+            <span class="n">box</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">box</span><span class="p">,</span>
+            <span class="n">origin</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">origin</span><span class="p">,</span>
+            <span class="n">exit_planes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">exit_planes</span><span class="p">,</span>
+            <span class="n">device</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_all_electron_density</span><span class="p">()</span>
+
+        <span class="k">for</span> <span class="n">slic</span> <span class="ow">in</span> <span class="n">_generate_slices</span><span class="p">(</span>
+            <span class="n">array</span><span class="p">,</span> <span class="n">ewald_potential</span><span class="p">,</span> <span class="n">first_slice</span><span class="o">=</span><span class="n">first_slice</span><span class="p">,</span> <span class="n">last_slice</span><span class="o">=</span><span class="n">last_slice</span>
+        <span class="p">):</span>
+            <span class="k">yield</span> <span class="n">slic</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">ensemble_axes_metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">AxisMetadata</span><span class="p">]:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_frozen_phonons</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">num_frozen_phonons</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">calculators</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">ensemble_shape</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_frozen_phonons</span><span class="o">.</span><span class="n">ensemble_shape</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">_gpaw_potential</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="n">frozen_phonons_partial</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="n">args</span> <span class="o">=</span> <span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;item&quot;</span><span class="p">):</span>
+            <span class="n">args</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+
+        <span class="k">if</span> <span class="n">args</span><span class="p">[</span><span class="s2">&quot;frozen_phonons&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">frozen_phonons</span> <span class="o">=</span> <span class="n">frozen_phonons_partial</span><span class="p">(</span><span class="n">args</span><span class="p">[</span><span class="s2">&quot;frozen_phonons&quot;</span><span class="p">])</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">frozen_phonons</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="n">calculators</span> <span class="o">=</span> <span class="n">args</span><span class="p">[</span><span class="s2">&quot;calculators&quot;</span><span class="p">]</span>
+
+        <span class="k">return</span> <span class="n">GPAWPotential</span><span class="p">(</span><span class="n">calculators</span><span class="p">,</span> <span class="n">frozen_phonons</span><span class="o">=</span><span class="n">frozen_phonons</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_from_partitioned_args</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">kwargs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_copy_kwargs</span><span class="p">(</span><span class="n">exclude</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;calculators&quot;</span><span class="p">,</span> <span class="s2">&quot;frozen_phonons&quot;</span><span class="p">))</span>
+
+        <span class="n">frozen_phonons_partial</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="o">.</span><span class="n">_from_partitioned_args</span><span class="p">()</span>
+
+        <span class="k">return</span> <span class="n">partial</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_gpaw_potential</span><span class="p">,</span>
+            <span class="n">frozen_phonons_partial</span><span class="o">=</span><span class="n">frozen_phonons_partial</span><span class="p">,</span>
+            <span class="o">**</span><span class="n">kwargs</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_partition_args</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">chunks</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span> <span class="n">lazy</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">):</span>
+
+        <span class="n">chunks</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_validate_chunks</span><span class="p">(</span><span class="n">chunks</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">frozen_phonons</span><span class="p">(</span><span class="n">calculators</span><span class="p">,</span> <span class="n">frozen_phonons</span><span class="p">):</span>
+            <span class="n">arr</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">1</span><span class="p">,),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">object</span><span class="p">)</span>
+            <span class="n">arr</span><span class="o">.</span><span class="n">itemset</span><span class="p">(</span>
+                <span class="mi">0</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;calculators&quot;</span><span class="p">:</span> <span class="n">calculators</span><span class="p">,</span> <span class="s2">&quot;frozen_phonons&quot;</span><span class="p">:</span> <span class="n">frozen_phonons</span><span class="p">}</span>
+            <span class="p">)</span>
+            <span class="k">return</span> <span class="n">arr</span>
+
+        <span class="n">calculators</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">calculators</span>
+
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="p">,</span> <span class="n">FrozenPhonons</span><span class="p">):</span>
+            <span class="n">array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">object</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">fp</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="o">.</span><span class="n">_partition_args</span><span class="p">(</span><span class="n">chunks</span><span class="p">,</span> <span class="n">lazy</span><span class="o">=</span><span class="n">lazy</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="p">):</span>
+                <span class="k">if</span> <span class="n">lazy</span><span class="p">:</span>
+                    <span class="n">block</span> <span class="o">=</span> <span class="n">dask</span><span class="o">.</span><span class="n">delayed</span><span class="p">(</span><span class="n">frozen_phonons</span><span class="p">)(</span><span class="n">calculators</span><span class="p">,</span> <span class="n">fp</span><span class="p">)</span>
+
+                    <span class="n">array</span><span class="o">.</span><span class="n">itemset</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="n">da</span><span class="o">.</span><span class="n">from_delayed</span><span class="p">(</span><span class="n">block</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">object</span><span class="p">))</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">array</span><span class="o">.</span><span class="n">itemset</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="n">frozen_phonons</span><span class="p">(</span><span class="n">calculators</span><span class="p">,</span> <span class="n">fp</span><span class="p">))</span>
+
+            <span class="k">if</span> <span class="n">lazy</span><span class="p">:</span>
+                <span class="n">array</span> <span class="o">=</span> <span class="n">da</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">array</span><span class="p">))</span>
+
+            <span class="k">return</span> <span class="p">(</span><span class="n">array</span><span class="p">,)</span>
+
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">1</span><span class="p">,),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">object</span><span class="p">)</span>
+                <span class="n">calculators</span> <span class="o">=</span> <span class="p">[</span><span class="n">calculators</span><span class="p">]</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">object</span><span class="p">)</span>
+
+            <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">calculator</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">calculators</span><span class="p">):</span>
+
+                <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                    <span class="n">calculator</span> <span class="o">=</span> <span class="p">[</span><span class="n">calculator</span><span class="p">]</span>
+
+                <span class="k">if</span> <span class="n">lazy</span><span class="p">:</span>
+                    <span class="n">calculator</span> <span class="o">=</span> <span class="n">dask</span><span class="o">.</span><span class="n">delayed</span><span class="p">(</span><span class="n">calculator</span><span class="p">)</span>
+                    <span class="n">block</span> <span class="o">=</span> <span class="n">da</span><span class="o">.</span><span class="n">from_delayed</span><span class="p">(</span>
+                        <span class="n">dask</span><span class="o">.</span><span class="n">delayed</span><span class="p">(</span><span class="n">frozen_phonons</span><span class="p">)(</span><span class="n">calculator</span><span class="p">,</span> <span class="kc">None</span><span class="p">),</span>
+                        <span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,),</span>
+                        <span class="n">dtype</span><span class="o">=</span><span class="nb">object</span><span class="p">,</span>
+                    <span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">block</span> <span class="o">=</span> <span class="n">frozen_phonons</span><span class="p">(</span><span class="n">calculator</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+                <span class="n">array</span><span class="o">.</span><span class="n">itemset</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="n">block</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">lazy</span><span class="p">:</span>
+                <span class="k">return</span> <span class="p">(</span><span class="n">da</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">array</span><span class="p">)),)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">return</span> <span class="p">(</span><span class="n">array</span><span class="p">,)</span></div>
+
+
+<span class="k">class</span> <span class="nc">_GPAWParametrization</span><span class="p">:</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_potential_functions</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="k">def</span> <span class="nf">_get_added_electrons</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">symbol</span><span class="p">,</span> <span class="n">charge</span><span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">charge</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">[]</span>
+
+        <span class="n">charge</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sign</span><span class="p">(</span><span class="n">charge</span><span class="p">)</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">charge</span><span class="p">))</span>
+
+        <span class="n">number</span> <span class="o">=</span> <span class="n">atomic_numbers</span><span class="p">[</span><span class="n">symbol</span><span class="p">]</span>
+        <span class="n">config</span> <span class="o">=</span> <span class="n">config_str_to_config_tuples</span><span class="p">(</span>
+            <span class="n">electron_configurations</span><span class="p">[</span><span class="n">chemical_symbols</span><span class="p">[</span><span class="n">number</span><span class="p">]]</span>
+        <span class="p">)</span>
+        <span class="n">ionic_config</span> <span class="o">=</span> <span class="n">config_str_to_config_tuples</span><span class="p">(</span>
+            <span class="n">electron_configurations</span><span class="p">[</span><span class="n">chemical_symbols</span><span class="p">[</span><span class="n">number</span> <span class="o">-</span> <span class="n">charge</span><span class="p">]]</span>
+        <span class="p">)</span>
+
+        <span class="n">config</span> <span class="o">=</span> <span class="n">defaultdict</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="p">{</span><span class="n">shell</span><span class="p">[:</span><span class="mi">2</span><span class="p">]:</span> <span class="n">shell</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="k">for</span> <span class="n">shell</span> <span class="ow">in</span> <span class="n">config</span><span class="p">})</span>
+        <span class="n">ionic_config</span> <span class="o">=</span> <span class="n">defaultdict</span><span class="p">(</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="p">{</span><span class="n">shell</span><span class="p">[:</span><span class="mi">2</span><span class="p">]:</span> <span class="n">shell</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="k">for</span> <span class="n">shell</span> <span class="ow">in</span> <span class="n">ionic_config</span><span class="p">}</span>
+        <span class="p">)</span>
+
+        <span class="n">electrons</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="nb">set</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span><span class="o">.</span><span class="n">union</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">ionic_config</span><span class="o">.</span><span class="n">keys</span><span class="p">())):</span>
+
+            <span class="n">difference</span> <span class="o">=</span> <span class="n">config</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">-</span> <span class="n">ionic_config</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
+
+            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">difference</span><span class="p">)):</span>
+                <span class="n">electrons</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">key</span> <span class="o">+</span> <span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sign</span><span class="p">(</span><span class="n">difference</span><span class="p">),))</span>
+        <span class="k">return</span> <span class="n">electrons</span>
+
+    <span class="k">def</span> <span class="nf">_get_all_electron_atom</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">symbol</span><span class="p">,</span> <span class="n">charge</span><span class="o">=</span><span class="mf">0.0</span><span class="p">):</span>
+
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">devnull</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">,</span> <span class="n">contextlib</span><span class="o">.</span><span class="n">redirect_stdout</span><span class="p">(</span><span class="n">f</span><span class="p">):</span>
+            <span class="n">ae</span> <span class="o">=</span> <span class="n">AllElectronAtom</span><span class="p">(</span><span class="n">symbol</span><span class="p">,</span> <span class="n">spinpol</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">xc</span><span class="o">=</span><span class="s2">&quot;PBE&quot;</span><span class="p">)</span>
+
+            <span class="n">added_electrons</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_added_electrons</span><span class="p">(</span><span class="n">symbol</span><span class="p">,</span> <span class="n">charge</span><span class="p">)</span>
+            <span class="c1">#     for added_electron in added_electrons:</span>
+            <span class="c1">#         ae.add(*added_electron[:2], added_electron[-1])</span>
+            <span class="c1"># # ae.run()</span>
+            <span class="c1"># ae.run(mix=0.005, maxiter=5000, dnmax=1e-5)</span>
+            <span class="n">ae</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
+            <span class="n">ae</span><span class="o">.</span><span class="n">refine</span><span class="p">()</span>
+
+        <span class="k">return</span> <span class="n">ae</span>
+
+        <span class="c1"># vr_e = interp1d(radial_coord, electron_potential, fill_value=&#39;extrapolate&#39;, bounds_error=False)</span>
+        <span class="c1"># vr = lambda r: atomic_numbers[symbol] / r / (4 * np.pi * eps0) + vr_e(r) / r * units.Hartree * units.Bohr</span>
+
+    <span class="k">def</span> <span class="nf">charge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">symbol</span><span class="p">,</span> <span class="n">charge</span><span class="o">=</span><span class="mf">0.0</span><span class="p">):</span>
+        <span class="n">ae</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_all_electron_atom</span><span class="p">(</span><span class="n">symbol</span><span class="p">,</span> <span class="n">charge</span><span class="p">)</span>
+        <span class="n">r</span> <span class="o">=</span> <span class="n">ae</span><span class="o">.</span><span class="n">rgd</span><span class="o">.</span><span class="n">r_g</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span>
+        <span class="n">n</span> <span class="o">=</span> <span class="n">ae</span><span class="o">.</span><span class="n">n_sg</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">/</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span> <span class="o">**</span> <span class="mi">3</span>
+        <span class="k">return</span> <span class="n">interp1d</span><span class="p">(</span><span class="n">r</span><span class="p">,</span> <span class="n">n</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="s2">&quot;extrapolate&quot;</span><span class="p">,</span> <span class="n">bounds_error</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">potential</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">symbol</span><span class="p">,</span> <span class="n">charge</span><span class="o">=</span><span class="mf">0.0</span><span class="p">):</span>
+        <span class="n">ae</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_all_electron_atom</span><span class="p">(</span><span class="n">symbol</span><span class="p">,</span> <span class="n">charge</span><span class="p">)</span>
+        <span class="n">r</span> <span class="o">=</span> <span class="n">ae</span><span class="o">.</span><span class="n">rgd</span><span class="o">.</span><span class="n">r_g</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span>
+        <span class="c1"># n = ae.n_sg.sum(0) / units.Bohr ** 3</span>
+
+        <span class="n">ve</span> <span class="o">=</span> <span class="o">-</span><span class="n">ae</span><span class="o">.</span><span class="n">rgd</span><span class="o">.</span><span class="n">poisson</span><span class="p">(</span><span class="n">ae</span><span class="o">.</span><span class="n">n_sg</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
+        <span class="n">ve</span> <span class="o">=</span> <span class="n">interp1d</span><span class="p">(</span><span class="n">r</span><span class="p">,</span> <span class="n">ve</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="s2">&quot;extrapolate&quot;</span><span class="p">,</span> <span class="n">bounds_error</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="c1"># electron_potential = -ae.rgd.poisson(ae.n_sg.sum(0))</span>
+
+        <span class="n">vr</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="k">lambda</span> <span class="n">r</span><span class="p">:</span> <span class="n">atomic_numbers</span><span class="p">[</span><span class="n">symbol</span><span class="p">]</span> <span class="o">/</span> <span class="n">r</span> <span class="o">/</span> <span class="p">(</span><span class="mi">4</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">eps0</span><span class="p">)</span>
+            <span class="o">+</span> <span class="n">ve</span><span class="p">(</span><span class="n">r</span><span class="p">)</span> <span class="o">/</span> <span class="n">r</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Hartree</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="n">vr</span>
+
+    <span class="c1"># def get_function(self, symbol, charge=0.):</span>
+    <span class="c1">#     #if symbol in self._potential_functions.keys():</span>
+    <span class="c1">#     #    return self._potential_functions[(symbol, charge)]</span>
+    <span class="c1">#</span>
+    <span class="c1">#</span>
+    <span class="c1">#</span>
+    <span class="c1">#     self._potential_functions[(symbol, charge)] = vr</span>
+    <span class="c1">#     return self._potential_functions[(symbol, charge)]</span>
+    <span class="c1">#</span>
+    <span class="c1"># def potential(self, r, symbol, charge=0.):</span>
+    <span class="c1">#     potential = self._calculate(symbol, charge)</span>
+    <span class="c1">#     return potential(r)</span>
+</pre></div>
+
+              </div>
+              
+            </main>
+            <footer class="footer-article noprint">
+                
+    <!-- Previous / next buttons -->
+<div class='prev-next-area'>
+</div>
+            </footer>
+        </div>
+    </div>
+    <div class="footer-content row">
+        <footer class="col footer"><p>
+  
+    By The abTEM developers<br/>
+  
+      &copy; Copyright 2022.<br/>
+</p>
+        </footer>
+    </div>
+    
+</div>
+
+
+      </div>
+    </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script src="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
+
+
+  </body>
+</html>

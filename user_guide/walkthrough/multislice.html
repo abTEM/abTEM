@@ -51,6 +51,8 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -209,7 +211,7 @@ const thebe_selector_output = ".output, .cell_output"
    </li>
    <li class="toctree-l2">
     <a class="reference internal" href="performance.html">
-     Parallelization, Dask and GPUs
+     Parallelization and Dask
     </a>
    </li>
    <li class="toctree-l2">
@@ -306,7 +308,7 @@ const thebe_selector_output = ".output, .cell_output"
   </label>
   <ul>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/waves.html">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.html">
      waves
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
@@ -316,30 +318,30 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.Probe.html">
-       Probe
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.BaseWaves.html">
+       BaseWaves
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.PlaneWave.html">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.PlaneWave.html">
        PlaneWave
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.core.Waves.html">
-       Waves
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.Probe.html">
+       Probe
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.transfer.WaveTransform.html">
-       WaveTransform
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.Waves.html">
+       Waves
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/measure.html">
-     measurements
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.html">
+     potentials
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/>
     <label for="toctree-checkbox-6">
@@ -348,13 +350,508 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.core.Measurement.html">
-       Measurement
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.BasePotential.html">
+       BasePotential
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.detectors.Detector.html">
-       Detector
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.CrystalPotential.html">
+       CrystalPotential
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.Potential.html">
+       Potential
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.PotentialArray.html">
+       PotentialArray
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.TransmissionFunction.html">
+       TransmissionFunction
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.html">
+     scan
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" type="checkbox"/>
+    <label for="toctree-checkbox-7">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.BaseScan.html">
+       BaseScan
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.CustomScan.html">
+       CustomScan
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.GridScan.html">
+       GridScan
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.LineScan.html">
+       LineScan
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.SourceOffset.html">
+       SourceOffset
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.html">
+     detectors
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" type="checkbox"/>
+    <label for="toctree-checkbox-8">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.validate_detectors.html">
+       validate_detectors
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html">
+       AbstractRadialDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
+       AnnularDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.BaseDetector.html">
+       BaseDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.FlexibleAnnularDetector.html">
+       FlexibleAnnularDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.PixelatedDetector.html">
+       PixelatedDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.SegmentedDetector.html">
+       SegmentedDetector
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.WavesDetector.html">
+       WavesDetector
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.html">
+     measurements
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" type="checkbox"/>
+    <label for="toctree-checkbox-9">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html">
+       BaseMeasurement
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.DiffractionPatterns.html">
+       DiffractionPatterns
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html">
+       FourierSpaceLineProfiles
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.Images.html">
+       Images
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.PolarMeasurements.html">
+       PolarMeasurements
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html">
+       RealSpaceLineProfiles
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html">
+       SinglePointMeasurement
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.html">
+     transfer
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" type="checkbox"/>
+    <label for="toctree-checkbox-10">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.cartesian2polar.html">
+       cartesian2polar
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.nyquist_sampling.html">
+       nyquist_sampling
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.point_resolution.html">
+       point_resolution
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.polar2cartesian.html">
+       polar2cartesian
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.scherzer_defocus.html">
+       scherzer_defocus
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Aberrations.html">
+       Aberrations
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Aperture.html">
+       Aperture
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.BaseAperture.html">
+       BaseAperture
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Bullseye.html">
+       Bullseye
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.CTF.html">
+       CTF
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.SpatialEnvelope.html">
+       SpatialEnvelope
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.TemporalEnvelope.html">
+       TemporalEnvelope
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Vortex.html">
+       Vortex
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.html">
+     distributions
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" type="checkbox"/>
+    <label for="toctree-checkbox-11">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.from_values.html">
+       from_values
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.gaussian.html">
+       gaussian
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.uniform.html">
+       uniform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
+       AxisAlignedDistributionND
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
+       BaseDistribution
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.DistributionFromValues.html">
+       DistributionFromValues
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.html">
+     charge_density
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" type="checkbox"/>
+    <label for="toctree-checkbox-12">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.add_point_charges_fourier.html">
+       add_point_charges_fourier
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.integrate_gradient_fourier.html">
+       integrate_gradient_fourier
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.ChargeDensityPotential.html">
+       ChargeDensityPotential
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.html">
+     gpaw
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" type="checkbox"/>
+    <label for="toctree-checkbox-13">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html">
+       GPAWPotential
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.html">
+     visualize
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" type="checkbox"/>
+    <label for="toctree-checkbox-14">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.plot_diffraction_pattern.html">
+       plot_diffraction_pattern
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_atoms.html">
+       show_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_measurement_2d.html">
+       show_measurement_2d
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_measurements_1d.html">
+       show_measurements_1d
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.html">
+     atoms
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" type="checkbox"/>
+    <label for="toctree-checkbox-15">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.atoms_in_cell.html">
+       atoms_in_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_box.html">
+       best_orthogonal_box
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_box.html">
+       cut_box
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.decompose_affine_transform.html">
+       decompose_affine_transform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.flip_atoms.html">
+       flip_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_hexagonal.html">
+       is_cell_hexagonal
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_orthogonal.html">
+       is_cell_orthogonal
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_valid.html">
+       is_cell_valid
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.merge_close_atoms.html">
+       merge_close_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.orthogonalize_cell.html">
+       orthogonalize_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.pad_atoms.html">
+       pad_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.plane_to_axes.html">
+       plane_to_axes
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.pretty_print_transform.html">
+       pretty_print_transform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotate_atoms_to_plane.html">
+       rotate_atoms_to_plane
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotation_matrix_from_plane.html">
+       rotation_matrix_from_plane
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotation_matrix_to_euler.html">
+       rotation_matrix_to_euler
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.shrink_cell.html">
+       shrink_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.standardize_cell.html">
+       standardize_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.wrap_with_tolerance.html">
+       wrap_with_tolerance
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.html">
+     multislice
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" type="checkbox"/>
+    <label for="toctree-checkbox-16">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
+       allocate_multislice_measurements
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.fresnel_propagator.html">
+       fresnel_propagator
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
+       multislice_and_detect
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_step.html">
+       multislice_step
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.tilt_shift.html">
+       tilt_shift
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.FresnelPropagator.html">
+       FresnelPropagator
       </a>
      </li>
     </ul>
@@ -600,6 +1097,11 @@ title="Print to PDF"
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#writing-exit-wave-functions">
+   Writing exit wave functions
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#thickness-series">
    Thickness series
   </a>
@@ -663,6 +1165,11 @@ title="Print to PDF"
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#writing-exit-wave-functions">
+   Writing exit wave functions
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#thickness-series">
    Thickness series
   </a>
@@ -710,9 +1217,9 @@ title="Print to PDF"
 <span class="o">%</span><span class="k">matplotlib</span> inline
 
 <span class="kn">import</span> <span class="nn">abtem</span>
+<span class="kn">import</span> <span class="nn">ase</span>
 <span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 <span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
-<span class="kn">from</span> <span class="nn">ase.build</span> <span class="kn">import</span> <span class="n">bulk</span><span class="p">,</span> <span class="n">surface</span>
 
 <span class="n">abtem</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">set</span><span class="p">({</span><span class="s2">&quot;local_diagnostics.progress_bar&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">});</span>
 </pre></div>
@@ -720,11 +1227,11 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="multislice-simulations">
-<span id="getting-started-user-guide-multislice"></span><h1>Multislice simulations<a class="headerlink" href="#multislice-simulations" title="Permalink to this heading">#</a></h1>
-<p>In the <a class="reference internal" href="potentials.html#getting-started-user-guide-potentials"><span class="std std-ref">introduction to potentials</span></a>, we described how to integrate the potential into a series of thin slices <span class="math notranslate nohighlight">\(V_n\)</span> along the optical axis (see <a class="reference internal" href="potentials.html#equation-eq-potentials-slice">(1)</a>). Given a wave function representing fast electrons at the entrance of the <span class="math notranslate nohighlight">\(n\)</span>’th slice, <span class="math notranslate nohighlight">\(\phi_n(\vec{r})\)</span>, the wave function at exit of that slice may be written as</p>
+<span id="walkthrough-multislice"></span><h1>Multislice simulations<a class="headerlink" href="#multislice-simulations" title="Permalink to this heading">#</a></h1>
+<p>In the <a class="reference internal" href="potentials.html#walkthrough-potentials"><span class="std std-ref">walkthrough on potentials</span></a>, we describe how to integrate the potential into a series of thin slices <span class="math notranslate nohighlight">\(V_n\)</span> along the optical axis (see <a class="reference internal" href="potentials.html#equation-eq-potentials-slice">(1)</a>). Given a wave function representing fast electrons at the entrance of the <span class="math notranslate nohighlight">\(n\)</span>’th slice, <span class="math notranslate nohighlight">\(\psi_n(\vec{r})\)</span>, the wave function at exit of that slice may be written as</p>
 <div class="math notranslate nohighlight" id="equation-eq-getting-started-user-guide-multislice-multislice">
 <span class="eqno">(2)<a class="headerlink" href="#equation-eq-getting-started-user-guide-multislice-multislice" title="Permalink to this equation">#</a></span>\[
-    \phi_{n + 1}(\vec{r}) = p(\vec{r}) * \left[t_n(\vec{r}) \phi_n(\vec{r}) \right]
+    \psi_{n + 1}(\vec{r}) = p(\vec{r}) * \left[t_n(\vec{r}) \psi_n(\vec{r}) \right]
 \]</div>
 <p>where</p>
 <div class="math notranslate nohighlight">
@@ -739,7 +1246,7 @@ title="Print to PDF"
 <p>is the transmission function which applies a phase shift proportional to the magnitude of the potential, the proportionality constant, <span class="math notranslate nohighlight">\(\sigma\)</span>, is called the interaction constant. Using the Fourier convolution theorem, we can write Eq. <a class="reference internal" href="#equation-eq-getting-started-user-guide-multislice-multislice">(2)</a> as</p>
 <div class="math notranslate nohighlight">
 \[
-    \phi_{n+1}(\vec{r}) = \mathcal{F}^{-1} \left\{P(\vec{k}) \ \mathcal{F}\left[t(\vec{r}) \phi_n(\vec{r})\right] \right\}  := \mathcal{M}_n \phi_n(\vec{r}) \quad ,
+    \psi_{n+1}(\vec{r}) = \mathcal{F}^{-1} \left\{P(\vec{k}) \ \mathcal{F}\left[t(\vec{r}) \psi_n(\vec{r})\right] \right\}  := \mathcal{M}_n \phi_n(\vec{r}) \quad ,
 \]</div>
 <p>where</p>
 <div class="math notranslate nohighlight">
@@ -748,9 +1255,9 @@ title="Print to PDF"
 \]</div>
 <p>is the Fresnel free space propagator in Fourier space and <span class="math notranslate nohighlight">\(\mathcal{F}\)</span> and <span class="math notranslate nohighlight">\(\mathcal{F}^{-1}\)</span> is the Fourier transform and its inverse, respectively.</p>
 <p>For brevity we have defined a multislice operator, <span class="math notranslate nohighlight">\(\mathcal{M}_n\)</span>, acting on a wave function to step it forward through the <span class="math notranslate nohighlight">\(n\)</span>’th slice. Thus given an initial wave function <span class="math notranslate nohighlight">\(\phi_0\)</span>, we can obtain the exit wave function for a potential with slice indices <span class="math notranslate nohighlight">\(n=0,1,\ldots N\)</span> by sequentially applying these operators</p>
-<div class="math notranslate nohighlight">
-\[
-    \phi_{exit}(\vec{r}) := \phi_{N}(\vec{r}) = \mathcal{M}_N \mathcal{M}_{N-1} \ldots \mathcal{M}_{0} \phi_0(\vec{r}) \quad .
+<div class="math notranslate nohighlight" id="equation-eq-getting-started-user-guide-multislice-multislice-symbol">
+<span class="eqno">(3)<a class="headerlink" href="#equation-eq-getting-started-user-guide-multislice-multislice-symbol" title="Permalink to this equation">#</a></span>\[
+    \psi_{exit}(\vec{r}) := \psi_{N}(\vec{r}) = \mathcal{M}_N \mathcal{M}_{N-1} \ldots \mathcal{M}_{0} \psi_0(\vec{r}) \quad .
 \]</div>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>
@@ -761,9 +1268,9 @@ title="Print to PDF"
 <p>Below we create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> representing gold in the <span class="math notranslate nohighlight">\(\left&lt;100\right&gt;\)</span> zone axis and use a <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> as the initial wave function.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">bulk</span><span class="p">(</span><span class="s2">&quot;Au&quot;</span><span class="p">,</span> <span class="n">cubic</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">35</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">ase</span><span class="o">.</span><span class="n">build</span><span class="o">.</span><span class="n">bulk</span><span class="p">(</span><span class="s2">&quot;Au&quot;</span><span class="p">,</span> <span class="n">cubic</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">35</span><span class="p">)</span>
 
-<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">show_periodic</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mf">0.9</span><span class="p">);</span>
+<span class="n">abtem</span><span class="o">.</span><span class="n">show_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mf">0.9</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
@@ -780,7 +1287,7 @@ title="Print to PDF"
 </div>
 </div>
 </div>
-<p>We create a task graph for running the multislice algorithm by calling <code class="docutils literal notranslate"><span class="pre">multislice</span></code> producing an exit wave function.</p>
+<p>We set up our calculation by calling <code class="docutils literal notranslate"><span class="pre">multislice</span></code> producing an exit wave function.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave</span> <span class="o">=</span> <span class="n">plane_wave</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
@@ -788,7 +1295,7 @@ title="Print to PDF"
 </div>
 </div>
 </div>
-<p>To execute the task graph, we call <code class="docutils literal notranslate"><span class="pre">compute</span></code>.</p>
+<p>To execute the simulation we call <code class="docutils literal notranslate"><span class="pre">compute</span></code>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave</span><span class="o">.</span><span class="n">compute</span><span class="p">();</span>
@@ -811,7 +1318,7 @@ title="Print to PDF"
 <img alt="../../_images/multislice_10_0.png" src="../../_images/multislice_10_0.png" />
 </div>
 </div>
-<p>In HRTEM experiments, the wave function have to be magnified by an objective lens which introduces aberrations and cuts off large scattering angles. See more in our introduction to the contrast transfer function.</p>
+<p>In HRTEM experiments the wave function have to be magnified by an objective lens which introduces aberrations and effectively cuts off large scattering angles. See more in our <span class="xref myst">introduction to the contrast transfer function</span>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave</span><span class="o">.</span><span class="n">apply_ctf</span><span class="p">(</span><span class="n">defocus</span><span class="o">=-</span><span class="mi">50</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
@@ -827,7 +1334,7 @@ title="Print to PDF"
 <p>Below we obtain the <code class="docutils literal notranslate"><span class="pre">DiffractionPatterns</span></code> simulating a <a class="reference external" href="https://en.wikipedia.org/wiki/Selected_area_diffraction">selected area diffraction (SAD)</a> experiment. We use <code class="docutils literal notranslate"><span class="pre">block_direct=True</span></code> to block the direct beam. The direct beam typically has a much higher intensity than the scattered beams, thus it is typically not possible to show the direct spot on the same scale as the scattered spots.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_patterns</span> <span class="o">=</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">block_direct</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">max_angle</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">parity</span><span class="o">=</span><span class="s2">&quot;odd&quot;</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_patterns</span> <span class="o">=</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">block_direct</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">max_angle</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
 <span class="n">diffraction_patterns</span><span class="o">.</span><span class="n">show</span><span class="p">();</span>
 </pre></div>
 </div>
@@ -836,35 +1343,36 @@ title="Print to PDF"
 <img alt="../../_images/multislice_14_0.png" src="../../_images/multislice_14_0.png" />
 </div>
 </div>
-<p>The diffraction spots looks like squares. This is because the incoming wave function is a periodic and effectively infinite plane wave, hence the diffraction spots are points with no size. However, we are discretizing the wave function on a square grid (i.e. pixels), hence the spots can only be as small as single pixels. In real SAD experiments, the spot size is fundamentally broadened due to the finite extent of the crystal as well experimental factors.</p>
-<p><em>abTEM</em> provides the <code class="docutils literal notranslate"><span class="pre">plot_diffraction_pattern</span></code> function as an alternative for visualizing SAD patterns, producing a visualization that corresponds closer with typical textbook illustrations. The function allows overlaying the indexed diffraction spots. The cell edges of the conventional unit cell have to be provided in order to index the pattern.</p>
+<p>The diffraction spots looks like squares. This is because the incoming wave function is a periodic and infinite plane wave, hence the diffraction spots are points with no size. However, we are discretizing the wave function on a square grid (i.e. pixels), hence the spots can only be as small as single pixels. In real SAD experiments, the spot size is broadened due to the finite extent of the crystal as well experimental details.</p>
+<p>We can use <code class="docutils literal notranslate"><span class="pre">index_diffraction_spots</span></code> to create a represent SAD patterns as a mapping of Miller indices to the intensity of the corresponding spot. The cell edges of the <em>conventional</em> unit cell have to be provided in order to index the pattern.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">abtem.visualize.mpl</span> <span class="kn">import</span> <span class="n">plot_diffraction_pattern</span>
-
-<span class="n">plot_diffraction_pattern</span><span class="p">(</span>
-    <span class="n">diffraction_patterns</span><span class="p">,</span> <span class="n">cell</span><span class="o">=</span><span class="mf">4.08</span><span class="p">,</span> <span class="n">spot_scale</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
-<span class="p">);</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">indexed</span> <span class="o">=</span> <span class="n">diffraction_patterns</span><span class="o">.</span><span class="n">index_diffraction_spots</span><span class="p">(</span><span class="n">cell</span><span class="o">=</span><span class="mf">4.08</span><span class="p">)</span>
+<span class="n">indexed</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/multislice_16_0.png" src="../../_images/multislice_16_0.png" />
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.core.indexing.IndexedDiffractionPatterns at 0x7f89498866d0&gt;
+</pre></div>
 </div>
 </div>
-<p>It is also possible to obtain a table of the intensity values of the indexed diffraction spots.</p>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">IndexedDiffractionPatterns</span></code> facilitates the creation of a visualization that corresponds closer with typical textbook illustrations overlaying the miller indices of the non-equivalent diffraction spots. We see that <span class="math notranslate nohighlight">\((100)\)</span> is extinguished, as is expected for a FCC crystal in the <span class="math notranslate nohighlight">\(\left&lt;100\right&gt;\)</span> zone axis.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">abtem.measurements.indexing</span> <span class="kn">import</span> <span class="n">tabulate_diffraction_pattern</span>
-
-<span class="n">table</span> <span class="o">=</span> <span class="n">tabulate_diffraction_pattern</span><span class="p">(</span>
-    <span class="n">diffraction_patterns</span><span class="p">,</span>
-    <span class="n">cell</span><span class="o">=</span><span class="mf">4.08</span><span class="p">,</span>
-    <span class="n">normalize</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-    <span class="n">return_data_frame</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-    <span class="n">spot_threshold</span><span class="o">=</span><span class="mf">0.001</span><span class="p">,</span>
-<span class="p">)</span>
-<span class="n">table</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">indexed</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">spot_scale</span><span class="o">=</span><span class="mi">2</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../_images/multislice_18_0.png" src="../../_images/multislice_18_0.png" />
+</div>
+</div>
+<p>It is also possible to obtain a table of the intensity values of the indexed diffraction spots. We have normalized the spot intensity to the most intense spot (not including the <span class="math notranslate nohighlight">\((000)\)</span>-spot) and only spots with an intensity of at least <span class="math notranslate nohighlight">\(1 \ \%\)</span> that are included.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">indexed</span><span class="o">.</span><span class="n">to_dataframe</span><span class="p">(</span><span class="n">normalize</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">intensity_threshold</span><span class="o">=</span><span class="mf">.01</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -889,14 +1397,9 @@ title="Print to PDF"
       <th></th>
       <th>200</th>
       <th>220</th>
-      <th>310</th>
-      <th>330</th>
       <th>400</th>
       <th>420</th>
       <th>440</th>
-      <th>510</th>
-      <th>530</th>
-      <th>550</th>
     </tr>
   </thead>
   <tbody>
@@ -904,52 +1407,58 @@ title="Print to PDF"
       <th>0</th>
       <td>0.452802</td>
       <td>1.0</td>
-      <td>0.004454</td>
-      <td>0.004658</td>
       <td>0.572662</td>
       <td>0.499753</td>
       <td>0.20015</td>
-      <td>0.006123</td>
-      <td>0.007601</td>
-      <td>0.004059</td>
     </tr>
   </tbody>
 </table>
 </div></div></div>
 </div>
-<p>We see that all the spots up to <span class="math notranslate nohighlight">\((200)\)</span> are extinguished, as is expected for a FCC crystal in the <span class="math notranslate nohighlight">\(\left&lt;100\right&gt;\)</span> zone axis. It may be slightly more surprising that <span class="math notranslate nohighlight">\((220)\)</span> spots have a higher intensity than the <span class="math notranslate nohighlight">\((200)\)</span> spots; this is due to dynamical scattering.</p>
+<p>It may be slightly surprising that <span class="math notranslate nohighlight">\((220)\)</span> spots have a higher intensity than the <span class="math notranslate nohighlight">\((200)\)</span> spots; this is due to dynamical scattering.</p>
 </section>
+</section>
+<section id="writing-exit-wave-functions">
+<h2>Writing exit wave functions<a class="headerlink" href="#writing-exit-wave-functions" title="Permalink to this heading">#</a></h2>
+<p>You can write exit wave function directly to disk, this will trigger the computation to run.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave</span> <span class="o">=</span> <span class="n">plane_wave</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
+
+<span class="n">exit_wave</span><span class="o">.</span><span class="n">to_zarr</span><span class="p">(</span><span class="s2">&quot;./data/exit_waves.zarr&quot;</span><span class="p">,</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>We read the wave function as below.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">imported_wave</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">from_zarr</span><span class="p">(</span><span class="s2">&quot;./data/exit_waves.zarr&quot;</span><span class="p">)</span>
+
+<span class="k">assert</span> <span class="n">imported_wave</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span> <span class="o">==</span> <span class="n">exit_wave</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+</div>
 </section>
 <section id="thickness-series">
 <h2>Thickness series<a class="headerlink" href="#thickness-series" title="Permalink to this heading">#</a></h2>
-<p><em>abTEM</em> allows us to obtain the wave function at intermediate steps of the multislice algorithm, thus allowing us to see how the wave function evolves as it passes through the potential. To create such a <em>thickness series</em> we set the <code class="docutils literal notranslate"><span class="pre">exit_planes</span></code> keyword, this may be given as a tuple of the slice indices, <span class="math notranslate nohighlight">\(n\)</span>, to return, or just a single integer to indicate the step between slice indices.</p>
-<p>Below we create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> as above but we set with <code class="docutils literal notranslate"><span class="pre">exit_planes=36</span></code>. When running the multislice simulation we obtain an <em>ensemble</em> of wave functions <span class="math notranslate nohighlight">\(\phi_n(\vec{r})\)</span> with <span class="math notranslate nohighlight">\(n=0,36,72,\ldots\)</span>.</p>
+<p>abTEM allows us to obtain the wave function at intermediate steps of the multislice algorithm, thus allowing us to see how the wave function evolves as it passes through the potential. To create such a <em>thickness series</em> we set the <code class="docutils literal notranslate"><span class="pre">exit_planes</span></code> keyword of the potential. <code class="docutils literal notranslate"><span class="pre">exit_planes</span></code> may be given as a tuple of slice indices at which to return the wave function or just a single integer to indicate the step between those slice indices.</p>
+<p>Below we create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> as above, however, we set <code class="docutils literal notranslate"><span class="pre">exit_planes=36</span></code>. When running the multislice simulation we obtain an <em>ensemble</em> of wave functions <span class="math notranslate nohighlight">\(\psi_n(\vec{r})\)</span> with <span class="math notranslate nohighlight">\(n=0,36,72,\ldots\)</span>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_series</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span>
     <span class="n">atoms</span><span class="p">,</span> <span class="n">slice_thickness</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.04</span><span class="p">,</span> <span class="n">exit_planes</span><span class="o">=</span><span class="mi">36</span>
 <span class="p">)</span>
 
-<span class="n">exit_wave_series</span> <span class="o">=</span> <span class="n">plane_wave</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">potential_series</span><span class="p">)</span>
+<span class="n">exit_wave_series</span> <span class="o">=</span> <span class="n">plane_wave</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">potential_series</span><span class="p">)</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
 
-<span class="n">exit_wave_series</span>
+<span class="n">exit_wave_series</span><span class="o">.</span><span class="n">shape</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.core.Waves object at 0x7fd224d9e8b0&gt;
--------------------------------------------------
-
-type           label    coordinates
--------------  -------  ---------------------
-ThicknessAxis  z [Å]    0.00 35.95 ... 142.80
-RealSpaceAxis  x [Å]    0.00 0.04 ... 4.04
-RealSpaceAxis  y [Å]    0.00 0.04 ... 4.04
-
-        bytes       shape          count     type
-------  ----------  -------------  --------  -------------
-array   406.41 kiB  (5, 102, 102)  4 tasks   complex64
-chunks  406.41 kiB  (5, 102, 102)  1 chunks  numpy.ndarray
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>(5, 102, 102)
 </pre></div>
 </div>
 </div>
@@ -969,13 +1478,15 @@ chunks  406.41 kiB  (5, 102, 102)  1 chunks  numpy.ndarray
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/multislice_23_0.png" src="../../_images/multislice_23_0.png" />
+<img alt="../../_images/multislice_29_0.png" src="../../_images/multislice_29_0.png" />
 </div>
 </div>
 <p>We can of course do the same with diffraction patterns.</p>
 <div class="cell tag_full-width docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave_series</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">block_direct</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">max_angle</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">parity</span><span class="o">=</span><span class="s2">&quot;odd&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave_series</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span>
+    <span class="n">block_direct</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">max_angle</span><span class="o">=</span><span class="mi">30</span>
+<span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
     <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
     <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
     <span class="n">common_color_scale</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
@@ -986,7 +1497,7 @@ chunks  406.41 kiB  (5, 102, 102)  1 chunks  numpy.ndarray
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/multislice_25_0.png" src="../../_images/multislice_25_0.png" />
+<img alt="../../_images/multislice_31_0.png" src="../../_images/multislice_31_0.png" />
 </div>
 </div>
 </section>
@@ -995,15 +1506,15 @@ chunks  406.41 kiB  (5, 102, 102)  1 chunks  numpy.ndarray
 <p>We create our initial wave function as a convergent electron beam with an energy of <span class="math notranslate nohighlight">\(200 \ \mathrm{keV}\)</span> and a convergence semiangle of <span class="math notranslate nohighlight">\(10 \ \mathrm{mrad}\)</span>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">probe</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">100e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mf">9.4</span><span class="p">,</span> <span class="n">taper</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">probe</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">100e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mf">9.4</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
 </div>
-<p>There are two additional considerations to take into when performing multislice simulations with probes: self-interaction errors and probe placement.</p>
+<p>There are two additional considerations to take into account when performing multislice simulations with probes: self-interaction errors and probe placement.</p>
 <section id="self-interaction">
 <h3>Self-interaction<a class="headerlink" href="#self-interaction" title="Permalink to this heading">#</a></h3>
-<p>Self-interaction errors happen when the probe overlaps with its periodic images. We see this happening below, the signs are that the probe does not have a circular symmetry, even though there are no non-symmetric aberrations.</p>
+<p>Self-interaction errors happen when the probe overlaps with its periodic images. We see this happening below, the clearest visual clue is that the probe does not have a circular symmetry, even though there are no non-symmetric aberrations.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">probe</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
@@ -1013,10 +1524,10 @@ chunks  406.41 kiB  (5, 102, 102)  1 chunks  numpy.ndarray
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/multislice_29_0.png" src="../../_images/multislice_29_0.png" />
+<img alt="../../_images/multislice_35_0.png" src="../../_images/multislice_35_0.png" />
 </div>
 </div>
-<p>We get rid of self-interaction by increasing the extent of the potential until the probe intensity is sufficiently small at the boundary. Note that the potential should be large enough so there is no periodic overlap at any slice of the multislice algorithm.</p>
+<p>We get rid of self-interaction by increasing the extent of the potential until the probe intensity is sufficiently small at the boundary. Note that this should be true at any slice of the potential when running the multislice algorithm.</p>
 <p>The potential may be extended by modifying the atoms, however, for crystals we can also use the <code class="docutils literal notranslate"><span class="pre">CrystalPotential</span></code>. Here we repeat the potential used above by <span class="math notranslate nohighlight">\(5\)</span> in and <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1034,13 +1545,13 @@ chunks  406.41 kiB  (5, 102, 102)  1 chunks  numpy.ndarray
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/multislice_33_0.png" src="../../_images/multislice_33_0.png" />
+<img alt="../../_images/multislice_39_0.png" src="../../_images/multislice_39_0.png" />
 </div>
 </div>
 </section>
 <section id="probe-position">
 <h3>Probe position<a class="headerlink" href="#probe-position" title="Permalink to this heading">#</a></h3>
-<p>Above, the probe was placed (by default) at the center of the potential, later we will learn how to scan the probe for STEM simulations. Here, we manually select a few positions.</p>
+<p>Above the probe was placed (by default) at the center of the potential, later we will learn how to scan the probe for STEM simulations. Here, we manually select a few positions.</p>
 <p>We create an array of <span class="math notranslate nohighlight">\(5\)</span> probe positions across the center of the potential.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1070,30 +1581,32 @@ chunks  406.41 kiB  (5, 102, 102)  1 chunks  numpy.ndarray
 <span class="p">)</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
 
 <span class="n">exit_wave_probe_positioned</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
-    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
+    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+    <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
 <span class="p">);</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/multislice_37_0.png" src="../../_images/multislice_37_0.png" />
+<img alt="../../_images/multislice_43_0.png" src="../../_images/multislice_43_0.png" />
 </div>
 </div>
 </section>
 <section id="convergent-beam-diffraction">
 <h3>Convergent beam diffraction<a class="headerlink" href="#convergent-beam-diffraction" title="Permalink to this heading">#</a></h3>
-<p>The convergent beam (electron) diffraction (CBED) pattern may be calculated in the same manner as the SAD pattern. Here we select the third probe position from the ensemble created above and calculate its diffraction pattern.</p>
+<p>The convergent beam (electron) diffraction (CBED) pattern may be calculated in the same manner as the SAD pattern. Here we select the third probe position by indexing the ensemble created above and calculate its diffraction pattern.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave_probe_positioned</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">();</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave_probe_positioned</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">();</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/multislice_39_0.png" src="../../_images/multislice_39_0.png" />
+<img alt="../../_images/multislice_45_0.png" src="../../_images/multislice_45_0.png" />
 </div>
 </div>
-<p>The diffraction pattern is rather pixelated, to improve Fourier space sampling we have repeat the potential even more. Below the potential is repeated by <span class="math notranslate nohighlight">\(15\)</span> in <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span>, thus improving the Fourier space sampling by a factor of <span class="math notranslate nohighlight">\(3\)</span>.</p>
+<p>The diffraction pattern is rather pixelated, improving Fourier space sampling is equivalent to tiling in real space. Below the potential is repeated by <span class="math notranslate nohighlight">\(15\)</span> in <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span>, thus improving the Fourier space sampling from above by a factor of <span class="math notranslate nohighlight">\(3\)</span>. We also set <code class="docutils literal notranslate"><span class="pre">exit_planes=36</span></code> to obtain a series of <span class="math notranslate nohighlight">\(5\)</span> exit waves.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_extra_tiled</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">CrystalPotential</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="p">(</span><span class="mi">15</span><span class="p">,</span> <span class="mi">15</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">exit_planes</span><span class="o">=</span><span class="mi">36</span><span class="p">)</span>
@@ -1107,13 +1620,15 @@ chunks  406.41 kiB  (5, 102, 102)  1 chunks  numpy.ndarray
 <div class="cell tag_full-width docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave_extra_tiled</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
-    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
+    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+    <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
 <span class="p">);</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/multislice_43_0.png" src="../../_images/multislice_43_0.png" />
+<img alt="../../_images/multislice_49_0.png" src="../../_images/multislice_49_0.png" />
 </div>
 </div>
 </section>
@@ -1123,14 +1638,14 @@ chunks  406.41 kiB  (5, 102, 102)  1 chunks  numpy.ndarray
 <p>Small amounts of beam tilt (or equivalently sample tilt) may be included by a small modification to the propagator function</p>
 <div class="math notranslate nohighlight">
 \[
-    P(\vec{k}) = \exp\left[-i \pi \lambda k^2 \Delta z + 2 \pi i \Delta z (k_x \tan\theta_x + k_y \tan\theta_y)\right]
+    P(\vec{k}) = \exp\left[-i \pi \lambda k^2 \Delta z + 2 \pi i \Delta z (k_x \tan\theta_x + k_y \tan\theta_y)\right] \quad ,
 \]</div>
 <p>where <span class="math notranslate nohighlight">\(\theta_x\)</span>, <span class="math notranslate nohighlight">\(\theta_y\)</span> is the beam tilt in the <span class="math notranslate nohighlight">\(x\)</span>, <span class="math notranslate nohighlight">\(y\)</span> directions. This is equivalent to shifting the wave function between slices and is only valid for very small tilts of no more than about <span class="math notranslate nohighlight">\(100 \ \mathrm{mrad}\)</span>.</p>
 <div class="admonition seealso">
 <p class="admonition-title">See also</p>
 <p>See our example on simulating precession electron diffraction experiments.</p>
 </div>
-<p>In <em>abTEM</em> beam tilt may be included using the tilt keyword of both <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> and <code class="docutils literal notranslate"><span class="pre">Probe</span></code>. Below we create the same <code class="docutils literal notranslate"><span class="pre">Probe</span></code> used above with a series of <span class="math notranslate nohighlight">\(5\)</span> tilts ranging from <span class="math notranslate nohighlight">\(0 \ \mathrm{mrad}\)</span> to <span class="math notranslate nohighlight">\(8 \ \mathrm{mrad}\)</span> along the <span class="math notranslate nohighlight">\(x\)</span>-axis.</p>
+<p>In abTEM beam tilt may be included using the tilt keyword of both <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> and <code class="docutils literal notranslate"><span class="pre">Probe</span></code>. Below we create the same <code class="docutils literal notranslate"><span class="pre">Probe</span></code> used above with a series of <span class="math notranslate nohighlight">\(5\)</span> tilts ranging from <span class="math notranslate nohighlight">\(0 \ \mathrm{mrad}\)</span> to <span class="math notranslate nohighlight">\(8 \ \mathrm{mrad}\)</span> along the <span class="math notranslate nohighlight">\(x\)</span>-axis.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">tilt_x</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">distributions</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
@@ -1155,19 +1670,7 @@ chunks  406.41 kiB  (5, 102, 102)  1 chunks  numpy.ndarray
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.core.Waves object at 0x7fd224d9e8b0&gt;
--------------------------------------------------
-
-type                 label          coordinates
--------------------  -------------  -------------------
-AxisAlignedTiltAxis  tilt_x [mrad]  0.00 2.00 ... 8.00
-RealSpaceAxis        x [Å]          0.00 0.05 ... 61.15
-RealSpaceAxis        y [Å]          0.00 0.05 ... 61.15
-
-        bytes      shape            count     type
-------  ---------  ---------------  --------  -------------
-array   57.71 MiB  (5, 1230, 1230)  -         complex64
-chunks  -          -                - chunks  numpy.ndarray
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.Waves object at 0x7f894d8e5a90&gt;
 </pre></div>
 </div>
 </div>
@@ -1176,13 +1679,15 @@ chunks  -          -                - chunks  numpy.ndarray
 <div class="cell tag_full-width docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave_tilt</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">50</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
-    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
+    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+    <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
 <span class="p">);</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/multislice_49_0.png" src="../../_images/multislice_49_0.png" />
+<img alt="../../_images/multislice_55_0.png" src="../../_images/multislice_55_0.png" />
 </div>
 </div>
 <div class="admonition note">

@@ -40,8 +40,6 @@ or reproducing publication results.
 :::
 
 :::{grid-item-card}
-:link: api_reference
-:link-type: ref
 **API reference**
 
 The reference guide contains a detailed description of the *abTEM* API. The reference describes how the methods work and
