@@ -6,8 +6,8 @@ from hypothesis.strategies import composite
 
 import strategies as abtem_st
 from abtem.core.axes import ScanAxis, OrdinalAxis
-from abtem.measurements.core import Images, DiffractionPatterns, RealSpaceLineProfiles
-from abtem.waves.core import Probe
+from abtem.measurements import Images, DiffractionPatterns, RealSpaceLineProfiles, _scan_shape, _scan_sampling
+from abtem.waves import Probe
 from utils import ensure_is_tuple, gpu, array_is_close
 
 
@@ -181,7 +181,7 @@ def test_images_interpolate_line(data, lazy, device):
 def test_poisson_noise(data, measurement, dose_per_area, lazy, device):
     measurement = data.draw(measurement(lazy=lazy, device=device, min_value=.5, min_base_side=16))
 
-    assume(isinstance(measurement, Images) or len(measurement.scan_sampling) == 2)
+    assume(isinstance(measurement, Images) or len(_scan_shape(measurement)) == 2)
     noisy = measurement.poisson_noise(dose_per_area=dose_per_area, samples=16).compute()
 
     if isinstance(measurement, Images):
@@ -269,7 +269,7 @@ def test_diffraction_patterns_polar_binning(data, lazy, device):
 @pytest.mark.parametrize('device', ['cpu', gpu])
 def test_diffraction_patterns_center_of_mass(data, lazy, device):
     measurement = data.draw(abtem_st.diffraction_patterns(lazy=lazy, min_scan_dims=1, device=device, min_base_side=16))
-    assume(len(measurement.scan_sampling) > 0)
+    assume(len(_scan_sampling(measurement)) > 0)
     measurement.center_of_mass().compute()
 
 
@@ -278,7 +278,7 @@ def test_diffraction_patterns_center_of_mass(data, lazy, device):
 @pytest.mark.parametrize('device', ['cpu', gpu])
 def test_diffraction_patterns_integrated_center_of_mass(data, lazy, device):
     measurement = data.draw(abtem_st.diffraction_patterns(lazy=lazy, min_scan_dims=1, device=device, min_base_side=16))
-    assume(len(measurement.scan_sampling) > 1)
+    assume(len(_scan_sampling(measurement)) > 1)
     measurement.integrated_center_of_mass().compute()
 
 
@@ -287,7 +287,7 @@ def test_diffraction_patterns_integrated_center_of_mass(data, lazy, device):
 @pytest.mark.parametrize('device', ['cpu', gpu])
 def test_diffraction_patterns_integrated_center_of_mass(data, lazy, device):
     measurement = data.draw(abtem_st.diffraction_patterns(lazy=lazy, min_scan_dims=1, device=device, min_base_side=16))
-    assume(len(measurement.scan_sampling) > 1)
+    assume(len(_scan_sampling(measurement)) > 1)
     measurement.integrated_center_of_mass().compute()
 
 
@@ -308,7 +308,7 @@ def test_diffraction_patterns_bandlimit(data, lazy, device):
 @pytest.mark.parametrize('device', ['cpu', gpu])
 def test_diffraction_patterns_gaussian_source_size(data, sigma, lazy, device):
     measurement = data.draw(abtem_st.diffraction_patterns(lazy=lazy, min_scan_dims=2, device=device, min_base_side=16))
-    assume(len(measurement.scan_sampling) > 1)
+    assume(len(_scan_sampling(measurement)) > 1)
     measurement.gaussian_source_size(sigma).compute()
 
 
@@ -318,7 +318,7 @@ def test_diffraction_patterns_gaussian_source_size(data, sigma, lazy, device):
 @pytest.mark.parametrize('device', ['cpu', gpu])
 def test_polar_measurements_integrate(data, lazy, device):
     measurement = data.draw(abtem_st.polar_measurements(lazy=lazy, device=device))
-    assume(measurement.num_scan_axes > 0)
+    assume(len(_scan_shape(measurement)) > 0)
 
     radial_outer = data.draw(abtem_st.sensible_floats(min_value=0., max_value=measurement.outer_angle))
     radial_inner = data.draw(abtem_st.sensible_floats(min_value=0., max_value=radial_outer))

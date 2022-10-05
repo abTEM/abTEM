@@ -1,13 +1,9 @@
-import hypothesis.strategies as st
 import numpy as np
 import pytest
-from ase.build import bulk, graphene
+from ase.build import bulk
 from ase import build
-from ase.data import chemical_symbols
-from ase.data import reference_states
-from hypothesis import given
 
-from abtem.structures.transform import orthogonalize_cell, shrink_cell, merge_close_atoms, cut_box
+from abtem.atoms import orthogonalize_cell, shrink_cell, merge_close_atoms, cut_box
 
 
 def fcc(orthogonal=False):

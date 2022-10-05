@@ -33,7 +33,7 @@ from abtem.core.ensemble import concatenate_array_blocks
 def test_ensemble_shape(data, ensemble):
     ensemble = data.draw(ensemble())
     assert len(ensemble.ensemble_shape) == len(ensemble.ensemble_axes_metadata)
-    assert len(ensemble.ensemble_shape) == len(ensemble.default_ensemble_chunks)
+    assert len(ensemble.ensemble_shape) == len(ensemble._default_ensemble_chunks)
 
 
 @given(data=st.data())

@@ -1,7 +1,7 @@
 import numpy as np
 
-from abtem.core import distributions
-from abtem.waves.core import Probe
+from abtem import distributions
+from abtem.waves import Probe
 
 
 def test_gaussian_distribution_normalized():

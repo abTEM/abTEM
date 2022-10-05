@@ -260,9 +260,9 @@ def test_intensity(data, lazy, device):
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_intensity(data, lazy, device):
+def test_images(data, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
-    images = waves.complex_images()
+    images = waves.images()
     assert images.shape == waves.shape
     assert images.array.dtype == np.complex64
 
@@ -336,19 +336,19 @@ def test_diffraction_patterns(data, max_angle, fftshift, block_direct, lazy, dev
     repetitions=st.tuples(
         st.integers(min_value=1, max_value=2), st.integers(min_value=1, max_value=2)
     ),
-    normalization=st.sampled_from(("intensity", "values")),
+    renormalize=st.booleans(),
 )
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("device", ["cpu", gpu])
-def test_tile(data, repetitions, normalization, lazy, device):
+def test_tile(data, repetitions, renormalize, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
     old_extent = waves.extent
     old_sum = waves.diffraction_patterns(max_angle=None).array.sum((-2, -1))
-    tiled = waves.tile(repetitions, normalization=normalization)
+    tiled = waves.tile(repetitions, renormalize=renormalize)
     assert np.allclose(
         (old_extent[0] * repetitions[0], old_extent[1] * repetitions[1]), tiled.extent
     )
-    if normalization == "intensity":
+    if renormalize:
         assert np.allclose(
             old_sum, tiled.diffraction_patterns(max_angle=None).array.sum((-2, -1))
         )

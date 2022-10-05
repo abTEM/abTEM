@@ -6,8 +6,8 @@ from ase.build import bulk
 from ase.data import chemical_symbols
 from hypothesis.extra import numpy as numpy_st
 
-from abtem.potentials.potentials import Potential, PotentialArray
-from abtem.potentials.temperature import FrozenPhonons, DummyFrozenPhonons, MDFrozenPhonons
+from abtem.potentials import Potential, PotentialArray
+from abtem.inelastic.phonons import FrozenPhonons, DummyFrozenPhonons, MDFrozenPhonons
 from . import core as core_st
 
 

@@ -1,36 +1,11 @@
 import hypothesis.strategies as st
-import numpy as np
 import pytest
-from hypothesis import given, reproduce_failure
+from hypothesis import given
 
-from abtem import PixelatedDetector, AnnularDetector
-from abtem.waves.core import Probe, PlaneWave
-from abtem.waves.scan import CustomScan, LineScan, GridScan
-from abtem.potentials.potentials import Potential
-
-from utils import gpu
 import strategies as abtem_st
-
-
-# def expected_shape(measurement, waves, potential=None, scan=None, detector=None):
-#     shape = ()
-#     if potential is not None:
-#         if potential.frozen_phonons.ensemble_mean and not np.iscomplexobj(measurement.array):
-#             shape += potential.ensemble_shape[1:]
-#         else:
-#             shape += potential.ensemble_shape
-#
-#     shape += waves.transforms.ensemble_shape
-#
-#     if scan is not None:
-#         shape += scan.ensemble_shape
-#
-#     shape = tuple(n for n in shape if n > 1)
-#
-#     if detector is not None:
-#         shape += detector.measurement_shape(waves)
-#
-#     return shape
+from abtem import PixelatedDetector, AnnularDetector
+from abtem.scan import CustomScan, LineScan, GridScan
+from utils import gpu
 
 
 @given(data=st.data())

@@ -3,7 +3,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 import strategies as abtem_st
-from abtem.waves.scan import LineScan
+from abtem.scan import LineScan
 
 
 @given(position=st.tuples(abtem_st.sensible_floats(min_value=-100, max_value=100),

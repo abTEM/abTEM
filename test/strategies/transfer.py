@@ -1,9 +1,8 @@
 import hypothesis.strategies as st
-import numpy as np
 
-from abtem.core import distributions
-from abtem.waves.transfer import polar_symbols, Aberrations, Aperture, TemporalEnvelope, CompositeWaveTransform, \
-    SpatialEnvelope, CTF
+from abtem import distributions
+from abtem.transfer import polar_symbols, Aberrations, Aperture, TemporalEnvelope, SpatialEnvelope, CTF
+from abtem.core.transform import CompositeWaveTransform
 from . import core as core_st
 from . import scan as scan_st
 
@@ -56,7 +55,7 @@ def spatial_envelope(draw, allow_distribution=True):
     return SpatialEnvelope(
         angular_spread=draw(parameter(min_value=5, max_value=20, allow_distribution=allow_distribution)),
         energy=draw(core_st.energy()),
-        **draw(aberrations()).parameters)
+        **draw(aberrations()).aberration_coefficients)
 
 
 @st.composite
@@ -78,7 +77,7 @@ def composite_wave_transform(draw, allow_distribution=True):
 @st.composite
 def ctf(draw, allow_distribution=True):
     return CTF(
-        **draw(aberrations(allow_distribution=allow_distribution)).parameters,
+        **draw(aberrations(allow_distribution=allow_distribution)).aberration_coefficients,
         semiangle_cutoff=draw(parameter(min_value=5, max_value=20, allow_distribution=allow_distribution)),
         angular_spread=draw(parameter(min_value=5, max_value=20, allow_distribution=allow_distribution)),
         focal_spread=draw(parameter(min_value=5, max_value=20, allow_distribution=allow_distribution)),

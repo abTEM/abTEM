@@ -6,9 +6,9 @@ import pytest
 from hypothesis import assume
 
 from abtem.core.backend import get_array_module, cp
-from abtem.potentials.potentials import Potential
-from abtem.potentials.temperature import AbstractFrozenPhonons
-from abtem.waves.core import Waves
+from abtem.potentials import Potential
+from abtem.inelastic.phonons import AbstractFrozenPhonons
+from abtem.waves import Waves
 
 
 def assert_array_matches_device(array, device):

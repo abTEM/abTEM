@@ -34,5 +34,5 @@ def test_frozen_phonons_as_ensembles(data, frozen_phonons, lazy):
         assert not fp.is_lazy
         assert blocks[i] == fp
 
-    assert all(isinstance(array, da.core.Array) for array in frozen_phonons.partition_args(lazy=True))
-    assert all(not isinstance(array, da.core.Array) for array in frozen_phonons.partition_args(lazy=False))
+    assert all(isinstance(array, da.core.Array) for array in frozen_phonons._partition_args(lazy=True))
+    assert all(not isinstance(array, da.core.Array) for array in frozen_phonons._partition_args(lazy=False))

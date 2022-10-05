@@ -2,8 +2,8 @@ import hypothesis.strategies as st
 import numpy as np
 
 from abtem.core.energy import energy2wavelength
-from abtem.waves.prism import SMatrix
-from abtem.waves.core import Probe, PlaneWave, Waves
+from abtem.prism.s_matrix import SMatrix
+from abtem.waves import Probe, PlaneWave, Waves
 from . import core as core_st
 from . import transfer as transfer_st
 

@@ -2,38 +2,37 @@ import hypothesis.strategies as st
 import numpy as np
 import pytest
 from hypothesis import given, assume
+from abtem.measurements import _scan_shape, _scan_axes, _scan_shape
 
 import strategies as abtem_st
 from abtem import RealSpaceLineProfiles, Images
-from abtem.measurements.detectors import (
+from abtem.detectors import (
     AnnularDetector,
     FlexibleAnnularDetector,
     PixelatedDetector,
 )
-from abtem.waves.core import Probe
+from abtem.waves import Probe
 from utils import gpu
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("lazy", [False])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 @pytest.mark.parametrize(
     "detector",
     [
-        abtem_st.segmented_detector,
-        abtem_st.flexible_annular_detector,
+        #abtem_st.segmented_detector,
+        #abtem_st.flexible_annular_detector,
         abtem_st.pixelated_detector,
-        abtem_st.waves_detector,
+        #abtem_st.waves_detector,
     ],
 )
 def test_detect(data, detector, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
     detector = data.draw(detector())
-
     assume(all(waves._gpts_within_angle(min(detector.angular_limits(waves)))))
     assume(min(waves.cutoff_angles) > 1.0)
     measurement = detector.detect(waves)
-
     assert measurement.ensemble_shape == waves.ensemble_shape
     assert measurement.dtype == detector.measurement_dtype
     assert measurement.base_shape == detector.measurement_shape(waves)
@@ -51,24 +50,26 @@ def test_annular_detector(data, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device, min_scan_dims=1))
     detector = data.draw(abtem_st.annular_detector())
 
-    assume(waves.num_scan_axes > 0)
-    assume(waves.num_scan_axes < 3)
+    assume(len(_scan_shape(waves)) > 0)
+    assume(len(_scan_shape(waves))< 3)
     assume(all(waves._gpts_within_angle(min(detector.angular_limits(waves)))))
     assume(min(waves.cutoff_angles) > 1.0)
 
     measurement = detector.detect(waves)
 
+    scan_axes = _scan_axes(waves)
+
     shape = tuple(
-        n for i, n in enumerate(waves.ensemble_shape) if i not in waves.scan_axes[-2:]
+        n for i, n in enumerate(waves.ensemble_shape) if i not in scan_axes[-2:]
     )
 
     assert measurement.ensemble_shape == shape
     assert measurement.dtype == detector.measurement_dtype
-    assert measurement.base_shape == waves.scan_shape[-2:]
+    assert measurement.base_shape == _scan_shape(waves)
 
-    if len(waves.scan_axes) == 1:
+    if len(scan_axes) == 1:
         assert type(measurement) == RealSpaceLineProfiles
-    elif len(waves.scan_axes) > 1:
+    elif len(scan_axes) > 1:
         assert type(measurement) == Images
 
     if detector.to_cpu:

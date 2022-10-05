@@ -6,7 +6,7 @@ from hypothesis.extra import numpy as numpy_strats
 
 from abtem.core.axes import ScanAxis
 from abtem.core.backend import get_array_module
-from abtem.measurements.core import Images, DiffractionPatterns, RealSpaceLineProfiles, PolarMeasurements
+from abtem.measurements import Images, DiffractionPatterns, RealSpaceLineProfiles, PolarMeasurements
 from . import core as core_st
 
 

@@ -6,14 +6,15 @@ import pytest
 from ase.data import chemical_symbols
 from hypothesis import given, settings
 
-from abtem.potentials.parametrizations import LobatoParametrization, KirklandParametrization
+from abtem.core.parametrizations import LobatoParametrization, KirklandParametrization
 from utils import array_is_close
 
 try:
     from gpaw import GPAW
-    from abtem.potentials.gpaw.parametrization import GPAWParametrization
+    from abtem.gpaw import GPAWParametrization
 except ImportError:
-    pass
+    GPAW = None
+    GPAWParametrization = None
 
 
 @settings(deadline=None, max_examples=1)

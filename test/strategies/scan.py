@@ -1,7 +1,7 @@
 import hypothesis.strategies as st
 from hypothesis.extra import numpy as numpy_st
 
-from abtem.waves.scan import CustomScan, LineScan, GridScan
+from abtem.scan import CustomScan, LineScan, GridScan
 from . import core as core_strats
 from .core import sensible_floats
 
