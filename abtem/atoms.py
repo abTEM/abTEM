@@ -73,11 +73,11 @@ def plane_to_axes(plane: str) -> tuple:
 
 def is_cell_hexagonal(atoms: Atoms) -> bool:
     """
-    Check whether the cell of an ASE `Atoms` object is hexagonal.
+    Check whether the cell of given atoms is hexagonal.
 
     Parameters
     ----------
-    atoms : ASE atoms object
+    atoms : ase.Atoms
         The atoms that should be checked.
 
     Returns
@@ -104,11 +104,11 @@ def is_cell_hexagonal(atoms: Atoms) -> bool:
 
 def is_cell_orthogonal(cell: Union[Atoms, Cell], tol: float = 1e-12):
     """
-    Check whether ASE `Atoms` object has an orthogonal cell.
+    Check whether atoms have an orthogonal cell.
 
     Parameters
     ----------
-    cell : ASE `Atoms` object
+    cell : ase.Atoms
         The atoms that should be checked.
     tol : float
         Components of the lattice vectors below this value are considered to be zero.
@@ -126,11 +126,11 @@ def is_cell_orthogonal(cell: Union[Atoms, Cell], tol: float = 1e-12):
 
 def is_cell_valid(atoms: Atoms, tol: float = 1e-12) -> bool:
     """
-    Check whether the cell of ASE `Atoms` object can be converted to a structure usable by abTEM.
+    Check whether the cell of given atoms can be converted to a structure usable by abTEM.
 
     Parameters
     ----------
-    atoms : ASE `Atoms` object
+    atoms : ase.Atoms
         The atoms that should be checked.
     tol : float
         Components of the lattice vectors whose magnitude is below this value are considered to be zero.
@@ -154,19 +154,19 @@ def is_cell_valid(atoms: Atoms, tol: float = 1e-12) -> bool:
 
 def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     """
-    Standardize the cell of an ASE `Atoms` object. The atoms are rotated so that one of the lattice vectors in the `xy`-plane
+    Standardize the cell of given atoms. The atoms are rotated so that one of the lattice vectors in the `xy`-plane
     is aligned with the `x`-axis, and then all the lattice vectors are made positive.
 
     Parameters
     ----------
-    atoms : ASE `Atoms` object
+    atoms : ase.Atoms
         The atoms that should be standardized.
     tol : float
         Components of the lattice vectors whose magnitude is below this value are considered to be zero.
 
     Returns
     -------
-    atoms : ASE `Atoms` object
+    atoms : ase.Atoms
         The standardized atoms.
     """
     atoms = atoms.copy()
@@ -321,14 +321,14 @@ def merge_close_atoms(atoms: Atoms, tol: float = 1e-7) -> Atoms:
 
     Parameters
     ----------
-    atoms : ASE `Atoms` object
+    atoms : ase.Atoms
         Atoms to merge.
     tol : float
         Atoms closer to each other than this value are merged if they have identical atomic numbers.
 
     Returns
     -------
-    merged_atoms : ASE `Atoms` object
+    merged_atoms : ase.Atoms
         Merged atoms.
     """
     if len(atoms) < 2:
@@ -368,13 +368,13 @@ def wrap_with_tolerance(atoms: Atoms, tol: float = 1e-6) -> Atoms:
 
     Parameters
     ----------
-    atoms : ASE `Atoms` object
+    atoms : ase.Atoms
         Atoms to be wrapped.
     tol : float
         Minimum distance to any cell boundary.
     Returns
     -------
-    atoms : ASE `Atoms` object
+    atoms : ase.Atoms
         Wrapped atoms.
     """
     atoms = atoms.copy()
@@ -395,7 +395,7 @@ def shrink_cell(atoms: Atoms, repetitions=(2, 3), tol=1e-6):
 
     Parameters
     ----------
-    atoms : ASE `Atoms` object
+    atoms : ase.Atoms
         Atoms whose repetition is to be removed.
     repetitions : tuple
         Integer number of repetitions in `x` and `y` directions to be checked.
@@ -404,7 +404,7 @@ def shrink_cell(atoms: Atoms, repetitions=(2, 3), tol=1e-6):
 
     Returns
     -------
-    atoms : ASE `Atoms` object
+    atoms : ase.Atoms
         Smallest non-repeating cell for the given atoms.
     """
     atoms = wrap_with_tolerance(atoms, tol=tol)
@@ -483,7 +483,7 @@ def rotate_atoms_to_plane(
 
     Returns
     -------
-    rotated : ASE `Atoms` object
+    rotated : ase.Atoms
         Rotated atoms.
     """
     if plane == "xy":
@@ -503,14 +503,14 @@ def flip_atoms(atoms: Atoms, axis: int = 2) -> Atoms:
 
     Parameters
     ----------
-    atoms : ASE `Atoms` object
+    atoms : ase.Atoms
         Atoms to be inverted.
     axis : int
         Integer representing the Cartesian axis (0 is `x`, 1 is `y`, and the default 2 is `z`).
 
     Returns
     -------
-    atoms : ASE `Atoms` object
+    atoms : ase.Atoms
         Inverted atoms.
     """
     atoms = atoms.copy()
@@ -600,13 +600,13 @@ def orthogonalize_cell(
         tolerance: float = 0.01,
 ):
     """
-    Make the cell of an ASE `Atoms` object orthogonal. This is accomplished by repeating the cell until lattice vectors
+    Make the cell of the given atoms orthogonal. This is accomplished by repeating the cell until lattice vectors
     are close to the three principal Cartesian directions. If the structure is not exactly orthogonal after the
     structure is repeated by a given maximum number, the remaining difference is made up by applying strain.
 
     Parameters
     ----------
-    atoms : ASE `Atoms` object
+    atoms : ase.Atoms
         The non-orthogonal atoms.
     max_repetitions : int
         The maximum number of repetitions allowed. Increase this to allow more repetitions and hence less strain.
@@ -617,7 +617,7 @@ def orthogonalize_cell(
 
     Returns
     -------
-    atoms : ASE `Atoms` object
+    atoms : ase.Atoms
         The orthogonal atoms.
     transform : tuple of arrays, optional
         The applied transform given as Euler angles (by default not returned).
@@ -667,14 +667,14 @@ def atoms_in_cell(
 
     Parameters
     ----------
-    atoms : ASE `Atoms` object
+    atoms : ase.Atoms
         Atoms to be cropped.
     margin : float or tuple of three floats
         Atoms that are outside the cell by this margin are not cropped (by default no margin).
 
     Returns
     -------
-    cropped : ASE `Atoms` object
+    cropped : ase.Atoms
         Cropped atoms.
     """
     if isinstance(margin, Number):
@@ -705,7 +705,7 @@ def cut_cell(
 
     Parameters
     ----------
-    atoms : ASE `Atoms` object
+    atoms : ase.Atoms
         Atoms to be fit.
     cell : tuple of floats
         Cell to be fit into.
@@ -718,7 +718,7 @@ def cut_cell(
 
     Returns
     -------
-    cut : ASE `Atoms` object
+    cut : ase.Atoms
        Atoms fit into the cell.
     """
     if cell is None:
@@ -780,14 +780,14 @@ def pad_atoms(
 
     Parameters
     ----------
-    atoms: ASE `Atoms` object
+    atoms: ase.Atoms
         The atoms that should be padded.
     margins: one or tuple of three floats
         The padding margin. Can be specified either as a single value for all directions, or three separate values.
 
     Returns
     -------
-    ASE `Atoms` object
+    padded : ase.Atoms
         Padded atoms.
     """
 
