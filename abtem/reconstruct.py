@@ -1,5 +1,5 @@
 import numpy as np
-from abtem.device import get_scipy_module, get_array_module_from_device
+from abtem.device import get_scipy_module, get_array_module_from_device, asnumpy
 from abtem.measure import Measurement, Calibration
 from abtem.utils import ProgressBar, fft_shift
 from abtem.waves import FresnelPropagator, Probe, Waves
@@ -19,10 +19,13 @@ def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Se
                                  maxiter                 : int                                    = 5,
                                  alpha                   : float                                  = 1.,
                                  beta                    : float                                  = 1.,
+                                 gamma                   : float                                  = 1.,
+                                 pre_pos_correction_iter : int                                    = 1,
                                  damping                 : float                                  = 1.,
                                  damping_rate            : float                                  = 0.995,
                                  fix_probe               : bool                                   = False, 
                                  fix_com                 : bool                                   = True,
+                                 fix_pos                 : bool                                   = True,
                                  return_iterations       : bool                                   = False,
                                  verbose                 : bool                                   = False,
                                  seed                    : int                                    = None,
@@ -37,6 +40,8 @@ def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Se
     - mixed-state  PIE: See https://doi.org/10.1038/s41467-020-16688-6
     - multislice   PIE: See https://doi.org/10.1364/JOSAA.29.001606 
     - simultaneous PIE: See example notebook
+
+    Optionally, it also allows for probe-position correction using steepest descent. See 10.1016/j.ultramic.2018.04.004 
     
     Further, it allows the user to define custom functions for the four main steps of the algorithm.
     See example notebook for a walkthrough.
@@ -72,6 +77,10 @@ def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Se
     beta : float
         Controls the regularization of the iterative updates for the probe. See regularized PIE reference.
         beta=1, corresponds to ePIE with beta=1. beta < 1 regularizes towards true gradient descent.
+    gamma : float
+        Controls the probe-position update step. See position-correction reference.
+    pre_pos_correction_iter : int
+        Run the algorithm for this many iterations before applying position correction.
     damping : float
         Backwards-compatible parameter if user wants to run ePIE with alpha/beta != 1.
     damping_rate: float
@@ -81,6 +90,8 @@ def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Se
         If True, the probe will not be updated by the algorithm. Default is False.
     fix_com : bool
         If True, the center of mass of the probe will be centered. Default is True.
+    fix_pos : bool
+        If True, the positions will not be updated by the algorithm. Default is True.
     return_iterations : bool
         If True, return the reconstruction after every iteration. Default is False.
     verbose : bool
@@ -94,7 +105,7 @@ def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Se
         
     Returns
     -------
-    Measurement objects of object(s), probe(s), and error
+    Measurements of object(s), probe(s), probe positions, and error
     """
 
     if num_slices is not None:
@@ -117,7 +128,7 @@ def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Se
                                                                                     slice_thicknesses = slice_thicknesses,
                                                                                     device            = device)
    
-    
+
     if functions_dictionary is None:
     
         if not isinstance(diffraction_measurements,Iterable):
@@ -127,6 +138,7 @@ def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Se
                 _exit_wave_func              = _mixed_state_exit_wave_func
                 _amplitude_modification_func = _mixed_state_amplitude_modification_func
                 _update_func                 = _mixed_state_update_func
+                _update_positions_func       = _update_positions_multiple_probes_and_objects
                 _update_center_of_mass_func  = _update_multiple_probes_center_of_mass_func
 
             elif len(objects.shape) == 3:
@@ -134,6 +146,7 @@ def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Se
                 _exit_wave_func              = _multislice_exit_wave_func
                 _amplitude_modification_func = _multislice_amplitude_modification_func
                 _update_func                 = _multislice_update_func
+                _update_positions_func       = _update_positions_multislice_object
                 _update_center_of_mass_func  = _update_single_probe_first_index_center_of_mass_func
 
             else:
@@ -141,6 +154,7 @@ def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Se
                 _exit_wave_func              = _epie_exit_wave_func
                 _amplitude_modification_func = _epie_amplitude_modification_func
                 _update_func                 = _epie_update_func
+                _update_positions_func       = _update_positions_single_object
                 _update_center_of_mass_func  = _update_single_probe_center_of_mass_func
 
         else:
@@ -148,20 +162,23 @@ def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Se
             _exit_wave_func                  = _simultaneous_exit_wave_func
             _amplitude_modification_func     = _simultaneous_amplitude_modification_func
             _update_func                     = _simultaneous_update_func
+            _update_positions_func           = _update_positions_simultaneous_objects
             _update_center_of_mass_func      = _update_single_probe_center_of_mass_func
         
     else:
         _exit_wave_func                      = functions_dictionary['exit_wave_func']
         _amplitude_modification_func         = functions_dictionary['amplitude_modification_func']
         _update_func                         = functions_dictionary['update_func']
+        _update_positions_func               = functions_dictionary['update_positions_func']
         _update_center_of_mass_func          = functions_dictionary['update_center_of_mass_func']
         
     xp = get_array_module_from_device(device)
     
     if return_iterations:
-        objects_iterations = []
-        probes_iterations  = []
-        SSE_iterations     = []
+        objects_iterations   = []
+        probes_iterations    = []
+        positions_iterations = []
+        SSE_iterations       = []
 
     if seed is not None:
         np.random.seed(seed)
@@ -176,7 +193,20 @@ def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Se
     
     propagator             = FresnelPropagator()
     antialias_filter       = AntialiasFilter()
-    
+
+    if not isinstance(diffraction_measurements,Iterable):
+        pixel_size_y             = positions[1,1]
+        pixel_size_x             = positions[diffraction_measurements.shape[1],0]
+        real_space_sampling_x    = diffraction_measurements.calibrations[0].sampling
+        real_space_sampling_y    = diffraction_measurements.calibrations[1].sampling
+        positions_scaling_factor = np.array([[pixel_size_x/real_space_sampling_x,pixel_size_y/real_space_sampling_y]])
+    else:
+        pixel_size_y             = positions[1,1]
+        pixel_size_x             = positions[diffraction_measurements[0].shape[1],0]
+        real_space_sampling_x    = diffraction_measurements[0].calibrations[0].sampling
+        real_space_sampling_y    = diffraction_measurements[0].calibrations[1].sampling
+        positions_scaling_factor = np.array([[pixel_size_x/real_space_sampling_x,pixel_size_y/real_space_sampling_y]])
+
     while iteration < maxiter:
         indices            = np.arange(len(positions))
         np.random.shuffle(indices)
@@ -228,26 +258,40 @@ def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Se
                                                        wave_properties    = props)
             
             old_position = position
+        
+            if not fix_pos and iteration >= pre_pos_correction_iter:
+                positions[j]            = _update_positions_func(objects,
+                                                                 probes,
+                                                                 diffraction_patterns,
+                                                                 position,
+                                                                 pixel_sizes     = (pixel_size_x,pixel_size_y),
+                                                                 gamma           = gamma,
+                                                                 damping         = damping,
+                                                                 xp              = xp)
+            
+
             inner_pbar.update(1)
         
         if isinstance(objects,tuple):
-            objects = tuple(fft_shift(obj,position) for obj in objects)
+            objects  = tuple(fft_shift(obj,position) for obj in objects)
         else:
-            objects = fft_shift(objects,position)
+            objects  = fft_shift(objects,position)
         
         if fix_com:
-            probes  = _update_center_of_mass_func(probes,center_of_mass,xp=xp)
-        
+            probes   = _update_center_of_mass_func(probes,
+                                                   center_of_mass,
+                                                   xp=xp)
+            
         SSE        /= len(positions)
         
         if return_iterations:
             objects_iterations.append(objects)
             probes_iterations.append(probes)
+            positions_iterations.append(positions/positions_scaling_factor)
             SSE_iterations.append(SSE)
             
         if verbose:
             print(f'Iteration {iteration:<{len(str(maxiter))}}, SSE = {float(SSE):.3e}')
-            
             
         damping   *= damping_rate
         outer_pbar.update(1)
@@ -290,7 +334,7 @@ def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Se
         else:
             probes_iterations      = [Measurement(np.fft.fftshift(probe),calibrations) for probe in probes_iterations]
         
-        return objects_iterations, probes_iterations, SSE_iterations
+        return objects_iterations, probes_iterations, positions_iterations, SSE_iterations
     
     else:
         if isinstance(objects,tuple):
@@ -309,7 +353,7 @@ def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Se
         else:
             probes                 = Measurement(np.fft.fftshift(probes),calibrations)
         
-        return objects, probes, SSE
+        return objects, probes, positions/positions_scaling_factor, SSE
 
 
 def _prepare_pie_inputs(diffraction_measurements : Union[Measurement, Sequence[Measurement]],
@@ -492,29 +536,35 @@ def _prepare_pie_inputs(diffraction_measurements : Union[Measurement, Sequence[M
 
 def _update_single_probe_center_of_mass_func(probe_array:np.ndarray,
                                              center_of_mass,
-                                             xp=np):
+                                             xp=np,
+                                             **kwargs):
+
     com         = center_of_mass(xp.fft.fftshift(xp.abs(probe_array) ** 2))
     probe_array = xp.fft.ifftshift(fft_shift(probe_array, - xp.array(com)))
 
     return probe_array
 
+def _update_single_probe_first_index_center_of_mass_func(probe_array:np.ndarray,
+                                                         center_of_mass,
+                                                         xp=np,
+                                                         **kwargs):
+
+    com            = center_of_mass(xp.fft.fftshift(xp.abs(probe_array[0]) ** 2))
+    probe_array[0] = xp.fft.ifftshift(fft_shift(probe_array[0], - xp.array(com)))
+
+    return probe_array
+
 def _update_multiple_probes_center_of_mass_func(probes:Sequence[np.ndarray],
                                                 center_of_mass,
-                                                xp=np):
+                                                xp=np,
+                                                **kwargs):
+
     _probes = []
     for probe_array in probes:
         com           = center_of_mass(xp.fft.fftshift(xp.abs(probe_array) ** 2))
         _probes.append(xp.fft.ifftshift(fft_shift(probe_array, - xp.array(com))))
 
     return tuple(_probes)
-
-def _update_single_probe_first_index_center_of_mass_func(probe_array:np.ndarray,
-                                                         center_of_mass,
-                                                         xp=np):
-    com            = center_of_mass(xp.fft.fftshift(xp.abs(probe_array[0]) ** 2))
-    probe_array[0] = xp.fft.ifftshift(fft_shift(probe_array[0], - xp.array(com)))
-
-    return probe_array
 
 ### e-PIE functions
 
@@ -789,4 +839,77 @@ def _simultaneous_update_func(exit_waves:Sequence[np.ndarray],
     magnetic_object       = _magnetic_object
 
     return (electrostatic_object,magnetic_object), probe_array
+
+def _update_positions_single_object(objects: np.ndarray,
+                                   probes : np.ndarray,
+                                   diffraction_pattern: np.ndarray,
+                                   position: np.ndarray,
+                                   pixel_sizes: tuple = None,
+                                   gamma:       float = 1.0,
+                                   damping:     float = 1.0,
+                                   xp=np,
+                                   **kwargs):
+
+    pixel_size_x, pixel_size_y = pixel_sizes
+
+    # Note: `objects` is already shifted by position
+    exit_waves_fft             = xp.fft.fft2(objects*probes)
+    estimated_intensities      = xp.abs(exit_waves_fft)**2
+    actual_intensities         = diffraction_pattern**2
+    diff_intensities           = (actual_intensities - estimated_intensities).ravel()
+
+    dx                         = xp.array([pixel_size_x,0.])
+    exit_waves_fft_dx          = xp.fft.fft2(fft_shift(objects,-dx)*probes)
+    d_exit_waves_fft_dx        = (exit_waves_fft -exit_waves_fft_dx)/pixel_size_x
+
+    dy                         = xp.array([0.,pixel_size_y])
+    exit_waves_fft_dy          = xp.fft.fft2(fft_shift(objects,-dy)*probes)
+    d_exit_waves_fft_dy        = (exit_waves_fft - exit_waves_fft_dy)/pixel_size_y
+
+    exit_waves_fft_conj        = xp.conj(exit_waves_fft)
+
+    partial_intensities_dx     = 2*xp.real(d_exit_waves_fft_dx*exit_waves_fft_conj).ravel()
+    partial_intensities_dy     = 2*xp.real(d_exit_waves_fft_dy*exit_waves_fft_conj).ravel()
+
+    coefficients_matrix        = xp.column_stack((partial_intensities_dx,partial_intensities_dy))
+    displacements              = xp.linalg.lstsq(coefficients_matrix,diff_intensities,rcond=None)[0]
+
+    return asnumpy(position - damping*gamma*displacements)
+            
+
+def _update_positions_simultaneous_objects(objects: np.ndarray,
+                                           probes : np.ndarray,
+                                           diffraction_pattern: np.ndarray,
+                                           position: np.ndarray,
+                                           pixel_sizes: tuple = None,
+                                           gamma:       float = 1.0,
+                                           damping:     float = 1.0,
+                                           xp=np,
+                                           **kwargs):
+
+    raise NotImplementedError()
+
+def _update_positions_multiple_probes_and_objects(objects: np.ndarray,
+                                                  probes : np.ndarray,
+                                                  diffraction_pattern: np.ndarray,
+                                                  position: np.ndarray,
+                                                  pixel_sizes: tuple = None,
+                                                  gamma:       float = 1.0,
+                                                  damping:     float = 1.0,
+                                                  xp=np,
+                                                  **kwargs):
+
+    raise NotImplementedError()
+
+def _update_positions_multislice_object(objects: np.ndarray,
+                                        probes : np.ndarray,
+                                        diffraction_pattern: np.ndarray,
+                                        position: np.ndarray,
+                                        pixel_sizes: tuple = None,
+                                        gamma:       float = 1.0,
+                                        damping:     float = 1.0,
+                                        xp=np,
+                                        **kwargs):
+
+    raise NotImplementedError()
 
