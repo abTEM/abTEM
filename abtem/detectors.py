@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from abtem.waves import Waves
 
 
-def validate_detectors(
+def _validate_detectors(
     detectors: Union["BaseDetector", List["BaseDetector"]]
 ) -> List["BaseDetector"]:
     if hasattr(detectors, "detect"):
@@ -37,27 +37,27 @@ def validate_detectors(
     ):
 
         raise RuntimeError(
-            "detectors must be AbstractDetector or list of AbstractDetector"
+            "Detectors must be AbstractDetector or list of AbstractDetector."
         )
 
     return detectors
 
 
 class BaseDetector(CopyMixin, metaclass=ABCMeta):
-    def __init__(self, to_cpu: bool = True, url: str = None):
-        """
-        Base detector type,
+    """
+    Base detector class.
 
-        Parameters
-        ----------
-        to_cpu : bool, optional
-            If True, copy the measurement data after applying the detector from the calculation device to cpu memory,
-            otherwise the data stays on the respective devices. Default is True.
-        url : str, optional
-            If this parameter is set the measurement data is saved at the specified location, typically a path to a
-            local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
-            the data stays in memory.
-        """
+    Parameters
+    ----------
+    to_cpu : bool, optional
+       If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
+       otherwise the data stays on the respective devices. Default is True.
+    url : str, optional
+       If this parameter is set the measurement data is saved at the specified location, typically a path to a
+       local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
+       the data stays in memory.
+    """
+    def __init__(self, to_cpu: bool = True, url: str = None):
         self._to_cpu = to_cpu
         self._url = url
 
@@ -108,7 +108,7 @@ class BaseDetector(CopyMixin, metaclass=ABCMeta):
 class AnnularDetector(BaseDetector):
     """
     The annular detector integrates the intensity of the detected wave functions between an inner and outer radial
-    integration limit, i.e. over an annulus.
+    integration limits, i.e. over an annulus.
 
     Parameters
     ----------
@@ -119,7 +119,7 @@ class AnnularDetector(BaseDetector):
     offset: two float, optional
         Center offset of the annular integration region [mrad].
     to_cpu : bool, optional
-        If True, copy the measurement data after applying the detector from the calculation device to cpu memory,
+        If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
         otherwise the data stays on the respective devices. Default is True.
     url : str, optional
         If this parameter is set the measurement data is saved at the specified location, typically a path to a
@@ -237,7 +237,7 @@ class AnnularDetector(BaseDetector):
         return ax, im
 
 
-class AbstractRadialDetector(BaseDetector):
+class _AbstractRadialDetector(BaseDetector):
     def __init__(
         self,
         inner: float,
@@ -395,23 +395,21 @@ class AbstractRadialDetector(BaseDetector):
         return ax, im
 
 
-class FlexibleAnnularDetector(AbstractRadialDetector):
+class FlexibleAnnularDetector(_AbstractRadialDetector):
     """
-    Flexible annular detector.
-
-    The FlexibleAnnularDetector allows choosing the integration limits after running the simulation by binning the
+    The flexible annular detector allows choosing the integration limits after running the simulation by binning the
     intensity in annular integration regions.
 
     Parameters
     ----------
     step_size : float, optional
-        Radial extent of the bins [mrad]. Default is 1.
+        Radial extent of the bins [mrad] (default is 1).
     inner : float, optional
         Inner integration limit of the bins [mrad].
     outer : float, optional
         Outer integration limit of the bins [mrad].
     to_cpu : bool, optional
-        If True, copy the measurement data after applying the detector from the calculation device to cpu memory,
+        If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
         otherwise the data stays on the respective devices. Default is True.
     url : str, optional
         If this parameter is set the measurement data is saved at the specified location, typically a path to a
@@ -439,7 +437,7 @@ class FlexibleAnnularDetector(AbstractRadialDetector):
 
     @property
     def step_size(self) -> float:
-        """ Step size [mrad]. """
+        """Step size [mrad]."""
         return self._step_size
 
     @step_size.setter
@@ -461,7 +459,7 @@ class FlexibleAnnularDetector(AbstractRadialDetector):
         return 1
 
 
-class SegmentedDetector(AbstractRadialDetector):
+class SegmentedDetector(_AbstractRadialDetector):
     def __init__(
         self,
         nbins_radial: int,
@@ -474,8 +472,6 @@ class SegmentedDetector(AbstractRadialDetector):
         url: str = None,
     ):
         """
-        Segmented detector.
-
         The segmented detector covers an annular angular range, and is partitioned into several integration regions
         divided to radial and angular segments. This can be used for simulating differential phase contrast (DPC)
         imaging.
@@ -493,9 +489,9 @@ class SegmentedDetector(AbstractRadialDetector):
         rotation : float
             Rotation of the bins around the origin [mrad].
         offset : two float
-            Offset of the bins from the origin in x and y [mrad].
+            Offset of the bins from the origin in `x` and `y` [mrad].
         to_cpu : bool, optional
-            If True, copy the measurement data after applying the detector from the calculation device to cpu memory,
+            If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
             otherwise the data stays on the respective devices. Default is True.
         url : str, optional
             If this parameter is set the measurement data is saved at the specified location, typically a path to a
@@ -554,35 +550,32 @@ class SegmentedDetector(AbstractRadialDetector):
 class PixelatedDetector(BaseDetector):
     def __init__(
         self,
-        max_angle: Union[str, float, None] = "valid",
+        max_angle: Union[str, float] = "valid",
         resample: bool = False,
         fourier_space: bool = True,
         to_cpu: bool = True,
         url: str = None,
     ):
         """
-        Pixelated detector.
-
         The pixelated detector records the intensity of the Fourier-transformed exit wave function. This may be used for
         example for simulating 4D-STEM.
 
         Parameters
         ----------
-        max_angle : str or float or None
-            The diffraction patterns will be detected up to this angle. If set to a string it must be 'limit' or 'valid'
-        resample : 'uniform' or False
+        max_angle : str or float
+            The diffraction patterns will be detected up to this angle [mrad]. If str, it must be one of:
+            ``cutoff`` :
+            The maximum scattering angle will be the cutoff of the antialiasing aperture.
+            ``valid`` :
+            The maximum scattering angle will be the largest rectangle that fits inside the circular antialiasing aperture
+            (default).
+            ``full`` :
+            Diffraction patterns will not be cropped and will include angles outside the antialiasing aperture.
+        resample : str or False
             If 'uniform', the diffraction patterns from rectangular cells will be downsampled to a uniform angular
             sampling.
-        max_angle : {'cutoff', 'valid'} or float
-            Maximum detected scattering angle of the diffraction patterns. If str, it must be one of:
-            ``cutoff`` :
-            The maximum scattering angle will be the cutoff of the antialias aperture.
-            ``valid`` :
-            The maximum scattering angle will be the largest rectangle that fits inside the circular antialias aperture
-            (default).
-
         to_cpu : bool, optional
-            If True, copy the measurement data after applying the detector from the calculation device to cpu memory,
+            If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
             otherwise the data stays on the respective devices. Default is True.
         url : str, optional
             If this parameter is set the measurement data is saved at the specified location, typically a path to a
@@ -668,8 +661,8 @@ class PixelatedDetector(BaseDetector):
 
     def detect(self, waves: "Waves") -> "DiffractionPatterns":
         """
-        Calculate the far field intensity of the wave functions. The output is cropped to include the non-suppressed
-        frequencies from the antialiased 2D fourier spectrum.
+        Calculate the far-field intensity of the wave functions. The output is cropped to include the non-suppressed
+        frequencies from the antialiased 2D Fourier spectrum.
 
         Parameters
         ----------
@@ -678,10 +671,10 @@ class PixelatedDetector(BaseDetector):
 
         Returns
         -------
+        values : DiffractionPatterns
             Detected values. The first dimension indexes the batch size, the second and third indexes the two components
             of the spatial frequency.
         """
-
         if self.fourier_space:
             measurements = waves.diffraction_patterns(max_angle=self.max_angle, parity="same")
 
@@ -695,6 +688,19 @@ class PixelatedDetector(BaseDetector):
 
 
 class WavesDetector(BaseDetector):
+    """
+    Base detector class.
+
+    Parameters
+    ----------
+    to_cpu : bool, optional
+       If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
+       otherwise the data stays on the respective devices. Default is True.
+    url : str, optional
+       If this parameter is set the measurement data is saved at the specified location, typically a path to a
+       local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
+       the data stays in memory.
+    """
     def __init__(self, to_cpu: bool = False, url: str = None):
         super().__init__(to_cpu=to_cpu, url=url)
 

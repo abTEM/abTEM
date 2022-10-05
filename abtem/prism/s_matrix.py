@@ -20,7 +20,7 @@ from abtem.core.grid import Grid, GridUndefinedError
 from abtem.measurements import BaseMeasurement
 from abtem.detectors import (
     BaseDetector,
-    validate_detectors,
+    _validate_detectors,
     WavesDetector,
     FlexibleAnnularDetector,
 )
@@ -520,7 +520,7 @@ class SMatrixArray(HasArray, AbstractSMatrix):
             scan, Probe._from_ctf(extent=self.extent, ctf=ctf, energy=self.energy)
         )
 
-        detectors = validate_detectors(detectors)
+        detectors = _validate_detectors(detectors)
 
         reduction_max_batch = self._validate_reduction_max_batch(
             scan, reduction_max_batch

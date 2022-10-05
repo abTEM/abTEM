@@ -29,7 +29,7 @@ from abtem.core.grid import HasGridMixin
 from abtem.core.utils import safe_floor_int, CopyMixin, EqualityMixin
 from abtem.detectors import (
     BaseDetector,
-    validate_detectors,
+    _validate_detectors,
     WavesDetector,
     FlexibleAnnularDetector,
 )
@@ -978,7 +978,7 @@ class Waves(HasArray, BaseWaves):
 
         potential = _validate_potential(potential, self)
 
-        detectors = validate_detectors(detectors)
+        detectors = _validate_detectors(detectors)
 
         if self.is_lazy:
             blocks = potential._partition_args()
@@ -1363,7 +1363,7 @@ class PlaneWave(_WavesFactory):
 
         potential = _validate_potential(potential)
         lazy = validate_lazy(lazy)
-        detectors = validate_detectors(detectors)
+        detectors = _validate_detectors(detectors)
 
         self.grid.match(potential)
         self.grid.check_is_defined()
@@ -1665,7 +1665,7 @@ class Probe(_WavesFactory):
 
         lazy = validate_lazy(lazy)
 
-        detectors = validate_detectors(detectors)
+        detectors = _validate_detectors(detectors)
 
         self.grid.check_is_defined()
         self.accelerator.check_is_defined()
