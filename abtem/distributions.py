@@ -13,6 +13,10 @@ from abtem.core.utils import EqualityMixin, CopyMixin
 
 
 class BaseDistribution(EqualityMixin, CopyMixin, metaclass=ABCMeta):
+    """
+    Template for defining the mathematical distributions of certain simulation parameters.
+    """
+
     @property
     @abstractmethod
     def dimensions(self) -> int:
@@ -43,9 +47,9 @@ class BaseDistribution(EqualityMixin, CopyMixin, metaclass=ABCMeta):
         pass
 
 
-class DistributionFromValues(BaseDistribution):
+class _DistributionFromValues(BaseDistribution):
     def __init__(
-        self, values: np.ndarray, weights: np.ndarray, ensemble_mean: bool = True
+            self, values: np.ndarray, weights: np.ndarray, ensemble_mean: bool = True
     ):
         self._values = values
         self._weights = weights
@@ -77,7 +81,7 @@ class DistributionFromValues(BaseDistribution):
 
         blocks = np.empty(len(chunks), dtype=object)
         for i, (start, stop) in enumerate(
-            zip(np.cumsum((0,) + chunks), np.cumsum(chunks))
+                zip(np.cumsum((0,) + chunks), np.cumsum(chunks))
         ):
             blocks[i] = self.__class__(
                 self.values[start:stop].copy(),
@@ -108,11 +112,11 @@ class DistributionFromValues(BaseDistribution):
     def weights(self):
         return self._weights
 
-    def combine(self, other: "DistributionFromValues") -> "AxisAlignedDistributionND":
-        return AxisAlignedDistributionND([self, other])
+    def combine(self, other: "_DistributionFromValues") -> "_AxisAlignedDistributionND":
+        return _AxisAlignedDistributionND([self, other])
 
 
-class AxisAlignedDistributionND(BaseDistribution):
+class _AxisAlignedDistributionND(BaseDistribution):
     def __init__(self, distributions: List[BaseDistribution]):
         for distribution in distributions:
             assert distribution.dimensions == 1
@@ -179,37 +183,37 @@ class AxisAlignedDistributionND(BaseDistribution):
 
 
 def from_values(
-    values: Sequence[Number], weights: np.ndarray = None, ensemble_mean: bool = False
-) -> DistributionFromValues:
+        values: Sequence[Number], weights: np.ndarray = None, ensemble_mean: bool = False
+) -> _DistributionFromValues:
     """
-    Returns a distribution from user defined values and weights.
+    Return a distribution from user-defined values and weights.
 
     Parameters
     ----------
-    values : sequence of scalar
-        The values of the parameters.
-    weights : sequence of scalar, optional
+    values : sequence of int or float
+        The scalar values of the parameters.
+    weights : sequence of float, optional
+        The scalar values of the weights (default is None).
     ensemble_mean : bool, optional
-        If True, the mean of an eventual ensemble of measurements is calculated, otherwise the full ensemble is
-        kept.
+        If True, the mean of an ensemble of measurements defined by the distribution is calculated, otherwise the full ensemble is kept.
     """
     if weights is None:
         weights = np.ones(len(values))
     values = np.array(values)
-    return DistributionFromValues(
+    return _DistributionFromValues(
         values=values, weights=weights, ensemble_mean=ensemble_mean
     )
 
 
 def uniform(
-    low: float,
-    high: float,
-    num_samples: int,
-    endpoint: bool = True,
-    ensemble_mean: bool = False,
-) -> DistributionFromValues:
+        low: float,
+        high: float,
+        num_samples: int,
+        endpoint: bool = True,
+        ensemble_mean: bool = False,
+) -> _DistributionFromValues:
     """
-    Return a distribution with uniformly weighted values, the values are evenly spaced over a specified interval.
+    Return a distribution with uniformly weighted values evenly spaced over a specified interval.
     As an example, this distribution may be used for simulating a focal series.
 
     Parameters
@@ -217,34 +221,34 @@ def uniform(
     low : float
         The lowest value of the distribution.
     high : float
-        The highest value of the distribution, unless endpoint is set to False. In that case, the sequence consists of
-        all but the last of `num_samples + 1` evenly spaced samples, so that stop is excluded.
+        The highest value of the distribution. If endpoint is set to False, the sequence consists of
+        all but the last of `num_samples + 1` evenly spaced samples so that the high value is excluded.
     num_samples : int
         Number of samples in the distribution.
     ensemble_mean : bool, optional
-        If True, the mean of an eventual ensemble of measurements is calculated, otherwise the full ensemble is
+        If True, the mean of an ensemble of measurements defined by the distribution is calculated, otherwise the full ensemble is
         kept.
     """
 
     values = np.linspace(start=low, stop=high, num=num_samples, endpoint=endpoint)
     weights = np.ones(len(values))
     values = np.array(values)
-    return DistributionFromValues(
+    return _DistributionFromValues(
         values=values, weights=weights, ensemble_mean=ensemble_mean
     )
 
 
 def gaussian(
-    standard_deviation: Union[float, Tuple[float, ...]],
-    num_samples: Union[int, Tuple[int, ...]],
-    dimension: int = 1,
-    center: Union[float, Tuple[float, ...]] = 0.0,
-    ensemble_mean: Union[bool, Tuple[bool, ...]] = True,
-    sampling_limit: Union[float, Tuple[float, ...]] = 3.0,
-    normalize: str = "intensity",
+        standard_deviation: Union[float, Tuple[float, ...]],
+        num_samples: Union[int, Tuple[int, ...]],
+        dimension: int = 1,
+        center: Union[float, Tuple[float, ...]] = 0.0,
+        ensemble_mean: Union[bool, Tuple[bool, ...]] = True,
+        sampling_limit: Union[float, Tuple[float, ...]] = 3.0,
+        normalize: str = "intensity",
 ):
     """
-    Return a distribution with values weigthed according to a (multidimensional) Gaussian distribution.
+    Return a distribution with values weighted according to a (multidimensional) Gaussian distribution.
     The values are evenly spaced within a given truncation of the Gaussian distribution. As an example, this
     distribution may be used for simulating focal spread.
 
@@ -257,19 +261,18 @@ def gaussian(
         Number of samples uniformly spaced samples. The samples may be given for each axis as a tuple, or as a
         single number, in which case it is equal for all axes.
     center : float or tuple of float
-        The center of the Gaussian distribution. The center may be given for each axis as a tuple, or as a single
-        number, in which case it is equal for all axes. Default is 0.0.
+        The center of the Gaussian distribution (default is 0.0). The center may be given for each axis as a tuple, or as a single
+        number, in which case it is equal for all axes.
     dimension : int, optional
         Number of dimensions of the Gaussian distribution.
     ensemble_mean : bool, optional
-        If True, the mean of an eventual ensemble of measurements is calculated, otherwise the full ensemble is
+        If True, the mean of ensemble of measurements defined by the distribution is calculated, otherwise the full ensemble is
         kept. Default is True.
     sampling_limit : float, optional
-        Truncate the distribution at this many standard deviations. Default is 3.0.
-    normalize : {'intensity', 'amplitude'}, optional
-        Specifies whether to normalize the intensity or amplitude. Default is 'intensity'.
+        Truncate the distribution at this many standard deviations (default is 3.0).
+    normalize : str, optional
+        Specifies whether to normalize the 'intensity' (default) or 'amplitude'.
     """
-
     if np.isscalar(center):
         center = (center,) * dimension
 
@@ -303,12 +306,12 @@ def gaussian(
             raise RuntimeError()
 
         distributions.append(
-            DistributionFromValues(
+            _DistributionFromValues(
                 values=values, weights=weights, ensemble_mean=ensemble_mean[i]
             )
         )
 
-    return AxisAlignedDistributionND(distributions=distributions)
+    return _AxisAlignedDistributionND(distributions=distributions)
 
 
 def _validate_distribution(distribution):
@@ -317,7 +320,7 @@ def _validate_distribution(distribution):
 
     if isinstance(distribution, Iterable):
         distribution = np.array(distribution)
-        return DistributionFromValues(
+        return _DistributionFromValues(
             distribution, np.ones_like(distribution, dtype=np.float32)
         )
 

@@ -16,7 +16,7 @@ from abtem.core.fft import fft_shift_kernel
 from abtem.core.grid import Grid, HasGridMixin
 from abtem.core.transform import WaveTransform
 from abtem.core.utils import safe_floor_int
-from abtem.distributions import AxisAlignedDistributionND
+from abtem.distributions import _AxisAlignedDistributionND
 from abtem.potentials import BasePotential
 
 if TYPE_CHECKING:
@@ -136,7 +136,7 @@ class SourceOffset(BaseScan):
     def ensemble_partial(self):
         def distribution(*args):
             factors = [arg.item() for arg in args]
-            dist = SourceOffset(AxisAlignedDistributionND(factors))
+            dist = SourceOffset(_AxisAlignedDistributionND(factors))
             arr = np.empty((1,) * len(args), dtype=object)
             arr.itemset(dist)
             return arr

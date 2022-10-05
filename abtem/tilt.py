@@ -5,7 +5,7 @@ import dask.array as da
 from abtem.core.axes import AxisMetadata, TiltAxis, AxisAlignedTiltAxis
 from abtem.core.backend import get_array_module
 from abtem.core.transform import CompositeWaveTransform, WaveTransform
-from abtem.distributions import BaseDistribution, AxisAlignedDistributionND, _EnsembleFromDistributionsMixin
+from abtem.distributions import BaseDistribution, _AxisAlignedDistributionND, _EnsembleFromDistributionsMixin
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 def validate_tilt(tilt):
 
-    if isinstance(tilt, AxisAlignedDistributionND):
+    if isinstance(tilt, _AxisAlignedDistributionND):
         raise NotImplementedError
 
     if isinstance(tilt, BaseDistribution):
