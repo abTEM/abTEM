@@ -6,7 +6,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
 
-    <title>Real space integrators (advanced options) &#8212; abTEM Documentation</title>
+    <title>Real space integrators &#8212; abTEM Documentation</title>
     
   <!-- Loaded before other Sphinx assets -->
   <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -235,23 +235,8 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="normalization.html">
-     Wave Function Normalization
-    </a>
-   </li>
-   <li class="toctree-l2">
     <a class="reference internal" href="antialiasing.html">
-     Antialiasing and Sampling
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="ensembles.html">
-     Ensembles
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="visualized_aberrations.html">
-     Visualized aberrations
+     Sampling and antialiasing
     </a>
    </li>
   </ul>
@@ -666,6 +651,11 @@ const thebe_selector_output = ".output, .cell_output"
      </i>
     </label>
     <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html">
+       GPAWParametrization
+      </a>
+     </li>
      <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html">
        GPAWPotential
@@ -1096,7 +1086,7 @@ title="Print to PDF"
         <div class="col pl-md-3 pl-lg-5 content-container">
             <!-- Table of contents that is only displayed when printing the page -->
             <div id="jb-print-docs-body" class="onlyprint">
-                <h1>Real space integrators (advanced options)</h1>
+                <h1>Real space integrators</h1>
                 <!-- Table of contents -->
                 <div id="print-main-content">
                     <div id="jb-print-toc">
@@ -1121,8 +1111,8 @@ title="Print to PDF"
                 
               <div>
                 
-  <section id="real-space-integrators-advanced-options">
-<h1>Real space integrators (advanced options)<a class="headerlink" href="#real-space-integrators-advanced-options" title="Permalink to this heading">#</a></h1>
+  <section id="real-space-integrators">
+<h1>Real space integrators<a class="headerlink" href="#real-space-integrators" title="Permalink to this heading">#</a></h1>
 <section id="quadrature-rule">
 <h2>Quadrature rule<a class="headerlink" href="#quadrature-rule" title="Permalink to this heading">#</a></h2>
 <p>The numerical integrals by creating a table of integrals by using the Gaussian quadrature method , which is designed for accurate results using a minimum number of evaluations for functions with singularities.</p>

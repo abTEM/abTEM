@@ -233,23 +233,8 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/normalization.html">
-     Wave Function Normalization
-    </a>
-   </li>
-   <li class="toctree-l2">
     <a class="reference internal" href="../appendix/antialiasing.html">
-     Antialiasing and Sampling
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/ensembles.html">
-     Ensembles
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/visualized_aberrations.html">
-     Visualized aberrations
+     Sampling and antialiasing
     </a>
    </li>
   </ul>
@@ -664,6 +649,11 @@ const thebe_selector_output = ".output, .cell_output"
      </i>
     </label>
     <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html">
+       GPAWParametrization
+      </a>
+     </li>
      <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html">
        GPAWPotential
@@ -1145,7 +1135,7 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="abtem-and-dask">
-<h1>abTEM and Dask<a class="headerlink" href="#abtem-and-dask" title="Permalink to this heading">#</a></h1>
+<span id="walkthrough-dask"></span><h1>abTEM and Dask<a class="headerlink" href="#abtem-and-dask" title="Permalink to this heading">#</a></h1>
 <p>Parallel computation in abTEM whether it is running on a laptop or a High Performance Computing cluster goes through <a class="reference external" href="https://dask.org/">Dask</a>. Some knowledge of Dask may be required to run abTEM effectively on large multi-CPU/GPU systems, however, if you are just running abTEM on your own computer, this tutorial gets you started. If you want a quick introduction to Dask, we recommend <a class="reference external" href="https://www.youtube.com/watch?v=nnndxbr_Xq4&amp;t=66s">this</a> short youtube video.</p>
 <section id="lazy-computations-and-task-graphs">
 <h2>Lazy computations and task graphs<a class="headerlink" href="#lazy-computations-and-task-graphs" title="Permalink to this heading">#</a></h2>

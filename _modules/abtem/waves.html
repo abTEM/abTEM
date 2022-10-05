@@ -232,23 +232,8 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../../user_guide/appendix/normalization.html">
-     Wave Function Normalization
-    </a>
-   </li>
-   <li class="toctree-l2">
     <a class="reference internal" href="../../user_guide/appendix/antialiasing.html">
-     Antialiasing and Sampling
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user_guide/appendix/ensembles.html">
-     Ensembles
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user_guide/appendix/visualized_aberrations.html">
-     Visualized aberrations
+     Sampling and antialiasing
     </a>
    </li>
   </ul>
@@ -664,6 +649,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html">
+       GPAWParametrization
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html">
        GPAWPotential
       </a>
@@ -1035,7 +1025,6 @@ title="Open an issue"
 <span class="kn">from</span> <span class="nn">abtem.core.fft</span> <span class="kn">import</span> <span class="n">fft2</span><span class="p">,</span> <span class="n">ifft2</span><span class="p">,</span> <span class="n">fft_crop</span><span class="p">,</span> <span class="n">fft_interpolate</span>
 <span class="kn">from</span> <span class="nn">abtem.core.grid</span> <span class="kn">import</span> <span class="n">Grid</span><span class="p">,</span> <span class="n">validate_gpts</span><span class="p">,</span> <span class="n">polar_spatial_frequencies</span>
 <span class="kn">from</span> <span class="nn">abtem.core.grid</span> <span class="kn">import</span> <span class="n">HasGridMixin</span>
-<span class="kn">from</span> <span class="nn">abtem.core.intialize</span> <span class="kn">import</span> <span class="n">initialize</span>
 <span class="kn">from</span> <span class="nn">abtem.core.utils</span> <span class="kn">import</span> <span class="n">safe_floor_int</span><span class="p">,</span> <span class="n">CopyMixin</span><span class="p">,</span> <span class="n">EqualityMixin</span>
 <span class="kn">from</span> <span class="nn">abtem.detectors</span> <span class="kn">import</span> <span class="p">(</span>
     <span class="n">BaseDetector</span><span class="p">,</span>
@@ -1201,7 +1190,7 @@ title="Open an issue"
         <span class="bp">self</span><span class="p">,</span> <span class="n">angle</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="n">parity</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;same&quot;</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
 
-        <span class="k">if</span> <span class="n">angle</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">angle</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">angle</span> <span class="o">==</span> <span class="s2">&quot;full&quot;</span><span class="p">:</span>
             <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">gpts</span>
 
         <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">angle</span><span class="p">,</span> <span class="p">(</span><span class="n">numbers</span><span class="o">.</span><span class="n">Number</span><span class="p">,</span> <span class="nb">float</span><span class="p">)):</span>
@@ -1217,7 +1206,7 @@ title="Open an issue"
             <span class="n">gpts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_antialias_valid_gpts</span>
 
         <span class="k">else</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;angle must be a number or one of &quot;cutoff&quot; or &quot;angle&quot;&#39;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;angle must be a number or one of &quot;cutoff&quot;, &quot;valid&quot; or &quot;full&quot;&#39;</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="n">parity</span> <span class="o">==</span> <span class="s2">&quot;same&quot;</span><span class="p">:</span>
             <span class="k">return</span> <span class="p">(</span>
@@ -1663,7 +1652,7 @@ title="Open an issue"
             <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">,</span>
         <span class="p">)</span></div>
 
-<div class="viewcode-block" id="Waves.image"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.image">[docs]</a>    <span class="k">def</span> <span class="nf">image</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<div class="viewcode-block" id="Waves.images"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.images">[docs]</a>    <span class="k">def</span> <span class="nf">images</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Calculate the complex array of the wave functions at the image plane.</span>
 
@@ -1762,7 +1751,7 @@ title="Open an issue"
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
-<span class="sd">        max_angle : {&#39;cutoff&#39;, &#39;valid&#39;} or float</span>
+<span class="sd">        max_angle : {&#39;cutoff&#39;, &#39;valid&#39;, &#39;full&#39;} or float</span>
 <span class="sd">            Maximum scattering angle of the diffraction patterns.</span>
 
 <span class="sd">                ``cutoff`` :</span>
@@ -1789,6 +1778,7 @@ title="Open an issue"
 
             <span class="n">array</span> <span class="o">=</span> <span class="n">fft2</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">overwrite_x</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 
+
             <span class="k">if</span> <span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:]</span> <span class="o">!=</span> <span class="n">new_gpts</span><span class="p">:</span>
                 <span class="n">array</span> <span class="o">=</span> <span class="n">fft_crop</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">new_shape</span><span class="o">=</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">+</span> <span class="n">new_gpts</span><span class="p">)</span>
 
@@ -1805,7 +1795,7 @@ title="Open an issue"
         <span class="n">validate_gpts</span><span class="p">(</span><span class="n">new_gpts</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_lazy</span><span class="p">:</span>
-            <span class="n">dtype</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">complex64</span> <span class="k">if</span> <span class="n">return_complex</span> <span class="k">else</span> <span class="n">xp</span><span class="o">.</span><span class="n">float</span>
+            <span class="n">dtype</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">complex64</span> <span class="k">if</span> <span class="n">return_complex</span> <span class="k">else</span> <span class="n">xp</span><span class="o">.</span><span class="n">float32</span>
 
             <span class="n">pattern</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">map_blocks</span><span class="p">(</span>
                 <span class="n">_diffraction_pattern</span><span class="p">,</span>
@@ -2500,7 +2490,7 @@ title="Open an issue"
         <span class="k">return</span> <span class="bp">cls</span><span class="p">(</span>
             <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="n">ctf</span><span class="o">.</span><span class="n">semiangle_cutoff</span><span class="p">,</span>
             <span class="n">taper</span><span class="o">=</span><span class="n">ctf</span><span class="o">.</span><span class="n">taper</span><span class="p">,</span>
-            <span class="n">aberrations</span><span class="o">=</span><span class="n">ctf</span><span class="o">.</span><span class="n">parameters</span><span class="p">,</span>
+            <span class="n">aberrations</span><span class="o">=</span><span class="n">ctf</span><span class="o">.</span><span class="n">aberration_coefficients</span><span class="p">,</span>
             <span class="o">**</span><span class="n">kwargs</span>
         <span class="p">)</span>
 
@@ -2656,8 +2646,6 @@ title="Open an issue"
 <span class="sd">        -------</span>
 <span class="sd">        measurements : BaseMeasurement or Waves or list of BaseMeasurement</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-        <span class="n">initialize</span><span class="p">()</span>
-
         <span class="n">potential</span> <span class="o">=</span> <span class="n">_validate_potential</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
 

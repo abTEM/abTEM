@@ -232,23 +232,8 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../../user_guide/appendix/normalization.html">
-     Wave Function Normalization
-    </a>
-   </li>
-   <li class="toctree-l2">
     <a class="reference internal" href="../../user_guide/appendix/antialiasing.html">
-     Antialiasing and Sampling
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user_guide/appendix/ensembles.html">
-     Ensembles
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user_guide/appendix/visualized_aberrations.html">
-     Visualized aberrations
+     Sampling and antialiasing
     </a>
    </li>
   </ul>
@@ -664,6 +649,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html">
+       GPAWParametrization
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html">
        GPAWPotential
       </a>
@@ -1031,6 +1021,7 @@ title="Open an issue"
 
 <span class="kn">from</span> <span class="nn">abtem.charge_density</span> <span class="kn">import</span> <span class="n">_generate_slices</span>
 <span class="kn">from</span> <span class="nn">abtem.core.axes</span> <span class="kn">import</span> <span class="n">AxisMetadata</span>
+<span class="kn">from</span> <span class="nn">abtem.core.constants</span> <span class="kn">import</span> <span class="n">eps0</span>
 <span class="kn">from</span> <span class="nn">abtem.core.electron_configurations</span> <span class="kn">import</span> <span class="p">(</span>
     <span class="n">electron_configurations</span><span class="p">,</span>
     <span class="n">config_str_to_config_tuples</span><span class="p">,</span>
@@ -1578,9 +1569,9 @@ title="Open an issue"
                 <span class="k">return</span> <span class="p">(</span><span class="n">array</span><span class="p">,)</span></div>
 
 
-<span class="k">class</span> <span class="nc">_GPAWParametrization</span><span class="p">:</span>
-    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_potential_functions</span> <span class="o">=</span> <span class="p">{}</span>
+<div class="viewcode-block" id="GPAWParametrization"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html#abtem.gpaw.GPAWParametrization">[docs]</a><span class="k">class</span> <span class="nc">GPAWParametrization</span><span class="p">:</span>
+<div class="viewcode-block" id="GPAWParametrization.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html#abtem.gpaw.GPAWParametrization.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_potential_functions</span> <span class="o">=</span> <span class="p">{}</span></div>
 
     <span class="k">def</span> <span class="nf">_get_added_electrons</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">symbol</span><span class="p">,</span> <span class="n">charge</span><span class="p">):</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">charge</span><span class="p">:</span>
@@ -1647,7 +1638,7 @@ title="Open an issue"
             <span class="k">lambda</span> <span class="n">r</span><span class="p">:</span> <span class="n">atomic_numbers</span><span class="p">[</span><span class="n">symbol</span><span class="p">]</span> <span class="o">/</span> <span class="n">r</span> <span class="o">/</span> <span class="p">(</span><span class="mi">4</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">eps0</span><span class="p">)</span>
             <span class="o">+</span> <span class="n">ve</span><span class="p">(</span><span class="n">r</span><span class="p">)</span> <span class="o">/</span> <span class="n">r</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Hartree</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span>
         <span class="p">)</span>
-        <span class="k">return</span> <span class="n">vr</span>
+        <span class="k">return</span> <span class="n">vr</span></div>
 
     <span class="c1"># def get_function(self, symbol, charge=0.):</span>
     <span class="c1">#     #if symbol in self._potential_functions.keys():</span>

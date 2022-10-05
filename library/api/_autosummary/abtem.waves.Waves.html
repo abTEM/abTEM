@@ -235,23 +235,8 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../../../user_guide/appendix/normalization.html">
-     Wave Function Normalization
-    </a>
-   </li>
-   <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/appendix/antialiasing.html">
-     Antialiasing and Sampling
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../../user_guide/appendix/ensembles.html">
-     Ensembles
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../../user_guide/appendix/visualized_aberrations.html">
-     Visualized aberrations
+     Sampling and antialiasing
     </a>
    </li>
   </ul>
@@ -666,6 +651,11 @@ const thebe_selector_output = ".output, .cell_output"
      </i>
     </label>
     <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="abtem.gpaw.GPAWParametrization.html">
+       GPAWParametrization
+      </a>
+     </li>
      <li class="toctree-l3">
       <a class="reference internal" href="abtem.gpaw.GPAWPotential.html">
        GPAWPotential
@@ -1158,7 +1148,7 @@ from the waves.</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.waves.Waves.image" title="abtem.waves.Waves.image"><code class="xref py py-obj docutils literal notranslate"><span class="pre">image</span></code></a>()</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.waves.Waves.images" title="abtem.waves.Waves.images"><code class="xref py py-obj docutils literal notranslate"><span class="pre">images</span></code></a>()</p></td>
 <td><p>Calculate the complex array of the wave functions at the image plane.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.waves.Waves.intensity" title="abtem.waves.Waves.intensity"><code class="xref py py-obj docutils literal notranslate"><span class="pre">intensity</span></code></a>()</p></td>
@@ -1557,7 +1547,7 @@ automatically estimated based on “dask.chunk-size” in the user configuration
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>max_angle</strong> (<em>{'cutoff'</em><em>, </em><em>'valid'}</em><em> or </em><em>float</em>) – <p>Maximum scattering angle of the diffraction patterns.</p>
+<li><p><strong>max_angle</strong> (<em>{'cutoff'</em><em>, </em><em>'valid'</em><em>, </em><em>'full'}</em><em> or </em><em>float</em>) – <p>Maximum scattering angle of the diffraction patterns.</p>
 <blockquote>
 <div><dl class="simple">
 <dt><code class="docutils literal notranslate"><span class="pre">cutoff</span></code> :</dt><dd><p>The maximum scattering angle will be the cutoff of the antialias aperture.</p>
@@ -1760,8 +1750,8 @@ s3:// for remote data.</p>
 </dd></dl>
 
 <dl class="py method">
-<dt class="sig sig-object py" id="abtem.waves.Waves.image">
-<span class="sig-name descname"><span class="pre">image</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves.html#Waves.image"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.Waves.image" title="Permalink to this definition">#</a></dt>
+<dt class="sig sig-object py" id="abtem.waves.Waves.images">
+<span class="sig-name descname"><span class="pre">images</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/waves.html#Waves.images"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.waves.Waves.images" title="Permalink to this definition">#</a></dt>
 <dd><p>Calculate the complex array of the wave functions at the image plane.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Returns</dt>

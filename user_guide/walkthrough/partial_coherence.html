@@ -235,23 +235,8 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/normalization.html">
-     Wave Function Normalization
-    </a>
-   </li>
-   <li class="toctree-l2">
     <a class="reference internal" href="../appendix/antialiasing.html">
-     Antialiasing and Sampling
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/ensembles.html">
-     Ensembles
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/visualized_aberrations.html">
-     Visualized aberrations
+     Sampling and antialiasing
     </a>
    </li>
   </ul>
@@ -666,6 +651,11 @@ const thebe_selector_output = ".output, .cell_output"
      </i>
     </label>
     <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html">
+       GPAWParametrization
+      </a>
+     </li>
      <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html">
        GPAWPotential
@@ -1083,8 +1073,8 @@ title="Print to PDF"
     <nav id="bd-toc-nav" aria-label="Page">
         <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#partial-coherence-with-plane-waves">
-   Partial coherence with plane waves
+  <a class="reference internal nav-link" href="#partial-temporal-coherence-with-plane-waves">
+   Partial temporal coherence with plane waves
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -1112,8 +1102,8 @@ title="Print to PDF"
                         <nav aria-label="Page">
                             <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#partial-coherence-with-plane-waves">
-   Partial coherence with plane waves
+  <a class="reference internal nav-link" href="#partial-temporal-coherence-with-plane-waves">
+   Partial temporal coherence with plane waves
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -1131,7 +1121,7 @@ title="Print to PDF"
                 
               <div>
                 
-  <div class="cell docutils container">
+  <div class="cell tag_hide-input docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="o">%</span><span class="k">config</span> InlineBackend.rc = {&quot;figure.dpi&quot;: 72, &#39;figure.figsize&#39;: (6.0, 4.0)}
 <span class="o">%</span><span class="k">matplotlib</span> inline
@@ -1147,12 +1137,13 @@ title="Print to PDF"
 </div>
 </div>
 </div>
-<p>(walkthrough:partial_coherence)</p>
 <section class="tex2jax_ignore mathjax_ignore" id="partial-coherence">
-<h1>Partial coherence<a class="headerlink" href="#partial-coherence" title="Permalink to this heading">#</a></h1>
-<p>In our introduction to the contrast transfer function, we described how partial coherence may be approximated by multiplication with an envelope function. This approach is not always appropriate for simulating experiments with plane wave illumination and it is never appropriate for simulating experiments with a convergent beam.</p>
-<section id="partial-coherence-with-plane-waves">
-<h2>Partial coherence with plane waves<a class="headerlink" href="#partial-coherence-with-plane-waves" title="Permalink to this heading">#</a></h2>
+<span id="walkthrough-partial-coherence"></span><h1>Partial coherence<a class="headerlink" href="#partial-coherence" title="Permalink to this heading">#</a></h1>
+<p>In our <a class="reference internal" href="contrast_transfer_function.html#walkthrough-contrast-transfer-function"><span class="std std-ref">walkthrough on the contrast transfer function</span></a>, we described how partial coherence may be approximated by multiplication with an envelope function. This approach is not always appropriate for simulating experiments with plane wave illumination and it is never appropriate for simulating experiments with a convergent beam.</p>
+<section id="partial-temporal-coherence-with-plane-waves">
+<h2>Partial temporal coherence with plane waves<a class="headerlink" href="#partial-temporal-coherence-with-plane-waves" title="Permalink to this heading">#</a></h2>
+<p>Partial temporal coherence is generally more important than partial temporal coherence. In this section, we compare the quasicoherent approximation to the accurate inc</p>
+<p>We simulate an exit wave at <span class="math notranslate nohighlight">\(80 \ \mathrm{keV}\)</span> using a sample of MoS<sub/>2.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">PlaneWave</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span><span class="p">)</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">mx2</span><span class="p">(</span><span class="n">vacuum</span><span class="o">=</span><span class="mi">2</span><span class="p">))</span>
@@ -1160,6 +1151,7 @@ title="Print to PDF"
 </div>
 </div>
 </div>
+<p>Next we apply a contrast transfer function using the Scherzer defocus with a spherical aberration of <span class="math notranslate nohighlight">\(-20 \ \mu m\)</span> and a focal spread of <span class="math notranslate nohighlight">\(52.5 \ \mathrm{Å}\)</span>. See the <a class="reference internal" href="contrast_transfer_function.html#walkthrough-contrast-transfer-function"><span class="std std-ref">walkthrough on the CTF</span></a> for details.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">Cs</span> <span class="o">=</span> <span class="o">-</span><span class="mf">20e-6</span> <span class="o">*</span> <span class="mf">1e10</span>
@@ -1181,35 +1173,34 @@ title="Print to PDF"
 </div>
 </div>
 </div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">ctf_quasi_coherent</span><span class="o">.</span><span class="n">profiles</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">();</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<img alt="../../_images/partial_coherence_5_0.png" src="../../_images/partial_coherence_5_0.png" />
-</div>
-</div>
+<p>In the fully incoherent model, we integrate over images at different defocii</p>
 <div class="math notranslate nohighlight">
 \[
-    I_{incoherent} = \int_{-\infty}^{\infty} p(\Delta f) I(\Delta f)  \ \mathrm{d} \Delta f
+    I_{incoherent} = \int_{-\infty}^{\infty} p(\Delta f) I(\Delta f) \ \mathrm{d} \Delta f \quad ,
 \]</div>
-<p>The image intensity given an exit wave function, <span class="math notranslate nohighlight">\(\psi_{exit}\)</span>, and the phase aberrations, <span class="math notranslate nohighlight">\(\chi(\Delta f)\)</span>, with the defocus, <span class="math notranslate nohighlight">\(\Delta f\)</span>, may be written
-$<span class="math notranslate nohighlight">\(
+<p>the image intensity given an exit wave function, <span class="math notranslate nohighlight">\(\psi_{exit}\)</span>, and the phase aberrations, <span class="math notranslate nohighlight">\(\chi(\Delta f)\)</span>, with the defocus, <span class="math notranslate nohighlight">\(\Delta f\)</span>, may be written</p>
+<div class="math notranslate nohighlight">
+\[
     I(\Delta f) = \left\| \mathcal{F^{-1}}\left[ \hat{\psi}_{exit} \exp(-i \chi(\Delta f) \right] \right\|^2 \quad ,
-\)</span>$
-where for clarity we have omitted the coordinates.</p>
-<p>where</p>
+\]</div>
+<p>where for clarity we have omitted the coordinates.</p>
+<p>The weighting function is assumed to be Gaussian</p>
 <div class="math notranslate nohighlight">
 \[
-    p(\Delta f) = \frac{1}{\sigma\sqrt{2\pi}} \exp\left(\frac{(\Delta f_0 - \Delta f) ^ 2}{2\sigma ^ 2}\right)
+    p(\Delta f) = \frac{1}{\sigma\sqrt{2\pi}} \exp\left(\frac{(\Delta f_{center} - \Delta f) ^ 2}{2\sigma ^ 2}\right)
 \]</div>
-<p>where <span class="math notranslate nohighlight">\(\sigma\)</span> is the focal spread</p>
-<p>We approximate Eq. as a Riemann sum
-$<span class="math notranslate nohighlight">\(
+<p>where <span class="math notranslate nohighlight">\(\sigma\)</span> is the focal spread.</p>
+<p>We approximate Eq. as a Riemann sum</p>
+<div class="math notranslate nohighlight">
+\[
     I_{incoherent} = \sum_{\Delta f_n} p(\Delta f_n) I(\Delta f_n)
-\)</span>$</p>
+\]</div>
+<p>where we need to choose a set of <span class="math notranslate nohighlight">\(N\)</span> samples</p>
+<div class="math notranslate nohighlight">
+\[
+    \Delta f_n = \Delta f_{center} - \Delta f_{truncation} + \frac{2 n \Delta f_{truncation}}{N}
+\]</div>
+<p>where <span class="math notranslate nohighlight">\(n=0,1,\ldots,N\)</span> and the truncation of the sum, <span class="math notranslate nohighlight">\(\Delta f_{truncation}\)</span>, have to be chosen such that <span class="math notranslate nohighlight">\(p(\Delta f)\)</span> is small.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">ctf_incoherent</span> <span class="o">=</span> <span class="n">ctf_coherent</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
@@ -1218,22 +1209,10 @@ $<span class="math notranslate nohighlight">\(
     <span class="n">center</span><span class="o">=</span><span class="n">ctf_incoherent</span><span class="o">.</span><span class="n">scherzer_defocus</span><span class="p">,</span>
     <span class="n">standard_deviation</span><span class="o">=</span><span class="n">focal_spread</span><span class="p">,</span>
     <span class="n">num_samples</span><span class="o">=</span><span class="mi">7</span><span class="p">,</span>
-    <span class="n">sampling_limit</span><span class="o">=</span><span class="mf">1.21</span><span class="p">,</span>
+    <span class="n">sampling_limit</span><span class="o">=</span><span class="mf">1.5</span><span class="p">,</span>
 <span class="p">)</span>
 
 <span class="n">ctf_incoherent</span><span class="o">.</span><span class="n">defocus</span> <span class="o">=</span> <span class="n">defocus</span>
-</pre></div>
-</div>
-</div>
-</div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="mi">1</span><span class="o">/</span><span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="mi">1</span><span class="o">/</span><span class="mi">2</span><span class="p">)</span> <span class="o">*</span> <span class="mi">2</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>1.2130613194252668
 </pre></div>
 </div>
 </div>
@@ -1247,16 +1226,16 @@ $<span class="math notranslate nohighlight">\(
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.Images object at 0x7f900d693850&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.measurements.Images object at 0x7f9eded87310&gt;
 </pre></div>
 </div>
 </div>
 </div>
-<div class="cell docutils container">
+<div class="cell tag_full-width docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">images_incoherent</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
     <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-    <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+    <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
     <span class="n">common_color_scale</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
     <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
     <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
@@ -1265,7 +1244,7 @@ $<span class="math notranslate nohighlight">\(
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/partial_coherence_10_0.png" src="../../_images/partial_coherence_10_0.png" />
+<img alt="../../_images/partial_coherence_9_0.png" src="../../_images/partial_coherence_9_0.png" />
 </div>
 </div>
 <div class="cell docutils container">
@@ -1293,7 +1272,7 @@ $<span class="math notranslate nohighlight">\(
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/partial_coherence_12_0.png" src="../../_images/partial_coherence_12_0.png" />
+<img alt="../../_images/partial_coherence_11_0.png" src="../../_images/partial_coherence_11_0.png" />
 </div>
 </div>
 <div class="cell docutils container">
@@ -1303,7 +1282,7 @@ $<span class="math notranslate nohighlight">\(
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/partial_coherence_13_0.png" src="../../_images/partial_coherence_13_0.png" />
+<img alt="../../_images/partial_coherence_12_0.png" src="../../_images/partial_coherence_12_0.png" />
 </div>
 </div>
 </section>

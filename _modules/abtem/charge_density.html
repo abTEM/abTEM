@@ -50,6 +50,8 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -230,23 +232,8 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../../user_guide/appendix/normalization.html">
-     Wave Function Normalization
-    </a>
-   </li>
-   <li class="toctree-l2">
     <a class="reference internal" href="../../user_guide/appendix/antialiasing.html">
-     Antialiasing and Sampling
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user_guide/appendix/ensembles.html">
-     Ensembles
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../../user_guide/appendix/visualized_aberrations.html">
-     Visualized aberrations
+     Sampling and antialiasing
     </a>
    </li>
   </ul>
@@ -661,6 +648,11 @@ const thebe_selector_output = ".output, .cell_output"
      </i>
     </label>
     <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html">
+       GPAWParametrization
+      </a>
+     </li>
      <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html">
        GPAWPotential
@@ -1216,7 +1208,7 @@ title="Open an issue"
     <span class="p">)</span>
 
     <span class="n">charge</span> <span class="o">=</span> <span class="n">add_point_charges_fourier</span><span class="p">(</span>
-        <span class="n">charge</span><span class="p">,</span> <span class="n">atoms</span><span class="p">,</span> <span class="mf">0.2</span><span class="o">*</span><span class="n">ewald_potential</span><span class="o">.</span><span class="n">integrator</span><span class="o">.</span><span class="n">parametrization</span><span class="o">.</span><span class="n">width</span>
+        <span class="n">charge</span><span class="p">,</span> <span class="n">atoms</span><span class="p">,</span> <span class="n">ewald_potential</span><span class="o">.</span><span class="n">integrator</span><span class="o">.</span><span class="n">parametrization</span><span class="o">.</span><span class="n">width</span>
     <span class="p">)</span>
 
     <span class="n">potential</span> <span class="o">=</span> <span class="p">(</span>

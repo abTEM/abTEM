@@ -237,23 +237,8 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/normalization.html">
-     Wave Function Normalization
-    </a>
-   </li>
-   <li class="toctree-l2">
     <a class="reference internal" href="../appendix/antialiasing.html">
-     Antialiasing and Sampling
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/ensembles.html">
-     Ensembles
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/visualized_aberrations.html">
-     Visualized aberrations
+     Sampling and antialiasing
     </a>
    </li>
   </ul>
@@ -668,6 +653,11 @@ const thebe_selector_output = ".output, .cell_output"
      </i>
     </label>
     <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html">
+       GPAWParametrization
+      </a>
+     </li>
      <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html">
        GPAWPotential
@@ -1208,7 +1198,7 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="prism">
-<span id="getting-started-user-guide-prism"></span><h1>PRISM<a class="headerlink" href="#prism" title="Permalink to this heading">#</a></h1>
+<span id="walkthrough-prism"></span><h1>PRISM<a class="headerlink" href="#prism" title="Permalink to this heading">#</a></h1>
 <p>Multslice simulations of STEM images is computationally expensive because the exit wave function has to be calculated from scratch at each probe position. abTEM uses parallization to mitigate this however   mitigated by using more hardware or GPUs, an alternative, that does not require more hardware, is to use the PRISM algorithm <span id="id1">[<a class="reference internal" href="../../library/bibliography.html#id7" title="Colin Ophus. A fast image simulation algorithm for scanning transmission electron microscopy. Advanced Structural and Chemical Imaging, 2017.">Oph17</a>]</span>. At zero cost to accuracy, PRISM almost always speeds up simulations of images with many probe positions. Introducing approximations in the form of Fourier space interpolation, PRISM can reach speedups of several 100x at a minor cost to the accuracy.</p>
 <p>The downside to PRISM is an increased memory requirement, which can be prohibitive, especially if a requirement of good Fourier space sampling prohibits interpolation. A solution to this issue is using the partitioned PRISM algorithm introduced at the end of this document.</p>
 <div class="admonition seealso">
@@ -1253,21 +1243,6 @@ title="Print to PDF"
 <p>We import the atomic model of the SrTiO<sub>3</sub>/LaTiO<sub>3</sub> interface created <span class="xref myst">here</span> and make a <code class="docutils literal notranslate"><span class="pre">Potential</span></code>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">client</span> <span class="o">=</span> <span class="n">Client</span><span class="p">()</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<div class="output stderr highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>/opt/anaconda3/envs/abtem-dask/lib/python3.8/site-packages/distributed/node.py:160: UserWarning: Port 8787 is already in use.
-Perhaps you already have a cluster running?
-Hosting the HTTP server on port 62284 instead
-  warnings.warn(
-</pre></div>
-</div>
-</div>
-</div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="s2">&quot;./data/STO_LTO.cif&quot;</span><span class="p">)</span>
 
 <span class="n">potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">gpts</span><span class="o">=</span><span class="p">(</span><span class="mi">304</span><span class="p">,</span> <span class="mi">608</span><span class="p">))</span>
@@ -1277,7 +1252,7 @@ Hosting the HTTP server on port 62284 instead
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/prism_3_0.png" src="../../_images/prism_3_0.png" />
+<img alt="../../_images/prism_2_0.png" src="../../_images/prism_2_0.png" />
 </div>
 </div>
 <p>In <em>abTEM</em>, the PRISM scattering matrix (i.e. the set of waves <span class="math notranslate nohighlight">\(\mathcal{M} S_{nm}\)</span>) is represented by the <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code>. The expansion cutoff angle, <span class="math notranslate nohighlight">\(\alpha_{max}\)</span>, is given as <code class="docutils literal notranslate"><span class="pre">planewave_cutoff</span></code>. In addition to <span class="math notranslate nohighlight">\(\alpha_{max}\)</span>, the number of plane wave in the expansion increases with the energy and the extent of the potential, because they, respectively, decrease <span class="math notranslate nohighlight">\(\lambda\)</span> and <span class="math notranslate nohighlight">\(\Delta_q\)</span> in Eq. <a class="reference internal" href="#equation-eq-prism-cutoff">(5)</a>.</p>
@@ -1340,7 +1315,7 @@ chunks  51.15 MiB   (86, 192, 406)   5 chunks  numpy.ndarray
 <div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  1.7s
 </pre></div>
 </div>
-<img alt="../../_images/prism_9_1.png" src="../../_images/prism_9_1.png" />
+<img alt="../../_images/prism_8_1.png" src="../../_images/prism_8_1.png" />
 </div>
 </div>
 <p>The number of plane waves should be compared to the number of probe positions required to scan over the extent of the potential at Nyquist sampling.</p>
@@ -1404,7 +1379,7 @@ Ratio: 5.4
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/prism_16_0.png" src="../../_images/prism_16_0.png" />
+<img alt="../../_images/prism_15_0.png" src="../../_images/prism_15_0.png" />
 </div>
 </div>
 <p>The reduction stage is typically significantly faster than the multislice stage, however, this depends completely on the number of slices in the potential. Using PRISM the present example took about 1 min 30s on a mid-range laptop, while the equivalent conventional multislice algorithm took 6 min, hence the actual speedup from using PRISM was about a factor of 4.</p>
@@ -1494,7 +1469,7 @@ Ratio: 5.4
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/prism_22_0.png" src="../../_images/prism_22_0.png" />
+<img alt="../../_images/prism_21_0.png" src="../../_images/prism_21_0.png" />
 </div>
 </div>
 <p>A quantitative comparison is shown below as the difference between the exact and interpolated as a percent of the maximum value. We see that the error is a couple of percent for the interpolation factors <span class="math notranslate nohighlight">\((1,2)\)</span> and <span class="math notranslate nohighlight">\((2,4)\)</span>, which is probably well within the range of error source due to unknowns and implicit approximantions. The error of up to <span class="math notranslate nohighlight">\(15\ \%\)</span> for the interpolation factor of <span class="math notranslate nohighlight">\((4,8)\)</span> is clearly too large for creating production quality simulations, but it  might be tolerated while dialing in other parameters.</p>
@@ -1528,7 +1503,7 @@ Ratio: 5.4
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/prism_24_0.png" src="../../_images/prism_24_0.png" />
+<img alt="../../_images/prism_23_0.png" src="../../_images/prism_23_0.png" />
 </div>
 </div>
 <p>In the above we interpolated by twice the factor in <span class="math notranslate nohighlight">\(y\)</span> compared to <span class="math notranslate nohighlight">\(x\)</span>. Interpolation effectively repeats the probe, hence the “window” that the repeated probes shrinks as interpolation increases. Hence when the potential extent is larger, we can interpolate by a larger factor before the probes starts to get squeezed.</p>
@@ -1553,7 +1528,7 @@ Ratio: 5.4
 [########################################] | 100% Completed |  0.1s
 </pre></div>
 </div>
-<img alt="../../_images/prism_26_1.png" src="../../_images/prism_26_1.png" />
+<img alt="../../_images/prism_25_1.png" src="../../_images/prism_25_1.png" />
 </div>
 </div>
 </section>
@@ -1589,7 +1564,7 @@ Ratio: 5.4
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/prism_29_0.png" src="../../_images/prism_29_0.png" />
+<img alt="../../_images/prism_28_0.png" src="../../_images/prism_28_0.png" />
 </div>
 </div>
 </section>

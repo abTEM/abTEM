@@ -50,8 +50,6 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="#" />
     <link rel="search" title="Search" href="search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -214,6 +212,11 @@ const thebe_selector_output = ".output, .cell_output"
      Core loss EELS
     </a>
    </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="user_guide/walkthrough/plasmons.html">
+     Plasmons
+    </a>
+   </li>
   </ul>
  </li>
  <li class="toctree-l1 has-children">
@@ -232,23 +235,8 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="user_guide/appendix/normalization.html">
-     Wave Function Normalization
-    </a>
-   </li>
-   <li class="toctree-l2">
     <a class="reference internal" href="user_guide/appendix/antialiasing.html">
-     Antialiasing and Sampling
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="user_guide/appendix/ensembles.html">
-     Ensembles
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="user_guide/appendix/visualized_aberrations.html">
-     Visualized aberrations
+     Sampling and antialiasing
     </a>
    </li>
   </ul>
@@ -664,6 +652,11 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
+      <a class="reference internal" href="library/api/_autosummary/abtem.gpaw.GPAWParametrization.html">
+       GPAWParametrization
+      </a>
+     </li>
+     <li class="toctree-l3">
       <a class="reference internal" href="library/api/_autosummary/abtem.gpaw.GPAWPotential.html">
        GPAWPotential
       </a>
@@ -1057,6 +1050,8 @@ title="Open an issue"
         <li><a href="library/api/_autosummary/abtem.distributions.BaseDistribution.html#abtem.distributions.BaseDistribution.__init__">(abtem.distributions.BaseDistribution method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.distributions.DistributionFromValues.html#abtem.distributions.DistributionFromValues.__init__">(abtem.distributions.DistributionFromValues method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.gpaw.GPAWParametrization.html#abtem.gpaw.GPAWParametrization.__init__">(abtem.gpaw.GPAWParametrization method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.gpaw.GPAWPotential.html#abtem.gpaw.GPAWPotential.__init__">(abtem.gpaw.GPAWPotential method)</a>
 </li>
@@ -1927,6 +1922,8 @@ title="Open an issue"
       </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.gpaw.GPAWParametrization.html#abtem.gpaw.GPAWParametrization">GPAWParametrization (class in abtem.gpaw)</a>
+</li>
       <li><a href="library/api/_autosummary/abtem.gpaw.GPAWPotential.html#abtem.gpaw.GPAWPotential">GPAWPotential (class in abtem.gpaw)</a>
 </li>
       <li><a href="library/api/_autosummary/abtem.charge_density.ChargeDensityPotential.html#abtem.charge_density.ChargeDensityPotential.gpts">gpts (abtem.charge_density.ChargeDensityPotential property)</a>
@@ -2005,9 +2002,9 @@ title="Open an issue"
         <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.imag">(abtem.measurements.SinglePointMeasurement method)</a>
 </li>
       </ul></li>
-      <li><a href="library/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.image">image() (abtem.waves.Waves method)</a>
-</li>
       <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images">Images (class in abtem.measurements)</a>
+</li>
+      <li><a href="library/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.images">images() (abtem.waves.Waves method)</a>
 </li>
       <li><a href="library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html#abtem.detectors.AbstractRadialDetector.inner">inner (abtem.detectors.AbstractRadialDetector property)</a>
 

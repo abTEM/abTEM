@@ -19,6 +19,7 @@
       :toctree:
       :template: custom-class-template.rst
    
+      GPAWParametrization
       GPAWPotential
    
    

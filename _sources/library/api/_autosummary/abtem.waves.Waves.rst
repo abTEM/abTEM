@@ -34,7 +34,7 @@ Waves
       ~Waves.from_partitioned_args
       ~Waves.from_zarr
       ~Waves.get_items
-      ~Waves.image
+      ~Waves.images
       ~Waves.intensity
       ~Waves.match_grid
       ~Waves.max

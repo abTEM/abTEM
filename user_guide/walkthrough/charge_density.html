@@ -235,23 +235,8 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/normalization.html">
-     Wave Function Normalization
-    </a>
-   </li>
-   <li class="toctree-l2">
     <a class="reference internal" href="../appendix/antialiasing.html">
-     Antialiasing and Sampling
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/ensembles.html">
-     Ensembles
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/visualized_aberrations.html">
-     Visualized aberrations
+     Sampling and antialiasing
     </a>
    </li>
   </ul>
@@ -666,6 +651,11 @@ const thebe_selector_output = ".output, .cell_output"
      </i>
     </label>
     <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html">
+       GPAWParametrization
+      </a>
+     </li>
      <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html">
        GPAWPotential
@@ -1180,8 +1170,8 @@ title="Print to PDF"
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="ab-initio-potentials-with-gpaw">
 <span id="getting-started-user-guide-charge-density"></span><h1><em>ab initio</em> potentials with GPAW<a class="headerlink" href="#ab-initio-potentials-with-gpaw" title="Permalink to this heading">#</a></h1>
-<p>The independent atom model (IAM) neglects bonding and the resulting charge transfer, this is typically a good approximation, because the core charge and electrons are responible for most of the potential. However, the difference between the IAM and a more realistic model including the effects of bonding is measurable, in certain systems. Understanding this charge transfer may provide further insights, due its the importance in chemistry.</p>
-<p>Here we go beyond the independent atom model using density functional theory (DFT), to calculate a potential that includes charge transfer. Note that you need a working GPAW installation, see the <a class="reference external" href="https://wiki.fysik.dtu.dk/gpaw/">GPAW documentation</a> for more information. abTEM only supports GPAW directly, however, other DFT codes may be used assuming you can obtain the electron charge density as a numpy array.</p>
+<p>The independent atom model (IAM) neglects bonding and the resulting charge transfer, this is typically a good approximation, because the core charge and electrons are responible for most of the potential. However, the difference between the IAM and a more realistic model including the effects of bonding is measurable, in certain systems<span id="id1">[<a class="reference internal" href="../../library/bibliography.html#id15" title="Jacob Madsen, Timothy J. Pennycook, and Toma Susi. Ab initio description of bonding for transmission electron microscopy. Ultramicroscopy, 231:113253, 2021. doi:https://doi.org/10.1016/j.ultramic.2021.113253.">MPS21</a>]</span>. Understanding this charge transfer may provide further insights, due its the importance in chemistry.</p>
+<p>Here we go beyond the independent atom model using density functional theory (DFT), to calculate a potential that includes charge transfer using GPAW<span id="id2">[<a class="reference internal" href="../../library/bibliography.html#id9" title="J. J. Mortensen, L. B. Hansen, and K. W. Jacobsen. Real-space grid implementation of the projector augmented wave method. Phys. Rev. B, 71(3):035109, 2005.">MHJ05</a>]</span>. Note that you need a working GPAW installation to run the code in this walkthrough, see the <a class="reference external" href="https://wiki.fysik.dtu.dk/gpaw/">GPAW documentation</a> for more information. abTEM only supports GPAW directly, however, other DFT codes may be used assuming that you can obtain the electron charge density as a numpy array through the <code class="docutils literal notranslate"><span class="pre">ChargeDensityPotential</span></code>.</p>
 <section id="dft-calculation-of-hbn-with-gpaw">
 <h2>DFT calculation of hBN with GPAW<a class="headerlink" href="#dft-calculation-of-hbn-with-gpaw" title="Permalink to this heading">#</a></h2>
 <p>The first step to create a DFT potential is to converge a DFT calculation. We calculate the minimal hexagonal cell of hexagonal-Boron-Nitride (hBN). The atomic model is created by modifying a graphene model.</p>
@@ -1266,7 +1256,7 @@ title="Print to PDF"
 </div>
 </div>
 <p>Below compare the projection of the potentials. It is difficult to discern any visual differences between the IAM and DFT model from their resepective heatmaps, hence, we also calculate and show their difference and relative difference. In hBN the negative charge is transferred from Boron to Nitrogen, thus better screening the Nitrogen cores and lowering the potential.</p>
-<div class="cell docutils container">
+<div class="cell tag_full-width docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">projected_potential_dft</span> <span class="o">=</span> <span class="n">potential_dft</span><span class="o">.</span><span class="n">project</span><span class="p">()</span>
 <span class="n">projected_potential_iam</span> <span class="o">=</span> <span class="n">potential_iam</span><span class="o">.</span><span class="n">project</span><span class="p">()</span>
@@ -1334,7 +1324,7 @@ title="Print to PDF"
 </section>
 <section id="electron-diffraction-of-dft-potentials">
 <h2>Electron diffraction of DFT potentials<a class="headerlink" href="#electron-diffraction-of-dft-potentials" title="Permalink to this heading">#</a></h2>
-<p>Next, we calculate the influence of charge transfer on the electron diffraction patterns in hBN, approximately reproducing a published result <code class="docutils literal notranslate"><span class="pre">cite</span></code>{gpawpotential}.</p>
+<p>Next, we calculate the influence of charge transfer on the electron diffraction patterns in hBN, approximately reproducing a published result <span id="id3">[<a class="reference internal" href="../../library/bibliography.html#id3" title="Toma Susi, Jacob Madsen, Ursula Ludacka, Jens Jørgen Mortensen, Timothy J. Pennycook, Zhongbo Lee, Jani Kotakoski, Ute Kaiser, and Jannik C. Meyer. Efficient first principles simulation of electron scattering factors for transmission electron microscopy. Ultramicroscopy, 197:16-22, 2019.">SML+19</a>]</span>.</p>
 <p>We create a <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> at an energy of <span class="math notranslate nohighlight">\(100 \ \mathrm{keV}\)</span>, then run the multislice algorithm for the IAM and DFT potential, finally caluclating the diffraction patterns.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1357,120 +1347,36 @@ title="Print to PDF"
 <p>We show the resulting diffraction patterns below. The most obvious difference is that order of intensity of the <span class="math notranslate nohighlight">\((210)\)</span> and <span class="math notranslate nohighlight">\((110)\)</span> families of diffraction spots is flipped in the two models.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_spots_iam</span> <span class="o">=</span> <span class="n">diffraction_iam</span><span class="o">.</span><span class="n">index_diffraction_spots</span><span class="p">(</span><span class="n">cell</span><span class="o">=</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">)</span>
+<span class="n">diffraction_spots_dft</span> <span class="o">=</span> <span class="n">diffraction_dft</span><span class="o">.</span><span class="n">index_diffraction_spots</span><span class="p">(</span><span class="n">cell</span><span class="o">=</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">)</span>
 
-<span class="n">plot_diffraction_pattern</span><span class="p">(</span>
-    <span class="n">diffraction_iam</span><span class="p">,</span> <span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;IAM diffraction&quot;</span><span class="p">,</span> <span class="n">intensity_split</span><span class="o">=</span><span class="mf">0.01</span>
-<span class="p">)</span>
-<span class="n">plot_diffraction_pattern</span><span class="p">(</span>
-    <span class="n">diffraction_dft</span><span class="p">,</span> <span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;DFT diffraction&quot;</span><span class="p">,</span> <span class="n">intensity_split</span><span class="o">=</span><span class="mf">0.01</span>
-<span class="p">);</span>
+<span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
+
+<span class="n">diffraction_spots_iam</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">divide_threshold</span><span class="o">=</span><span class="mf">0.01</span><span class="p">)</span>
+<span class="n">diffraction_spots_dft</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">divide_threshold</span><span class="o">=</span><span class="mf">0.01</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output traceback highlight-ipythontb notranslate"><div class="highlight"><pre><span></span><span class="gt">---------------------------------------------------------------------------</span>
-<span class="ne">NameError</span><span class="g g-Whitespace">                                 </span>Traceback (most recent call last)
-<span class="o">&lt;</span><span class="n">ipython</span><span class="o">-</span><span class="nb">input</span><span class="o">-</span><span class="mi">21</span><span class="o">-</span><span class="mi">1</span><span class="n">fa7f2c7228b</span><span class="o">&gt;</span> <span class="ow">in</span> <span class="o">&lt;</span><span class="n">module</span><span class="o">&gt;</span>
-<span class="g g-Whitespace">      </span><span class="mi">1</span> <span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
-<span class="g g-Whitespace">      </span><span class="mi">2</span> 
-<span class="ne">----&gt; </span><span class="mi">3</span> <span class="n">plot_diffraction_pattern</span><span class="p">(</span>
-<span class="g g-Whitespace">      </span><span class="mi">4</span>     <span class="n">diffraction_iam</span><span class="p">,</span> <span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;IAM diffraction&quot;</span><span class="p">,</span> <span class="n">intensity_split</span><span class="o">=</span><span class="mf">0.01</span>
-<span class="g g-Whitespace">      </span><span class="mi">5</span> <span class="p">)</span>
-
-<span class="ne">NameError</span>: name &#39;plot_diffraction_pattern&#39; is not defined
-</pre></div>
-</div>
-<img alt="../../_images/charge_density_21_1.png" src="../../_images/charge_density_21_1.png" />
+<img alt="../../_images/charge_density_21_0.png" src="../../_images/charge_density_21_0.png" />
 </div>
 </div>
 <p>Below we compare the relative intensities of the diffraction spots in a table, the intensities are normalized to the intensity of the <span class="math notranslate nohighlight">\((110)\)</span> spots. We also include experimental values <code class="docutils literal notranslate"><span class="pre">cite</span></code>{gpawpotential}.</p>
 <p>We see the largest difference between the models for the <span class="math notranslate nohighlight">\((210)\)</span> spots. Comparing to the experimental result, we see that IAM predicts the wrong intensity ordering of the <span class="math notranslate nohighlight">\((110)\)</span> and <span class="math notranslate nohighlight">\((210)\)</span> spots. The DFT model gets the order of the spots right, however, the relative intensity is significantly overestimated. The main cause of the discrepancy is the noninclusion of phonon scattering, as we shall see in the following section.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">table_iam</span> <span class="o">=</span> <span class="n">tabulate_diffraction_pattern</span><span class="p">(</span>
-    <span class="n">diffraction_iam</span><span class="p">,</span>
-    <span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">,</span>
-    <span class="n">return_data_frame</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-    <span class="n">normalize</span><span class="o">=</span><span class="s2">&quot;11-20&quot;</span><span class="p">,</span>
-    <span class="n">intensity_split</span><span class="o">=</span><span class="mf">0.01</span><span class="p">,</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">table_iam</span> <span class="o">=</span> <span class="n">diffraction_spots_iam</span><span class="o">.</span><span class="n">to_dataframe</span><span class="p">(</span>
+    <span class="n">normalize</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="n">divide_threshold</span><span class="o">=</span><span class="mf">0.01</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="s2">&quot;iam&quot;</span>
 <span class="p">)</span>
-
-<span class="n">table_iam</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<div class="output text_html"><div>
-<style scoped>
-    .dataframe tbody tr th:only-of-type {
-        vertical-align: middle;
-    }
-
-    .dataframe tbody tr th {
-        vertical-align: top;
-    }
-
-    .dataframe thead th {
-        text-align: right;
-    }
-</style>
-<table border="1" class="dataframe">
-  <thead>
-    <tr style="text-align: right;">
-      <th></th>
-      <th>11-20</th>
-      <th>2-1-10</th>
-      <th>22-40</th>
-      <th>30-30</th>
-      <th>4-510</th>
-      <th>4-2-20</th>
-      <th>5-1-40</th>
-      <th>6-3-30</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <th>0</th>
-      <td>1.0</td>
-      <td>1.052713</td>
-      <td>0.163061</td>
-      <td>0.933537</td>
-      <td>0.058092</td>
-      <td>0.155534</td>
-      <td>0.062024</td>
-      <td>0.136435</td>
-    </tr>
-  </tbody>
-</table>
-</div></div></div>
-</div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">table_iam</span> <span class="o">=</span> <span class="n">tabulate_diffraction_pattern</span><span class="p">(</span>
-    <span class="n">diffraction_iam</span><span class="p">,</span>
-    <span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">,</span>
-    <span class="n">return_data_frame</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-    <span class="n">normalize</span><span class="o">=</span><span class="s2">&quot;11-20&quot;</span><span class="p">,</span>
-    <span class="n">intensity_split</span><span class="o">=</span><span class="mf">0.01</span><span class="p">,</span>
+<span class="n">table_dft</span> <span class="o">=</span> <span class="n">diffraction_spots_dft</span><span class="o">.</span><span class="n">to_dataframe</span><span class="p">(</span>
+    <span class="n">normalize</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="n">divide_threshold</span><span class="o">=</span><span class="mf">0.01</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="s2">&quot;dft&quot;</span>
 <span class="p">)</span>
-<span class="n">table_dft</span> <span class="o">=</span> <span class="n">tabulate_diffraction_pattern</span><span class="p">(</span>
-    <span class="n">diffraction_dft</span><span class="p">,</span>
-    <span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">,</span>
-    <span class="n">return_data_frame</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-    <span class="n">normalize</span><span class="o">=</span><span class="s2">&quot;11-20&quot;</span><span class="p">,</span>
-    <span class="n">intensity_split</span><span class="o">=</span><span class="mf">0.01</span><span class="p">,</span>
-<span class="p">)</span>
-
 <span class="n">experiment</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
     <span class="p">{</span><span class="s2">&quot;11-20&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;30-30&quot;</span><span class="p">:</span> <span class="mf">1.07</span><span class="p">,</span> <span class="s2">&quot;2-1-10&quot;</span><span class="p">:</span> <span class="mf">1.05</span><span class="p">,</span> <span class="s2">&quot;4-2-20&quot;</span><span class="p">:</span> <span class="mf">0.19</span><span class="p">,</span> <span class="s2">&quot;22-40&quot;</span><span class="p">:</span> <span class="mf">0.19</span><span class="p">},</span>
-    <span class="n">index</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+    <span class="n">index</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;Exp.&quot;</span><span class="p">],</span>
 <span class="p">)</span>
 
 <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">([</span><span class="n">table_iam</span><span class="p">,</span> <span class="n">table_dft</span><span class="p">,</span> <span class="n">experiment</span><span class="p">],</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-<span class="n">df</span><span class="p">[</span><span class="s2">&quot;source&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;IAM&quot;</span><span class="p">,</span> <span class="s2">&quot;DFT&quot;</span><span class="p">,</span> <span class="s2">&quot;Exp.&quot;</span><span class="p">]</span>
-<span class="n">df</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;source&quot;</span><span class="p">,</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-
 <span class="n">df</span>
 </pre></div>
 </div>
@@ -1498,45 +1404,34 @@ title="Print to PDF"
       <th>2-1-10</th>
       <th>22-40</th>
       <th>30-30</th>
-      <th>4-510</th>
       <th>4-2-20</th>
+      <th>4-510</th>
       <th>5-1-40</th>
       <th>6-3-30</th>
-    </tr>
-    <tr>
-      <th>source</th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
     </tr>
   </thead>
   <tbody>
     <tr>
-      <th>IAM</th>
+      <th>iam</th>
       <td>1.0</td>
       <td>1.052713</td>
       <td>0.163061</td>
       <td>0.933537</td>
-      <td>0.058092</td>
       <td>0.155534</td>
+      <td>0.058092</td>
       <td>0.062024</td>
       <td>0.136435</td>
     </tr>
     <tr>
-      <th>DFT</th>
+      <th>dft</th>
       <td>1.0</td>
-      <td>1.051849</td>
-      <td>0.215151</td>
-      <td>1.166772</td>
-      <td>0.071535</td>
-      <td>0.210165</td>
-      <td>0.074212</td>
-      <td>0.169130</td>
+      <td>1.050152</td>
+      <td>0.215294</td>
+      <td>1.168096</td>
+      <td>0.210582</td>
+      <td>0.071467</td>
+      <td>0.074027</td>
+      <td>0.168128</td>
     </tr>
     <tr>
       <th>Exp.</th>
@@ -1544,8 +1439,8 @@ title="Print to PDF"
       <td>1.050000</td>
       <td>0.190000</td>
       <td>1.070000</td>
-      <td>NaN</td>
       <td>0.190000</td>
+      <td>NaN</td>
       <td>NaN</td>
       <td>NaN</td>
     </tr>
@@ -1556,6 +1451,10 @@ title="Print to PDF"
 </section>
 <section id="frozen-phonons-and-dft">
 <h2>Frozen phonons and DFT<a class="headerlink" href="#frozen-phonons-and-dft" title="Permalink to this heading">#</a></h2>
+<div class="no-icon admonition">
+<p class="admonition-title"><svg version="4.0.0.63c5cb3" width="1.5rem" height="1.5rem" class="sd-material-icon sd-material-icon-engineering sd-mr-1" viewBox="0 0 24 24" aria-hidden="true"><g><rect fill="none" height="24" width="24"></rect></g><g><g><path d="M9,15c-2.67,0-8,1.34-8,4v2h16v-2C17,16.34,11.67,15,9,15z"></path><path d="M22.1,6.84c0.01-0.11,0.02-0.22,0.02-0.34c0-0.12-0.01-0.23-0.03-0.34l0.74-0.58c0.07-0.05,0.08-0.15,0.04-0.22l-0.7-1.21 c-0.04-0.08-0.14-0.1-0.21-0.08L21.1,4.42c-0.18-0.14-0.38-0.25-0.59-0.34l-0.13-0.93C20.36,3.06,20.29,3,20.2,3h-1.4 c-0.09,0-0.16,0.06-0.17,0.15L18.5,4.08c-0.21,0.09-0.41,0.21-0.59,0.34l-0.87-0.35c-0.08-0.03-0.17,0-0.21,0.08l-0.7,1.21 c-0.04,0.08-0.03,0.17,0.04,0.22l0.74,0.58c-0.02,0.11-0.03,0.23-0.03,0.34c0,0.11,0.01,0.23,0.03,0.34l-0.74,0.58 c-0.07,0.05-0.08,0.15-0.04,0.22l0.7,1.21c0.04,0.08,0.14,0.1,0.21,0.08l0.87-0.35c0.18,0.14,0.38,0.25,0.59,0.34l0.13,0.93 C18.64,9.94,18.71,10,18.8,10h1.4c0.09,0,0.16-0.06,0.17-0.15l0.13-0.93c0.21-0.09,0.41-0.21,0.59-0.34l0.87,0.35 c0.08,0.03,0.17,0,0.21-0.08l0.7-1.21c0.04-0.08,0.03-0.17-0.04-0.22L22.1,6.84z M19.5,7.75c-0.69,0-1.25-0.56-1.25-1.25 s0.56-1.25,1.25-1.25s1.25,0.56,1.25,1.25S20.19,7.75,19.5,7.75z"></path><path d="M19.92,11.68l-0.5-0.87c-0.03-0.06-0.1-0.08-0.15-0.06l-0.62,0.25c-0.13-0.1-0.27-0.18-0.42-0.24l-0.09-0.66 C18.12,10.04,18.06,10,18,10h-1c-0.06,0-0.11,0.04-0.12,0.11l-0.09,0.66c-0.15,0.06-0.29,0.15-0.42,0.24l-0.62-0.25 c-0.06-0.02-0.12,0-0.15,0.06l-0.5,0.87c-0.03,0.06-0.02,0.12,0.03,0.16l0.53,0.41c-0.01,0.08-0.02,0.16-0.02,0.24 c0,0.08,0.01,0.17,0.02,0.24l-0.53,0.41c-0.05,0.04-0.06,0.11-0.03,0.16l0.5,0.87c0.03,0.06,0.1,0.08,0.15,0.06l0.62-0.25 c0.13,0.1,0.27,0.18,0.42,0.24l0.09,0.66C16.89,14.96,16.94,15,17,15h1c0.06,0,0.12-0.04,0.12-0.11l0.09-0.66 c0.15-0.06,0.29-0.15,0.42-0.24l0.62,0.25c0.06,0.02,0.12,0,0.15-0.06l0.5-0.87c0.03-0.06,0.02-0.12-0.03-0.16l-0.52-0.41 c0.01-0.08,0.02-0.16,0.02-0.24c0-0.08-0.01-0.17-0.02-0.24l0.53-0.41C19.93,11.81,19.94,11.74,19.92,11.68z M17.5,13.33 c-0.46,0-0.83-0.38-0.83-0.83c0-0.46,0.38-0.83,0.83-0.83s0.83,0.38,0.83,0.83C18.33,12.96,17.96,13.33,17.5,13.33z"></path><path d="M4.74,9h8.53c0.27,0,0.49-0.22,0.49-0.49V8.49c0-0.27-0.22-0.49-0.49-0.49H13c0-1.48-0.81-2.75-2-3.45V5.5 C11,5.78,10.78,6,10.5,6S10,5.78,10,5.5V4.14C9.68,4.06,9.35,4,9,4S8.32,4.06,8,4.14V5.5C8,5.78,7.78,6,7.5,6S7,5.78,7,5.5V4.55 C5.81,5.25,5,6.52,5,8H4.74C4.47,8,4.25,8.22,4.25,8.49v0.03C4.25,8.78,4.47,9,4.74,9z"></path><path d="M9,13c1.86,0,3.41-1.28,3.86-3H5.14C5.59,11.72,7.14,13,9,13z"></path></g></g></svg> Currently Under Construction</p>
+<p>Check back for more…</p>
+</div>
 </section>
 </section>
 

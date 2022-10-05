@@ -57,7 +57,7 @@ const thebe_selector_output = ".output, .cell_output"
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Wave Function Normalization" href="normalization.html" />
+    <link rel="next" title="Sampling and antialiasing" href="antialiasing.html" />
     <link rel="prev" title="Appendix" href="appendix.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
@@ -237,23 +237,8 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="normalization.html">
-     Wave Function Normalization
-    </a>
-   </li>
-   <li class="toctree-l2">
     <a class="reference internal" href="antialiasing.html">
-     Antialiasing and Sampling
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="ensembles.html">
-     Ensembles
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="visualized_aberrations.html">
-     Visualized aberrations
+     Sampling and antialiasing
     </a>
    </li>
   </ul>
@@ -668,6 +653,11 @@ const thebe_selector_output = ".output, .cell_output"
      </i>
     </label>
     <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html">
+       GPAWParametrization
+      </a>
+     </li>
      <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html">
        GPAWPotential
@@ -1088,8 +1078,8 @@ title="Print to PDF"
                 
   <section class="tex2jax_ignore mathjax_ignore" id="deriving-the-multislice-algorithm">
 <h1>Deriving the Multislice Algorithm<a class="headerlink" href="#deriving-the-multislice-algorithm" title="Permalink to this heading">#</a></h1>
-<p>This is a short description on the theory of the multislice method. For a more complete, formal discussion including detailed theory see Advanced Computing Computing in Electron Microscopy by EJ Kirkland.</p>
-<p>The energy of the incident electron waves (100 - 1000 keV) are much higher than the specimen potential, which provides only minor perturbations on the forward motion of the electrons. Hence, it is useful to write the wave function, <span class="math notranslate nohighlight">\(\psi_{full}\)</span>, of the propagating electrons as a slowly varying plane wave along the optical axis, <span class="math notranslate nohighlight">\(z\)</span>, with an amplitude modulation</p>
+<p>This is a short description on the theory of the multislice simulation method for electron scattering. For a more complete derivation including detailed theory, see Advanced Computing Computing in Electron Microscopy by EJ Kirkland<span id="id1">[<a class="reference internal" href="../../library/bibliography.html#id5" title="Earl J. Kirkland. Advanced computing in electron microscopy. Springer, 2 edition, 2010. ISBN 978-1-4419-6532-5.">Kir10</a>]</span>.</p>
+<p>In electron microscopy, the energy of the incident electron waves (20 - 1000 keV) are generally much larger than the electrostatic potential wells of the atoms, which we will assume to only provide small perturbations on the forward motion of the electrons. Hence, we write the wave function, <span class="math notranslate nohighlight">\(\psi_{full}\)</span>, of the propagating electrons as a slowly varying plane wave along the optical axis, <span class="math notranslate nohighlight">\(z\)</span>, with a modulation in <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span> given by <span class="math notranslate nohighlight">\(\psi(x,y)\)</span></p>
 <div class="math notranslate nohighlight">
 \[
     \psi_{full}(x,y,z) = \psi(x,y)\exp(2\pi iz/\lambda) \quad ,
@@ -1167,10 +1157,10 @@ title="Print to PDF"
             <p class="prev-next-title">Appendix</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="normalization.html" title="next page">
+    <a class='right-next' id="next-link" href="antialiasing.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Wave Function Normalization</p>
+        <p class="prev-next-title">Sampling and antialiasing</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>
