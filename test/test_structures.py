@@ -3,7 +3,7 @@ import pytest
 from ase.build import bulk
 from ase import build
 
-from abtem.atoms import orthogonalize_cell, shrink_cell, merge_close_atoms, cut_box
+from abtem.atoms import orthogonalize_cell, shrink_cell, merge_close_atoms, cut_cell
 
 
 def fcc(orthogonal=False):
@@ -98,6 +98,6 @@ def test_cut(structure):
     atoms = structure()
 
     orthogonalized_atoms = orthogonalize_cell(atoms)
-    cut_atoms = cut_box(atoms, box=np.diag(orthogonalized_atoms.cell) - 1e-12)
+    cut_atoms = cut_cell(atoms, cell=np.diag(orthogonalized_atoms.cell) - 1e-12)
 
     assert_atoms_close(orthogonalized_atoms, cut_atoms)

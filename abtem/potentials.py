@@ -49,8 +49,8 @@ from abtem.slicing import (
 from abtem.atoms import (
     is_cell_orthogonal,
     orthogonalize_cell,
-    best_orthogonal_box,
-    cut_box,
+    best_orthogonal_cell,
+    cut_cell,
     rotation_matrix_from_plane,
     pad_atoms,
 )
@@ -234,7 +234,7 @@ class _PotentialBuilder(BasePotential):
         if self._require_cell_transform(cell, box=box, plane=plane, origin=origin):
             R = rotation_matrix_from_plane(plane)
             cell = np.dot(cell, R.T)
-            box = tuple(best_orthogonal_box(cell))
+            box = tuple(best_orthogonal_cell(cell))
 
         elif box is None:
             box = tuple(np.diag(cell))
@@ -561,9 +561,9 @@ class Potential(_PotentialBuilder):
                     allow_transform=True,
                 )
             else:
-                atoms = cut_box(
+                atoms = cut_cell(
                     atoms,
-                    box=self.box,
+                    cell=self.box,
                     plane=self.plane,
                     origin=self.origin,
                     margin=max(cutoffs) if cutoffs else 0.0,

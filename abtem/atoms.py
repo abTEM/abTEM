@@ -1,4 +1,4 @@
-"""Module for modifying ASE atoms objects for use in abTEM."""
+"""Module for modifying ASE `Atoms` objects for use in abTEM."""
 from numbers import Number
 from typing import Union, Tuple
 
@@ -11,6 +11,7 @@ from scipy.spatial.distance import pdist
 
 from abtem.core.utils import label_to_index
 
+# Converting Cartesian string representations of Cartesian axes to numerical.
 _axes2tuple = {
     "sxyz": (0, 0, 0, 0),
     "sxyx": (0, 0, 1, 0),
@@ -42,6 +43,19 @@ axis_mapping = {"x": (1, 0, 0), "y": (0, 1, 0), "z": (0, 0, 1)}
 
 
 def plane_to_axes(plane: str) -> tuple:
+    """
+    Convert string representation of Carterian axes to numerical.
+
+    Parameters
+    ----------
+    plane : str
+        String representation of axes.
+
+    Returns
+    -------
+    axes : tuple
+        Numerical representation of axes.
+    """
     axes = ()
     last_axis = [0, 1, 2]
     for axis in list(plane):
@@ -59,12 +73,17 @@ def plane_to_axes(plane: str) -> tuple:
 
 def is_cell_hexagonal(atoms: Atoms) -> bool:
     """
-    Function to check whether the cell of an ASE atoms object is hexagonal.
+    Check whether the cell of an ASE `Atoms` object is hexagonal.
 
     Parameters
     ----------
     atoms : ASE atoms object
         The atoms that should be checked.
+
+    Returns
+    -------
+    hexagonal : bool
+        True if cell is hexagonal.
     """
     if isinstance(atoms, Atoms):
         cell = atoms.get_cell()
@@ -85,14 +104,19 @@ def is_cell_hexagonal(atoms: Atoms) -> bool:
 
 def is_cell_orthogonal(cell: Union[Atoms, Cell], tol: float = 1e-12):
     """
-    Check whether an Atoms object has an orthogonal cell.
+    Check whether ASE `Atoms` object has an orthogonal cell.
 
     Parameters
     ----------
-    cell : ASE atoms object
+    cell : ASE `Atoms` object
         The atoms that should be checked.
     tol : float
         Components of the lattice vectors below this value are considered to be zero.
+
+    Returns
+    -------
+    orthogonal : bool
+        True if cell is orthogonal.
     """
     if hasattr(cell, "cell"):
         cell = cell.cell
@@ -102,19 +126,19 @@ def is_cell_orthogonal(cell: Union[Atoms, Cell], tol: float = 1e-12):
 
 def is_cell_valid(atoms: Atoms, tol: float = 1e-12) -> bool:
     """
-    Check whether the cell of an ASE atoms object can be converted to a structure that is usable by abTEM.
+    Check whether the cell of ASE `Atoms` object can be converted to a structure usable by abTEM.
 
     Parameters
     ----------
-    atoms : ASE atoms object
+    atoms : ASE `Atoms` object
         The atoms that should be checked.
     tol : float
-        Components of the lattice vectors below this value are considered to be zero.
+        Components of the lattice vectors whose magnitude is below this value are considered to be zero.
 
     Returns
     -------
-    bool
-        If true, the atomic structure is usable by abTEM.
+    valid : bool
+        True if the atomic structure is usable by abTEM.
     """
     if np.abs(atoms.cell[0, 0] - np.linalg.norm(atoms.cell[0])) > tol:
         return False
@@ -130,19 +154,19 @@ def is_cell_valid(atoms: Atoms, tol: float = 1e-12) -> bool:
 
 def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     """
-    Standardize the cell of an ASE atoms object. The atoms are rotated so one of the lattice vectors in the xy-plane
-    aligns with the x-axis, then all the lattice vectors are made positive.
+    Standardize the cell of an ASE `Atoms` object. The atoms are rotated so that one of the lattice vectors in the `xy`-plane
+    is aligned with the `x`-axis, and then all the lattice vectors are made positive.
 
     Parameters
     ----------
-    atoms : ASE atoms object
-        The atoms that should be standardized
+    atoms : ASE `Atoms` object
+        The atoms that should be standardized.
     tol : float
-        Components of the lattice vectors below this value are considered to be zero.
+        Components of the lattice vectors whose magnitude is below this value are considered to be zero.
 
     Returns
     -------
-    atoms : ASE atoms object
+    atoms : ASE `Atoms` object
         The standardized atoms.
     """
     atoms = atoms.copy()
@@ -152,7 +176,7 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
     vertical_vector = np.where(np.all(np.abs(cell[:, :2]) < tol, axis=1))[0]
 
     if len(vertical_vector) != 1:
-        raise RuntimeError("Invalid cell: no vertical lattice vector")
+        raise RuntimeError("Invalid cell: no vertical lattice vector.")
 
     cell[[vertical_vector[0], 2]] = cell[[2, vertical_vector[0]]]
     r = np.arctan2(atoms.cell[0, 1], atoms.cell[0, 0]) / np.pi * 180
@@ -163,7 +187,7 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
         atoms.rotate(-r, "z", rotate_cell=True)
 
     if not np.all(atoms.cell.lengths() == np.abs(np.diag(atoms.cell))):
-        raise RuntimeError("cell has nonorthgonal lattice vectors")
+        raise RuntimeError("Cell has non-orthogonal lattice vectors.")
 
     for i, diagonal_component in enumerate(np.diag(atoms.cell)):
         if diagonal_component < 0:
@@ -180,6 +204,23 @@ def standardize_cell(atoms: Atoms, tol: float = 1e-12) -> Atoms:
 
 
 def rotation_matrix_to_euler(R: np.ndarray, axes: str = "sxyz", eps: float = 1e-6):
+    """
+    Convert a Cartesian rotation matrix to Euler angles.
+
+    Parameters
+    ----------
+    R : np.ndarray
+        Rotation array of dimension 3x3.
+    axes : str
+        String representation of Cartesian axes.
+    eps : float
+        Components of the rotation matrix whose magnitude is below this value are ignored.
+
+    Returns
+    -------
+    angles : tuple
+        Euler angles corresponding to the given rotation matrix.
+    """
     firstaxis, parity, repetition, frame = _axes2tuple[axes.lower()]
 
     i = firstaxis
@@ -216,57 +257,79 @@ def rotation_matrix_to_euler(R: np.ndarray, axes: str = "sxyz", eps: float = 1e-
 
 
 def decompose_affine_transform(
-        affined_transform: np.ndarray,
+        affine_transform: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    ZS = np.linalg.cholesky(np.dot(affined_transform.T, affined_transform)).T
+    """
+    Decompose an affine transform into rotation, scale and shear.
 
-    zoom = np.diag(ZS)
+    Parameters
+    ----------
+    affine_transform : np.ndarray
+        Matrix representation of an affine transformation of dimension 3x3.
 
-    shear = ZS / zoom[:, None]
+    Returns
+    -------
+    decomposition : {(3,), (3,), (3,)} tuple
+        Decomposition of the affine transformation into a tuple of length 3 whose items are arrays of dimension 3 representing rotation, scale and shear.
+    """
+    ZS = np.linalg.cholesky(np.dot(affine_transform.T, affine_transform)).T
+
+    scale = np.diag(ZS)
+
+    shear = ZS / scale[:, None]
     shear = shear[np.triu_indices(3, 1)]
 
-    rotation = np.dot(affined_transform, np.linalg.inv(ZS))
+    rotation = np.dot(affine_transform, np.linalg.inv(ZS))
 
     if np.linalg.det(rotation) < 0:
-        zoom[0] *= -1
+        scale[0] *= -1
         ZS[0] *= -1
-        rotation = np.dot(affined_transform, np.linalg.inv(ZS))
+        rotation = np.dot(affine_transform, np.linalg.inv(ZS))
 
-    return rotation, zoom, shear
+    return rotation, scale, shear
 
 
-def pretty_print_transform(transform):
+def pretty_print_transform(decomposed: Tuple[np.ndarray, np.ndarray, np.ndarray]):
+    """
+    Print a decomposed transformation in an easy-to-read manner.
+
+    Parameters
+    ----------
+    decomposed : tuple of np.ndarray
+        Tuple of length 3 whose items are arrays of dimension 3 representing rotation, scale and shear.
+    """
     print(
-        "euler angles (degrees): \t x = {:.3f}, \t y = {:.3f}, \t z = {:.3f}".format(
-            *transform[0] / np.pi * 180
+        "Euler angles (degrees): \t x = {:.3f}, \t y = {:.3f}, \t z = {:.3f}".format(
+            *decomposed[0] / np.pi * 180
         )
     )
     print(
-        "normal strains (percent): \t x = {:.3f}, \t y = {:.3f}, \t z = {:.3f}".format(
-            *(transform[1] - 1) * 100
+        "Normal strains (percent): \t x = {:.3f}, \t y = {:.3f}, \t z = {:.3f}".format(
+            *(decomposed[1] - 1) * 100
         )
     )
     print(
-        "shear strains (percent): \t xy = {:.3f}, \t xz = {:.3f}, \t xz = {:.3f}".format(
-            *(transform[2]) * 100
+        "Shear strains (percent): \t xy = {:.3f}, \t xz = {:.3f}, \t xz = {:.3f}".format(
+            *(decomposed[2]) * 100
         )
     )
 
 
 def merge_close_atoms(atoms: Atoms, tol: float = 1e-7) -> Atoms:
     """
-    Merge atoms that are closer in distance than a given tolerance.
+    Merge atoms that are closer in distance to each other than the given tolerance.
 
     Parameters
     ----------
-    atoms : Atoms
+    atoms : ASE `Atoms` object
         Atoms to merge.
     tol : float
-        Atoms closer than this value are merged assuming they have identical atomic numbers.
+        Atoms closer to each other than this value are merged if they have identical atomic numbers.
 
     Returns
     -------
-    merged_atoms : Atoms
+    merged_atoms : ASE `Atoms` object
+        Merged atoms.
     """
     if len(atoms) < 2:
         return atoms
@@ -300,6 +363,20 @@ def merge_close_atoms(atoms: Atoms, tol: float = 1e-7) -> Atoms:
 
 
 def wrap_with_tolerance(atoms: Atoms, tol: float = 1e-6) -> Atoms:
+    """
+    Wrap atoms that are closer to cell boundaries than the given tolerance.
+
+    Parameters
+    ----------
+    atoms : ASE `Atoms` object
+        Atoms to be wrapped.
+    tol : float
+        Minimum distance to any cell boundary.
+    Returns
+    -------
+    atoms : ASE `Atoms` object
+        Wrapped atoms.
+    """
     atoms = atoms.copy()
 
     atoms.wrap()
@@ -313,6 +390,23 @@ def wrap_with_tolerance(atoms: Atoms, tol: float = 1e-6) -> Atoms:
 
 
 def shrink_cell(atoms: Atoms, repetitions=(2, 3), tol=1e-6):
+    """
+    Find and return the smallest non-repeating cell for the given atoms.
+
+    Parameters
+    ----------
+    atoms : ASE `Atoms` object
+        Atoms whose repetition is to be removed.
+    repetitions : tuple
+        Integer number of repetitions in `x` and `y` directions to be checked.
+    tol : float
+        Repetitions with a mismatch smaller than this value are considered to be repeated.
+
+    Returns
+    -------
+    atoms : ASE `Atoms` object
+        Smallest non-repeating cell for the given atoms.
+    """
     atoms = wrap_with_tolerance(atoms, tol=tol)
 
     for repetition in repetitions:
@@ -341,6 +435,19 @@ def rotation_matrix_from_plane(
             str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
         ] = "xy"
 ):
+    """
+    Give the rotation matrix corresponding to a rotation from a given plane to the `xy` plane.
+
+    Parameters
+    ----------
+    plane : str or tuple of tuple
+        Plane from which to rotate given either as a string or two tuples.
+
+    Returns
+    -------
+    rotation : np.ndarray
+        Rotation matrix of dimension 3x3.
+    """
     x_vector, y_vector = plane
 
     if isinstance(x_vector, str):
@@ -364,6 +471,21 @@ def rotate_atoms_to_plane(
             str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
         ] = "xy",
 ) -> Atoms:
+    """
+    Rotate atoms so that their `xy` plane is rotated into a given plane.
+
+    Parameters
+    ----------
+    atoms : ASE `Atoms` objet
+        Atoms to be rotated.
+    plane : str or tuple of tuple
+        Plane to be rotated into given as either a string or two tuples.
+
+    Returns
+    -------
+    rotated : ASE `Atoms` object
+        Rotated atoms.
+    """
     if plane == "xy":
         return atoms
 
@@ -376,19 +498,51 @@ def rotate_atoms_to_plane(
 
 
 def flip_atoms(atoms: Atoms, axis: int = 2) -> Atoms:
+    """
+    Inverts the positions of atoms along a given axis.
+
+    Parameters
+    ----------
+    atoms : ASE `Atoms` object
+        Atoms to be inverted.
+    axis : int
+        Integer representing the Cartesian axis (0 is `x`, 1 is `y`, and the default 2 is `z`).
+
+    Returns
+    -------
+    atoms : ASE `Atoms` object
+        Inverted atoms.
+    """
     atoms = atoms.copy()
     atoms.positions[:, axis] = atoms.cell[axis, axis] - atoms.positions[:, axis]
     return atoms
 
 
-def best_orthogonal_box(
+def best_orthogonal_cell(
         cell: np.ndarray, max_repetitions: int = 5, eps: float = 1e-12
 ) -> np.ndarray:
+    """
+    Find the closest orthogonal cell for a given cell given a maximum number of repetitions in all directions.
+
+    Parameters
+    ----------
+    cell : np.ndarray
+        Cell of dimensions 3x3.
+    max_repetitions : int
+        Maximum number of allowed repetitions (default is 5).
+    eps : float
+        Lattice vector components below this value are considered to be zero.
+
+    Returns
+    -------
+    cell : np.ndarray
+        Closest orthogonal cell found.
+    """
     zero_vectors = np.linalg.norm(cell, axis=0) < eps
 
     if zero_vectors.sum() > 1:
         raise RuntimeError(
-            "two or more lattice vectors of the provided Atoms has no length"
+            "Two or more lattice vectors of the provided `Atoms` object have no length."
         )
 
     k = np.arange(-max_repetitions, max_repetitions + 1)
@@ -446,28 +600,27 @@ def orthogonalize_cell(
         tolerance: float = 0.01,
 ):
     """
-    Make the cell of an ASE atoms object orthogonal. This is accomplished by repeating the cell until lattice vectors
+    Make the cell of an ASE `Atoms` object orthogonal. This is accomplished by repeating the cell until lattice vectors
     are close to the three principal Cartesian directions. If the structure is not exactly orthogonal after the
-    structure is repeated by a given maximum the remaining difference will be made up by applying strain.
+    structure is repeated by a given maximum number, the remaining difference is made up by applying strain.
 
     Parameters
     ----------
-    atoms : ASE atoms object
-        The non-orthogonal atoms object.
+    atoms : ASE `Atoms` object
+        The non-orthogonal atoms.
     max_repetitions : int
-        The maximum number of repetions allowed. Increase this to allow more repetitions and hence less strain.
+        The maximum number of repetitions allowed. Increase this to allow more repetitions and hence less strain.
     return_transform : bool
         If true, return the transformations that were applied to make the atoms orthogonal.
     allow_transform : bool
         If false no transformation is applied to make the cell orthogonal, hence a non-orthogonal cell may be returned.
 
-
     Returns
     -------
-    atoms : ASE atoms object
+    atoms : ASE `Atoms` object
         The orthogonal atoms.
-    transform : tuple of arrays
-        The applied transform in the form the euler angles
+    transform : tuple of arrays, optional
+        The applied transform given as Euler angles (by default not returned).
     """
 
     if origin != (0.0, 0.0, 0.0):
@@ -478,10 +631,10 @@ def orthogonalize_cell(
         atoms = rotate_atoms_to_plane(atoms, plane)
 
     if box is None:
-        box = best_orthogonal_box(atoms.cell, max_repetitions=max_repetitions)
+        box = best_orthogonal_cell(atoms.cell, max_repetitions=max_repetitions)
 
     if np.any(atoms.cell.lengths() < tolerance):
-        raise RuntimeError("cell vectors must have non-zero length")
+        raise RuntimeError("Cell vectors must have non-zero length.")
 
     inv = np.linalg.inv(atoms.cell)
     vectors = np.dot(np.diag(box), inv)
@@ -499,27 +652,34 @@ def orthogonalize_cell(
         raise RuntimeError()
 
     if return_transform:
-        rotation, zoom, shear = decompose_affine_transform(A)
-        return atoms, (np.array(rotation_matrix_to_euler(rotation)), zoom, shear)
+        rotation, scale, shear = decompose_affine_transform(A)
+        return atoms, (np.array(rotation_matrix_to_euler(rotation)), scale, shear)
     else:
         return atoms
 
 
-# def atoms_in_box(atoms: Atoms,
-#                  box: Tuple[float, float, float],
-#                  margin: Tuple[float, float, float] = (0., 0., 0.),
-#                  origin: Tuple[float, float, float] = (0., 0., 0.)) -> Atoms:
-#     mask = np.all(atoms.positions >= (np.array(origin) - margin - 1e-12)[None], axis=1) * \
-#            np.all(atoms.positions < (np.array(origin) + box + margin)[None], axis=1)
-#
-#     atoms = atoms[mask]
-#     return atoms
-
-
 def atoms_in_cell(
         atoms: Atoms,
-        margin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        margin: Union[float, Tuple[float, float, float]] = 0.0,
 ) -> Atoms:
+    """
+    Crop atoms that are outside of their cell.
+
+    Parameters
+    ----------
+    atoms : ASE `Atoms` object
+        Atoms to be cropped.
+    margin : float or tuple of three floats
+        Atoms that are outside the cell by this margin are not cropped (by default no margin).
+
+    Returns
+    -------
+    cropped : ASE `Atoms` object
+        Cropped atoms.
+    """
+    if isinstance(margin, Number):
+        margin = (margin, margin, margin)
+
     scaled_positions = atoms.get_scaled_positions(wrap=False)
     scaled_margins = np.array(margin) / atoms.cell.lengths()
 
@@ -531,17 +691,38 @@ def atoms_in_cell(
     return atoms
 
 
-def cut_box(
+def cut_cell(
         atoms: Atoms,
-        box: Tuple[float, float, float] = None,
+        cell: Tuple[float, float, float] = None,
         plane: Union[
             str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
         ] = "xy",
         origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         margin: Union[float, Tuple[float, float, float]] = 0.0,
 ) -> Atoms:
-    if box is None:
-        box = best_orthogonal_box(atoms.cell)
+    """
+    Fit the given atoms into a given cell by cropping atoms that are outside the cell, ignoring periodicity. If the given atoms do not originally fill the cell, they are first repeated until they do.
+
+    Parameters
+    ----------
+    atoms : ASE `Atoms` object
+        Atoms to be fit.
+    cell : tuple of floats
+        Cell to be fit into.
+    plane : str or tuple of tuples
+        Plane to be rotated into given as either a string or two tuples (by default `xy` which results in no rotation for a standardized cell).
+    origin : tuple of floats
+        Offset of the origin for the given cell with respect to the original cell.
+    margin : float or tuple of three floats
+        Atoms that are outside the cell by this margin are not cropped (by default no margin).
+
+    Returns
+    -------
+    cut : ASE `Atoms` object
+       Atoms fit into the cell.
+    """
+    if cell is None:
+        cell = best_orthogonal_cell(atoms.cell)
 
     if isinstance(margin, Number):
         margin = (margin, margin, margin)
@@ -553,7 +734,7 @@ def cut_box(
 
     atoms = rotate_atoms_to_plane(atoms, plane)
 
-    new_cell = np.diag(np.array(box) + 2 * np.array(margin))
+    new_cell = np.diag(np.array(cell) + 2 * np.array(margin))
     new_cell = np.dot(atoms.cell.scaled_positions(new_cell), atoms.cell)
 
     scaled_margin = atoms.cell.scaled_positions(np.diag(margin))
@@ -582,7 +763,7 @@ def cut_box(
 
     new_atoms.positions[:] += center_translate - margin_translate
 
-    new_atoms.cell = box
+    new_atoms.cell = cell
     new_atoms = atoms_in_cell(new_atoms, margin=margin)
 
     # new_atoms = wrap_with_tolerance(new_atoms)
@@ -595,18 +776,18 @@ def pad_atoms(
         directions: str = "xyz",
 ) -> Atoms:
     """
-    Repeat the atoms in x and y, retaining only the repeated atoms within the margin distance from the cell boundary.
+    Repeat the atoms in the `x` and `y` directions, retaining only the repeated atoms within the margin distance from the cell boundary.
 
     Parameters
     ----------
-    atoms: ASE Atoms object
+    atoms: ASE `Atoms` object
         The atoms that should be padded.
-    margins: one or three float
-        The padding margin.
+    margins: one or tuple of three floats
+        The padding margin. Can be specified either as a single value for all directions, or three separate values.
 
     Returns
     -------
-    ASE Atoms object
+    ASE `Atoms` object
         Padded atoms.
     """
 
