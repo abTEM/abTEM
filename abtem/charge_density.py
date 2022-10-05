@@ -51,22 +51,26 @@ def _spatial_frequencies_squared(shape, cell: Cell):
 
 def integrate_gradient_fourier(
     array: np.ndarray, cell: Cell, in_space: str = "real", out_space: str = "real"
-):
+) -> np.ndarray:
     """
-    Integrate the gradient in 3d using Fourier space integration.
+    Integrate an array representation of a gradient in 3D using Fourier-space integration.
 
     Parameters
     ----------
     array : np.ndarray
+        Array representing a gradient of dimension 3.
     cell : ase.cell.Cell
-    in_space : "real" or "fourier"
-    out_space : "real" or "fourier"
+        ASE `Cell` object defining the region of space where the gradient is integrated.
+    in_space : str
+        Space in which the gradient is defined (either "real" or "fourier").
+    out_space : str
+        Space in which the integrated gradient is defined ("real" or "fourier").
 
     Returns
     -------
-
+    integrated : np.ndarray
+        Integrated gradient.
     """
-
     if in_space == "real":
         array = fftn(array)
 
@@ -133,7 +137,24 @@ def _fourier_space_gaussian(k2, width):
     return np.exp(-1 / (4 * a ** 2) * k2)
 
 
-def add_point_charges_fourier(array, atoms, broadening=0.0):
+def add_point_charges_fourier(array: np.ndarray, atoms: Atoms, broadening: float = 0.0) -> np.ndarray:
+    """
+    Add the nuclear point charges in Fourier space.
+
+    Parameters
+    ----------
+    array : np.ndarray
+        Array representing 3D charge density to which the point charges are added.
+    atoms : ase.Atoms
+        Atoms from which the nuclear charges with magnitudes and positions are determined.
+    broadening : float
+        Gaussian broadening of the point charges (default is 0.0).
+
+    Returns
+    -------
+    density : np.ndarray
+        3D charge density with added nuclear charges in Fourier space.
+    """
     pixel_volume = np.prod(np.diag(atoms.cell)) / np.prod(array.shape)
 
     kx, ky, kz = _spatial_frequencies(array.shape, atoms.cell)
@@ -238,54 +259,51 @@ def _generate_slices(
 class ChargeDensityPotential(_PotentialBuilder):
     """
     The charge density potential is used to calculate the electrostatic potential from a set of core charges defined by
-    an ASE Atoms and corresponding electron charge density defined by a NumPy array.
+    an ASE `Atoms` object and corresponding electron charge density defined by a NumPy array.
 
     Parameters
     ----------
     atoms : Atoms or FrozenPhonons
-        Atoms or FrozenPhonons defining the atomic configuration(s) used in the independent atom model for calculating
-        the electrostatic potential(s).
-    charge_density : 3d array
-        Charge density as a 3d NumPy array [electrons / Å^3].
+        Atomic configuration(s) used in the independent atom model for calculating the electrostatic potential(s).
+    charge_density : np.ndarray
+        Charge density as a 3D NumPy array [electrons / Å^3].
     gpts : one or two int, optional
-        Number of grid points in x and y describing each slice of the potential. Provide either "sampling" or "gpts".
+        Number of grid points in `x` and `y` describing each slice of the potential calculated by specifying either `sampling` or `gpts`.
     sampling : one or two float, optional
-        Sampling of the potential in x and y [1 / Å]. Provide either "sampling" or "gpts".
+        Sampling of the potential in `x` and `y` [1 / Å] calculated by specifying either `sampling` or `gpts`.
     slice_thickness : float or sequence of float, optional
-        Thickness of the potential slices in Å. If given as a float the number of slices are calculated by dividing the
-        slice thickness into the z-height of supercell.
+        Thickness of the potential slices [Å] (default is 0.5 Å). If given as a float, the number of slices are calculated by dividing the
+        slice thickness into the `z`-height of the cell.
         The slice thickness may be given as a sequence of values for each slice, in which case an error will be thrown
         if the sum of slice thicknesses is not equal to the height of the atoms.
-        Default is 0.5 Å.
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an
         exit plane is desired, and hence during a multislice simulation a measurement is created. If `exit_planes` is
-        an integer a measurement will be collected every `exit_planes` number of slices.
+        an integer, a measurement will be collected every `exit_planes` number of slices.
     plane : str or two tuples of three float, optional
-        The plane relative to the provided Atoms mapped to xy plane of the Potential, i.e. provided plane is
-        perpendicular to the propagation direction. If str, it must be a combination of two of 'x', 'y' and 'z',
-        the default value 'xy' indicates that potential slices are cuts the 'xy'-plane of the Atoms.
-        The plane may also be specified with two arbitrary 3d vectors, which are mapped to the x and y directions of
-        the potential, respectively. The length of the vectors has influence. If the vectors are not perpendicular,
-        the second vector is rotated in the plane to become perpendicular. Providing a value of
-        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
+        The plane relative to the provided atoms mapped to the `xy` plane of the potential, i.e. the propagation direction will be
+        perpendicular to the provided plane. If str, must be a concatenation of two of 'x', 'y' and 'z';
+        the default value 'xy' indicates that potential slices are cuts parallel to the 'xy'-plane.
+        The plane may also be specified with two arbitrary 3D vectors, which are mapped to the `x` and `y` directions of
+        the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,
+        the second vector is rotated in the plane to become perpendicular to the first. A value of
+        ((1., 0., 0.), (0., 1., 0.)) is equivalent to 'xy'.
     origin : three float, optional
-        The origin relative to the provided Atoms mapped to the origin of the Potential. This is equivalent to shifting
-        the atoms
+        The origin relative to the provided atoms mapped to the origin of the potential. This is equivalent to translating
+        the atoms.
         The default is (0., 0., 0.).
     box : three float, optional
-        The extent of the potential in x, y and z. If not given this is determined from the Atoms. If the box size does
-        not match an integer number of the atoms' supercell, an affine transformation may be necessary to preserve
+        The extent of the potential in `x`, `y` and `z`. If not given this is determined from the atoms. If the box size does
+        not match an integer number of the atoms' cell, an affine transformation may be necessary to preserve
         periodicity, determined by the `periodic` keyword.
     periodic : bool, True
         If a transformation of the atomic structure is required, `periodic` determines how the atomic structure is
-        transformed. If True, the periodicity of the Atoms is preserved, which may require applying a small affine
+        transformed. If True, the periodicity of the atoms is preserved, which may require applying a small affine
         transformation to the atoms. If False, the transformed potential is effectively cut out of a larger repeated
         potential, which may not preserve periodicity.
     device : str, optional
         The device used for calculating the potential. The default is determined by the user configuration file.
-
     """
 
     def __init__(
@@ -471,7 +489,7 @@ class ChargeDensityPotential(_PotentialBuilder):
         )
 
     def generate_slices(self, first_slice: int = 0, last_slice: int = None):
-
+        """Generate the slices for the potential."""
         if last_slice is None:
             last_slice = len(self)
 
