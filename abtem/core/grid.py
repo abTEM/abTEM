@@ -34,8 +34,8 @@ class GridUndefinedError(Exception):
 
 
 def safe_divide(a, b):
-    if b == 0.:
-        return 0.
+    if b == 0.0:
+        return 0.0
     else:
         return a / b
 
@@ -201,8 +201,9 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
     @property
     def fourier_space_sampling(self) -> Tuple[float, float]:
         self.check_is_defined()
-        return 1 / (self.gpts[0] * self.sampling[0]), 1 / (
-            self.gpts[1] * self.sampling[1]
+        return (
+            1 / (self.gpts[0] * self.sampling[0]),
+            1 / (self.gpts[1] * self.sampling[1]),
         )
 
     def _adjust_extent(self, gpts: tuple, sampling: tuple):
@@ -327,37 +328,43 @@ class HasGridMixin:
 
     @property
     def grid(self) -> Grid:
+        """ Simulation grid. """
         return self._grid
 
     @property
-    def extent(self):
+    def extent(self) -> Tuple[float, ...]:
+        """ Extent of grid for each dimension in Ångstrom. """
         return self.grid.extent
 
     @extent.setter
-    def extent(self, extent):
+    def extent(self, extent: Tuple[float, ...]):
         self.grid.extent = extent
 
     @property
-    def gpts(self):
+    def gpts(self) -> Tuple[int, ...]:
+        """ Number of grid points for each dimension. """
         return self.grid.gpts
 
     @gpts.setter
-    def gpts(self, gpts):
+    def gpts(self, gpts: Tuple[int, ...]):
         self.grid.gpts = gpts
 
     @property
-    def sampling(self):
+    def sampling(self) -> Tuple[float, ...]:
+        """ Grid sampling for each dimension in Ångstrom per grid point. """
         return self.grid.sampling
 
     @sampling.setter
-    def sampling(self, sampling):
+    def sampling(self, sampling: Tuple[float, ...]):
         self.grid.sampling = sampling
 
     @property
-    def fourier_space_sampling(self):
+    def fourier_space_sampling(self) -> Tuple[float, ...]:
+        """ Fourier space sampling in reciprocal Ångstrom. """
         return self.grid.fourier_space_sampling
 
-    def match_grid(self, other, check_match=False):
+    def match_grid(self, other: "HasGridMixin", check_match: bool = False):
+        """ Match the grid to another object with a Grid. """
         self.grid.match(other, check_match=check_match)
         return self
 

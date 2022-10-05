@@ -1,7 +1,7 @@
 import dataclasses
 from dataclasses import dataclass
 from numbers import Number
-from typing import List, Tuple
+from typing import List, Tuple, Union
 from tabulate import tabulate
 import numpy as np
 
@@ -235,6 +235,32 @@ def axis_from_dict(d):
     return cls(**{key: value for key, value in d.items() if key != "type"})
 
 
+def format_axes_metadata(axes_metadata, shape):
+    data = []
+    for axis, n in zip(axes_metadata, shape):
+        data += [axis._tabular_repr_data(n)]
+
+    return tabulate(data, headers=["type", "label", "coordinates"], tablefmt="simple")
+
+
+def _find_axes_type(has_axes, axis_type):
+    indices = ()
+    for i, axis_metadata in enumerate(has_axes.axes_metadata):
+        if isinstance(axis_metadata, axis_type):
+            indices += (i,)
+
+    return indices
+
+
+class AxesMetadataList(list):
+    def __init__(self, l, shape):
+        self._shape = shape
+        super().__init__(l)
+
+    def __repr__(self):
+        return format_axes_metadata(self, self._shape)
+
+
 class HasAxes:
     base_shape: Tuple[int, ...]
     ensemble_shape: Tuple[int, ...]
@@ -242,36 +268,59 @@ class HasAxes:
     ensemble_axes_metadata: List[AxisMetadata]
 
     @property
-    def axes_metadata(self):
-        return self.ensemble_axes_metadata + self.base_axes_metadata
+    def axes_metadata(self) -> AxesMetadataList:
+        """
+        List of AxisMetadata.
+        """
+        return AxesMetadataList(
+            self.ensemble_axes_metadata + self.base_axes_metadata, self.shape
+        )
 
     @property
-    def num_base_axes(self):
+    def num_base_axes(self) -> int:
+        """
+        Number of base axes.
+        """
         return len(self.base_axes_metadata)
 
     @property
-    def num_ensemble_axes(self):
+    def num_ensemble_axes(self) -> int:
+        """
+        Number of ensemble axes.
+        """
         return len(self.ensemble_axes_metadata)
 
     @property
-    def num_axes(self):
+    def num_axes(self) -> int:
+        """
+        Number of axes.
+        """
         return self.num_ensemble_axes + self.num_base_axes
 
     @property
-    def base_axes(self):
+    def base_axes(self) -> Tuple[int, ...]:
+        """
+        Axis indices of base axes.
+        """
         return tuple(
             range(self.num_ensemble_axes, self.num_ensemble_axes + self.num_base_axes)
         )
 
     @property
-    def ensemble_axes(self):
+    def ensemble_axes(self) -> Tuple[int, ...]:
+        """
+        Axis indices of ensemble axes.
+        """
         return tuple(range(self.num_ensemble_axes))
 
     @property
-    def shape(self):
+    def shape(self) -> Tuple[int, ...]:
+        """
+        The size of each axis.
+        """
         return self.ensemble_shape + self.base_shape
 
-    def check_axes_metadata(self):
+    def _check_axes_metadata(self):
         if len(self.shape) != self.num_axes:
             raise RuntimeError(
                 f"number of dimensions ({len(self.shape)}) does not match number of axis metadata items "
@@ -285,54 +334,7 @@ class HasAxes:
                     f"({n})"
                 )
 
-    def _is_base_axis(self, axis) -> bool:
+    def _is_base_axis(self, axis: Union[int, Tuple[int, ...]]) -> bool:
         if isinstance(axis, Number):
             axis = (axis,)
         return len(set(axis).intersection(self.base_axes)) > 0
-
-    def find_axes_type(self, cls):
-        indices = ()
-        for i, axis_metadata in enumerate(self.axes_metadata):
-            if isinstance(axis_metadata, cls):
-                indices += (i,)
-
-        return indices
-
-    @property
-    def num_scan_axes(self):
-        return len(self.scan_axes)
-
-    @property
-    def scan_axes(self):
-        num_trailing_scan_axes = 0
-        for axis in reversed(self.ensemble_axes_metadata):
-            if not isinstance(axis, ScanAxis) or num_trailing_scan_axes == 2:
-                break
-
-            num_trailing_scan_axes += 1
-
-        return tuple(
-            range(
-                len(self.ensemble_shape) - num_trailing_scan_axes,
-                len(self.ensemble_shape),
-            )
-        )
-
-    @property
-    def scan_axes_metadata(self):
-        return [self.axes_metadata[i] for i in self.scan_axes]
-
-    @property
-    def scan_shape(self):
-        return tuple(self.shape[i] for i in self.scan_axes)
-
-    @property
-    def scan_sampling(self):
-        return tuple(self.axes_metadata[i].sampling for i in self.scan_axes)
-
-    def _ensemble_axes_to_reduce(self):
-        reduce = ()
-        for i, axis in enumerate(self.axes_metadata):
-            if hasattr(axis, "_ensemble_mean") and axis._ensemble_mean:
-                reduce += (i,)
-        return reduce

@@ -17,3 +17,4 @@ fftw:
 warnings:
   prism-interpolation-gpts: true
   dask-blockwise-performance: false
+extended_repr: false

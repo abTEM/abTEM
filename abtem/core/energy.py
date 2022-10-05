@@ -93,7 +93,7 @@ class Accelerator(HasEventsMixin, EqualityMixin, CopyMixin):
     @property
     def energy(self) -> float:
         """
-        Acceleration energy [eV].
+        Electron acceleration energy [eV].
         """
         return self._energy
 
@@ -109,7 +109,9 @@ class Accelerator(HasEventsMixin, EqualityMixin, CopyMixin):
 
     @property
     def wavelength(self) -> float:
-        """ Relativistic wavelength [Å]. """
+        """
+        Relativistic wavelength [Å].
+        """
         self.check_is_defined()
         return energy2wavelength(self.energy)
 
@@ -165,6 +167,9 @@ class HasAcceleratorMixin:
 
     @property
     def accelerator(self) -> Accelerator:
+        """
+        Accelerator object describing the acceleration energy.
+        """
         return self._accelerator
 
     @accelerator.setter
@@ -173,6 +178,9 @@ class HasAcceleratorMixin:
 
     @property
     def energy(self):
+        """
+        Electron acceleration energy in electron volts.
+        """
         return self.accelerator.energy
 
     @energy.setter
@@ -181,4 +189,7 @@ class HasAcceleratorMixin:
 
     @property
     def wavelength(self):
+        """
+        Relativistic wavelength in Ångstrom.
+        """
         return self.accelerator.wavelength

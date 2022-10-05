@@ -11,7 +11,10 @@ from abtem.core import config
 
 
 def chunk_ranges(chunks):
-    return tuple(tuple((cumchunks - cc, cumchunks) for cc, cumchunks in zip(c, accumulate(c))) for c in chunks)
+    return tuple(
+        tuple((cumchunks - cc, cumchunks) for cc, cumchunks in zip(c, accumulate(c)))
+        for c in chunks
+    )
 
 
 def chunk_shape(chunks):
@@ -19,18 +22,20 @@ def chunk_shape(chunks):
 
 
 def iterate_chunk_ranges(chunks):
-    for block_indices, chunk_range in zip(itertools.product(*(range(n) for n in chunk_shape(chunks))),
-                                          itertools.product(*chunk_ranges(chunks))):
+    for block_indices, chunk_range in zip(
+        itertools.product(*(range(n) for n in chunk_shape(chunks))),
+        itertools.product(*chunk_ranges(chunks)),
+    ):
         slic = tuple(slice(*cr) for cr in chunk_range)
 
         yield block_indices, slic
 
 
 def config_chunk_size(device):
-    if device == 'gpu':
+    if device == "gpu":
         return parse_bytes(config.get("dask.chunk-size-gpu"))
 
-    if device != 'cpu':
+    if device != "cpu":
         raise RuntimeError()
 
     return parse_bytes(config.get("dask.chunk-size"))
@@ -40,19 +45,20 @@ Chunks = Union[int, str, Tuple[Union[int, str, Tuple[int, ...]], ...]]
 ValidatedChunks = Tuple[Tuple[int, ...], ...]
 
 
-def validate_chunks(shape: Tuple[int, ...],
-                    chunks: Chunks,
-                    limit: Union[int, str] = None,
-                    dtype: np.dtype.base = None,
-                    device: str = 'cpu') -> ValidatedChunks:
+def validate_chunks(
+    shape: Tuple[int, ...],
+    chunks: Chunks,
+    limit: Union[int, str] = "auto",
+    dtype: np.dtype.base = None,
+    device: str = "cpu",
+) -> ValidatedChunks:
 
     if chunks == -1:
         return validate_chunks(shape, shape)
 
     if isinstance(chunks, int):
-        assert limit is None
         limit = chunks
-        chunks = ('auto',) * len(shape)
+        chunks = ("auto",) * len(shape)
         return auto_chunks(shape, chunks, limit, dtype=dtype, device=device)
 
     if all(isinstance(c, tuple) for c in chunks):
@@ -80,18 +86,20 @@ def validate_chunks(shape: Tuple[int, ...],
         else:
             raise RuntimeError()
 
-
     return validated_chunks
 
 
-def auto_chunks(shape: Tuple[int, ...],
-                chunks: Chunks,
-                limit: Union[str, int] = None,
-                dtype: np.dtype.base = None,
-                device: str = 'cpu') -> ValidatedChunks:
-    if limit is None or limit == 'auto':
+def auto_chunks(
+    shape: Tuple[int, ...],
+    chunks: Chunks,
+    limit: Union[str, int] = "auto",
+    dtype: np.dtype.base = None,
+    device: str = "cpu",
+) -> ValidatedChunks:
+
+    if limit == "auto":
         if dtype is None:
-            raise ValueError
+            raise ValueError("auto selecting chunk limits requires dtype")
 
         limit = int(np.floor(config_chunk_size(device)) / dtype.itemsize)
 
@@ -103,12 +111,16 @@ def auto_chunks(shape: Tuple[int, ...],
 
     normalized_chunks = tuple(s if c == -1 else c for s, c in zip(shape, chunks))
 
-    minimum_chunks = tuple(1 if c == 'auto' else c for s, c in zip(shape, normalized_chunks))
-    maximum_chunks = tuple(s if c == 'auto' else c for s, c in zip(shape, normalized_chunks))
+    minimum_chunks = tuple(
+        1 if c == "auto" else c for s, c in zip(shape, normalized_chunks)
+    )
+    maximum_chunks = tuple(
+        s if c == "auto" else c for s, c in zip(shape, normalized_chunks)
+    )
 
     current_chunks = list(minimum_chunks)
 
-    auto = [i for i, c in enumerate(normalized_chunks) if c == 'auto']
+    auto = [i for i, c in enumerate(normalized_chunks) if c == "auto"]
 
     j = 0
     while len(auto):
@@ -158,7 +170,7 @@ def equal_sized_chunks(num_items: int, num_chunks: int = None, chunks: int = Non
         num_chunks = (num_items + (-num_items % chunks)) // chunks
 
     if num_items < num_chunks:
-        raise RuntimeError('num_chunks may not be larger than num_items')
+        raise RuntimeError("num_chunks may not be larger than num_items")
 
     elif num_items % num_chunks == 0:
         return tuple([num_items // num_chunks] * num_chunks)
@@ -172,3 +184,12 @@ def equal_sized_chunks(num_items: int, num_chunks: int = None, chunks: int = Non
             else:
                 v = [pp] + v
         return tuple(v)
+
+
+def generate_chunks(
+    num_items: int, num_chunks: int = None, chunks: int = None, start: int = 0
+):
+    for batch in equal_sized_chunks(num_items, num_chunks, chunks):
+        end = start + batch
+        yield start, end
+        start = end

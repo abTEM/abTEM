@@ -29,7 +29,7 @@ class CopyMixin:
             if value.kind not in (value.VAR_POSITIONAL, value.VAR_KEYWORD)
         )
 
-    def copy_kwargs(self, exclude: Tuple["str", ...] = (), cls=None) -> dict:
+    def _copy_kwargs(self, exclude: Tuple["str", ...] = (), cls=None) -> dict:
         if cls is None:
             cls = self.__class__
 
@@ -39,10 +39,11 @@ class CopyMixin:
         return kwargs
 
     def copy(self):
+        """ Make a copy. """
         return copy.deepcopy(self)
 
 
-def safe_equality(a, b, exclude=()):
+def safe_equality(a, b, exclude: Tuple[str, ...] = ()) -> bool:
     if not isinstance(b, a.__class__):
         return False
 
@@ -57,7 +58,9 @@ def safe_equality(a, b, exclude=()):
             return False
 
         with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', r'Creating an ndarray from nested sequences')
+            warnings.filterwarnings(
+                "ignore", r"Creating an ndarray from nested sequences"
+            )
             # TODO: properly handle this warning
 
             try:
@@ -144,56 +147,6 @@ def expand_dims_to_match(arr1, arr2, match_dims=None):
     return arr1, arr2
 
 
-def subdivide_into_chunks(num_items: int, num_chunks: int = None, chunks: int = None):
-    """
-    Split an n integer into m (almost) equal integers, such that the sum of smaller integers equals n.
-
-    Parameters
-    ----------
-    n: int
-        The integer to split.
-    m: int
-        The number integers n will be split into.
-
-    Returns
-    -------
-    list of int
-    """
-    if num_items == 0:
-        return 0, 0
-
-    if (num_chunks is not None) & (chunks is not None):
-        raise RuntimeError()
-
-    if (num_chunks is None) & (chunks is not None):
-        num_chunks = (num_items + (-num_items % chunks)) // chunks
-
-    if num_items < num_chunks:
-        raise RuntimeError("num_chunks may not be larger than num_items")
-
-    elif num_items % num_chunks == 0:
-        return tuple([num_items // num_chunks] * num_chunks)
-    else:
-        v = []
-        zp = num_chunks - (num_items % num_chunks)
-        pp = num_items // num_chunks
-        for i in range(num_chunks):
-            if i >= zp:
-                v = [pp + 1] + v
-            else:
-                v = [pp] + v
-        return tuple(v)
-
-
-def generate_chunks(
-    num_items: int, num_chunks: int = None, chunks: int = None, start: int = 0
-):
-    for batch in subdivide_into_chunks(num_items, num_chunks, chunks):
-        end = start + batch
-        yield start, end
-        start = end
-
-
 def label_to_index(labels, max_label=None):
     if max_label is None:
         max_label = np.max(labels)
@@ -208,40 +161,3 @@ def label_to_index(labels, max_label=None):
     hi = xp.searchsorted(sorted_labels, index, side="right")
     for i, (l, h) in enumerate(zip(lo, hi)):
         yield indices[l:h]
-
-
-def tapered_cutoff(x, cutoff, rolloff=0.1):
-    xp = get_array_module(x)
-
-    rolloff = rolloff * cutoff
-
-    if rolloff > 0.0:
-        array = 0.5 * (1 + xp.cos(np.pi * (x - cutoff + rolloff) / rolloff))
-        array[x > cutoff] = 0.0
-        array = xp.where(x > cutoff - rolloff, array, xp.ones_like(x, dtype=xp.float32))
-    else:
-        array = xp.array(x < cutoff).astype(xp.float32)
-
-    return array
-
-
-def dictionary_property(name, key):
-    def getter(self):
-        return getattr(self, name)[key]
-
-    def setter(self, value):
-        getattr(self, name)[key] = value
-
-    return property(getter, setter)
-
-
-def delegate_property(delegate_name, property_name):
-    def getter(self):
-        delegate = getattr(self, delegate_name)
-        return getattr(delegate, property_name)
-
-    def setter(self, value):
-        delegate = getattr(self, delegate_name)
-        setattr(delegate, property_name, value)
-
-    return property(getter, setter)

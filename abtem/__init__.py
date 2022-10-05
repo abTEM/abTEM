@@ -1,20 +1,29 @@
 """Main abTEM module."""
+from abtem import distributions
 from abtem._version import __version__
+from abtem.atoms import orthogonalize_cell
+from abtem.charge_density import ChargeDensityPotential
 from abtem.core import axes
 from abtem.core import config
 from abtem.core.array import concatenate, stack, from_zarr
-from abtem.core import distributions
-from abtem.structures.transform import orthogonalize_cell
-from abtem.measurements.detectors import AnnularDetector, SegmentedDetector, FlexibleAnnularDetector, PixelatedDetector, \
-    WavesDetector
-from abtem.measurements.core import Images, RealSpaceLineProfiles, DiffractionPatterns, PolarMeasurements
-from abtem.potentials.crystal import CrystalPotential
-from abtem.potentials.gpaw.potential import GPAWPotential
-from abtem.potentials.poisson import ChargeDensityPotential
-from abtem.potentials.potentials import Potential, PotentialArray
-from abtem.potentials.temperature import FrozenPhonons, MDFrozenPhonons
-from abtem.visualize.atoms import show_atoms
-from abtem.waves.prism import SMatrix
-from abtem.waves.scan import LineScan, GridScan, CustomScan
-from abtem.waves.transfer import CTF, Aperture, TemporalEnvelope, SpatialEnvelope
-from abtem.waves.core import Waves, PlaneWave, Probe
+from abtem.detectors import (
+    AnnularDetector,
+    SegmentedDetector,
+    FlexibleAnnularDetector,
+    PixelatedDetector,
+    WavesDetector,
+)
+from abtem.gpaw import GPAWPotential
+from abtem.measurements import (
+    Images,
+    DiffractionPatterns,
+    RealSpaceLineProfiles,
+    FourierSpaceLineProfiles,
+    PolarMeasurements,
+)
+from abtem.inelastic.phonons import FrozenPhonons, MDFrozenPhonons
+from abtem.potentials import Potential, CrystalPotential, PotentialArray
+from abtem.scan import CustomScan, LineScan, GridScan
+from abtem.transfer import CTF, Aperture, TemporalEnvelope, SpatialEnvelope
+from abtem.visualize import show_atoms, plot_diffraction_pattern
+from abtem.waves import Waves, Probe, PlaneWave

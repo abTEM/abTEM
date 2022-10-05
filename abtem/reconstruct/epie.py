@@ -7,7 +7,7 @@ from abtem.core.backend import get_array_module, get_ndimage_module
 from abtem.core.chunks import validate_chunks, iterate_chunk_ranges
 from abtem.core.diagnostics import ProgressBar
 from abtem.core.fft import fft_shift
-from abtem.measurements.core import DiffractionPatterns, Images
+from abtem.measurements import DiffractionPatterns, Images
 from abtem.waves import Probe
 
 
