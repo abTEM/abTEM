@@ -26,7 +26,6 @@ from abtem.core.energy import HasAcceleratorMixin
 from abtem.core.fft import fft2, ifft2, fft_crop, fft_interpolate
 from abtem.core.grid import Grid, validate_gpts, polar_spatial_frequencies
 from abtem.core.grid import HasGridMixin
-from abtem.core.intialize import initialize
 from abtem.core.utils import safe_floor_int, CopyMixin, EqualityMixin
 from abtem.detectors import (
     BaseDetector,
@@ -1648,8 +1647,6 @@ class Probe(_WavesFactory):
         -------
         measurements : BaseMeasurement or Waves or list of BaseMeasurement
         """
-        initialize()
-
         potential = _validate_potential(potential)
         self.grid.match(potential)
 

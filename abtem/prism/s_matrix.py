@@ -17,7 +17,6 @@ from abtem.core.complex import abs2
 from abtem.core.energy import Accelerator
 from abtem.core.fft import fft2
 from abtem.core.grid import Grid, GridUndefinedError
-from abtem.core.intialize import initialize
 from abtem.measurements import BaseMeasurement
 from abtem.detectors import (
     BaseDetector,

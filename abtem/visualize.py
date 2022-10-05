@@ -456,7 +456,7 @@ def plot_diffraction_pattern(
     spot_threshold: float = 0.02,
     title: str = None,
     annotate_kwargs: dict = None,
-    intensity_split: float = 1.0,
+    divide_threshold: float = 1.0,
 ):
 
     if annotate_kwargs is None:
@@ -497,16 +497,11 @@ def plot_diffraction_pattern(
         )
     )
 
-    indexed_diffraction_pattern = indexed_diffraction_pattern.remove_equivalent()
+    indexed_diffraction_pattern = indexed_diffraction_pattern.remove_equivalent(divide_threshold=divide_threshold)
     coordinates = indexed_diffraction_pattern._vectors
     coordinates = coordinates / normalize_coordinates
 
     miller_indices = indexed_diffraction_pattern.miller_indices
-    # _, hexagonal = validate_cell_edges(cell)
-
-    # include = find_equivalent_spots(
-    #     hkl, intensities, hexagonal=hexagonal, intensity_split=intensity_split
-    # )
 
     for hkl, coordinate in zip(miller_indices, coordinates):
         # if include[i]:  # or label_mode == "all":

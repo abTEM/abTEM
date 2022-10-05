@@ -24,7 +24,6 @@ def frequency_bin_indices(shape):
 
 
 def find_linearly_independent_row(array, row, tol: float = 1e-6):
-
     for other_row in array:
         A = np.row_stack([row, other_row])
         U, s, V = np.linalg.svd(A)
@@ -113,7 +112,6 @@ def bin_index_to_orthorhombic_miller(array, sampling, cell_edges):
 
 
 def validate_cell_edges(cell):
-
     if isinstance(cell, Number):
         cell = [cell]
 
@@ -160,6 +158,7 @@ def remap_vector_space(vector_space1, vector_space2, vectors):
 
 def map_all_bin_indices_to_miller_indices(array, sampling, cell, tolerance=1e-6):
     cell_edges, hexagonal = validate_cell_edges(cell)
+
     (v1, v2), (u1, u2) = bin_index_to_orthorhombic_miller(array, sampling, cell_edges)
 
     bins = frequency_bin_indices(array.shape)
@@ -172,6 +171,7 @@ def map_all_bin_indices_to_miller_indices(array, sampling, cell, tolerance=1e-6)
 
     if hexagonal:
         hkl[:, 1] = hkl[:, :-1].sum(axis=1) / 2
+        hkl = miller_to_miller_bravais(hkl)
 
     return bins, hkl
 
@@ -329,7 +329,7 @@ class IndexedDiffractionPatterns:
 
     @classmethod
     def index_diffraction_patterns(
-        cls, diffraction_patterns, cell, hexagonal: bool = False
+        cls, diffraction_patterns, cell,
     ):
         bins, miller_indices = map_all_bin_indices_to_miller_indices(
             diffraction_patterns.array, diffraction_patterns.sampling, cell
@@ -339,24 +339,35 @@ class IndexedDiffractionPatterns:
         vectors = bins * diffraction_patterns.sampling
         return cls(spots, vectors)
 
-    def normalize_intensity(self):
-        c = self.intensities.max()
-        spots = {
-            hkl : intensity / c for hkl, intensity in self._spots.items()
-        }
+    def normalize_intensity(self, spot=None):
+        if spot is None:
+            c = self.intensities.max()
+        else:
+            c = self._spots[spot]
+
+        spots = {hkl: intensity / c for hkl, intensity in self._spots.items()}
 
         return self.__class__(spots, self._vectors)
 
-    def to_dataframe(self, intensity_threshold=1e-2, normalize:bool=False, index=0):
+    def to_dataframe(
+        self,
+        intensity_threshold=1e-2,
+        divide_threshold=1.0,
+        normalize: bool = False,
+        index=0,
+    ):
         import pandas as pd
 
-        indexed = self.remove_equivalent().remove_low_intensity(intensity_threshold)
+        indexed = self.remove_equivalent(
+            divide_threshold=divide_threshold
+        ).remove_low_intensity(intensity_threshold)
 
         if normalize:
-            indexed = indexed.normalize_intensity()
+            indexed = indexed.normalize_intensity(spot=normalize)
 
         spots = {
-            "".join(map(str, list(hkl))): intensity for hkl, intensity in indexed._spots.items()
+            "".join(map(str, list(hkl))): intensity
+            for hkl, intensity in indexed._spots.items()
         }
         spots = dict(sorted(spots.items()))
 
@@ -366,6 +377,3 @@ class IndexedDiffractionPatterns:
         from abtem.visualize import plot_diffraction_pattern
 
         return plot_diffraction_pattern(self, **kwargs)
-
-
-
