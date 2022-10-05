@@ -1,9 +1,12 @@
 numpy
 pyfftw
-numba
-pytest
 scipy
-zarr
+numba
 dask
+zarr
 matplotlib
 ase
+jupyter
+tabulate
+cplot
+threadpoolctl
