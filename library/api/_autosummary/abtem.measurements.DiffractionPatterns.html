@@ -51,8 +51,6 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="FourierSpaceLineProfiles" href="abtem.measurements.FourierSpaceLineProfiles.html" />
@@ -407,16 +405,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -598,18 +586,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -711,13 +689,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1294,15 +1272,10 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.angular_coordinates" title="abtem.measurements.DiffractionPatterns.angular_coordinates"><code class="xref py py-obj docutils literal notranslate"><span class="pre">angular_coordinates</span></code></a></p></td>
-<td><p>Angular coordinates.</p></td>
+<td><p>Scattering angle coordinates [mrad].</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">angular_limits</span></code></p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">List</span></code>[<code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]]</p>
-</dd>
-</dl>
-</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.angular_limits" title="abtem.measurements.DiffractionPatterns.angular_limits"><code class="xref py py-obj docutils literal notranslate"><span class="pre">angular_limits</span></code></a></p></td>
+<td><p>Lower and upper scattering angle in x and y [mrad].</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">angular_sampling</span></code></p></td>
 <td><p><dl class="field-list simple">
@@ -1341,7 +1314,7 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 <td><p></p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.coordinates" title="abtem.measurements.DiffractionPatterns.coordinates"><code class="xref py py-obj docutils literal notranslate"><span class="pre">coordinates</span></code></a></p></td>
-<td><p>Angular coordinates.</p></td>
+<td><p>Reciprocal spatial frequency coordinates [1 / Å].</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">device</span></code></p></td>
 <td><p></p></td>
@@ -1379,12 +1352,6 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">equivalent_real_space_extent</span></code></p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">equivalent_real_space_sampling</span></code></p></td>
-<td><p></p></td>
-</tr>
 <tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">fftshift</span></code></p></td>
 <td><p></p></td>
 </tr>
@@ -1394,16 +1361,11 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 <tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">is_lazy</span></code></p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">limits</span></code></p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">List</span></code>[<code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]]</p>
-</dd>
-</dl>
-</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.limits" title="abtem.measurements.DiffractionPatterns.limits"><code class="xref py py-obj docutils literal notranslate"><span class="pre">limits</span></code></a></p></td>
+<td><p>Lower and upper spatial frequency in x and y [1 / Å].</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">max_angles</span></code></p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.max_angles" title="abtem.measurements.DiffractionPatterns.max_angles"><code class="xref py py-obj docutils literal notranslate"><span class="pre">max_angles</span></code></a></p></td>
+<td><p>Maximum scattering angle in x and y [mrad]</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">metadata</span></code></p></td>
 <td><p><dl class="field-list simple">
@@ -1430,13 +1392,10 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scan_extent</span></code></p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.shape" title="abtem.measurements.DiffractionPatterns.shape"><code class="xref py py-obj docutils literal notranslate"><span class="pre">shape</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.shape" title="abtem.measurements.DiffractionPatterns.shape"><code class="xref py py-obj docutils literal notranslate"><span class="pre">shape</span></code></a></p></td>
 <td><p>The size of each axis.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">wavelength</span></code></p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">wavelength</span></code></p></td>
 <td><p></p></td>
 </tr>
 </tbody>
@@ -1450,10 +1409,21 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.angular_coordinates">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">angular_coordinates</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">ndarray</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">ndarray</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.angular_coordinates" title="Permalink to this definition">#</a></dt>
-<dd><p>Angular coordinates.</p>
+<dd><p>Scattering angle coordinates [mrad].</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>]</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.angular_limits">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">angular_limits</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.angular_limits" title="Permalink to this definition">#</a></dt>
+<dd><p>Lower and upper scattering angle in x and y [mrad].</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">List</span></code>[<code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]]</p>
 </dd>
 </dl>
 </dd></dl>
@@ -1540,7 +1510,7 @@ the real and imaginary part represents the x and y component.</p>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.coordinates">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">coordinates</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">ndarray</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">ndarray</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.coordinates" title="Permalink to this definition">#</a></dt>
-<dd><p>Angular coordinates.</p>
+<dd><p>Reciprocal spatial frequency coordinates [1 / Å].</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>]</p>
@@ -1710,6 +1680,23 @@ is uniform.</p>
 <dd class="field-odd"><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns" title="abtem.measurements.DiffractionPatterns">DiffractionPatterns</a></p>
 </dd>
 </dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.limits">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">limits</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.limits" title="Permalink to this definition">#</a></dt>
+<dd><p>Lower and upper spatial frequency in x and y [1 / Å].</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">List</span></code>[<code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]]</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.max_angles">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">max_angles</span></span><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.max_angles" title="Permalink to this definition">#</a></dt>
+<dd><p>Maximum scattering angle in x and y [mrad]</p>
 </dd></dl>
 
 <dl class="py property">
@@ -1932,7 +1919,7 @@ existing data.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library/api/_autosummary"
+            path: "./library\api\_autosummary"
         },
         predefinedOutput: true
     }

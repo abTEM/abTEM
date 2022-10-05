@@ -407,16 +407,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -598,18 +588,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -711,13 +691,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1052,39 +1032,37 @@ title="Print to PDF"
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.charge_density.</span></span><span class="sig-name descname"><span class="pre">ChargeDensityPotential</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">atoms</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">charge_density</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gpts</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slice_thickness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.5</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">plane</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'xy'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">box</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">origin</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(0.0,</span> <span class="pre">0.0,</span> <span class="pre">0.0)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">periodic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">exit_planes</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/charge_density.html#ChargeDensityPotential"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.charge_density.ChargeDensityPotential" title="Permalink to this definition">#</a></dt>
 <dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">_PotentialBuilder</span></code></p>
 <p>The charge density potential is used to calculate the electrostatic potential from a set of core charges defined by
-an ASE Atoms and corresponding electron charge density defined by a NumPy array.</p>
+an ASE <cite>Atoms</cite> object and corresponding electron charge density defined by a NumPy array.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>atoms</strong> (<em>Atoms</em><em> or </em><em>FrozenPhonons</em>) – Atoms or FrozenPhonons defining the atomic configuration(s) used in the independent atom model for calculating
-the electrostatic potential(s).</p></li>
-<li><p><strong>charge_density</strong> (<em>3d array</em>) – Charge density as a 3d NumPy array [electrons / Å^3].</p></li>
-<li><p><strong>gpts</strong> (<em>one</em><em> or </em><em>two int</em><em>, </em><em>optional</em>) – Number of grid points in x and y describing each slice of the potential. Provide either “sampling” or “gpts”.</p></li>
-<li><p><strong>sampling</strong> (<em>one</em><em> or </em><em>two float</em><em>, </em><em>optional</em>) – Sampling of the potential in x and y [1 / Å]. Provide either “sampling” or “gpts”.</p></li>
-<li><p><strong>slice_thickness</strong> (<em>float</em><em> or </em><em>sequence of float</em><em>, </em><em>optional</em>) – Thickness of the potential slices in Å. If given as a float the number of slices are calculated by dividing the
-slice thickness into the z-height of supercell.
+<li><p><strong>atoms</strong> (<em>Atoms</em><em> or </em><em>FrozenPhonons</em>) – Atomic configuration(s) used in the independent atom model for calculating the electrostatic potential(s).</p></li>
+<li><p><strong>charge_density</strong> (<em>np.ndarray</em>) – Charge density as a 3D NumPy array [electrons / Å^3].</p></li>
+<li><p><strong>gpts</strong> (<em>one</em><em> or </em><em>two int</em><em>, </em><em>optional</em>) – Number of grid points in <cite>x</cite> and <cite>y</cite> describing each slice of the potential calculated by specifying either <cite>sampling</cite> or <cite>gpts</cite>.</p></li>
+<li><p><strong>sampling</strong> (<em>one</em><em> or </em><em>two float</em><em>, </em><em>optional</em>) – Sampling of the potential in <cite>x</cite> and <cite>y</cite> [1 / Å] calculated by specifying either <cite>sampling</cite> or <cite>gpts</cite>.</p></li>
+<li><p><strong>slice_thickness</strong> (<em>float</em><em> or </em><em>sequence of float</em><em>, </em><em>optional</em>) – Thickness of the potential slices [Å] (default is 0.5 Å). If given as a float, the number of slices are calculated by dividing the
+slice thickness into the <cite>z</cite>-height of the cell.
 The slice thickness may be given as a sequence of values for each slice, in which case an error will be thrown
-if the sum of slice thicknesses is not equal to the height of the atoms.
-Default is 0.5 Å.</p></li>
+if the sum of slice thicknesses is not equal to the height of the atoms.</p></li>
 <li><p><strong>exit_planes</strong> (<em>int</em><em> or </em><em>tuple of int</em><em>, </em><em>optional</em>) – The <cite>exit_planes</cite> argument can be used to calculate thickness series.
 Providing <cite>exit_planes</cite> as a tuple of int indicates that the tuple contains the slice indices after which an
 exit plane is desired, and hence during a multislice simulation a measurement is created. If <cite>exit_planes</cite> is
-an integer a measurement will be collected every <cite>exit_planes</cite> number of slices.</p></li>
-<li><p><strong>plane</strong> (<em>str</em><em> or </em><em>two tuples of three float</em><em>, </em><em>optional</em>) – The plane relative to the provided Atoms mapped to xy plane of the Potential, i.e. provided plane is
-perpendicular to the propagation direction. If str, it must be a combination of two of ‘x’, ‘y’ and ‘z’,
-the default value ‘xy’ indicates that potential slices are cuts the ‘xy’-plane of the Atoms.
-The plane may also be specified with two arbitrary 3d vectors, which are mapped to the x and y directions of
-the potential, respectively. The length of the vectors has influence. If the vectors are not perpendicular,
-the second vector is rotated in the plane to become perpendicular. Providing a value of
-((1., 0., 0.), (0., 1., 0.)) is equivalent to providing ‘xy’.</p></li>
-<li><p><strong>origin</strong> (<em>three float</em><em>, </em><em>optional</em>) – The origin relative to the provided Atoms mapped to the origin of the Potential. This is equivalent to shifting
-the atoms
+an integer, a measurement will be collected every <cite>exit_planes</cite> number of slices.</p></li>
+<li><p><strong>plane</strong> (<em>str</em><em> or </em><em>two tuples of three float</em><em>, </em><em>optional</em>) – The plane relative to the provided atoms mapped to the <cite>xy</cite> plane of the potential, i.e. the propagation direction will be
+perpendicular to the provided plane. If str, must be a concatenation of two of ‘x’, ‘y’ and ‘z’;
+the default value ‘xy’ indicates that potential slices are cuts parallel to the ‘xy’-plane.
+The plane may also be specified with two arbitrary 3D vectors, which are mapped to the <cite>x</cite> and <cite>y</cite> directions of
+the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,
+the second vector is rotated in the plane to become perpendicular to the first. A value of
+((1., 0., 0.), (0., 1., 0.)) is equivalent to ‘xy’.</p></li>
+<li><p><strong>origin</strong> (<em>three float</em><em>, </em><em>optional</em>) – The origin relative to the provided atoms mapped to the origin of the potential. This is equivalent to translating
+the atoms.
 The default is (0., 0., 0.).</p></li>
-<li><p><strong>box</strong> (<em>three float</em><em>, </em><em>optional</em>) – The extent of the potential in x, y and z. If not given this is determined from the Atoms. If the box size does
-not match an integer number of the atoms’ supercell, an affine transformation may be necessary to preserve
+<li><p><strong>box</strong> (<em>three float</em><em>, </em><em>optional</em>) – The extent of the potential in <cite>x</cite>, <cite>y</cite> and <cite>z</cite>. If not given this is determined from the atoms. If the box size does
+not match an integer number of the atoms’ cell, an affine transformation may be necessary to preserve
 periodicity, determined by the <cite>periodic</cite> keyword.</p></li>
 <li><p><strong>periodic</strong> (<em>bool</em><em>, </em><em>True</em>) – If a transformation of the atomic structure is required, <cite>periodic</cite> determines how the atomic structure is
-transformed. If True, the periodicity of the Atoms is preserved, which may require applying a small affine
+transformed. If True, the periodicity of the atoms is preserved, which may require applying a small affine
 transformation to the atoms. If False, the transformed potential is effectively cut out of a larger repeated
 potential, which may not preserve periodicity.</p></li>
 <li><p><strong>device</strong> (<em>str</em><em>, </em><em>optional</em>) – The device used for calculating the potential. The default is determined by the user configuration file.</p></li>
@@ -1118,8 +1096,8 @@ potential, which may not preserve periodicity.</p></li>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.charge_density.ChargeDensityPotential.generate_blocks" title="abtem.charge_density.ChargeDensityPotential.generate_blocks"><code class="xref py py-obj docutils literal notranslate"><span class="pre">generate_blocks</span></code></a>([chunks])</p></td>
 <td><p>Generate chunks of the ensemble.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">generate_slices</span></code>([first_slice, last_slice])</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.charge_density.ChargeDensityPotential.generate_slices" title="abtem.charge_density.ChargeDensityPotential.generate_slices"><code class="xref py py-obj docutils literal notranslate"><span class="pre">generate_slices</span></code></a>([first_slice, last_slice])</p></td>
+<td><p>Generate the slices for the potential.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">images</span></code>()</p></td>
 <td><p></p></td>
@@ -1404,6 +1382,12 @@ potential, which may not preserve periodicity.</p></li>
 </dl>
 </dd></dl>
 
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.charge_density.ChargeDensityPotential.generate_slices">
+<span class="sig-name descname"><span class="pre">generate_slices</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">first_slice</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">last_slice</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/charge_density.html#ChargeDensityPotential.generate_slices"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.charge_density.ChargeDensityPotential.generate_slices" title="Permalink to this definition">#</a></dt>
+<dd><p>Generate the slices for the potential.</p>
+</dd></dl>
+
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.charge_density.ChargeDensityPotential.gpts">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">gpts</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.charge_density.ChargeDensityPotential.gpts" title="Permalink to this definition">#</a></dt>
@@ -1595,7 +1579,7 @@ potential, which may not preserve periodicity.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library/api/_autosummary"
+            path: "./library\api\_autosummary"
         },
         predefinedOutput: true
     }

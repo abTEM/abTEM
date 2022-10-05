@@ -404,16 +404,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -595,18 +585,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -708,13 +688,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1028,7 +1008,7 @@ title="Open an issue"
 <span class="kn">from</span> <span class="nn">abtem.core.utils</span> <span class="kn">import</span> <span class="n">safe_floor_int</span><span class="p">,</span> <span class="n">CopyMixin</span><span class="p">,</span> <span class="n">EqualityMixin</span>
 <span class="kn">from</span> <span class="nn">abtem.detectors</span> <span class="kn">import</span> <span class="p">(</span>
     <span class="n">BaseDetector</span><span class="p">,</span>
-    <span class="n">validate_detectors</span><span class="p">,</span>
+    <span class="n">_validate_detectors</span><span class="p">,</span>
     <span class="n">WavesDetector</span><span class="p">,</span>
     <span class="n">FlexibleAnnularDetector</span><span class="p">,</span>
 <span class="p">)</span>
@@ -1977,7 +1957,7 @@ title="Open an issue"
 
         <span class="n">potential</span> <span class="o">=</span> <span class="n">_validate_potential</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span>
 
-        <span class="n">detectors</span> <span class="o">=</span> <span class="n">validate_detectors</span><span class="p">(</span><span class="n">detectors</span><span class="p">)</span>
+        <span class="n">detectors</span> <span class="o">=</span> <span class="n">_validate_detectors</span><span class="p">(</span><span class="n">detectors</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_lazy</span><span class="p">:</span>
             <span class="n">blocks</span> <span class="o">=</span> <span class="n">potential</span><span class="o">.</span><span class="n">_partition_args</span><span class="p">()</span>
@@ -2362,7 +2342,7 @@ title="Open an issue"
 
         <span class="n">potential</span> <span class="o">=</span> <span class="n">_validate_potential</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
         <span class="n">lazy</span> <span class="o">=</span> <span class="n">validate_lazy</span><span class="p">(</span><span class="n">lazy</span><span class="p">)</span>
-        <span class="n">detectors</span> <span class="o">=</span> <span class="n">validate_detectors</span><span class="p">(</span><span class="n">detectors</span><span class="p">)</span>
+        <span class="n">detectors</span> <span class="o">=</span> <span class="n">_validate_detectors</span><span class="p">(</span><span class="n">detectors</span><span class="p">)</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">check_is_defined</span><span class="p">()</span>
@@ -2664,7 +2644,7 @@ title="Open an issue"
 
         <span class="n">lazy</span> <span class="o">=</span> <span class="n">validate_lazy</span><span class="p">(</span><span class="n">lazy</span><span class="p">)</span>
 
-        <span class="n">detectors</span> <span class="o">=</span> <span class="n">validate_detectors</span><span class="p">(</span><span class="n">detectors</span><span class="p">)</span>
+        <span class="n">detectors</span> <span class="o">=</span> <span class="n">_validate_detectors</span><span class="p">(</span><span class="n">detectors</span><span class="p">)</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">check_is_defined</span><span class="p">()</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">accelerator</span><span class="o">.</span><span class="n">check_is_defined</span><span class="p">()</span>

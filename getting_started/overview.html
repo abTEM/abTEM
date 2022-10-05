@@ -51,8 +51,6 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Installation" href="install.html" />
@@ -407,16 +405,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../library/api/_autosummary/abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -598,18 +586,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../library/api/_autosummary/abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -711,13 +689,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../library/api/_autosummary/abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="../library/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../library/api/_autosummary/abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="../library/api/_autosummary/abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1021,61 +999,12 @@ title="Print to PDF"
     </ul>
   </div>
 </div>
-<label for="__page-toc"
-  class="headerbtn headerbtn-page-toc"
-  
->
-  
-
-<span class="headerbtn__icon-container">
-  <i class="fas fa-list"></i>
-  </span>
-
-</label>
 
     </div>
 </div>
 
 <!-- Table of contents -->
 <div class="col-md-3 bd-toc show noprint">
-    <div class="tocsection onthispage pt-5 pb-3">
-        <i class="fas fa-list"></i> Contents
-    </div>
-    <nav id="bd-toc-nav" aria-label="Page">
-        <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#why-abtem">
-   Why abTEM?
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#flexibility-and-modularity">
-   Flexibility and modularity
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#implemented-in-python">
-   Implemented in Python
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#speed-and-scale">
-   Speed and scale
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#reproduce-and-share-simulations">
-   Reproduce and share simulations
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#maintained-and-developed">
-   Maintained and developed
-  </a>
- </li>
-</ul>
-
-    </nav>
 </div>
     </div>
     <div class="article row">
@@ -1087,44 +1016,6 @@ title="Print to PDF"
                 <div id="print-main-content">
                     <div id="jb-print-toc">
                         
-                        <div>
-                            <h2> Contents </h2>
-                        </div>
-                        <nav aria-label="Page">
-                            <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#why-abtem">
-   Why abTEM?
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#flexibility-and-modularity">
-   Flexibility and modularity
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#implemented-in-python">
-   Implemented in Python
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#speed-and-scale">
-   Speed and scale
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#reproduce-and-share-simulations">
-   Reproduce and share simulations
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#maintained-and-developed">
-   Maintained and developed
-  </a>
- </li>
-</ul>
-
-                        </nav>
                     </div>
                 </div>
             </div>
@@ -1134,38 +1025,6 @@ title="Print to PDF"
                 
   <section class="tex2jax_ignore mathjax_ignore" id="overview">
 <span id="getting-started-overview"></span><h1>Overview<a class="headerlink" href="#overview" title="Permalink to this heading">#</a></h1>
-<p><code class="docutils literal notranslate"><span class="pre">abTEM</span></code> is an open-source code for simulation code designed to meet these demands by integrating the ability to
-calculate
-the potential via density functional theory (DFT) with a flexible modular software design.</p>
-<p>See our</p>
-<section id="why-abtem">
-<h2>Why abTEM?<a class="headerlink" href="#why-abtem" title="Permalink to this heading">#</a></h2>
-</section>
-<section id="flexibility-and-modularity">
-<h2>Flexibility and modularity<a class="headerlink" href="#flexibility-and-modularity" title="Permalink to this heading">#</a></h2>
-<p>abTEM differs from most other codes by not directly implementing any common imaging modes (STEM, HRTEM etc.), but
-invites the user to mix and match objects to construct the desired simulation .
-This design patterns is inspired from object-oriented scientific codes, particularly ASE</p>
-<p>The objects are based on models and concepts that should be familiar to physicists, for example, the <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> object
-represents a plane wave function and the <code class="docutils literal notranslate"><span class="pre">Potential</span></code> an electrostatic potential. See a list of the most important
-objects in</p>
-</section>
-<section id="implemented-in-python">
-<h2>Implemented in Python<a class="headerlink" href="#implemented-in-python" title="Permalink to this heading">#</a></h2>
-<p>abTEM works with the Atomic Simulation Environment and the density functional theory code GPAW to provide an seamless
-environment for simulating images from first principles.</p>
-</section>
-<section id="speed-and-scale">
-<h2>Speed and scale<a class="headerlink" href="#speed-and-scale" title="Permalink to this heading">#</a></h2>
-<p>The computationally demanding parts are implemented using jit-compiled
-Numba code and high-performance libraries, maintaining speed while ensuring portability.</p>
-</section>
-<section id="reproduce-and-share-simulations">
-<h2>Reproduce and share simulations<a class="headerlink" href="#reproduce-and-share-simulations" title="Permalink to this heading">#</a></h2>
-</section>
-<section id="maintained-and-developed">
-<h2>Maintained and developed<a class="headerlink" href="#maintained-and-developed" title="Permalink to this heading">#</a></h2>
-</section>
 </section>
 
     <script type="text/x-thebe-config">

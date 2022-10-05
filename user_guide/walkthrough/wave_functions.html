@@ -409,16 +409,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -600,18 +590,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -713,13 +693,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1168,7 +1148,7 @@ title="Print to PDF"
 </ul>
 <div class="admonition seealso">
 <p class="admonition-title">See also</p>
-<p>The PRISM <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code> is not included in the list above. However, it can be used to achieve most of the goals of using the <code class="docutils literal notranslate"><span class="pre">Probe</span></code>. See our <span class="xref myst">introduction to PRISM in abTEM</span>.</p>
+<p>The PRISM <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code> is not included in the list above. However, it can be used to achieve most of the goals of using the <code class="docutils literal notranslate"><span class="pre">Probe</span></code>. See our <a class="reference internal" href="prism.html#walkthrough-prism"><span class="std std-ref">introduction to PRISM in abTEM</span></a>.</p>
 </div>
 <section id="plane-wave-functions">
 <span id="wave-functions-plane-wave"></span><h2>Plane wave functions<a class="headerlink" href="#plane-wave-functions" title="Permalink to this heading">#</a></h2>
@@ -1370,7 +1350,7 @@ title="Print to PDF"
 </div>
 <div class="admonition seealso">
 <p class="admonition-title">See also</p>
-<p>See our <span class="xref myst">introduction to the contrast transfer function</span> for a full list of phase aberrations.</p>
+<p>See our <a class="reference internal" href="contrast_transfer_function.html#walkthrough-contrast-transfer-function"><span class="std std-ref">introduction to the contrast transfer function</span></a> for a full list of phase aberrations.</p>
 </div>
 <p>We can turn the <code class="docutils literal notranslate"><span class="pre">Probe</span></code> into the generic <code class="docutils literal notranslate"><span class="pre">Waves</span></code> by using <code class="docutils literal notranslate"><span class="pre">build</span></code>.</p>
 <p>Which, as the plane wave, is represented by a Dask array.</p>
@@ -1487,7 +1467,7 @@ title="Print to PDF"
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>
 <p>Not every parameter in abTEM allows</p>
-<p>The uniform distribution created by <code class="docutils literal notranslate"><span class="pre">abtem.distributions.uniform</span></code> is not just <code class="docutils literal notranslate"><span class="pre">np.linspace</span></code> under a different name. We explain distributions in our <span class="xref myst">walkthrough on partial coherence</span>.</p>
+<p>The uniform distribution created by <code class="docutils literal notranslate"><span class="pre">abtem.distributions.uniform</span></code> is not just <code class="docutils literal notranslate"><span class="pre">np.linspace</span></code> under a different name. We explain distributions in our <a class="reference internal" href="partial_coherence.html#walkthrough-partial-coherence"><span class="std std-ref">walkthrough on partial coherence</span></a>.</p>
 </div>
 <p>The <code class="docutils literal notranslate"><span class="pre">Waves</span></code> are a 1d ensemble of 2d wave functions, hence the shape is 3d.</p>
 <div class="cell docutils container">
@@ -1592,7 +1572,7 @@ RealSpaceAxis  y [Å]    0.00 0.08 ... 19.92
         },
         kernelOptions: {
             kernelName: "test_threads",
-            path: "./user_guide/walkthrough"
+            path: "./user_guide\walkthrough"
         },
         predefinedOutput: true
     }

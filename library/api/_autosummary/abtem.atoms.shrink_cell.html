@@ -407,16 +407,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -598,18 +588,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -711,13 +691,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1050,7 +1030,23 @@ title="Print to PDF"
 <dl class="py function">
 <dt class="sig sig-object py" id="abtem.atoms.shrink_cell">
 <span class="sig-prename descclassname"><span class="pre">abtem.atoms.</span></span><span class="sig-name descname"><span class="pre">shrink_cell</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">atoms</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">repetitions</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(2,</span> <span class="pre">3)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tol</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1e-06</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/atoms.html#shrink_cell"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.atoms.shrink_cell" title="Permalink to this definition">#</a></dt>
-<dd></dd></dl>
+<dd><p>Find and return the smallest non-repeating cell for the given atoms.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>atoms</strong> (<em>ase.Atoms</em>) – Atoms whose repetition is to be removed.</p></li>
+<li><p><strong>repetitions</strong> (<em>tuple</em>) – Integer number of repetitions in <cite>x</cite> and <cite>y</cite> directions to be checked.</p></li>
+<li><p><strong>tol</strong> (<em>float</em>) – Repetitions with a mismatch smaller than this value are considered to be repeated.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>atoms</strong> – Smallest non-repeating cell for the given atoms.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>ase.Atoms</p>
+</dd>
+</dl>
+</dd></dl>
 
 </section>
 
@@ -1067,7 +1063,7 @@ title="Print to PDF"
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library/api/_autosummary"
+            path: "./library\api\_autosummary"
         },
         predefinedOutput: true
     }

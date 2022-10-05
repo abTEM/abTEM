@@ -56,7 +56,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="add_point_charges_fourier" href="abtem.charge_density.add_point_charges_fourier.html" />
-    <link rel="prev" title="DistributionFromValues" href="abtem.distributions.DistributionFromValues.html" />
+    <link rel="prev" title="BaseDistribution" href="abtem.distributions.BaseDistribution.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -407,16 +407,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -598,18 +588,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -711,13 +691,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1055,10 +1035,10 @@ title="Print to PDF"
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="abtem.charge_density.add_point_charges_fourier.html#abtem.charge_density.add_point_charges_fourier" title="abtem.charge_density.add_point_charges_fourier"><code class="xref py py-obj docutils literal notranslate"><span class="pre">add_point_charges_fourier</span></code></a>(array, atoms[, ...])</p></td>
-<td><p></p></td>
+<td><p>Add the nuclear point charges in Fourier space.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="abtem.charge_density.integrate_gradient_fourier.html#abtem.charge_density.integrate_gradient_fourier" title="abtem.charge_density.integrate_gradient_fourier"><code class="xref py py-obj docutils literal notranslate"><span class="pre">integrate_gradient_fourier</span></code></a>(array, cell[, ...])</p></td>
-<td><p>Integrate the gradient in 3d using Fourier space integration.</p></td>
+<td><p>Integrate an array representation of a gradient in 3D using Fourier-space integration.</p></td>
 </tr>
 </tbody>
 </table>
@@ -1070,7 +1050,7 @@ title="Print to PDF"
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="abtem.charge_density.ChargeDensityPotential.html#abtem.charge_density.ChargeDensityPotential" title="abtem.charge_density.ChargeDensityPotential"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ChargeDensityPotential</span></code></a>(atoms[, ...])</p></td>
-<td><p>The charge density potential is used to calculate the electrostatic potential from a set of core charges defined by an ASE Atoms and corresponding electron charge density defined by a NumPy array.</p></td>
+<td><p>The charge density potential is used to calculate the electrostatic potential from a set of core charges defined by an ASE <cite>Atoms</cite> object and corresponding electron charge density defined by a NumPy array.</p></td>
 </tr>
 </tbody>
 </table>
@@ -1089,7 +1069,7 @@ title="Print to PDF"
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library/api/_autosummary"
+            path: "./library\api\_autosummary"
         },
         predefinedOutput: true
     }
@@ -1103,11 +1083,11 @@ title="Print to PDF"
                 
     <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="abtem.distributions.DistributionFromValues.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="abtem.distributions.BaseDistribution.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">DistributionFromValues</p>
+            <p class="prev-next-title">BaseDistribution</p>
         </div>
     </a>
     <a class='right-next' id="next-link" href="abtem.charge_density.add_point_charges_fourier.html" title="next page">

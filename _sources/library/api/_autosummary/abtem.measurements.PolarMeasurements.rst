@@ -1,4 +1,4 @@
-PolarMeasurements
+﻿PolarMeasurements
 =================
 
 .. currentmodule:: abtem.measurements
@@ -43,7 +43,6 @@ PolarMeasurements
       ~PolarMeasurements.rechunk
       ~PolarMeasurements.reduce_ensemble
       ~PolarMeasurements.relative_difference
-      ~PolarMeasurements.scan_extent
       ~PolarMeasurements.scan_positions
       ~PolarMeasurements.show
       ~PolarMeasurements.squeeze

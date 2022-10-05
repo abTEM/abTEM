@@ -404,16 +404,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -595,18 +585,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -708,13 +688,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -997,7 +977,7 @@ title="Open an issue"
               <div>
                 
   <h1>Source code for abtem.atoms</h1><div class="highlight"><pre>
-<span></span><span class="sd">&quot;&quot;&quot;Module for modifying ASE atoms objects for use in abTEM.&quot;&quot;&quot;</span>
+<span></span><span class="sd">&quot;&quot;&quot;Module for modifying ASE `Atoms` objects for use in abTEM.&quot;&quot;&quot;</span>
 <span class="kn">from</span> <span class="nn">numbers</span> <span class="kn">import</span> <span class="n">Number</span>
 <span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Union</span><span class="p">,</span> <span class="n">Tuple</span>
 
@@ -1010,6 +990,7 @@ title="Open an issue"
 
 <span class="kn">from</span> <span class="nn">abtem.core.utils</span> <span class="kn">import</span> <span class="n">label_to_index</span>
 
+<span class="c1"># Converting Cartesian string representations of Cartesian axes to numerical.</span>
 <span class="n">_axes2tuple</span> <span class="o">=</span> <span class="p">{</span>
     <span class="s2">&quot;sxyz&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span>
     <span class="s2">&quot;sxyx&quot;</span><span class="p">:</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span>
@@ -1041,6 +1022,19 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="plane_to_axes"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.plane_to_axes.html#abtem.atoms.plane_to_axes">[docs]</a><span class="k">def</span> <span class="nf">plane_to_axes</span><span class="p">(</span><span class="n">plane</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Convert string representation of Carterian axes to numerical.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    plane : str</span>
+<span class="sd">        String representation of axes.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    axes : tuple</span>
+<span class="sd">        Numerical representation of axes.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">axes</span> <span class="o">=</span> <span class="p">()</span>
     <span class="n">last_axis</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>
     <span class="k">for</span> <span class="n">axis</span> <span class="ow">in</span> <span class="nb">list</span><span class="p">(</span><span class="n">plane</span><span class="p">):</span>
@@ -1058,12 +1052,17 @@ title="Open an issue"
 
 <div class="viewcode-block" id="is_cell_hexagonal"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.is_cell_hexagonal.html#abtem.atoms.is_cell_hexagonal">[docs]</a><span class="k">def</span> <span class="nf">is_cell_hexagonal</span><span class="p">(</span><span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
     <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Function to check whether the cell of an ASE atoms object is hexagonal.</span>
+<span class="sd">    Check whether the cell of given atoms is hexagonal.</span>
 
 <span class="sd">    Parameters</span>
 <span class="sd">    ----------</span>
-<span class="sd">    atoms : ASE atoms object</span>
+<span class="sd">    atoms : ase.Atoms</span>
 <span class="sd">        The atoms that should be checked.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    hexagonal : bool</span>
+<span class="sd">        True if cell is hexagonal.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">Atoms</span><span class="p">):</span>
         <span class="n">cell</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">get_cell</span><span class="p">()</span>
@@ -1076,22 +1075,27 @@ title="Open an issue"
     <span class="n">angle</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arccos</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">cell</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">cell</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span> <span class="o">/</span> <span class="p">(</span><span class="n">a</span> <span class="o">*</span> <span class="n">b</span><span class="p">))</span>
 
     <span class="k">return</span> <span class="p">(</span>
-            <span class="n">np</span><span class="o">.</span><span class="n">isclose</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
-            <span class="o">&amp;</span> <span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isclose</span><span class="p">(</span><span class="n">angle</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">/</span> <span class="mi">3</span><span class="p">)</span> <span class="o">|</span> <span class="n">np</span><span class="o">.</span><span class="n">isclose</span><span class="p">(</span><span class="n">angle</span><span class="p">,</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">/</span> <span class="mi">3</span><span class="p">))</span>
-            <span class="o">&amp;</span> <span class="p">(</span><span class="n">c</span> <span class="o">==</span> <span class="n">cell</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">])</span>
+        <span class="n">np</span><span class="o">.</span><span class="n">isclose</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
+        <span class="o">&amp;</span> <span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isclose</span><span class="p">(</span><span class="n">angle</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">/</span> <span class="mi">3</span><span class="p">)</span> <span class="o">|</span> <span class="n">np</span><span class="o">.</span><span class="n">isclose</span><span class="p">(</span><span class="n">angle</span><span class="p">,</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">/</span> <span class="mi">3</span><span class="p">))</span>
+        <span class="o">&amp;</span> <span class="p">(</span><span class="n">c</span> <span class="o">==</span> <span class="n">cell</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">])</span>
     <span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="is_cell_orthogonal"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.is_cell_orthogonal.html#abtem.atoms.is_cell_orthogonal">[docs]</a><span class="k">def</span> <span class="nf">is_cell_orthogonal</span><span class="p">(</span><span class="n">cell</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Atoms</span><span class="p">,</span> <span class="n">Cell</span><span class="p">],</span> <span class="n">tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-12</span><span class="p">):</span>
     <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Check whether an Atoms object has an orthogonal cell.</span>
+<span class="sd">    Check whether atoms have an orthogonal cell.</span>
 
 <span class="sd">    Parameters</span>
 <span class="sd">    ----------</span>
-<span class="sd">    cell : ASE atoms object</span>
+<span class="sd">    cell : ase.Atoms</span>
 <span class="sd">        The atoms that should be checked.</span>
 <span class="sd">    tol : float</span>
 <span class="sd">        Components of the lattice vectors below this value are considered to be zero.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    orthogonal : bool</span>
+<span class="sd">        True if cell is orthogonal.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="s2">&quot;cell&quot;</span><span class="p">):</span>
         <span class="n">cell</span> <span class="o">=</span> <span class="n">cell</span><span class="o">.</span><span class="n">cell</span>
@@ -1101,19 +1105,19 @@ title="Open an issue"
 
 <div class="viewcode-block" id="is_cell_valid"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.is_cell_valid.html#abtem.atoms.is_cell_valid">[docs]</a><span class="k">def</span> <span class="nf">is_cell_valid</span><span class="p">(</span><span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span> <span class="n">tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-12</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
     <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Check whether the cell of an ASE atoms object can be converted to a structure that is usable by abTEM.</span>
+<span class="sd">    Check whether the cell of given atoms can be converted to a structure usable by abTEM.</span>
 
 <span class="sd">    Parameters</span>
 <span class="sd">    ----------</span>
-<span class="sd">    atoms : ASE atoms object</span>
+<span class="sd">    atoms : ase.Atoms</span>
 <span class="sd">        The atoms that should be checked.</span>
 <span class="sd">    tol : float</span>
-<span class="sd">        Components of the lattice vectors below this value are considered to be zero.</span>
+<span class="sd">        Components of the lattice vectors whose magnitude is below this value are considered to be zero.</span>
 
 <span class="sd">    Returns</span>
 <span class="sd">    -------</span>
-<span class="sd">    bool</span>
-<span class="sd">        If true, the atomic structure is usable by abTEM.</span>
+<span class="sd">    valid : bool</span>
+<span class="sd">        True if the atomic structure is usable by abTEM.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span> <span class="o">&gt;</span> <span class="n">tol</span><span class="p">:</span>
         <span class="k">return</span> <span class="kc">False</span>
@@ -1129,19 +1133,19 @@ title="Open an issue"
 
 <div class="viewcode-block" id="standardize_cell"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.standardize_cell.html#abtem.atoms.standardize_cell">[docs]</a><span class="k">def</span> <span class="nf">standardize_cell</span><span class="p">(</span><span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span> <span class="n">tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-12</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Atoms</span><span class="p">:</span>
     <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Standardize the cell of an ASE atoms object. The atoms are rotated so one of the lattice vectors in the xy-plane</span>
-<span class="sd">    aligns with the x-axis, then all the lattice vectors are made positive.</span>
+<span class="sd">    Standardize the cell of given atoms. The atoms are rotated so that one of the lattice vectors in the `xy`-plane</span>
+<span class="sd">    is aligned with the `x`-axis, and then all the lattice vectors are made positive.</span>
 
 <span class="sd">    Parameters</span>
 <span class="sd">    ----------</span>
-<span class="sd">    atoms : ASE atoms object</span>
-<span class="sd">        The atoms that should be standardized</span>
+<span class="sd">    atoms : ase.Atoms</span>
+<span class="sd">        The atoms that should be standardized.</span>
 <span class="sd">    tol : float</span>
-<span class="sd">        Components of the lattice vectors below this value are considered to be zero.</span>
+<span class="sd">        Components of the lattice vectors whose magnitude is below this value are considered to be zero.</span>
 
 <span class="sd">    Returns</span>
 <span class="sd">    -------</span>
-<span class="sd">    atoms : ASE atoms object</span>
+<span class="sd">    atoms : ase.Atoms</span>
 <span class="sd">        The standardized atoms.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">atoms</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
@@ -1151,7 +1155,7 @@ title="Open an issue"
     <span class="n">vertical_vector</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">cell</span><span class="p">[:,</span> <span class="p">:</span><span class="mi">2</span><span class="p">])</span> <span class="o">&lt;</span> <span class="n">tol</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">))[</span><span class="mi">0</span><span class="p">]</span>
 
     <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">vertical_vector</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Invalid cell: no vertical lattice vector&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Invalid cell: no vertical lattice vector.&quot;</span><span class="p">)</span>
 
     <span class="n">cell</span><span class="p">[[</span><span class="n">vertical_vector</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">2</span><span class="p">]]</span> <span class="o">=</span> <span class="n">cell</span><span class="p">[[</span><span class="mi">2</span><span class="p">,</span> <span class="n">vertical_vector</span><span class="p">[</span><span class="mi">0</span><span class="p">]]]</span>
     <span class="n">r</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arctan2</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="mi">180</span>
@@ -1162,7 +1166,7 @@ title="Open an issue"
         <span class="n">atoms</span><span class="o">.</span><span class="n">rotate</span><span class="p">(</span><span class="o">-</span><span class="n">r</span><span class="p">,</span> <span class="s2">&quot;z&quot;</span><span class="p">,</span> <span class="n">rotate_cell</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
     <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="o">.</span><span class="n">lengths</span><span class="p">()</span> <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">diag</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">))):</span>
-        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;cell has nonorthgonal lattice vectors&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Cell has non-orthogonal lattice vectors.&quot;</span><span class="p">)</span>
 
     <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">diagonal_component</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">diag</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">)):</span>
         <span class="k">if</span> <span class="n">diagonal_component</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
@@ -1179,6 +1183,23 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="rotation_matrix_to_euler"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.rotation_matrix_to_euler.html#abtem.atoms.rotation_matrix_to_euler">[docs]</a><span class="k">def</span> <span class="nf">rotation_matrix_to_euler</span><span class="p">(</span><span class="n">R</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">axes</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;sxyz&quot;</span><span class="p">,</span> <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-6</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Convert a Cartesian rotation matrix to Euler angles.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    R : np.ndarray</span>
+<span class="sd">        Rotation array of dimension 3x3.</span>
+<span class="sd">    axes : str</span>
+<span class="sd">        String representation of Cartesian axes.</span>
+<span class="sd">    eps : float</span>
+<span class="sd">        Components of the rotation matrix whose magnitude is below this value are ignored.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    angles : tuple</span>
+<span class="sd">        Euler angles corresponding to the given rotation matrix.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">firstaxis</span><span class="p">,</span> <span class="n">parity</span><span class="p">,</span> <span class="n">repetition</span><span class="p">,</span> <span class="n">frame</span> <span class="o">=</span> <span class="n">_axes2tuple</span><span class="p">[</span><span class="n">axes</span><span class="o">.</span><span class="n">lower</span><span class="p">()]</span>
 
     <span class="n">i</span> <span class="o">=</span> <span class="n">firstaxis</span>
@@ -1215,57 +1236,79 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="decompose_affine_transform"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.decompose_affine_transform.html#abtem.atoms.decompose_affine_transform">[docs]</a><span class="k">def</span> <span class="nf">decompose_affine_transform</span><span class="p">(</span>
-        <span class="n">affined_transform</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">affine_transform</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
-    <span class="n">ZS</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">cholesky</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">affined_transform</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">affined_transform</span><span class="p">))</span><span class="o">.</span><span class="n">T</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Decompose an affine transform into rotation, scale and shear.</span>
 
-    <span class="n">zoom</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">diag</span><span class="p">(</span><span class="n">ZS</span><span class="p">)</span>
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    affine_transform : np.ndarray</span>
+<span class="sd">        Matrix representation of an affine transformation of dimension 3x3.</span>
 
-    <span class="n">shear</span> <span class="o">=</span> <span class="n">ZS</span> <span class="o">/</span> <span class="n">zoom</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span>
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    decomposition : {(3,), (3,), (3,)} tuple</span>
+<span class="sd">        Decomposition of the affine transformation into a tuple of length 3 whose items are arrays of dimension 3 representing rotation, scale and shear.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">ZS</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">cholesky</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">affine_transform</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">affine_transform</span><span class="p">))</span><span class="o">.</span><span class="n">T</span>
+
+    <span class="n">scale</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">diag</span><span class="p">(</span><span class="n">ZS</span><span class="p">)</span>
+
+    <span class="n">shear</span> <span class="o">=</span> <span class="n">ZS</span> <span class="o">/</span> <span class="n">scale</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span>
     <span class="n">shear</span> <span class="o">=</span> <span class="n">shear</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">triu_indices</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">)]</span>
 
-    <span class="n">rotation</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">affined_transform</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">inv</span><span class="p">(</span><span class="n">ZS</span><span class="p">))</span>
+    <span class="n">rotation</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">affine_transform</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">inv</span><span class="p">(</span><span class="n">ZS</span><span class="p">))</span>
 
     <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">det</span><span class="p">(</span><span class="n">rotation</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="n">zoom</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="n">scale</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*=</span> <span class="o">-</span><span class="mi">1</span>
         <span class="n">ZS</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*=</span> <span class="o">-</span><span class="mi">1</span>
-        <span class="n">rotation</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">affined_transform</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">inv</span><span class="p">(</span><span class="n">ZS</span><span class="p">))</span>
+        <span class="n">rotation</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">affine_transform</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">inv</span><span class="p">(</span><span class="n">ZS</span><span class="p">))</span>
 
-    <span class="k">return</span> <span class="n">rotation</span><span class="p">,</span> <span class="n">zoom</span><span class="p">,</span> <span class="n">shear</span></div>
+    <span class="k">return</span> <span class="n">rotation</span><span class="p">,</span> <span class="n">scale</span><span class="p">,</span> <span class="n">shear</span></div>
 
 
-<div class="viewcode-block" id="pretty_print_transform"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.pretty_print_transform.html#abtem.atoms.pretty_print_transform">[docs]</a><span class="k">def</span> <span class="nf">pretty_print_transform</span><span class="p">(</span><span class="n">transform</span><span class="p">):</span>
+<div class="viewcode-block" id="pretty_print_transform"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.pretty_print_transform.html#abtem.atoms.pretty_print_transform">[docs]</a><span class="k">def</span> <span class="nf">pretty_print_transform</span><span class="p">(</span><span class="n">decomposed</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Print a decomposed transformation in an easy-to-read manner.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    decomposed : tuple of np.ndarray</span>
+<span class="sd">        Tuple of length 3 whose items are arrays of dimension 3 representing rotation, scale and shear.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     <span class="nb">print</span><span class="p">(</span>
-        <span class="s2">&quot;euler angles (degrees): </span><span class="se">\t</span><span class="s2"> x = </span><span class="si">{:.3f}</span><span class="s2">, </span><span class="se">\t</span><span class="s2"> y = </span><span class="si">{:.3f}</span><span class="s2">, </span><span class="se">\t</span><span class="s2"> z = </span><span class="si">{:.3f}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
-            <span class="o">*</span><span class="n">transform</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="mi">180</span>
+        <span class="s2">&quot;Euler angles (degrees): </span><span class="se">\t</span><span class="s2"> x = </span><span class="si">{:.3f}</span><span class="s2">, </span><span class="se">\t</span><span class="s2"> y = </span><span class="si">{:.3f}</span><span class="s2">, </span><span class="se">\t</span><span class="s2"> z = </span><span class="si">{:.3f}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="o">*</span><span class="n">decomposed</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="mi">180</span>
         <span class="p">)</span>
     <span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span>
-        <span class="s2">&quot;normal strains (percent): </span><span class="se">\t</span><span class="s2"> x = </span><span class="si">{:.3f}</span><span class="s2">, </span><span class="se">\t</span><span class="s2"> y = </span><span class="si">{:.3f}</span><span class="s2">, </span><span class="se">\t</span><span class="s2"> z = </span><span class="si">{:.3f}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
-            <span class="o">*</span><span class="p">(</span><span class="n">transform</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="mi">100</span>
+        <span class="s2">&quot;Normal strains (percent): </span><span class="se">\t</span><span class="s2"> x = </span><span class="si">{:.3f}</span><span class="s2">, </span><span class="se">\t</span><span class="s2"> y = </span><span class="si">{:.3f}</span><span class="s2">, </span><span class="se">\t</span><span class="s2"> z = </span><span class="si">{:.3f}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="o">*</span><span class="p">(</span><span class="n">decomposed</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="mi">100</span>
         <span class="p">)</span>
     <span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span>
-        <span class="s2">&quot;shear strains (percent): </span><span class="se">\t</span><span class="s2"> xy = </span><span class="si">{:.3f}</span><span class="s2">, </span><span class="se">\t</span><span class="s2"> xz = </span><span class="si">{:.3f}</span><span class="s2">, </span><span class="se">\t</span><span class="s2"> xz = </span><span class="si">{:.3f}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
-            <span class="o">*</span><span class="p">(</span><span class="n">transform</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span> <span class="o">*</span> <span class="mi">100</span>
+        <span class="s2">&quot;Shear strains (percent): </span><span class="se">\t</span><span class="s2"> xy = </span><span class="si">{:.3f}</span><span class="s2">, </span><span class="se">\t</span><span class="s2"> xz = </span><span class="si">{:.3f}</span><span class="s2">, </span><span class="se">\t</span><span class="s2"> xz = </span><span class="si">{:.3f}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="o">*</span><span class="p">(</span><span class="n">decomposed</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span> <span class="o">*</span> <span class="mi">100</span>
         <span class="p">)</span>
     <span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="merge_close_atoms"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.merge_close_atoms.html#abtem.atoms.merge_close_atoms">[docs]</a><span class="k">def</span> <span class="nf">merge_close_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span> <span class="n">tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-7</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Atoms</span><span class="p">:</span>
     <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Merge atoms that are closer in distance than a given tolerance.</span>
+<span class="sd">    Merge atoms that are closer in distance to each other than the given tolerance.</span>
 
 <span class="sd">    Parameters</span>
 <span class="sd">    ----------</span>
-<span class="sd">    atoms : Atoms</span>
+<span class="sd">    atoms : ase.Atoms</span>
 <span class="sd">        Atoms to merge.</span>
 <span class="sd">    tol : float</span>
-<span class="sd">        Atoms closer than this value are merged assuming they have identical atomic numbers.</span>
+<span class="sd">        Atoms closer to each other than this value are merged if they have identical atomic numbers.</span>
 
 <span class="sd">    Returns</span>
 <span class="sd">    -------</span>
-<span class="sd">    merged_atoms : Atoms</span>
+<span class="sd">    merged_atoms : ase.Atoms</span>
+<span class="sd">        Merged atoms.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">atoms</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">atoms</span>
@@ -1292,13 +1335,27 @@ title="Open an issue"
         <span class="n">k</span> <span class="o">+=</span> <span class="n">i</span>
 
     <span class="n">new_atoms</span> <span class="o">=</span> <span class="n">Atoms</span><span class="p">(</span>
-        <span class="n">positions</span><span class="o">=</span><span class="n">new_points</span><span class="p">[:</span> <span class="n">k</span><span class="p">],</span> <span class="n">numbers</span><span class="o">=</span><span class="n">new_numbers</span><span class="p">[:</span> <span class="n">k</span><span class="p">],</span> <span class="n">cell</span><span class="o">=</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span>
+        <span class="n">positions</span><span class="o">=</span><span class="n">new_points</span><span class="p">[:</span><span class="n">k</span><span class="p">],</span> <span class="n">numbers</span><span class="o">=</span><span class="n">new_numbers</span><span class="p">[:</span><span class="n">k</span><span class="p">],</span> <span class="n">cell</span><span class="o">=</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span>
     <span class="p">)</span>
 
     <span class="k">return</span> <span class="n">new_atoms</span></div>
 
 
 <div class="viewcode-block" id="wrap_with_tolerance"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.wrap_with_tolerance.html#abtem.atoms.wrap_with_tolerance">[docs]</a><span class="k">def</span> <span class="nf">wrap_with_tolerance</span><span class="p">(</span><span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span> <span class="n">tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-6</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Atoms</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Wrap atoms that are closer to cell boundaries than the given tolerance.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    atoms : ase.Atoms</span>
+<span class="sd">        Atoms to be wrapped.</span>
+<span class="sd">    tol : float</span>
+<span class="sd">        Minimum distance to any cell boundary.</span>
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    atoms : ase.Atoms</span>
+<span class="sd">        Wrapped atoms.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">atoms</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
 
     <span class="n">atoms</span><span class="o">.</span><span class="n">wrap</span><span class="p">()</span>
@@ -1312,6 +1369,23 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="shrink_cell"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.shrink_cell.html#abtem.atoms.shrink_cell">[docs]</a><span class="k">def</span> <span class="nf">shrink_cell</span><span class="p">(</span><span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span> <span class="n">repetitions</span><span class="o">=</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">tol</span><span class="o">=</span><span class="mf">1e-6</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Find and return the smallest non-repeating cell for the given atoms.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    atoms : ase.Atoms</span>
+<span class="sd">        Atoms whose repetition is to be removed.</span>
+<span class="sd">    repetitions : tuple</span>
+<span class="sd">        Integer number of repetitions in `x` and `y` directions to be checked.</span>
+<span class="sd">    tol : float</span>
+<span class="sd">        Repetitions with a mismatch smaller than this value are considered to be repeated.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    atoms : ase.Atoms</span>
+<span class="sd">        Smallest non-repeating cell for the given atoms.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">atoms</span> <span class="o">=</span> <span class="n">wrap_with_tolerance</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">tol</span><span class="o">=</span><span class="n">tol</span><span class="p">)</span>
 
     <span class="k">for</span> <span class="n">repetition</span> <span class="ow">in</span> <span class="n">repetitions</span><span class="p">:</span>
@@ -1336,10 +1410,23 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="rotation_matrix_from_plane"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.rotation_matrix_from_plane.html#abtem.atoms.rotation_matrix_from_plane">[docs]</a><span class="k">def</span> <span class="nf">rotation_matrix_from_plane</span><span class="p">(</span>
-        <span class="n">plane</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span>
-            <span class="nb">str</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span>
-        <span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;xy&quot;</span>
+    <span class="n">plane</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span>
+        <span class="nb">str</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span>
+    <span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;xy&quot;</span>
 <span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Give the rotation matrix corresponding to a rotation from a given plane to the `xy` plane.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    plane : str or tuple of tuple</span>
+<span class="sd">        Plane from which to rotate given either as a string or two tuples.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    rotation : np.ndarray</span>
+<span class="sd">        Rotation matrix of dimension 3x3.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">x_vector</span><span class="p">,</span> <span class="n">y_vector</span> <span class="o">=</span> <span class="n">plane</span>
 
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">x_vector</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
@@ -1358,11 +1445,26 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="rotate_atoms_to_plane"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.rotate_atoms_to_plane.html#abtem.atoms.rotate_atoms_to_plane">[docs]</a><span class="k">def</span> <span class="nf">rotate_atoms_to_plane</span><span class="p">(</span>
-        <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span>
-        <span class="n">plane</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span>
-            <span class="nb">str</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span>
-        <span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;xy&quot;</span><span class="p">,</span>
+    <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span>
+    <span class="n">plane</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span>
+        <span class="nb">str</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span>
+    <span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;xy&quot;</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Atoms</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Rotate atoms so that their `xy` plane is rotated into a given plane.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    atoms : ASE `Atoms` objet</span>
+<span class="sd">        Atoms to be rotated.</span>
+<span class="sd">    plane : str or tuple of tuple</span>
+<span class="sd">        Plane to be rotated into given as either a string or two tuples.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    rotated : ase.Atoms</span>
+<span class="sd">        Rotated atoms.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="n">plane</span> <span class="o">==</span> <span class="s2">&quot;xy&quot;</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">atoms</span>
 
@@ -1375,19 +1477,51 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="flip_atoms"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.flip_atoms.html#abtem.atoms.flip_atoms">[docs]</a><span class="k">def</span> <span class="nf">flip_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span> <span class="n">axis</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Atoms</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Inverts the positions of atoms along a given axis.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    atoms : ase.Atoms</span>
+<span class="sd">        Atoms to be inverted.</span>
+<span class="sd">    axis : int</span>
+<span class="sd">        Integer representing the Cartesian axis (0 is `x`, 1 is `y`, and the default 2 is `z`).</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    atoms : ase.Atoms</span>
+<span class="sd">        Inverted atoms.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">atoms</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
     <span class="n">atoms</span><span class="o">.</span><span class="n">positions</span><span class="p">[:,</span> <span class="n">axis</span><span class="p">]</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">[</span><span class="n">axis</span><span class="p">,</span> <span class="n">axis</span><span class="p">]</span> <span class="o">-</span> <span class="n">atoms</span><span class="o">.</span><span class="n">positions</span><span class="p">[:,</span> <span class="n">axis</span><span class="p">]</span>
     <span class="k">return</span> <span class="n">atoms</span></div>
 
 
-<div class="viewcode-block" id="best_orthogonal_box"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_box.html#abtem.atoms.best_orthogonal_box">[docs]</a><span class="k">def</span> <span class="nf">best_orthogonal_box</span><span class="p">(</span>
-        <span class="n">cell</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">max_repetitions</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span> <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-12</span>
+<div class="viewcode-block" id="best_orthogonal_cell"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_cell.html#abtem.atoms.best_orthogonal_cell">[docs]</a><span class="k">def</span> <span class="nf">best_orthogonal_cell</span><span class="p">(</span>
+    <span class="n">cell</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">max_repetitions</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span> <span class="n">eps</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-12</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Find the closest orthogonal cell for a given cell given a maximum number of repetitions in all directions.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    cell : np.ndarray</span>
+<span class="sd">        Cell of dimensions 3x3.</span>
+<span class="sd">    max_repetitions : int</span>
+<span class="sd">        Maximum number of allowed repetitions (default is 5).</span>
+<span class="sd">    eps : float</span>
+<span class="sd">        Lattice vector components below this value are considered to be zero.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    cell : np.ndarray</span>
+<span class="sd">        Closest orthogonal cell found.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">zero_vectors</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">eps</span>
 
     <span class="k">if</span> <span class="n">zero_vectors</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
-            <span class="s2">&quot;two or more lattice vectors of the provided Atoms has no length&quot;</span>
+            <span class="s2">&quot;Two or more lattice vectors of the provided `Atoms` object have no length.&quot;</span>
         <span class="p">)</span>
 
     <span class="n">k</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="o">-</span><span class="n">max_repetitions</span><span class="p">,</span> <span class="n">max_repetitions</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
@@ -1397,9 +1531,9 @@ title="Open an issue"
     <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span> <span class="o">=</span> <span class="n">cell</span>
     <span class="n">vectors</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span>
         <span class="p">(</span>
-                <span class="p">(</span><span class="n">k</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">a</span><span class="p">[</span><span class="kc">None</span><span class="p">])[:,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>
-                <span class="o">+</span> <span class="p">(</span><span class="n">l</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">b</span><span class="p">[</span><span class="kc">None</span><span class="p">])[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:,</span> <span class="kc">None</span><span class="p">]</span>
-                <span class="o">+</span> <span class="p">(</span><span class="n">m</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">c</span><span class="p">[</span><span class="kc">None</span><span class="p">])[</span><span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
+            <span class="p">(</span><span class="n">k</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">a</span><span class="p">[</span><span class="kc">None</span><span class="p">])[:,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>
+            <span class="o">+</span> <span class="p">(</span><span class="n">l</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">b</span><span class="p">[</span><span class="kc">None</span><span class="p">])[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:,</span> <span class="kc">None</span><span class="p">]</span>
+            <span class="o">+</span> <span class="p">(</span><span class="n">m</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">c</span><span class="p">[</span><span class="kc">None</span><span class="p">])[</span><span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
         <span class="p">)</span>
     <span class="p">)</span>
 
@@ -1433,40 +1567,39 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="orthogonalize_cell"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.orthogonalize_cell.html#abtem.atoms.orthogonalize_cell">[docs]</a><span class="k">def</span> <span class="nf">orthogonalize_cell</span><span class="p">(</span>
-        <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span>
-        <span class="n">box</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">max_repetitions</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span>
-        <span class="n">return_transform</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-        <span class="n">allow_transform</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-        <span class="n">origin</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
-        <span class="n">plane</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span>
-            <span class="nb">str</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span>
-        <span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;xy&quot;</span><span class="p">,</span>
-        <span class="n">tolerance</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.01</span><span class="p">,</span>
+    <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span>
+    <span class="n">box</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">max_repetitions</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span>
+    <span class="n">return_transform</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="n">allow_transform</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">origin</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
+    <span class="n">plane</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span>
+        <span class="nb">str</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span>
+    <span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;xy&quot;</span><span class="p">,</span>
+    <span class="n">tolerance</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.01</span><span class="p">,</span>
 <span class="p">):</span>
     <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Make the cell of an ASE atoms object orthogonal. This is accomplished by repeating the cell until lattice vectors</span>
+<span class="sd">    Make the cell of the given atoms orthogonal. This is accomplished by repeating the cell until lattice vectors</span>
 <span class="sd">    are close to the three principal Cartesian directions. If the structure is not exactly orthogonal after the</span>
-<span class="sd">    structure is repeated by a given maximum the remaining difference will be made up by applying strain.</span>
+<span class="sd">    structure is repeated by a given maximum number, the remaining difference is made up by applying strain.</span>
 
 <span class="sd">    Parameters</span>
 <span class="sd">    ----------</span>
-<span class="sd">    atoms : ASE atoms object</span>
-<span class="sd">        The non-orthogonal atoms object.</span>
+<span class="sd">    atoms : ase.Atoms</span>
+<span class="sd">        The non-orthogonal atoms.</span>
 <span class="sd">    max_repetitions : int</span>
-<span class="sd">        The maximum number of repetions allowed. Increase this to allow more repetitions and hence less strain.</span>
+<span class="sd">        The maximum number of repetitions allowed. Increase this to allow more repetitions and hence less strain.</span>
 <span class="sd">    return_transform : bool</span>
 <span class="sd">        If true, return the transformations that were applied to make the atoms orthogonal.</span>
 <span class="sd">    allow_transform : bool</span>
 <span class="sd">        If false no transformation is applied to make the cell orthogonal, hence a non-orthogonal cell may be returned.</span>
 
-
 <span class="sd">    Returns</span>
 <span class="sd">    -------</span>
-<span class="sd">    atoms : ASE atoms object</span>
+<span class="sd">    atoms : ase.Atoms</span>
 <span class="sd">        The orthogonal atoms.</span>
-<span class="sd">    transform : tuple of arrays</span>
-<span class="sd">        The applied transform in the form the euler angles</span>
+<span class="sd">    transform : tuple of arrays, optional</span>
+<span class="sd">        The applied transform given as Euler angles (by default not returned).</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
     <span class="k">if</span> <span class="n">origin</span> <span class="o">!=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">):</span>
@@ -1477,10 +1610,10 @@ title="Open an issue"
         <span class="n">atoms</span> <span class="o">=</span> <span class="n">rotate_atoms_to_plane</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">plane</span><span class="p">)</span>
 
     <span class="k">if</span> <span class="n">box</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">box</span> <span class="o">=</span> <span class="n">best_orthogonal_box</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">,</span> <span class="n">max_repetitions</span><span class="o">=</span><span class="n">max_repetitions</span><span class="p">)</span>
+        <span class="n">box</span> <span class="o">=</span> <span class="n">best_orthogonal_cell</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">,</span> <span class="n">max_repetitions</span><span class="o">=</span><span class="n">max_repetitions</span><span class="p">)</span>
 
     <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="o">.</span><span class="n">lengths</span><span class="p">()</span> <span class="o">&lt;</span> <span class="n">tolerance</span><span class="p">):</span>
-        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;cell vectors must have non-zero length&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Cell vectors must have non-zero length.&quot;</span><span class="p">)</span>
 
     <span class="n">inv</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">inv</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">)</span>
     <span class="n">vectors</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">diag</span><span class="p">(</span><span class="n">box</span><span class="p">),</span> <span class="n">inv</span><span class="p">)</span>
@@ -1498,27 +1631,34 @@ title="Open an issue"
         <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">()</span>
 
     <span class="k">if</span> <span class="n">return_transform</span><span class="p">:</span>
-        <span class="n">rotation</span><span class="p">,</span> <span class="n">zoom</span><span class="p">,</span> <span class="n">shear</span> <span class="o">=</span> <span class="n">decompose_affine_transform</span><span class="p">(</span><span class="n">A</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">atoms</span><span class="p">,</span> <span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">rotation_matrix_to_euler</span><span class="p">(</span><span class="n">rotation</span><span class="p">)),</span> <span class="n">zoom</span><span class="p">,</span> <span class="n">shear</span><span class="p">)</span>
+        <span class="n">rotation</span><span class="p">,</span> <span class="n">scale</span><span class="p">,</span> <span class="n">shear</span> <span class="o">=</span> <span class="n">decompose_affine_transform</span><span class="p">(</span><span class="n">A</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">atoms</span><span class="p">,</span> <span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">rotation_matrix_to_euler</span><span class="p">(</span><span class="n">rotation</span><span class="p">)),</span> <span class="n">scale</span><span class="p">,</span> <span class="n">shear</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">atoms</span></div>
 
 
-<span class="c1"># def atoms_in_box(atoms: Atoms,</span>
-<span class="c1">#                  box: Tuple[float, float, float],</span>
-<span class="c1">#                  margin: Tuple[float, float, float] = (0., 0., 0.),</span>
-<span class="c1">#                  origin: Tuple[float, float, float] = (0., 0., 0.)) -&gt; Atoms:</span>
-<span class="c1">#     mask = np.all(atoms.positions &gt;= (np.array(origin) - margin - 1e-12)[None], axis=1) * \</span>
-<span class="c1">#            np.all(atoms.positions &lt; (np.array(origin) + box + margin)[None], axis=1)</span>
-<span class="c1">#</span>
-<span class="c1">#     atoms = atoms[mask]</span>
-<span class="c1">#     return atoms</span>
-
-
 <div class="viewcode-block" id="atoms_in_cell"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.atoms_in_cell.html#abtem.atoms.atoms_in_cell">[docs]</a><span class="k">def</span> <span class="nf">atoms_in_cell</span><span class="p">(</span>
-        <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span>
-        <span class="n">margin</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
+    <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span>
+    <span class="n">margin</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Atoms</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Crop atoms that are outside of their cell.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    atoms : ase.Atoms</span>
+<span class="sd">        Atoms to be cropped.</span>
+<span class="sd">    margin : float or tuple of three floats</span>
+<span class="sd">        Atoms that are outside the cell by this margin are not cropped (by default no margin).</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    cropped : ase.Atoms</span>
+<span class="sd">        Cropped atoms.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">margin</span><span class="p">,</span> <span class="n">Number</span><span class="p">):</span>
+        <span class="n">margin</span> <span class="o">=</span> <span class="p">(</span><span class="n">margin</span><span class="p">,</span> <span class="n">margin</span><span class="p">,</span> <span class="n">margin</span><span class="p">)</span>
+
     <span class="n">scaled_positions</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">get_scaled_positions</span><span class="p">(</span><span class="n">wrap</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
     <span class="n">scaled_margins</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">margin</span><span class="p">)</span> <span class="o">/</span> <span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="o">.</span><span class="n">lengths</span><span class="p">()</span>
 
@@ -1530,17 +1670,38 @@ title="Open an issue"
     <span class="k">return</span> <span class="n">atoms</span></div>
 
 
-<div class="viewcode-block" id="cut_box"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.cut_box.html#abtem.atoms.cut_box">[docs]</a><span class="k">def</span> <span class="nf">cut_box</span><span class="p">(</span>
-        <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span>
-        <span class="n">box</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">plane</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span>
-            <span class="nb">str</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span>
-        <span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;xy&quot;</span><span class="p">,</span>
-        <span class="n">origin</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
-        <span class="n">margin</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+<div class="viewcode-block" id="cut_cell"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.cut_cell.html#abtem.atoms.cut_cell">[docs]</a><span class="k">def</span> <span class="nf">cut_cell</span><span class="p">(</span>
+    <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span>
+    <span class="n">cell</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">plane</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span>
+        <span class="nb">str</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span>
+    <span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;xy&quot;</span><span class="p">,</span>
+    <span class="n">origin</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
+    <span class="n">margin</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Atoms</span><span class="p">:</span>
-    <span class="k">if</span> <span class="n">box</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">box</span> <span class="o">=</span> <span class="n">best_orthogonal_box</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">)</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Fit the given atoms into a given cell by cropping atoms that are outside the cell, ignoring periodicity. If the given atoms do not originally fill the cell, they are first repeated until they do.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    atoms : ase.Atoms</span>
+<span class="sd">        Atoms to be fit.</span>
+<span class="sd">    cell : tuple of floats</span>
+<span class="sd">        Cell to be fit into.</span>
+<span class="sd">    plane : str or tuple of tuples</span>
+<span class="sd">        Plane to be rotated into given as either a string or two tuples (by default `xy` which results in no rotation for a standardized cell).</span>
+<span class="sd">    origin : tuple of floats</span>
+<span class="sd">        Offset of the origin for the given cell with respect to the original cell.</span>
+<span class="sd">    margin : float or tuple of three floats</span>
+<span class="sd">        Atoms that are outside the cell by this margin are not cropped (by default no margin).</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    cut : ase.Atoms</span>
+<span class="sd">       Atoms fit into the cell.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">cell</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">cell</span> <span class="o">=</span> <span class="n">best_orthogonal_cell</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">)</span>
 
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">margin</span><span class="p">,</span> <span class="n">Number</span><span class="p">):</span>
         <span class="n">margin</span> <span class="o">=</span> <span class="p">(</span><span class="n">margin</span><span class="p">,</span> <span class="n">margin</span><span class="p">,</span> <span class="n">margin</span><span class="p">)</span>
@@ -1552,7 +1713,7 @@ title="Open an issue"
 
     <span class="n">atoms</span> <span class="o">=</span> <span class="n">rotate_atoms_to_plane</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">plane</span><span class="p">)</span>
 
-    <span class="n">new_cell</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">diag</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">box</span><span class="p">)</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">margin</span><span class="p">))</span>
+    <span class="n">new_cell</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">diag</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">cell</span><span class="p">)</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">margin</span><span class="p">))</span>
     <span class="n">new_cell</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="o">.</span><span class="n">scaled_positions</span><span class="p">(</span><span class="n">new_cell</span><span class="p">),</span> <span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">)</span>
 
     <span class="n">scaled_margin</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="o">.</span><span class="n">scaled_positions</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">diag</span><span class="p">(</span><span class="n">margin</span><span class="p">))</span>
@@ -1581,7 +1742,7 @@ title="Open an issue"
 
     <span class="n">new_atoms</span><span class="o">.</span><span class="n">positions</span><span class="p">[:]</span> <span class="o">+=</span> <span class="n">center_translate</span> <span class="o">-</span> <span class="n">margin_translate</span>
 
-    <span class="n">new_atoms</span><span class="o">.</span><span class="n">cell</span> <span class="o">=</span> <span class="n">box</span>
+    <span class="n">new_atoms</span><span class="o">.</span><span class="n">cell</span> <span class="o">=</span> <span class="n">cell</span>
     <span class="n">new_atoms</span> <span class="o">=</span> <span class="n">atoms_in_cell</span><span class="p">(</span><span class="n">new_atoms</span><span class="p">,</span> <span class="n">margin</span><span class="o">=</span><span class="n">margin</span><span class="p">)</span>
 
     <span class="c1"># new_atoms = wrap_with_tolerance(new_atoms)</span>
@@ -1589,23 +1750,23 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="pad_atoms"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.pad_atoms.html#abtem.atoms.pad_atoms">[docs]</a><span class="k">def</span> <span class="nf">pad_atoms</span><span class="p">(</span>
-        <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span>
-        <span class="n">margins</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]],</span>
-        <span class="n">directions</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;xyz&quot;</span><span class="p">,</span>
+    <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span>
+    <span class="n">margins</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]],</span>
+    <span class="n">directions</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;xyz&quot;</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Atoms</span><span class="p">:</span>
     <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Repeat the atoms in x and y, retaining only the repeated atoms within the margin distance from the cell boundary.</span>
+<span class="sd">    Repeat the atoms in the `x` and `y` directions, retaining only the repeated atoms within the margin distance from the cell boundary.</span>
 
 <span class="sd">    Parameters</span>
 <span class="sd">    ----------</span>
-<span class="sd">    atoms: ASE Atoms object</span>
+<span class="sd">    atoms: ase.Atoms</span>
 <span class="sd">        The atoms that should be padded.</span>
-<span class="sd">    margins: one or three float</span>
-<span class="sd">        The padding margin.</span>
+<span class="sd">    margins: one or tuple of three floats</span>
+<span class="sd">        The padding margin. Can be specified either as a single value for all directions, or three separate values.</span>
 
 <span class="sd">    Returns</span>
 <span class="sd">    -------</span>
-<span class="sd">    ASE Atoms object</span>
+<span class="sd">    padded : ase.Atoms</span>
 <span class="sd">        Padded atoms.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 

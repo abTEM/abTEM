@@ -404,16 +404,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -595,18 +585,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -708,13 +688,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1015,7 +995,7 @@ title="Open an issue"
 <span class="kn">from</span> <span class="nn">abtem.core.grid</span> <span class="kn">import</span> <span class="n">Grid</span><span class="p">,</span> <span class="n">HasGridMixin</span>
 <span class="kn">from</span> <span class="nn">abtem.core.transform</span> <span class="kn">import</span> <span class="n">WaveTransform</span>
 <span class="kn">from</span> <span class="nn">abtem.core.utils</span> <span class="kn">import</span> <span class="n">safe_floor_int</span>
-<span class="kn">from</span> <span class="nn">abtem.distributions</span> <span class="kn">import</span> <span class="n">AxisAlignedDistributionND</span>
+<span class="kn">from</span> <span class="nn">abtem.distributions</span> <span class="kn">import</span> <span class="n">_AxisAlignedDistributionND</span>
 <span class="kn">from</span> <span class="nn">abtem.potentials</span> <span class="kn">import</span> <span class="n">BasePotential</span>
 
 <span class="k">if</span> <span class="n">TYPE_CHECKING</span><span class="p">:</span>
@@ -1135,7 +1115,7 @@ title="Open an issue"
     <span class="k">def</span> <span class="nf">ensemble_partial</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">def</span> <span class="nf">distribution</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">):</span>
             <span class="n">factors</span> <span class="o">=</span> <span class="p">[</span><span class="n">arg</span><span class="o">.</span><span class="n">item</span><span class="p">()</span> <span class="k">for</span> <span class="n">arg</span> <span class="ow">in</span> <span class="n">args</span><span class="p">]</span>
-            <span class="n">dist</span> <span class="o">=</span> <span class="n">SourceOffset</span><span class="p">(</span><span class="n">AxisAlignedDistributionND</span><span class="p">(</span><span class="n">factors</span><span class="p">))</span>
+            <span class="n">dist</span> <span class="o">=</span> <span class="n">SourceOffset</span><span class="p">(</span><span class="n">_AxisAlignedDistributionND</span><span class="p">(</span><span class="n">factors</span><span class="p">))</span>
             <span class="n">arr</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="mi">1</span><span class="p">,)</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">args</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">object</span><span class="p">)</span>
             <span class="n">arr</span><span class="o">.</span><span class="n">itemset</span><span class="p">(</span><span class="n">dist</span><span class="p">)</span>
             <span class="k">return</span> <span class="n">arr</span>

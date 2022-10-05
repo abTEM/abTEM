@@ -56,7 +56,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="flip_atoms" href="abtem.atoms.flip_atoms.html" />
-    <link rel="prev" title="cut_box" href="abtem.atoms.cut_box.html" />
+    <link rel="prev" title="cut_cell" href="abtem.atoms.cut_cell.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -407,16 +407,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -598,18 +588,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -711,13 +691,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3 current active">
@@ -1049,10 +1029,17 @@ title="Print to PDF"
 <h1>decompose_affine_transform<a class="headerlink" href="#decompose-affine-transform" title="Permalink to this heading">#</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="abtem.atoms.decompose_affine_transform">
-<span class="sig-prename descclassname"><span class="pre">abtem.atoms.</span></span><span class="sig-name descname"><span class="pre">decompose_affine_transform</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">affined_transform</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/atoms.html#decompose_affine_transform"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.atoms.decompose_affine_transform" title="Permalink to this definition">#</a></dt>
-<dd><dl class="field-list simple">
+<span class="sig-prename descclassname"><span class="pre">abtem.atoms.</span></span><span class="sig-name descname"><span class="pre">decompose_affine_transform</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">affine_transform</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/atoms.html#decompose_affine_transform"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.atoms.decompose_affine_transform" title="Permalink to this definition">#</a></dt>
+<dd><p>Decompose an affine transform into rotation, scale and shear.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>affine_transform</strong> (<em>np.ndarray</em>) – Matrix representation of an affine transformation of dimension 3x3.</p>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>decomposition</strong> – Decomposition of the affine transformation into a tuple of length 3 whose items are arrays of dimension 3 representing rotation, scale and shear.</p>
+</dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>]</p>
+<dd class="field-odd"><p>{(3,), (3,), (3,)} tuple</p>
 </dd>
 </dl>
 </dd></dl>
@@ -1072,7 +1059,7 @@ title="Print to PDF"
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library/api/_autosummary"
+            path: "./library\api\_autosummary"
         },
         predefinedOutput: true
     }
@@ -1086,11 +1073,11 @@ title="Print to PDF"
                 
     <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="abtem.atoms.cut_box.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="abtem.atoms.cut_cell.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">cut_box</p>
+            <p class="prev-next-title">cut_cell</p>
         </div>
     </a>
     <a class='right-next' id="next-link" href="abtem.atoms.flip_atoms.html" title="next page">

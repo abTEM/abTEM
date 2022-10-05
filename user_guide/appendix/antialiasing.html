@@ -51,8 +51,6 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -409,16 +407,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -600,18 +588,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -713,13 +691,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1108,17 +1086,17 @@ The real space coordinates take on only discrete values of:</p>
     k_{x,max} = \frac{1}{2\Delta_x} \quad \mathrm{and} \quad k_{y,max} = \frac{1}{2\Delta_y} \quad .
 \]</div>
 <p>We demonstrate the relationship between the real space sampling and the maximum simulated spatial frequencies (<span class="math notranslate nohighlight">\(k_{x,max}\)</span> and <span class="math notranslate nohighlight">\(k_{y,max}\)</span>) in abTEM below.</p>
-<p>We simulate two otherwise identical exit wave functions at different (uniform) samplings of <span class="math notranslate nohighlight">\(\Delta=\Delta_x=\Delta_y=0.05 \ \mathrm{Å}\)</span> and <span class="math notranslate nohighlight">\(\Delta= 0.025 \mathrm{Å}\)</span>. The diffraction patterns are plotted on a power scale to enhance the intensity at large spatial frequencies.</p>
+<p>We simulate two otherwise identical exit wave functions at different (uniform) samplings of <span class="math notranslate nohighlight">\(\Delta=\Delta_x=\Delta_y=0.08 \ \mathrm{Å}\)</span> and <span class="math notranslate nohighlight">\(\Delta= 0.04 \mathrm{Å}\)</span>. The diffraction patterns are plotted on a power scale to enhance the intensity at large spatial frequencies.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">ase</span><span class="o">.</span><span class="n">build</span><span class="o">.</span><span class="n">bulk</span><span class="p">(</span><span class="s2">&quot;Au&quot;</span><span class="p">,</span> <span class="n">cubic</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">ase</span><span class="o">.</span><span class="n">build</span><span class="o">.</span><span class="n">bulk</span><span class="p">(</span><span class="s2">&quot;Au&quot;</span><span class="p">,</span> <span class="n">cubic</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">40</span><span class="p">)</span>
 
 <span class="n">exit_wave_rough</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span>
-    <span class="n">energy</span><span class="o">=</span><span class="mf">100e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mf">9.5</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span>
+    <span class="n">energy</span><span class="o">=</span><span class="mf">100e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mf">9.5</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.08</span>
 <span class="p">)</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">atoms</span><span class="p">)</span>
 
 <span class="n">exit_wave_fine</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span>
-    <span class="n">energy</span><span class="o">=</span><span class="mf">100e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mf">9.5</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.025</span>
+    <span class="n">energy</span><span class="o">=</span><span class="mf">100e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mf">9.5</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.04</span>
 <span class="p">)</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">atoms</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -1130,10 +1108,10 @@ The real space coordinates take on only discrete values of:</p>
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
 
 <span class="n">exit_wave_rough</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="s2">&quot;full&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
-    <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">power</span><span class="o">=</span><span class="mf">0.2</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;sampling = 0.05 Å&quot;</span>
+    <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">power</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;sampling = 0.08 Å&quot;</span>
 <span class="p">)</span>
 <span class="n">exit_wave_fine</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="s2">&quot;full&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
-    <span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">power</span><span class="o">=</span><span class="mf">0.2</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;sampling = 0.025 Å&quot;</span>
+    <span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">power</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;sampling = 0.04 Å&quot;</span>
 <span class="p">)</span>
 <span class="n">plt</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
 </pre></div>
@@ -1165,7 +1143,7 @@ The real space coordinates take on only discrete values of:</p>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>Maximum scattering angles = (246.76243967509163, 246.76243967509163) mrad
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>Maximum scattering angles = (154.22652479693227, 154.22652479693227) mrad
 </pre></div>
 </div>
 </div>
@@ -1176,15 +1154,15 @@ The real space coordinates take on only discrete values of:</p>
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">,</span> <span class="n">ax3</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
 
 <span class="n">exit_wave_rough</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="s2">&quot;full&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
-    <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">power</span><span class="o">=</span><span class="mf">0.2</span><span class="p">,</span> <span class="n">units</span><span class="o">=</span><span class="s2">&quot;mrad&quot;</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;cropped to &#39;full&#39;&quot;</span>
+    <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">power</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">units</span><span class="o">=</span><span class="s2">&quot;mrad&quot;</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;cropped to &#39;full&#39;&quot;</span>
 <span class="p">)</span>
 
 <span class="n">exit_wave_rough</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="s2">&quot;cutoff&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
-    <span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">power</span><span class="o">=</span><span class="mf">0.2</span><span class="p">,</span> <span class="n">units</span><span class="o">=</span><span class="s2">&quot;mrad&quot;</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;cropped to &#39;cutoff&#39;&quot;</span>
+    <span class="n">ax</span><span class="o">=</span><span class="n">ax2</span><span class="p">,</span> <span class="n">power</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">units</span><span class="o">=</span><span class="s2">&quot;mrad&quot;</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;cropped to &#39;cutoff&#39;&quot;</span>
 <span class="p">)</span>
 
 <span class="n">exit_wave_rough</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="s2">&quot;valid&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
-    <span class="n">ax</span><span class="o">=</span><span class="n">ax3</span><span class="p">,</span> <span class="n">power</span><span class="o">=</span><span class="mf">0.2</span><span class="p">,</span> <span class="n">units</span><span class="o">=</span><span class="s2">&quot;mrad&quot;</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;cropped to &#39;valid&#39;&quot;</span>
+    <span class="n">ax</span><span class="o">=</span><span class="n">ax3</span><span class="p">,</span> <span class="n">power</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">units</span><span class="o">=</span><span class="s2">&quot;mrad&quot;</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s2">&quot;cropped to &#39;valid&#39;&quot;</span>
 <span class="p">)</span>
 
 <span class="n">plt</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
@@ -1201,7 +1179,7 @@ The real space coordinates take on only discrete values of:</p>
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">repeated_atoms</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span> <span class="o">*</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
 
 <span class="n">exit_wave_repeated</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span>
-    <span class="n">energy</span><span class="o">=</span><span class="mf">100e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mf">9.5</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.05</span>
+    <span class="n">energy</span><span class="o">=</span><span class="mf">100e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mf">9.5</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.08</span>
 <span class="p">)</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">repeated_atoms</span><span class="p">)</span>
 
 <span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
@@ -1236,7 +1214,7 @@ The real space coordinates take on only discrete values of:</p>
         },
         kernelOptions: {
             kernelName: "abtem-dask",
-            path: "./user_guide/appendix"
+            path: "./user_guide\appendix"
         },
         predefinedOutput: true
     }

@@ -51,8 +51,6 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="SinglePointMeasurement" href="abtem.measurements.SinglePointMeasurement.html" />
@@ -407,16 +405,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -598,18 +586,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -711,13 +689,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1183,16 +1161,13 @@ title="Print to PDF"
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">relative_difference</span></code>(other[, min_relative_tol])</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scan_extent</span></code>()</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scan_positions</span></code>()</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scan_positions</span></code>()</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">show</span></code>([ax, x_label, title, y_label, ...])</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">show</span></code>([ax, x_label, title, y_label, ...])</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">squeeze</span></code>([axis])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">squeeze</span></code>([axis])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1200,7 +1175,7 @@ title="Print to PDF"
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">std</span></code>([axes])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">std</span></code>([axes])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1208,7 +1183,7 @@ title="Print to PDF"
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sum</span></code>([axes])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sum</span></code>([axes])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1216,7 +1191,7 @@ title="Print to PDF"
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">tile</span></code>(reps)</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">tile</span></code>(reps)</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles" title="abtem.measurements.RealSpaceLineProfiles"><code class="xref py py-class docutils literal notranslate"><span class="pre">RealSpaceLineProfiles</span></code></a></p>
@@ -1224,7 +1199,7 @@ title="Print to PDF"
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_cpu</span></code>()</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_cpu</span></code>()</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1232,10 +1207,10 @@ title="Print to PDF"
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_delayed</span></code>()</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_delayed</span></code>()</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_gpu</span></code>()</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_gpu</span></code>()</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1243,16 +1218,16 @@ title="Print to PDF"
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.to_hyperspy" title="abtem.measurements.RealSpaceLineProfiles.to_hyperspy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_hyperspy</span></code></a>()</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.to_hyperspy" title="abtem.measurements.RealSpaceLineProfiles.to_hyperspy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_hyperspy</span></code></a>()</p></td>
 <td><p>Convert measurement to a hyperspy signal.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.to_zarr" title="abtem.measurements.RealSpaceLineProfiles.to_zarr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_zarr</span></code></a>(url[, compute, overwrite])</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.to_zarr" title="abtem.measurements.RealSpaceLineProfiles.to_zarr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_zarr</span></code></a>(url[, compute, overwrite])</p></td>
 <td><p>Write wave functions to a zarr file.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">visualize_graph</span></code>(**kwargs)</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">visualize_graph</span></code>(**kwargs)</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.width" title="abtem.measurements.RealSpaceLineProfiles.width"><code class="xref py py-obj docutils literal notranslate"><span class="pre">width</span></code></a>([height])</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.width" title="abtem.measurements.RealSpaceLineProfiles.width"><code class="xref py py-obj docutils literal notranslate"><span class="pre">width</span></code></a>([height])</p></td>
 <td><p>Calculate the width of lines at a given height.</p></td>
 </tr>
 </tbody>
@@ -1600,7 +1575,7 @@ existing data.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library/api/_autosummary"
+            path: "./library\api\_autosummary"
         },
         predefinedOutput: true
     }

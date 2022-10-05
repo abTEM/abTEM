@@ -407,16 +407,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -598,18 +588,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -711,13 +691,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1050,7 +1030,7 @@ title="Print to PDF"
 <dl class="py function">
 <dt class="sig sig-object py" id="abtem.distributions.gaussian">
 <span class="sig-prename descclassname"><span class="pre">abtem.distributions.</span></span><span class="sig-name descname"><span class="pre">gaussian</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">standard_deviation</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_samples</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dimension</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">center</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_mean</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling_limit</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">3.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">normalize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'intensity'</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/distributions.html#gaussian"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.distributions.gaussian" title="Permalink to this definition">#</a></dt>
-<dd><p>Return a distribution with values weigthed according to a (multidimensional) Gaussian distribution.
+<dd><p>Return a distribution with values weighted according to a (multidimensional) Gaussian distribution.
 The values are evenly spaced within a given truncation of the Gaussian distribution. As an example, this
 distribution may be used for simulating focal spread.</p>
 <dl class="field-list simple">
@@ -1060,13 +1040,13 @@ distribution may be used for simulating focal spread.</p>
 or as a single number, in which case it is equal for all axes.</p></li>
 <li><p><strong>num_samples</strong> (<em>int</em>) – Number of samples uniformly spaced samples. The samples may be given for each axis as a tuple, or as a
 single number, in which case it is equal for all axes.</p></li>
-<li><p><strong>center</strong> (<em>float</em><em> or </em><em>tuple of float</em>) – The center of the Gaussian distribution. The center may be given for each axis as a tuple, or as a single
-number, in which case it is equal for all axes. Default is 0.0.</p></li>
+<li><p><strong>center</strong> (<em>float</em><em> or </em><em>tuple of float</em>) – The center of the Gaussian distribution (default is 0.0). The center may be given for each axis as a tuple, or as a single
+number, in which case it is equal for all axes.</p></li>
 <li><p><strong>dimension</strong> (<em>int</em><em>, </em><em>optional</em>) – Number of dimensions of the Gaussian distribution.</p></li>
-<li><p><strong>ensemble_mean</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, the mean of an eventual ensemble of measurements is calculated, otherwise the full ensemble is
+<li><p><strong>ensemble_mean</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, the mean of ensemble of measurements defined by the distribution is calculated, otherwise the full ensemble is
 kept. Default is True.</p></li>
-<li><p><strong>sampling_limit</strong> (<em>float</em><em>, </em><em>optional</em>) – Truncate the distribution at this many standard deviations. Default is 3.0.</p></li>
-<li><p><strong>normalize</strong> (<em>{'intensity'</em><em>, </em><em>'amplitude'}</em><em>, </em><em>optional</em>) – Specifies whether to normalize the intensity or amplitude. Default is ‘intensity’.</p></li>
+<li><p><strong>sampling_limit</strong> (<em>float</em><em>, </em><em>optional</em>) – Truncate the distribution at this many standard deviations (default is 3.0).</p></li>
+<li><p><strong>normalize</strong> (<em>str</em><em>, </em><em>optional</em>) – Specifies whether to normalize the ‘intensity’ (default) or ‘amplitude’.</p></li>
 </ul>
 </dd>
 </dl>
@@ -1087,7 +1067,7 @@ kept. Default is True.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library/api/_autosummary"
+            path: "./library\api\_autosummary"
         },
         predefinedOutput: true
     }

@@ -404,16 +404,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -595,18 +585,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -708,13 +688,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1050,22 +1030,26 @@ title="Open an issue"
 
 <div class="viewcode-block" id="integrate_gradient_fourier"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.charge_density.integrate_gradient_fourier.html#abtem.charge_density.integrate_gradient_fourier">[docs]</a><span class="k">def</span> <span class="nf">integrate_gradient_fourier</span><span class="p">(</span>
     <span class="n">array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">cell</span><span class="p">:</span> <span class="n">Cell</span><span class="p">,</span> <span class="n">in_space</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;real&quot;</span><span class="p">,</span> <span class="n">out_space</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;real&quot;</span>
-<span class="p">):</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
     <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Integrate the gradient in 3d using Fourier space integration.</span>
+<span class="sd">    Integrate an array representation of a gradient in 3D using Fourier-space integration.</span>
 
 <span class="sd">    Parameters</span>
 <span class="sd">    ----------</span>
 <span class="sd">    array : np.ndarray</span>
+<span class="sd">        Array representing a gradient of dimension 3.</span>
 <span class="sd">    cell : ase.cell.Cell</span>
-<span class="sd">    in_space : &quot;real&quot; or &quot;fourier&quot;</span>
-<span class="sd">    out_space : &quot;real&quot; or &quot;fourier&quot;</span>
+<span class="sd">        ASE `Cell` object defining the region of space where the gradient is integrated.</span>
+<span class="sd">    in_space : str</span>
+<span class="sd">        Space in which the gradient is defined (either &quot;real&quot; or &quot;fourier&quot;).</span>
+<span class="sd">    out_space : str</span>
+<span class="sd">        Space in which the integrated gradient is defined (&quot;real&quot; or &quot;fourier&quot;).</span>
 
 <span class="sd">    Returns</span>
 <span class="sd">    -------</span>
-
+<span class="sd">    integrated : np.ndarray</span>
+<span class="sd">        Integrated gradient.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-
     <span class="k">if</span> <span class="n">in_space</span> <span class="o">==</span> <span class="s2">&quot;real&quot;</span><span class="p">:</span>
         <span class="n">array</span> <span class="o">=</span> <span class="n">fftn</span><span class="p">(</span><span class="n">array</span><span class="p">)</span>
 
@@ -1132,7 +1116,24 @@ title="Open an issue"
     <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span> <span class="o">/</span> <span class="p">(</span><span class="mi">4</span> <span class="o">*</span> <span class="n">a</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span> <span class="o">*</span> <span class="n">k2</span><span class="p">)</span>
 
 
-<div class="viewcode-block" id="add_point_charges_fourier"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.charge_density.add_point_charges_fourier.html#abtem.charge_density.add_point_charges_fourier">[docs]</a><span class="k">def</span> <span class="nf">add_point_charges_fourier</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">atoms</span><span class="p">,</span> <span class="n">broadening</span><span class="o">=</span><span class="mf">0.0</span><span class="p">):</span>
+<div class="viewcode-block" id="add_point_charges_fourier"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.charge_density.add_point_charges_fourier.html#abtem.charge_density.add_point_charges_fourier">[docs]</a><span class="k">def</span> <span class="nf">add_point_charges_fourier</span><span class="p">(</span><span class="n">array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span> <span class="n">broadening</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Add the nuclear point charges in Fourier space.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    array : np.ndarray</span>
+<span class="sd">        Array representing 3D charge density to which the point charges are added.</span>
+<span class="sd">    atoms : ase.Atoms</span>
+<span class="sd">        Atoms from which the nuclear charges with magnitudes and positions are determined.</span>
+<span class="sd">    broadening : float</span>
+<span class="sd">        Gaussian broadening of the point charges (default is 0.0).</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    density : np.ndarray</span>
+<span class="sd">        3D charge density with added nuclear charges in Fourier space.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">pixel_volume</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">diag</span><span class="p">(</span><span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">))</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
 
     <span class="n">kx</span><span class="p">,</span> <span class="n">ky</span><span class="p">,</span> <span class="n">kz</span> <span class="o">=</span> <span class="n">_spatial_frequencies</span><span class="p">(</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">atoms</span><span class="o">.</span><span class="n">cell</span><span class="p">)</span>
@@ -1237,54 +1238,51 @@ title="Open an issue"
 <div class="viewcode-block" id="ChargeDensityPotential"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.charge_density.ChargeDensityPotential.html#abtem.charge_density.ChargeDensityPotential">[docs]</a><span class="k">class</span> <span class="nc">ChargeDensityPotential</span><span class="p">(</span><span class="n">_PotentialBuilder</span><span class="p">):</span>
     <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    The charge density potential is used to calculate the electrostatic potential from a set of core charges defined by</span>
-<span class="sd">    an ASE Atoms and corresponding electron charge density defined by a NumPy array.</span>
+<span class="sd">    an ASE `Atoms` object and corresponding electron charge density defined by a NumPy array.</span>
 
 <span class="sd">    Parameters</span>
 <span class="sd">    ----------</span>
 <span class="sd">    atoms : Atoms or FrozenPhonons</span>
-<span class="sd">        Atoms or FrozenPhonons defining the atomic configuration(s) used in the independent atom model for calculating</span>
-<span class="sd">        the electrostatic potential(s).</span>
-<span class="sd">    charge_density : 3d array</span>
-<span class="sd">        Charge density as a 3d NumPy array [electrons / Å^3].</span>
+<span class="sd">        Atomic configuration(s) used in the independent atom model for calculating the electrostatic potential(s).</span>
+<span class="sd">    charge_density : np.ndarray</span>
+<span class="sd">        Charge density as a 3D NumPy array [electrons / Å^3].</span>
 <span class="sd">    gpts : one or two int, optional</span>
-<span class="sd">        Number of grid points in x and y describing each slice of the potential. Provide either &quot;sampling&quot; or &quot;gpts&quot;.</span>
+<span class="sd">        Number of grid points in `x` and `y` describing each slice of the potential calculated by specifying either `sampling` or `gpts`.</span>
 <span class="sd">    sampling : one or two float, optional</span>
-<span class="sd">        Sampling of the potential in x and y [1 / Å]. Provide either &quot;sampling&quot; or &quot;gpts&quot;.</span>
+<span class="sd">        Sampling of the potential in `x` and `y` [1 / Å] calculated by specifying either `sampling` or `gpts`.</span>
 <span class="sd">    slice_thickness : float or sequence of float, optional</span>
-<span class="sd">        Thickness of the potential slices in Å. If given as a float the number of slices are calculated by dividing the</span>
-<span class="sd">        slice thickness into the z-height of supercell.</span>
+<span class="sd">        Thickness of the potential slices [Å] (default is 0.5 Å). If given as a float, the number of slices are calculated by dividing the</span>
+<span class="sd">        slice thickness into the `z`-height of the cell.</span>
 <span class="sd">        The slice thickness may be given as a sequence of values for each slice, in which case an error will be thrown</span>
 <span class="sd">        if the sum of slice thicknesses is not equal to the height of the atoms.</span>
-<span class="sd">        Default is 0.5 Å.</span>
 <span class="sd">    exit_planes : int or tuple of int, optional</span>
 <span class="sd">        The `exit_planes` argument can be used to calculate thickness series.</span>
 <span class="sd">        Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an</span>
 <span class="sd">        exit plane is desired, and hence during a multislice simulation a measurement is created. If `exit_planes` is</span>
-<span class="sd">        an integer a measurement will be collected every `exit_planes` number of slices.</span>
+<span class="sd">        an integer, a measurement will be collected every `exit_planes` number of slices.</span>
 <span class="sd">    plane : str or two tuples of three float, optional</span>
-<span class="sd">        The plane relative to the provided Atoms mapped to xy plane of the Potential, i.e. provided plane is</span>
-<span class="sd">        perpendicular to the propagation direction. If str, it must be a combination of two of &#39;x&#39;, &#39;y&#39; and &#39;z&#39;,</span>
-<span class="sd">        the default value &#39;xy&#39; indicates that potential slices are cuts the &#39;xy&#39;-plane of the Atoms.</span>
-<span class="sd">        The plane may also be specified with two arbitrary 3d vectors, which are mapped to the x and y directions of</span>
-<span class="sd">        the potential, respectively. The length of the vectors has influence. If the vectors are not perpendicular,</span>
-<span class="sd">        the second vector is rotated in the plane to become perpendicular. Providing a value of</span>
-<span class="sd">        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing &#39;xy&#39;.</span>
+<span class="sd">        The plane relative to the provided atoms mapped to the `xy` plane of the potential, i.e. the propagation direction will be</span>
+<span class="sd">        perpendicular to the provided plane. If str, must be a concatenation of two of &#39;x&#39;, &#39;y&#39; and &#39;z&#39;;</span>
+<span class="sd">        the default value &#39;xy&#39; indicates that potential slices are cuts parallel to the &#39;xy&#39;-plane.</span>
+<span class="sd">        The plane may also be specified with two arbitrary 3D vectors, which are mapped to the `x` and `y` directions of</span>
+<span class="sd">        the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,</span>
+<span class="sd">        the second vector is rotated in the plane to become perpendicular to the first. A value of</span>
+<span class="sd">        ((1., 0., 0.), (0., 1., 0.)) is equivalent to &#39;xy&#39;.</span>
 <span class="sd">    origin : three float, optional</span>
-<span class="sd">        The origin relative to the provided Atoms mapped to the origin of the Potential. This is equivalent to shifting</span>
-<span class="sd">        the atoms</span>
+<span class="sd">        The origin relative to the provided atoms mapped to the origin of the potential. This is equivalent to translating</span>
+<span class="sd">        the atoms.</span>
 <span class="sd">        The default is (0., 0., 0.).</span>
 <span class="sd">    box : three float, optional</span>
-<span class="sd">        The extent of the potential in x, y and z. If not given this is determined from the Atoms. If the box size does</span>
-<span class="sd">        not match an integer number of the atoms&#39; supercell, an affine transformation may be necessary to preserve</span>
+<span class="sd">        The extent of the potential in `x`, `y` and `z`. If not given this is determined from the atoms. If the box size does</span>
+<span class="sd">        not match an integer number of the atoms&#39; cell, an affine transformation may be necessary to preserve</span>
 <span class="sd">        periodicity, determined by the `periodic` keyword.</span>
 <span class="sd">    periodic : bool, True</span>
 <span class="sd">        If a transformation of the atomic structure is required, `periodic` determines how the atomic structure is</span>
-<span class="sd">        transformed. If True, the periodicity of the Atoms is preserved, which may require applying a small affine</span>
+<span class="sd">        transformed. If True, the periodicity of the atoms is preserved, which may require applying a small affine</span>
 <span class="sd">        transformation to the atoms. If False, the transformed potential is effectively cut out of a larger repeated</span>
 <span class="sd">        potential, which may not preserve periodicity.</span>
 <span class="sd">    device : str, optional</span>
 <span class="sd">        The device used for calculating the potential. The default is determined by the user configuration file.</span>
-
 <span class="sd">    &quot;&quot;&quot;</span>
 
 <div class="viewcode-block" id="ChargeDensityPotential.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.charge_density.ChargeDensityPotential.html#abtem.charge_density.ChargeDensityPotential.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
@@ -1469,8 +1467,8 @@ title="Open an issue"
             <span class="n">device</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">,</span>
         <span class="p">)</span>
 
-    <span class="k">def</span> <span class="nf">generate_slices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
-
+<div class="viewcode-block" id="ChargeDensityPotential.generate_slices"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.charge_density.ChargeDensityPotential.html#abtem.charge_density.ChargeDensityPotential.generate_slices">[docs]</a>    <span class="k">def</span> <span class="nf">generate_slices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Generate the slices for the potential.&quot;&quot;&quot;</span>
         <span class="k">if</span> <span class="n">last_slice</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">last_slice</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
 
@@ -1489,7 +1487,7 @@ title="Open an issue"
         <span class="k">for</span> <span class="n">slic</span> <span class="ow">in</span> <span class="n">_generate_slices</span><span class="p">(</span>
             <span class="n">array</span><span class="p">,</span> <span class="n">ewald_potential</span><span class="p">,</span> <span class="n">first_slice</span><span class="o">=</span><span class="n">first_slice</span><span class="p">,</span> <span class="n">last_slice</span><span class="o">=</span><span class="n">last_slice</span>
         <span class="p">):</span>
-            <span class="k">yield</span> <span class="n">slic</span></div>
+            <span class="k">yield</span> <span class="n">slic</span></div></div>
 </pre></div>
 
               </div>

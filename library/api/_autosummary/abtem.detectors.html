@@ -55,7 +55,7 @@ const thebe_selector_output = ".output, .cell_output"
     <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
-    <link rel="next" title="validate_detectors" href="abtem.detectors.validate_detectors.html" />
+    <link rel="next" title="AnnularDetector" href="abtem.detectors.AnnularDetector.html" />
     <link rel="prev" title="SourceOffset" href="abtem.scan.SourceOffset.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
@@ -407,16 +407,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -598,18 +588,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -711,13 +691,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1048,23 +1028,6 @@ title="Print to PDF"
   <section id="module-abtem.detectors">
 <span id="detectors"></span><h1>detectors<a class="headerlink" href="#module-abtem.detectors" title="Permalink to this heading">#</a></h1>
 <p>Module for describing the detection of transmitted waves and different detector types.</p>
-<p class="rubric">Functions</p>
-<table class="autosummary longtable table autosummary">
-<colgroup>
-<col style="width: 10%" />
-<col style="width: 90%" />
-</colgroup>
-<tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="abtem.detectors.validate_detectors.html#abtem.detectors.validate_detectors" title="abtem.detectors.validate_detectors"><code class="xref py py-obj docutils literal notranslate"><span class="pre">validate_detectors</span></code></a>(detectors)</p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">List</span></code>[<a class="reference internal" href="abtem.detectors.BaseDetector.html#abtem.detectors.BaseDetector" title="abtem.detectors.BaseDetector"><code class="xref py py-class docutils literal notranslate"><span class="pre">BaseDetector</span></code></a>]</p>
-</dd>
-</dl>
-</p></td>
-</tr>
-</tbody>
-</table>
 <p class="rubric">Classes</p>
 <table class="autosummary longtable table autosummary">
 <colgroup>
@@ -1072,26 +1035,23 @@ title="Print to PDF"
 <col style="width: 90%" />
 </colgroup>
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="abtem.detectors.AbstractRadialDetector.html#abtem.detectors.AbstractRadialDetector" title="abtem.detectors.AbstractRadialDetector"><code class="xref py py-obj docutils literal notranslate"><span class="pre">AbstractRadialDetector</span></code></a>(inner, outer, ...[, ...])</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="abtem.detectors.AnnularDetector.html#abtem.detectors.AnnularDetector" title="abtem.detectors.AnnularDetector"><code class="xref py py-obj docutils literal notranslate"><span class="pre">AnnularDetector</span></code></a>(inner, outer[, offset, ...])</p></td>
+<td><p>The annular detector integrates the intensity of the detected wave functions between an inner and outer radial integration limits, i.e. over an annulus.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="abtem.detectors.BaseDetector.html#abtem.detectors.BaseDetector" title="abtem.detectors.BaseDetector"><code class="xref py py-obj docutils literal notranslate"><span class="pre">BaseDetector</span></code></a>([to_cpu, url])</p></td>
+<td><p>Base detector class.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="abtem.detectors.FlexibleAnnularDetector.html#abtem.detectors.FlexibleAnnularDetector" title="abtem.detectors.FlexibleAnnularDetector"><code class="xref py py-obj docutils literal notranslate"><span class="pre">FlexibleAnnularDetector</span></code></a>([step_size, inner, ...])</p></td>
+<td><p>The flexible annular detector allows choosing the integration limits after running the simulation by binning the intensity in annular integration regions.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="abtem.detectors.PixelatedDetector.html#abtem.detectors.PixelatedDetector" title="abtem.detectors.PixelatedDetector"><code class="xref py py-obj docutils literal notranslate"><span class="pre">PixelatedDetector</span></code></a>([max_angle, resample, ...])</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="abtem.detectors.AnnularDetector.html#abtem.detectors.AnnularDetector" title="abtem.detectors.AnnularDetector"><code class="xref py py-obj docutils literal notranslate"><span class="pre">AnnularDetector</span></code></a>(inner, outer[, offset, ...])</p></td>
-<td><p>The annular detector integrates the intensity of the detected wave functions between an inner and outer radial integration limit, i.e. over an annulus.</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="abtem.detectors.BaseDetector.html#abtem.detectors.BaseDetector" title="abtem.detectors.BaseDetector"><code class="xref py py-obj docutils literal notranslate"><span class="pre">BaseDetector</span></code></a>([to_cpu, url])</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="abtem.detectors.SegmentedDetector.html#abtem.detectors.SegmentedDetector" title="abtem.detectors.SegmentedDetector"><code class="xref py py-obj docutils literal notranslate"><span class="pre">SegmentedDetector</span></code></a>(nbins_radial, ...[, ...])</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="abtem.detectors.FlexibleAnnularDetector.html#abtem.detectors.FlexibleAnnularDetector" title="abtem.detectors.FlexibleAnnularDetector"><code class="xref py py-obj docutils literal notranslate"><span class="pre">FlexibleAnnularDetector</span></code></a>([step_size, inner, ...])</p></td>
-<td><p>Flexible annular detector.</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="abtem.detectors.PixelatedDetector.html#abtem.detectors.PixelatedDetector" title="abtem.detectors.PixelatedDetector"><code class="xref py py-obj docutils literal notranslate"><span class="pre">PixelatedDetector</span></code></a>([max_angle, resample, ...])</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="abtem.detectors.SegmentedDetector.html#abtem.detectors.SegmentedDetector" title="abtem.detectors.SegmentedDetector"><code class="xref py py-obj docutils literal notranslate"><span class="pre">SegmentedDetector</span></code></a>(nbins_radial, ...[, ...])</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="abtem.detectors.WavesDetector.html#abtem.detectors.WavesDetector" title="abtem.detectors.WavesDetector"><code class="xref py py-obj docutils literal notranslate"><span class="pre">WavesDetector</span></code></a>([to_cpu, url])</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="abtem.detectors.WavesDetector.html#abtem.detectors.WavesDetector" title="abtem.detectors.WavesDetector"><code class="xref py py-obj docutils literal notranslate"><span class="pre">WavesDetector</span></code></a>([to_cpu, url])</p></td>
+<td><p>Base detector class.</p></td>
 </tr>
 </tbody>
 </table>
@@ -1110,7 +1070,7 @@ title="Print to PDF"
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library/api/_autosummary"
+            path: "./library\api\_autosummary"
         },
         predefinedOutput: true
     }
@@ -1131,10 +1091,10 @@ title="Print to PDF"
             <p class="prev-next-title">SourceOffset</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="abtem.detectors.validate_detectors.html" title="next page">
+    <a class='right-next' id="next-link" href="abtem.detectors.AnnularDetector.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">validate_detectors</p>
+        <p class="prev-next-title">AnnularDetector</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>

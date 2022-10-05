@@ -1,4 +1,4 @@
-FourierSpaceLineProfiles
+﻿FourierSpaceLineProfiles
 ========================
 
 .. currentmodule:: abtem.measurements
@@ -41,7 +41,6 @@ FourierSpaceLineProfiles
       ~FourierSpaceLineProfiles.rechunk
       ~FourierSpaceLineProfiles.reduce_ensemble
       ~FourierSpaceLineProfiles.relative_difference
-      ~FourierSpaceLineProfiles.scan_extent
       ~FourierSpaceLineProfiles.scan_positions
       ~FourierSpaceLineProfiles.show
       ~FourierSpaceLineProfiles.squeeze

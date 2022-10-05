@@ -16,8 +16,8 @@
       :template: custom-function-template.rst
    
       atoms_in_cell
-      best_orthogonal_box
-      cut_box
+      best_orthogonal_cell
+      cut_cell
       decompose_affine_transform
       flip_atoms
       is_cell_hexagonal

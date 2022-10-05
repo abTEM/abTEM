@@ -9,14 +9,6 @@
 
    
    
-   .. rubric:: Functions
-
-   .. autosummary::
-      :toctree:
-      :template: custom-function-template.rst
-   
-      validate_detectors
-   
    
 
    
@@ -27,7 +19,6 @@
       :toctree:
       :template: custom-class-template.rst
    
-      AbstractRadialDetector
       AnnularDetector
       BaseDetector
       FlexibleAnnularDetector

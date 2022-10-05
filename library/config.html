@@ -407,16 +407,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="api/_autosummary/abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="api/_autosummary/abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="api/_autosummary/abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -598,18 +588,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="api/_autosummary/abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="api/_autosummary/abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -711,13 +691,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="api/_autosummary/abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="api/_autosummary/abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="api/_autosummary/abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1112,25 +1092,25 @@ feature flags.</p>
 files within each of these directories and merges them together.</p>
 <p>Below is the full default configuration file. Anything you set in your own YAML will be merged into these
 defaults before they are used to configure the build.</p>
-<div class="full-width highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">device</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">cpu</span><span class="w"></span>
-<span class="nt">fft</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mkl</span><span class="w"></span>
-<span class="nt">local_diagnostics</span><span class="p">:</span><span class="w"></span>
-<span class="w">  </span><span class="nt">progress_bar</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w"></span>
-<span class="nt">dask</span><span class="p">:</span><span class="w"></span>
-<span class="w">  </span><span class="nt">lazy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w"></span>
-<span class="w">  </span><span class="nt">scheduler</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">threads</span><span class="w"></span>
-<span class="w">  </span><span class="nt">chunk-size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128 MB</span><span class="w"></span>
-<span class="w">  </span><span class="nt">chunk-size-gpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512 MB</span><span class="w"></span>
-<span class="nt">cupy</span><span class="p">:</span><span class="w"></span>
-<span class="w">  </span><span class="nt">fft-cache-size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0 MB</span><span class="w"></span>
-<span class="nt">mkl</span><span class="p">:</span><span class="w"></span>
-<span class="w">  </span><span class="nt">threads</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span><span class="w"></span>
-<span class="nt">fftw</span><span class="p">:</span><span class="w"></span>
-<span class="w">  </span><span class="nt">threads</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span><span class="w"></span>
-<span class="w">  </span><span class="nt">planning_effort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">FFTW_MEASURE</span><span class="w"></span>
-<span class="nt">warnings</span><span class="p">:</span><span class="w"></span>
-<span class="w">  </span><span class="nt">prism-interpolation-gpts</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w"></span>
-<span class="w">  </span><span class="nt">dask-blockwise-performance</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w"></span>
+<div class="full-width highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">device</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">cpu</span>
+<span class="nt">fft</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">mkl</span>
+<span class="nt">local_diagnostics</span><span class="p">:</span>
+  <span class="nt">progress_bar</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="nt">dask</span><span class="p">:</span>
+  <span class="nt">lazy</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">true</span>
+  <span class="nt">scheduler</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">threads</span>
+  <span class="nt">chunk-size</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">128 MB</span>
+  <span class="nt">chunk-size-gpu</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">512 MB</span>
+<span class="nt">cupy</span><span class="p">:</span>
+  <span class="nt">fft-cache-size</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">0 MB</span>
+<span class="nt">mkl</span><span class="p">:</span>
+  <span class="nt">threads</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="nt">fftw</span><span class="p">:</span>
+  <span class="nt">threads</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">1</span>
+  <span class="nt">planning_effort</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">FFTW_MEASURE</span>
+<span class="nt">warnings</span><span class="p">:</span>
+  <span class="nt">prism-interpolation-gpts</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">true</span>
+  <span class="nt">dask-blockwise-performance</span><span class="p">:</span> <span class="l l-Scalar l-Scalar-Plain">false</span>
 </pre></div>
 </div>
 </section>

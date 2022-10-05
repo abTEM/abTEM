@@ -1,4 +1,4 @@
-SinglePointMeasurement
+﻿SinglePointMeasurement
 ======================
 
 .. currentmodule:: abtem.measurements
@@ -40,7 +40,6 @@ SinglePointMeasurement
       ~SinglePointMeasurement.rechunk
       ~SinglePointMeasurement.reduce_ensemble
       ~SinglePointMeasurement.relative_difference
-      ~SinglePointMeasurement.scan_extent
       ~SinglePointMeasurement.scan_positions
       ~SinglePointMeasurement.squeeze
       ~SinglePointMeasurement.std

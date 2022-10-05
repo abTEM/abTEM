@@ -50,8 +50,6 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -404,16 +402,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -595,18 +583,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -708,13 +686,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1104,7 +1082,9 @@ title="Open an issue"
 
 
 <span class="k">def</span> <span class="nf">_reduced_scanned_images_or_line_profiles</span><span class="p">(</span>
-    <span class="n">new_array</span><span class="p">,</span> <span class="n">old_measurement</span><span class="p">,</span> <span class="n">metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+    <span class="n">new_array</span><span class="p">,</span>
+    <span class="n">old_measurement</span><span class="p">,</span>
+    <span class="n">metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="s2">&quot;RealSpaceLineProfiles&quot;</span><span class="p">,</span> <span class="s2">&quot;Images&quot;</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
 
     <span class="k">if</span> <span class="n">metadata</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -1155,7 +1135,8 @@ title="Open an issue"
 
     <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span>
         <span class="nb">range</span><span class="p">(</span>
-            <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">)</span> <span class="o">-</span> <span class="n">num_trailing_scan_axes</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">),</span>
+            <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">)</span> <span class="o">-</span> <span class="n">num_trailing_scan_axes</span><span class="p">,</span>
+            <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">),</span>
         <span class="p">)</span>
     <span class="p">)</span>
 
@@ -1179,6 +1160,13 @@ title="Open an issue"
         <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">_scan_sampling</span><span class="p">(</span><span class="n">measurements</span><span class="p">))</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;cannot infer pixel area from metadata&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_scan_extent</span><span class="p">(</span><span class="n">measurement</span><span class="p">):</span>
+    <span class="n">extent</span> <span class="o">=</span> <span class="p">()</span>
+    <span class="k">for</span> <span class="n">n</span><span class="p">,</span> <span class="n">metadata</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">_scan_shape</span><span class="p">(</span><span class="n">measurement</span><span class="p">),</span> <span class="n">_scan_axes_metadata</span><span class="p">(</span><span class="n">measurement</span><span class="p">)):</span>
+        <span class="n">extent</span> <span class="o">+=</span> <span class="p">(</span><span class="n">metadata</span><span class="o">.</span><span class="n">sampling</span> <span class="o">*</span> <span class="n">n</span><span class="p">,)</span>
+    <span class="k">return</span> <span class="n">extent</span>
 
 
 <span class="k">def</span> <span class="nf">_polar_detector_bins</span><span class="p">(</span>
@@ -1268,10 +1256,8 @@ title="Open an issue"
         <span class="n">array</span><span class="p">,</span>
         <span class="n">ensemble_axes_metadata</span><span class="p">,</span>
         <span class="n">metadata</span><span class="p">,</span>
-        <span class="n">allow_complex</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
         <span class="n">allow_base_axis_chunks</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
     <span class="p">):</span>
-        <span class="c1">#</span>
 
         <span class="k">if</span> <span class="n">ensemble_axes_metadata</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">ensemble_axes_metadata</span> <span class="o">=</span> <span class="p">[]</span>
@@ -1284,15 +1270,15 @@ title="Open an issue"
 
         <span class="bp">self</span><span class="o">.</span><span class="n">_array</span> <span class="o">=</span> <span class="n">array</span>
 
-        <span class="bp">self</span><span class="o">.</span><span class="n">_check_axes_metadata</span><span class="p">()</span></div>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_check_axes_metadata</span><span class="p">()</span>
 
-        <span class="c1"># if len(array.shape) &lt; len(self.base_shape):</span>
-        <span class="c1">#     raise RuntimeError(f&#39;array dim smaller than base dim of measurement type {self.__class__}&#39;)</span>
-        <span class="c1">#</span>
-
-        <span class="c1"># if not allow_base_axis_chunks:</span>
-        <span class="c1">#     if self.is_lazy and (not all(len(chunks) == 1 for chunks in array.chunks[-2:])):</span>
-        <span class="c1">#         raise RuntimeError(f&#39;chunks not allowed in base axes of {self.__class__}&#39;)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">allow_base_axis_chunks</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_lazy</span> <span class="ow">and</span> <span class="p">(</span>
+                <span class="ow">not</span> <span class="nb">all</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">chunks</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span> <span class="k">for</span> <span class="n">chunks</span> <span class="ow">in</span> <span class="n">array</span><span class="o">.</span><span class="n">chunks</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:])</span>
+            <span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;chunks not allowed in base axes of </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="p">)</span></div>
 
     <span class="k">def</span> <span class="nf">iterate_ensemble</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">keep_dims</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">):</span>
         <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">np</span><span class="o">.</span><span class="n">ndindex</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">):</span>
@@ -1312,20 +1298,6 @@ title="Open an issue"
     <span class="k">def</span> <span class="nf">wavelength</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">energy2wavelength</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">energy</span><span class="p">)</span>
 
-    <span class="c1"># def scan_from_metadata(self):</span>
-    <span class="c1">#     start = ()</span>
-    <span class="c1">#     end = ()</span>
-    <span class="c1">#     gpts = ()</span>
-    <span class="c1">#     endpoint = ()</span>
-    <span class="c1">#     for n, metadata in zip(self.scan_shape, self.scan_axes_metadata):</span>
-    <span class="c1">#         start += (metadata.offset,)</span>
-    <span class="c1">#         end += (metadata.offset + metadata.sampling * n,)</span>
-    <span class="c1">#         gpts += (n,)</span>
-    <span class="c1">#         endpoint += (metadata.endpoint,)</span>
-    <span class="c1">#</span>
-    <span class="c1">#     if len(start) == 2:</span>
-    <span class="c1">#         return GridScan(start=start, end=end, gpts=gpts, endpoint=endpoint)  # noqa</span>
-
     <span class="k">def</span> <span class="nf">scan_positions</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="n">positions</span> <span class="o">=</span> <span class="p">()</span>
         <span class="k">for</span> <span class="n">n</span><span class="p">,</span> <span class="n">metadata</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">_scan_shape</span><span class="p">(</span><span class="bp">self</span><span class="p">),</span> <span class="n">_scan_axes_metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">)):</span>
@@ -1338,12 +1310,6 @@ title="Open an issue"
                 <span class="p">),</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">positions</span>
-
-    <span class="k">def</span> <span class="nf">scan_extent</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="n">extent</span> <span class="o">=</span> <span class="p">()</span>
-        <span class="k">for</span> <span class="n">n</span><span class="p">,</span> <span class="n">metadata</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">_scan_shape</span><span class="p">(</span><span class="bp">self</span><span class="p">),</span> <span class="n">_scan_axes_metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">)):</span>
-            <span class="n">extent</span> <span class="o">+=</span> <span class="p">(</span><span class="n">metadata</span><span class="o">.</span><span class="n">sampling</span> <span class="o">*</span> <span class="n">n</span><span class="p">,)</span>
-        <span class="k">return</span> <span class="n">extent</span>
 
     <span class="nd">@property</span>
     <span class="nd">@abstractmethod</span>
@@ -1374,7 +1340,6 @@ title="Open an issue"
         <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">iscomplexobj</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">):</span>
             <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;function not implemented for non-complex measurement&quot;</span><span class="p">)</span>
 
-
 <div class="viewcode-block" id="BaseMeasurement.real"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.real">[docs]</a>    <span class="k">def</span> <span class="nf">real</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;Calculate the phase from complex images.&quot;&quot;&quot;</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_check_is_complex</span><span class="p">()</span>
@@ -1399,7 +1364,6 @@ title="Open an issue"
         <span class="sd">&quot;&quot;&quot;Calculate the absolute square from complex images.&quot;&quot;&quot;</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_check_is_complex</span><span class="p">()</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_apply_element_wise_func</span><span class="p">(</span><span class="n">abs2</span><span class="p">)</span></div>
-
 
     <span class="k">def</span> <span class="nf">relative_difference</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">,</span> <span class="n">min_relative_tol</span><span class="o">=</span><span class="mf">0.0</span><span class="p">):</span>
         <span class="n">difference</span> <span class="o">=</span> <span class="bp">self</span> <span class="o">-</span> <span class="n">other</span>
@@ -1575,10 +1539,12 @@ title="Open an issue"
             <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">()</span>
 
         <span class="n">axes_base</span> <span class="o">=</span> <span class="n">_to_hyperspy_axes_metadata</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">base_axes_metadata</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">base_shape</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">base_axes_metadata</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">base_shape</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="n">axes_extra</span> <span class="o">=</span> <span class="n">_to_hyperspy_axes_metadata</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">ensemble_axes_metadata</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">,</span>
         <span class="p">)</span>
 
         <span class="n">array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span>
@@ -1634,7 +1600,6 @@ title="Open an issue"
             <span class="n">array</span><span class="o">=</span><span class="n">array</span><span class="p">,</span>
             <span class="n">ensemble_axes_metadata</span><span class="o">=</span><span class="n">ensemble_axes_metadata</span><span class="p">,</span>
             <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">,</span>
-            <span class="n">allow_complex</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
             <span class="n">allow_base_axis_chunks</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
         <span class="p">)</span></div>
 
@@ -1695,8 +1660,6 @@ title="Open an issue"
             <span class="n">RealSpaceAxis</span><span class="p">(</span><span class="n">label</span><span class="o">=</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sampling</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">units</span><span class="o">=</span><span class="s2">&quot;Å&quot;</span><span class="p">),</span>
             <span class="n">RealSpaceAxis</span><span class="p">(</span><span class="n">label</span><span class="o">=</span><span class="s2">&quot;y&quot;</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sampling</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">units</span><span class="o">=</span><span class="s2">&quot;Å&quot;</span><span class="p">),</span>
         <span class="p">]</span>
-
-
 
 <div class="viewcode-block" id="Images.integrate_gradient"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.integrate_gradient">[docs]</a>    <span class="k">def</span> <span class="nf">integrate_gradient</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
@@ -2302,7 +2265,6 @@ title="Open an issue"
             <span class="n">array</span><span class="o">=</span><span class="n">array</span><span class="p">,</span>
             <span class="n">ensemble_axes_metadata</span><span class="o">=</span><span class="n">ensemble_axes_metadata</span><span class="p">,</span>
             <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">,</span>
-            <span class="n">allow_complex</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
             <span class="n">allow_base_axis_chunks</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
         <span class="p">)</span>
 
@@ -2596,7 +2558,6 @@ title="Open an issue"
         <span class="n">ensemble_axes_metadata</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">AxisMetadata</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">):</span>
-
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        One or more diffraction patterns.</span>
 
@@ -2630,6 +2591,7 @@ title="Open an issue"
             <span class="n">array</span><span class="o">=</span><span class="n">array</span><span class="p">,</span>
             <span class="n">ensemble_axes_metadata</span><span class="o">=</span><span class="n">ensemble_axes_metadata</span><span class="p">,</span>
             <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">,</span>
+            <span class="n">allow_base_axis_chunks</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
         <span class="p">)</span></div>
 
     <span class="k">def</span> <span class="nf">_area_per_pixel</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
@@ -2688,31 +2650,17 @@ title="Open an issue"
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">max_angles</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; Maximum scattering angle in x and y [mrad]&quot;&quot;&quot;</span>
+
         <span class="k">return</span> <span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">//</span> <span class="mi">2</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">angular_sampling</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">//</span> <span class="mi">2</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">angular_sampling</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>
         <span class="p">)</span>
 
     <span class="nd">@property</span>
-    <span class="k">def</span> <span class="nf">equivalent_real_space_extent</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">return</span> <span class="mi">1</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">1</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
-
-    <span class="nd">@property</span>
-    <span class="k">def</span> <span class="nf">equivalent_real_space_sampling</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">return</span> <span class="p">(</span>
-            <span class="mi">1</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">base_shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
-            <span class="mi">1</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">base_shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>
-        <span class="p">)</span>
-
-    <span class="nd">@property</span>
-    <span class="k">def</span> <span class="nf">scan_extent</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="n">extent</span> <span class="o">=</span> <span class="p">()</span>
-        <span class="k">for</span> <span class="n">d</span><span class="p">,</span> <span class="n">n</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">_scan_sampling</span><span class="p">(</span><span class="bp">self</span><span class="p">),</span> <span class="n">_scan_shape</span><span class="p">(</span><span class="bp">self</span><span class="p">)):</span>
-            <span class="n">extent</span> <span class="o">+=</span> <span class="p">(</span><span class="n">d</span> <span class="o">*</span> <span class="n">n</span><span class="p">,)</span>
-        <span class="k">return</span> <span class="n">extent</span>
-
-    <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">limits</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]:</span>
+        <span class="sd">&quot;&quot;&quot; Lower and upper spatial frequency in x and y [1 / Å]. &quot;&quot;&quot;</span>
+
         <span class="n">limits</span> <span class="o">=</span> <span class="p">[]</span>
         <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="p">(</span><span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">):</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">%</span> <span class="mi">2</span><span class="p">:</span>
@@ -2733,6 +2681,8 @@ title="Open an issue"
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">angular_limits</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]:</span>
+        <span class="sd">&quot;&quot;&quot; Lower and upper scattering angle in x and y [mrad]. &quot;&quot;&quot;</span>
+
         <span class="n">limits</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">limits</span>
         <span class="n">limits</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
             <span class="n">limits</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">wavelength</span> <span class="o">*</span> <span class="mf">1e3</span><span class="p">,</span>
@@ -2746,7 +2696,8 @@ title="Open an issue"
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">coordinates</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
-        <span class="sd">&quot;&quot;&quot;Angular coordinates.&quot;&quot;&quot;</span>
+        <span class="sd">&quot;&quot;&quot; Reciprocal spatial frequency coordinates [1 / Å]. &quot;&quot;&quot;</span>
+
         <span class="k">return</span> <span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">coordinates</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">base_shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]),</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">coordinates</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">base_shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]),</span>
@@ -2754,7 +2705,8 @@ title="Open an issue"
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">angular_coordinates</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
-        <span class="sd">&quot;&quot;&quot;Angular coordinates.&quot;&quot;&quot;</span>
+        <span class="sd">&quot;&quot;&quot; Scattering angle coordinates [mrad]. &quot;&quot;&quot;</span>
+
         <span class="n">xp</span> <span class="o">=</span> <span class="n">get_array_module</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">)</span>
         <span class="n">limits</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">angular_limits</span>
         <span class="n">alpha_x</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span>
@@ -3028,11 +2980,20 @@ title="Open an issue"
 
             <span class="n">new_shape</span> <span class="o">=</span> <span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">+</span> <span class="p">(</span><span class="n">nbins_radial</span><span class="p">,</span> <span class="n">nbins_azimuthal</span><span class="p">)</span>
 
-            <span class="n">array</span> <span class="o">=</span> <span class="n">array</span><span class="o">.</span><span class="n">reshape</span><span class="p">((</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">*</span> <span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">],))[</span>
-                <span class="o">...</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">indices</span><span class="p">)</span>
-            <span class="p">]</span>
+            <span class="n">array</span> <span class="o">=</span> <span class="n">array</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+                <span class="p">(</span>
+                    <span class="o">-</span><span class="mi">1</span><span class="p">,</span>
+                    <span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">*</span> <span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span>
+                <span class="p">)</span>
+            <span class="p">)[</span><span class="o">...</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">indices</span><span class="p">)]</span>
 
-            <span class="n">result</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="nb">len</span><span class="p">(</span><span class="n">indices</span><span class="p">),),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">xp</span><span class="o">.</span><span class="n">float32</span><span class="p">,)</span>
+            <span class="n">result</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span>
+                <span class="p">(</span>
+                    <span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+                    <span class="nb">len</span><span class="p">(</span><span class="n">indices</span><span class="p">),</span>
+                <span class="p">),</span>
+                <span class="n">dtype</span><span class="o">=</span><span class="n">xp</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+            <span class="p">)</span>
 
             <span class="k">if</span> <span class="n">xp</span> <span class="ow">is</span> <span class="n">cp</span><span class="p">:</span>
                 <span class="n">sum_run_length_encoded_cuda</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">result</span><span class="p">,</span> <span class="n">separators</span><span class="p">)</span>
@@ -3049,8 +3010,15 @@ title="Open an issue"
                 <span class="n">nbins_azimuthal</span><span class="o">=</span><span class="n">nbins_azimuthal</span><span class="p">,</span>
                 <span class="n">sampling</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">angular_sampling</span><span class="p">,</span>
                 <span class="n">drop_axis</span><span class="o">=</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">-</span> <span class="mi">2</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">),</span>
-                <span class="n">chunks</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">chunks</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">+</span> <span class="p">((</span><span class="n">nbins_radial</span><span class="p">,),</span> <span class="p">(</span><span class="n">nbins_azimuthal</span><span class="p">,),),</span>
-                <span class="n">new_axis</span><span class="o">=</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">-</span> <span class="mi">2</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,),</span>
+                <span class="n">chunks</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">chunks</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
+                <span class="o">+</span> <span class="p">(</span>
+                    <span class="p">(</span><span class="n">nbins_radial</span><span class="p">,),</span>
+                    <span class="p">(</span><span class="n">nbins_azimuthal</span><span class="p">,),</span>
+                <span class="p">),</span>
+                <span class="n">new_axis</span><span class="o">=</span><span class="p">(</span>
+                    <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">-</span> <span class="mi">2</span><span class="p">,</span>
+                    <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span>
+                <span class="p">),</span>
                 <span class="n">meta</span><span class="o">=</span><span class="n">xp</span><span class="o">.</span><span class="n">array</span><span class="p">((),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">xp</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
             <span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
@@ -3261,7 +3229,7 @@ title="Open an issue"
         <span class="p">)</span>
 
         <span class="k">if</span> <span class="n">crop_to_scan</span><span class="p">:</span>
-            <span class="n">reconstruction</span> <span class="o">=</span> <span class="n">reconstruction</span><span class="o">.</span><span class="n">crop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">scan_extent</span><span class="p">)</span>
+            <span class="n">reconstruction</span> <span class="o">=</span> <span class="n">reconstruction</span><span class="o">.</span><span class="n">crop</span><span class="p">(</span><span class="n">_scan_extent</span><span class="p">(</span><span class="bp">self</span><span class="p">))</span>
 
         <span class="k">return</span> <span class="n">reconstruction</span></div>
 
@@ -3678,7 +3646,7 @@ title="Open an issue"
         <span class="n">figsize</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
         <span class="n">radial_ticks</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
         <span class="n">azimuthal_ticks</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-            <span class="n">cbar</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="n">cbar</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
         <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
     <span class="p">):</span>
 

@@ -55,7 +55,7 @@ const thebe_selector_output = ".output, .cell_output"
     <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
-    <link rel="next" title="AxisAlignedDistributionND" href="abtem.distributions.AxisAlignedDistributionND.html" />
+    <link rel="next" title="BaseDistribution" href="abtem.distributions.BaseDistribution.html" />
     <link rel="prev" title="gaussian" href="abtem.distributions.gaussian.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
@@ -407,16 +407,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -598,18 +588,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -711,13 +691,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1050,21 +1030,21 @@ title="Print to PDF"
 <dl class="py function">
 <dt class="sig sig-object py" id="abtem.distributions.uniform">
 <span class="sig-prename descclassname"><span class="pre">abtem.distributions.</span></span><span class="sig-name descname"><span class="pre">uniform</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">low</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">high</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_samples</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">endpoint</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_mean</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/distributions.html#uniform"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.distributions.uniform" title="Permalink to this definition">#</a></dt>
-<dd><p>Return a distribution with uniformly weighted values, the values are evenly spaced over a specified interval.
+<dd><p>Return a distribution with uniformly weighted values evenly spaced over a specified interval.
 As an example, this distribution may be used for simulating a focal series.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>low</strong> (<em>float</em>) – The lowest value of the distribution.</p></li>
-<li><p><strong>high</strong> (<em>float</em>) – The highest value of the distribution, unless endpoint is set to False. In that case, the sequence consists of
-all but the last of <cite>num_samples + 1</cite> evenly spaced samples, so that stop is excluded.</p></li>
+<li><p><strong>high</strong> (<em>float</em>) – The highest value of the distribution. If endpoint is set to False, the sequence consists of
+all but the last of <cite>num_samples + 1</cite> evenly spaced samples so that the high value is excluded.</p></li>
 <li><p><strong>num_samples</strong> (<em>int</em>) – Number of samples in the distribution.</p></li>
-<li><p><strong>ensemble_mean</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, the mean of an eventual ensemble of measurements is calculated, otherwise the full ensemble is
+<li><p><strong>ensemble_mean</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, the mean of an ensemble of measurements defined by the distribution is calculated, otherwise the full ensemble is
 kept.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Return type</dt>
-<dd class="field-even"><p><a class="reference internal" href="abtem.distributions.DistributionFromValues.html#abtem.distributions.DistributionFromValues" title="abtem.distributions.DistributionFromValues"><code class="xref py py-class docutils literal notranslate"><span class="pre">DistributionFromValues</span></code></a></p>
+<dd class="field-even"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">_DistributionFromValues</span></code></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1084,7 +1064,7 @@ kept.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library/api/_autosummary"
+            path: "./library\api\_autosummary"
         },
         predefinedOutput: true
     }
@@ -1105,10 +1085,10 @@ kept.</p></li>
             <p class="prev-next-title">gaussian</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="abtem.distributions.AxisAlignedDistributionND.html" title="next page">
+    <a class='right-next' id="next-link" href="abtem.distributions.BaseDistribution.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">AxisAlignedDistributionND</p>
+        <p class="prev-next-title">BaseDistribution</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>

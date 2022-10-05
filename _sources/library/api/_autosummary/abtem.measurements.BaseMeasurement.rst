@@ -1,4 +1,4 @@
-BaseMeasurement
+﻿BaseMeasurement
 ===============
 
 .. currentmodule:: abtem.measurements
@@ -40,7 +40,6 @@ BaseMeasurement
       ~BaseMeasurement.rechunk
       ~BaseMeasurement.reduce_ensemble
       ~BaseMeasurement.relative_difference
-      ~BaseMeasurement.scan_extent
       ~BaseMeasurement.scan_positions
       ~BaseMeasurement.squeeze
       ~BaseMeasurement.std

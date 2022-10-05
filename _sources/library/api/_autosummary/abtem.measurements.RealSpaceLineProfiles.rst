@@ -1,4 +1,4 @@
-RealSpaceLineProfiles
+﻿RealSpaceLineProfiles
 =====================
 
 .. currentmodule:: abtem.measurements
@@ -41,7 +41,6 @@ RealSpaceLineProfiles
       ~RealSpaceLineProfiles.rechunk
       ~RealSpaceLineProfiles.reduce_ensemble
       ~RealSpaceLineProfiles.relative_difference
-      ~RealSpaceLineProfiles.scan_extent
       ~RealSpaceLineProfiles.scan_positions
       ~RealSpaceLineProfiles.show
       ~RealSpaceLineProfiles.squeeze

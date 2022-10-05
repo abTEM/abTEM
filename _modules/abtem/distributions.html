@@ -404,16 +404,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -595,18 +585,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -708,13 +688,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1012,6 +992,10 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="BaseDistribution"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html#abtem.distributions.BaseDistribution">[docs]</a><span class="k">class</span> <span class="nc">BaseDistribution</span><span class="p">(</span><span class="n">EqualityMixin</span><span class="p">,</span> <span class="n">CopyMixin</span><span class="p">,</span> <span class="n">metaclass</span><span class="o">=</span><span class="n">ABCMeta</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Template for defining the mathematical distributions of certain simulation parameters.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
     <span class="nd">@property</span>
     <span class="nd">@abstractmethod</span>
     <span class="k">def</span> <span class="nf">dimensions</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
@@ -1042,13 +1026,13 @@ title="Open an issue"
         <span class="k">pass</span></div>
 
 
-<div class="viewcode-block" id="DistributionFromValues"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.distributions.DistributionFromValues.html#abtem.distributions.DistributionFromValues">[docs]</a><span class="k">class</span> <span class="nc">DistributionFromValues</span><span class="p">(</span><span class="n">BaseDistribution</span><span class="p">):</span>
-<div class="viewcode-block" id="DistributionFromValues.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.distributions.DistributionFromValues.html#abtem.distributions.DistributionFromValues.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span> <span class="n">values</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">weights</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">ensemble_mean</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+<span class="k">class</span> <span class="nc">_DistributionFromValues</span><span class="p">(</span><span class="n">BaseDistribution</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
+            <span class="bp">self</span><span class="p">,</span> <span class="n">values</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">weights</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">ensemble_mean</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="p">):</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_values</span> <span class="o">=</span> <span class="n">values</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_weights</span> <span class="o">=</span> <span class="n">weights</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_ensemble_mean</span> <span class="o">=</span> <span class="n">ensemble_mean</span></div>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_ensemble_mean</span> <span class="o">=</span> <span class="n">ensemble_mean</span>
 
     <span class="k">def</span> <span class="fm">__neg__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span>
@@ -1076,7 +1060,7 @@ title="Open an issue"
 
         <span class="n">blocks</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">chunks</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">object</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="p">(</span><span class="n">start</span><span class="p">,</span> <span class="n">stop</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span>
-            <span class="nb">zip</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">((</span><span class="mi">0</span><span class="p">,)</span> <span class="o">+</span> <span class="n">chunks</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">chunks</span><span class="p">))</span>
+                <span class="nb">zip</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">((</span><span class="mi">0</span><span class="p">,)</span> <span class="o">+</span> <span class="n">chunks</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">chunks</span><span class="p">))</span>
         <span class="p">):</span>
             <span class="n">blocks</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">values</span><span class="p">[</span><span class="n">start</span><span class="p">:</span><span class="n">stop</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">(),</span>
@@ -1107,16 +1091,16 @@ title="Open an issue"
     <span class="k">def</span> <span class="nf">weights</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_weights</span>
 
-    <span class="k">def</span> <span class="nf">combine</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="s2">&quot;DistributionFromValues&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;AxisAlignedDistributionND&quot;</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">AxisAlignedDistributionND</span><span class="p">([</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">])</span></div>
+    <span class="k">def</span> <span class="nf">combine</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="s2">&quot;_DistributionFromValues&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;_AxisAlignedDistributionND&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_AxisAlignedDistributionND</span><span class="p">([</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">])</span>
 
 
-<div class="viewcode-block" id="AxisAlignedDistributionND"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html#abtem.distributions.AxisAlignedDistributionND">[docs]</a><span class="k">class</span> <span class="nc">AxisAlignedDistributionND</span><span class="p">(</span><span class="n">BaseDistribution</span><span class="p">):</span>
-<div class="viewcode-block" id="AxisAlignedDistributionND.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html#abtem.distributions.AxisAlignedDistributionND.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">distributions</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">BaseDistribution</span><span class="p">]):</span>
+<span class="k">class</span> <span class="nc">_AxisAlignedDistributionND</span><span class="p">(</span><span class="n">BaseDistribution</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">distributions</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">BaseDistribution</span><span class="p">]):</span>
         <span class="k">for</span> <span class="n">distribution</span> <span class="ow">in</span> <span class="n">distributions</span><span class="p">:</span>
             <span class="k">assert</span> <span class="n">distribution</span><span class="o">.</span><span class="n">dimensions</span> <span class="o">==</span> <span class="mi">1</span>
 
-        <span class="bp">self</span><span class="o">.</span><span class="n">_distributions</span> <span class="o">=</span> <span class="n">distributions</span></div>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_distributions</span> <span class="o">=</span> <span class="n">distributions</span>
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">distributions</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
@@ -1174,41 +1158,41 @@ title="Open an issue"
         <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_distributions</span><span class="p">)):</span>
             <span class="n">weights</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">outer</span><span class="p">(</span><span class="n">weights</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_distributions</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">weights</span><span class="p">)</span>
 
-        <span class="k">return</span> <span class="n">weights</span></div>
+        <span class="k">return</span> <span class="n">weights</span>
 
 
 <div class="viewcode-block" id="from_values"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.distributions.from_values.html#abtem.distributions.from_values">[docs]</a><span class="k">def</span> <span class="nf">from_values</span><span class="p">(</span>
-    <span class="n">values</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Number</span><span class="p">],</span> <span class="n">weights</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">ensemble_mean</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DistributionFromValues</span><span class="p">:</span>
+        <span class="n">values</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Number</span><span class="p">],</span> <span class="n">weights</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">ensemble_mean</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">_DistributionFromValues</span><span class="p">:</span>
     <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Returns a distribution from user defined values and weights.</span>
+<span class="sd">    Return a distribution from user-defined values and weights.</span>
 
 <span class="sd">    Parameters</span>
 <span class="sd">    ----------</span>
-<span class="sd">    values : sequence of scalar</span>
-<span class="sd">        The values of the parameters.</span>
-<span class="sd">    weights : sequence of scalar, optional</span>
+<span class="sd">    values : sequence of int or float</span>
+<span class="sd">        The scalar values of the parameters.</span>
+<span class="sd">    weights : sequence of float, optional</span>
+<span class="sd">        The scalar values of the weights (default is None).</span>
 <span class="sd">    ensemble_mean : bool, optional</span>
-<span class="sd">        If True, the mean of an eventual ensemble of measurements is calculated, otherwise the full ensemble is</span>
-<span class="sd">        kept.</span>
+<span class="sd">        If True, the mean of an ensemble of measurements defined by the distribution is calculated, otherwise the full ensemble is kept.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="n">weights</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">weights</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">values</span><span class="p">))</span>
     <span class="n">values</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">values</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">DistributionFromValues</span><span class="p">(</span>
+    <span class="k">return</span> <span class="n">_DistributionFromValues</span><span class="p">(</span>
         <span class="n">values</span><span class="o">=</span><span class="n">values</span><span class="p">,</span> <span class="n">weights</span><span class="o">=</span><span class="n">weights</span><span class="p">,</span> <span class="n">ensemble_mean</span><span class="o">=</span><span class="n">ensemble_mean</span>
     <span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="uniform"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.distributions.uniform.html#abtem.distributions.uniform">[docs]</a><span class="k">def</span> <span class="nf">uniform</span><span class="p">(</span>
-    <span class="n">low</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-    <span class="n">high</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-    <span class="n">num_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-    <span class="n">endpoint</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-    <span class="n">ensemble_mean</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DistributionFromValues</span><span class="p">:</span>
+        <span class="n">low</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+        <span class="n">high</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+        <span class="n">num_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+        <span class="n">endpoint</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="n">ensemble_mean</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">_DistributionFromValues</span><span class="p">:</span>
     <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Return a distribution with uniformly weighted values, the values are evenly spaced over a specified interval.</span>
+<span class="sd">    Return a distribution with uniformly weighted values evenly spaced over a specified interval.</span>
 <span class="sd">    As an example, this distribution may be used for simulating a focal series.</span>
 
 <span class="sd">    Parameters</span>
@@ -1216,34 +1200,34 @@ title="Open an issue"
 <span class="sd">    low : float</span>
 <span class="sd">        The lowest value of the distribution.</span>
 <span class="sd">    high : float</span>
-<span class="sd">        The highest value of the distribution, unless endpoint is set to False. In that case, the sequence consists of</span>
-<span class="sd">        all but the last of `num_samples + 1` evenly spaced samples, so that stop is excluded.</span>
+<span class="sd">        The highest value of the distribution. If endpoint is set to False, the sequence consists of</span>
+<span class="sd">        all but the last of `num_samples + 1` evenly spaced samples so that the high value is excluded.</span>
 <span class="sd">    num_samples : int</span>
 <span class="sd">        Number of samples in the distribution.</span>
 <span class="sd">    ensemble_mean : bool, optional</span>
-<span class="sd">        If True, the mean of an eventual ensemble of measurements is calculated, otherwise the full ensemble is</span>
+<span class="sd">        If True, the mean of an ensemble of measurements defined by the distribution is calculated, otherwise the full ensemble is</span>
 <span class="sd">        kept.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
     <span class="n">values</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="n">start</span><span class="o">=</span><span class="n">low</span><span class="p">,</span> <span class="n">stop</span><span class="o">=</span><span class="n">high</span><span class="p">,</span> <span class="n">num</span><span class="o">=</span><span class="n">num_samples</span><span class="p">,</span> <span class="n">endpoint</span><span class="o">=</span><span class="n">endpoint</span><span class="p">)</span>
     <span class="n">weights</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">values</span><span class="p">))</span>
     <span class="n">values</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">values</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">DistributionFromValues</span><span class="p">(</span>
+    <span class="k">return</span> <span class="n">_DistributionFromValues</span><span class="p">(</span>
         <span class="n">values</span><span class="o">=</span><span class="n">values</span><span class="p">,</span> <span class="n">weights</span><span class="o">=</span><span class="n">weights</span><span class="p">,</span> <span class="n">ensemble_mean</span><span class="o">=</span><span class="n">ensemble_mean</span>
     <span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="gaussian"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.distributions.gaussian.html#abtem.distributions.gaussian">[docs]</a><span class="k">def</span> <span class="nf">gaussian</span><span class="p">(</span>
-    <span class="n">standard_deviation</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">]],</span>
-    <span class="n">num_samples</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]],</span>
-    <span class="n">dimension</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
-    <span class="n">center</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">]]</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
-    <span class="n">ensemble_mean</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">bool</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">bool</span><span class="p">,</span> <span class="o">...</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-    <span class="n">sampling_limit</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">]]</span> <span class="o">=</span> <span class="mf">3.0</span><span class="p">,</span>
-    <span class="n">normalize</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;intensity&quot;</span><span class="p">,</span>
+        <span class="n">standard_deviation</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">]],</span>
+        <span class="n">num_samples</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]],</span>
+        <span class="n">dimension</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+        <span class="n">center</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">]]</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+        <span class="n">ensemble_mean</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">bool</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">bool</span><span class="p">,</span> <span class="o">...</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="n">sampling_limit</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">]]</span> <span class="o">=</span> <span class="mf">3.0</span><span class="p">,</span>
+        <span class="n">normalize</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;intensity&quot;</span><span class="p">,</span>
 <span class="p">):</span>
     <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Return a distribution with values weigthed according to a (multidimensional) Gaussian distribution.</span>
+<span class="sd">    Return a distribution with values weighted according to a (multidimensional) Gaussian distribution.</span>
 <span class="sd">    The values are evenly spaced within a given truncation of the Gaussian distribution. As an example, this</span>
 <span class="sd">    distribution may be used for simulating focal spread.</span>
 
@@ -1256,19 +1240,18 @@ title="Open an issue"
 <span class="sd">        Number of samples uniformly spaced samples. The samples may be given for each axis as a tuple, or as a</span>
 <span class="sd">        single number, in which case it is equal for all axes.</span>
 <span class="sd">    center : float or tuple of float</span>
-<span class="sd">        The center of the Gaussian distribution. The center may be given for each axis as a tuple, or as a single</span>
-<span class="sd">        number, in which case it is equal for all axes. Default is 0.0.</span>
+<span class="sd">        The center of the Gaussian distribution (default is 0.0). The center may be given for each axis as a tuple, or as a single</span>
+<span class="sd">        number, in which case it is equal for all axes.</span>
 <span class="sd">    dimension : int, optional</span>
 <span class="sd">        Number of dimensions of the Gaussian distribution.</span>
 <span class="sd">    ensemble_mean : bool, optional</span>
-<span class="sd">        If True, the mean of an eventual ensemble of measurements is calculated, otherwise the full ensemble is</span>
+<span class="sd">        If True, the mean of ensemble of measurements defined by the distribution is calculated, otherwise the full ensemble is</span>
 <span class="sd">        kept. Default is True.</span>
 <span class="sd">    sampling_limit : float, optional</span>
-<span class="sd">        Truncate the distribution at this many standard deviations. Default is 3.0.</span>
-<span class="sd">    normalize : {&#39;intensity&#39;, &#39;amplitude&#39;}, optional</span>
-<span class="sd">        Specifies whether to normalize the intensity or amplitude. Default is &#39;intensity&#39;.</span>
+<span class="sd">        Truncate the distribution at this many standard deviations (default is 3.0).</span>
+<span class="sd">    normalize : str, optional</span>
+<span class="sd">        Specifies whether to normalize the &#39;intensity&#39; (default) or &#39;amplitude&#39;.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-
     <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">isscalar</span><span class="p">(</span><span class="n">center</span><span class="p">):</span>
         <span class="n">center</span> <span class="o">=</span> <span class="p">(</span><span class="n">center</span><span class="p">,)</span> <span class="o">*</span> <span class="n">dimension</span>
 
@@ -1302,12 +1285,12 @@ title="Open an issue"
             <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">()</span>
 
         <span class="n">distributions</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-            <span class="n">DistributionFromValues</span><span class="p">(</span>
+            <span class="n">_DistributionFromValues</span><span class="p">(</span>
                 <span class="n">values</span><span class="o">=</span><span class="n">values</span><span class="p">,</span> <span class="n">weights</span><span class="o">=</span><span class="n">weights</span><span class="p">,</span> <span class="n">ensemble_mean</span><span class="o">=</span><span class="n">ensemble_mean</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
             <span class="p">)</span>
         <span class="p">)</span>
 
-    <span class="k">return</span> <span class="n">AxisAlignedDistributionND</span><span class="p">(</span><span class="n">distributions</span><span class="o">=</span><span class="n">distributions</span><span class="p">)</span></div>
+    <span class="k">return</span> <span class="n">_AxisAlignedDistributionND</span><span class="p">(</span><span class="n">distributions</span><span class="o">=</span><span class="n">distributions</span><span class="p">)</span></div>
 
 
 <span class="k">def</span> <span class="nf">_validate_distribution</span><span class="p">(</span><span class="n">distribution</span><span class="p">):</span>
@@ -1316,7 +1299,7 @@ title="Open an issue"
 
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">distribution</span><span class="p">,</span> <span class="n">Iterable</span><span class="p">):</span>
         <span class="n">distribution</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">distribution</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">DistributionFromValues</span><span class="p">(</span>
+        <span class="k">return</span> <span class="n">_DistributionFromValues</span><span class="p">(</span>
             <span class="n">distribution</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ones_like</span><span class="p">(</span><span class="n">distribution</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
         <span class="p">)</span>
 

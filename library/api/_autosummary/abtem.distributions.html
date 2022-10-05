@@ -407,16 +407,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -598,18 +588,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -711,13 +691,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1055,13 +1035,13 @@ title="Print to PDF"
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="abtem.distributions.from_values.html#abtem.distributions.from_values" title="abtem.distributions.from_values"><code class="xref py py-obj docutils literal notranslate"><span class="pre">from_values</span></code></a>(values[, weights, ensemble_mean])</p></td>
-<td><p>Returns a distribution from user defined values and weights.</p></td>
+<td><p>Return a distribution from user-defined values and weights.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="abtem.distributions.gaussian.html#abtem.distributions.gaussian" title="abtem.distributions.gaussian"><code class="xref py py-obj docutils literal notranslate"><span class="pre">gaussian</span></code></a>(standard_deviation, num_samples[, ...])</p></td>
-<td><p>Return a distribution with values weigthed according to a (multidimensional) Gaussian distribution.</p></td>
+<td><p>Return a distribution with values weighted according to a (multidimensional) Gaussian distribution.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="abtem.distributions.uniform.html#abtem.distributions.uniform" title="abtem.distributions.uniform"><code class="xref py py-obj docutils literal notranslate"><span class="pre">uniform</span></code></a>(low, high, num_samples[, endpoint, ...])</p></td>
-<td><p>Return a distribution with uniformly weighted values, the values are evenly spaced over a specified interval.</p></td>
+<td><p>Return a distribution with uniformly weighted values evenly spaced over a specified interval.</p></td>
 </tr>
 </tbody>
 </table>
@@ -1072,14 +1052,8 @@ title="Print to PDF"
 <col style="width: 90%" />
 </colgroup>
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="abtem.distributions.AxisAlignedDistributionND.html#abtem.distributions.AxisAlignedDistributionND" title="abtem.distributions.AxisAlignedDistributionND"><code class="xref py py-obj docutils literal notranslate"><span class="pre">AxisAlignedDistributionND</span></code></a>(distributions)</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="abtem.distributions.BaseDistribution.html#abtem.distributions.BaseDistribution" title="abtem.distributions.BaseDistribution"><code class="xref py py-obj docutils literal notranslate"><span class="pre">BaseDistribution</span></code></a>()</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="abtem.distributions.DistributionFromValues.html#abtem.distributions.DistributionFromValues" title="abtem.distributions.DistributionFromValues"><code class="xref py py-obj docutils literal notranslate"><span class="pre">DistributionFromValues</span></code></a>(values, weights[, ...])</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="abtem.distributions.BaseDistribution.html#abtem.distributions.BaseDistribution" title="abtem.distributions.BaseDistribution"><code class="xref py py-obj docutils literal notranslate"><span class="pre">BaseDistribution</span></code></a>()</p></td>
+<td><p>Template for defining the mathematical distributions of certain simulation parameters.</p></td>
 </tr>
 </tbody>
 </table>
@@ -1098,7 +1072,7 @@ title="Print to PDF"
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library/api/_autosummary"
+            path: "./library\api\_autosummary"
         },
         predefinedOutput: true
     }

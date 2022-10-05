@@ -1,4 +1,4 @@
-DiffractionPatterns
+﻿DiffractionPatterns
 ===================
 
 .. currentmodule:: abtem.measurements
@@ -91,8 +91,6 @@ DiffractionPatterns
       ~DiffractionPatterns.ensemble_axes
       ~DiffractionPatterns.ensemble_axes_metadata
       ~DiffractionPatterns.ensemble_shape
-      ~DiffractionPatterns.equivalent_real_space_extent
-      ~DiffractionPatterns.equivalent_real_space_sampling
       ~DiffractionPatterns.fftshift
       ~DiffractionPatterns.is_complex
       ~DiffractionPatterns.is_lazy
@@ -103,7 +101,6 @@ DiffractionPatterns
       ~DiffractionPatterns.num_base_axes
       ~DiffractionPatterns.num_ensemble_axes
       ~DiffractionPatterns.sampling
-      ~DiffractionPatterns.scan_extent
       ~DiffractionPatterns.shape
       ~DiffractionPatterns.wavelength
    

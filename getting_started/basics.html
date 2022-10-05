@@ -51,8 +51,6 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Walkthrough" href="../user_guide/walkthrough/walkthrough.html" />
@@ -407,16 +405,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../library/api/_autosummary/abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -598,18 +586,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../library/api/_autosummary/abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -711,13 +689,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../library/api/_autosummary/abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="../library/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../library/api/_autosummary/abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="../library/api/_autosummary/abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1044,28 +1022,37 @@ title="Print to PDF"
     <nav id="bd-toc-nav" aria-label="Page">
         <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#the-objects">
-   The objects
+  <a class="reference internal nav-link" href="#atomic-model">
+   Atomic model
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#mixing-and-matching">
-   Mixing and matching
+  <a class="reference internal nav-link" href="#potential">
+   Potential
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#ensembles">
-   Ensembles
+  <a class="reference internal nav-link" href="#wave-functions">
+   Wave functions
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#interoperating">
-   Interoperating
+  <a class="reference internal nav-link" href="#setup-simulation">
+   Setup simulation
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#where-to-go-from-here">
-   Where to go from here?
+  <a class="reference internal nav-link" href="#execute-computation">
+   Execute computation
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#postprocess">
+   Postprocess
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#id1">
   </a>
  </li>
 </ul>
@@ -1088,28 +1075,37 @@ title="Print to PDF"
                         <nav aria-label="Page">
                             <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#the-objects">
-   The objects
+  <a class="reference internal nav-link" href="#atomic-model">
+   Atomic model
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#mixing-and-matching">
-   Mixing and matching
+  <a class="reference internal nav-link" href="#potential">
+   Potential
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#ensembles">
-   Ensembles
+  <a class="reference internal nav-link" href="#wave-functions">
+   Wave functions
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#interoperating">
-   Interoperating
+  <a class="reference internal nav-link" href="#setup-simulation">
+   Setup simulation
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#where-to-go-from-here">
-   Where to go from here?
+  <a class="reference internal nav-link" href="#execute-computation">
+   Execute computation
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#postprocess">
+   Postprocess
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#id1">
   </a>
  </li>
 </ul>
@@ -1124,15 +1120,45 @@ title="Print to PDF"
                 
   <section class="tex2jax_ignore mathjax_ignore" id="the-basics">
 <h1>The basics<a class="headerlink" href="#the-basics" title="Permalink to this heading">#</a></h1>
-<p>This is a short overview of Dask geared towards new users. There is much more information contained in the rest of the documentation.</p>
+<p>This is a short overview of abTEM geared towards new users. Hence, for details</p>
+<p>There is much more information contained in the rest of the documentation.</p>
+<p>For users with previous experience in . This</p>
 <p>We normally import abTEM as follows:</p>
-<p>The array is a <a class="reference external" href="https://docs.dask.org/en/stable/array.html">Dask Array</a>, this means that it is “lazily” evaluated. When we create a lazy array, we only set up the tasks to compute the array, to execute those tasks we also have to call <code class="docutils literal notranslate"><span class="pre">compute</span></code>. After calling <code class="docutils literal notranslate"><span class="pre">compute</span></code> the Dask array becomes a NumPy array.</p>
-<div class="admonition seealso">
-<p class="admonition-title">See also</p>
-<p>See our walkthrough on <span class="xref myst">Dask in abTEM</span> for details.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">abtem</span>
+</pre></div>
 </div>
-<section id="the-objects">
-<h2>The objects<a class="headerlink" href="#the-objects" title="Permalink to this heading">#</a></h2>
+<section id="atomic-model">
+<h2>Atomic model<a class="headerlink" href="#atomic-model" title="Permalink to this heading">#</a></h2>
+<p>abTEM uses the atomic simulation environment for importing atomic models:</p>
+<p>We can also procedurally create and modify structures:</p>
+<p>The multislice algorithm requires cell with orthogonal lattice vectors. You can make your unit cell orthogonal ``:</p>
+</section>
+<section id="potential">
+<h2>Potential<a class="headerlink" href="#potential" title="Permalink to this heading">#</a></h2>
+<p>We create an electron static potential by</p>
+<p>We can include frozen phonons by wrapping</p>
+</section>
+<section id="wave-functions">
+<h2>Wave functions<a class="headerlink" href="#wave-functions" title="Permalink to this heading">#</a></h2>
+<p>abTEM differs from codes for simulating electron diffraction by not directly implementing any common imaging modes
+(STEM, HRTEM etc.). You select</p>
+<p>For simulating HRTEM and SAED you should define a plane wave:</p>
+<p>For STEM and CBED you should</p>
+</section>
+<section id="setup-simulation">
+<h2>Setup simulation<a class="headerlink" href="#setup-simulation" title="Permalink to this heading">#</a></h2>
+<p>For simulating</p>
+</section>
+<section id="execute-computation">
+<h2>Execute computation<a class="headerlink" href="#execute-computation" title="Permalink to this heading">#</a></h2>
+<p>abTEM is lazily evaluated. The result from a computation isn’t computed until you ask for it. Instead, a Dask task graph for the computation is produced.</p>
+<p>The array is a <a class="reference external" href="https://docs.dask.org/en/stable/array.html">Dask Array</a>, this means that it is “lazily” evaluated. When we create a lazy array, we only set up the tasks to compute the array, to execute those tasks we also have to call <code class="docutils literal notranslate"><span class="pre">compute</span></code>. After calling <code class="docutils literal notranslate"><span class="pre">compute</span></code> the Dask array becomes a NumPy array.</p>
+</section>
+<section id="postprocess">
+<h2>Postprocess<a class="headerlink" href="#postprocess" title="Permalink to this heading">#</a></h2>
+</section>
+<section id="id1">
+<h2><a class="headerlink" href="#id1" title="Permalink to this heading">#</a></h2>
 <div class="sd-container-fluid sd-sphinx-override sd-mb-4 docutils">
 <div class="sd-row docutils">
 <div class="sd-col sd-d-flex-column sd-col-4 sd-col-xs-4 sd-col-sm-4 sd-col-md-4 sd-col-lg-4 sd-border-1 docutils">
@@ -1190,18 +1216,6 @@ title="Print to PDF"
 </div>
 </div>
 </div>
-</section>
-<section id="mixing-and-matching">
-<h2>Mixing and matching<a class="headerlink" href="#mixing-and-matching" title="Permalink to this heading">#</a></h2>
-</section>
-<section id="ensembles">
-<h2>Ensembles<a class="headerlink" href="#ensembles" title="Permalink to this heading">#</a></h2>
-</section>
-<section id="interoperating">
-<h2>Interoperating<a class="headerlink" href="#interoperating" title="Permalink to this heading">#</a></h2>
-</section>
-<section id="where-to-go-from-here">
-<h2>Where to go from here?<a class="headerlink" href="#where-to-go-from-here" title="Permalink to this heading">#</a></h2>
 </section>
 </section>
 

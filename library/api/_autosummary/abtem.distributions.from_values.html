@@ -407,16 +407,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -598,18 +588,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -711,13 +691,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1050,18 +1030,17 @@ title="Print to PDF"
 <dl class="py function">
 <dt class="sig sig-object py" id="abtem.distributions.from_values">
 <span class="sig-prename descclassname"><span class="pre">abtem.distributions.</span></span><span class="sig-name descname"><span class="pre">from_values</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">values</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weights</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_mean</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/distributions.html#from_values"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.distributions.from_values" title="Permalink to this definition">#</a></dt>
-<dd><p>Returns a distribution from user defined values and weights.</p>
+<dd><p>Return a distribution from user-defined values and weights.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>values</strong> (<em>sequence of scalar</em>) – The values of the parameters.</p></li>
-<li><p><strong>weights</strong> (<em>sequence of scalar</em><em>, </em><em>optional</em>) – </p></li>
-<li><p><strong>ensemble_mean</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, the mean of an eventual ensemble of measurements is calculated, otherwise the full ensemble is
-kept.</p></li>
+<li><p><strong>values</strong> (<em>sequence of int</em><em> or </em><em>float</em>) – The scalar values of the parameters.</p></li>
+<li><p><strong>weights</strong> (<em>sequence of float</em><em>, </em><em>optional</em>) – The scalar values of the weights (default is None).</p></li>
+<li><p><strong>ensemble_mean</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, the mean of an ensemble of measurements defined by the distribution is calculated, otherwise the full ensemble is kept.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Return type</dt>
-<dd class="field-even"><p><a class="reference internal" href="abtem.distributions.DistributionFromValues.html#abtem.distributions.DistributionFromValues" title="abtem.distributions.DistributionFromValues"><code class="xref py py-class docutils literal notranslate"><span class="pre">DistributionFromValues</span></code></a></p>
+<dd class="field-even"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">_DistributionFromValues</span></code></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1081,7 +1060,7 @@ kept.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library/api/_autosummary"
+            path: "./library\api\_autosummary"
         },
         predefinedOutput: true
     }

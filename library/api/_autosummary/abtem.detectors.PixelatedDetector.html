@@ -407,16 +407,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul class="current">
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -598,18 +588,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -711,13 +691,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1054,22 +1034,22 @@ title="Print to PDF"
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.detectors.PixelatedDetector.__init__">
 <span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">max_angle</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'valid'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">resample</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fourier_space</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">to_cpu</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">url</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/detectors.html#PixelatedDetector.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.detectors.PixelatedDetector.__init__" title="Permalink to this definition">#</a></dt>
-<dd><p>Pixelated detector.</p>
-<p>The pixelated detector records the intensity of the Fourier-transformed exit wave function. This may be used for
+<dd><p>The pixelated detector records the intensity of the Fourier-transformed exit wave function. This may be used for
 example for simulating 4D-STEM.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>max_angle</strong> (<em>{'cutoff'</em><em>, </em><em>'valid'}</em><em> or </em><em>float</em>) – The diffraction patterns will be detected up to this angle. If set to a string it must be ‘limit’ or ‘valid’</p></li>
-<li><p><strong>resample</strong> (<em>'uniform'</em><em> or </em><em>False</em>) – If ‘uniform’, the diffraction patterns from rectangular cells will be downsampled to a uniform angular
-sampling.</p></li>
-<li><p><strong>max_angle</strong> – Maximum detected scattering angle of the diffraction patterns. If str, it must be one of:
+<li><p><strong>max_angle</strong> (<em>str</em><em> or </em><em>float</em>) – The diffraction patterns will be detected up to this angle [mrad]. If str, it must be one of:
 <code class="docutils literal notranslate"><span class="pre">cutoff</span></code> :
-The maximum scattering angle will be the cutoff of the antialias aperture.
+The maximum scattering angle will be the cutoff of the antialiasing aperture.
 <code class="docutils literal notranslate"><span class="pre">valid</span></code> :
-The maximum scattering angle will be the largest rectangle that fits inside the circular antialias aperture
-(default).</p></li>
-<li><p><strong>to_cpu</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, copy the measurement data after applying the detector from the calculation device to cpu memory,
+The maximum scattering angle will be the largest rectangle that fits inside the circular antialiasing aperture
+(default).
+<code class="docutils literal notranslate"><span class="pre">full</span></code> :
+Diffraction patterns will not be cropped and will include angles outside the antialiasing aperture.</p></li>
+<li><p><strong>resample</strong> (<em>str</em><em> or </em><em>False</em>) – If ‘uniform’, the diffraction patterns from rectangular cells will be downsampled to a uniform angular
+sampling.</p></li>
+<li><p><strong>to_cpu</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
 otherwise the data stays on the respective devices. Default is True.</p></li>
 <li><p><strong>url</strong> (<em>str</em><em>, </em><em>optional</em>) – If this parameter is set the measurement data is saved at the specified location, typically a path to a
 local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
@@ -1087,7 +1067,7 @@ the data stays in memory.</p></li>
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.detectors.PixelatedDetector.__init__" title="abtem.detectors.PixelatedDetector.__init__"><code class="xref py py-obj docutils literal notranslate"><span class="pre">__init__</span></code></a>([max_angle, resample, ...])</p></td>
-<td><p>Pixelated detector.</p></td>
+<td><p>The pixelated detector records the intensity of the Fourier-transformed exit wave function.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">angular_limits</span></code>(waves)</p></td>
 <td><p><dl class="field-list simple">
@@ -1101,7 +1081,7 @@ the data stays in memory.</p></li>
 <td><p>Make a copy.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.detectors.PixelatedDetector.detect" title="abtem.detectors.PixelatedDetector.detect"><code class="xref py py-obj docutils literal notranslate"><span class="pre">detect</span></code></a>(waves)</p></td>
-<td><p>Calculate the far field intensity of the wave functions.</p></td>
+<td><p>Calculate the far-field intensity of the wave functions.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">measurement_axes_metadata</span></code>(waves)</p></td>
 <td><p><dl class="field-list simple">
@@ -1191,21 +1171,18 @@ the data stays in memory.</p></li>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.detectors.PixelatedDetector.detect">
 <span class="sig-name descname"><span class="pre">detect</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">waves</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/detectors.html#PixelatedDetector.detect"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.detectors.PixelatedDetector.detect" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate the far field intensity of the wave functions. The output is cropped to include the non-suppressed
-frequencies from the antialiased 2D fourier spectrum.</p>
+<dd><p>Calculate the far-field intensity of the wave functions. The output is cropped to include the non-suppressed
+frequencies from the antialiased 2D Fourier spectrum.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><p><strong>waves</strong> (<a class="reference internal" href="abtem.waves.Waves.html#abtem.waves.Waves" title="abtem.waves.Waves"><em>Waves</em></a>) – The batch of wave functions to detect.</p>
 </dd>
-<dt class="field-even">Return type</dt>
-<dd class="field-even"><p><a class="reference internal" href="abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns" title="abtem.measurements.DiffractionPatterns"><code class="xref py py-class docutils literal notranslate"><span class="pre">DiffractionPatterns</span></code></a></p>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>values</strong> – Detected values. The first dimension indexes the batch size, the second and third indexes the two components
+of the spatial frequency.</p>
 </dd>
-<dt class="field-odd">Returns</dt>
-<dd class="field-odd"><p><ul class="simple">
-<li><p><em>Detected values. The first dimension indexes the batch size, the second and third indexes the two components</em></p></li>
-<li><p><em>of the spatial frequency.</em></p></li>
-</ul>
-</p>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><a class="reference internal" href="abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns" title="abtem.measurements.DiffractionPatterns">DiffractionPatterns</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1227,7 +1204,7 @@ frequencies from the antialiased 2D fourier spectrum.</p>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library/api/_autosummary"
+            path: "./library\api\_autosummary"
         },
         predefinedOutput: true
     }

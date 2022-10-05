@@ -404,16 +404,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -595,18 +585,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -708,13 +688,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1021,7 +1001,7 @@ title="Open an issue"
     <span class="kn">from</span> <span class="nn">abtem.waves</span> <span class="kn">import</span> <span class="n">Waves</span>
 
 
-<div class="viewcode-block" id="validate_detectors"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.detectors.validate_detectors.html#abtem.detectors.validate_detectors">[docs]</a><span class="k">def</span> <span class="nf">validate_detectors</span><span class="p">(</span>
+<span class="k">def</span> <span class="nf">_validate_detectors</span><span class="p">(</span>
     <span class="n">detectors</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="s2">&quot;BaseDetector&quot;</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="s2">&quot;BaseDetector&quot;</span><span class="p">]]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="s2">&quot;BaseDetector&quot;</span><span class="p">]:</span>
     <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">detectors</span><span class="p">,</span> <span class="s2">&quot;detect&quot;</span><span class="p">):</span>
@@ -1036,27 +1016,27 @@ title="Open an issue"
     <span class="p">):</span>
 
         <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
-            <span class="s2">&quot;detectors must be AbstractDetector or list of AbstractDetector&quot;</span>
+            <span class="s2">&quot;Detectors must be AbstractDetector or list of AbstractDetector.&quot;</span>
         <span class="p">)</span>
 
-    <span class="k">return</span> <span class="n">detectors</span></div>
+    <span class="k">return</span> <span class="n">detectors</span>
 
 
 <div class="viewcode-block" id="BaseDetector"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.detectors.BaseDetector.html#abtem.detectors.BaseDetector">[docs]</a><span class="k">class</span> <span class="nc">BaseDetector</span><span class="p">(</span><span class="n">CopyMixin</span><span class="p">,</span> <span class="n">metaclass</span><span class="o">=</span><span class="n">ABCMeta</span><span class="p">):</span>
-<div class="viewcode-block" id="BaseDetector.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.detectors.BaseDetector.html#abtem.detectors.BaseDetector.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">to_cpu</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">url</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
-        <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Base detector type,</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Base detector class.</span>
 
-<span class="sd">        Parameters</span>
-<span class="sd">        ----------</span>
-<span class="sd">        to_cpu : bool, optional</span>
-<span class="sd">            If True, copy the measurement data after applying the detector from the calculation device to cpu memory,</span>
-<span class="sd">            otherwise the data stays on the respective devices. Default is True.</span>
-<span class="sd">        url : str, optional</span>
-<span class="sd">            If this parameter is set the measurement data is saved at the specified location, typically a path to a</span>
-<span class="sd">            local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)</span>
-<span class="sd">            the data stays in memory.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    to_cpu : bool, optional</span>
+<span class="sd">       If True, copy the measurement data from the calculation device to CPU memory after applying the detector,</span>
+<span class="sd">       otherwise the data stays on the respective devices. Default is True.</span>
+<span class="sd">    url : str, optional</span>
+<span class="sd">       If this parameter is set the measurement data is saved at the specified location, typically a path to a</span>
+<span class="sd">       local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)</span>
+<span class="sd">       the data stays in memory.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<div class="viewcode-block" id="BaseDetector.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.detectors.BaseDetector.html#abtem.detectors.BaseDetector.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">to_cpu</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="n">url</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_to_cpu</span> <span class="o">=</span> <span class="n">to_cpu</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_url</span> <span class="o">=</span> <span class="n">url</span></div>
 
@@ -1107,7 +1087,7 @@ title="Open an issue"
 <div class="viewcode-block" id="AnnularDetector"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html#abtem.detectors.AnnularDetector">[docs]</a><span class="k">class</span> <span class="nc">AnnularDetector</span><span class="p">(</span><span class="n">BaseDetector</span><span class="p">):</span>
     <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    The annular detector integrates the intensity of the detected wave functions between an inner and outer radial</span>
-<span class="sd">    integration limit, i.e. over an annulus.</span>
+<span class="sd">    integration limits, i.e. over an annulus.</span>
 
 <span class="sd">    Parameters</span>
 <span class="sd">    ----------</span>
@@ -1118,7 +1098,7 @@ title="Open an issue"
 <span class="sd">    offset: two float, optional</span>
 <span class="sd">        Center offset of the annular integration region [mrad].</span>
 <span class="sd">    to_cpu : bool, optional</span>
-<span class="sd">        If True, copy the measurement data after applying the detector from the calculation device to cpu memory,</span>
+<span class="sd">        If True, copy the measurement data from the calculation device to CPU memory after applying the detector,</span>
 <span class="sd">        otherwise the data stays on the respective devices. Default is True.</span>
 <span class="sd">    url : str, optional</span>
 <span class="sd">        If this parameter is set the measurement data is saved at the specified location, typically a path to a</span>
@@ -1236,8 +1216,8 @@ title="Open an issue"
         <span class="k">return</span> <span class="n">ax</span><span class="p">,</span> <span class="n">im</span></div>
 
 
-<div class="viewcode-block" id="AbstractRadialDetector"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html#abtem.detectors.AbstractRadialDetector">[docs]</a><span class="k">class</span> <span class="nc">AbstractRadialDetector</span><span class="p">(</span><span class="n">BaseDetector</span><span class="p">):</span>
-<div class="viewcode-block" id="AbstractRadialDetector.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html#abtem.detectors.AbstractRadialDetector.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
+<span class="k">class</span> <span class="nc">_AbstractRadialDetector</span><span class="p">(</span><span class="n">BaseDetector</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">inner</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
         <span class="n">outer</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
@@ -1250,7 +1230,7 @@ title="Open an issue"
         <span class="bp">self</span><span class="o">.</span><span class="n">_outer</span> <span class="o">=</span> <span class="n">outer</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_rotation</span> <span class="o">=</span> <span class="n">rotation</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_offset</span> <span class="o">=</span> <span class="n">offset</span>
-        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">to_cpu</span><span class="o">=</span><span class="n">to_cpu</span><span class="p">,</span> <span class="n">url</span><span class="o">=</span><span class="n">url</span><span class="p">)</span></div>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">to_cpu</span><span class="o">=</span><span class="n">to_cpu</span><span class="p">,</span> <span class="n">url</span><span class="o">=</span><span class="n">url</span><span class="p">)</span>
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">inner</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
@@ -1391,26 +1371,24 @@ title="Open an issue"
 
         <span class="n">plt</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">im</span><span class="p">,</span> <span class="n">extend</span><span class="o">=</span><span class="s2">&quot;min&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;Detector region&quot;</span><span class="p">)</span>
         <span class="c1"># ax.set_rlim([-0, min(waves.cutoff_angles) * 1.1])</span>
-        <span class="k">return</span> <span class="n">ax</span><span class="p">,</span> <span class="n">im</span></div>
+        <span class="k">return</span> <span class="n">ax</span><span class="p">,</span> <span class="n">im</span>
 
 
-<div class="viewcode-block" id="FlexibleAnnularDetector"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.detectors.FlexibleAnnularDetector.html#abtem.detectors.FlexibleAnnularDetector">[docs]</a><span class="k">class</span> <span class="nc">FlexibleAnnularDetector</span><span class="p">(</span><span class="n">AbstractRadialDetector</span><span class="p">):</span>
+<div class="viewcode-block" id="FlexibleAnnularDetector"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.detectors.FlexibleAnnularDetector.html#abtem.detectors.FlexibleAnnularDetector">[docs]</a><span class="k">class</span> <span class="nc">FlexibleAnnularDetector</span><span class="p">(</span><span class="n">_AbstractRadialDetector</span><span class="p">):</span>
     <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Flexible annular detector.</span>
-
-<span class="sd">    The FlexibleAnnularDetector allows choosing the integration limits after running the simulation by binning the</span>
+<span class="sd">    The flexible annular detector allows choosing the integration limits after running the simulation by binning the</span>
 <span class="sd">    intensity in annular integration regions.</span>
 
 <span class="sd">    Parameters</span>
 <span class="sd">    ----------</span>
 <span class="sd">    step_size : float, optional</span>
-<span class="sd">        Radial extent of the bins [mrad]. Default is 1.</span>
+<span class="sd">        Radial extent of the bins [mrad] (default is 1).</span>
 <span class="sd">    inner : float, optional</span>
 <span class="sd">        Inner integration limit of the bins [mrad].</span>
 <span class="sd">    outer : float, optional</span>
 <span class="sd">        Outer integration limit of the bins [mrad].</span>
 <span class="sd">    to_cpu : bool, optional</span>
-<span class="sd">        If True, copy the measurement data after applying the detector from the calculation device to cpu memory,</span>
+<span class="sd">        If True, copy the measurement data from the calculation device to CPU memory after applying the detector,</span>
 <span class="sd">        otherwise the data stays on the respective devices. Default is True.</span>
 <span class="sd">    url : str, optional</span>
 <span class="sd">        If this parameter is set the measurement data is saved at the specified location, typically a path to a</span>
@@ -1438,7 +1416,7 @@ title="Open an issue"
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">step_size</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
-        <span class="sd">&quot;&quot;&quot; Step size [mrad]. &quot;&quot;&quot;</span>
+        <span class="sd">&quot;&quot;&quot;Step size [mrad].&quot;&quot;&quot;</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_step_size</span>
 
     <span class="nd">@step_size</span><span class="o">.</span><span class="n">setter</span>
@@ -1460,7 +1438,7 @@ title="Open an issue"
         <span class="k">return</span> <span class="mi">1</span></div>
 
 
-<div class="viewcode-block" id="SegmentedDetector"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.detectors.SegmentedDetector.html#abtem.detectors.SegmentedDetector">[docs]</a><span class="k">class</span> <span class="nc">SegmentedDetector</span><span class="p">(</span><span class="n">AbstractRadialDetector</span><span class="p">):</span>
+<div class="viewcode-block" id="SegmentedDetector"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.detectors.SegmentedDetector.html#abtem.detectors.SegmentedDetector">[docs]</a><span class="k">class</span> <span class="nc">SegmentedDetector</span><span class="p">(</span><span class="n">_AbstractRadialDetector</span><span class="p">):</span>
 <div class="viewcode-block" id="SegmentedDetector.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.detectors.SegmentedDetector.html#abtem.detectors.SegmentedDetector.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">nbins_radial</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
@@ -1473,8 +1451,6 @@ title="Open an issue"
         <span class="n">url</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Segmented detector.</span>
-
 <span class="sd">        The segmented detector covers an annular angular range, and is partitioned into several integration regions</span>
 <span class="sd">        divided to radial and angular segments. This can be used for simulating differential phase contrast (DPC)</span>
 <span class="sd">        imaging.</span>
@@ -1492,9 +1468,9 @@ title="Open an issue"
 <span class="sd">        rotation : float</span>
 <span class="sd">            Rotation of the bins around the origin [mrad].</span>
 <span class="sd">        offset : two float</span>
-<span class="sd">            Offset of the bins from the origin in x and y [mrad].</span>
+<span class="sd">            Offset of the bins from the origin in `x` and `y` [mrad].</span>
 <span class="sd">        to_cpu : bool, optional</span>
-<span class="sd">            If True, copy the measurement data after applying the detector from the calculation device to cpu memory,</span>
+<span class="sd">            If True, copy the measurement data from the calculation device to CPU memory after applying the detector,</span>
 <span class="sd">            otherwise the data stays on the respective devices. Default is True.</span>
 <span class="sd">        url : str, optional</span>
 <span class="sd">            If this parameter is set the measurement data is saved at the specified location, typically a path to a</span>
@@ -1553,35 +1529,32 @@ title="Open an issue"
 <div class="viewcode-block" id="PixelatedDetector"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.detectors.PixelatedDetector.html#abtem.detectors.PixelatedDetector">[docs]</a><span class="k">class</span> <span class="nc">PixelatedDetector</span><span class="p">(</span><span class="n">BaseDetector</span><span class="p">):</span>
 <div class="viewcode-block" id="PixelatedDetector.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.detectors.PixelatedDetector.html#abtem.detectors.PixelatedDetector.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
-        <span class="n">max_angle</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;valid&quot;</span><span class="p">,</span>
+        <span class="n">max_angle</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;valid&quot;</span><span class="p">,</span>
         <span class="n">resample</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
         <span class="n">fourier_space</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
         <span class="n">to_cpu</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
         <span class="n">url</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Pixelated detector.</span>
-
 <span class="sd">        The pixelated detector records the intensity of the Fourier-transformed exit wave function. This may be used for</span>
 <span class="sd">        example for simulating 4D-STEM.</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
-<span class="sd">        max_angle : str or float or None</span>
-<span class="sd">            The diffraction patterns will be detected up to this angle. If set to a string it must be &#39;limit&#39; or &#39;valid&#39;</span>
-<span class="sd">        resample : &#39;uniform&#39; or False</span>
+<span class="sd">        max_angle : str or float</span>
+<span class="sd">            The diffraction patterns will be detected up to this angle [mrad]. If str, it must be one of:</span>
+<span class="sd">            ``cutoff`` :</span>
+<span class="sd">            The maximum scattering angle will be the cutoff of the antialiasing aperture.</span>
+<span class="sd">            ``valid`` :</span>
+<span class="sd">            The maximum scattering angle will be the largest rectangle that fits inside the circular antialiasing aperture</span>
+<span class="sd">            (default).</span>
+<span class="sd">            ``full`` :</span>
+<span class="sd">            Diffraction patterns will not be cropped and will include angles outside the antialiasing aperture.</span>
+<span class="sd">        resample : str or False</span>
 <span class="sd">            If &#39;uniform&#39;, the diffraction patterns from rectangular cells will be downsampled to a uniform angular</span>
 <span class="sd">            sampling.</span>
-<span class="sd">        max_angle : {&#39;cutoff&#39;, &#39;valid&#39;} or float</span>
-<span class="sd">            Maximum detected scattering angle of the diffraction patterns. If str, it must be one of:</span>
-<span class="sd">            ``cutoff`` :</span>
-<span class="sd">            The maximum scattering angle will be the cutoff of the antialias aperture.</span>
-<span class="sd">            ``valid`` :</span>
-<span class="sd">            The maximum scattering angle will be the largest rectangle that fits inside the circular antialias aperture</span>
-<span class="sd">            (default).</span>
-
 <span class="sd">        to_cpu : bool, optional</span>
-<span class="sd">            If True, copy the measurement data after applying the detector from the calculation device to cpu memory,</span>
+<span class="sd">            If True, copy the measurement data from the calculation device to CPU memory after applying the detector,</span>
 <span class="sd">            otherwise the data stays on the respective devices. Default is True.</span>
 <span class="sd">        url : str, optional</span>
 <span class="sd">            If this parameter is set the measurement data is saved at the specified location, typically a path to a</span>
@@ -1667,8 +1640,8 @@ title="Open an issue"
 
 <div class="viewcode-block" id="PixelatedDetector.detect"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.detectors.PixelatedDetector.html#abtem.detectors.PixelatedDetector.detect">[docs]</a>    <span class="k">def</span> <span class="nf">detect</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">waves</span><span class="p">:</span> <span class="s2">&quot;Waves&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;DiffractionPatterns&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Calculate the far field intensity of the wave functions. The output is cropped to include the non-suppressed</span>
-<span class="sd">        frequencies from the antialiased 2D fourier spectrum.</span>
+<span class="sd">        Calculate the far-field intensity of the wave functions. The output is cropped to include the non-suppressed</span>
+<span class="sd">        frequencies from the antialiased 2D Fourier spectrum.</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
@@ -1677,10 +1650,10 @@ title="Open an issue"
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
+<span class="sd">        values : DiffractionPatterns</span>
 <span class="sd">            Detected values. The first dimension indexes the batch size, the second and third indexes the two components</span>
 <span class="sd">            of the spatial frequency.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">fourier_space</span><span class="p">:</span>
             <span class="n">measurements</span> <span class="o">=</span> <span class="n">waves</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">max_angle</span><span class="p">,</span> <span class="n">parity</span><span class="o">=</span><span class="s2">&quot;same&quot;</span><span class="p">)</span>
 
@@ -1694,6 +1667,19 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="WavesDetector"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.detectors.WavesDetector.html#abtem.detectors.WavesDetector">[docs]</a><span class="k">class</span> <span class="nc">WavesDetector</span><span class="p">(</span><span class="n">BaseDetector</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Base detector class.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    to_cpu : bool, optional</span>
+<span class="sd">       If True, copy the measurement data from the calculation device to CPU memory after applying the detector,</span>
+<span class="sd">       otherwise the data stays on the respective devices. Default is True.</span>
+<span class="sd">    url : str, optional</span>
+<span class="sd">       If this parameter is set the measurement data is saved at the specified location, typically a path to a</span>
+<span class="sd">       local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)</span>
+<span class="sd">       the data stays in memory.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
 <div class="viewcode-block" id="WavesDetector.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.detectors.WavesDetector.html#abtem.detectors.WavesDetector.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">to_cpu</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">url</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">to_cpu</span><span class="o">=</span><span class="n">to_cpu</span><span class="p">,</span> <span class="n">url</span><span class="o">=</span><span class="n">url</span><span class="p">)</span></div>
 

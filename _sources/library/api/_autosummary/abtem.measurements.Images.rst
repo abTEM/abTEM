@@ -1,4 +1,4 @@
-Images
+﻿Images
 ======
 
 .. currentmodule:: abtem.measurements
@@ -47,7 +47,6 @@ Images
       ~Images.rechunk
       ~Images.reduce_ensemble
       ~Images.relative_difference
-      ~Images.scan_extent
       ~Images.scan_positions
       ~Images.show
       ~Images.squeeze

@@ -407,16 +407,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -598,18 +588,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -711,13 +691,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1047,7 +1027,7 @@ title="Print to PDF"
                 
   <section id="module-abtem.atoms">
 <span id="atoms"></span><h1>atoms<a class="headerlink" href="#module-abtem.atoms" title="Permalink to this heading">#</a></h1>
-<p>Module for modifying ASE atoms objects for use in abTEM.</p>
+<p>Module for modifying ASE <cite>Atoms</cite> objects for use in abTEM.</p>
 <p class="rubric">Functions</p>
 <table class="autosummary longtable table autosummary">
 <colgroup>
@@ -1056,101 +1036,61 @@ title="Print to PDF"
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="abtem.atoms.atoms_in_cell.html#abtem.atoms.atoms_in_cell" title="abtem.atoms.atoms_in_cell"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atoms_in_cell</span></code></a>(atoms[, margin])</p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">Atoms</span></code></p>
-</dd>
-</dl>
-</p></td>
+<td><p>Crop atoms that are outside of their cell.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="abtem.atoms.best_orthogonal_box.html#abtem.atoms.best_orthogonal_box" title="abtem.atoms.best_orthogonal_box"><code class="xref py py-obj docutils literal notranslate"><span class="pre">best_orthogonal_box</span></code></a>(cell[, max_repetitions, eps])</p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></p>
-</dd>
-</dl>
-</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="abtem.atoms.best_orthogonal_cell.html#abtem.atoms.best_orthogonal_cell" title="abtem.atoms.best_orthogonal_cell"><code class="xref py py-obj docutils literal notranslate"><span class="pre">best_orthogonal_cell</span></code></a>(cell[, ...])</p></td>
+<td><p>Find the closest orthogonal cell for a given cell given a maximum number of repetitions in all directions.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="abtem.atoms.cut_box.html#abtem.atoms.cut_box" title="abtem.atoms.cut_box"><code class="xref py py-obj docutils literal notranslate"><span class="pre">cut_box</span></code></a>(atoms[, box, plane, origin, margin])</p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">Atoms</span></code></p>
-</dd>
-</dl>
-</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="abtem.atoms.cut_cell.html#abtem.atoms.cut_cell" title="abtem.atoms.cut_cell"><code class="xref py py-obj docutils literal notranslate"><span class="pre">cut_cell</span></code></a>(atoms[, cell, plane, origin, margin])</p></td>
+<td><p>Fit the given atoms into a given cell by cropping atoms that are outside the cell, ignoring periodicity.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="abtem.atoms.decompose_affine_transform.html#abtem.atoms.decompose_affine_transform" title="abtem.atoms.decompose_affine_transform"><code class="xref py py-obj docutils literal notranslate"><span class="pre">decompose_affine_transform</span></code></a>(affined_transform)</p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>]</p>
-</dd>
-</dl>
-</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="abtem.atoms.decompose_affine_transform.html#abtem.atoms.decompose_affine_transform" title="abtem.atoms.decompose_affine_transform"><code class="xref py py-obj docutils literal notranslate"><span class="pre">decompose_affine_transform</span></code></a>(affine_transform)</p></td>
+<td><p>Decompose an affine transform into rotation, scale and shear.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="abtem.atoms.flip_atoms.html#abtem.atoms.flip_atoms" title="abtem.atoms.flip_atoms"><code class="xref py py-obj docutils literal notranslate"><span class="pre">flip_atoms</span></code></a>(atoms[, axis])</p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">Atoms</span></code></p>
-</dd>
-</dl>
-</p></td>
+<td><p>Inverts the positions of atoms along a given axis.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="abtem.atoms.is_cell_hexagonal.html#abtem.atoms.is_cell_hexagonal" title="abtem.atoms.is_cell_hexagonal"><code class="xref py py-obj docutils literal notranslate"><span class="pre">is_cell_hexagonal</span></code></a>(atoms)</p></td>
-<td><p>Function to check whether the cell of an ASE atoms object is hexagonal.</p></td>
+<td><p>Check whether the cell of given atoms is hexagonal.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="abtem.atoms.is_cell_orthogonal.html#abtem.atoms.is_cell_orthogonal" title="abtem.atoms.is_cell_orthogonal"><code class="xref py py-obj docutils literal notranslate"><span class="pre">is_cell_orthogonal</span></code></a>(cell[, tol])</p></td>
-<td><p>Check whether an Atoms object has an orthogonal cell.</p></td>
+<td><p>Check whether atoms have an orthogonal cell.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="abtem.atoms.is_cell_valid.html#abtem.atoms.is_cell_valid" title="abtem.atoms.is_cell_valid"><code class="xref py py-obj docutils literal notranslate"><span class="pre">is_cell_valid</span></code></a>(atoms[, tol])</p></td>
-<td><p>Check whether the cell of an ASE atoms object can be converted to a structure that is usable by abTEM.</p></td>
+<td><p>Check whether the cell of given atoms can be converted to a structure usable by abTEM.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="abtem.atoms.merge_close_atoms.html#abtem.atoms.merge_close_atoms" title="abtem.atoms.merge_close_atoms"><code class="xref py py-obj docutils literal notranslate"><span class="pre">merge_close_atoms</span></code></a>(atoms[, tol])</p></td>
-<td><p>Merge atoms that are closer in distance than a given tolerance.</p></td>
+<td><p>Merge atoms that are closer in distance to each other than the given tolerance.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="abtem.atoms.orthogonalize_cell.html#abtem.atoms.orthogonalize_cell" title="abtem.atoms.orthogonalize_cell"><code class="xref py py-obj docutils literal notranslate"><span class="pre">orthogonalize_cell</span></code></a>(atoms[, box, ...])</p></td>
-<td><p>Make the cell of an ASE atoms object orthogonal.</p></td>
+<td><p>Make the cell of the given atoms orthogonal.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="abtem.atoms.pad_atoms.html#abtem.atoms.pad_atoms" title="abtem.atoms.pad_atoms"><code class="xref py py-obj docutils literal notranslate"><span class="pre">pad_atoms</span></code></a>(atoms, margins[, directions])</p></td>
-<td><p>Repeat the atoms in x and y, retaining only the repeated atoms within the margin distance from the cell boundary.</p></td>
+<td><p>Repeat the atoms in the <cite>x</cite> and <cite>y</cite> directions, retaining only the repeated atoms within the margin distance from the cell boundary.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="abtem.atoms.plane_to_axes.html#abtem.atoms.plane_to_axes" title="abtem.atoms.plane_to_axes"><code class="xref py py-obj docutils literal notranslate"><span class="pre">plane_to_axes</span></code></a>(plane)</p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code></p>
-</dd>
-</dl>
-</p></td>
+<td><p>Convert string representation of Carterian axes to numerical.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="abtem.atoms.pretty_print_transform.html#abtem.atoms.pretty_print_transform" title="abtem.atoms.pretty_print_transform"><code class="xref py py-obj docutils literal notranslate"><span class="pre">pretty_print_transform</span></code></a>(transform)</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="abtem.atoms.pretty_print_transform.html#abtem.atoms.pretty_print_transform" title="abtem.atoms.pretty_print_transform"><code class="xref py py-obj docutils literal notranslate"><span class="pre">pretty_print_transform</span></code></a>(decomposed)</p></td>
+<td><p>Print a decomposed transformation in an easy-to-read manner.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="abtem.atoms.rotate_atoms_to_plane.html#abtem.atoms.rotate_atoms_to_plane" title="abtem.atoms.rotate_atoms_to_plane"><code class="xref py py-obj docutils literal notranslate"><span class="pre">rotate_atoms_to_plane</span></code></a>(atoms[, plane])</p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">Atoms</span></code></p>
-</dd>
-</dl>
-</p></td>
+<td><p>Rotate atoms so that their <cite>xy</cite> plane is rotated into a given plane.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="abtem.atoms.rotation_matrix_from_plane.html#abtem.atoms.rotation_matrix_from_plane" title="abtem.atoms.rotation_matrix_from_plane"><code class="xref py py-obj docutils literal notranslate"><span class="pre">rotation_matrix_from_plane</span></code></a>([plane])</p></td>
-<td><p></p></td>
+<td><p>Give the rotation matrix corresponding to a rotation from a given plane to the <cite>xy</cite> plane.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="abtem.atoms.rotation_matrix_to_euler.html#abtem.atoms.rotation_matrix_to_euler" title="abtem.atoms.rotation_matrix_to_euler"><code class="xref py py-obj docutils literal notranslate"><span class="pre">rotation_matrix_to_euler</span></code></a>(R[, axes, eps])</p></td>
-<td><p></p></td>
+<td><p>Convert a Cartesian rotation matrix to Euler angles.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="abtem.atoms.shrink_cell.html#abtem.atoms.shrink_cell" title="abtem.atoms.shrink_cell"><code class="xref py py-obj docutils literal notranslate"><span class="pre">shrink_cell</span></code></a>(atoms[, repetitions, tol])</p></td>
-<td><p></p></td>
+<td><p>Find and return the smallest non-repeating cell for the given atoms.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="abtem.atoms.standardize_cell.html#abtem.atoms.standardize_cell" title="abtem.atoms.standardize_cell"><code class="xref py py-obj docutils literal notranslate"><span class="pre">standardize_cell</span></code></a>(atoms[, tol])</p></td>
-<td><p>Standardize the cell of an ASE atoms object.</p></td>
+<td><p>Standardize the cell of given atoms.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="abtem.atoms.wrap_with_tolerance.html#abtem.atoms.wrap_with_tolerance" title="abtem.atoms.wrap_with_tolerance"><code class="xref py py-obj docutils literal notranslate"><span class="pre">wrap_with_tolerance</span></code></a>(atoms[, tol])</p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">Atoms</span></code></p>
-</dd>
-</dl>
-</p></td>
+<td><p>Wrap atoms that are closer to cell boundaries than the given tolerance.</p></td>
 </tr>
 </tbody>
 </table>
@@ -1169,7 +1109,7 @@ title="Print to PDF"
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library/api/_autosummary"
+            path: "./library\api\_autosummary"
         },
         predefinedOutput: true
     }

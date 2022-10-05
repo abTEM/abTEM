@@ -404,16 +404,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -595,18 +585,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -708,13 +688,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1048,8 +1028,8 @@ title="Open an issue"
 <span class="kn">from</span> <span class="nn">abtem.atoms</span> <span class="kn">import</span> <span class="p">(</span>
     <span class="n">is_cell_orthogonal</span><span class="p">,</span>
     <span class="n">orthogonalize_cell</span><span class="p">,</span>
-    <span class="n">best_orthogonal_box</span><span class="p">,</span>
-    <span class="n">cut_box</span><span class="p">,</span>
+    <span class="n">best_orthogonal_cell</span><span class="p">,</span>
+    <span class="n">cut_cell</span><span class="p">,</span>
     <span class="n">rotation_matrix_from_plane</span><span class="p">,</span>
     <span class="n">pad_atoms</span><span class="p">,</span>
 <span class="p">)</span>
@@ -1233,7 +1213,7 @@ title="Open an issue"
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_require_cell_transform</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">box</span><span class="o">=</span><span class="n">box</span><span class="p">,</span> <span class="n">plane</span><span class="o">=</span><span class="n">plane</span><span class="p">,</span> <span class="n">origin</span><span class="o">=</span><span class="n">origin</span><span class="p">):</span>
             <span class="n">R</span> <span class="o">=</span> <span class="n">rotation_matrix_from_plane</span><span class="p">(</span><span class="n">plane</span><span class="p">)</span>
             <span class="n">cell</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">cell</span><span class="p">,</span> <span class="n">R</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
-            <span class="n">box</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">best_orthogonal_box</span><span class="p">(</span><span class="n">cell</span><span class="p">))</span>
+            <span class="n">box</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">best_orthogonal_cell</span><span class="p">(</span><span class="n">cell</span><span class="p">))</span>
 
         <span class="k">elif</span> <span class="n">box</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">box</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">diag</span><span class="p">(</span><span class="n">cell</span><span class="p">))</span>
@@ -1560,9 +1540,9 @@ title="Open an issue"
                     <span class="n">allow_transform</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
                 <span class="p">)</span>
             <span class="k">else</span><span class="p">:</span>
-                <span class="n">atoms</span> <span class="o">=</span> <span class="n">cut_box</span><span class="p">(</span>
+                <span class="n">atoms</span> <span class="o">=</span> <span class="n">cut_cell</span><span class="p">(</span>
                     <span class="n">atoms</span><span class="p">,</span>
-                    <span class="n">box</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">box</span><span class="p">,</span>
+                    <span class="n">cell</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">box</span><span class="p">,</span>
                     <span class="n">plane</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">plane</span><span class="p">,</span>
                     <span class="n">origin</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">origin</span><span class="p">,</span>
                     <span class="n">margin</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="n">cutoffs</span><span class="p">)</span> <span class="k">if</span> <span class="n">cutoffs</span> <span class="k">else</span> <span class="mf">0.0</span><span class="p">,</span>

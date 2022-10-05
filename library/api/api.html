@@ -51,8 +51,6 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="waves" href="_autosummary/abtem.waves.html" />
@@ -407,16 +405,6 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="_autosummary/abtem.detectors.validate_detectors.html">
-       validate_detectors
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="_autosummary/abtem.detectors.AbstractRadialDetector.html">
-       AbstractRadialDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="_autosummary/abtem.detectors.AnnularDetector.html">
        AnnularDetector
       </a>
@@ -598,18 +586,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="_autosummary/abtem.distributions.AxisAlignedDistributionND.html">
-       AxisAlignedDistributionND
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="_autosummary/abtem.distributions.BaseDistribution.html">
        BaseDistribution
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="_autosummary/abtem.distributions.DistributionFromValues.html">
-       DistributionFromValues
       </a>
      </li>
     </ul>
@@ -711,13 +689,13 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="_autosummary/abtem.atoms.best_orthogonal_box.html">
-       best_orthogonal_box
+      <a class="reference internal" href="_autosummary/abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="_autosummary/abtem.atoms.cut_box.html">
-       cut_box
+      <a class="reference internal" href="_autosummary/abtem.atoms.cut_cell.html">
+       cut_cell
       </a>
      </li>
      <li class="toctree-l3">
@@ -1085,7 +1063,7 @@ title="Print to PDF"
 <td><p>Module for plotting atoms, images, line scans, and diffraction patterns.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="_autosummary/abtem.atoms.html#module-abtem.atoms" title="abtem.atoms"><code class="xref py py-obj docutils literal notranslate"><span class="pre">abtem.atoms</span></code></a></p></td>
-<td><p>Module for modifying ASE atoms objects for use in abTEM.</p></td>
+<td><p>Module for modifying ASE <cite>Atoms</cite> objects for use in abTEM.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="_autosummary/abtem.multislice.html#module-abtem.multislice" title="abtem.multislice"><code class="xref py py-obj docutils literal notranslate"><span class="pre">abtem.multislice</span></code></a></p></td>
 <td><p></p></td>
@@ -1107,7 +1085,7 @@ title="Print to PDF"
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library/api"
+            path: "./library\api"
         },
         predefinedOutput: true
     }
