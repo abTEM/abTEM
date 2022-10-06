@@ -37,14 +37,11 @@ def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Se
     
     The current implementation automatically handles the following common PIE extensions:
     - regularized  PIE: See https://doi.org/10.1364/OPTICA.4.000736
-    - mixed-state  PIE: See https://doi.org/10.1038/s41467-020-16688-6
+    - mixed-state  PIE: See https://doi.org/10.1038/nature11806
     - multislice   PIE: See https://doi.org/10.1364/JOSAA.29.001606 
     - simultaneous PIE: See example notebook
 
     Optionally, it also allows for probe-position correction using steepest descent. See 10.1016/j.ultramic.2018.04.004 
-    
-    Further, it allows the user to define custom functions for the four main steps of the algorithm.
-    See example notebook for a walkthrough.
     
     Parameters
     ----------
@@ -107,6 +104,14 @@ def ptychographic_reconstruction(diffraction_measurements: Union[Measurement, Se
     -------
     Measurements of object(s), probe(s), probe positions, and error
     """
+
+    if not fix_pos:
+        if isinstance(diffraction_measurements,Iterable):
+            raise NotImplementedError()
+        if num_slices is not None:
+            raise NotImplementedError()
+        if num_probes is not None or num_objects is not None:
+            raise NotImplementedError()
 
     if num_slices is not None:
         if slice_thicknesses is None:
@@ -727,7 +732,7 @@ def _mixed_state_amplitude_modification_func(exit_wave_arrays:np.ndarray,
     for l in range(num_objects):
         for k in range(num_probes):
             exit_wave_fft     = exit_wave_arrays_fft[l,k]
-            modified_exit_wave_arrays[l,k] = xp.fft.ifft2(diffraction_pattern*xp.exp(1j*xp.angle(exit_wave_fft)))
+            modified_exit_wave_arrays[l,k] = xp.fft.ifft2(diffraction_pattern*exit_wave_fft/intensity_norm)
 
     return modified_exit_wave_arrays, sse
 
