@@ -96,9 +96,9 @@ def is_cell_hexagonal(atoms: Atoms) -> bool:
     angle = np.arccos(np.dot(cell[0], cell[1]) / (a * b))
 
     return (
-            np.isclose(a, b)
-            & (np.isclose(angle, np.pi / 3) | np.isclose(angle, 2 * np.pi / 3))
-            & (c == cell[2, 2])
+        np.isclose(a, b)
+        & (np.isclose(angle, np.pi / 3) | np.isclose(angle, 2 * np.pi / 3))
+        & (c == cell[2, 2])
     )
 
 
@@ -257,7 +257,7 @@ def rotation_matrix_to_euler(R: np.ndarray, axes: str = "sxyz", eps: float = 1e-
 
 
 def decompose_affine_transform(
-        affine_transform: np.ndarray,
+    affine_transform: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Decompose an affine transform into rotation, scale and shear.
@@ -356,7 +356,7 @@ def merge_close_atoms(atoms: Atoms, tol: float = 1e-7) -> Atoms:
         k += i
 
     new_atoms = Atoms(
-        positions=new_points[: k], numbers=new_numbers[: k], cell=atoms.cell
+        positions=new_points[:k], numbers=new_numbers[:k], cell=atoms.cell
     )
 
     return new_atoms
@@ -431,9 +431,9 @@ def shrink_cell(atoms: Atoms, repetitions=(2, 3), tol=1e-6):
 
 
 def rotation_matrix_from_plane(
-        plane: Union[
-            str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
-        ] = "xy"
+    plane: Union[
+        str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+    ] = "xy"
 ):
     """
     Give the rotation matrix corresponding to a rotation from a given plane to the `xy` plane.
@@ -466,10 +466,10 @@ def rotation_matrix_from_plane(
 
 
 def rotate_atoms_to_plane(
-        atoms: Atoms,
-        plane: Union[
-            str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
-        ] = "xy",
+    atoms: Atoms,
+    plane: Union[
+        str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+    ] = "xy",
 ) -> Atoms:
     """
     Rotate atoms so that their `xy` plane is rotated into a given plane.
@@ -519,7 +519,7 @@ def flip_atoms(atoms: Atoms, axis: int = 2) -> Atoms:
 
 
 def best_orthogonal_cell(
-        cell: np.ndarray, max_repetitions: int = 5, eps: float = 1e-12
+    cell: np.ndarray, max_repetitions: int = 5, eps: float = 1e-12
 ) -> np.ndarray:
     """
     Find the closest orthogonal cell for a given cell given a maximum number of repetitions in all directions.
@@ -552,9 +552,9 @@ def best_orthogonal_cell(
     a, b, c = cell
     vectors = np.abs(
         (
-                (k[:, None] * a[None])[:, None, None]
-                + (l[:, None] * b[None])[None, :, None]
-                + (m[:, None] * c[None])[None, None, :]
+            (k[:, None] * a[None])[:, None, None]
+            + (l[:, None] * b[None])[None, :, None]
+            + (m[:, None] * c[None])[None, None, :]
         )
     )
 
@@ -588,16 +588,16 @@ def best_orthogonal_cell(
 
 
 def orthogonalize_cell(
-        atoms: Atoms,
-        box: Tuple[float, float, float] = None,
-        max_repetitions: int = 5,
-        return_transform: bool = False,
-        allow_transform: bool = True,
-        origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-        plane: Union[
-            str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
-        ] = "xy",
-        tolerance: float = 0.01,
+    atoms: Atoms,
+    box: Tuple[float, float, float] = None,
+    max_repetitions: int = 5,
+    return_transform: bool = False,
+    allow_transform: bool = True,
+    origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+    plane: Union[
+        str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+    ] = "xy",
+    tolerance: float = 0.01,
 ):
     """
     Make the cell of the given atoms orthogonal. This is accomplished by repeating the cell until lattice vectors
@@ -659,8 +659,8 @@ def orthogonalize_cell(
 
 
 def atoms_in_cell(
-        atoms: Atoms,
-        margin: Union[float, Tuple[float, float, float]] = 0.0,
+    atoms: Atoms,
+    margin: Union[float, Tuple[float, float, float]] = 0.0,
 ) -> Atoms:
     """
     Crop atoms that are outside of their cell.
@@ -692,13 +692,13 @@ def atoms_in_cell(
 
 
 def cut_cell(
-        atoms: Atoms,
-        cell: Tuple[float, float, float] = None,
-        plane: Union[
-            str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
-        ] = "xy",
-        origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-        margin: Union[float, Tuple[float, float, float]] = 0.0,
+    atoms: Atoms,
+    cell: Tuple[float, float, float] = None,
+    plane: Union[
+        str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
+    ] = "xy",
+    origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+    margin: Union[float, Tuple[float, float, float]] = 0.0,
 ) -> Atoms:
     """
     Fit the given atoms into a given cell by cropping atoms that are outside the cell, ignoring periodicity. If the given atoms do not originally fill the cell, they are first repeated until they do.
@@ -771,9 +771,9 @@ def cut_cell(
 
 
 def pad_atoms(
-        atoms: Atoms,
-        margins: Union[float, Tuple[float, float, float]],
-        directions: str = "xyz",
+    atoms: Atoms,
+    margins: Union[float, Tuple[float, float, float]],
+    directions: str = "xyz",
 ) -> Atoms:
     """
     Repeat the atoms in the `x` and `y` directions, retaining only the repeated atoms within the margin distance from the cell boundary.

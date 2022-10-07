@@ -5,7 +5,6 @@ from scipy.spatial.distance import squareform
 
 from abtem.core.backend import get_array_module, get_ndimage_module
 from abtem.core.chunks import validate_chunks, iterate_chunk_ranges
-from abtem.core.diagnostics import ProgressBar
 from abtem.core.fft import fft_shift
 from abtem.measurements import DiffractionPatterns, Images
 from abtem.waves import Probe
@@ -52,18 +51,20 @@ from abtem.waves import Probe
 #     #     sss
 
 
-def _run_epie(object,
-              probe: np.ndarray,
-              diffraction_patterns: np.ndarray,
-              positions: np.ndarray,
-              maxiter: int,
-              alpha: float = 1.,
-              beta: float = 1.,
-              fix_probe: bool = False,
-              fix_com: bool = False,
-              return_iterations: bool = False,
-              max_batch: int = 8,
-              seed=None):
+def _run_epie(
+    object,
+    probe: np.ndarray,
+    diffraction_patterns: np.ndarray,
+    positions: np.ndarray,
+    maxiter: int,
+    alpha: float = 1.0,
+    beta: float = 1.0,
+    fix_probe: bool = False,
+    fix_com: bool = False,
+    return_iterations: bool = False,
+    max_batch: int = 8,
+    seed=None,
+):
     xp = get_array_module(probe)
 
     object = xp.array(object)
@@ -96,7 +97,9 @@ def _run_epie(object,
     if seed is not None:
         np.random.seed(seed)
 
-    diffraction_patterns = np.fft.ifftshift(np.sqrt(diffraction_patterns), axes=(-2, -1))
+    diffraction_patterns = np.fft.ifftshift(
+        np.sqrt(diffraction_patterns), axes=(-2, -1)
+    )
 
     center_of_mass = get_ndimage_module(xp).center_of_mass
 
@@ -117,16 +120,21 @@ def _run_epie(object,
             batch_positions = xp.asarray(positions[ind])
 
             diffraction_pattern = xp.array(diffraction_patterns[ind])
-            illuminated_object = fft_shift(object, - batch_positions)
+            illuminated_object = fft_shift(object, -batch_positions)
 
             g = illuminated_object * probe
-            gprime = xp.fft.ifft2(diffraction_pattern * xp.exp(1j * xp.angle(xp.fft.fft2(g))))
+            gprime = xp.fft.ifft2(
+                diffraction_pattern * xp.exp(1j * xp.angle(xp.fft.fft2(g)))
+            )
 
-            object = illuminated_object + alpha * (gprime - g) * xp.conj(probe) / (xp.max(xp.abs(probe)) ** 2)
+            object = illuminated_object + alpha * (gprime - g) * xp.conj(probe) / (
+                xp.max(xp.abs(probe)) ** 2
+            )
 
             if not fix_probe:
                 probe = probe + beta * (gprime - g) * xp.conj(illuminated_object) / (
-                        xp.max(xp.abs(illuminated_object)) ** 2)
+                    xp.max(xp.abs(illuminated_object)) ** 2
+                )
 
             object = fft_shift(object, batch_positions)
 
@@ -136,7 +144,7 @@ def _run_epie(object,
 
         if fix_com:
             com = center_of_mass(xp.fft.fftshift(xp.abs(probe) ** 2))
-            probe = xp.fft.ifftshift(fft_shift(probe, - xp.array(com)))
+            probe = xp.fft.ifftshift(fft_shift(probe, -xp.array(com)))
 
         if object_iterations is not None and probe_iterations is not None:
             object_iterations.append(object)
@@ -166,16 +174,29 @@ def periodic_distances(positions, bounds, square=False):
     return distances
 
 
-def epie(diffraction_patterns: DiffractionPatterns,
-         probe_guess: Probe,
-         max_iter: int = 5,
-         max_batch: int = 8,
-         alpha: float = 1.,
-         beta: float = 1.,
-         fix_probe: bool = False,
-         fix_com: bool = False,
-         return_iterations: bool = False,
-         seed: int = None):
+def _equivalent_real_space_extent(diffraction_patterns):
+    return 1 / diffraction_patterns.sampling[0], 1 / diffraction_patterns.sampling[1]
+
+
+def _equivalent_real_space_sampling(diffraction_patterns):
+    return (
+        1 / diffraction_patterns.sampling[0] / diffraction_patterns.base_shape[0],
+        1 / diffraction_patterns.sampling[1] / diffraction_patterns.base_shape[1],
+    )
+
+
+def epie(
+    diffraction_patterns: DiffractionPatterns,
+    probe_guess: Probe,
+    max_iter: int = 5,
+    max_batch: int = 8,
+    alpha: float = 1.0,
+    beta: float = 1.0,
+    fix_probe: bool = False,
+    fix_com: bool = False,
+    return_iterations: bool = False,
+    seed: int = None,
+):
     """
     Reconstruct the phase of a 4D-STEM measurement using the extended Ptychographical Iterative Engine.
 
@@ -225,28 +246,37 @@ def epie(diffraction_patterns: DiffractionPatterns,
         raise ValueError()
 
     x, y = diffraction_patterns.scan_positions()
-    x, y = np.meshgrid(x, y, indexing='ij')
-    scan_positions = np.array([x.ravel(), y.ravel()]).T / diffraction_patterns.equivalent_real_space_sampling
+    x, y = np.meshgrid(x, y, indexing="ij")
+    scan_positions = (
+        np.array([x.ravel(), y.ravel()]).T
+        / diffraction_patterns.equivalent_real_space_sampling
+    )
 
-    probe_guess = probe_guess.build((0., 0.), lazy=False).array
-    diffraction_patterns_array = diffraction_patterns.array.reshape((-1,) + diffraction_patterns.array.shape[-2:])
+    probe_guess = probe_guess.build((0.0, 0.0), lazy=False).array
+    diffraction_patterns_array = diffraction_patterns.array.reshape(
+        (-1,) + diffraction_patterns.array.shape[-2:]
+    )
 
-    result = _run_epie(diffraction_patterns.shape[-2:],
-                       probe_guess,
-                       diffraction_patterns_array,
-                       scan_positions,
-                       maxiter=max_iter,
-                       alpha=alpha,
-                       beta=beta,
-                       return_iterations=return_iterations,
-                       fix_probe=fix_probe,
-                       fix_com=fix_com,
-                       max_batch=max_batch,
-                       seed=seed)
+    result = _run_epie(
+        diffraction_patterns.shape[-2:],
+        probe_guess,
+        diffraction_patterns_array,
+        scan_positions,
+        maxiter=max_iter,
+        alpha=alpha,
+        beta=beta,
+        return_iterations=return_iterations,
+        fix_probe=fix_probe,
+        fix_com=fix_com,
+        max_batch=max_batch,
+        seed=seed,
+    )
 
     if return_iterations:
-        object_iterations = [Images(obj, sampling=diffraction_patterns.equivalent_real_space_sampling) for obj in
-                             result[0]]
+        object_iterations = [
+            Images(obj, sampling=diffraction_patterns.equivalent_real_space_sampling)
+            for obj in result[0]
+        ]
         # probe_iterations = [Measurement(np.fft.fftshift(probe), calibrations=calibrations) for probe in result[1]]
 
         # if crop_to_valid:
@@ -254,7 +284,9 @@ def epie(diffraction_patterns: DiffractionPatterns,
 
         return object_iterations  # object_iterations, probe_iterations, result[2]
     else:
-        object = Images(result[0], sampling=diffraction_patterns.equivalent_real_space_sampling)
+        object = Images(
+            result[0], sampling=diffraction_patterns.equivalent_real_space_sampling
+        )
 
         # if crop_to_valid:
         #    object = object.crop(valid_extent)
