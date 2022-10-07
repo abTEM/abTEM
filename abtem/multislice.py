@@ -1,3 +1,4 @@
+"""Module for running the multislice algorithm."""
 from typing import TYPE_CHECKING, Union, Tuple, List, Dict
 
 import numpy as np
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
     from abtem.waves import BaseWaves
 
 
-def fresnel_propagator(
+def _fresnel_propagator(
     thickness: float,
     tilt: Tuple[float, float],
     gpts: Tuple[int, int],
@@ -50,7 +51,7 @@ def fresnel_propagator(
     return f
 
 
-def tilt_shift(k, tilt, thickness):
+def _tilt_shift(k, tilt, thickness):
     xp = get_array_module(k)
     return complex_exponential(-k * xp.tan(tilt / 1e3) * thickness * 2 * np.pi)
 
@@ -58,7 +59,7 @@ def tilt_shift(k, tilt, thickness):
 class FresnelPropagator:
     def __init__(self):
         """
-        The fresnel propagtor is used for propagating wave functions using the near-field approximation
+        The Fresnel propagtor is used for propagating wave functions using the near-field approximation
         (Fresnel diffraction).
         """
         self._array = None
@@ -92,7 +93,7 @@ class FresnelPropagator:
         antialias_aperture.grid.match(waves)
         array = antialias_aperture.array.astype(np.complex64)
 
-        array *= fresnel_propagator(
+        array *= _fresnel_propagator(
             gpts=waves.gpts,
             sampling=waves.sampling,
             thickness=thickness,
@@ -112,7 +113,7 @@ class FresnelPropagator:
                 j = plane_to_axes(axis.direction)[0]
                 k = spatial_frequencies((waves.gpts[j],), (waves.sampling[j],), xp=xp)
                 tilts = xp.array(axis.values)[:, None]
-                shift = tilt_shift(k[0][None], tilts, thickness)
+                shift = _tilt_shift(k[0][None], tilts, thickness)
                 shift, array = expand_dims_to_match(
                     shift, array, match_dims=[(-1,), (-2 + j,)]
                 )
@@ -126,18 +127,21 @@ class FresnelPropagator:
         self, waves: "Waves", thickness: float, overwrite_x: bool = False
     ) -> "Waves":
         """
-        Propagate wave functions.
+        Propagate wave functions through free space.
 
         Parameters
         ----------
         waves : Waves
             The wave functions to propagate.
+        thickness : float
+            Distance in free space to propagate.
         overwrite_x : bool
             If True, the wave functions may be overwritten.
 
         Returns
         -------
         propagated_wave_functions : Waves
+            Propagated wave functions.
         """
         array = self._get_array(waves, thickness)
 
@@ -152,6 +156,26 @@ def allocate_multislice_measurements(
     extra_ensemble_axes_shape: Tuple[int, ...] = None,
     extra_ensemble_axes_metadata: List[AxisMetadata] = None,
 ) -> Dict[BaseDetector, BaseMeasurement]:
+    """
+    Allocate multislice measurements that would be produced by a given set of wave functions and detectors for improved
+    numerical efficiency.
+
+    Parameters
+    ----------
+    waves : Waves
+        Wave functions.
+    detectors : (list of) BaseDetector
+        Detector or list of multiple detectors.
+    extra_ensemble_axes_shape : tuple of int
+        Optional extra ensemble axes to be added to the allocated measurements.
+    extra_ensemble_axes_metadata : AxisMetadata
+        Metadata corresponding to the extra ensemble axes.
+
+    Returns
+    -------
+    mapping : dict
+        Mapping of detectors to measurements.
+    """
     measurements = {}
     for detector in detectors:
         xp = get_array_module(detector.measurement_meta(waves))
@@ -188,30 +212,30 @@ def multislice_step(
     transpose: bool = False,
 ) -> "Waves":
     """
-
+    Calculate one step of the multislice algorithm for the given batch of wave functions through a given potential slice.
 
     Parameters
     ----------
     waves : Waves
-        A batch of wave functions as a `abtem.Waves` type object.
+        A batch of wave functions as a :class:`.Waves` object.
     potential_slice : PotentialArray or TransmissionFunction
-        A potential slice as a `abtem.potentials.PotentialArray` or `abtem.potentials.TransmissionFunction`.
+        A potential slice as a :class:`.PotentialArray` or :class:`.TransmissionFunction`.
     propagator : FresnelPropagator, optional
-        A fresnel propagator type matching the wave functions. The main reason for using this argument is to reuse
+        A Fresnel propagator type matching the wave functions. The main reason for using this argument is to reuse
         a previously calculated propagator. If not provided a new propagator is created.
     antialias_aperture : AntialiasAperture, optional
         An antialias aperture type matching the wave functions. The main reason for using this argument is to reuse
         a previously calculated antialias aperture. If not provided a new antialias aperture is created.
     conjugate : bool, optional
-        If True, use the conjugate of the transmission function. Default is False.
+        If True, use the conjugate of the transmission function (default is False).
     transpose : bool, optional
-        If True, reverse the order of propagation and transmission. Default is False.
+        If True, reverse the order of propagation and transmission (default is False).
 
     Returns
     -------
     forward_stepped_waves : Waves
+        Wave functions propagated and transmitted through the potential slice.
     """
-
     if waves.device != potential_slice.device:
         potential_slice = potential_slice.copy_to_device(device=waves.device)
 
@@ -249,29 +273,30 @@ def multislice_and_detect(
     Tuple[Union[BaseMeasurement, "Waves"], ...], BaseMeasurement, "Waves"
 ]:
     """
-    Run the multislice algorithm given a batch of wave functions and a potential.
+    Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
+    at each of the exit planes specified in the potential.
 
     Parameters
     ----------
     waves : Waves
-        A batch of wave functions as a `abtem.Waves` type object.
+        A batch of wave functions as a :class:`.Waves` object.
     potential : BasePotential
-        A potential as `abtem.potentials.AbstractPotential`.
-    detectors : detector, list of detectors, optional
+        A potential as :class:`.BasePotential` object.
+    detectors : (list of) BaseDetector, optional
         A detector or a list of detectors defining how the wave functions should be converted to measurements after
-        running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.
+        running the multislice algorithm. See :module:`.detect` for a list of implemented detectors.
     conjugate : bool, optional
-        If True, use the conjugate of the transmission function. Default is False.
+        If True, use the conjugate of the transmission function (default is False).
     transpose : bool, optional
-        If True, reverse the order of propagation and transmission. Default is False.
+        If True, reverse the order of propagation and transmission (default is False).
 
     Returns
     -------
-    exit_waves : Waves
+    measurements : Waves or (list of) BaseMeasurement
+        Exit waves or detected measurements or lists of measurements.
     """
     antialias_aperture = AntialiasAperture(device=get_array_module(waves.array))
     antialias_aperture.match_grid(waves)
-
 
     propagator = FresnelPropagator()
 
