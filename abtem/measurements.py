@@ -105,7 +105,9 @@ def _scanned_measurement_type(
 
 
 def _reduced_scanned_images_or_line_profiles(
-    new_array, old_measurement, metadata=None,
+    new_array,
+    old_measurement,
+    metadata=None,
 ) -> Union["RealSpaceLineProfiles", "Images", np.ndarray]:
 
     if metadata is None:
@@ -156,7 +158,8 @@ def _scan_axes(self):
 
     return tuple(
         range(
-            len(self.ensemble_shape) - num_trailing_scan_axes, len(self.ensemble_shape),
+            len(self.ensemble_shape) - num_trailing_scan_axes,
+            len(self.ensemble_shape),
         )
     )
 
@@ -180,6 +183,13 @@ def _scan_area_per_pixel(measurements):
         return np.prod(_scan_sampling(measurements))
     else:
         raise RuntimeError("cannot infer pixel area from metadata")
+
+
+def _scan_extent(measurement):
+    extent = ()
+    for n, metadata in zip(_scan_shape(measurement), _scan_axes_metadata(measurement)):
+        extent += (metadata.sampling * n,)
+    return extent
 
 
 def _polar_detector_bins(
@@ -269,10 +279,8 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
         array,
         ensemble_axes_metadata,
         metadata,
-        allow_complex=False,
         allow_base_axis_chunks=False,
     ):
-        #
 
         if ensemble_axes_metadata is None:
             ensemble_axes_metadata = []
@@ -287,13 +295,13 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
 
         self._check_axes_metadata()
 
-        # if len(array.shape) < len(self.base_shape):
-        #     raise RuntimeError(f'array dim smaller than base dim of measurement type {self.__class__}')
-        #
-
-        # if not allow_base_axis_chunks:
-        #     if self.is_lazy and (not all(len(chunks) == 1 for chunks in array.chunks[-2:])):
-        #         raise RuntimeError(f'chunks not allowed in base axes of {self.__class__}')
+        if not allow_base_axis_chunks:
+            if self.is_lazy and (
+                not all(len(chunks) == 1 for chunks in array.chunks[-2:])
+            ):
+                raise RuntimeError(
+                    f"chunks not allowed in base axes of {self.__class__}"
+                )
 
     def iterate_ensemble(self, keep_dims: bool = False):
         for i in np.ndindex(*self.ensemble_shape):
@@ -313,20 +321,6 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
     def wavelength(self):
         return energy2wavelength(self.energy)
 
-    # def scan_from_metadata(self):
-    #     start = ()
-    #     end = ()
-    #     gpts = ()
-    #     endpoint = ()
-    #     for n, metadata in zip(self.scan_shape, self.scan_axes_metadata):
-    #         start += (metadata.offset,)
-    #         end += (metadata.offset + metadata.sampling * n,)
-    #         gpts += (n,)
-    #         endpoint += (metadata.endpoint,)
-    #
-    #     if len(start) == 2:
-    #         return GridScan(start=start, end=end, gpts=gpts, endpoint=endpoint)  # noqa
-
     def scan_positions(self):
         positions = ()
         for n, metadata in zip(_scan_shape(self), _scan_axes_metadata(self)):
@@ -339,12 +333,6 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
                 ),
             )
         return positions
-
-    def scan_extent(self):
-        extent = ()
-        for n, metadata in zip(_scan_shape(self), _scan_axes_metadata(self)):
-            extent += (metadata.sampling * n,)
-        return extent
 
     @property
     @abstractmethod
@@ -375,7 +363,6 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
         if not np.iscomplexobj(self.array):
             raise RuntimeError("function not implemented for non-complex measurement")
 
-
     def real(self):
         """Calculate the phase from complex images."""
         self._check_is_complex()
@@ -400,7 +387,6 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
         """Calculate the absolute square from complex images."""
         self._check_is_complex()
         return self._apply_element_wise_func(abs2)
-
 
     def relative_difference(self, other, min_relative_tol=0.0):
         difference = self - other
@@ -576,10 +562,12 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
             raise RuntimeError()
 
         axes_base = _to_hyperspy_axes_metadata(
-            self.base_axes_metadata, self.base_shape,
+            self.base_axes_metadata,
+            self.base_shape,
         )
         axes_extra = _to_hyperspy_axes_metadata(
-            self.ensemble_axes_metadata, self.ensemble_shape,
+            self.ensemble_axes_metadata,
+            self.ensemble_shape,
         )
 
         array = np.transpose(
@@ -635,7 +623,6 @@ class Images(BaseMeasurement):
             array=array,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
-            allow_complex=True,
             allow_base_axis_chunks=True,
         )
 
@@ -696,8 +683,6 @@ class Images(BaseMeasurement):
             RealSpaceAxis(label="x", sampling=self.sampling[0], units="Å"),
             RealSpaceAxis(label="y", sampling=self.sampling[1], units="Å"),
         ]
-
-
 
     def integrate_gradient(self):
         """
@@ -1303,7 +1288,6 @@ class _AbstractMeasurement1d(BaseMeasurement):
             array=array,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
-            allow_complex=True,
             allow_base_axis_chunks=True,
         )
 
@@ -1597,7 +1581,6 @@ class DiffractionPatterns(BaseMeasurement):
         ensemble_axes_metadata: List[AxisMetadata] = None,
         metadata: dict = None,
     ):
-
         """
         One or more diffraction patterns.
 
@@ -1631,6 +1614,7 @@ class DiffractionPatterns(BaseMeasurement):
             array=array,
             ensemble_axes_metadata=ensemble_axes_metadata,
             metadata=metadata,
+            allow_base_axis_chunks=False,
         )
 
     def _area_per_pixel(self):
@@ -1689,31 +1673,17 @@ class DiffractionPatterns(BaseMeasurement):
 
     @property
     def max_angles(self):
+        """ Maximum scattering angle in x and y [mrad]"""
+
         return (
             self.shape[-2] // 2 * self.angular_sampling[0],
             self.shape[-1] // 2 * self.angular_sampling[1],
         )
 
     @property
-    def equivalent_real_space_extent(self):
-        return 1 / self.sampling[0], 1 / self.sampling[1]
-
-    @property
-    def equivalent_real_space_sampling(self):
-        return (
-            1 / self.sampling[0] / self.base_shape[0],
-            1 / self.sampling[1] / self.base_shape[1],
-        )
-
-    @property
-    def scan_extent(self):
-        extent = ()
-        for d, n in zip(_scan_sampling(self), _scan_shape(self)):
-            extent += (d * n,)
-        return extent
-
-    @property
     def limits(self) -> List[Tuple[float, float]]:
+        """ Lower and upper spatial frequency in x and y [1 / Å]. """
+
         limits = []
         for i in (-2, -1):
             if self.shape[i] % 2:
@@ -1734,6 +1704,8 @@ class DiffractionPatterns(BaseMeasurement):
 
     @property
     def angular_limits(self) -> List[Tuple[float, float]]:
+        """ Lower and upper scattering angle in x and y [mrad]. """
+
         limits = self.limits
         limits[0] = (
             limits[0][0] * self.wavelength * 1e3,
@@ -1747,7 +1719,8 @@ class DiffractionPatterns(BaseMeasurement):
 
     @property
     def coordinates(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Angular coordinates."""
+        """ Reciprocal spatial frequency coordinates [1 / Å]. """
+
         return (
             self.axes_metadata[-2].coordinates(self.base_shape[-2]),
             self.axes_metadata[-1].coordinates(self.base_shape[-1]),
@@ -1755,7 +1728,8 @@ class DiffractionPatterns(BaseMeasurement):
 
     @property
     def angular_coordinates(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Angular coordinates."""
+        """ Scattering angle coordinates [mrad]. """
+
         xp = get_array_module(self.array)
         limits = self.angular_limits
         alpha_x = xp.linspace(
@@ -2029,11 +2003,20 @@ class DiffractionPatterns(BaseMeasurement):
 
             new_shape = array.shape[:-2] + (nbins_radial, nbins_azimuthal)
 
-            array = array.reshape((-1, array.shape[-2] * array.shape[-1],))[
-                ..., np.concatenate(indices)
-            ]
+            array = array.reshape(
+                (
+                    -1,
+                    array.shape[-2] * array.shape[-1],
+                )
+            )[..., np.concatenate(indices)]
 
-            result = xp.zeros((array.shape[0], len(indices),), dtype=xp.float32,)
+            result = xp.zeros(
+                (
+                    array.shape[0],
+                    len(indices),
+                ),
+                dtype=xp.float32,
+            )
 
             if xp is cp:
                 sum_run_length_encoded_cuda(array, result, separators)
@@ -2050,8 +2033,15 @@ class DiffractionPatterns(BaseMeasurement):
                 nbins_azimuthal=nbins_azimuthal,
                 sampling=self.angular_sampling,
                 drop_axis=(len(self.shape) - 2, len(self.shape) - 1),
-                chunks=self.array.chunks[:-2] + ((nbins_radial,), (nbins_azimuthal,),),
-                new_axis=(len(self.shape) - 2, len(self.shape) - 1,),
+                chunks=self.array.chunks[:-2]
+                + (
+                    (nbins_radial,),
+                    (nbins_azimuthal,),
+                ),
+                new_axis=(
+                    len(self.shape) - 2,
+                    len(self.shape) - 1,
+                ),
                 meta=xp.array((), dtype=xp.float32),
             )
         else:
@@ -2262,7 +2252,7 @@ class DiffractionPatterns(BaseMeasurement):
         )
 
         if crop_to_scan:
-            reconstruction = reconstruction.crop(self.scan_extent)
+            reconstruction = reconstruction.crop(_scan_extent(self))
 
         return reconstruction
 
@@ -2679,7 +2669,7 @@ class PolarMeasurements(BaseMeasurement):
         figsize=None,
         radial_ticks=None,
         azimuthal_ticks=None,
-            cbar=False,
+        cbar=False,
         **kwargs,
     ):
 
