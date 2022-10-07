@@ -284,7 +284,7 @@ def multislice_and_detect(
         A potential as :class:`.BasePotential` object.
     detectors : (list of) BaseDetector, optional
         A detector or a list of detectors defining how the wave functions should be converted to measurements after
-        running the multislice algorithm. See :module:`.detect` for a list of implemented detectors.
+        running the multislice algorithm.
     conjugate : bool, optional
         If True, use the conjugate of the transmission function (default is False).
     transpose : bool, optional
