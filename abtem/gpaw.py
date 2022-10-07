@@ -40,7 +40,6 @@ try:
     from gpaw.lfc import LFC, BasisFunctions
     from gpaw.transformers import Transformer
     from gpaw.utilities import unpack2
-    from gpaw import GPAW
     from gpaw.atom.aeatom import AllElectronAtom
     from gpaw.io import Reader
     from gpaw.density import RealSpaceDensity
@@ -197,7 +196,7 @@ def _interpolate_pseudo_density(nt_sg, gd, gridrefinement=1):
 
 
 def _get_all_electron_density(
-    nt_sG, gd, D_asp: dict, setups, atoms: Atoms, gridrefinement: int = 1
+        nt_sG, gd, D_asp: dict, setups, atoms: Atoms, gridrefinement: int = 1
 ):
     nspins = nt_sG.shape[0]
     spos_ac = atoms.get_scaled_positions() % 1.0
@@ -230,7 +229,7 @@ def _get_all_electron_density(
     W = 0
     for a in phi.atom_indices:
         nw = len(phi.sphere_a[a].M_w)
-        a_W[W : W + nw] = a
+        a_W[W: W + nw] = a
         W += nw
 
     x_W = phi.create_displacement_arrays()[0]
@@ -263,7 +262,7 @@ def _get_all_electron_density(
     W = 0
     for a in nc.atom_indices:
         nw = len(nc.sphere_a[a].M_w)
-        a_W[W : W + nw] = a
+        a_W[W: W + nw] = a
         W += nw
     scale = 1.0 / nspins
 
@@ -283,45 +282,79 @@ def _get_all_electron_density(
 
 
 class GPAWPotential(_PotentialBuilder):
+    """
+    Calculate the electrostatic potential from a (set of) converged GPAW DFT calculation(s). Frozen phonons can be
+    included either by specifying multiple GPAW calculators corresponding to the different phonon configurations, or
+    approximately for a single calculator by using the `frozen_phonons` keyword.
+
+    Parameters
+    ----------
+    calculators : (list of) gpaw.calculator.GPAW or (list of) str
+        GPAW calculator or path to GPAW calculator or list of calculators or paths. Atoms are read from the calculator.
+    gpts : one or two int, optional
+        Number of grid points in `x` and `y` describing each slice of the potential. Provide either "sampling" (spacing
+        between consecutive grid points) or "gpts" (total number of grid points).
+    sampling : one or two float, optional
+        Sampling of the potential in `x` and `y` [1 / Å]. Provide either "sampling" or "gpts".
+    slice_thickness : float or sequence of float, optional
+        Thickness of the potential slices in the propagation direction in [Å] (default is 0.5 Å).
+        If given as a float the number of slices is calculated by dividing the slice thickness into the `z`-height
+        of supercell. The slice thickness may be given as a sequence of values for each slice, in which case an
+        error will be thrown if the sum of slice thicknesses is not equal to the height of the atoms.
+    exit_planes : int or tuple of int, optional
+        The `exit_planes` argument can be used to calculate thickness series.
+        Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an
+        exit plane is desired, and hence during a multislice simulation a measurement is created. If `exit_planes` is
+        an integer a measurement will be collected every `exit_planes` number of slices.
+    plane : str or two tuples of three float, optional
+        The plane relative to the provided atoms mapped to `xy` plane of the potential, i.e. provided plane is
+        perpendicular to the propagation direction. If string, it must be a concatenation of two of 'x', 'y' and 'z';
+        the default value 'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
+        The plane may also be specified with two arbitrary 3D vectors, which are mapped to the `x` and `y` directions of
+        the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,
+        the second vector is rotated in the plane to become perpendicular to the first. Providing a value of
+        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
+    origin : three float, optional
+        The origin relative to the provided Atoms mapped to the origin of the Potential. This is equivalent to translating
+        the atoms. The default is (0., 0., 0.)
+    box : three float, optional
+        The extent of the potential in `x`, `y` and `z`. If not given this is determined from the atoms' cell.
+        If the box size does not match an integer number of the atoms' supercell, an affine transformation may be
+        necessary to preserve periodicity, determined by the `periodic` keyword
+    periodic : bool
+        If a transformation of the atomic structure is required, `periodic` determines how the atomic structure is
+        transformed. If True (default), the periodicity of the Atoms is preserved, which may require applying a small affine
+        transformation to the atoms. If False, the transformed potential is effectively cut out of a larger repeated
+        potential, which may not preserve periodicity.
+    frozen_phonons : abtem.AbstractFrozenPhonons, optional
+        Approximates frozen phonons for a single GPAW calculator by displacing only the nuclear core potentials.
+        Supercedes the atoms from the calculator.
+    repetitions : tuple of int
+        Repeats the atoms by integer amounts in the `x`, `y` and `z` directions before applying frozen phonon displacements
+        to calculate the potential contribution of the nuclear cores. Necessary when using frozen phonons.
+    gridrefinement : int
+        Necessary interpolation of the charge density into a finer grid for improved numerical precision.
+        Allowed values are '2' and '4'.
+    device : str, optional
+        The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user
+        configuration file.
+    """
     def __init__(
-        self,
-        calculators: Union["GPAW", List["GPAW"], List[str], str],
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
-        slice_thickness: float = 1.0,
-        exit_planes: int = None,
-        gridrefinement: int = 4,
-        device: str = None,
-        plane: str = "xy",
-        box: Tuple[float, float, float] = None,
-        origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-        periodic: bool = True,
-        repetitions: Tuple[int, int, int] = (1, 1, 1),
-        frozen_phonons: AbstractFrozenPhonons = None,
+            self,
+            calculators: Union["GPAW", List["GPAW"], List[str], str],
+            gpts: Union[int, Tuple[int, int]] = None,
+            sampling: Union[float, Tuple[float, float]] = None,
+            slice_thickness: float = 1.0,
+            exit_planes: int = None,
+            plane: str = "xy",
+            origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+            box: Tuple[float, float, float] = None,
+            periodic: bool = True,
+            frozen_phonons: AbstractFrozenPhonons = None,
+            repetitions: Tuple[int, int, int] = (1, 1, 1),
+            gridrefinement: int = 4,
+            device: str = None
     ):
-        """
-
-        Calculate electrostatic potential from a converged DFT calculation using GPAW.
-
-        Parameters
-        ----------
-        calculators : GPAW calculator or path to GPAW calculator or list of calculators or paths
-
-        gpts : one or two int, optional
-            Number of grid points in x and y describing each slice of the potential. Provide either "sampling" or "gpts".
-        sampling : one or two float, optional
-            Sampling of the potential in x and y [1 / Å]. Provide either "sampling" or "gpts".
-        slice_thickness
-        exit_planes
-        gridrefinement
-        device
-        plane
-        box
-        origin
-        periodic
-        repetitions
-        frozen_phonons
-        """
 
         if GPAW is None:
             raise RuntimeError(
@@ -442,6 +475,20 @@ class GPAWPotential(_PotentialBuilder):
         )
 
     def generate_slices(self, first_slice: int = 0, last_slice: int = None):
+        """
+        Generate the slices for the potential.
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice of the generated potential.
+        last_slice : int, optional
+            Index of the last slice of the generated potential.
+        Returns
+        -------
+        slices : generator of np.ndarray
+            Generator for the array of slices.
+        """
         if last_slice is None:
             last_slice = len(self)
 
@@ -468,7 +515,7 @@ class GPAWPotential(_PotentialBuilder):
         array = self._get_all_electron_density()
 
         for slic in _generate_slices(
-            array, ewald_potential, first_slice=first_slice, last_slice=last_slice
+                array, ewald_potential, first_slice=first_slice, last_slice=last_slice
         ):
             yield slic
 
@@ -526,7 +573,7 @@ class GPAWPotential(_PotentialBuilder):
         if isinstance(self.frozen_phonons, FrozenPhonons):
             array = np.zeros(len(self.frozen_phonons), dtype=object)
             for i, fp in enumerate(
-                self.frozen_phonons._partition_args(chunks, lazy=lazy)[0]
+                    self.frozen_phonons._partition_args(chunks, lazy=lazy)[0]
             ):
                 if lazy:
                     block = dask.delayed(frozen_phonons)(calculators, fp)
@@ -571,6 +618,9 @@ class GPAWPotential(_PotentialBuilder):
 
 
 class GPAWParametrization:
+    """
+    Calculate an Independent Atomic Model (IAM) potential based on a GPAW DFT calculation.
+    """
     def __init__(self):
         self._potential_functions = {}
 
@@ -620,36 +670,51 @@ class GPAWParametrization:
         # vr_e = interp1d(radial_coord, electron_potential, fill_value='extrapolate', bounds_error=False)
         # vr = lambda r: atomic_numbers[symbol] / r / (4 * np.pi * eps0) + vr_e(r) / r * units.Hartree * units.Bohr
 
-    def charge(self, symbol, charge=0.0):
+    def charge(self, symbol: str, charge: float = 0.0):
+        """
+        Calculate the radial charge density for an atom.
+
+        Parameters
+        ----------
+        symbol : str
+            Chemical symbol of the atomic element.
+        charge : float, optional
+            Charge the atom by the given fractional number of electrons.
+
+        Returns
+        -------
+        charge : callable
+            Function of the radial charge density with parameter 'r' corresponding to the radial distance from the core.
+        """
         ae = self._get_all_electron_atom(symbol, charge)
         r = ae.rgd.r_g * units.Bohr
         n = ae.n_sg.sum(0) / units.Bohr ** 3
         return interp1d(r, n, fill_value="extrapolate", bounds_error=False)
 
-    def potential(self, symbol, charge=0.0):
+    def potential(self, symbol: str, charge: float = 0.0):
+        """
+        Calculate the radial electrostatic potential for an atom.
+
+        Parameters
+        ----------
+        symbol : str
+            Chemical symbol of the atomic element.
+        charge : float, optional
+            Charge the atom by the given fractional number of electrons.
+
+        Returns
+        -------
+        potential : callable
+            Function of the radial electrostatic potential with parameter 'r' corresponding to the radial distance from the core.
+        """
         ae = self._get_all_electron_atom(symbol, charge)
         r = ae.rgd.r_g * units.Bohr
-        # n = ae.n_sg.sum(0) / units.Bohr ** 3
 
         ve = -ae.rgd.poisson(ae.n_sg.sum(0))
         ve = interp1d(r, ve, fill_value="extrapolate", bounds_error=False)
-        # electron_potential = -ae.rgd.poisson(ae.n_sg.sum(0))
 
         vr = (
             lambda r: atomic_numbers[symbol] / r / (4 * np.pi * eps0)
-            + ve(r) / r * units.Hartree * units.Bohr
+                      + ve(r) / r * units.Hartree * units.Bohr
         )
         return vr
-
-    # def get_function(self, symbol, charge=0.):
-    #     #if symbol in self._potential_functions.keys():
-    #     #    return self._potential_functions[(symbol, charge)]
-    #
-    #
-    #
-    #     self._potential_functions[(symbol, charge)] = vr
-    #     return self._potential_functions[(symbol, charge)]
-    #
-    # def potential(self, r, symbol, charge=0.):
-    #     potential = self._calculate(symbol, charge)
-    #     return potential(r)
