@@ -26,25 +26,23 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
                  energy: float = None,
                  semiangle_cutoff: float = None, ):
         """
-        Diagonal mixed coherence function
-
         The diagonal mixed coherence may be used to efficient calculate partial coherence for electron probes.
 
         Parameters
         ----------
         focal_spread : float, optional
-            The standard deviation of the gaussian focal spread assuming [Å].
+            The standard deviation of the Gaussian focal spread assuming [Å].
         source_size : float, optional
-            The standard deviation of the 2d gaussian shaped electron source [Å].
+            The standard deviation of the 2D gaussian shaped electron source [Å].
         rectangular_offset : two float, optional
-            The standard deviation of the 2d gaussian shaped electron source [Å].
+            The standard deviation of the 2D gaussian shaped electron source [Å].
         eigenvectors : int, or tuple of int
             The subset of eigenvectors of the decomposed mixed coherence used to represent the electron probe. It is
             possible to parallelize over eigenvectors.
         energy : float, optional
-            Electron energy [eV]. If not given, this will be matched to a wavefunction.
+            Electron energy [eV]. If not given, this will be matched to a wave function.
         semiangle_cutoff : float, optional
-            Half aperture angle [mrad]. If not given, this will be matched to a wavefunction.
+            Aperture half-angle [mrad]. If not given, this will be matched to a wave function.
         """
 
         self._focal_spread = focal_spread
@@ -90,7 +88,7 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
             try:
                 semiangle_cutoff = waves.metadata['semiangle_cutoff']
             except KeyError:
-                raise RuntimeError('"semiangle_cutoff" could not be inferred from Waves, please provide as an argument')
+                raise RuntimeError('"Semiangle_cutoff" could not be inferred from Waves, please provide as an argument.')
         else:
             semiangle_cutoff = self.semiangle_cutoff
 
@@ -104,7 +102,6 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
         grid = Grid(extent=waves.extent, gpts=self._cropped_shape(waves.extent, semiangle_cutoff, waves.wavelength))
 
         kx, ky = spatial_frequencies(gpts=grid.gpts, sampling=grid.sampling, xp=np)
-        # kx, ky = np.fft.fftshift(kx), np.fft.fftshift(ky)
 
         k2 = kx[:, None] ** 2 + ky[None] ** 2
         kx, ky = np.meshgrid(kx, ky, indexing='ij')
@@ -130,8 +127,22 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
 
         return E
 
-    def evaluate(self, waves, apply_weights=True, return_correlation: bool = False):
+    def evaluate(self, waves, return_correlation: bool = False):
+        """
+        Evaluate the diagonal mixed coherence function for given wave functions.
 
+        Parameters
+        ----------
+        waves : Waves
+            Wave functions to which the diagonal mixed coherence function is applied.
+        return_correlation : bool
+            Return correlation coefficients (default is False).
+
+        Returns
+        -------
+        mcf : np.ndarray
+            Array representing the diagonal mixed coherence function.
+        """
         semiangle_cutoff = self._safe_semiangle_cutoff(waves)
 
         E = self._evaluate_flat_cropped_mcf(waves)
@@ -149,6 +160,7 @@ class DiagonalMCF(ArrayWaveTransform, HasAcceleratorMixin):
 
         vectors = fft_crop(vectors, waves.gpts)
 
+        # TODO: implement returing correlation coefficients
         # R = np.corrcoef(E.ravel(), S.ravel())
 
         if return_correlation:
