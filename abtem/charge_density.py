@@ -489,7 +489,20 @@ class ChargeDensityPotential(_PotentialBuilder):
         )
 
     def generate_slices(self, first_slice: int = 0, last_slice: int = None):
-        """Generate the slices for the potential."""
+        """
+        Generate the slices for the potential.
+
+        Parameters
+        ----------
+        first_slice : int, optional
+            Index of the first slice of the generated potential.
+        last_slice : int, optional
+            Index of the last slice of the generated potential.
+        Returns
+        -------
+        slices : generator of np.ndarray
+            Generator for the array of slices.
+        """
         if last_slice is None:
             last_slice = len(self)
 

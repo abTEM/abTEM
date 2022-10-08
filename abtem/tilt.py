@@ -1,3 +1,4 @@
+"""Module for simulating beam tilt."""
 from typing import Union, TYPE_CHECKING, Tuple, List
 
 import dask.array as da
@@ -12,7 +13,7 @@ if TYPE_CHECKING:
 
 
 def validate_tilt(tilt):
-
+    """Validate that the given tilt is correctly defined."""
     if isinstance(tilt, _AxisAlignedDistributionND):
         raise NotImplementedError
 
@@ -34,17 +35,26 @@ def validate_tilt(tilt):
 
 
 class BeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
+    """
+    Class describing beam tilt.
+
+    Parameters
+    ----------
+    tilt : tuple of float
+        Tilt along the `x` and `y` axes [mrad] with an optional spread of values.
+    """
     def __init__(self, tilt: Union[Tuple[float, float], BaseDistribution]):
         self._tilt = tilt
         super().__init__(distributions=("tilt",))
 
     @property
     def tilt(self) -> Union[Tuple[float, float], BaseDistribution]:
-        """Beam tilt [mrad]."""
+        """Beam tilt angle [mrad]."""
         return self._tilt
 
     @property
     def metadata(self):
+        """Metadata describing the tilt."""
         if isinstance(self.tilt, BaseDistribution):
             return {"base_tilt_x": 0.0, "base_tilt_y": 0.0}
         else:
@@ -52,6 +62,7 @@ class BeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
 
     @property
     def ensemble_axes_metadata(self) -> List[AxisMetadata]:
+        """Metadata describing (an ensemble of) tilted wave function(s)."""
         if isinstance(self.tilt, BaseDistribution):
             return [
                 TiltAxis(
@@ -63,6 +74,7 @@ class BeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
             ]
 
     def apply(self, waves: "Waves") -> "Waves":
+        """Apply tilt(s) to (an ensamble of) wave function(s)."""
         xp = get_array_module(waves.device)
 
         array = waves.array[(None,) * len(self.ensemble_shape)]
@@ -82,6 +94,16 @@ class BeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
 
 
 class AxisAlignedBeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
+    """
+    Class describing tilt(s) aligned with an axis.
+
+    Parameters
+    ----------
+    tilt : array of BeamTilt
+        Tilt along the given direction with an optional spread of values.
+    direction : str
+        Cartesian axis, should be either 'x' or 'y'.
+    """
     def __init__(self, tilt: Union[float, BaseDistribution] = 0.0, direction: str = "x"):
         if not isinstance(tilt, BaseDistribution):
             tilt = float(tilt)
@@ -121,6 +143,7 @@ class AxisAlignedBeamTilt(_EnsembleFromDistributionsMixin, WaveTransform):
             return []
 
     def apply(self, waves: "Waves") -> "Waves":
+        """Apply tilt(s) to (an ensamble of) wave function(s)."""
         xp = get_array_module(waves.device)
 
         array = waves.array[(None,) * len(self.ensemble_shape)]

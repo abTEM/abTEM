@@ -1,3 +1,5 @@
+"""Module for slicing atoms for the multislice algorithm."""
+# TODO: to be eventually commented.
 from abc import abstractmethod
 from typing import Tuple, Union, Sequence
 
@@ -6,7 +8,6 @@ from ase import Atoms
 
 from abtem.core.utils import label_to_index
 from abtem.atoms import is_cell_orthogonal
-
 
 def validate_slice_thickness(slice_thickness: Union[float, Tuple[float, ...]],
                              thickness: float = None,

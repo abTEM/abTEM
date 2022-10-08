@@ -1,42 +1,36 @@
+"""Module describing the detector modulation transfer function (MTF)."""
 import numpy as np
 
 def default_mtf_func(k: np.ndarray, c0: float, c1: float, c2: float, c3: float):
     """
-    A default MTF function
+    A default modulation transfer function (MTF).
 
     Parameters
     ----------
-    k : float
-        Spatial frequency
+    k : float or np.ndarray
+        Spatial frequencies at which to evaluate the MTF.
     c : float
-        Coefficients for function
+        Coefficients for the MTF.
 
     Returns
     -------
-    float
-        Result from MTF
+    mtf : float or np.ndarray
+        Modulation transfer function for given spatial frequencies.
     """
     return (c0 - c1) / (1 + (k / (2 * c2)) ** np.abs(c3)) + c1
 
 
 class MTF:
     """
-    MTF Object for applying a specified MTF function with specified parameters
+    Apply a modulation transfer function (MTF) with specified parameters.
+
     Parameters
     ----------
-    func: function
-        The Modulation Transfer Function
-    kwargs:
+    func : function, optional
+        The modulation transfer function. If not specified, uses the default MTF.
+    kwargs :
         Provide the MTF parameters as keyword arguments.
-    measurement: Measurement object
-        The measurement to apply MTF to
-
-    Returns
-    -------
-    measurement: Measurement object
-        The MFT applied measurement
     """
-
     def __init__(self, func: callable = None, **kwargs):
         if func is None:
             self.f = default_mtf_func
@@ -46,17 +40,17 @@ class MTF:
 
     def __call__(self, measurement):
         """
-        Apply a modulation transfer function to the image.
+        Apply a modulation transfer function to a given measurement.
 
         Parameters
         ----------
-        measurement : Measurement object
-            The original Measurement
+        measurement : BaseMeasurement
+            The original measurement.
 
         Returns
         -------
-        measurement: Measurement object
-            The MFT applied measurement
+        modulated_measurement : BaseMeasurement
+            The measurement with the MTF applied.
         """
         # Get sampling from measurement
         sampling = []
@@ -65,7 +59,7 @@ class MTF:
                 if calibration.units.lower() in ('angstrom', 'å'):
                     sampling.append(calibration.sampling)
 
-        # Get number of gridpoints from measurement
+        # Get number of grid points from measurement
         if len(measurement.array.shape) == 2:
             gpts = (measurement.array.shape[0], measurement.array.shape[1])
         else:

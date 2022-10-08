@@ -1162,14 +1162,14 @@ class Images(BaseMeasurement):
         Parameters
         ----------
         cmap : str, optional
-            TODO
+            Matplotlib colormap name used to map scalar data to colors. Ignored if image array is complex.
         explode : bool, optional
-            If True, a grid of images are created for all the items of the last two ensemble axes. If False, the first
+            If True, a grid of images is created for all the items of the last two ensemble axes. If False, the first
             ensemble item is shown.
         ax : matplotlib.axes.Axes, optional
             If given the plots are added to the axis. This is not available for image grids.
         figsize : two int, optional
-            The figure size given as width and height in inches, passed to matplotlib.pyplot.figure.
+            The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
         title : bool or str, optional
             Add a title to the figure. If True is given instead of a string the title will be given by the value
             corresponding to the "name" key of the metadata dictionary, if this item exists.
@@ -1177,14 +1177,14 @@ class Images(BaseMeasurement):
             Add titles to each panel. If True a title will be created from the axis metadata. If given as a list of
             strings an item must exist for each panel.
         x_ticks : bool or list, optional
-            If False, the ticks on the x-axis will be removed.
+            If False, the ticks on the `x`-axis will be removed.
         y_ticks : bool or list, optional
-            If False, the ticks on the y-axis will be removed.
+            If False, the ticks on the `y`-axis will be removed.
         x_label : bool or str, optional
-            Add label to the x-axis of every plot. If True (default) the label will created from the corresponding axis
+            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis
             metadata. A string may be given to override this.
         y_label : bool or str, optional
-            Add label to the x-axis of every plot. If True (default) the label will created from the corresponding axis
+            Add label to the `x`-axis of every plot. If True (default) the label will created from the corresponding axis
             metadata. A string may be given to override this.
         row_super_label : bool or str, optional
             Add super label to the rows of an image grid. If True the label will be created from the corresponding axis
@@ -1203,8 +1203,9 @@ class Images(BaseMeasurement):
             it is requested). Default is False.
         cbar : bool, optional
             Add colorbar(s) to the image(s). The position and size of the colorbar(s) may be controlled by passing
-            keyword arguments to mpl_toolkits.axes_grid1.axes_grid.ImageGrid through `image_grid_kwargs`.
+            keyword arguments to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid` through `image_grid_kwargs`.
         cbar_labels : str or list of str
+            Label(s) for the colorbar(s).
         sizebar : bool, optional,
             Add a size bar to the image(s).
         float_formatting : str, optional
@@ -1212,24 +1213,23 @@ class Images(BaseMeasurement):
         panel_labels : list of str
             A list of labels for each panel of a grid of images.
         image_grid_kwargs : dict
-            Additional keyword arguments passed to mpl_toolkits.axes_grid1.axes_grid.ImageGrid.
+            Additional keyword arguments passed to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid`.
         imshow_kwargs : dict
-            Additional keyword arguments passed to matplotlib.axes.Axes.imshow.
+            Additional keyword arguments passed to `matplotlib.axes.Axes.imshow`.
         anchored_text_kwargs : dict
-            Additional keyword arguments passed to matplotlib.offsetbox.AnchoredText. This is used for creating panel
+            Additional keyword arguments passed to `matplotlib.offsetbox.AnchoredText`. This is used for creating panel
             labels.
 
         Returns
         -------
-        matplotlib.axes.Axes
+        Figure, matplotlib.axes.Axes
         """
-
         if not explode:
             measurements = self[(0,) * len(self.ensemble_shape)]
         else:
             if ax is not None:
                 raise NotImplementedError(
-                    "`ax` not implemented for with `explode = True`"
+                    "`ax` not implemented for with `explode = True`."
                 )
             measurements = self
 
@@ -1440,6 +1440,7 @@ class RealSpaceLineProfiles(_AbstractMeasurement1d):
 
         return self.__class__(**kwargs)
 
+    # TODO: urgently needs documentation!
     def show(
             self,
             ax: Axes = None,

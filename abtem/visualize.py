@@ -211,6 +211,74 @@ def show_measurement_2d(
     complex_coloring_kwargs: dict = None,
     axes: Axes = None,
 ):
+    """
+    Show the image(s) using matplotlib.
+
+    Parameters
+    ----------
+    cmap : str, optional
+        Matplotlib colormap name used to map scalar data to colors. Ignored if image array is complex.
+    explode : bool, optional
+        If True, a grid of images is created for all the items of the last two ensemble axes. If False, the first
+        ensemble item is shown.
+    ax : matplotlib.axes.Axes, optional
+        If given the plots are added to the axis. This is not available for image grids.
+    figsize : two int, optional
+        The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
+    title : bool or str, optional
+        Add a title to the figure. If True is given instead of a string the title will be given by the value
+        corresponding to the "name" key of the metadata dictionary, if this item exists.
+    panel_titles : bool or list of str, optional
+        Add titles to each panel. If True a title will be created from the axis metadata. If given as a list of
+        strings an item must exist for each panel.
+    x_ticks : bool or list, optional
+        If False, the ticks on the `x`-axis will be removed.
+    y_ticks : bool or list, optional
+        If False, the ticks on the `y`-axis will be removed.
+    x_label : bool or str, optional
+        Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis
+        metadata. A string may be given to override this.
+    y_label : bool or str, optional
+        Add label to the `x`-axis of every plot. If True (default) the label will created from the corresponding axis
+        metadata. A string may be given to override this.
+    row_super_label : bool or str, optional
+        Add super label to the rows of an image grid. If True the label will be created from the corresponding axis
+        metadata. A string may be given to override this. The default is no super label.
+    col_super_label : bool or str, optional
+        Add super label to the columns of an image grid. If True the label will be created from the corresponding
+        axis metadata. A string may be given to override this. The default is no super label.
+    power : float
+        Show image on a power scale.
+    vmin : float, optional
+        Minimum of the intensity color scale. Default is the minimum of the array values.
+    vmax : float, optional
+        Maximum of the intensity color scale. Default is the maximum of the array values.
+    common_color_scale : bool, optional
+        If True all images in an image grid are shown on the same colorscale, and a single colorbar is created (if
+        it is requested). Default is False.
+    cbar : bool, optional
+        Add colorbar(s) to the image(s). The position and size of the colorbar(s) may be controlled by passing
+        keyword arguments to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid` through `image_grid_kwargs`.
+    cbar_labels : str or list of str
+        Label(s) for the colorbar(s).
+    sizebar : bool, optional,
+        Add a size bar to the image(s).
+    float_formatting : str, optional
+        A formatting string used for formatting the floats of the panel titles.
+    panel_labels : list of str
+        A list of labels for each panel of a grid of images.
+    image_grid_kwargs : dict
+        Additional keyword arguments passed to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid`.
+    imshow_kwargs : dict
+        Additional keyword arguments passed to `matplotlib.axes.Axes.imshow`.
+    anchored_text_kwargs : dict
+        Additional keyword arguments passed to `matplotlib.offsetbox.AnchoredText`. This is used for creating panel
+        labels.
+
+    Returns
+    -------
+    Figure, matplotlib.axes.Axes
+    """
     measurements = measurements.to_cpu().compute()
 
     imshow_kwargs = {} if imshow_kwargs is None else imshow_kwargs
@@ -402,6 +470,7 @@ def show_measurements_1d(
     figsize: Tuple[int, int] = None,
     **kwargs,
 ):
+    # TODO: urgently needs documentation (copy over from measurements.py)!
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
     else:
@@ -449,16 +518,38 @@ def show_measurements_1d(
 
 def plot_diffraction_pattern(
     indexed_diffraction_pattern: "IndexedDiffractionPattern",
-    # cell: Union[float, Tuple[float, float], Tuple[float, float, float], Cell],
     spot_scale: float = 1.0,
     ax: Axes = None,
     figsize: Tuple[float, float] = (6, 6),
-    spot_threshold: float = 0.02,
     title: str = None,
     annotate_kwargs: dict = None,
-    divide_threshold: float = 1.0,
+    inequivalency_threshold: float = 1.0,
 ):
+    """
+    Display a diffraction pattern as indexed Bragg reflections.
 
+    Parameters
+    ----------
+    indexed_diffraction_pattern : IndexedDiffractionPattern
+        Diffraction pattern to be displayed.
+    spot_scale : float
+        Size of the circles representing the diffraction spots.
+    ax : matplotlib.axes.Axes, optional
+        If given the plots are added to the axis.
+    figsize : two int, optional
+        The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
+    title : bool or str, optional
+        Add a title to the figure. If True is given instead of a string the title will be given by the value
+        corresponding to the "name" key of the metadata dictionary, if this item exists
+    annotate_kwargs : dict
+        Additional keyword arguments passed to `matplotlib.axes.Axes.annotate` to change the formatting of the labels.
+    inequivalency_threshold : float
+        Relative intensity difference to determine whether two symmetry-equivalent diffraction spots should be indepdendently
+        labeled (e.g. due to a unit cell with a basis of more than one element).
+    Returns
+    -------
+    figure, axis_handle : matplotlib.figure.Figure, matplotlib.axis.Axis
+    """
     if annotate_kwargs is None:
         annotate_kwargs = {}
 
@@ -497,20 +588,13 @@ def plot_diffraction_pattern(
         )
     )
 
-    indexed_diffraction_pattern = indexed_diffraction_pattern.remove_equivalent(divide_threshold=divide_threshold)
+    indexed_diffraction_pattern = indexed_diffraction_pattern.remove_equivalent(divide_threshold=inequivalency_threshold)
     coordinates = indexed_diffraction_pattern._vectors
     coordinates = coordinates / normalize_coordinates
 
     miller_indices = indexed_diffraction_pattern.miller_indices
 
     for hkl, coordinate in zip(miller_indices, coordinates):
-        # if include[i]:  # or label_mode == "all":
-        # if hexagonal:
-        #     spot = miller_to_miller_bravais(hkl[i][None])[0]
-        # else:
-        #     spot = hkl[i]
-        # print(hkl, coordinate)
-
         t = ax.annotate(
             "".join(map(str, list(hkl))),
             coordinate,
@@ -587,19 +671,19 @@ def show_atoms(
     merge: float = 1e-2,
 ):
     """
-    Display 2d projection of atoms as a Matplotlib plot.
+    Display 2D projection of atoms as a matplotlib plot.
 
     Parameters
     ----------
-    atoms : ASE Atoms
+    atoms : ase.Atoms
         The atoms to be shown.
     plane : str, two float
-        The projection plane given as a combination of 'x' 'y' and 'z', e.g. 'xy', or the as two floats representing the
-        azimuth and elevation angles in degrees of the viewing direction, e.g. (45, 45).
-    ax : matplotlib Axes, optional
+        The projection plane given as a concatenation of 'x' 'y' and 'z', e.g. 'xy', or as two floats representing the
+        azimuth and elevation angles of the viewing direction [degrees], e.g. (45, 45).
+    ax : matplotlib.axes.Axes, optional
         If given the plots are added to the axes.
     scale : float
-        Scaling factor for the atom display sizes. Default is 0.5.
+        Factor scaling their covalent radii for the atom display sizes (default is 0.75).
     title : str
         Title of the displayed image. Default is None.
     numbering : bool
@@ -607,14 +691,16 @@ def show_atoms(
     show_periodic : bool
         If True, show the periodic images of the atoms at the cell boundary.
     figsize : two int, optional
-        The figure size given as width and height in inches, passed to matplotlib.pyplot.figure.
+        The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.
     legend : bool
         If True, add a legend indicating the color of the atomic species.
     merge: float
-        Plotting large numbers of atoms can be slow. To speed up plotting atoms closer than the given value
-        (in Ångstrom) are merged.
-    """
+        To speed up plotting large numbers of atoms, those closer than the given value [Å] are merged.
 
+    Returns
+    -------
+    matplotlib.figure.Figure, matplotlib.axes.Axes
+    """
     if show_periodic:
         atoms = atoms.copy()
         atoms = pad_atoms(atoms, margins=1e-3)
@@ -680,7 +766,5 @@ def show_atoms(
         ]
 
         ax.legend(handles=legend_elements, loc="upper right")
-    # ax.set_xlim([0, np.max(cell_lines_x)])
-    # ax.set_ylim([0, np.max(cell_lines_y)])
 
     return fig, ax

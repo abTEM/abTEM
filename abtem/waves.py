@@ -1305,7 +1305,9 @@ class PlaneWave(_WavesFactory):
 
         Parameters
         ----------
-        lazy :
+        lazy : bool, optional
+            If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
+            value set in the configuration file.
 
         Returns
         -------
@@ -1350,7 +1352,6 @@ class PlaneWave(_WavesFactory):
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
             value set in the configuration file.
-
 
         Returns
         -------
