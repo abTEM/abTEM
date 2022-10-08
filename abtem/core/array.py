@@ -10,7 +10,7 @@ import dask
 import dask.array as da
 import numpy as np
 import zarr
-from dask.diagnostics import ProgressBar
+from dask.diagnostics import ProgressBar, Profiler, ResourceProfiler
 from dask.utils import format_bytes, parse_bytes
 from tabulate import tabulate
 from threadpoolctl import threadpool_limits
@@ -30,7 +30,7 @@ from abtem.core.backend import (
     get_array_module,
     copy_to_device,
     device_name_from_array_module,
-    cp
+    cp,
 )
 from abtem.core.chunks import Chunks
 from abtem.core.utils import normalize_axes, CopyMixin
@@ -53,7 +53,9 @@ class ComputableList(list):
 
 
 @contextmanager
-def _compute_context(progress_bar: bool = None):
+def _compute_context(
+    progress_bar: bool = None, profiler=False, resource_profiler=False
+):
     if progress_bar is None:
         progress_bar = config.get("local_diagnostics.progress_bar")
 
@@ -62,26 +64,53 @@ def _compute_context(progress_bar: bool = None):
     else:
         progress_bar = nullcontext()
 
+    if profiler:
+        profiler = Profiler()
+    else:
+        profiler = nullcontext()
+
+    if resource_profiler:
+        resource_profiler = ResourceProfiler()
+    else:
+        resource_profiler = nullcontext()
+
     threads = config.get("mkl.threads")
-    with progress_bar as a, threadpool_limits(limits=threads) as b:
-        yield (a, b)
+    with progress_bar as a, threadpool_limits(
+        limits=threads
+    ) as b, profiler as c, resource_profiler as d:
+        yield a, b, c, d
 
 
-def _compute(dask_array_wrappers, progress_bar: bool = None, **kwargs):
+def _compute(
+    dask_array_wrappers,
+    progress_bar: bool = None,
+    profiler: bool = False,
+    resource_profiler: bool = False,
+    **kwargs,
+):
     # if cp is not None:
     #     cache = cp.fft.config.get_plan_cache()
     #     cache_size = parse_bytes(config.get('cupy.fft-cache-size'))
     #     cache.set_size(cache_size)
 
-    with _compute_context(progress_bar):
+    with _compute_context(
+        progress_bar, profiler=profiler, resource_profiler=resource_profiler
+    ) as (a, b, c, d):
         arrays = dask.compute(
-            [wrapper.array for wrapper in dask_array_wrappers], **kwargs
+            [wrapper.array for wrapper in dask_array_wrappers], s=2, **kwargs
         )[0]
 
     for array, wrapper in zip(arrays, dask_array_wrappers):
         wrapper._array = array
 
-    return dask_array_wrappers
+    profilers = ()
+    if c is not None:
+        profilers += (c,)
+
+    if d is not None:
+        profilers += (d,)
+
+    return dask_array_wrappers, profilers
 
 
 def computable(func):
@@ -168,7 +197,7 @@ class HasArray(HasAxes, CopyMixin):
 
     @property
     def base_shape(self) -> Tuple[int, ...]:
-        return self.array.shape[-self._base_dims:]
+        return self.array.shape[-self._base_dims :]
 
     @property
     def ensemble_shape(self) -> Tuple[int, ...]:
@@ -220,8 +249,8 @@ class HasArray(HasAxes, CopyMixin):
             raise RuntimeError(f"incompatible shapes ({self.shape} != {other.shape})")
 
         for (key, value), (other_key, other_value) in zip(
-                self._copy_kwargs(exclude=("array", "metadata")).items(),
-                other._copy_kwargs(exclude=("array", "metadata")).items(),
+            self._copy_kwargs(exclude=("array", "metadata")).items(),
+            other._copy_kwargs(exclude=("array", "metadata")).items(),
         ):
             if np.any(value != other_value):
                 raise RuntimeError(
@@ -387,7 +416,7 @@ class HasArray(HasAxes, CopyMixin):
         )
 
     def expand_dims(
-            self, axis: Tuple[int, ...] = None, axis_metadata: List[AxisMetadata] = None
+        self, axis: Tuple[int, ...] = None, axis_metadata: List[AxisMetadata] = None
     ) -> "T":
         if axis is None:
             axis = (0,)
@@ -452,11 +481,30 @@ class HasArray(HasAxes, CopyMixin):
 
         return self.__class__(array, **self._copy_kwargs(exclude=("array",)))
 
-    def compute(self, progress_bar: bool = None, **kwargs):
+    def compute(
+        self,
+        progress_bar: bool = None,
+        profiler: bool = False,
+        resource_profiler=False,
+        **kwargs,
+    ):
         if not self.is_lazy:
             return self
 
-        return _compute([self], progress_bar=progress_bar, **kwargs)[0]
+        output, profilers = _compute(
+            [self],
+            progress_bar=progress_bar,
+            profiler=profiler,
+            resource_profiler=resource_profiler,
+            **kwargs,
+        )
+
+        output = output[0]
+
+        if profilers:
+            return output, profilers
+
+        return output
 
     def visualize_graph(self, **kwargs):
         return self.array.visualize(**kwargs)
@@ -473,7 +521,9 @@ class HasArray(HasAxes, CopyMixin):
     def to_gpu(self) -> "T":
         return self.copy_to_device("gpu")
 
-    def to_zarr(self, url: str, compute: bool = True, overwrite: bool = False, **kwargs):
+    def to_zarr(
+        self, url: str, compute: bool = True, overwrite: bool = False, **kwargs
+    ):
         """
         Write wave functions to a zarr file.
 
@@ -555,7 +605,7 @@ def from_zarr(url: str, chunks: Chunks = None):
 
 
 def stack(
-        has_arrays: Sequence[HasArray], axis_metadata: AxisMetadata = None, axis: int = 0
+    has_arrays: Sequence[HasArray], axis_metadata: AxisMetadata = None, axis: int = 0
 ) -> "T":
     if axis_metadata is None:
         axis_metadata = UnknownAxis()
