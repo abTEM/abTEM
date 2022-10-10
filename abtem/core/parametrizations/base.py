@@ -5,7 +5,7 @@ from ase.data import chemical_symbols
 
 from abtem.core.axes import OrdinalAxis
 from abtem.core.utils import EqualityMixin
-from abtem.measurements import FourierSpaceLineProfiles, RealSpaceLineProfiles
+from abtem.measurements import ReciprocalSpaceLineProfiles, RealSpaceLineProfiles
 
 real_space_funcs = "potential", "projected_potential", "charge"
 fourier_space_funcs = "scattering_factor", "projected_scattering_factor"
@@ -90,7 +90,7 @@ class Parametrization(EqualityMixin, metaclass=ABCMeta):
 
         elif name in fourier_space_funcs:
             k = np.arange(0.0, cutoff, sampling)
-            return FourierSpaceLineProfiles(
+            return ReciprocalSpaceLineProfiles(
                 func(k)[None],
                 sampling=sampling,
                 ensemble_axes_metadata=ensemble_axes_metadata,

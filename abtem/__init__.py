@@ -18,7 +18,7 @@ from abtem.measurements import (
     Images,
     DiffractionPatterns,
     RealSpaceLineProfiles,
-    FourierSpaceLineProfiles,
+    ReciprocalSpaceLineProfiles,
     PolarMeasurements,
 )
 from abtem.inelastic.phonons import FrozenPhonons, MDFrozenPhonons

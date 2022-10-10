@@ -1,5 +1,5 @@
 """Module for slicing atoms for the multislice algorithm."""
-# TODO: to be eventually commented.
+# TODO: to be eventually commented. Deprecate as separate module, move functions to atoms.py? Or move to /core?
 from abc import abstractmethod
 from typing import Tuple, Union, Sequence
 

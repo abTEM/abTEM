@@ -86,9 +86,9 @@ def planar_angle(hkl1, hkl2, cell_edges):
     h1, k1, l1 = hkl1
     h2, k2, l2 = hkl2
     a, b, c = cell_edges
-    d1 = 1 / a ** 2 * h1 ** 2 + 1 / b ** 2 * k1 ** 2 + 1 / c ** 2 * l1 ** 2
-    d2 = 1 / a ** 2 * h2 ** 2 + 1 / b ** 2 * k2 ** 2 + 1 / c ** 2 * l2 ** 2
-    d3 = 1 / a ** 2 * h1 * h2 + 1 / b ** 2 * k1 * k2 + 1 / c ** 2 * l1 * l2
+    d1 = 1 / a**2 * h1**2 + 1 / b**2 * k1**2 + 1 / c**2 * l1**2
+    d2 = 1 / a**2 * h2**2 + 1 / b**2 * k2**2 + 1 / c**2 * l2**2
+    d3 = 1 / a**2 * h1 * h2 + 1 / b**2 * k1 * k2 + 1 / c**2 * l1 * l2
     return np.arccos(d3 / np.sqrt(d1 * d2))
 
 
@@ -236,7 +236,7 @@ def tabulate_diffraction_pattern(
         diffraction_pattern.array, diffraction_pattern.sampling, cell
     )
 
-    intensities = diffraction_pattern.select_frequency_bin(bins)
+    intensities = diffraction_pattern._select_frequency_bin(bins)
 
     _, hexagonal = validate_cell_edges(cell)
     include = find_equivalent_spots(
@@ -301,7 +301,9 @@ class IndexedDiffractionPatterns:
     def remove_equivalent(self, divide_threshold=1.0):
         miller_indices, intensities = self._dict_to_arrays(self._spots)
         include = find_equivalent_spots(
-            miller_indices, intensities=intensities, intensity_split=divide_threshold,
+            miller_indices,
+            intensities=intensities,
+            intensity_split=divide_threshold,
         )
 
         miller_indices, intensities = miller_indices[include], intensities[include]
@@ -329,12 +331,14 @@ class IndexedDiffractionPatterns:
 
     @classmethod
     def index_diffraction_patterns(
-        cls, diffraction_patterns, cell,
+        cls,
+        diffraction_patterns,
+        cell,
     ):
         bins, miller_indices = map_all_bin_indices_to_miller_indices(
             diffraction_patterns.array, diffraction_patterns.sampling, cell
         )
-        intensities = diffraction_patterns.select_frequency_bin(bins)
+        intensities = diffraction_patterns._select_frequency_bin(bins)
         spots = cls._arrays_to_dict(miller_indices, intensities)
         vectors = bins * diffraction_patterns.sampling
         return cls(spots, vectors)

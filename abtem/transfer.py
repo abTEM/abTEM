@@ -21,7 +21,7 @@ from abtem.distributions import (
     _unpack_distributions,
     _validate_distribution,
 )
-from abtem.measurements import FourierSpaceLineProfiles
+from abtem.measurements import ReciprocalSpaceLineProfiles
 
 
 class BaseAperture(FourierSpaceConvolution):
@@ -1070,7 +1070,7 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
         axis_metadata = ["ctf"]
         metadata = {"energy": self.energy}
         profiles = [
-            FourierSpaceLineProfiles(
+            ReciprocalSpaceLineProfiles(
                 -aberrations.imag * envelope,
                 sampling=sampling,
                 metadata=metadata,
@@ -1080,7 +1080,7 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
 
         if self._aperture.semiangle_cutoff != np.inf:
             profiles += [
-                FourierSpaceLineProfiles(aperture, sampling=sampling, metadata=metadata)
+                ReciprocalSpaceLineProfiles(aperture, sampling=sampling, metadata=metadata)
             ]
             axis_metadata += ["aperture"]
 
@@ -1089,13 +1089,13 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
             and self._spatial_envelope.angular_spread > 0.0
         ):
             profiles += [
-                FourierSpaceLineProfiles(envelope, sampling=sampling, metadata=metadata)
+                ReciprocalSpaceLineProfiles(envelope, sampling=sampling, metadata=metadata)
             ]
             axis_metadata += ["envelope"]
 
         if self._temporal_envelope.focal_spread > 0.0:
             profiles += [
-                FourierSpaceLineProfiles(
+                ReciprocalSpaceLineProfiles(
                     temporal_envelope, sampling=sampling, metadata=metadata
                 )
             ]
@@ -1103,7 +1103,7 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
 
         if self._spatial_envelope.angular_spread > 0.0:
             profiles += [
-                FourierSpaceLineProfiles(
+                ReciprocalSpaceLineProfiles(
                     spatial_envelope, sampling=sampling, metadata=metadata
                 )
             ]

@@ -106,10 +106,10 @@ data['(n, m)'] = [str(bin) for bin in bins[1:]]
 
 data['exp.'] = [1.05, 1.07, 0.19, 0.19]
 
-gpaw_values = gpaw_diffraction.select_frequency_bin(bins)
+gpaw_values = gpaw_diffraction._select_frequency_bin(bins)
 data['gpaw'] = [f'{value:.2f}' for value in gpaw_values[1:] / gpaw_values[0]]
 
-iam_values = iam_diffraction.select_frequency_bin(bins)
+iam_values = iam_diffraction._select_frequency_bin(bins)
 data['iam'] = [f'{value:.2f}' for value in iam_values[1:] / iam_values[0]]
 
 df = pd.DataFrame(data)

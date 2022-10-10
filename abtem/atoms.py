@@ -372,6 +372,7 @@ def wrap_with_tolerance(atoms: Atoms, tol: float = 1e-6) -> Atoms:
         Atoms to be wrapped.
     tol : float
         Minimum distance to any cell boundary.
+
     Returns
     -------
     atoms : ase.Atoms
@@ -589,14 +590,14 @@ def best_orthogonal_cell(
 
 def orthogonalize_cell(
     atoms: Atoms,
-    box: Tuple[float, float, float] = None,
     max_repetitions: int = 5,
     return_transform: bool = False,
     allow_transform: bool = True,
-    origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
     plane: Union[
         str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]
     ] = "xy",
+    origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+    box: Tuple[float, float, float] = None,
     tolerance: float = 0.01,
 ):
     """
@@ -614,6 +615,32 @@ def orthogonalize_cell(
         If true, return the transformations that were applied to make the atoms orthogonal.
     allow_transform : bool
         If false no transformation is applied to make the cell orthogonal, hence a non-orthogonal cell may be returned.
+        plane : str or two tuples of three float, optional
+        The plane relative to the provided atoms mapped to `xy` plane of the potential, i.e. provided plane is
+        perpendicular to the propagation direction. If string, it must be a concatenation of two of 'x', 'y' and 'z';
+        the default value 'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
+        The plane may also be specified with two arbitrary 3D vectors, which are mapped to the `x` and `y` directions of
+        the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,
+        the second vector is rotated in the plane to become perpendicular to the first. Providing a value of
+        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
+    plane : str or two tuples of three float, optional
+        The plane relative to the provided atoms mapped to `xy` plane of the potential, i.e. provided plane is
+        perpendicular to the propagation direction. If string, it must be a concatenation of two of 'x', 'y' and 'z';
+        the default value 'xy' indicates that potential slices are cuts along the `xy`-plane of the atoms.
+        The plane may also be specified with two arbitrary 3D vectors, which are mapped to the `x` and `y` directions of
+        the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,
+        the second vector is rotated in the plane to become perpendicular to the first. Providing a value of
+        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing 'xy'.
+    origin : three float, optional
+        The origin relative to the provided atoms mapped to the origin of the potential. This is equivalent to translating
+        the atoms. The default is (0., 0., 0.).
+    box : three float, optional
+        The extent of the potential in `x`, `y` and `z`. If not given this is determined from the atoms' cell.
+        If the box size does not match an integer number of the atoms' supercell, an affine transformation may be
+        necessary to preserve periodicity, determined by the `periodic` keyword.
+    tolerance : float
+        Determines what is defined as a plane. All atoms within a distance equal to tolerance [Å] from a given plane
+        will be considered to belong to that plane.
 
     Returns
     -------
