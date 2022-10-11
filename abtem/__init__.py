@@ -21,9 +21,11 @@ from abtem.measurements import (
     FourierSpaceLineProfiles,
     PolarMeasurements,
 )
+from abtem.prism.s_matrix import SMatrix, SMatrixArray
 from abtem.inelastic.phonons import FrozenPhonons, MDFrozenPhonons
 from abtem.potentials import Potential, CrystalPotential, PotentialArray
 from abtem.scan import CustomScan, LineScan, GridScan
 from abtem.transfer import CTF, Aperture, TemporalEnvelope, SpatialEnvelope
 from abtem.visualize import show_atoms, plot_diffraction_pattern
 from abtem.waves import Waves, Probe, PlaneWave
+from abtem import transfer
