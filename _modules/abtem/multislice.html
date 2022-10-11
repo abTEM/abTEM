@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -33,7 +33,6 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
@@ -55,7 +54,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -212,6 +211,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../user_guide/walkthrough/core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -795,11 +799,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -807,11 +806,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -977,7 +971,8 @@ title="Open an issue"
               <div>
                 
   <h1>Source code for abtem.multislice</h1><div class="highlight"><pre>
-<span></span><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">TYPE_CHECKING</span><span class="p">,</span> <span class="n">Union</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Dict</span>
+<span></span><span class="sd">&quot;&quot;&quot;Module for running the multislice algorithm.&quot;&quot;&quot;</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">TYPE_CHECKING</span><span class="p">,</span> <span class="n">Union</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Dict</span>
 
 <span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 
@@ -1004,7 +999,7 @@ title="Open an issue"
     <span class="kn">from</span> <span class="nn">abtem.waves</span> <span class="kn">import</span> <span class="n">BaseWaves</span>
 
 
-<div class="viewcode-block" id="fresnel_propagator"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.multislice.fresnel_propagator.html#abtem.multislice.fresnel_propagator">[docs]</a><span class="k">def</span> <span class="nf">fresnel_propagator</span><span class="p">(</span>
+<span class="k">def</span> <span class="nf">_fresnel_propagator</span><span class="p">(</span>
     <span class="n">thickness</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
     <span class="n">tilt</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span>
     <span class="n">gpts</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span>
@@ -1026,18 +1021,18 @@ title="Open an issue"
             <span class="o">-</span><span class="n">kx</span> <span class="o">*</span> <span class="n">xp</span><span class="o">.</span><span class="n">tan</span><span class="p">(</span><span class="n">tilt</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="mf">1e3</span><span class="p">)</span> <span class="o">*</span> <span class="n">thickness</span> <span class="o">*</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span>
         <span class="p">)</span> <span class="o">*</span> <span class="n">complex_exponential</span><span class="p">(</span><span class="o">-</span><span class="n">ky</span> <span class="o">*</span> <span class="n">xp</span><span class="o">.</span><span class="n">tan</span><span class="p">(</span><span class="n">tilt</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="mf">1e3</span><span class="p">)</span> <span class="o">*</span> <span class="n">thickness</span> <span class="o">*</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">)</span>
 
-    <span class="k">return</span> <span class="n">f</span></div>
+    <span class="k">return</span> <span class="n">f</span>
 
 
-<div class="viewcode-block" id="tilt_shift"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.multislice.tilt_shift.html#abtem.multislice.tilt_shift">[docs]</a><span class="k">def</span> <span class="nf">tilt_shift</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">tilt</span><span class="p">,</span> <span class="n">thickness</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">_tilt_shift</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">tilt</span><span class="p">,</span> <span class="n">thickness</span><span class="p">):</span>
     <span class="n">xp</span> <span class="o">=</span> <span class="n">get_array_module</span><span class="p">(</span><span class="n">k</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">complex_exponential</span><span class="p">(</span><span class="o">-</span><span class="n">k</span> <span class="o">*</span> <span class="n">xp</span><span class="o">.</span><span class="n">tan</span><span class="p">(</span><span class="n">tilt</span> <span class="o">/</span> <span class="mf">1e3</span><span class="p">)</span> <span class="o">*</span> <span class="n">thickness</span> <span class="o">*</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">)</span></div>
+    <span class="k">return</span> <span class="n">complex_exponential</span><span class="p">(</span><span class="o">-</span><span class="n">k</span> <span class="o">*</span> <span class="n">xp</span><span class="o">.</span><span class="n">tan</span><span class="p">(</span><span class="n">tilt</span> <span class="o">/</span> <span class="mf">1e3</span><span class="p">)</span> <span class="o">*</span> <span class="n">thickness</span> <span class="o">*</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">)</span>
 
 
 <div class="viewcode-block" id="FresnelPropagator"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.multislice.FresnelPropagator.html#abtem.multislice.FresnelPropagator">[docs]</a><span class="k">class</span> <span class="nc">FresnelPropagator</span><span class="p">:</span>
 <div class="viewcode-block" id="FresnelPropagator.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.multislice.FresnelPropagator.html#abtem.multislice.FresnelPropagator.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        The fresnel propagtor is used for propagating wave functions using the near-field approximation</span>
+<span class="sd">        The Fresnel propagtor is used for propagating wave functions using the near-field approximation</span>
 <span class="sd">        (Fresnel diffraction).</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_array</span> <span class="o">=</span> <span class="kc">None</span>
@@ -1071,7 +1066,7 @@ title="Open an issue"
         <span class="n">antialias_aperture</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">waves</span><span class="p">)</span>
         <span class="n">array</span> <span class="o">=</span> <span class="n">antialias_aperture</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">complex64</span><span class="p">)</span>
 
-        <span class="n">array</span> <span class="o">*=</span> <span class="n">fresnel_propagator</span><span class="p">(</span>
+        <span class="n">array</span> <span class="o">*=</span> <span class="n">_fresnel_propagator</span><span class="p">(</span>
             <span class="n">gpts</span><span class="o">=</span><span class="n">waves</span><span class="o">.</span><span class="n">gpts</span><span class="p">,</span>
             <span class="n">sampling</span><span class="o">=</span><span class="n">waves</span><span class="o">.</span><span class="n">sampling</span><span class="p">,</span>
             <span class="n">thickness</span><span class="o">=</span><span class="n">thickness</span><span class="p">,</span>
@@ -1091,7 +1086,7 @@ title="Open an issue"
                 <span class="n">j</span> <span class="o">=</span> <span class="n">plane_to_axes</span><span class="p">(</span><span class="n">axis</span><span class="o">.</span><span class="n">direction</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
                 <span class="n">k</span> <span class="o">=</span> <span class="n">spatial_frequencies</span><span class="p">((</span><span class="n">waves</span><span class="o">.</span><span class="n">gpts</span><span class="p">[</span><span class="n">j</span><span class="p">],),</span> <span class="p">(</span><span class="n">waves</span><span class="o">.</span><span class="n">sampling</span><span class="p">[</span><span class="n">j</span><span class="p">],),</span> <span class="n">xp</span><span class="o">=</span><span class="n">xp</span><span class="p">)</span>
                 <span class="n">tilts</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">axis</span><span class="o">.</span><span class="n">values</span><span class="p">)[:,</span> <span class="kc">None</span><span class="p">]</span>
-                <span class="n">shift</span> <span class="o">=</span> <span class="n">tilt_shift</span><span class="p">(</span><span class="n">k</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="kc">None</span><span class="p">],</span> <span class="n">tilts</span><span class="p">,</span> <span class="n">thickness</span><span class="p">)</span>
+                <span class="n">shift</span> <span class="o">=</span> <span class="n">_tilt_shift</span><span class="p">(</span><span class="n">k</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="kc">None</span><span class="p">],</span> <span class="n">tilts</span><span class="p">,</span> <span class="n">thickness</span><span class="p">)</span>
                 <span class="n">shift</span><span class="p">,</span> <span class="n">array</span> <span class="o">=</span> <span class="n">expand_dims_to_match</span><span class="p">(</span>
                     <span class="n">shift</span><span class="p">,</span> <span class="n">array</span><span class="p">,</span> <span class="n">match_dims</span><span class="o">=</span><span class="p">[(</span><span class="o">-</span><span class="mi">1</span><span class="p">,),</span> <span class="p">(</span><span class="o">-</span><span class="mi">2</span> <span class="o">+</span> <span class="n">j</span><span class="p">,)]</span>
                 <span class="p">)</span>
@@ -1105,18 +1100,21 @@ title="Open an issue"
         <span class="bp">self</span><span class="p">,</span> <span class="n">waves</span><span class="p">:</span> <span class="s2">&quot;Waves&quot;</span><span class="p">,</span> <span class="n">thickness</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">overwrite_x</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;Waves&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Propagate wave functions.</span>
+<span class="sd">        Propagate wave functions through free space.</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
 <span class="sd">        waves : Waves</span>
 <span class="sd">            The wave functions to propagate.</span>
+<span class="sd">        thickness : float</span>
+<span class="sd">            Distance in free space to propagate.</span>
 <span class="sd">        overwrite_x : bool</span>
 <span class="sd">            If True, the wave functions may be overwritten.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
 <span class="sd">        propagated_wave_functions : Waves</span>
+<span class="sd">            Propagated wave functions.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_array</span><span class="p">(</span><span class="n">waves</span><span class="p">,</span> <span class="n">thickness</span><span class="p">)</span>
 
@@ -1131,6 +1129,26 @@ title="Open an issue"
     <span class="n">extra_ensemble_axes_shape</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">extra_ensemble_axes_metadata</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">AxisMetadata</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="n">BaseDetector</span><span class="p">,</span> <span class="n">BaseMeasurement</span><span class="p">]:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Allocate multislice measurements that would be produced by a given set of wave functions and detectors for improved</span>
+<span class="sd">    numerical efficiency.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    waves : Waves</span>
+<span class="sd">        Wave functions.</span>
+<span class="sd">    detectors : (list of) BaseDetector</span>
+<span class="sd">        Detector or list of multiple detectors.</span>
+<span class="sd">    extra_ensemble_axes_shape : tuple of int</span>
+<span class="sd">        Optional extra ensemble axes to be added to the allocated measurements.</span>
+<span class="sd">    extra_ensemble_axes_metadata : AxisMetadata</span>
+<span class="sd">        Metadata corresponding to the extra ensemble axes.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    mapping : dict</span>
+<span class="sd">        Mapping of detectors to measurements.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">measurements</span> <span class="o">=</span> <span class="p">{}</span>
     <span class="k">for</span> <span class="n">detector</span> <span class="ow">in</span> <span class="n">detectors</span><span class="p">:</span>
         <span class="n">xp</span> <span class="o">=</span> <span class="n">get_array_module</span><span class="p">(</span><span class="n">detector</span><span class="o">.</span><span class="n">measurement_meta</span><span class="p">(</span><span class="n">waves</span><span class="p">))</span>
@@ -1167,30 +1185,30 @@ title="Open an issue"
     <span class="n">transpose</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;Waves&quot;</span><span class="p">:</span>
     <span class="sd">&quot;&quot;&quot;</span>
-
+<span class="sd">    Calculate one step of the multislice algorithm for the given batch of wave functions through a given potential slice.</span>
 
 <span class="sd">    Parameters</span>
 <span class="sd">    ----------</span>
 <span class="sd">    waves : Waves</span>
-<span class="sd">        A batch of wave functions as a `abtem.Waves` type object.</span>
+<span class="sd">        A batch of wave functions as a :class:`.Waves` object.</span>
 <span class="sd">    potential_slice : PotentialArray or TransmissionFunction</span>
-<span class="sd">        A potential slice as a `abtem.potentials.PotentialArray` or `abtem.potentials.TransmissionFunction`.</span>
+<span class="sd">        A potential slice as a :class:`.PotentialArray` or :class:`.TransmissionFunction`.</span>
 <span class="sd">    propagator : FresnelPropagator, optional</span>
-<span class="sd">        A fresnel propagator type matching the wave functions. The main reason for using this argument is to reuse</span>
+<span class="sd">        A Fresnel propagator type matching the wave functions. The main reason for using this argument is to reuse</span>
 <span class="sd">        a previously calculated propagator. If not provided a new propagator is created.</span>
 <span class="sd">    antialias_aperture : AntialiasAperture, optional</span>
 <span class="sd">        An antialias aperture type matching the wave functions. The main reason for using this argument is to reuse</span>
 <span class="sd">        a previously calculated antialias aperture. If not provided a new antialias aperture is created.</span>
 <span class="sd">    conjugate : bool, optional</span>
-<span class="sd">        If True, use the conjugate of the transmission function. Default is False.</span>
+<span class="sd">        If True, use the conjugate of the transmission function (default is False).</span>
 <span class="sd">    transpose : bool, optional</span>
-<span class="sd">        If True, reverse the order of propagation and transmission. Default is False.</span>
+<span class="sd">        If True, reverse the order of propagation and transmission (default is False).</span>
 
 <span class="sd">    Returns</span>
 <span class="sd">    -------</span>
 <span class="sd">    forward_stepped_waves : Waves</span>
+<span class="sd">        Wave functions propagated and transmitted through the potential slice.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-
     <span class="k">if</span> <span class="n">waves</span><span class="o">.</span><span class="n">device</span> <span class="o">!=</span> <span class="n">potential_slice</span><span class="o">.</span><span class="n">device</span><span class="p">:</span>
         <span class="n">potential_slice</span> <span class="o">=</span> <span class="n">potential_slice</span><span class="o">.</span><span class="n">copy_to_device</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">waves</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
 
@@ -1228,29 +1246,30 @@ title="Open an issue"
     <span class="n">Tuple</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="n">BaseMeasurement</span><span class="p">,</span> <span class="s2">&quot;Waves&quot;</span><span class="p">],</span> <span class="o">...</span><span class="p">],</span> <span class="n">BaseMeasurement</span><span class="p">,</span> <span class="s2">&quot;Waves&quot;</span>
 <span class="p">]:</span>
     <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Run the multislice algorithm given a batch of wave functions and a potential.</span>
+<span class="sd">    Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting</span>
+<span class="sd">    at each of the exit planes specified in the potential.</span>
 
 <span class="sd">    Parameters</span>
 <span class="sd">    ----------</span>
 <span class="sd">    waves : Waves</span>
-<span class="sd">        A batch of wave functions as a `abtem.Waves` type object.</span>
+<span class="sd">        A batch of wave functions as a :class:`.Waves` object.</span>
 <span class="sd">    potential : BasePotential</span>
-<span class="sd">        A potential as `abtem.potentials.AbstractPotential`.</span>
-<span class="sd">    detectors : detector, list of detectors, optional</span>
+<span class="sd">        A potential as :class:`.BasePotential` object.</span>
+<span class="sd">    detectors : (list of) BaseDetector, optional</span>
 <span class="sd">        A detector or a list of detectors defining how the wave functions should be converted to measurements after</span>
-<span class="sd">        running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.</span>
+<span class="sd">        running the multislice algorithm.</span>
 <span class="sd">    conjugate : bool, optional</span>
-<span class="sd">        If True, use the conjugate of the transmission function. Default is False.</span>
+<span class="sd">        If True, use the conjugate of the transmission function (default is False).</span>
 <span class="sd">    transpose : bool, optional</span>
-<span class="sd">        If True, reverse the order of propagation and transmission. Default is False.</span>
+<span class="sd">        If True, reverse the order of propagation and transmission (default is False).</span>
 
 <span class="sd">    Returns</span>
 <span class="sd">    -------</span>
-<span class="sd">    exit_waves : Waves</span>
+<span class="sd">    measurements : Waves or (list of) BaseMeasurement</span>
+<span class="sd">        Exit waves or detected measurements or lists of measurements.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">antialias_aperture</span> <span class="o">=</span> <span class="n">AntialiasAperture</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">get_array_module</span><span class="p">(</span><span class="n">waves</span><span class="o">.</span><span class="n">array</span><span class="p">))</span>
     <span class="n">antialias_aperture</span><span class="o">.</span><span class="n">match_grid</span><span class="p">(</span><span class="n">waves</span><span class="p">)</span>
-
 
     <span class="n">propagator</span> <span class="o">=</span> <span class="n">FresnelPropagator</span><span class="p">()</span>
 

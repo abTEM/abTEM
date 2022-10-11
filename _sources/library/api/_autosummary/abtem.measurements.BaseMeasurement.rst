@@ -1,4 +1,4 @@
-﻿BaseMeasurement
+BaseMeasurement
 ===============
 
 .. currentmodule:: abtem.measurements

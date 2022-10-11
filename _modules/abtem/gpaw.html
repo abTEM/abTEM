@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -33,7 +33,6 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
@@ -55,7 +54,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -212,6 +211,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../user_guide/walkthrough/core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -795,11 +799,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -807,11 +806,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -1019,7 +1013,6 @@ title="Open an issue"
     <span class="kn">from</span> <span class="nn">gpaw.lfc</span> <span class="kn">import</span> <span class="n">LFC</span><span class="p">,</span> <span class="n">BasisFunctions</span>
     <span class="kn">from</span> <span class="nn">gpaw.transformers</span> <span class="kn">import</span> <span class="n">Transformer</span>
     <span class="kn">from</span> <span class="nn">gpaw.utilities</span> <span class="kn">import</span> <span class="n">unpack2</span>
-    <span class="kn">from</span> <span class="nn">gpaw</span> <span class="kn">import</span> <span class="n">GPAW</span>
     <span class="kn">from</span> <span class="nn">gpaw.atom.aeatom</span> <span class="kn">import</span> <span class="n">AllElectronAtom</span>
     <span class="kn">from</span> <span class="nn">gpaw.io</span> <span class="kn">import</span> <span class="n">Reader</span>
     <span class="kn">from</span> <span class="nn">gpaw.density</span> <span class="kn">import</span> <span class="n">RealSpaceDensity</span>
@@ -1176,7 +1169,7 @@ title="Open an issue"
 
 
 <span class="k">def</span> <span class="nf">_get_all_electron_density</span><span class="p">(</span>
-    <span class="n">nt_sG</span><span class="p">,</span> <span class="n">gd</span><span class="p">,</span> <span class="n">D_asp</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">setups</span><span class="p">,</span> <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span> <span class="n">gridrefinement</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="n">nt_sG</span><span class="p">,</span> <span class="n">gd</span><span class="p">,</span> <span class="n">D_asp</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">setups</span><span class="p">,</span> <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span> <span class="n">gridrefinement</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span>
 <span class="p">):</span>
     <span class="n">nspins</span> <span class="o">=</span> <span class="n">nt_sG</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
     <span class="n">spos_ac</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">get_scaled_positions</span><span class="p">()</span> <span class="o">%</span> <span class="mf">1.0</span>
@@ -1209,7 +1202,7 @@ title="Open an issue"
     <span class="n">W</span> <span class="o">=</span> <span class="mi">0</span>
     <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">phi</span><span class="o">.</span><span class="n">atom_indices</span><span class="p">:</span>
         <span class="n">nw</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">phi</span><span class="o">.</span><span class="n">sphere_a</span><span class="p">[</span><span class="n">a</span><span class="p">]</span><span class="o">.</span><span class="n">M_w</span><span class="p">)</span>
-        <span class="n">a_W</span><span class="p">[</span><span class="n">W</span> <span class="p">:</span> <span class="n">W</span> <span class="o">+</span> <span class="n">nw</span><span class="p">]</span> <span class="o">=</span> <span class="n">a</span>
+        <span class="n">a_W</span><span class="p">[</span><span class="n">W</span><span class="p">:</span> <span class="n">W</span> <span class="o">+</span> <span class="n">nw</span><span class="p">]</span> <span class="o">=</span> <span class="n">a</span>
         <span class="n">W</span> <span class="o">+=</span> <span class="n">nw</span>
 
     <span class="n">x_W</span> <span class="o">=</span> <span class="n">phi</span><span class="o">.</span><span class="n">create_displacement_arrays</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
@@ -1242,7 +1235,7 @@ title="Open an issue"
     <span class="n">W</span> <span class="o">=</span> <span class="mi">0</span>
     <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">nc</span><span class="o">.</span><span class="n">atom_indices</span><span class="p">:</span>
         <span class="n">nw</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">nc</span><span class="o">.</span><span class="n">sphere_a</span><span class="p">[</span><span class="n">a</span><span class="p">]</span><span class="o">.</span><span class="n">M_w</span><span class="p">)</span>
-        <span class="n">a_W</span><span class="p">[</span><span class="n">W</span> <span class="p">:</span> <span class="n">W</span> <span class="o">+</span> <span class="n">nw</span><span class="p">]</span> <span class="o">=</span> <span class="n">a</span>
+        <span class="n">a_W</span><span class="p">[</span><span class="n">W</span><span class="p">:</span> <span class="n">W</span> <span class="o">+</span> <span class="n">nw</span><span class="p">]</span> <span class="o">=</span> <span class="n">a</span>
         <span class="n">W</span> <span class="o">+=</span> <span class="n">nw</span>
     <span class="n">scale</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">nspins</span>
 
@@ -1262,45 +1255,79 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="GPAWPotential"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html#abtem.gpaw.GPAWPotential">[docs]</a><span class="k">class</span> <span class="nc">GPAWPotential</span><span class="p">(</span><span class="n">_PotentialBuilder</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Calculate the electrostatic potential from a (set of) converged GPAW DFT calculation(s). Frozen phonons can be</span>
+<span class="sd">    included either by specifying multiple GPAW calculators corresponding to the different phonon configurations, or</span>
+<span class="sd">    approximately for a single calculator by using the `frozen_phonons` keyword.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    calculators : (list of) gpaw.calculator.GPAW or (list of) str</span>
+<span class="sd">        GPAW calculator or path to GPAW calculator or list of calculators or paths. Atoms are read from the calculator.</span>
+<span class="sd">    gpts : one or two int, optional</span>
+<span class="sd">        Number of grid points in `x` and `y` describing each slice of the potential. Provide either &quot;sampling&quot; (spacing</span>
+<span class="sd">        between consecutive grid points) or &quot;gpts&quot; (total number of grid points).</span>
+<span class="sd">    sampling : one or two float, optional</span>
+<span class="sd">        Sampling of the potential in `x` and `y` [1 / Å]. Provide either &quot;sampling&quot; or &quot;gpts&quot;.</span>
+<span class="sd">    slice_thickness : float or sequence of float, optional</span>
+<span class="sd">        Thickness of the potential slices in the propagation direction in [Å] (default is 0.5 Å).</span>
+<span class="sd">        If given as a float the number of slices is calculated by dividing the slice thickness into the `z`-height</span>
+<span class="sd">        of supercell. The slice thickness may be given as a sequence of values for each slice, in which case an</span>
+<span class="sd">        error will be thrown if the sum of slice thicknesses is not equal to the height of the atoms.</span>
+<span class="sd">    exit_planes : int or tuple of int, optional</span>
+<span class="sd">        The `exit_planes` argument can be used to calculate thickness series.</span>
+<span class="sd">        Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an</span>
+<span class="sd">        exit plane is desired, and hence during a multislice simulation a measurement is created. If `exit_planes` is</span>
+<span class="sd">        an integer a measurement will be collected every `exit_planes` number of slices.</span>
+<span class="sd">    plane : str or two tuples of three float, optional</span>
+<span class="sd">        The plane relative to the provided atoms mapped to `xy` plane of the potential, i.e. provided plane is</span>
+<span class="sd">        perpendicular to the propagation direction. If string, it must be a concatenation of two of &#39;x&#39;, &#39;y&#39; and &#39;z&#39;;</span>
+<span class="sd">        the default value &#39;xy&#39; indicates that potential slices are cuts along the `xy`-plane of the atoms.</span>
+<span class="sd">        The plane may also be specified with two arbitrary 3D vectors, which are mapped to the `x` and `y` directions of</span>
+<span class="sd">        the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,</span>
+<span class="sd">        the second vector is rotated in the plane to become perpendicular to the first. Providing a value of</span>
+<span class="sd">        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing &#39;xy&#39;.</span>
+<span class="sd">    origin : three float, optional</span>
+<span class="sd">        The origin relative to the provided Atoms mapped to the origin of the Potential. This is equivalent to translating</span>
+<span class="sd">        the atoms. The default is (0., 0., 0.)</span>
+<span class="sd">    box : three float, optional</span>
+<span class="sd">        The extent of the potential in `x`, `y` and `z`. If not given this is determined from the atoms&#39; cell.</span>
+<span class="sd">        If the box size does not match an integer number of the atoms&#39; supercell, an affine transformation may be</span>
+<span class="sd">        necessary to preserve periodicity, determined by the `periodic` keyword</span>
+<span class="sd">    periodic : bool</span>
+<span class="sd">        If a transformation of the atomic structure is required, `periodic` determines how the atomic structure is</span>
+<span class="sd">        transformed. If True (default), the periodicity of the Atoms is preserved, which may require applying a small affine</span>
+<span class="sd">        transformation to the atoms. If False, the transformed potential is effectively cut out of a larger repeated</span>
+<span class="sd">        potential, which may not preserve periodicity.</span>
+<span class="sd">    frozen_phonons : abtem.AbstractFrozenPhonons, optional</span>
+<span class="sd">        Approximates frozen phonons for a single GPAW calculator by displacing only the nuclear core potentials.</span>
+<span class="sd">        Supercedes the atoms from the calculator.</span>
+<span class="sd">    repetitions : tuple of int</span>
+<span class="sd">        Repeats the atoms by integer amounts in the `x`, `y` and `z` directions before applying frozen phonon displacements</span>
+<span class="sd">        to calculate the potential contribution of the nuclear cores. Necessary when using frozen phonons.</span>
+<span class="sd">    gridrefinement : int</span>
+<span class="sd">        Necessary interpolation of the charge density into a finer grid for improved numerical precision.</span>
+<span class="sd">        Allowed values are &#39;2&#39; and &#39;4&#39;.</span>
+<span class="sd">    device : str, optional</span>
+<span class="sd">        The device used for calculating the potential, &#39;cpu&#39; or &#39;gpu&#39;. The default is determined by the user</span>
+<span class="sd">        configuration file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
 <div class="viewcode-block" id="GPAWPotential.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html#abtem.gpaw.GPAWPotential.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span>
-        <span class="n">calculators</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="s2">&quot;GPAW&quot;</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="s2">&quot;GPAW&quot;</span><span class="p">],</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="nb">str</span><span class="p">],</span>
-        <span class="n">gpts</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">sampling</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">slice_thickness</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
-        <span class="n">exit_planes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">gridrefinement</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span>
-        <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">plane</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;xy&quot;</span><span class="p">,</span>
-        <span class="n">box</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">origin</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
-        <span class="n">periodic</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-        <span class="n">repetitions</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
-        <span class="n">frozen_phonons</span><span class="p">:</span> <span class="n">AbstractFrozenPhonons</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="bp">self</span><span class="p">,</span>
+            <span class="n">calculators</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="s2">&quot;GPAW&quot;</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="s2">&quot;GPAW&quot;</span><span class="p">],</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="nb">str</span><span class="p">],</span>
+            <span class="n">gpts</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">sampling</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">slice_thickness</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+            <span class="n">exit_planes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">plane</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;xy&quot;</span><span class="p">,</span>
+            <span class="n">origin</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
+            <span class="n">box</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">periodic</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+            <span class="n">frozen_phonons</span><span class="p">:</span> <span class="n">AbstractFrozenPhonons</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">repetitions</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
+            <span class="n">gridrefinement</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span>
+            <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="p">):</span>
-        <span class="sd">&quot;&quot;&quot;</span>
-
-<span class="sd">        Calculate electrostatic potential from a converged DFT calculation using GPAW.</span>
-
-<span class="sd">        Parameters</span>
-<span class="sd">        ----------</span>
-<span class="sd">        calculators : GPAW calculator or path to GPAW calculator or list of calculators or paths</span>
-
-<span class="sd">        gpts : one or two int, optional</span>
-<span class="sd">            Number of grid points in x and y describing each slice of the potential. Provide either &quot;sampling&quot; or &quot;gpts&quot;.</span>
-<span class="sd">        sampling : one or two float, optional</span>
-<span class="sd">            Sampling of the potential in x and y [1 / Å]. Provide either &quot;sampling&quot; or &quot;gpts&quot;.</span>
-<span class="sd">        slice_thickness</span>
-<span class="sd">        exit_planes</span>
-<span class="sd">        gridrefinement</span>
-<span class="sd">        device</span>
-<span class="sd">        plane</span>
-<span class="sd">        box</span>
-<span class="sd">        origin</span>
-<span class="sd">        periodic</span>
-<span class="sd">        repetitions</span>
-<span class="sd">        frozen_phonons</span>
-<span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="k">if</span> <span class="n">GPAW</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
@@ -1420,7 +1447,21 @@ title="Open an issue"
             <span class="n">atoms</span><span class="o">=</span><span class="n">random_atoms</span><span class="p">,</span>
         <span class="p">)</span>
 
-    <span class="k">def</span> <span class="nf">generate_slices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+<div class="viewcode-block" id="GPAWPotential.generate_slices"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html#abtem.gpaw.GPAWPotential.generate_slices">[docs]</a>    <span class="k">def</span> <span class="nf">generate_slices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generate the slices for the potential.</span>
+
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        first_slice : int, optional</span>
+<span class="sd">            Index of the first slice of the generated potential.</span>
+<span class="sd">        last_slice : int, optional</span>
+<span class="sd">            Index of the last slice of the generated potential.</span>
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        slices : generator of np.ndarray</span>
+<span class="sd">            Generator for the array of slices.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">if</span> <span class="n">last_slice</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">last_slice</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
 
@@ -1447,9 +1488,9 @@ title="Open an issue"
         <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_all_electron_density</span><span class="p">()</span>
 
         <span class="k">for</span> <span class="n">slic</span> <span class="ow">in</span> <span class="n">_generate_slices</span><span class="p">(</span>
-            <span class="n">array</span><span class="p">,</span> <span class="n">ewald_potential</span><span class="p">,</span> <span class="n">first_slice</span><span class="o">=</span><span class="n">first_slice</span><span class="p">,</span> <span class="n">last_slice</span><span class="o">=</span><span class="n">last_slice</span>
+                <span class="n">array</span><span class="p">,</span> <span class="n">ewald_potential</span><span class="p">,</span> <span class="n">first_slice</span><span class="o">=</span><span class="n">first_slice</span><span class="p">,</span> <span class="n">last_slice</span><span class="o">=</span><span class="n">last_slice</span>
         <span class="p">):</span>
-            <span class="k">yield</span> <span class="n">slic</span>
+            <span class="k">yield</span> <span class="n">slic</span></div>
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">ensemble_axes_metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">AxisMetadata</span><span class="p">]:</span>
@@ -1505,7 +1546,7 @@ title="Open an issue"
         <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="p">,</span> <span class="n">FrozenPhonons</span><span class="p">):</span>
             <span class="n">array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">object</span><span class="p">)</span>
             <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">fp</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="o">.</span><span class="n">_partition_args</span><span class="p">(</span><span class="n">chunks</span><span class="p">,</span> <span class="n">lazy</span><span class="o">=</span><span class="n">lazy</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">frozen_phonons</span><span class="o">.</span><span class="n">_partition_args</span><span class="p">(</span><span class="n">chunks</span><span class="p">,</span> <span class="n">lazy</span><span class="o">=</span><span class="n">lazy</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
             <span class="p">):</span>
                 <span class="k">if</span> <span class="n">lazy</span><span class="p">:</span>
                     <span class="n">block</span> <span class="o">=</span> <span class="n">dask</span><span class="o">.</span><span class="n">delayed</span><span class="p">(</span><span class="n">frozen_phonons</span><span class="p">)(</span><span class="n">calculators</span><span class="p">,</span> <span class="n">fp</span><span class="p">)</span>
@@ -1550,6 +1591,9 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="GPAWParametrization"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html#abtem.gpaw.GPAWParametrization">[docs]</a><span class="k">class</span> <span class="nc">GPAWParametrization</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Calculate an Independent Atomic Model (IAM) potential based on a GPAW DFT calculation.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
 <div class="viewcode-block" id="GPAWParametrization.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html#abtem.gpaw.GPAWParametrization.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_potential_functions</span> <span class="o">=</span> <span class="p">{}</span></div>
 
@@ -1599,39 +1643,54 @@ title="Open an issue"
         <span class="c1"># vr_e = interp1d(radial_coord, electron_potential, fill_value=&#39;extrapolate&#39;, bounds_error=False)</span>
         <span class="c1"># vr = lambda r: atomic_numbers[symbol] / r / (4 * np.pi * eps0) + vr_e(r) / r * units.Hartree * units.Bohr</span>
 
-    <span class="k">def</span> <span class="nf">charge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">symbol</span><span class="p">,</span> <span class="n">charge</span><span class="o">=</span><span class="mf">0.0</span><span class="p">):</span>
+<div class="viewcode-block" id="GPAWParametrization.charge"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html#abtem.gpaw.GPAWParametrization.charge">[docs]</a>    <span class="k">def</span> <span class="nf">charge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">symbol</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">charge</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Calculate the radial charge density for an atom.</span>
+
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        symbol : str</span>
+<span class="sd">            Chemical symbol of the atomic element.</span>
+<span class="sd">        charge : float, optional</span>
+<span class="sd">            Charge the atom by the given fractional number of electrons.</span>
+
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        charge : callable</span>
+<span class="sd">            Function of the radial charge density with parameter &#39;r&#39; corresponding to the radial distance from the core.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">ae</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_all_electron_atom</span><span class="p">(</span><span class="n">symbol</span><span class="p">,</span> <span class="n">charge</span><span class="p">)</span>
         <span class="n">r</span> <span class="o">=</span> <span class="n">ae</span><span class="o">.</span><span class="n">rgd</span><span class="o">.</span><span class="n">r_g</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span>
         <span class="n">n</span> <span class="o">=</span> <span class="n">ae</span><span class="o">.</span><span class="n">n_sg</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">/</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span> <span class="o">**</span> <span class="mi">3</span>
-        <span class="k">return</span> <span class="n">interp1d</span><span class="p">(</span><span class="n">r</span><span class="p">,</span> <span class="n">n</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="s2">&quot;extrapolate&quot;</span><span class="p">,</span> <span class="n">bounds_error</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">interp1d</span><span class="p">(</span><span class="n">r</span><span class="p">,</span> <span class="n">n</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="s2">&quot;extrapolate&quot;</span><span class="p">,</span> <span class="n">bounds_error</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
 
-    <span class="k">def</span> <span class="nf">potential</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">symbol</span><span class="p">,</span> <span class="n">charge</span><span class="o">=</span><span class="mf">0.0</span><span class="p">):</span>
+<div class="viewcode-block" id="GPAWParametrization.potential"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html#abtem.gpaw.GPAWParametrization.potential">[docs]</a>    <span class="k">def</span> <span class="nf">potential</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">symbol</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">charge</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Calculate the radial electrostatic potential for an atom.</span>
+
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        symbol : str</span>
+<span class="sd">            Chemical symbol of the atomic element.</span>
+<span class="sd">        charge : float, optional</span>
+<span class="sd">            Charge the atom by the given fractional number of electrons.</span>
+
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        potential : callable</span>
+<span class="sd">            Function of the radial electrostatic potential with parameter &#39;r&#39; corresponding to the radial distance from the core.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">ae</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_all_electron_atom</span><span class="p">(</span><span class="n">symbol</span><span class="p">,</span> <span class="n">charge</span><span class="p">)</span>
         <span class="n">r</span> <span class="o">=</span> <span class="n">ae</span><span class="o">.</span><span class="n">rgd</span><span class="o">.</span><span class="n">r_g</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span>
-        <span class="c1"># n = ae.n_sg.sum(0) / units.Bohr ** 3</span>
 
         <span class="n">ve</span> <span class="o">=</span> <span class="o">-</span><span class="n">ae</span><span class="o">.</span><span class="n">rgd</span><span class="o">.</span><span class="n">poisson</span><span class="p">(</span><span class="n">ae</span><span class="o">.</span><span class="n">n_sg</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
         <span class="n">ve</span> <span class="o">=</span> <span class="n">interp1d</span><span class="p">(</span><span class="n">r</span><span class="p">,</span> <span class="n">ve</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="s2">&quot;extrapolate&quot;</span><span class="p">,</span> <span class="n">bounds_error</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-        <span class="c1"># electron_potential = -ae.rgd.poisson(ae.n_sg.sum(0))</span>
 
         <span class="n">vr</span> <span class="o">=</span> <span class="p">(</span>
             <span class="k">lambda</span> <span class="n">r</span><span class="p">:</span> <span class="n">atomic_numbers</span><span class="p">[</span><span class="n">symbol</span><span class="p">]</span> <span class="o">/</span> <span class="n">r</span> <span class="o">/</span> <span class="p">(</span><span class="mi">4</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">eps0</span><span class="p">)</span>
-            <span class="o">+</span> <span class="n">ve</span><span class="p">(</span><span class="n">r</span><span class="p">)</span> <span class="o">/</span> <span class="n">r</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Hartree</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span>
+                      <span class="o">+</span> <span class="n">ve</span><span class="p">(</span><span class="n">r</span><span class="p">)</span> <span class="o">/</span> <span class="n">r</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Hartree</span> <span class="o">*</span> <span class="n">units</span><span class="o">.</span><span class="n">Bohr</span>
         <span class="p">)</span>
-        <span class="k">return</span> <span class="n">vr</span></div>
-
-    <span class="c1"># def get_function(self, symbol, charge=0.):</span>
-    <span class="c1">#     #if symbol in self._potential_functions.keys():</span>
-    <span class="c1">#     #    return self._potential_functions[(symbol, charge)]</span>
-    <span class="c1">#</span>
-    <span class="c1">#</span>
-    <span class="c1">#</span>
-    <span class="c1">#     self._potential_functions[(symbol, charge)] = vr</span>
-    <span class="c1">#     return self._potential_functions[(symbol, charge)]</span>
-    <span class="c1">#</span>
-    <span class="c1"># def potential(self, r, symbol, charge=0.):</span>
-    <span class="c1">#     potential = self._calculate(symbol, charge)</span>
-    <span class="c1">#     return potential(r)</span>
+        <span class="k">return</span> <span class="n">vr</span></div></div>
 </pre></div>
 
               </div>

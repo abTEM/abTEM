@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,6 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
@@ -60,7 +59,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Potentials" href="potentials.html" />
     <link rel="prev" title="Walkthrough" href="walkthrough.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -217,6 +216,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -1239,10 +1243,10 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="atomic-models-with-ase">
-<span id="walkthrough-atomic-models"></span><h1>Atomic models with ASE<a class="headerlink" href="#atomic-models-with-ase" title="Permalink to this heading">#</a></h1>
+<span id="walkthrough-atomic-models"></span><h1>Atomic models with ASE<a class="headerlink" href="#atomic-models-with-ase" title="Permalink to this headline">#</a></h1>
 <p>abTEM uses the Atomic Simulation Environment (<a class="reference external" href="https://wiki.fysik.dtu.dk/ase/">ASE</a>) for creating model atomic structures <span id="id1">[<a class="reference internal" href="../../library/bibliography.html#id8" title="Ask Hjorth Larsen, Jens Jørgen Mortensen, Jakob Blomqvist, Ivano E Castelli, Rune Christensen, Marcin Dułak, Jesper Friis, Michael N Groves, Bjørk Hammer, Cory Hargus, Eric D Hermes, Paul C Jennings, Peter Bjerre Jensen, James Kermode, John R Kitchin, Esben Leonhard Kolsbjerg, Joseph Kubal, Kristen Kaasbjerg, Steen Lysgaard, Jón Bergmann Maronsson, Tristan Maxson, Thomas Olsen, Lars Pastewka, Andrew Peterson, Carsten Rostgaard, Jakob Schiøtz, Ole Schütt, Mikkel Strange, Kristian S Thygesen, Tejs Vegge, Lasse Vilhelmsen, Michael Walter, Zhenhua Zeng, and Karsten W Jacobsen. The atomic simulation environment — a python library for working with atoms. Journal of Physics: Condensed Matter, 29(27):273002, 2017.">LMB+17</a>]</span>. ASE is a set of tools and Python modules for setting up, manipulating, visualizing and analyzing atomistic simulations. It is also used in conjunction with other simulation codes such as <a class="reference external" href="https://wiki.fysik.dtu.dk/gpaw/">GPAW</a> for running DFT simulations. Here, we introduce the set of features of ASE needed for image simulations; please refer to the ASE documentation for a more general introduction.</p>
 <section id="atoms">
-<h2><code class="docutils literal notranslate"><span class="pre">Atoms</span></code><a class="headerlink" href="#atoms" title="Permalink to this heading">#</a></h2>
+<h2><code class="docutils literal notranslate"><span class="pre">Atoms</span></code><a class="headerlink" href="#atoms" title="Permalink to this headline">#</a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">Atoms</span></code> defines a collection of atoms. Here is how to set up an N<sub>2</sub> molecule by directly specifying the position of the two nitrogen atoms (in units of Ångstrom).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1313,7 +1317,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="import-export">
-<h2>Import/export<a class="headerlink" href="#import-export" title="Permalink to this heading">#</a></h2>
+<h2>Import/export<a class="headerlink" href="#import-export" title="Permalink to this headline">#</a></h2>
 <p>ASE can import all the common atomic structure formats, see a full list <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/io/io.html">here</a>. Below we import a .cif-file defining a unit cell of strontium titanate (SrTiO<sub>3</sub>).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1346,7 +1350,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="visualizing-structures">
-<h2>Visualizing structures<a class="headerlink" href="#visualizing-structures" title="Permalink to this heading">#</a></h2>
+<h2>Visualizing structures<a class="headerlink" href="#visualizing-structures" title="Permalink to this headline">#</a></h2>
 <p>The simplest way to visualize the atoms is the <code class="docutils literal notranslate"><span class="pre">show_atoms</span></code> function. This function creates a <code class="docutils literal notranslate"><span class="pre">matplotlib</span></code> figure of a 2D orthogonal projection of the structure perpendicular to a specified plane.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1360,7 +1364,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/atomic_models_17_01.png" src="../../_images/atomic_models_17_01.png" />
+<img alt="../../_images/atomic_models_17_0.png" src="../../_images/atomic_models_17_0.png" />
 </div>
 </div>
 <p>The multislice algorithm requires periodic boundary conditions, hence we should imagine that the atoms at the boundary have an equivalent image at the opposite side. We can show the periodic images of the atoms at the boundary by setting <code class="docutils literal notranslate"><span class="pre">show_periodic=True</span></code>.</p>
@@ -1376,7 +1380,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/atomic_models_19_01.png" src="../../_images/atomic_models_19_01.png" />
+<img alt="../../_images/atomic_models_19_0.png" src="../../_images/atomic_models_19_0.png" />
 </div>
 </div>
 <p>To view the atoms in an interactive 3d viewer, we can use ASE’s <code class="docutils literal notranslate"><span class="pre">view</span></code> function. See the documentation <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/visualize/visualize.html">here</a>. Note that this may not work in a remote environment.</p>
@@ -1390,7 +1394,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="bulding-structures">
-<h2>Bulding structures<a class="headerlink" href="#bulding-structures" title="Permalink to this heading">#</a></h2>
+<h2>Bulding structures<a class="headerlink" href="#bulding-structures" title="Permalink to this headline">#</a></h2>
 <p>In addition to importing structures, ASE has tools for procedurally creating many common structures:</p>
 <ul class="simple">
 <li><p>Common bulk crystals: <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/build/build.html#ase.build.bulk"><code class="docutils literal notranslate"><span class="pre">ase.build.bulk</span></code></a></p></li>
@@ -1421,10 +1425,10 @@ title="Print to PDF"
 </div>
 </section>
 <section id="manipulating-structures">
-<h2>Manipulating structures<a class="headerlink" href="#manipulating-structures" title="Permalink to this heading">#</a></h2>
+<h2>Manipulating structures<a class="headerlink" href="#manipulating-structures" title="Permalink to this headline">#</a></h2>
 <p>The structure you import or build may not match your requirements or the requirements of abTEM. Here, we exemplify the most common manipulations needed for modifying atomic models for image simulation.</p>
 <section id="rotating-structures">
-<h3>Rotating structures<a class="headerlink" href="#rotating-structures" title="Permalink to this heading">#</a></h3>
+<h3>Rotating structures<a class="headerlink" href="#rotating-structures" title="Permalink to this headline">#</a></h3>
 <p>A common problem when creating model structures is choosing the imaging direction. abTEM always assumes that the imaging electrons travels along the <span class="math notranslate nohighlight">\(z\)</span>-axis in the direction from negative to positive coordinate values, hence choosing the propagation direction requires manipulating the atomic structure.</p>
 <p>In this example, we rotate the nanoparticle into the (111) zone axis. We first <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/atoms.html?highlight=atoms#ase.Atoms.rotate"><code class="docutils literal notranslate"><span class="pre">rotate</span></code></a> the atoms by <span class="math notranslate nohighlight">\(45 \ \mathrm{deg.}\)</span> around <span class="math notranslate nohighlight">\(x\)</span> and then by <span class="math notranslate nohighlight">\(\sim35.26 \ \mathrm{deg.}\)</span> around <span class="math notranslate nohighlight">\(y\)</span>.</p>
 <div class="cell docutils container">
@@ -1445,7 +1449,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="adding-vacuum">
-<h3>Adding vacuum<a class="headerlink" href="#adding-vacuum" title="Permalink to this heading">#</a></h3>
+<h3>Adding vacuum<a class="headerlink" href="#adding-vacuum" title="Permalink to this headline">#</a></h3>
 <p>The unit cell of the nanoparticle has <em>zero extent</em>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1482,7 +1486,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="rotation-of-bulk-structures">
-<h3>Rotation of bulk structures<a class="headerlink" href="#rotation-of-bulk-structures" title="Permalink to this heading">#</a></h3>
+<h3>Rotation of bulk structures<a class="headerlink" href="#rotation-of-bulk-structures" title="Permalink to this headline">#</a></h3>
 <p>We just rotated the nanoparticle without considering the unit cell because the nanoparticle did not require periodicity at the cell boundary. This is not possible for periodic structures, in such cases ASE provides the <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/build/surface.html#create-specific-non-common-surfaces"><code class="docutils literal notranslate"><span class="pre">surface</span></code></a> function for picking the <a class="reference external" href="https://en.wikipedia.org/wiki/Zone_axis">zone axis</a> of a given structure by providing the Miller indices. Below we create a SrTiO<sub>3</sub> structure in the (110) zone axis.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1493,7 +1497,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/atomic_models_32_01.png" src="../../_images/atomic_models_32_01.png" />
+<img alt="../../_images/atomic_models_32_0.png" src="../../_images/atomic_models_32_0.png" />
 </div>
 </div>
 <div class="admonition seealso">
@@ -1502,7 +1506,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="repeating-the-structure">
-<h3>Repeating the structure<a class="headerlink" href="#repeating-the-structure" title="Permalink to this heading">#</a></h3>
+<h3>Repeating the structure<a class="headerlink" href="#repeating-the-structure" title="Permalink to this headline">#</a></h3>
 <p>It is often necessary to repeat the unit cell. For example, you may need to increase the thickness of the structure by repeating it along <span class="math notranslate nohighlight">\(z\)</span>. In STEM, the <span class="math notranslate nohighlight">\(xy\)</span>-extent of the model structure have to be large enough to accomodate the size of the probe to prevent self-interaction with its periodic images.</p>
 <p>In ASE structures may be repeated by multiplying them with a tuple of 3 integers.</p>
 <div class="cell docutils container">
@@ -1522,7 +1526,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="conditionally-modifying-atoms">
-<h3>Conditionally modifying atoms<a class="headerlink" href="#conditionally-modifying-atoms" title="Permalink to this heading">#</a></h3>
+<h3>Conditionally modifying atoms<a class="headerlink" href="#conditionally-modifying-atoms" title="Permalink to this headline">#</a></h3>
 <p>The atomic positions and numbers are just numpy arrays and can be modified directly. The ASE documentation provides some tips <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/tips.html#atoms-objects">here</a>.</p>
 <p>We create a SrTiO<sub>3</sub> / LaTiO<sub>3</sub> interface by changing the atomic number of half the Sr atoms.</p>
 <div class="cell docutils container">
@@ -1551,7 +1555,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="scaling-structures">
-<h3>Scaling structures<a class="headerlink" href="#scaling-structures" title="Permalink to this heading">#</a></h3>
+<h3>Scaling structures<a class="headerlink" href="#scaling-structures" title="Permalink to this headline">#</a></h3>
 <p>The structure created above uses the lattice constant of SrTiO<sub>3</sub> calculated from DFT. Below we scale the structure to have the average experimental lattice constant of SrTiO<sub>3</sub> and LaTiO<sub>3</sub>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1575,7 +1579,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="combining-multiple-structures">
-<h3>Combining multiple structures<a class="headerlink" href="#combining-multiple-structures" title="Permalink to this heading">#</a></h3>
+<h3>Combining multiple structures<a class="headerlink" href="#combining-multiple-structures" title="Permalink to this headline">#</a></h3>
 <p>Some complex hetero-structures can only be created by combining multiple component structures. As an example, we create a simple model of a nanoparticle supported on amorphous carbon.</p>
 <p>Below, the amorphous carbon is created by randomly displacing the atoms of a diamond structure.</p>
 <div class="cell docutils container">
@@ -1655,7 +1659,7 @@ title="Print to PDF"
 </section>
 </section>
 <section id="orthogonal-and-periodic-supercells">
-<span id="orthogonal"></span><h2>Orthogonal and periodic supercells<a class="headerlink" href="#orthogonal-and-periodic-supercells" title="Permalink to this heading">#</a></h2>
+<span id="orthogonal"></span><h2>Orthogonal and periodic supercells<a class="headerlink" href="#orthogonal-and-periodic-supercells" title="Permalink to this headline">#</a></h2>
 <p>The multislice algorithm requires an orthogonal and periodic atomic structure as its input. However, taking any arbitrary structure and making it periodic and orthogonal is not always trivial, we have an in-depth tutorial on this problem here.</p>
 <p>Below we briefly introduce a tool we have created to solve this problem. To demonstrate the tool, we start by creating a graphene structure with the its minimal unit cell.</p>
 <div class="cell docutils container">
@@ -1759,7 +1763,7 @@ shear strains (percent): 	 xy = 0.000, 	 xz = 0.000, 	 xz = 0.000
         },
         kernelOptions: {
             kernelName: "test_threads",
-            path: "./user_guide\walkthrough"
+            path: "./user_guide/walkthrough"
         },
         predefinedOutput: true
     }

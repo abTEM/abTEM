@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,6 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
@@ -58,7 +57,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="GPAWPotential" href="abtem.gpaw.GPAWPotential.html" />
     <link rel="prev" title="gpaw" href="abtem.gpaw.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -215,6 +214,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/walkthrough/core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -798,11 +802,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -810,11 +809,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -1026,11 +1020,12 @@ title="Print to PDF"
               <div>
                 
   <section id="gpawparametrization">
-<h1>GPAWParametrization<a class="headerlink" href="#gpawparametrization" title="Permalink to this heading">#</a></h1>
+<h1>GPAWParametrization<a class="headerlink" href="#gpawparametrization" title="Permalink to this headline">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.gpaw.GPAWParametrization">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.gpaw.</span></span><span class="sig-name descname"><span class="pre">GPAWParametrization</span></span><a class="reference internal" href="../../../_modules/abtem/gpaw.html#GPAWParametrization"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.gpaw.GPAWParametrization" title="Permalink to this definition">#</a></dt>
 <dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<p>Calculate an Independent Atomic Model (IAM) potential based on a GPAW DFT calculation.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.gpaw.GPAWParametrization.__init__">
 <span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/gpaw.html#GPAWParametrization.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.gpaw.GPAWParametrization.__init__" title="Permalink to this definition">#</a></dt>
@@ -1046,14 +1041,54 @@ title="Print to PDF"
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.gpaw.GPAWParametrization.__init__" title="abtem.gpaw.GPAWParametrization.__init__"><code class="xref py py-obj docutils literal notranslate"><span class="pre">__init__</span></code></a>()</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">charge</span></code>(symbol[, charge])</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.gpaw.GPAWParametrization.charge" title="abtem.gpaw.GPAWParametrization.charge"><code class="xref py py-obj docutils literal notranslate"><span class="pre">charge</span></code></a>(symbol[, charge])</p></td>
+<td><p>Calculate the radial charge density for an atom.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">potential</span></code>(symbol[, charge])</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.gpaw.GPAWParametrization.potential" title="abtem.gpaw.GPAWParametrization.potential"><code class="xref py py-obj docutils literal notranslate"><span class="pre">potential</span></code></a>(symbol[, charge])</p></td>
+<td><p>Calculate the radial electrostatic potential for an atom.</p></td>
 </tr>
 </tbody>
 </table>
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.gpaw.GPAWParametrization.charge">
+<span class="sig-name descname"><span class="pre">charge</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">symbol</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">charge</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.0</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/gpaw.html#GPAWParametrization.charge"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.gpaw.GPAWParametrization.charge" title="Permalink to this definition">#</a></dt>
+<dd><p>Calculate the radial charge density for an atom.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>symbol</strong> (<em>str</em>) – Chemical symbol of the atomic element.</p></li>
+<li><p><strong>charge</strong> (<em>float</em><em>, </em><em>optional</em>) – Charge the atom by the given fractional number of electrons.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>charge</strong> – Function of the radial charge density with parameter ‘r’ corresponding to the radial distance from the core.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>callable</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.gpaw.GPAWParametrization.potential">
+<span class="sig-name descname"><span class="pre">potential</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">symbol</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">charge</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.0</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/gpaw.html#GPAWParametrization.potential"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.gpaw.GPAWParametrization.potential" title="Permalink to this definition">#</a></dt>
+<dd><p>Calculate the radial electrostatic potential for an atom.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>symbol</strong> (<em>str</em>) – Chemical symbol of the atomic element.</p></li>
+<li><p><strong>charge</strong> (<em>float</em><em>, </em><em>optional</em>) – Charge the atom by the given fractional number of electrons.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>potential</strong> – Function of the radial electrostatic potential with parameter ‘r’ corresponding to the radial distance from the core.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>callable</p>
+</dd>
+</dl>
+</dd></dl>
+
 </dd></dl>
 
 </section>
@@ -1071,7 +1106,7 @@ title="Print to PDF"
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library\api\_autosummary"
+            path: "./library/api/_autosummary"
         },
         predefinedOutput: true
     }

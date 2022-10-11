@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,6 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
@@ -52,7 +51,7 @@ const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -60,7 +59,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Parallelization and Dask" href="performance.html" />
     <link rel="prev" title="Partial coherence" href="partial_coherence.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -217,6 +216,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -461,11 +465,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html">
-       FourierSpaceLineProfiles
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.Images.html">
        Images
       </a>
@@ -481,8 +480,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html">
-       SinglePointMeasurement
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html">
+       ReciprocalSpaceLineProfiles
       </a>
      </li>
     </ul>
@@ -800,11 +799,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -812,11 +806,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -1178,19 +1167,19 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="prism">
-<span id="walkthrough-prism"></span><h1>PRISM<a class="headerlink" href="#prism" title="Permalink to this heading">#</a></h1>
-<p>Multslice simulations of STEM images is computationally expensive because the exit wave function has to be calculated from scratch at each probe position. abTEM uses parallization to mitigate this however   mitigated by using more hardware or GPUs, an alternative, that does not require more hardware, is to use the PRISM algorithm <span id="id1">[<a class="reference internal" href="../../library/bibliography.html#id7" title="Colin Ophus. A fast image simulation algorithm for scanning transmission electron microscopy. Advanced Structural and Chemical Imaging, 2017.">Oph17</a>]</span>. At zero cost to accuracy, PRISM almost always speeds up simulations of images with many probe positions. Introducing approximations in the form of Fourier space interpolation, PRISM can reach speedups of several 100x at a minor cost to the accuracy.</p>
-<p>The downside to PRISM is an increased memory requirement, which can be prohibitive, especially if a requirement of good Fourier space sampling prohibits interpolation. A solution to this issue is using the partitioned PRISM algorithm introduced at the end of this document.</p>
+<span id="walkthrough-prism"></span><h1>PRISM<a class="headerlink" href="#prism" title="Permalink to this headline">#</a></h1>
+<p>Multslice simulations of STEM images is computationally expensive because the exit wave function has to be calculated from scratch at each probe position. abTEM uses parallization to mitigate this, an alternative, that does not require more hardware, is to use the PRISM algorithm <span id="id1">[<a class="reference internal" href="../../library/bibliography.html#id7" title="Colin Ophus. A fast image simulation algorithm for scanning transmission electron microscopy. Advanced Structural and Chemical Imaging, 2017.">Oph17</a>]</span>. At zero cost to accuracy, PRISM almost always speeds up simulations of images with many probe positions. By introducing approximations in the form of Fourier space interpolation, PRISM can reach speedups of several 100x at a minor cost to the accuracy.</p>
+<p>The downside to PRISM is often an increased memory requirement, which can be prohibitive, especially if good Fourier space sampling prohibits interpolation. A solution to this issue is using the partitioned PRISM algorithm introduced at the end of this document.</p>
 <div class="admonition seealso">
 <p class="admonition-title">See also</p>
 <p>Our PRISM quickstart example provides a basic template for doing STEM simulations with PRISM in <em>abTEM</em>.</p>
 </div>
 <section id="the-prism-scattering-matrix">
-<h2>The PRISM scattering matrix<a class="headerlink" href="#the-prism-scattering-matrix" title="Permalink to this heading">#</a></h2>
+<h2>The PRISM scattering matrix<a class="headerlink" href="#the-prism-scattering-matrix" title="Permalink to this headline">#</a></h2>
 <p>We derive the PRISM algorithm from the perspective of writing the (discretized) probe wave function as an expansion of plane waves.</p>
 <div class="math notranslate nohighlight">
 \[
-    \phi(\vec{r}) = \sum_{nm} C_{nm} S_{nm}
+    \psi(\vec{r}) = \sum_{nm} C_{nm} S_{nm}
 \]</div>
 <p>where</p>
 <div class="math notranslate nohighlight">
@@ -1200,26 +1189,26 @@ title="Print to PDF"
 <p>is a plane wave with a wave vector <span class="math notranslate nohighlight">\(\vec{q}_{nm}\)</span> that (due to discretization) must fulfill</p>
 <div class="math notranslate nohighlight">
 \[
-    \vec{q}_{nm} = (n \Delta_q, m \Delta_q) \quad ,
+    \vec{q}_{nm} = (n \Delta q, m \Delta q) \quad ,
 \]</div>
-<p>where <span class="math notranslate nohighlight">\(\Delta_{q}\)</span> is the Fourier space sampling rate. The complex expansion coefficients <span class="math notranslate nohighlight">\(C_{nm}\)</span> may be chosen to select a specified probe position and/or phase error. Since the Fourier space probe wave function is zero beyond the convergence semi-angle, we may limit the number of terms in the expansion by the semiangle cutoff <span class="math notranslate nohighlight">\(\alpha_{cut}\)</span>. Thus only the terms fulfilling</p>
+<p>where <span class="math notranslate nohighlight">\(\Delta q\)</span> is the Fourier space sampling rate. The complex expansion coefficients <span class="math notranslate nohighlight">\(C_{nm}\)</span> may be chosen to select a specified probe position and/or phase error. Since the Fourier space probe wave function is zero beyond the convergence semi-angle, we may limit the number of terms in the expansion by the semiangle cutoff <span class="math notranslate nohighlight">\(\alpha_{cut}\)</span>. Thus only the terms fulfilling</p>
 <div class="math notranslate nohighlight" id="equation-eq-prism-cutoff">
-<span class="eqno">(5)<a class="headerlink" href="#equation-eq-prism-cutoff" title="Permalink to this equation">#</a></span>\[
+<span class="eqno">(8)<a class="headerlink" href="#equation-eq-prism-cutoff" title="Permalink to this equation">#</a></span>\[
     \sqrt{n ^ 2 + m ^ 2} \lambda \Delta_q \leq \alpha_{cut}
 \]</div>
 <p>needs to be included in the expansion.</p>
-<p>We use the symbol <span class="math notranslate nohighlight">\(\mathcal{M} = \mathcal{M}_N \mathcal{M}_{N-1} \ldots \mathcal{M}_{0}\)</span> to represent the application of the multislice algorithm (see Eq. <code class="docutils literal notranslate"><span class="pre">eq</span></code>{eq:getting_started:user_guide:multislice:multislice_symbol}), thus the exit wave is given by</p>
+<p>We use the symbol <span class="math notranslate nohighlight">\(\mathcal{M}\)</span> to represent the application of the multislice algorithm to a wave function (see Eq. <code class="docutils literal notranslate"><span class="pre">eq</span></code>{eq:multislice_symbol} in our walkthrough on the multislice algorithm), thus the exit wave is given by</p>
 <div class="math notranslate nohighlight" id="equation-eq-prism">
-<span class="eqno">(6)<a class="headerlink" href="#equation-eq-prism" title="Permalink to this equation">#</a></span>\[
+<span class="eqno">(9)<a class="headerlink" href="#equation-eq-prism" title="Permalink to this equation">#</a></span>\[
     \phi_{exit}(\vec{r}) = \mathcal{M} \sum_{nm} C_{nm} S_{nm} = \sum_{nm} C_{nm} \mathcal{M} S_{nm} \quad ,
 \]</div>
-<p>where we use that the Fourier transform is linear.</p>
+<p>where the second equality just uses that the multislice operator is linear (following from the linearity of convolutions).</p>
 <p>The PRISM algorithm for STEM simulations may be summarised as two consecutive stages:</p>
 <p><strong>Multislice stage:</strong> Build the PRISM scattering matrix by applying the multislice algorithm to each plane wave in the expansion, i.e. calculate the set of waves <span class="math notranslate nohighlight">\(\mathcal{M} S_{nm}\)</span>.</p>
-<p><strong>Reduction stage:</strong> For each probe position, perform the reduction in Eq. <a class="reference internal" href="#equation-eq-prism">(6)</a> with a set of expansion coefficients determined by the probe position and phase aberrations.</p>
+<p><strong>Reduction stage:</strong> For each probe position, perform the reduction in Eq. <a class="reference internal" href="#equation-eq-prism">(9)</a> with a set of expansion coefficients determined by the probe position and phase aberrations.</p>
 </section>
 <section id="the-smatrix">
-<h2>The <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code><a class="headerlink" href="#the-smatrix" title="Permalink to this heading">#</a></h2>
+<h2>The <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code><a class="headerlink" href="#the-smatrix" title="Permalink to this headline">#</a></h2>
 <p>We import the atomic model of the SrTiO<sub>3</sub>/LaTiO<sub>3</sub> interface created <span class="xref myst">here</span> and make a <code class="docutils literal notranslate"><span class="pre">Potential</span></code>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1235,7 +1224,7 @@ title="Print to PDF"
 <img alt="../../_images/prism_2_0.png" src="../../_images/prism_2_0.png" />
 </div>
 </div>
-<p>In <em>abTEM</em>, the PRISM scattering matrix (i.e. the set of waves <span class="math notranslate nohighlight">\(\mathcal{M} S_{nm}\)</span>) is represented by the <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code>. The expansion cutoff angle, <span class="math notranslate nohighlight">\(\alpha_{max}\)</span>, is given as <code class="docutils literal notranslate"><span class="pre">planewave_cutoff</span></code>. In addition to <span class="math notranslate nohighlight">\(\alpha_{max}\)</span>, the number of plane wave in the expansion increases with the energy and the extent of the potential, because they, respectively, decrease <span class="math notranslate nohighlight">\(\lambda\)</span> and <span class="math notranslate nohighlight">\(\Delta_q\)</span> in Eq. <a class="reference internal" href="#equation-eq-prism-cutoff">(5)</a>.</p>
+<p>In <em>abTEM</em>, the PRISM scattering matrix (i.e. the set of waves <span class="math notranslate nohighlight">\(\mathcal{M} S_{nm}\)</span>) is represented by the <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code>. The expansion cutoff angle, <span class="math notranslate nohighlight">\(\alpha_{max}\)</span>, is given as <code class="docutils literal notranslate"><span class="pre">planewave_cutoff</span></code>. In addition to <span class="math notranslate nohighlight">\(\alpha_{max}\)</span>, the number of plane wave in the expansion increases with the energy and the extent of the potential, because they, respectively, decrease <span class="math notranslate nohighlight">\(\lambda\)</span> and <span class="math notranslate nohighlight">\(\Delta_q\)</span> in Eq. <a class="reference internal" href="#equation-eq-prism-cutoff">(8)</a>.</p>
 <p>We create an <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code> representing the SrTiO<sub>3</sub>/LaTiO<sub>3</sub> model for an energy of <span class="math notranslate nohighlight">\(150 \ \mathrm{keV}\)</span> and an expansion cutoff angle of <span class="math notranslate nohighlight">\(20 \ \mathrm{mrad}\)</span>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1259,19 +1248,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.core.Waves object at 0x7f95fe8b6f10&gt;
--------------------------------------------------
-
-type           label    coordinates
--------------  -------  -------------------
-OrdinalAxis    (n, m)   -
-RealSpaceAxis  x [Å]    0.00 0.06 ... 11.10
-RealSpaceAxis  y [Å]    0.00 0.06 ... 23.61
-
-        bytes       shape            count     type
-------  ----------  ---------------  --------  -------------
-array   223.02 MiB  (375, 192, 406)  12 tasks  complex64
-chunks  51.15 MiB   (86, 192, 406)   5 chunks  numpy.ndarray
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.Waves object at 0x7fc2de3bb520&gt;
 </pre></div>
 </div>
 </div>
@@ -1283,7 +1260,7 @@ chunks  51.15 MiB   (86, 192, 406)   5 chunks  numpy.ndarray
 <p>We show a small selection of the expansion wave functions (<span class="math notranslate nohighlight">\(\mathcal{M} S_{nm}\)</span>) below.</p>
 <div class="cell tag_full-width docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">s_matrix</span><span class="o">.</span><span class="n">build</span><span class="p">(</span><span class="n">max_batch</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">waves</span><span class="p">[</span><span class="mi">1</span><span class="p">::</span><span class="mi">62</span><span class="p">]</span><span class="o">.</span><span class="n">as_complex_image</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">s_matrix</span><span class="o">.</span><span class="n">build</span><span class="p">(</span><span class="n">max_batch</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">waves</span><span class="p">[</span><span class="mi">1</span><span class="p">::</span><span class="mi">62</span><span class="p">]</span><span class="o">.</span><span class="n">images</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
     <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
     <span class="n">panel_titles</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
     <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">14</span><span class="p">,</span> <span class="mi">6</span><span class="p">),</span>
@@ -1292,7 +1269,7 @@ chunks  51.15 MiB   (86, 192, 406)   5 chunks  numpy.ndarray
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  1.7s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  1.8s
 </pre></div>
 </div>
 <img alt="../../_images/prism_8_1.png" src="../../_images/prism_8_1.png" />
@@ -1301,9 +1278,10 @@ chunks  51.15 MiB   (86, 192, 406)   5 chunks  numpy.ndarray
 <p>The number of plane waves should be compared to the number of probe positions required to scan over the extent of the potential at Nyquist sampling.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">sampling</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">waves</span><span class="o">.</span><span class="n">transfer</span><span class="o">.</span><span class="n">nyquist_sampling</span><span class="p">(</span>
-    <span class="n">s_matrix</span><span class="o">.</span><span class="n">planewave_cutoff</span><span class="p">,</span> <span class="n">s_matrix</span><span class="o">.</span><span class="n">wavelength</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">sampling</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">transfer</span><span class="o">.</span><span class="n">nyquist_sampling</span><span class="p">(</span>
+    <span class="n">s_matrix</span><span class="o">.</span><span class="n">planewave_cutoff</span><span class="p">,</span> <span class="n">s_matrix</span><span class="o">.</span><span class="n">energy</span>
 <span class="p">)</span>
+
 <span class="n">scan</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">GridScan</span><span class="o">.</span><span class="n">from_fractional_coordinates</span><span class="p">(</span><span class="n">potential</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="n">sampling</span><span class="p">)</span>
 
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Number of probe positions: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">scan</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
@@ -1322,21 +1300,7 @@ Ratio: 5.4
 </div>
 <p>Thus, PRISM (without approximations) requires 5.4 times fewer multislice steps than the conventional multislice algorithm.</p>
 <p>This factor is an upper bound on possible speedup as PRISM also requires the reduction stage. To perform the reduction we call <code class="docutils literal notranslate"><span class="pre">scan</span></code> with the <code class="docutils literal notranslate"><span class="pre">GridScan</span></code> defined above and an <code class="docutils literal notranslate"><span class="pre">AnnularDetector</span></code> to detect the exit waves as the expansion is reduced with varying <code class="docutils literal notranslate"><span class="pre">C_{nm}</span></code>.</p>
-<p>We also call <code class="docutils literal notranslate"><span class="pre">compute</span></code> which in this case will compute the task graph of both the multislice and reduction stage.</p>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">abtem.waves.transfer</span> <span class="kn">import</span> <span class="n">HasPhaseAberrations</span><span class="p">,</span> <span class="n">Aberrations</span>
-<span class="kn">import</span> <span class="nn">re</span>
-
-<span class="n">defocus</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">distributions</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">5</span><span class="p">,</span><span class="mi">5</span><span class="p">)</span>
-
-<span class="n">a</span> <span class="o">=</span> <span class="n">Aberrations</span><span class="p">(</span><span class="n">defocus</span><span class="o">=</span><span class="n">defocus</span><span class="p">)</span><span class="o">.</span><span class="n">ensemble_blocks</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
-
-<span class="c1">#a.C10</span>
-</pre></div>
-</div>
-</div>
-</div>
+<p>We also call <code class="docutils literal notranslate"><span class="pre">compute</span></code> which in this case will compute the full task graph of both the multislice and reduction stage.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">detector</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">AnnularDetector</span><span class="p">(</span><span class="n">inner</span><span class="o">=</span><span class="mi">50</span><span class="p">,</span> <span class="n">outer</span><span class="o">=</span><span class="mi">150</span><span class="p">)</span>
@@ -1346,7 +1310,7 @@ Ratio: 5.4
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 26.3s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 43.8s
 </pre></div>
 </div>
 </div>
@@ -1354,22 +1318,22 @@ Ratio: 5.4
 <p>We can now show the resulting HAADF image.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">measurement</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="mf">0.1</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">();</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">measurement</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="mf">0.1</span><span class="p">)</span><span class="o">.</span><span class="n">gaussian_filter</span><span class="p">(</span><span class="mf">.3</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">();</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/prism_15_0.png" src="../../_images/prism_15_0.png" />
+<img alt="../../_images/prism_14_0.png" src="../../_images/prism_14_0.png" />
 </div>
 </div>
 <p>The reduction stage is typically significantly faster than the multislice stage, however, this depends completely on the number of slices in the potential. Using PRISM the present example took about 1 min 30s on a mid-range laptop, while the equivalent conventional multislice algorithm took 6 min, hence the actual speedup from using PRISM was about a factor of 4.</p>
 </section>
 <section id="prism-interpolation">
-<h2>PRISM interpolation<a class="headerlink" href="#prism-interpolation" title="Permalink to this heading">#</a></h2>
+<h2>PRISM interpolation<a class="headerlink" href="#prism-interpolation" title="Permalink to this headline">#</a></h2>
 <p>The real speedup with PRISM comes when introducing interpolation. Choosing the interpolation factors <span class="math notranslate nohighlight">\((f_n, f_m)\)</span> the wave vectors should fulfill</p>
 <div class="math notranslate nohighlight">
 \[
-    \vec{q}_{nm} = (n f_n \Delta_q, m f_m \Delta_q) \quad ,
+    \vec{q}_{nm} = (n f_n \Delta q, m f_m \Delta q) \quad ,
 \]</div>
 <p>hence we keep only every <span class="math notranslate nohighlight">\(f_n\)</span>’th and <span class="math notranslate nohighlight">\(f_m\)</span>’th wave vector. For example, for <span class="math notranslate nohighlight">\((f_n, f_m) = (2, 1)\)</span> we keep only every second wave vector, skipping every second of the <span class="math notranslate nohighlight">\(n\)</span>-indices. The total number of wave vectors is thus reduced by a factor <span class="math notranslate nohighlight">\(f_nf_m\)</span>.</p>
 <p>We create the same <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code> as we did in the preceding section, however, we create it with three different interpolation factors <span class="math notranslate nohighlight">\((2, 1)\)</span>, <span class="math notranslate nohighlight">\((4, 2)\)</span> and <span class="math notranslate nohighlight">\((8, 4)\)</span>.</p>
@@ -1415,9 +1379,9 @@ Ratio: 5.4
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 15.4s
-[########################################] | 100% Completed |  9.1s
-[########################################] | 100% Completed |  3.3s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 26.1s
+[########################################] | 100% Completed | 11.7s
+[########################################] | 100% Completed |  4.4s
 </pre></div>
 </div>
 </div>
@@ -1449,7 +1413,7 @@ Ratio: 5.4
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/prism_21_0.png" src="../../_images/prism_21_0.png" />
+<img alt="../../_images/prism_20_0.png" src="../../_images/prism_20_0.png" />
 </div>
 </div>
 <p>A quantitative comparison is shown below as the difference between the exact and interpolated as a percent of the maximum value. We see that the error is a couple of percent for the interpolation factors <span class="math notranslate nohighlight">\((1,2)\)</span> and <span class="math notranslate nohighlight">\((2,4)\)</span>, which is probably well within the range of error source due to unknowns and implicit approximantions. The error of up to <span class="math notranslate nohighlight">\(15\ \%\)</span> for the interpolation factor of <span class="math notranslate nohighlight">\((4,8)\)</span> is clearly too large for creating production quality simulations, but it  might be tolerated while dialing in other parameters.</p>
@@ -1483,12 +1447,12 @@ Ratio: 5.4
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/prism_23_0.png" src="../../_images/prism_23_0.png" />
+<img alt="../../_images/prism_22_0.png" src="../../_images/prism_22_0.png" />
 </div>
 </div>
 <p>In the above we interpolated by twice the factor in <span class="math notranslate nohighlight">\(y\)</span> compared to <span class="math notranslate nohighlight">\(x\)</span>. Interpolation effectively repeats the probe, hence the “window” that the repeated probes shrinks as interpolation increases. Hence when the potential extent is larger, we can interpolate by a larger factor before the probes starts to get squeezed.</p>
 <section id="choosing-the-interpolation">
-<h3>Choosing the interpolation<a class="headerlink" href="#choosing-the-interpolation" title="Permalink to this heading">#</a></h3>
+<h3>Choosing the interpolation<a class="headerlink" href="#choosing-the-interpolation" title="Permalink to this headline">#</a></h3>
 <p>Choosing an appropriate interpolation factor can</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1503,18 +1467,18 @@ Ratio: 5.4
 </div>
 <div class="cell_output docutils container">
 <div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  0.1s
-[########################################] | 100% Completed |  0.1s
+[########################################] | 100% Completed |  0.2s
 [########################################] | 100% Completed |  0.1s
 [########################################] | 100% Completed |  0.1s
 </pre></div>
 </div>
-<img alt="../../_images/prism_25_1.png" src="../../_images/prism_25_1.png" />
+<img alt="../../_images/prism_24_1.png" src="../../_images/prism_24_1.png" />
 </div>
 </div>
 </section>
 </section>
 <section id="prism-with-phase-aberrations">
-<h2>PRISM with phase aberrations<a class="headerlink" href="#prism-with-phase-aberrations" title="Permalink to this heading">#</a></h2>
+<h2>PRISM with phase aberrations<a class="headerlink" href="#prism-with-phase-aberrations" title="Permalink to this headline">#</a></h2>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">defocus</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">distributions</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">120</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
@@ -1528,7 +1492,7 @@ Ratio: 5.4
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 36.4s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 47.4s
 </pre></div>
 </div>
 </div>
@@ -1544,12 +1508,12 @@ Ratio: 5.4
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/prism_28_0.png" src="../../_images/prism_28_0.png" />
+<img alt="../../_images/prism_27_0.png" src="../../_images/prism_27_0.png" />
 </div>
 </div>
 </section>
 <section id="parallel-reduction-in-abtem">
-<h2>Parallel reduction in <em>abTEM</em><a class="headerlink" href="#parallel-reduction-in-abtem" title="Permalink to this heading">#</a></h2>
+<h2>Parallel reduction in <em>abTEM</em><a class="headerlink" href="#parallel-reduction-in-abtem" title="Permalink to this headline">#</a></h2>
 </section>
 </section>
 
@@ -1566,7 +1530,7 @@ Ratio: 5.4
         },
         kernelOptions: {
             kernelName: "abtem-dask",
-            path: "./user_guide\walkthrough"
+            path: "./user_guide/walkthrough"
         },
         predefinedOutput: true
     }

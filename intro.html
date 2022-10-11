@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,6 @@
     <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
     <script src="_static/jquery.js"></script>
     <script src="_static/underscore.js"></script>
-    <script src="_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="_static/doctools.js"></script>
     <script src="_static/clipboard.min.js"></script>
     <script src="_static/copybutton.js"></script>
@@ -51,11 +50,13 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
     <link rel="next" title="Overview" href="getting_started/overview.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -212,6 +213,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="user_guide/walkthrough/core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="user_guide/walkthrough/plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -456,11 +462,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html">
-       FourierSpaceLineProfiles
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="library/api/_autosummary/abtem.measurements.Images.html">
        Images
       </a>
@@ -476,8 +477,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html">
-       SinglePointMeasurement
+      <a class="reference internal" href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html">
+       ReciprocalSpaceLineProfiles
       </a>
      </li>
     </ul>
@@ -795,11 +796,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="library/api/_autosummary/abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -807,11 +803,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="library/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="library/api/_autosummary/abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -1023,7 +1014,7 @@ title="Print to PDF"
               <div>
                 
   <section class="tex2jax_ignore mathjax_ignore" id="welcome-to-abtem">
-<h1>Welcome to abTEM<a class="headerlink" href="#welcome-to-abtem" title="Permalink to this heading">#</a></h1>
+<h1>Welcome to abTEM<a class="headerlink" href="#welcome-to-abtem" title="Permalink to this headline">#</a></h1>
 <p>abTEM - ab initio Transmission Electron Microscopy in Python</p>
 <p>abTEM is a flexible open-source package for simulating Transmission Electron Microscopy experiments. The Python API
 allows for easy integration with other simulation codes and analysis tools accessible from Python, while utilization of

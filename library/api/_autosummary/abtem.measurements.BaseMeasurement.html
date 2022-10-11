@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,6 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
@@ -51,12 +50,14 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="DiffractionPatterns" href="abtem.measurements.DiffractionPatterns.html" />
     <link rel="prev" title="measurements" href="abtem.measurements.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -213,6 +214,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/walkthrough/core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -457,11 +463,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.measurements.FourierSpaceLineProfiles.html">
-       FourierSpaceLineProfiles
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.measurements.Images.html">
        Images
       </a>
@@ -477,8 +478,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.measurements.SinglePointMeasurement.html">
-       SinglePointMeasurement
+      <a class="reference internal" href="abtem.measurements.ReciprocalSpaceLineProfiles.html">
+       ReciprocalSpaceLineProfiles
       </a>
      </li>
     </ul>
@@ -796,11 +797,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -808,11 +804,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -1024,11 +1015,23 @@ title="Print to PDF"
               <div>
                 
   <section id="basemeasurement">
-<h1>BaseMeasurement<a class="headerlink" href="#basemeasurement" title="Permalink to this heading">#</a></h1>
+<h1>BaseMeasurement<a class="headerlink" href="#basemeasurement" title="Permalink to this headline">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.measurements.BaseMeasurement">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.measurements.</span></span><span class="sig-name descname"><span class="pre">BaseMeasurement</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_axes_metadata</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">allow_base_axis_chunks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#BaseMeasurement"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.BaseMeasurement" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">HasArray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">HasAxes</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">EqualityMixin</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">CopyMixin</span></code></p>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.core.array.HasArray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.core.axes.HasAxes</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.core.utils.EqualityMixin</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.core.utils.CopyMixin</span></code></p>
+<p>Parent class common to all measurement types.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>array</strong> (<em>ndarray</em>) – Array containing data of type <cite>float</cite> or ´complex´.</p></li>
+<li><p><strong>ensemble_axes_metadata</strong> (<em>list of AxisMetadata</em><em>, </em><em>optional</em>) – Metadata associated with an ensemble axis.</p></li>
+<li><p><strong>metadata</strong> (<em>dict</em><em>, </em><em>optional</em>) – A dictionary defining simulation metadata.</p></li>
+<li><p><strong>allow_base_axis_chunks</strong> (<em>bool</em>) – Sets whether the measurement is allowed to be chunked along the base axis (e.g. <cite>Images</cite> are allowed, but
+<cite>DiffractionPatterns</cite> are not).</p></li>
+</ul>
+</dd>
+</dl>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.BaseMeasurement.__init__">
 <span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_axes_metadata</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">allow_base_axis_chunks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#BaseMeasurement.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.BaseMeasurement.__init__" title="Permalink to this definition">#</a></dt>
@@ -1045,12 +1048,12 @@ title="Print to PDF"
 <td><p></p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.BaseMeasurement.abs" title="abtem.measurements.BaseMeasurement.abs"><code class="xref py py-obj docutils literal notranslate"><span class="pre">abs</span></code></a>()</p></td>
-<td><p>Calculate the absolute value from complex images.</p></td>
+<td><p>Calculates the absolute value of a complex-valued measurement.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">check_is_compatible</span></code>(other)</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">compute</span></code>([progress_bar])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">compute</span></code>([progress_bar, profiler, ...])</p></td>
 <td><p></p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.BaseMeasurement.copy" title="abtem.measurements.BaseMeasurement.copy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">copy</span></code></a>()</p></td>
@@ -1075,13 +1078,8 @@ title="Print to PDF"
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">from_array_and_metadata</span></code>(array, ...)</p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= AbstractMeasurement)</p>
-</dd>
-</dl>
-</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.BaseMeasurement.from_array_and_metadata" title="abtem.measurements.BaseMeasurement.from_array_and_metadata"><code class="xref py py-obj docutils literal notranslate"><span class="pre">from_array_and_metadata</span></code></a>(array, ...)</p></td>
+<td><p>Documented in the subclasses.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.BaseMeasurement.from_zarr" title="abtem.measurements.BaseMeasurement.from_zarr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">from_zarr</span></code></a>(url[, chunks])</p></td>
 <td><p>Read wave functions from a hdf5 file.</p></td>
@@ -1095,10 +1093,10 @@ title="Print to PDF"
 </p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.BaseMeasurement.imag" title="abtem.measurements.BaseMeasurement.imag"><code class="xref py py-obj docutils literal notranslate"><span class="pre">imag</span></code></a>()</p></td>
-<td><p>Calculate the phase from complex images.</p></td>
+<td><p>Returns the imaginary part of a complex-valued measurement.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.BaseMeasurement.intensity" title="abtem.measurements.BaseMeasurement.intensity"><code class="xref py py-obj docutils literal notranslate"><span class="pre">intensity</span></code></a>()</p></td>
-<td><p>Calculate the absolute square from complex images.</p></td>
+<td><p>Calculates the squared norm of a complex-valued measurement.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">iterate_ensemble</span></code>([keep_dims])</p></td>
 <td><p></p></td>
@@ -1128,30 +1126,25 @@ title="Print to PDF"
 </p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.BaseMeasurement.phase" title="abtem.measurements.BaseMeasurement.phase"><code class="xref py py-obj docutils literal notranslate"><span class="pre">phase</span></code></a>()</p></td>
-<td><p>Calculate the phase from complex images.</p></td>
+<td><p>Calculates the phase of a complex-valued measurement.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.BaseMeasurement.poisson_noise" title="abtem.measurements.BaseMeasurement.poisson_noise"><code class="xref py py-obj docutils literal notranslate"><span class="pre">poisson_noise</span></code></a>([dose_per_area, total_dose, ...])</p></td>
-<td><p>Add Poisson noise to the DiffractionPattern.</p></td>
+<td><p>Add Poisson noise (ie.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">power</span></code>(number)</p></td>
 <td><p></p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.BaseMeasurement.real" title="abtem.measurements.BaseMeasurement.real"><code class="xref py py-obj docutils literal notranslate"><span class="pre">real</span></code></a>()</p></td>
-<td><p>Calculate the phase from complex images.</p></td>
+<td><p>Returns the real part of a complex-valued measurement.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">rechunk</span></code>(*args, **kwargs)</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">reduce_ensemble</span></code>()</p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= AbstractMeasurement)</p>
-</dd>
-</dl>
-</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.BaseMeasurement.reduce_ensemble" title="abtem.measurements.BaseMeasurement.reduce_ensemble"><code class="xref py py-obj docutils literal notranslate"><span class="pre">reduce_ensemble</span></code></a>()</p></td>
+<td><p>Takes the mean of an ensemble measurement (e.g.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">relative_difference</span></code>(other[, min_relative_tol])</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.BaseMeasurement.relative_difference" title="abtem.measurements.BaseMeasurement.relative_difference"><code class="xref py py-obj docutils literal notranslate"><span class="pre">relative_difference</span></code></a>(other[, min_relative_tol])</p></td>
+<td><p>Calculates the relative difference with respect to another compatible measurement.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scan_positions</span></code>()</p></td>
 <td><p></p></td>
@@ -1200,7 +1193,7 @@ title="Print to PDF"
 </p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.BaseMeasurement.to_hyperspy" title="abtem.measurements.BaseMeasurement.to_hyperspy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_hyperspy</span></code></a>()</p></td>
-<td><p>Convert measurement to a hyperspy signal.</p></td>
+<td><p>Convert measurement to a Hyperspy signal.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.BaseMeasurement.to_zarr" title="abtem.measurements.BaseMeasurement.to_zarr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_zarr</span></code></a>(url[, compute, overwrite])</p></td>
 <td><p>Write wave functions to a zarr file.</p></td>
@@ -1320,12 +1313,17 @@ title="Print to PDF"
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.BaseMeasurement.abs">
 <span class="sig-name descname"><span class="pre">abs</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#BaseMeasurement.abs"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.BaseMeasurement.abs" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate the absolute value from complex images.</p>
+<dd><p>Calculates the absolute value of a complex-valued measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.measurements.BaseMeasurement.axes_metadata">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">AxesMetadataList</span></em><a class="headerlink" href="#abtem.measurements.BaseMeasurement.axes_metadata" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.axes.AxesMetadataList</span></em><a class="headerlink" href="#abtem.measurements.BaseMeasurement.axes_metadata" title="Permalink to this definition">#</a></dt>
 <dd><p>List of AxisMetadata.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1374,6 +1372,17 @@ title="Print to PDF"
 </dd></dl>
 
 <dl class="py method">
+<dt class="sig sig-object py" id="abtem.measurements.BaseMeasurement.from_array_and_metadata">
+<em class="property"><span class="pre">abstract</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_array_and_metadata</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">axes_metadata</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#BaseMeasurement.from_array_and_metadata"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.BaseMeasurement.from_array_and_metadata" title="Permalink to this definition">#</a></dt>
+<dd><p>Documented in the subclasses.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.BaseMeasurement.from_zarr">
 <em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_zarr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'auto'</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.BaseMeasurement.from_zarr" title="Permalink to this definition">#</a></dt>
 <dd><p>Read wave functions from a hdf5 file.</p>
@@ -1394,13 +1403,23 @@ s3:// for remote data.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.BaseMeasurement.imag">
 <span class="sig-name descname"><span class="pre">imag</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#BaseMeasurement.imag"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.BaseMeasurement.imag" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate the phase from complex images.</p>
+<dd><p>Returns the imaginary part of a complex-valued measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.BaseMeasurement.intensity">
 <span class="sig-name descname"><span class="pre">intensity</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#BaseMeasurement.intensity"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.BaseMeasurement.intensity" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate the absolute square from complex images.</p>
+<dd><p>Calculates the squared norm of a complex-valued measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py property">
@@ -1439,28 +1458,34 @@ s3:// for remote data.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.BaseMeasurement.phase">
 <span class="sig-name descname"><span class="pre">phase</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#BaseMeasurement.phase"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.BaseMeasurement.phase" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate the phase from complex images.</p>
+<dd><p>Calculates the phase of a complex-valued measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.BaseMeasurement.poisson_noise">
 <span class="sig-name descname"><span class="pre">poisson_noise</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dose_per_area</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">total_dose</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">samples</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#BaseMeasurement.poisson_noise"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.BaseMeasurement.poisson_noise" title="Permalink to this definition">#</a></dt>
-<dd><p>Add Poisson noise to the DiffractionPattern.</p>
+<dd><p>Add Poisson noise (ie. shot noise) to a measurement corresponding to the provided ‘total_dose’ (per measurement
+if applied to an ensemble) or ‘dose_per_area’ (not applicable for single measurements).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>dose_per_area</strong> (<em>float</em><em>, </em><em>optional</em>) – The irradiation dose in electrons per Å^2. Provide either “total_dose” or “dose_per_area”.</p></li>
-<li><p><strong>total_dose</strong> (<em>float</em><em>, </em><em>optional</em>) – The irradiation dose per diffraction pattern. Provide either “total_dose” or “dose_per_area”.</p></li>
-<li><p><strong>samples</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of samples to draw from the poisson distribution. If this is greater than 1, an additional
+<li><p><strong>dose_per_area</strong> (<em>float</em><em>, </em><em>optional</em>) – The irradiation dose [electrons per Å:sup:<cite>2</cite>].</p></li>
+<li><p><strong>total_dose</strong> (<em>float</em><em>, </em><em>optional</em>) – The irradiation dose per diffraction pattern.</p></li>
+<li><p><strong>samples</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of samples to draw from a Poisson distribution. If this is greater than 1, an additional
 ensemble axis will be added to the measurement.</p></li>
 <li><p><strong>seed</strong> (<em>int</em><em>, </em><em>optional</em>) – Seed the random number generator.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
-<dd class="field-even"><p><strong>noisy_diffraction_patterns</strong> – The noisy diffraction patterns.</p>
+<dd class="field-even"><p><strong>noisy_measurement</strong> – The noisy measurement.</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference internal" href="abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns" title="abtem.measurements.DiffractionPatterns">DiffractionPatterns</a></p>
+<dd class="field-odd"><p><a class="reference internal" href="#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement">BaseMeasurement</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1468,7 +1493,43 @@ ensemble axis will be added to the measurement.</p></li>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.BaseMeasurement.real">
 <span class="sig-name descname"><span class="pre">real</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#BaseMeasurement.real"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.BaseMeasurement.real" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate the phase from complex images.</p>
+<dd><p>Returns the real part of a complex-valued measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.measurements.BaseMeasurement.reduce_ensemble">
+<span class="sig-name descname"><span class="pre">reduce_ensemble</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#BaseMeasurement.reduce_ensemble"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.BaseMeasurement.reduce_ensemble" title="Permalink to this definition">#</a></dt>
+<dd><p>Takes the mean of an ensemble measurement (e.g. of frozen phonon configurations).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.measurements.BaseMeasurement.relative_difference">
+<span class="sig-name descname"><span class="pre">relative_difference</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">other</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min_relative_tol</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.0</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#BaseMeasurement.relative_difference"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.BaseMeasurement.relative_difference" title="Permalink to this definition">#</a></dt>
+<dd><p>Calculates the relative difference with respect to another compatible measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>other</strong> (<a class="reference internal" href="#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement"><em>BaseMeasurement</em></a>) – Measurement to which the difference is calculated.</p></li>
+<li><p><strong>min_relative_tol</strong> (<em>float</em>) – Avoids division by zero errors by defining a minimum value of the divisor in the relative difference.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>difference</strong> – The relative difference as a measurement of the same type.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><a class="reference internal" href="#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement">BaseMeasurement</a></p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py property">
@@ -1485,7 +1546,7 @@ ensemble axis will be added to the measurement.</p></li>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.BaseMeasurement.to_hyperspy">
 <span class="sig-name descname"><span class="pre">to_hyperspy</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#BaseMeasurement.to_hyperspy"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.BaseMeasurement.to_hyperspy" title="Permalink to this definition">#</a></dt>
-<dd><p>Convert measurement to a hyperspy signal.</p>
+<dd><p>Convert measurement to a Hyperspy signal.</p>
 </dd></dl>
 
 <dl class="py method">
@@ -1523,7 +1584,7 @@ existing data.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library\api\_autosummary"
+            path: "./library/api/_autosummary"
         },
         predefinedOutput: true
     }

@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,6 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
@@ -51,12 +50,14 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="BaseMeasurement" href="abtem.measurements.BaseMeasurement.html" />
     <link rel="prev" title="WavesDetector" href="abtem.detectors.WavesDetector.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -213,6 +214,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/walkthrough/core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -457,11 +463,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.measurements.FourierSpaceLineProfiles.html">
-       FourierSpaceLineProfiles
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.measurements.Images.html">
        Images
       </a>
@@ -477,8 +478,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.measurements.SinglePointMeasurement.html">
-       SinglePointMeasurement
+      <a class="reference internal" href="abtem.measurements.ReciprocalSpaceLineProfiles.html">
+       ReciprocalSpaceLineProfiles
       </a>
      </li>
     </ul>
@@ -796,11 +797,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -808,11 +804,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -1024,7 +1015,8 @@ title="Print to PDF"
               <div>
                 
   <section id="module-abtem.measurements">
-<span id="measurements"></span><h1>measurements<a class="headerlink" href="#module-abtem.measurements" title="Permalink to this heading">#</a></h1>
+<span id="measurements"></span><h1>measurements<a class="headerlink" href="#module-abtem.measurements" title="Permalink to this headline">#</a></h1>
+<p>Module for handling measurements.</p>
 <p class="rubric">Classes</p>
 <table class="autosummary longtable table autosummary">
 <colgroup>
@@ -1033,25 +1025,22 @@ title="Print to PDF"
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement"><code class="xref py py-obj docutils literal notranslate"><span class="pre">BaseMeasurement</span></code></a>(array, ...[, ...])</p></td>
-<td><p></p></td>
+<td><p>Parent class common to all measurement types.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns" title="abtem.measurements.DiffractionPatterns"><code class="xref py py-obj docutils literal notranslate"><span class="pre">DiffractionPatterns</span></code></a>(array, sampling[, ...])</p></td>
-<td><p></p></td>
+<td><p>One or more diffraction patterns.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles" title="abtem.measurements.FourierSpaceLineProfiles"><code class="xref py py-obj docutils literal notranslate"><span class="pre">FourierSpaceLineProfiles</span></code></a>(array[, sampling, ...])</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="abtem.measurements.Images.html#abtem.measurements.Images" title="abtem.measurements.Images"><code class="xref py py-obj docutils literal notranslate"><span class="pre">Images</span></code></a>(array, sampling[, ...])</p></td>
+<td><p>A collection of 2D measurements such as HRTEM or STEM-ADF images.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="abtem.measurements.Images.html#abtem.measurements.Images" title="abtem.measurements.Images"><code class="xref py py-obj docutils literal notranslate"><span class="pre">Images</span></code></a>(array, sampling[, ...])</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements" title="abtem.measurements.PolarMeasurements"><code class="xref py py-obj docutils literal notranslate"><span class="pre">PolarMeasurements</span></code></a>(array, radial_sampling, ...)</p></td>
+<td><p>Class describing polar measurements with a specified number of radial and azimuthal bins.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements" title="abtem.measurements.PolarMeasurements"><code class="xref py py-obj docutils literal notranslate"><span class="pre">PolarMeasurements</span></code></a>(array, radial_sampling, ...)</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles" title="abtem.measurements.RealSpaceLineProfiles"><code class="xref py py-obj docutils literal notranslate"><span class="pre">RealSpaceLineProfiles</span></code></a>(array[, sampling, ...])</p></td>
+<td><p>A collection of real-space line profile(s).</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles" title="abtem.measurements.RealSpaceLineProfiles"><code class="xref py py-obj docutils literal notranslate"><span class="pre">RealSpaceLineProfiles</span></code></a>(array[, sampling, ...])</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement" title="abtem.measurements.SinglePointMeasurement"><code class="xref py py-obj docutils literal notranslate"><span class="pre">SinglePointMeasurement</span></code></a>(array, ...)</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles" title="abtem.measurements.ReciprocalSpaceLineProfiles"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ReciprocalSpaceLineProfiles</span></code></a>(array[, ...])</p></td>
+<td><p>A collection of reciprocal-space line profile(s).</p></td>
 </tr>
 </tbody>
 </table>
@@ -1070,7 +1059,7 @@ title="Print to PDF"
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library\api\_autosummary"
+            path: "./library/api/_autosummary"
         },
         predefinedOutput: true
     }

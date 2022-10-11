@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -33,7 +33,6 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
@@ -51,11 +50,11 @@ const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -212,6 +211,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../user_guide/walkthrough/core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -456,11 +460,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html">
-       FourierSpaceLineProfiles
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.Images.html">
        Images
       </a>
@@ -476,8 +475,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html">
-       SinglePointMeasurement
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html">
+       ReciprocalSpaceLineProfiles
       </a>
      </li>
     </ul>
@@ -795,11 +794,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -807,11 +801,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -1351,6 +1340,7 @@ title="Open an issue"
 <span class="sd">        Atoms to be wrapped.</span>
 <span class="sd">    tol : float</span>
 <span class="sd">        Minimum distance to any cell boundary.</span>
+
 <span class="sd">    Returns</span>
 <span class="sd">    -------</span>
 <span class="sd">    atoms : ase.Atoms</span>
@@ -1568,14 +1558,14 @@ title="Open an issue"
 
 <div class="viewcode-block" id="orthogonalize_cell"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.atoms.orthogonalize_cell.html#abtem.atoms.orthogonalize_cell">[docs]</a><span class="k">def</span> <span class="nf">orthogonalize_cell</span><span class="p">(</span>
     <span class="n">atoms</span><span class="p">:</span> <span class="n">Atoms</span><span class="p">,</span>
-    <span class="n">box</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">max_repetitions</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span>
     <span class="n">return_transform</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">allow_transform</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-    <span class="n">origin</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
     <span class="n">plane</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span>
         <span class="nb">str</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span>
     <span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;xy&quot;</span><span class="p">,</span>
+    <span class="n">origin</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
+    <span class="n">box</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">tolerance</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.01</span><span class="p">,</span>
 <span class="p">):</span>
     <span class="sd">&quot;&quot;&quot;</span>
@@ -1593,6 +1583,32 @@ title="Open an issue"
 <span class="sd">        If true, return the transformations that were applied to make the atoms orthogonal.</span>
 <span class="sd">    allow_transform : bool</span>
 <span class="sd">        If false no transformation is applied to make the cell orthogonal, hence a non-orthogonal cell may be returned.</span>
+<span class="sd">        plane : str or two tuples of three float, optional</span>
+<span class="sd">        The plane relative to the provided atoms mapped to `xy` plane of the potential, i.e. provided plane is</span>
+<span class="sd">        perpendicular to the propagation direction. If string, it must be a concatenation of two of &#39;x&#39;, &#39;y&#39; and &#39;z&#39;;</span>
+<span class="sd">        the default value &#39;xy&#39; indicates that potential slices are cuts along the `xy`-plane of the atoms.</span>
+<span class="sd">        The plane may also be specified with two arbitrary 3D vectors, which are mapped to the `x` and `y` directions of</span>
+<span class="sd">        the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,</span>
+<span class="sd">        the second vector is rotated in the plane to become perpendicular to the first. Providing a value of</span>
+<span class="sd">        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing &#39;xy&#39;.</span>
+<span class="sd">    plane : str or two tuples of three float, optional</span>
+<span class="sd">        The plane relative to the provided atoms mapped to `xy` plane of the potential, i.e. provided plane is</span>
+<span class="sd">        perpendicular to the propagation direction. If string, it must be a concatenation of two of &#39;x&#39;, &#39;y&#39; and &#39;z&#39;;</span>
+<span class="sd">        the default value &#39;xy&#39; indicates that potential slices are cuts along the `xy`-plane of the atoms.</span>
+<span class="sd">        The plane may also be specified with two arbitrary 3D vectors, which are mapped to the `x` and `y` directions of</span>
+<span class="sd">        the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,</span>
+<span class="sd">        the second vector is rotated in the plane to become perpendicular to the first. Providing a value of</span>
+<span class="sd">        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing &#39;xy&#39;.</span>
+<span class="sd">    origin : three float, optional</span>
+<span class="sd">        The origin relative to the provided atoms mapped to the origin of the potential. This is equivalent to translating</span>
+<span class="sd">        the atoms. The default is (0., 0., 0.).</span>
+<span class="sd">    box : three float, optional</span>
+<span class="sd">        The extent of the potential in `x`, `y` and `z`. If not given this is determined from the atoms&#39; cell.</span>
+<span class="sd">        If the box size does not match an integer number of the atoms&#39; supercell, an affine transformation may be</span>
+<span class="sd">        necessary to preserve periodicity, determined by the `periodic` keyword.</span>
+<span class="sd">    tolerance : float</span>
+<span class="sd">        Determines what is defined as a plane. All atoms within a distance equal to tolerance [Å] from a given plane</span>
+<span class="sd">        will be considered to belong to that plane.</span>
 
 <span class="sd">    Returns</span>
 <span class="sd">    -------</span>

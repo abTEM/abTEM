@@ -21,11 +21,10 @@
    
       BaseMeasurement
       DiffractionPatterns
-      FourierSpaceLineProfiles
       Images
       PolarMeasurements
       RealSpaceLineProfiles
-      SinglePointMeasurement
+      ReciprocalSpaceLineProfiles
    
    
 

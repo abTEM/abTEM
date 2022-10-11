@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,6 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
@@ -51,12 +50,14 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
-    <link rel="next" title="SinglePointMeasurement" href="abtem.measurements.SinglePointMeasurement.html" />
+    <link rel="next" title="ReciprocalSpaceLineProfiles" href="abtem.measurements.ReciprocalSpaceLineProfiles.html" />
     <link rel="prev" title="PolarMeasurements" href="abtem.measurements.PolarMeasurements.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -213,6 +214,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/walkthrough/core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -457,11 +463,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.measurements.FourierSpaceLineProfiles.html">
-       FourierSpaceLineProfiles
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.measurements.Images.html">
        Images
       </a>
@@ -477,8 +478,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.measurements.SinglePointMeasurement.html">
-       SinglePointMeasurement
+      <a class="reference internal" href="abtem.measurements.ReciprocalSpaceLineProfiles.html">
+       ReciprocalSpaceLineProfiles
       </a>
      </li>
     </ul>
@@ -796,11 +797,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -808,11 +804,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -1024,11 +1015,22 @@ title="Print to PDF"
               <div>
                 
   <section id="realspacelineprofiles">
-<h1>RealSpaceLineProfiles<a class="headerlink" href="#realspacelineprofiles" title="Permalink to this heading">#</a></h1>
+<h1>RealSpaceLineProfiles<a class="headerlink" href="#realspacelineprofiles" title="Permalink to this headline">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.measurements.RealSpaceLineProfiles">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.measurements.</span></span><span class="sig-name descname"><span class="pre">RealSpaceLineProfiles</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_axes_metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#RealSpaceLineProfiles"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">_AbstractMeasurement1d</span></code></p>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.measurements._AbstractMeasurement1d</span></code></p>
+<p>A collection of real-space line profile(s).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>array</strong> (<em>np.ndarray</em>) – 1D or greater array containing data of type <cite>float</cite> or ´complex´.</p></li>
+<li><p><strong>sampling</strong> (<em>float</em>) – Sampling of line profiles [Å].</p></li>
+<li><p><strong>ensemble_axes_metadata</strong> (<em>list of AxisMetadata</em><em>, </em><em>optional</em>) – Metadata associated with an ensemble axis.</p></li>
+<li><p><strong>metadata</strong> (<em>dict</em><em>, </em><em>optional</em>) – A dictionary defining simulation metadata.</p></li>
+</ul>
+</dd>
+</dl>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.RealSpaceLineProfiles.__init__">
 <span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_axes_metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#RealSpaceLineProfiles.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles.__init__" title="Permalink to this definition">#</a></dt>
@@ -1045,12 +1047,12 @@ title="Print to PDF"
 <td><p></p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.abs" title="abtem.measurements.RealSpaceLineProfiles.abs"><code class="xref py py-obj docutils literal notranslate"><span class="pre">abs</span></code></a>()</p></td>
-<td><p>Calculate the absolute value from complex images.</p></td>
+<td><p>Calculates the absolute value of a complex-valued measurement.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">check_is_compatible</span></code>(other)</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">compute</span></code>([progress_bar])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">compute</span></code>([progress_bar, profiler, ...])</p></td>
 <td><p></p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.copy" title="abtem.measurements.RealSpaceLineProfiles.copy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">copy</span></code></a>()</p></td>
@@ -1075,13 +1077,8 @@ title="Print to PDF"
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">from_array_and_metadata</span></code>(array, axes_metadata)</p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= AbstractMeasurement)</p>
-</dd>
-</dl>
-</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.from_array_and_metadata" title="abtem.measurements.RealSpaceLineProfiles.from_array_and_metadata"><code class="xref py py-obj docutils literal notranslate"><span class="pre">from_array_and_metadata</span></code></a>(array, axes_metadata)</p></td>
+<td><p>Creates line profile(s) from a given array and metadata.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.from_zarr" title="abtem.measurements.RealSpaceLineProfiles.from_zarr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">from_zarr</span></code></a>(url[, chunks])</p></td>
 <td><p>Read wave functions from a hdf5 file.</p></td>
@@ -1095,18 +1092,13 @@ title="Print to PDF"
 </p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.imag" title="abtem.measurements.RealSpaceLineProfiles.imag"><code class="xref py py-obj docutils literal notranslate"><span class="pre">imag</span></code></a>()</p></td>
-<td><p>Calculate the phase from complex images.</p></td>
+<td><p>Returns the imaginary part of a complex-valued measurement.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.intensity" title="abtem.measurements.RealSpaceLineProfiles.intensity"><code class="xref py py-obj docutils literal notranslate"><span class="pre">intensity</span></code></a>()</p></td>
-<td><p>Calculate the absolute square from complex images.</p></td>
+<td><p>Calculates the squared norm of a complex-valued measurement.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">interpolate</span></code>([sampling, gpts, order, endpoint])</p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= AbstractMeasurement)</p>
-</dd>
-</dl>
-</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.interpolate" title="abtem.measurements.RealSpaceLineProfiles.interpolate"><code class="xref py py-obj docutils literal notranslate"><span class="pre">interpolate</span></code></a>([sampling, gpts, order, endpoint])</p></td>
+<td><p>Interpolate line profile(s) producing equivalent line profile(s) with a different sampling.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">iterate_ensemble</span></code>([keep_dims])</p></td>
 <td><p></p></td>
@@ -1136,36 +1128,31 @@ title="Print to PDF"
 </p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.phase" title="abtem.measurements.RealSpaceLineProfiles.phase"><code class="xref py py-obj docutils literal notranslate"><span class="pre">phase</span></code></a>()</p></td>
-<td><p>Calculate the phase from complex images.</p></td>
+<td><p>Calculates the phase of a complex-valued measurement.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.poisson_noise" title="abtem.measurements.RealSpaceLineProfiles.poisson_noise"><code class="xref py py-obj docutils literal notranslate"><span class="pre">poisson_noise</span></code></a>([dose_per_area, total_dose, ...])</p></td>
-<td><p>Add Poisson noise to the DiffractionPattern.</p></td>
+<td><p>Add Poisson noise (ie.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">power</span></code>(number)</p></td>
 <td><p></p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.real" title="abtem.measurements.RealSpaceLineProfiles.real"><code class="xref py py-obj docutils literal notranslate"><span class="pre">real</span></code></a>()</p></td>
-<td><p>Calculate the phase from complex images.</p></td>
+<td><p>Returns the real part of a complex-valued measurement.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">rechunk</span></code>(*args, **kwargs)</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">reduce_ensemble</span></code>()</p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= AbstractMeasurement)</p>
-</dd>
-</dl>
-</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.reduce_ensemble" title="abtem.measurements.RealSpaceLineProfiles.reduce_ensemble"><code class="xref py py-obj docutils literal notranslate"><span class="pre">reduce_ensemble</span></code></a>()</p></td>
+<td><p>Takes the mean of an ensemble measurement (e.g.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">relative_difference</span></code>(other[, min_relative_tol])</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.relative_difference" title="abtem.measurements.RealSpaceLineProfiles.relative_difference"><code class="xref py py-obj docutils literal notranslate"><span class="pre">relative_difference</span></code></a>(other[, min_relative_tol])</p></td>
+<td><p>Calculates the relative difference with respect to another compatible measurement.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scan_positions</span></code>()</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">show</span></code>([ax, x_label, title, y_label, ...])</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.show" title="abtem.measurements.RealSpaceLineProfiles.show"><code class="xref py py-obj docutils literal notranslate"><span class="pre">show</span></code></a>([ax, figsize, title, x_label, y_label, ...])</p></td>
+<td><p>Show the line profile(s) using matplotlib.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">squeeze</span></code>([axis])</p></td>
 <td><p><dl class="field-list simple">
@@ -1219,7 +1206,7 @@ title="Print to PDF"
 </p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.to_hyperspy" title="abtem.measurements.RealSpaceLineProfiles.to_hyperspy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_hyperspy</span></code></a>()</p></td>
-<td><p>Convert measurement to a hyperspy signal.</p></td>
+<td><p>Convert measurement to a Hyperspy signal.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.to_zarr" title="abtem.measurements.RealSpaceLineProfiles.to_zarr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_zarr</span></code></a>(url[, compute, overwrite])</p></td>
 <td><p>Write wave functions to a zarr file.</p></td>
@@ -1228,7 +1215,7 @@ title="Print to PDF"
 <td><p></p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles.width" title="abtem.measurements.RealSpaceLineProfiles.width"><code class="xref py py-obj docutils literal notranslate"><span class="pre">width</span></code></a>([height])</p></td>
-<td><p>Calculate the width of lines at a given height.</p></td>
+<td><p>Calculate the width of line(s) at a given height, e.g.</p></td>
 </tr>
 </tbody>
 </table>
@@ -1358,12 +1345,17 @@ title="Print to PDF"
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.RealSpaceLineProfiles.abs">
 <span class="sig-name descname"><span class="pre">abs</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles.abs" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate the absolute value from complex images.</p>
+<dd><p>Calculates the absolute value of a complex-valued measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.measurements.RealSpaceLineProfiles.axes_metadata">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">AxesMetadataList</span></em><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles.axes_metadata" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.axes.AxesMetadataList</span></em><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles.axes_metadata" title="Permalink to this definition">#</a></dt>
 <dd><p>List of AxisMetadata.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1412,6 +1404,28 @@ title="Print to PDF"
 </dd></dl>
 
 <dl class="py method">
+<dt class="sig sig-object py" id="abtem.measurements.RealSpaceLineProfiles.from_array_and_metadata">
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_array_and_metadata</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">axes_metadata</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles.from_array_and_metadata" title="Permalink to this definition">#</a></dt>
+<dd><p>Creates line profile(s) from a given array and metadata.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>array</strong> (<em>array</em>) – Complex array defining one or more 1D line profiles.</p></li>
+<li><p><strong>axes_metadata</strong> (<em>list of AxesMetadata</em>) – Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
+axes must be RealSpaceAxis.</p></li>
+<li><p><strong>metadata</strong> (<em>dict</em><em>, </em><em>optional</em>) – A dictionary defining the measurement metadata.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>line_profiles</strong> – Line profiles from the array and metadata.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles" title="abtem.measurements.RealSpaceLineProfiles">RealSpaceLineProfiles</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.RealSpaceLineProfiles.from_zarr">
 <em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_zarr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'auto'</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles.from_zarr" title="Permalink to this definition">#</a></dt>
 <dd><p>Read wave functions from a hdf5 file.</p>
@@ -1432,13 +1446,45 @@ s3:// for remote data.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.RealSpaceLineProfiles.imag">
 <span class="sig-name descname"><span class="pre">imag</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles.imag" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate the phase from complex images.</p>
+<dd><p>Returns the imaginary part of a complex-valued measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.RealSpaceLineProfiles.intensity">
 <span class="sig-name descname"><span class="pre">intensity</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles.intensity" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate the absolute square from complex images.</p>
+<dd><p>Calculates the squared norm of a complex-valued measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.measurements.RealSpaceLineProfiles.interpolate">
+<span class="sig-name descname"><span class="pre">interpolate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gpts</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">3</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">endpoint</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles.interpolate" title="Permalink to this definition">#</a></dt>
+<dd><p>Interpolate line profile(s) producing equivalent line profile(s) with a different sampling. Either ‘sampling’ or
+‘gpts’ must be provided (but not both).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>sampling</strong> (<em>float</em>) – Sampling of line profiles after interpolation [Å].</p></li>
+<li><p><strong>gpts</strong> (<em>int</em>) – Number of grid points of line profiles after interpolation. Do not use if ‘sampling’ is used.</p></li>
+<li><p><strong>order</strong> (<em>int</em>) – The order of the spline interpolation (default is 3). The order has to be in the range 0-5.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>interpolated_profiles</strong> – The interpolated line profile(s).</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><a class="reference internal" href="#abtem.measurements.RealSpaceLineProfiles" title="abtem.measurements.RealSpaceLineProfiles">RealSpaceLineProfiles</a></p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py property">
@@ -1477,28 +1523,34 @@ s3:// for remote data.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.RealSpaceLineProfiles.phase">
 <span class="sig-name descname"><span class="pre">phase</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles.phase" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate the phase from complex images.</p>
+<dd><p>Calculates the phase of a complex-valued measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.RealSpaceLineProfiles.poisson_noise">
 <span class="sig-name descname"><span class="pre">poisson_noise</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dose_per_area</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">total_dose</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">samples</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles.poisson_noise" title="Permalink to this definition">#</a></dt>
-<dd><p>Add Poisson noise to the DiffractionPattern.</p>
+<dd><p>Add Poisson noise (ie. shot noise) to a measurement corresponding to the provided ‘total_dose’ (per measurement
+if applied to an ensemble) or ‘dose_per_area’ (not applicable for single measurements).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>dose_per_area</strong> (<em>float</em><em>, </em><em>optional</em>) – The irradiation dose in electrons per Å^2. Provide either “total_dose” or “dose_per_area”.</p></li>
-<li><p><strong>total_dose</strong> (<em>float</em><em>, </em><em>optional</em>) – The irradiation dose per diffraction pattern. Provide either “total_dose” or “dose_per_area”.</p></li>
-<li><p><strong>samples</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of samples to draw from the poisson distribution. If this is greater than 1, an additional
+<li><p><strong>dose_per_area</strong> (<em>float</em><em>, </em><em>optional</em>) – The irradiation dose [electrons per Å:sup:<cite>2</cite>].</p></li>
+<li><p><strong>total_dose</strong> (<em>float</em><em>, </em><em>optional</em>) – The irradiation dose per diffraction pattern.</p></li>
+<li><p><strong>samples</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of samples to draw from a Poisson distribution. If this is greater than 1, an additional
 ensemble axis will be added to the measurement.</p></li>
 <li><p><strong>seed</strong> (<em>int</em><em>, </em><em>optional</em>) – Seed the random number generator.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
-<dd class="field-even"><p><strong>noisy_diffraction_patterns</strong> – The noisy diffraction patterns.</p>
+<dd class="field-even"><p><strong>noisy_measurement</strong> – The noisy measurement.</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference internal" href="abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns" title="abtem.measurements.DiffractionPatterns">DiffractionPatterns</a></p>
+<dd class="field-odd"><p><a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement">BaseMeasurement</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1506,7 +1558,43 @@ ensemble axis will be added to the measurement.</p></li>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.RealSpaceLineProfiles.real">
 <span class="sig-name descname"><span class="pre">real</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles.real" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate the phase from complex images.</p>
+<dd><p>Returns the real part of a complex-valued measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.measurements.RealSpaceLineProfiles.reduce_ensemble">
+<span class="sig-name descname"><span class="pre">reduce_ensemble</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles.reduce_ensemble" title="Permalink to this definition">#</a></dt>
+<dd><p>Takes the mean of an ensemble measurement (e.g. of frozen phonon configurations).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.measurements.RealSpaceLineProfiles.relative_difference">
+<span class="sig-name descname"><span class="pre">relative_difference</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">other</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min_relative_tol</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles.relative_difference" title="Permalink to this definition">#</a></dt>
+<dd><p>Calculates the relative difference with respect to another compatible measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>other</strong> (<a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement"><em>BaseMeasurement</em></a>) – Measurement to which the difference is calculated.</p></li>
+<li><p><strong>min_relative_tol</strong> (<em>float</em>) – Avoids division by zero errors by defining a minimum value of the divisor in the relative difference.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>difference</strong> – The relative difference as a measurement of the same type.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement">BaseMeasurement</a></p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py property">
@@ -1521,9 +1609,33 @@ ensemble axis will be added to the measurement.</p></li>
 </dd></dl>
 
 <dl class="py method">
+<dt class="sig sig-object py" id="abtem.measurements.RealSpaceLineProfiles.show">
+<span class="sig-name descname"><span class="pre">show</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ax</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">figsize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">title</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_label</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y_label</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">float_formatting</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'.2f'</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#RealSpaceLineProfiles.show"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles.show" title="Permalink to this definition">#</a></dt>
+<dd><p>Show the line profile(s) using matplotlib.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>ax</strong> (<em>matplotlib Axes</em><em>, </em><em>optional</em>) – If given the plots are added to the Axes. This is not available for image grids.</p></li>
+<li><p><strong>figsize</strong> (<em>two int</em><em>, </em><em>optional</em>) – The figure size given as width and height in inches, passed to <cite>matplotlib.pyplot.figure</cite>.</p></li>
+<li><p><strong>title</strong> (<em>bool</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – Add a title to the figure. If True is given instead of a string the title will be given by the value
+corresponding to the “name” key of the metadata dictionary, if this item exists.</p></li>
+<li><p><strong>x_label</strong> (<em>bool</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – Add label to the <cite>x</cite>-axis of every plot. If True (default) the label will be created from the corresponding axis
+metadata. A string may be given to override this.</p></li>
+<li><p><strong>y_label</strong> (<em>bool</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – Add label to the <cite>x</cite>-axis of every plot. If True (default) the label will be created from the corresponding axis
+metadata. A string may be given to override this.</p></li>
+<li><p><strong>float_formatting</strong> (<em>str</em><em>, </em><em>optional</em>) – A formatting string used for formatting the floats of the panel titles.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p>matplotlib Axes</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.RealSpaceLineProfiles.to_hyperspy">
 <span class="sig-name descname"><span class="pre">to_hyperspy</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles.to_hyperspy" title="Permalink to this definition">#</a></dt>
-<dd><p>Convert measurement to a hyperspy signal.</p>
+<dd><p>Convert measurement to a Hyperspy signal.</p>
 </dd></dl>
 
 <dl class="py method">
@@ -1547,13 +1659,16 @@ existing data.</p></li>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.RealSpaceLineProfiles.width">
 <span class="sig-name descname"><span class="pre">width</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">height</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.5</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.RealSpaceLineProfiles.width" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate the width of lines at a given height.</p>
+<dd><p>Calculate the width of line(s) at a given height, e.g. full width at half maximum (the default).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>height</strong> (<em>float</em>) – </p>
+<dd class="field-odd"><p><strong>height</strong> (<em>float</em>) – Fractional height at which the width is calculated.</p>
 </dd>
-<dt class="field-even">Return type</dt>
-<dd class="field-even"><p>float</p>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>width</strong> – The calculated width.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>float</p>
 </dd>
 </dl>
 </dd></dl>
@@ -1575,7 +1690,7 @@ existing data.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library\api\_autosummary"
+            path: "./library/api/_autosummary"
         },
         predefinedOutput: true
     }
@@ -1596,10 +1711,10 @@ existing data.</p></li>
             <p class="prev-next-title">PolarMeasurements</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="abtem.measurements.SinglePointMeasurement.html" title="next page">
+    <a class='right-next' id="next-link" href="abtem.measurements.ReciprocalSpaceLineProfiles.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">SinglePointMeasurement</p>
+        <p class="prev-next-title">ReciprocalSpaceLineProfiles</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>

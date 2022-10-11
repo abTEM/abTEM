@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,6 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
@@ -51,6 +50,8 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -58,7 +59,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Partial coherence" href="partial_coherence.html" />
     <link rel="prev" title="Frozen phonons" href="frozen_phonons.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -215,6 +216,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -798,11 +804,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -810,11 +811,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -1149,11 +1145,11 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="ab-initio-potentials-with-gpaw">
-<span id="getting-started-user-guide-charge-density"></span><h1><em>ab initio</em> potentials with GPAW<a class="headerlink" href="#ab-initio-potentials-with-gpaw" title="Permalink to this heading">#</a></h1>
+<span id="getting-started-user-guide-charge-density"></span><h1><em>ab initio</em> potentials with GPAW<a class="headerlink" href="#ab-initio-potentials-with-gpaw" title="Permalink to this headline">#</a></h1>
 <p>The independent atom model (IAM) neglects bonding and the resulting charge transfer, this is typically a good approximation, because the core charge and electrons are responible for most of the potential. However, the difference between the IAM and a more realistic model including the effects of bonding is measurable, in certain systems<span id="id1">[<a class="reference internal" href="../../library/bibliography.html#id15" title="Jacob Madsen, Timothy J. Pennycook, and Toma Susi. Ab initio description of bonding for transmission electron microscopy. Ultramicroscopy, 231:113253, 2021. doi:https://doi.org/10.1016/j.ultramic.2021.113253.">MPS21</a>]</span>. Understanding this charge transfer may provide further insights, due its the importance in chemistry.</p>
 <p>Here we go beyond the independent atom model using density functional theory (DFT), to calculate a potential that includes charge transfer using GPAW<span id="id2">[<a class="reference internal" href="../../library/bibliography.html#id9" title="J. J. Mortensen, L. B. Hansen, and K. W. Jacobsen. Real-space grid implementation of the projector augmented wave method. Phys. Rev. B, 71(3):035109, 2005.">MHJ05</a>]</span>. Note that you need a working GPAW installation to run the code in this walkthrough, see the <a class="reference external" href="https://wiki.fysik.dtu.dk/gpaw/">GPAW documentation</a> for more information. abTEM only supports GPAW directly, however, other DFT codes may be used assuming that you can obtain the electron charge density as a numpy array through the <code class="docutils literal notranslate"><span class="pre">ChargeDensityPotential</span></code>.</p>
 <section id="dft-calculation-of-hbn-with-gpaw">
-<h2>DFT calculation of hBN with GPAW<a class="headerlink" href="#dft-calculation-of-hbn-with-gpaw" title="Permalink to this heading">#</a></h2>
+<h2>DFT calculation of hBN with GPAW<a class="headerlink" href="#dft-calculation-of-hbn-with-gpaw" title="Permalink to this headline">#</a></h2>
 <p>The first step to create a DFT potential is to converge a DFT calculation. We calculate the minimal hexagonal cell of hexagonal-Boron-Nitride (hBN). The atomic model is created by modifying a graphene model.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1198,7 +1194,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="using-the-gpaw-potential-in-abtem">
-<h2>Using the GPAW potential in abTEM<a class="headerlink" href="#using-the-gpaw-potential-in-abtem" title="Permalink to this heading">#</a></h2>
+<h2>Using the GPAW potential in abTEM<a class="headerlink" href="#using-the-gpaw-potential-in-abtem" title="Permalink to this headline">#</a></h2>
 <p>It is straightforward to calculate a DFT potential from a converged GPAW calculation. The <code class="docutils literal notranslate"><span class="pre">GPAWPotential</span></code> object just requires a converged GPAW calculator.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1220,7 +1216,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="comparing-dft-to-iam">
-<h2>Comparing DFT to IAM<a class="headerlink" href="#comparing-dft-to-iam" title="Permalink to this heading">#</a></h2>
+<h2>Comparing DFT to IAM<a class="headerlink" href="#comparing-dft-to-iam" title="Permalink to this headline">#</a></h2>
 <p>To show the difference that including charge trasnfer can have, we compare the DFT potential to an equivalent potential using the IAM. We make sure to set <code class="docutils literal notranslate"><span class="pre">projection=&quot;finite&quot;</span></code> to ensure that the projection integrals are done identically.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1303,7 +1299,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="electron-diffraction-of-dft-potentials">
-<h2>Electron diffraction of DFT potentials<a class="headerlink" href="#electron-diffraction-of-dft-potentials" title="Permalink to this heading">#</a></h2>
+<h2>Electron diffraction of DFT potentials<a class="headerlink" href="#electron-diffraction-of-dft-potentials" title="Permalink to this headline">#</a></h2>
 <p>Next, we calculate the influence of charge transfer on the electron diffraction patterns in hBN, approximately reproducing a published result <span id="id3">[<a class="reference internal" href="../../library/bibliography.html#id3" title="Toma Susi, Jacob Madsen, Ursula Ludacka, Jens Jørgen Mortensen, Timothy J. Pennycook, Zhongbo Lee, Jani Kotakoski, Ute Kaiser, and Jannik C. Meyer. Efficient first principles simulation of electron scattering factors for transmission electron microscopy. Ultramicroscopy, 197:16-22, 2019.">SML+19</a>]</span>.</p>
 <p>We create a <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> at an energy of <span class="math notranslate nohighlight">\(100 \ \mathrm{keV}\)</span>, then run the multislice algorithm for the IAM and DFT potential, finally caluclating the diffraction patterns.</p>
 <div class="cell docutils container">
@@ -1430,7 +1426,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="frozen-phonons-and-dft">
-<h2>Frozen phonons and DFT<a class="headerlink" href="#frozen-phonons-and-dft" title="Permalink to this heading">#</a></h2>
+<h2>Frozen phonons and DFT<a class="headerlink" href="#frozen-phonons-and-dft" title="Permalink to this headline">#</a></h2>
 <div class="no-icon admonition">
 <p class="admonition-title"><svg version="4.0.0.63c5cb3" width="1.5rem" height="1.5rem" class="sd-material-icon sd-material-icon-engineering sd-mr-1" viewBox="0 0 24 24" aria-hidden="true"><g><rect fill="none" height="24" width="24"></rect></g><g><g><path d="M9,15c-2.67,0-8,1.34-8,4v2h16v-2C17,16.34,11.67,15,9,15z"></path><path d="M22.1,6.84c0.01-0.11,0.02-0.22,0.02-0.34c0-0.12-0.01-0.23-0.03-0.34l0.74-0.58c0.07-0.05,0.08-0.15,0.04-0.22l-0.7-1.21 c-0.04-0.08-0.14-0.1-0.21-0.08L21.1,4.42c-0.18-0.14-0.38-0.25-0.59-0.34l-0.13-0.93C20.36,3.06,20.29,3,20.2,3h-1.4 c-0.09,0-0.16,0.06-0.17,0.15L18.5,4.08c-0.21,0.09-0.41,0.21-0.59,0.34l-0.87-0.35c-0.08-0.03-0.17,0-0.21,0.08l-0.7,1.21 c-0.04,0.08-0.03,0.17,0.04,0.22l0.74,0.58c-0.02,0.11-0.03,0.23-0.03,0.34c0,0.11,0.01,0.23,0.03,0.34l-0.74,0.58 c-0.07,0.05-0.08,0.15-0.04,0.22l0.7,1.21c0.04,0.08,0.14,0.1,0.21,0.08l0.87-0.35c0.18,0.14,0.38,0.25,0.59,0.34l0.13,0.93 C18.64,9.94,18.71,10,18.8,10h1.4c0.09,0,0.16-0.06,0.17-0.15l0.13-0.93c0.21-0.09,0.41-0.21,0.59-0.34l0.87,0.35 c0.08,0.03,0.17,0,0.21-0.08l0.7-1.21c0.04-0.08,0.03-0.17-0.04-0.22L22.1,6.84z M19.5,7.75c-0.69,0-1.25-0.56-1.25-1.25 s0.56-1.25,1.25-1.25s1.25,0.56,1.25,1.25S20.19,7.75,19.5,7.75z"></path><path d="M19.92,11.68l-0.5-0.87c-0.03-0.06-0.1-0.08-0.15-0.06l-0.62,0.25c-0.13-0.1-0.27-0.18-0.42-0.24l-0.09-0.66 C18.12,10.04,18.06,10,18,10h-1c-0.06,0-0.11,0.04-0.12,0.11l-0.09,0.66c-0.15,0.06-0.29,0.15-0.42,0.24l-0.62-0.25 c-0.06-0.02-0.12,0-0.15,0.06l-0.5,0.87c-0.03,0.06-0.02,0.12,0.03,0.16l0.53,0.41c-0.01,0.08-0.02,0.16-0.02,0.24 c0,0.08,0.01,0.17,0.02,0.24l-0.53,0.41c-0.05,0.04-0.06,0.11-0.03,0.16l0.5,0.87c0.03,0.06,0.1,0.08,0.15,0.06l0.62-0.25 c0.13,0.1,0.27,0.18,0.42,0.24l0.09,0.66C16.89,14.96,16.94,15,17,15h1c0.06,0,0.12-0.04,0.12-0.11l0.09-0.66 c0.15-0.06,0.29-0.15,0.42-0.24l0.62,0.25c0.06,0.02,0.12,0,0.15-0.06l0.5-0.87c0.03-0.06,0.02-0.12-0.03-0.16l-0.52-0.41 c0.01-0.08,0.02-0.16,0.02-0.24c0-0.08-0.01-0.17-0.02-0.24l0.53-0.41C19.93,11.81,19.94,11.74,19.92,11.68z M17.5,13.33 c-0.46,0-0.83-0.38-0.83-0.83c0-0.46,0.38-0.83,0.83-0.83s0.83,0.38,0.83,0.83C18.33,12.96,17.96,13.33,17.5,13.33z"></path><path d="M4.74,9h8.53c0.27,0,0.49-0.22,0.49-0.49V8.49c0-0.27-0.22-0.49-0.49-0.49H13c0-1.48-0.81-2.75-2-3.45V5.5 C11,5.78,10.78,6,10.5,6S10,5.78,10,5.5V4.14C9.68,4.06,9.35,4,9,4S8.32,4.06,8,4.14V5.5C8,5.78,7.78,6,7.5,6S7,5.78,7,5.5V4.55 C5.81,5.25,5,6.52,5,8H4.74C4.47,8,4.25,8.22,4.25,8.49v0.03C4.25,8.78,4.47,9,4.74,9z"></path><path d="M9,13c1.86,0,3.41-1.28,3.86-3H5.14C5.59,11.72,7.14,13,9,13z"></path></g></g></svg> Currently Under Construction</p>
 <p>Check back for more…</p>
@@ -1451,7 +1447,7 @@ title="Print to PDF"
         },
         kernelOptions: {
             kernelName: "abtem-dask",
-            path: "./user_guide\walkthrough"
+            path: "./user_guide/walkthrough"
         },
         predefinedOutput: true
     }

@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,6 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
@@ -60,7 +59,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Multislice simulations" href="multislice.html" />
     <link rel="prev" title="Potentials" href="potentials.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -217,6 +216,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -800,11 +804,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -812,11 +811,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -1138,7 +1132,7 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="wave-functions">
-<span id="walkthrough-wave-functions"></span><h1>Wave functions<a class="headerlink" href="#wave-functions" title="Permalink to this heading">#</a></h1>
+<span id="walkthrough-wave-functions"></span><h1>Wave functions<a class="headerlink" href="#wave-functions" title="Permalink to this headline">#</a></h1>
 <p>The multislice algorithm works by propagating the <span class="math notranslate nohighlight">\(xy\)</span> part of the wave function (defined as <span class="math notranslate nohighlight">\(\psi\)</span> in the <span class="xref myst">appendix</span>) through the electrostatic potential. To initiate this process, we need to assume the initial conditions for the wave function, i.e. the wave function describing the electron beam formed by the electron optics before the sample.</p>
 <p>abTEM defines three types of wave functions:</p>
 <ul class="simple">
@@ -1151,7 +1145,7 @@ title="Print to PDF"
 <p>The PRISM <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code> is not included in the list above. However, it can be used to achieve most of the goals of using the <code class="docutils literal notranslate"><span class="pre">Probe</span></code>. See our <a class="reference internal" href="prism.html#walkthrough-prism"><span class="std std-ref">introduction to PRISM in abTEM</span></a>.</p>
 </div>
 <section id="plane-wave-functions">
-<span id="wave-functions-plane-wave"></span><h2>Plane wave functions<a class="headerlink" href="#plane-wave-functions" title="Permalink to this heading">#</a></h2>
+<span id="wave-functions-plane-wave"></span><h2>Plane wave functions<a class="headerlink" href="#plane-wave-functions" title="Permalink to this headline">#</a></h2>
 <p>The default plane wave is just defined to be one everywhere</p>
 <div class="math notranslate nohighlight">
 \[
@@ -1206,7 +1200,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.Waves object at 0x7fbbe0b90610&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.Waves object at 0x000001F016B26800&gt;
 </pre></div>
 </div>
 </div>
@@ -1317,7 +1311,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="probe-wave-functions">
-<span id="wave-functions-probe"></span><h2>Probe wave functions<a class="headerlink" href="#probe-wave-functions" title="Permalink to this heading">#</a></h2>
+<span id="wave-functions-probe"></span><h2>Probe wave functions<a class="headerlink" href="#probe-wave-functions" title="Permalink to this headline">#</a></h2>
 <p>In abTEM, a focused beam of electrons, or <code class="docutils literal notranslate"><span class="pre">Probe</span></code>, is defined in Fourier space as</p>
 <div class="math notranslate nohighlight">
 \[
@@ -1375,7 +1369,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="visualizing-the-wave-function">
-<h2>Visualizing the wave function<a class="headerlink" href="#visualizing-the-wave-function" title="Permalink to this heading">#</a></h2>
+<h2>Visualizing the wave function<a class="headerlink" href="#visualizing-the-wave-function" title="Permalink to this headline">#</a></h2>
 <p>To visualize the wave function using abTEM’s builtin visualization module, we first have to convert it to a measurement type. The most common methods are <code class="docutils literal notranslate"><span class="pre">intensity</span></code> and <code class="docutils literal notranslate"><span class="pre">diffraction_patterns</span></code>, which will return a measurement as an <code class="docutils literal notranslate"><span class="pre">Images</span></code> and <code class="docutils literal notranslate"><span class="pre">DiffractionPatterns</span></code> type, respectively.</p>
 <p>The real space intensity, <span class="math notranslate nohighlight">\(\|\psi\|^2\)</span>, is calculated and shown below.</p>
 <div class="cell docutils container">
@@ -1387,7 +1381,236 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/wave_functions_21_0.png" src="../../_images/wave_functions_21_0.png" />
+<div class="output traceback highlight-ipythontb notranslate"><div class="highlight"><pre><span></span><span class="gt">---------------------------------------------------------------------------</span>
+<span class="ne">RuntimeError</span><span class="g g-Whitespace">                              </span>Traceback (most recent call last)
+<span class="n">Cell</span> <span class="n">In</span> <span class="p">[</span><span class="mi">15</span><span class="p">],</span> <span class="n">line</span> <span class="mi">3</span>
+<span class="g g-Whitespace">      </span><span class="mi">1</span> <span class="n">intensity</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span>
+<span class="ne">----&gt; </span><span class="mi">3</span> <span class="n">intensity</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\measurements.py:1253,</span> in <span class="ni">Images.show</span><span class="nt">(self, cmap, explode, ax, figsize, title, panel_titles, x_ticks, y_ticks, x_label, y_label, row_super_label, col_super_label, power, vmin, vmax, common_color_scale, cbar, cbar_labels, sizebar, float_formatting, panel_labels, image_grid_kwargs, imshow_kwargs, anchored_text_kwargs, complex_coloring_kwargs)</span>
+<span class="g g-Whitespace">   </span><span class="mi">1248</span>         <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+<span class="g g-Whitespace">   </span><span class="mi">1249</span>             <span class="s2">&quot;`ax` not implemented for with `explode = True`&quot;</span>
+<span class="g g-Whitespace">   </span><span class="mi">1250</span>         <span class="p">)</span>
+<span class="g g-Whitespace">   </span><span class="mi">1251</span>     <span class="n">measurements</span> <span class="o">=</span> <span class="bp">self</span>
+<span class="ne">-&gt; </span><span class="mi">1253</span> <span class="k">return</span> <span class="n">show_measurement_2d</span><span class="p">(</span>
+<span class="g g-Whitespace">   </span><span class="mi">1254</span>     <span class="n">measurements</span><span class="o">=</span><span class="n">measurements</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1255</span>     <span class="n">cmap</span><span class="o">=</span><span class="n">cmap</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1256</span>     <span class="n">figsize</span><span class="o">=</span><span class="n">figsize</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1257</span>     <span class="n">super_title</span><span class="o">=</span><span class="n">title</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1258</span>     <span class="n">sub_title</span><span class="o">=</span><span class="n">panel_titles</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1259</span>     <span class="n">x_ticks</span><span class="o">=</span><span class="n">x_ticks</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1260</span>     <span class="n">y_ticks</span><span class="o">=</span><span class="n">y_ticks</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1261</span>     <span class="n">x_label</span><span class="o">=</span><span class="n">x_label</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1262</span>     <span class="n">y_label</span><span class="o">=</span><span class="n">y_label</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1263</span>     <span class="n">row_super_label</span><span class="o">=</span><span class="n">row_super_label</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1264</span>     <span class="n">col_super_label</span><span class="o">=</span><span class="n">col_super_label</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1265</span>     <span class="n">power</span><span class="o">=</span><span class="n">power</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1266</span>     <span class="n">vmin</span><span class="o">=</span><span class="n">vmin</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1267</span>     <span class="n">vmax</span><span class="o">=</span><span class="n">vmax</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1268</span>     <span class="n">common_color_scale</span><span class="o">=</span><span class="n">common_color_scale</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1269</span>     <span class="n">cbar</span><span class="o">=</span><span class="n">cbar</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1270</span>     <span class="n">cbar_labels</span><span class="o">=</span><span class="n">cbar_labels</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1271</span>     <span class="n">sizebar</span><span class="o">=</span><span class="n">sizebar</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1272</span>     <span class="n">float_formatting</span><span class="o">=</span><span class="n">float_formatting</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1273</span>     <span class="n">panel_labels</span><span class="o">=</span><span class="n">panel_labels</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1274</span>     <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="n">image_grid_kwargs</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1275</span>     <span class="n">imshow_kwargs</span><span class="o">=</span><span class="n">imshow_kwargs</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1276</span>     <span class="n">anchored_text_kwargs</span><span class="o">=</span><span class="n">anchored_text_kwargs</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1277</span>     <span class="n">complex_coloring_kwargs</span><span class="o">=</span><span class="n">complex_coloring_kwargs</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1278</span>     <span class="n">axes</span><span class="o">=</span><span class="n">ax</span><span class="p">,</span>
+<span class="g g-Whitespace">   </span><span class="mi">1279</span> <span class="p">)</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\visualize.py:214,</span> in <span class="ni">show_measurement_2d</span><span class="nt">(measurements, figsize, super_title, sub_title, x_label, y_label, x_ticks, y_ticks, row_super_label, col_super_label, power, vmin, vmax, common_color_scale, cbar, cbar_labels, float_formatting, cmap, extent, panel_labels, sizebar, image_grid_kwargs, imshow_kwargs, anchored_text_kwargs, anchored_size_bar_kwargs, complex_coloring_kwargs, axes)</span>
+<span class="g g-Whitespace">    </span><span class="mi">185</span> <span class="k">def</span> <span class="nf">show_measurement_2d</span><span class="p">(</span>
+<span class="g g-Whitespace">    </span><span class="mi">186</span>     <span class="n">measurements</span><span class="p">:</span> <span class="s2">&quot;BaseMeasurement&quot;</span><span class="p">,</span>
+<span class="g g-Whitespace">    </span><span class="mi">187</span>     <span class="n">figsize</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span>
+   <span class="p">(</span><span class="o">...</span><span class="p">)</span>
+<span class="g g-Whitespace">    </span><span class="mi">212</span>     <span class="n">axes</span><span class="p">:</span> <span class="n">Axes</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="g g-Whitespace">    </span><span class="mi">213</span> <span class="p">):</span>
+<span class="ne">--&gt; </span><span class="mi">214</span>     <span class="n">measurements</span> <span class="o">=</span> <span class="n">measurements</span><span class="o">.</span><span class="n">to_cpu</span><span class="p">()</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
+<span class="g g-Whitespace">    </span><span class="mi">216</span>     <span class="n">imshow_kwargs</span> <span class="o">=</span> <span class="p">{}</span> <span class="k">if</span> <span class="n">imshow_kwargs</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">imshow_kwargs</span>
+<span class="g g-Whitespace">    </span><span class="mi">217</span>     <span class="n">image_grid_kwargs</span> <span class="o">=</span> <span class="p">{}</span> <span class="k">if</span> <span class="n">image_grid_kwargs</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">image_grid_kwargs</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\core\array.py:459,</span> in <span class="ni">HasArray.compute</span><span class="nt">(self, progress_bar, **kwargs)</span>
+<span class="g g-Whitespace">    </span><span class="mi">456</span> <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_lazy</span><span class="p">:</span>
+<span class="g g-Whitespace">    </span><span class="mi">457</span>     <span class="k">return</span> <span class="bp">self</span>
+<span class="ne">--&gt; </span><span class="mi">459</span> <span class="k">return</span> <span class="n">_compute</span><span class="p">([</span><span class="bp">self</span><span class="p">],</span> <span class="n">progress_bar</span><span class="o">=</span><span class="n">progress_bar</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\core\array.py:77,</span> in <span class="ni">_compute</span><span class="nt">(dask_array_wrappers, progress_bar, **kwargs)</span>
+<span class="g g-Whitespace">     </span><span class="mi">70</span> <span class="k">def</span> <span class="nf">_compute</span><span class="p">(</span><span class="n">dask_array_wrappers</span><span class="p">,</span> <span class="n">progress_bar</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<span class="g g-Whitespace">     </span><span class="mi">71</span>     <span class="c1"># if cp is not None:</span>
+<span class="g g-Whitespace">     </span><span class="mi">72</span>     <span class="c1">#     cache = cp.fft.config.get_plan_cache()</span>
+<span class="g g-Whitespace">     </span><span class="mi">73</span>     <span class="c1">#     cache_size = parse_bytes(config.get(&#39;cupy.fft-cache-size&#39;))</span>
+<span class="g g-Whitespace">     </span><span class="mi">74</span>     <span class="c1">#     cache.set_size(cache_size)</span>
+<span class="g g-Whitespace">     </span><span class="mi">76</span>     <span class="k">with</span> <span class="n">_compute_context</span><span class="p">(</span><span class="n">progress_bar</span><span class="p">):</span>
+<span class="ne">---&gt; </span><span class="mi">77</span>         <span class="n">arrays</span> <span class="o">=</span> <span class="n">dask</span><span class="o">.</span><span class="n">compute</span><span class="p">(</span>
+<span class="g g-Whitespace">     </span><span class="mi">78</span>             <span class="p">[</span><span class="n">wrapper</span><span class="o">.</span><span class="n">array</span> <span class="k">for</span> <span class="n">wrapper</span> <span class="ow">in</span> <span class="n">dask_array_wrappers</span><span class="p">],</span> <span class="o">**</span><span class="n">kwargs</span>
+<span class="g g-Whitespace">     </span><span class="mi">79</span>         <span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+<span class="g g-Whitespace">     </span><span class="mi">81</span>     <span class="k">for</span> <span class="n">array</span><span class="p">,</span> <span class="n">wrapper</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">arrays</span><span class="p">,</span> <span class="n">dask_array_wrappers</span><span class="p">):</span>
+<span class="g g-Whitespace">     </span><span class="mi">82</span>         <span class="n">wrapper</span><span class="o">.</span><span class="n">_array</span> <span class="o">=</span> <span class="n">array</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\base.py:600,</span> in <span class="ni">compute</span><span class="nt">(traverse, optimize_graph, scheduler, get, *args, **kwargs)</span>
+<span class="g g-Whitespace">    </span><span class="mi">597</span>     <span class="n">keys</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">__dask_keys__</span><span class="p">())</span>
+<span class="g g-Whitespace">    </span><span class="mi">598</span>     <span class="n">postcomputes</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">__dask_postcompute__</span><span class="p">())</span>
+<span class="ne">--&gt; </span><span class="mi">600</span> <span class="n">results</span> <span class="o">=</span> <span class="n">schedule</span><span class="p">(</span><span class="n">dsk</span><span class="p">,</span> <span class="n">keys</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+<span class="nn">    601 return repack([f(r, *a) for r, (f, a)</span> in <span class="ni">zip</span><span class="nt">(results, postcomputes)])</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\threaded.py:89,</span> in <span class="ni">get</span><span class="nt">(dsk, keys, cache, num_workers, pool, **kwargs)</span>
+<span class="g g-Whitespace">     </span><span class="mi">86</span>     <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">pool</span><span class="p">,</span> <span class="n">multiprocessing</span><span class="o">.</span><span class="n">pool</span><span class="o">.</span><span class="n">Pool</span><span class="p">):</span>
+<span class="g g-Whitespace">     </span><span class="mi">87</span>         <span class="n">pool</span> <span class="o">=</span> <span class="n">MultiprocessingPoolExecutor</span><span class="p">(</span><span class="n">pool</span><span class="p">)</span>
+<span class="ne">---&gt; </span><span class="mi">89</span> <span class="n">results</span> <span class="o">=</span> <span class="n">get_async</span><span class="p">(</span>
+<span class="g g-Whitespace">     </span><span class="mi">90</span>     <span class="n">pool</span><span class="o">.</span><span class="n">submit</span><span class="p">,</span>
+<span class="g g-Whitespace">     </span><span class="mi">91</span>     <span class="n">pool</span><span class="o">.</span><span class="n">_max_workers</span><span class="p">,</span>
+<span class="g g-Whitespace">     </span><span class="mi">92</span>     <span class="n">dsk</span><span class="p">,</span>
+<span class="g g-Whitespace">     </span><span class="mi">93</span>     <span class="n">keys</span><span class="p">,</span>
+<span class="g g-Whitespace">     </span><span class="mi">94</span>     <span class="n">cache</span><span class="o">=</span><span class="n">cache</span><span class="p">,</span>
+<span class="g g-Whitespace">     </span><span class="mi">95</span>     <span class="n">get_id</span><span class="o">=</span><span class="n">_thread_get_id</span><span class="p">,</span>
+<span class="g g-Whitespace">     </span><span class="mi">96</span>     <span class="n">pack_exception</span><span class="o">=</span><span class="n">pack_exception</span><span class="p">,</span>
+<span class="g g-Whitespace">     </span><span class="mi">97</span>     <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
+<span class="g g-Whitespace">     </span><span class="mi">98</span> <span class="p">)</span>
+<span class="g g-Whitespace">    </span><span class="mi">100</span> <span class="c1"># Cleanup pools associated to dead threads</span>
+<span class="g g-Whitespace">    </span><span class="mi">101</span> <span class="k">with</span> <span class="n">pools_lock</span><span class="p">:</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\local.py:511,</span> in <span class="ni">get_async</span><span class="nt">(submit, num_workers, dsk, result, cache, get_id, rerun_exceptions_locally, pack_exception, raise_exception, callbacks, dumps, loads, chunksize, **kwargs)</span>
+<span class="g g-Whitespace">    </span><span class="mi">509</span>         <span class="n">_execute_task</span><span class="p">(</span><span class="n">task</span><span class="p">,</span> <span class="n">data</span><span class="p">)</span>  <span class="c1"># Re-execute locally</span>
+<span class="g g-Whitespace">    </span><span class="mi">510</span>     <span class="k">else</span><span class="p">:</span>
+<span class="ne">--&gt; </span><span class="mi">511</span>         <span class="n">raise_exception</span><span class="p">(</span><span class="n">exc</span><span class="p">,</span> <span class="n">tb</span><span class="p">)</span>
+<span class="g g-Whitespace">    </span><span class="mi">512</span> <span class="n">res</span><span class="p">,</span> <span class="n">worker_id</span> <span class="o">=</span> <span class="n">loads</span><span class="p">(</span><span class="n">res_info</span><span class="p">)</span>
+<span class="g g-Whitespace">    </span><span class="mi">513</span> <span class="n">state</span><span class="p">[</span><span class="s2">&quot;cache&quot;</span><span class="p">][</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">res</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\local.py:319,</span> in <span class="ni">reraise</span><span class="nt">(exc, tb)</span>
+<span class="g g-Whitespace">    </span><span class="mi">317</span> <span class="k">if</span> <span class="n">exc</span><span class="o">.</span><span class="n">__traceback__</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">tb</span><span class="p">:</span>
+<span class="g g-Whitespace">    </span><span class="mi">318</span>     <span class="k">raise</span> <span class="n">exc</span><span class="o">.</span><span class="n">with_traceback</span><span class="p">(</span><span class="n">tb</span><span class="p">)</span>
+<span class="ne">--&gt; </span><span class="mi">319</span> <span class="k">raise</span> <span class="n">exc</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\local.py:224,</span> in <span class="ni">execute_task</span><span class="nt">(key, task_info, dumps, loads, get_id, pack_exception)</span>
+<span class="g g-Whitespace">    </span><span class="mi">222</span> <span class="k">try</span><span class="p">:</span>
+<span class="g g-Whitespace">    </span><span class="mi">223</span>     <span class="n">task</span><span class="p">,</span> <span class="n">data</span> <span class="o">=</span> <span class="n">loads</span><span class="p">(</span><span class="n">task_info</span><span class="p">)</span>
+<span class="ne">--&gt; </span><span class="mi">224</span>     <span class="n">result</span> <span class="o">=</span> <span class="n">_execute_task</span><span class="p">(</span><span class="n">task</span><span class="p">,</span> <span class="n">data</span><span class="p">)</span>
+<span class="g g-Whitespace">    </span><span class="mi">225</span>     <span class="nb">id</span> <span class="o">=</span> <span class="n">get_id</span><span class="p">()</span>
+<span class="g g-Whitespace">    </span><span class="mi">226</span>     <span class="n">result</span> <span class="o">=</span> <span class="n">dumps</span><span class="p">((</span><span class="n">result</span><span class="p">,</span> <span class="nb">id</span><span class="p">))</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:119,</span> in <span class="ni">_execute_task</span><span class="nt">(arg, cache, dsk)</span>
+<span class="g g-Whitespace">    </span><span class="mi">115</span>     <span class="n">func</span><span class="p">,</span> <span class="n">args</span> <span class="o">=</span> <span class="n">arg</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">arg</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
+<span class="g g-Whitespace">    </span><span class="mi">116</span>     <span class="c1"># Note: Don&#39;t assign the subtask results to a variable. numpy detects</span>
+<span class="g g-Whitespace">    </span><span class="mi">117</span>     <span class="c1"># temporaries by their reference count and can execute certain</span>
+<span class="g g-Whitespace">    </span><span class="mi">118</span>     <span class="c1"># operations in-place.</span>
+<span class="ne">--&gt; </span><span class="mi">119</span>     <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">_execute_task</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">args</span><span class="p">))</span>
+<span class="g g-Whitespace">    </span><span class="mi">120</span> <span class="k">elif</span> <span class="ow">not</span> <span class="n">ishashable</span><span class="p">(</span><span class="n">arg</span><span class="p">):</span>
+<span class="g g-Whitespace">    </span><span class="mi">121</span>     <span class="k">return</span> <span class="n">arg</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:119,</span> in <span class="ni">&lt;genexpr&gt;</span><span class="nt">(.0)</span>
+<span class="g g-Whitespace">    </span><span class="mi">115</span>     <span class="n">func</span><span class="p">,</span> <span class="n">args</span> <span class="o">=</span> <span class="n">arg</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">arg</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
+<span class="g g-Whitespace">    </span><span class="mi">116</span>     <span class="c1"># Note: Don&#39;t assign the subtask results to a variable. numpy detects</span>
+<span class="g g-Whitespace">    </span><span class="mi">117</span>     <span class="c1"># temporaries by their reference count and can execute certain</span>
+<span class="g g-Whitespace">    </span><span class="mi">118</span>     <span class="c1"># operations in-place.</span>
+<span class="ne">--&gt; </span><span class="mi">119</span>     <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">_execute_task</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">args</span><span class="p">))</span>
+<span class="g g-Whitespace">    </span><span class="mi">120</span> <span class="k">elif</span> <span class="ow">not</span> <span class="n">ishashable</span><span class="p">(</span><span class="n">arg</span><span class="p">):</span>
+<span class="g g-Whitespace">    </span><span class="mi">121</span>     <span class="k">return</span> <span class="n">arg</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:119,</span> in <span class="ni">_execute_task</span><span class="nt">(arg, cache, dsk)</span>
+<span class="g g-Whitespace">    </span><span class="mi">115</span>     <span class="n">func</span><span class="p">,</span> <span class="n">args</span> <span class="o">=</span> <span class="n">arg</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">arg</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
+<span class="g g-Whitespace">    </span><span class="mi">116</span>     <span class="c1"># Note: Don&#39;t assign the subtask results to a variable. numpy detects</span>
+<span class="g g-Whitespace">    </span><span class="mi">117</span>     <span class="c1"># temporaries by their reference count and can execute certain</span>
+<span class="g g-Whitespace">    </span><span class="mi">118</span>     <span class="c1"># operations in-place.</span>
+<span class="ne">--&gt; </span><span class="mi">119</span>     <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">_execute_task</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">args</span><span class="p">))</span>
+<span class="g g-Whitespace">    </span><span class="mi">120</span> <span class="k">elif</span> <span class="ow">not</span> <span class="n">ishashable</span><span class="p">(</span><span class="n">arg</span><span class="p">):</span>
+<span class="g g-Whitespace">    </span><span class="mi">121</span>     <span class="k">return</span> <span class="n">arg</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:119,</span> in <span class="ni">&lt;genexpr&gt;</span><span class="nt">(.0)</span>
+<span class="g g-Whitespace">    </span><span class="mi">115</span>     <span class="n">func</span><span class="p">,</span> <span class="n">args</span> <span class="o">=</span> <span class="n">arg</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">arg</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
+<span class="g g-Whitespace">    </span><span class="mi">116</span>     <span class="c1"># Note: Don&#39;t assign the subtask results to a variable. numpy detects</span>
+<span class="g g-Whitespace">    </span><span class="mi">117</span>     <span class="c1"># temporaries by their reference count and can execute certain</span>
+<span class="g g-Whitespace">    </span><span class="mi">118</span>     <span class="c1"># operations in-place.</span>
+<span class="ne">--&gt; </span><span class="mi">119</span>     <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">_execute_task</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">args</span><span class="p">))</span>
+<span class="g g-Whitespace">    </span><span class="mi">120</span> <span class="k">elif</span> <span class="ow">not</span> <span class="n">ishashable</span><span class="p">(</span><span class="n">arg</span><span class="p">):</span>
+<span class="g g-Whitespace">    </span><span class="mi">121</span>     <span class="k">return</span> <span class="n">arg</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:119,</span> in <span class="ni">_execute_task</span><span class="nt">(arg, cache, dsk)</span>
+<span class="g g-Whitespace">    </span><span class="mi">115</span>     <span class="n">func</span><span class="p">,</span> <span class="n">args</span> <span class="o">=</span> <span class="n">arg</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">arg</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
+<span class="g g-Whitespace">    </span><span class="mi">116</span>     <span class="c1"># Note: Don&#39;t assign the subtask results to a variable. numpy detects</span>
+<span class="g g-Whitespace">    </span><span class="mi">117</span>     <span class="c1"># temporaries by their reference count and can execute certain</span>
+<span class="g g-Whitespace">    </span><span class="mi">118</span>     <span class="c1"># operations in-place.</span>
+<span class="ne">--&gt; </span><span class="mi">119</span>     <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">_execute_task</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">args</span><span class="p">))</span>
+<span class="g g-Whitespace">    </span><span class="mi">120</span> <span class="k">elif</span> <span class="ow">not</span> <span class="n">ishashable</span><span class="p">(</span><span class="n">arg</span><span class="p">):</span>
+<span class="g g-Whitespace">    </span><span class="mi">121</span>     <span class="k">return</span> <span class="n">arg</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\optimization.py:990,</span> in <span class="ni">SubgraphCallable.__call__</span><span class="nt">(self, *args)</span>
+<span class="g g-Whitespace">    </span><span class="mi">988</span> <span class="k">if</span> <span class="ow">not</span> <span class="nb">len</span><span class="p">(</span><span class="n">args</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">inkeys</span><span class="p">):</span>
+<span class="g g-Whitespace">    </span><span class="mi">989</span>     <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Expected </span><span class="si">%d</span><span class="s2"> args, got </span><span class="si">%d</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">inkeys</span><span class="p">),</span> <span class="nb">len</span><span class="p">(</span><span class="n">args</span><span class="p">)))</span>
+<span class="ne">--&gt; </span><span class="mi">990</span> <span class="k">return</span> <span class="n">core</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dsk</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">outkey</span><span class="p">,</span> <span class="nb">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">inkeys</span><span class="p">,</span> <span class="n">args</span><span class="p">)))</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:149,</span> in <span class="ni">get</span><span class="nt">(dsk, out, cache)</span>
+<span class="g g-Whitespace">    </span><span class="mi">147</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">toposort</span><span class="p">(</span><span class="n">dsk</span><span class="p">):</span>
+<span class="g g-Whitespace">    </span><span class="mi">148</span>     <span class="n">task</span> <span class="o">=</span> <span class="n">dsk</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
+<span class="ne">--&gt; </span><span class="mi">149</span>     <span class="n">result</span> <span class="o">=</span> <span class="n">_execute_task</span><span class="p">(</span><span class="n">task</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span>
+<span class="g g-Whitespace">    </span><span class="mi">150</span>     <span class="n">cache</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">result</span>
+<span class="g g-Whitespace">    </span><span class="mi">151</span> <span class="n">result</span> <span class="o">=</span> <span class="n">_execute_task</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:119,</span> in <span class="ni">_execute_task</span><span class="nt">(arg, cache, dsk)</span>
+<span class="g g-Whitespace">    </span><span class="mi">115</span>     <span class="n">func</span><span class="p">,</span> <span class="n">args</span> <span class="o">=</span> <span class="n">arg</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">arg</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
+<span class="g g-Whitespace">    </span><span class="mi">116</span>     <span class="c1"># Note: Don&#39;t assign the subtask results to a variable. numpy detects</span>
+<span class="g g-Whitespace">    </span><span class="mi">117</span>     <span class="c1"># temporaries by their reference count and can execute certain</span>
+<span class="g g-Whitespace">    </span><span class="mi">118</span>     <span class="c1"># operations in-place.</span>
+<span class="ne">--&gt; </span><span class="mi">119</span>     <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">_execute_task</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">args</span><span class="p">))</span>
+<span class="g g-Whitespace">    </span><span class="mi">120</span> <span class="k">elif</span> <span class="ow">not</span> <span class="n">ishashable</span><span class="p">(</span><span class="n">arg</span><span class="p">):</span>
+<span class="g g-Whitespace">    </span><span class="mi">121</span>     <span class="k">return</span> <span class="n">arg</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:119,</span> in <span class="ni">&lt;genexpr&gt;</span><span class="nt">(.0)</span>
+<span class="g g-Whitespace">    </span><span class="mi">115</span>     <span class="n">func</span><span class="p">,</span> <span class="n">args</span> <span class="o">=</span> <span class="n">arg</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">arg</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
+<span class="g g-Whitespace">    </span><span class="mi">116</span>     <span class="c1"># Note: Don&#39;t assign the subtask results to a variable. numpy detects</span>
+<span class="g g-Whitespace">    </span><span class="mi">117</span>     <span class="c1"># temporaries by their reference count and can execute certain</span>
+<span class="g g-Whitespace">    </span><span class="mi">118</span>     <span class="c1"># operations in-place.</span>
+<span class="ne">--&gt; </span><span class="mi">119</span>     <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">_execute_task</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">args</span><span class="p">))</span>
+<span class="g g-Whitespace">    </span><span class="mi">120</span> <span class="k">elif</span> <span class="ow">not</span> <span class="n">ishashable</span><span class="p">(</span><span class="n">arg</span><span class="p">):</span>
+<span class="g g-Whitespace">    </span><span class="mi">121</span>     <span class="k">return</span> <span class="n">arg</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:119,</span> in <span class="ni">_execute_task</span><span class="nt">(arg, cache, dsk)</span>
+<span class="g g-Whitespace">    </span><span class="mi">115</span>     <span class="n">func</span><span class="p">,</span> <span class="n">args</span> <span class="o">=</span> <span class="n">arg</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">arg</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
+<span class="g g-Whitespace">    </span><span class="mi">116</span>     <span class="c1"># Note: Don&#39;t assign the subtask results to a variable. numpy detects</span>
+<span class="g g-Whitespace">    </span><span class="mi">117</span>     <span class="c1"># temporaries by their reference count and can execute certain</span>
+<span class="g g-Whitespace">    </span><span class="mi">118</span>     <span class="c1"># operations in-place.</span>
+<span class="ne">--&gt; </span><span class="mi">119</span>     <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">_execute_task</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">args</span><span class="p">))</span>
+<span class="g g-Whitespace">    </span><span class="mi">120</span> <span class="k">elif</span> <span class="ow">not</span> <span class="n">ishashable</span><span class="p">(</span><span class="n">arg</span><span class="p">):</span>
+<span class="g g-Whitespace">    </span><span class="mi">121</span>     <span class="k">return</span> <span class="n">arg</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\waves.py:1107,</span> in <span class="ni">_WavesFactory._build_waves_multislice_detect</span><span class="nt">(partials, multislice_func, detectors, *args)</span>
+<span class="g g-Whitespace">   </span><span class="mi">1103</span>     <span class="n">potential</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="g g-Whitespace">   </span><span class="mi">1105</span> <span class="n">waves</span> <span class="o">=</span> <span class="n">transform</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">waves</span><span class="p">)</span>
+<span class="ne">-&gt; </span><span class="mi">1107</span> <span class="n">waves</span> <span class="o">=</span> <span class="n">waves</span><span class="o">.</span><span class="n">ensure_real_space</span><span class="p">()</span>
+<span class="g g-Whitespace">   </span><span class="mi">1109</span> <span class="k">if</span> <span class="n">potential</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+<span class="g g-Whitespace">   </span><span class="mi">1110</span>     <span class="n">measurements</span> <span class="o">=</span> <span class="n">multislice_func</span><span class="p">(</span>
+<span class="g g-Whitespace">   </span><span class="mi">1111</span>         <span class="n">waves</span><span class="p">,</span> <span class="n">potential</span><span class="o">=</span><span class="n">potential</span><span class="p">,</span> <span class="n">detectors</span><span class="o">=</span><span class="n">detectors</span>
+<span class="g g-Whitespace">   </span><span class="mi">1112</span>     <span class="p">)</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\waves.py:598,</span> in <span class="ni">Waves.ensure_real_space</span><span class="nt">(self, in_place)</span>
+<span class="g g-Whitespace">    </span><span class="mi">595</span>     <span class="k">return</span> <span class="bp">self</span>
+<span class="g g-Whitespace">    </span><span class="mi">597</span> <span class="n">d</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_copy_kwargs</span><span class="p">(</span><span class="n">exclude</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;array&quot;</span><span class="p">,))</span>
+<span class="ne">--&gt; </span><span class="mi">598</span> <span class="n">d</span><span class="p">[</span><span class="s2">&quot;array&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">ifft2</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">,</span> <span class="n">overwrite_x</span><span class="o">=</span><span class="n">in_place</span><span class="p">)</span>
+<span class="g g-Whitespace">    </span><span class="mi">599</span> <span class="n">d</span><span class="p">[</span><span class="s2">&quot;fourier_space&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+<span class="g g-Whitespace">    </span><span class="mi">600</span> <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span><span class="o">**</span><span class="n">d</span><span class="p">)</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\core\fft.py:83,</span> in <span class="ni">ifft2</span><span class="nt">(x, overwrite_x, **kwargs)</span>
+<span class="g g-Whitespace">     </span><span class="mi">82</span> <span class="k">def</span> <span class="nf">ifft2</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">overwrite_x</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="ne">---&gt; </span><span class="mi">83</span>     <span class="k">return</span> <span class="n">_fft_dispatch</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">func_name</span><span class="o">=</span><span class="s2">&quot;ifft2&quot;</span><span class="p">,</span> <span class="n">overwrite_x</span><span class="o">=</span><span class="n">overwrite_x</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\core\fft.py:41,</span> in <span class="ni">_fft_dispatch</span><span class="nt">(x, func_name, overwrite_x, **kwargs)</span>
+<span class="g g-Whitespace">     </span><span class="mi">39</span> <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;fft&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;mkl&quot;</span><span class="p">:</span>
+<span class="g g-Whitespace">     </span><span class="mi">40</span>     <span class="k">if</span> <span class="n">mkl_fft</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+<span class="ne">---&gt; </span><span class="mi">41</span>         <span class="n">raise_fft_lib_not_present</span><span class="p">(</span><span class="s2">&quot;mkl_fft&quot;</span><span class="p">)</span>
+<span class="g g-Whitespace">     </span><span class="mi">43</span>     <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">mkl_fft</span><span class="p">,</span> <span class="n">func_name</span><span class="p">)(</span><span class="n">x</span><span class="p">,</span> <span class="n">overwrite_x</span><span class="o">=</span><span class="n">overwrite_x</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+<span class="g g-Whitespace">     </span><span class="mi">44</span> <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;fft&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;fftw&quot;</span><span class="p">:</span>
+
+<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\core\fft.py:29,</span> in <span class="ni">raise_fft_lib_not_present</span><span class="nt">(lib_name)</span>
+<span class="g g-Whitespace">     </span><span class="mi">28</span> <span class="k">def</span> <span class="nf">raise_fft_lib_not_present</span><span class="p">(</span><span class="n">lib_name</span><span class="p">):</span>
+<span class="ne">---&gt; </span><span class="mi">29</span>     <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+<span class="g g-Whitespace">     </span><span class="mi">30</span>         <span class="sa">f</span><span class="s2">&quot;FFT library </span><span class="si">{</span><span class="n">lib_name</span><span class="si">}</span><span class="s2"> not present. Install this package or change the FFT library in your &quot;</span>
+<span class="g g-Whitespace">     </span><span class="mi">31</span>         <span class="sa">f</span><span class="s2">&quot;configuration&quot;</span>
+<span class="g g-Whitespace">     </span><span class="mi">32</span>     <span class="p">)</span>
+
+<span class="ne">RuntimeError</span>: FFT library mkl_fft not present. Install this package or change the FFT library in your configuration
+</pre></div>
+</div>
 </div>
 </div>
 <p>The Fourier-space intensity, <span class="math notranslate nohighlight">\(\|\hat{\psi}\|^2\)</span>, is calculated and shown below. We set <code class="docutils literal notranslate"><span class="pre">max_angle=60</span></code> to only include angles up to <span class="math notranslate nohighlight">\(60 \ \mathrm{mrad}\)</span>.</p>
@@ -1444,7 +1667,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="wave-function-ensembles">
-<h2>Wave function ensembles<a class="headerlink" href="#wave-function-ensembles" title="Permalink to this heading">#</a></h2>
+<h2>Wave function ensembles<a class="headerlink" href="#wave-function-ensembles" title="Permalink to this headline">#</a></h2>
 <p>In general, the <code class="docutils literal notranslate"><span class="pre">Waves</span></code> represent an ensemble of wave functions as a multidimensional array.  The last two dimensions of the <code class="docutils literal notranslate"><span class="pre">Waves</span></code> represent the spatial dimensions, these are the mandatory or <em>base</em> dimensions of the <code class="docutils literal notranslate"><span class="pre">Waves</span></code>. Any preceeding dimension is an optional <em>ensemble</em> dimension. The ensemble dimensions may represent a range of defocii, positions, frozen phonons, tilt and more. abTEM will automatically parallelize over the ensemble dimensions.</p>
 <p>As an example, we create an ensemble of probes with different values for their defocus.</p>
 <div class="cell docutils container">
@@ -1568,16 +1791,16 @@ RealSpaceAxis  y [Å]    0.00 0.08 ... 19.92
         },
         codeMirrorConfig: {
             theme: "abcdef",
-            mode: "test_threads"
+            mode: "nnabtem"
         },
         kernelOptions: {
-            kernelName: "test_threads",
-            path: "./user_guide\walkthrough"
+            kernelName: "nnabtem",
+            path: "./user_guide/walkthrough"
         },
         predefinedOutput: true
     }
     </script>
-    <script>kernelName = 'test_threads'</script>
+    <script>kernelName = 'nnabtem'</script>
 
               </div>
               

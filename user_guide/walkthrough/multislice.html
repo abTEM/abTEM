@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,6 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
@@ -52,7 +51,7 @@ const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -60,7 +59,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="next" title="Contrast Transfer Function" href="contrast_transfer_function.html" />
     <link rel="prev" title="Wave functions" href="wave_functions.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -217,6 +216,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -461,11 +465,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html">
-       FourierSpaceLineProfiles
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.Images.html">
        Images
       </a>
@@ -481,8 +480,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html">
-       SinglePointMeasurement
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html">
+       ReciprocalSpaceLineProfiles
       </a>
      </li>
     </ul>
@@ -800,11 +799,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -812,11 +806,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -1197,7 +1186,7 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="multislice-simulations">
-<span id="walkthrough-multislice"></span><h1>Multislice simulations<a class="headerlink" href="#multislice-simulations" title="Permalink to this heading">#</a></h1>
+<span id="walkthrough-multislice"></span><h1>Multislice simulations<a class="headerlink" href="#multislice-simulations" title="Permalink to this headline">#</a></h1>
 <p>In the <a class="reference internal" href="potentials.html#walkthrough-potentials"><span class="std std-ref">walkthrough on potentials</span></a>, we describe how to integrate the potential into a series of thin slices <span class="math notranslate nohighlight">\(V_n\)</span> along the optical axis (see <a class="reference internal" href="potentials.html#equation-eq-potentials-slice">(1)</a>). Given a wave function representing fast electrons at the entrance of the <span class="math notranslate nohighlight">\(n\)</span>’th slice, <span class="math notranslate nohighlight">\(\psi_n(\vec{r})\)</span>, the wave function at exit of that slice may be written as</p>
 <div class="math notranslate nohighlight" id="equation-eq-getting-started-user-guide-multislice-multislice">
 <span class="eqno">(2)<a class="headerlink" href="#equation-eq-getting-started-user-guide-multislice-multislice" title="Permalink to this equation">#</a></span>\[
@@ -1225,16 +1214,16 @@ title="Print to PDF"
 \]</div>
 <p>is the Fresnel free space propagator in Fourier space and <span class="math notranslate nohighlight">\(\mathcal{F}\)</span> and <span class="math notranslate nohighlight">\(\mathcal{F}^{-1}\)</span> is the Fourier transform and its inverse, respectively.</p>
 <p>For brevity we have defined a multislice operator, <span class="math notranslate nohighlight">\(\mathcal{M}_n\)</span>, acting on a wave function to step it forward through the <span class="math notranslate nohighlight">\(n\)</span>’th slice. Thus given an initial wave function <span class="math notranslate nohighlight">\(\phi_0\)</span>, we can obtain the exit wave function for a potential with slice indices <span class="math notranslate nohighlight">\(n=0,1,\ldots N\)</span> by sequentially applying these operators</p>
-<div class="math notranslate nohighlight" id="equation-eq-getting-started-user-guide-multislice-multislice-symbol">
-<span class="eqno">(3)<a class="headerlink" href="#equation-eq-getting-started-user-guide-multislice-multislice-symbol" title="Permalink to this equation">#</a></span>\[
-    \psi_{exit}(\vec{r}) := \psi_{N}(\vec{r}) = \mathcal{M}_N \mathcal{M}_{N-1} \ldots \mathcal{M}_{0} \psi_0(\vec{r}) \quad .
+<div class="math notranslate nohighlight" id="equation-eq-multislice-symbol">
+<span class="eqno">(3)<a class="headerlink" href="#equation-eq-multislice-symbol" title="Permalink to this equation">#</a></span>\[
+    \psi_{exit}(\vec{r}) := \psi_{N}(\vec{r}) = \mathcal{M}_N \mathcal{M}_{N-1} \ldots \mathcal{M}_{0} \psi_0(\vec{r}) := \mathcal{M} \psi_0(\vec{r}) \quad .
 \]</div>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>
 <p>Phonon scattering is not included in the following, inclusions of phonons is important. Hence the following results may not correspond to experiment.</p>
 </div>
 <section id="multislice-simulations-with-plane-waves">
-<h2>Multislice simulations with plane waves<a class="headerlink" href="#multislice-simulations-with-plane-waves" title="Permalink to this heading">#</a></h2>
+<h2>Multislice simulations with plane waves<a class="headerlink" href="#multislice-simulations-with-plane-waves" title="Permalink to this headline">#</a></h2>
 <p>Below we create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> representing gold in the <span class="math notranslate nohighlight">\(\left&lt;100\right&gt;\)</span> zone axis and use a <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> as the initial wave function.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1300,7 +1289,7 @@ title="Print to PDF"
 </div>
 </div>
 <section id="electron-diffraction-patterns">
-<h3>Electron diffraction patterns<a class="headerlink" href="#electron-diffraction-patterns" title="Permalink to this heading">#</a></h3>
+<h3>Electron diffraction patterns<a class="headerlink" href="#electron-diffraction-patterns" title="Permalink to this headline">#</a></h3>
 <p>Below we obtain the <code class="docutils literal notranslate"><span class="pre">DiffractionPatterns</span></code> simulating a <a class="reference external" href="https://en.wikipedia.org/wiki/Selected_area_diffraction">selected area diffraction (SAD)</a> experiment. We use <code class="docutils literal notranslate"><span class="pre">block_direct=True</span></code> to block the direct beam. The direct beam typically has a much higher intensity than the scattered beams, thus it is typically not possible to show the direct spot on the same scale as the scattered spots.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1389,7 +1378,7 @@ title="Print to PDF"
 </section>
 </section>
 <section id="writing-exit-wave-functions">
-<h2>Writing exit wave functions<a class="headerlink" href="#writing-exit-wave-functions" title="Permalink to this heading">#</a></h2>
+<h2>Writing exit wave functions<a class="headerlink" href="#writing-exit-wave-functions" title="Permalink to this headline">#</a></h2>
 <p>You can write exit wave function directly to disk, this will trigger the computation to run.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1412,7 +1401,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="thickness-series">
-<h2>Thickness series<a class="headerlink" href="#thickness-series" title="Permalink to this heading">#</a></h2>
+<h2>Thickness series<a class="headerlink" href="#thickness-series" title="Permalink to this headline">#</a></h2>
 <p>abTEM allows us to obtain the wave function at intermediate steps of the multislice algorithm, thus allowing us to see how the wave function evolves as it passes through the potential. To create such a <em>thickness series</em> we set the <code class="docutils literal notranslate"><span class="pre">exit_planes</span></code> keyword of the potential. <code class="docutils literal notranslate"><span class="pre">exit_planes</span></code> may be given as a tuple of slice indices at which to return the wave function or just a single integer to indicate the step between those slice indices.</p>
 <p>Below we create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> as above, however, we set <code class="docutils literal notranslate"><span class="pre">exit_planes=36</span></code>. When running the multislice simulation we obtain an <em>ensemble</em> of wave functions <span class="math notranslate nohighlight">\(\psi_n(\vec{r})\)</span> with <span class="math notranslate nohighlight">\(n=0,36,72,\ldots\)</span>.</p>
 <div class="cell docutils container">
@@ -1472,7 +1461,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="multislice-simulation-with-a-probe">
-<h2>Multislice simulation with a probe<a class="headerlink" href="#multislice-simulation-with-a-probe" title="Permalink to this heading">#</a></h2>
+<h2>Multislice simulation with a probe<a class="headerlink" href="#multislice-simulation-with-a-probe" title="Permalink to this headline">#</a></h2>
 <p>We create our initial wave function as a convergent electron beam with an energy of <span class="math notranslate nohighlight">\(200 \ \mathrm{keV}\)</span> and a convergence semiangle of <span class="math notranslate nohighlight">\(10 \ \mathrm{mrad}\)</span>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1483,7 +1472,7 @@ title="Print to PDF"
 </div>
 <p>There are two additional considerations to take into account when performing multislice simulations with probes: self-interaction errors and probe placement.</p>
 <section id="self-interaction">
-<h3>Self-interaction<a class="headerlink" href="#self-interaction" title="Permalink to this heading">#</a></h3>
+<h3>Self-interaction<a class="headerlink" href="#self-interaction" title="Permalink to this headline">#</a></h3>
 <p>Self-interaction errors happen when the probe overlaps with its periodic images. We see this happening below, the clearest visual clue is that the probe does not have a circular symmetry, even though there are no non-symmetric aberrations.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1520,7 +1509,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="probe-position">
-<h3>Probe position<a class="headerlink" href="#probe-position" title="Permalink to this heading">#</a></h3>
+<h3>Probe position<a class="headerlink" href="#probe-position" title="Permalink to this headline">#</a></h3>
 <p>Above the probe was placed (by default) at the center of the potential, later we will learn how to scan the probe for STEM simulations. Here, we manually select a few positions.</p>
 <p>We create an array of <span class="math notranslate nohighlight">\(5\)</span> probe positions across the center of the potential.</p>
 <div class="cell docutils container">
@@ -1564,7 +1553,7 @@ title="Print to PDF"
 </div>
 </section>
 <section id="convergent-beam-diffraction">
-<h3>Convergent beam diffraction<a class="headerlink" href="#convergent-beam-diffraction" title="Permalink to this heading">#</a></h3>
+<h3>Convergent beam diffraction<a class="headerlink" href="#convergent-beam-diffraction" title="Permalink to this headline">#</a></h3>
 <p>The convergent beam (electron) diffraction (CBED) pattern may be calculated in the same manner as the SAD pattern. Here we select the third probe position by indexing the ensemble created above and calculate its diffraction pattern.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1604,7 +1593,7 @@ title="Print to PDF"
 </section>
 </section>
 <section id="small-angle-beam-tilt">
-<h2>Small-angle beam tilt<a class="headerlink" href="#small-angle-beam-tilt" title="Permalink to this heading">#</a></h2>
+<h2>Small-angle beam tilt<a class="headerlink" href="#small-angle-beam-tilt" title="Permalink to this headline">#</a></h2>
 <p>Small amounts of beam tilt (or equivalently sample tilt) may be included by a small modification to the propagator function</p>
 <div class="math notranslate nohighlight">
 \[
@@ -1680,7 +1669,7 @@ title="Print to PDF"
         },
         kernelOptions: {
             kernelName: "abtem-dask",
-            path: "./user_guide\walkthrough"
+            path: "./user_guide/walkthrough"
         },
         predefinedOutput: true
     }

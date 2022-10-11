@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -33,7 +33,6 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
@@ -51,11 +50,11 @@ const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -212,6 +211,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../user_guide/walkthrough/core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -456,11 +460,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html">
-       FourierSpaceLineProfiles
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.Images.html">
        Images
       </a>
@@ -476,8 +475,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html">
-       SinglePointMeasurement
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html">
+       ReciprocalSpaceLineProfiles
       </a>
      </li>
     </ul>
@@ -795,11 +794,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -807,11 +801,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -1015,7 +1004,7 @@ title="Open an issue"
         <span class="n">DiffractionPatterns</span><span class="p">,</span>
         <span class="n">BaseMeasurement</span><span class="p">,</span>
         <span class="n">RealSpaceLineProfiles</span><span class="p">,</span>
-        <span class="n">FourierSpaceLineProfiles</span><span class="p">,</span>
+        <span class="n">ReciprocalSpaceLineProfiles</span><span class="p">,</span>
     <span class="p">)</span>
     <span class="kn">from</span> <span class="nn">abtem.core.indexing</span> <span class="kn">import</span> <span class="n">IndexedDiffractionPattern</span>
 
@@ -1190,6 +1179,74 @@ title="Open an issue"
     <span class="n">complex_coloring_kwargs</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">axes</span><span class="p">:</span> <span class="n">Axes</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 <span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Show the image(s) using matplotlib.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    cmap : str, optional</span>
+<span class="sd">        Matplotlib colormap name used to map scalar data to colors. Ignored if image array is complex.</span>
+<span class="sd">    explode : bool, optional</span>
+<span class="sd">        If True, a grid of images is created for all the items of the last two ensemble axes. If False, the first</span>
+<span class="sd">        ensemble item is shown.</span>
+<span class="sd">    ax : matplotlib.axes.Axes, optional</span>
+<span class="sd">        If given the plots are added to the axis. This is not available for image grids.</span>
+<span class="sd">    figsize : two int, optional</span>
+<span class="sd">        The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.</span>
+<span class="sd">    title : bool or str, optional</span>
+<span class="sd">        Add a title to the figure. If True is given instead of a string the title will be given by the value</span>
+<span class="sd">        corresponding to the &quot;name&quot; key of the metadata dictionary, if this item exists.</span>
+<span class="sd">    panel_titles : bool or list of str, optional</span>
+<span class="sd">        Add titles to each panel. If True a title will be created from the axis metadata. If given as a list of</span>
+<span class="sd">        strings an item must exist for each panel.</span>
+<span class="sd">    x_ticks : bool or list, optional</span>
+<span class="sd">        If False, the ticks on the `x`-axis will be removed.</span>
+<span class="sd">    y_ticks : bool or list, optional</span>
+<span class="sd">        If False, the ticks on the `y`-axis will be removed.</span>
+<span class="sd">    x_label : bool or str, optional</span>
+<span class="sd">        Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis</span>
+<span class="sd">        metadata. A string may be given to override this.</span>
+<span class="sd">    y_label : bool or str, optional</span>
+<span class="sd">        Add label to the `x`-axis of every plot. If True (default) the label will created from the corresponding axis</span>
+<span class="sd">        metadata. A string may be given to override this.</span>
+<span class="sd">    row_super_label : bool or str, optional</span>
+<span class="sd">        Add super label to the rows of an image grid. If True the label will be created from the corresponding axis</span>
+<span class="sd">        metadata. A string may be given to override this. The default is no super label.</span>
+<span class="sd">    col_super_label : bool or str, optional</span>
+<span class="sd">        Add super label to the columns of an image grid. If True the label will be created from the corresponding</span>
+<span class="sd">        axis metadata. A string may be given to override this. The default is no super label.</span>
+<span class="sd">    power : float</span>
+<span class="sd">        Show image on a power scale.</span>
+<span class="sd">    vmin : float, optional</span>
+<span class="sd">        Minimum of the intensity color scale. Default is the minimum of the array values.</span>
+<span class="sd">    vmax : float, optional</span>
+<span class="sd">        Maximum of the intensity color scale. Default is the maximum of the array values.</span>
+<span class="sd">    common_color_scale : bool, optional</span>
+<span class="sd">        If True all images in an image grid are shown on the same colorscale, and a single colorbar is created (if</span>
+<span class="sd">        it is requested). Default is False.</span>
+<span class="sd">    cbar : bool, optional</span>
+<span class="sd">        Add colorbar(s) to the image(s). The position and size of the colorbar(s) may be controlled by passing</span>
+<span class="sd">        keyword arguments to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid` through `image_grid_kwargs`.</span>
+<span class="sd">    cbar_labels : str or list of str</span>
+<span class="sd">        Label(s) for the colorbar(s).</span>
+<span class="sd">    sizebar : bool, optional,</span>
+<span class="sd">        Add a size bar to the image(s).</span>
+<span class="sd">    float_formatting : str, optional</span>
+<span class="sd">        A formatting string used for formatting the floats of the panel titles.</span>
+<span class="sd">    panel_labels : list of str</span>
+<span class="sd">        A list of labels for each panel of a grid of images.</span>
+<span class="sd">    image_grid_kwargs : dict</span>
+<span class="sd">        Additional keyword arguments passed to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid`.</span>
+<span class="sd">    imshow_kwargs : dict</span>
+<span class="sd">        Additional keyword arguments passed to `matplotlib.axes.Axes.imshow`.</span>
+<span class="sd">    anchored_text_kwargs : dict</span>
+<span class="sd">        Additional keyword arguments passed to `matplotlib.offsetbox.AnchoredText`. This is used for creating panel</span>
+<span class="sd">        labels.</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    Figure, matplotlib.axes.Axes</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">measurements</span> <span class="o">=</span> <span class="n">measurements</span><span class="o">.</span><span class="n">to_cpu</span><span class="p">()</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
 
     <span class="n">imshow_kwargs</span> <span class="o">=</span> <span class="p">{}</span> <span class="k">if</span> <span class="n">imshow_kwargs</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">imshow_kwargs</span>
@@ -1371,7 +1428,7 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="show_measurements_1d"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.visualize.show_measurements_1d.html#abtem.visualize.show_measurements_1d">[docs]</a><span class="k">def</span> <span class="nf">show_measurements_1d</span><span class="p">(</span>
-    <span class="n">measurements</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="s2">&quot;RealSpaceLineProfiles&quot;</span><span class="p">,</span> <span class="s2">&quot;FourierSpaceLineProfiles&quot;</span><span class="p">],</span>
+    <span class="n">measurements</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="s2">&quot;RealSpaceLineProfiles&quot;</span><span class="p">,</span> <span class="s2">&quot;ReciprocalSpaceLineProfiles&quot;</span><span class="p">],</span>
     <span class="n">float_formatting</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">extent</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">ax</span><span class="p">:</span> <span class="n">Axes</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -1381,6 +1438,7 @@ title="Open an issue"
     <span class="n">figsize</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
 <span class="p">):</span>
+    <span class="c1"># TODO: urgently needs documentation (copy over from measurements.py)!</span>
     <span class="k">if</span> <span class="n">ax</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="n">figsize</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
@@ -1428,16 +1486,38 @@ title="Open an issue"
 
 <div class="viewcode-block" id="plot_diffraction_pattern"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.visualize.plot_diffraction_pattern.html#abtem.visualize.plot_diffraction_pattern">[docs]</a><span class="k">def</span> <span class="nf">plot_diffraction_pattern</span><span class="p">(</span>
     <span class="n">indexed_diffraction_pattern</span><span class="p">:</span> <span class="s2">&quot;IndexedDiffractionPattern&quot;</span><span class="p">,</span>
-    <span class="c1"># cell: Union[float, Tuple[float, float], Tuple[float, float, float], Cell],</span>
     <span class="n">spot_scale</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
     <span class="n">ax</span><span class="p">:</span> <span class="n">Axes</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">figsize</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">6</span><span class="p">),</span>
-    <span class="n">spot_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.02</span><span class="p">,</span>
     <span class="n">title</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">annotate_kwargs</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-    <span class="n">divide_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+    <span class="n">inequivalency_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
 <span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Display a diffraction pattern as indexed Bragg reflections.</span>
 
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    indexed_diffraction_pattern : IndexedDiffractionPattern</span>
+<span class="sd">        Diffraction pattern to be displayed.</span>
+<span class="sd">    spot_scale : float</span>
+<span class="sd">        Size of the circles representing the diffraction spots.</span>
+<span class="sd">    ax : matplotlib.axes.Axes, optional</span>
+<span class="sd">        If given the plots are added to the axis.</span>
+<span class="sd">    figsize : two int, optional</span>
+<span class="sd">        The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.</span>
+<span class="sd">    title : bool or str, optional</span>
+<span class="sd">        Add a title to the figure. If True is given instead of a string the title will be given by the value</span>
+<span class="sd">        corresponding to the &quot;name&quot; key of the metadata dictionary, if this item exists</span>
+<span class="sd">    annotate_kwargs : dict</span>
+<span class="sd">        Additional keyword arguments passed to `matplotlib.axes.Axes.annotate` to change the formatting of the labels.</span>
+<span class="sd">    inequivalency_threshold : float</span>
+<span class="sd">        Relative intensity difference to determine whether two symmetry-equivalent diffraction spots should be indepdendently</span>
+<span class="sd">        labeled (e.g. due to a unit cell with a basis of more than one element).</span>
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    figure, axis_handle : matplotlib.figure.Figure, matplotlib.axis.Axis</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="n">annotate_kwargs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">annotate_kwargs</span> <span class="o">=</span> <span class="p">{}</span>
 
@@ -1476,20 +1556,13 @@ title="Open an issue"
         <span class="p">)</span>
     <span class="p">)</span>
 
-    <span class="n">indexed_diffraction_pattern</span> <span class="o">=</span> <span class="n">indexed_diffraction_pattern</span><span class="o">.</span><span class="n">remove_equivalent</span><span class="p">(</span><span class="n">divide_threshold</span><span class="o">=</span><span class="n">divide_threshold</span><span class="p">)</span>
+    <span class="n">indexed_diffraction_pattern</span> <span class="o">=</span> <span class="n">indexed_diffraction_pattern</span><span class="o">.</span><span class="n">remove_equivalent</span><span class="p">(</span><span class="n">divide_threshold</span><span class="o">=</span><span class="n">inequivalency_threshold</span><span class="p">)</span>
     <span class="n">coordinates</span> <span class="o">=</span> <span class="n">indexed_diffraction_pattern</span><span class="o">.</span><span class="n">_vectors</span>
     <span class="n">coordinates</span> <span class="o">=</span> <span class="n">coordinates</span> <span class="o">/</span> <span class="n">normalize_coordinates</span>
 
     <span class="n">miller_indices</span> <span class="o">=</span> <span class="n">indexed_diffraction_pattern</span><span class="o">.</span><span class="n">miller_indices</span>
 
     <span class="k">for</span> <span class="n">hkl</span><span class="p">,</span> <span class="n">coordinate</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">miller_indices</span><span class="p">,</span> <span class="n">coordinates</span><span class="p">):</span>
-        <span class="c1"># if include[i]:  # or label_mode == &quot;all&quot;:</span>
-        <span class="c1"># if hexagonal:</span>
-        <span class="c1">#     spot = miller_to_miller_bravais(hkl[i][None])[0]</span>
-        <span class="c1"># else:</span>
-        <span class="c1">#     spot = hkl[i]</span>
-        <span class="c1"># print(hkl, coordinate)</span>
-
         <span class="n">t</span> <span class="o">=</span> <span class="n">ax</span><span class="o">.</span><span class="n">annotate</span><span class="p">(</span>
             <span class="s2">&quot;&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="nb">map</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">hkl</span><span class="p">))),</span>
             <span class="n">coordinate</span><span class="p">,</span>
@@ -1566,19 +1639,19 @@ title="Open an issue"
     <span class="n">merge</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-2</span><span class="p">,</span>
 <span class="p">):</span>
     <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Display 2d projection of atoms as a Matplotlib plot.</span>
+<span class="sd">    Display 2D projection of atoms as a matplotlib plot.</span>
 
 <span class="sd">    Parameters</span>
 <span class="sd">    ----------</span>
-<span class="sd">    atoms : ASE Atoms</span>
+<span class="sd">    atoms : ase.Atoms</span>
 <span class="sd">        The atoms to be shown.</span>
 <span class="sd">    plane : str, two float</span>
-<span class="sd">        The projection plane given as a combination of &#39;x&#39; &#39;y&#39; and &#39;z&#39;, e.g. &#39;xy&#39;, or the as two floats representing the</span>
-<span class="sd">        azimuth and elevation angles in degrees of the viewing direction, e.g. (45, 45).</span>
-<span class="sd">    ax : matplotlib Axes, optional</span>
+<span class="sd">        The projection plane given as a concatenation of &#39;x&#39; &#39;y&#39; and &#39;z&#39;, e.g. &#39;xy&#39;, or as two floats representing the</span>
+<span class="sd">        azimuth and elevation angles of the viewing direction [degrees], e.g. (45, 45).</span>
+<span class="sd">    ax : matplotlib.axes.Axes, optional</span>
 <span class="sd">        If given the plots are added to the axes.</span>
 <span class="sd">    scale : float</span>
-<span class="sd">        Scaling factor for the atom display sizes. Default is 0.5.</span>
+<span class="sd">        Factor scaling their covalent radii for the atom display sizes (default is 0.75).</span>
 <span class="sd">    title : str</span>
 <span class="sd">        Title of the displayed image. Default is None.</span>
 <span class="sd">    numbering : bool</span>
@@ -1586,14 +1659,16 @@ title="Open an issue"
 <span class="sd">    show_periodic : bool</span>
 <span class="sd">        If True, show the periodic images of the atoms at the cell boundary.</span>
 <span class="sd">    figsize : two int, optional</span>
-<span class="sd">        The figure size given as width and height in inches, passed to matplotlib.pyplot.figure.</span>
+<span class="sd">        The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.</span>
 <span class="sd">    legend : bool</span>
 <span class="sd">        If True, add a legend indicating the color of the atomic species.</span>
 <span class="sd">    merge: float</span>
-<span class="sd">        Plotting large numbers of atoms can be slow. To speed up plotting atoms closer than the given value</span>
-<span class="sd">        (in Ångstrom) are merged.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">        To speed up plotting large numbers of atoms, those closer than the given value [Å] are merged.</span>
 
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    matplotlib.figure.Figure, matplotlib.axes.Axes</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="n">show_periodic</span><span class="p">:</span>
         <span class="n">atoms</span> <span class="o">=</span> <span class="n">atoms</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
         <span class="n">atoms</span> <span class="o">=</span> <span class="n">pad_atoms</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="n">margins</span><span class="o">=</span><span class="mf">1e-3</span><span class="p">)</span>
@@ -1659,8 +1734,6 @@ title="Open an issue"
         <span class="p">]</span>
 
         <span class="n">ax</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">handles</span><span class="o">=</span><span class="n">legend_elements</span><span class="p">,</span> <span class="n">loc</span><span class="o">=</span><span class="s2">&quot;upper right&quot;</span><span class="p">)</span>
-    <span class="c1"># ax.set_xlim([0, np.max(cell_lines_x)])</span>
-    <span class="c1"># ax.set_ylim([0, np.max(cell_lines_y)])</span>
 
     <span class="k">return</span> <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span></div>
 </pre></div>

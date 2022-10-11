@@ -1,4 +1,4 @@
-﻿DiffractionPatterns
+DiffractionPatterns
 ===================
 
 .. currentmodule:: abtem.measurements
@@ -20,7 +20,6 @@
       ~DiffractionPatterns.abs
       ~DiffractionPatterns.bandlimit
       ~DiffractionPatterns.block_direct
-      ~DiffractionPatterns.center_bin
       ~DiffractionPatterns.center_of_mass
       ~DiffractionPatterns.check_is_compatible
       ~DiffractionPatterns.compute
@@ -54,7 +53,6 @@
       ~DiffractionPatterns.reduce_ensemble
       ~DiffractionPatterns.relative_difference
       ~DiffractionPatterns.scan_positions
-      ~DiffractionPatterns.select_frequency_bin
       ~DiffractionPatterns.show
       ~DiffractionPatterns.squeeze
       ~DiffractionPatterns.std

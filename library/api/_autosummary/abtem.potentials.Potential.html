@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,6 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
@@ -51,12 +50,14 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="PotentialArray" href="abtem.potentials.PotentialArray.html" />
     <link rel="prev" title="CrystalPotential" href="abtem.potentials.CrystalPotential.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -213,6 +214,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/walkthrough/core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -796,11 +802,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -808,11 +809,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -1024,61 +1020,60 @@ title="Print to PDF"
               <div>
                 
   <section id="potential">
-<h1>Potential<a class="headerlink" href="#potential" title="Permalink to this heading">#</a></h1>
+<h1>Potential<a class="headerlink" href="#potential" title="Permalink to this headline">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.potentials.Potential">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.potentials.</span></span><span class="sig-name descname"><span class="pre">Potential</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">atoms</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gpts</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slice_thickness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">parametrization</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'lobato'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">projection</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'infinite'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">integral_method</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">exit_planes</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">plane</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'xy'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">origin</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(0.0,</span> <span class="pre">0.0,</span> <span class="pre">0.0)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">box</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">periodic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">integrator</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/potentials.html#Potential"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.potentials.Potential" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">_PotentialBuilder</span></code></p>
-<p>The potential is used to calculate the electrostatic potential of a set of atoms represented by ASE Atoms.
-The potential is calculated with the Independent Atom Model (IAM) using a user-defined parametrization of the atomic
-potentials.</p>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.potentials.</span></span><span class="sig-name descname"><span class="pre">Potential</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">atoms</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gpts</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slice_thickness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">parametrization</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'lobato'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">projection</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'infinite'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">integral_method</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">exit_planes</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">plane</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'xy'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">origin</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(0.0,</span> <span class="pre">0.0,</span> <span class="pre">0.0)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">box</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">periodic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">integrator</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/potentials.html#Potential"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.potentials.Potential" title="Permalink to this definition">#</a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.potentials._PotentialBuilder</span></code></p>
+<p>Calculate the electrostatic potential of a set of atoms or frozen phonon configurations. The potential is calculated
+with the Independent Atom Model (IAM) using a user-defined parametrization of the atomic potentials.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>atoms</strong> (<em>Atoms</em><em> or </em><em>FrozenPhonons</em>) – Atoms or FrozenPhonons defining the atomic configuration(s) used in the independent atom model for calculating
+<li><p><strong>atoms</strong> (<em>ase.Atoms</em><em> or </em><em>abtem.FrozenPhonons</em>) – Atoms or FrozenPhonons defining the atomic configuration(s) used in the independent atom model for calculating
 the electrostatic potential(s).</p></li>
-<li><p><strong>gpts</strong> (<em>one</em><em> or </em><em>two int</em><em>, </em><em>optional</em>) – Number of grid points in x and y describing each slice of the potential. Provide either “sampling” or “gpts”.</p></li>
-<li><p><strong>sampling</strong> (<em>one</em><em> or </em><em>two float</em><em>, </em><em>optional</em>) – Sampling of the potential in x and y [1 / Å]. Provide either “sampling” or “gpts”.</p></li>
-<li><p><strong>slice_thickness</strong> (<em>float</em><em> or </em><em>sequence of float</em><em>, </em><em>optional</em>) – Thickness of the potential slices in Å. If given as a float the number of slices are calculated by dividing the
-slice thickness into the z-height of supercell.
+<li><p><strong>gpts</strong> (<em>one</em><em> or </em><em>two int</em><em>, </em><em>optional</em>) – Number of grid points in <cite>x</cite> and <cite>y</cite> describing each slice of the potential. Provide either “sampling” (spacing
+between consecutive grid points) or “gpts” (total number of grid points).</p></li>
+<li><p><strong>sampling</strong> (<em>one</em><em> or </em><em>two float</em><em>, </em><em>optional</em>) – Sampling of the potential in <cite>x</cite> and <cite>y</cite> [1 / Å]. Provide either “sampling” or “gpts”.</p></li>
+<li><p><strong>slice_thickness</strong> (<em>float</em><em> or </em><em>sequence of float</em><em>, </em><em>optional</em>) – Thickness of the potential slices in the propagation direction in [Å] (default is 0.5 Å).
+If given as a float, the number of slices is calculated by dividing the slice thickness into the <cite>z</cite>-height of supercell.
 The slice thickness may be given as a sequence of values for each slice, in which case an error will be thrown
-if the sum of slice thicknesses is not equal to the height of the atoms.
-Default is 0.5 Å.</p></li>
+if the sum of slice thicknesses is not equal to the height of the atoms.</p></li>
 <li><p><strong>parametrization</strong> (<em>'lobato'</em><em> or </em><em>'kirkland'</em><em>, </em><em>optional</em>) – The potential parametrization describes the radial dependence of the potential for each element. Two of the
-most accurate parametrizations are available by Lobato et al. and Kirkland. The abTEM default is ‘lobato’.
+most accurate parametrizations are available (by Lobato et al. and Kirkland; default is ‘lobato’).
 See the citation guide for references.</p></li>
-<li><p><strong>projection</strong> (<em>'finite'</em><em> or </em><em>'infinite'</em><em>, </em><em>optional</em>) – If ‘finite’ the 3d potential is numerically integrated between the slice boundaries. If ‘infinite’ the infinite
-potential projection of each atom will be assigned to a single slice. Default is ‘infinite’.</p></li>
+<li><p><strong>projection</strong> (<em>'finite'</em><em> or </em><em>'infinite'</em><em>, </em><em>optional</em>) – If ‘finite’ the 3D potential is numerically integrated between the slice boundaries. If ‘infinite’ (default),
+the infinite potential projection of each atom will be assigned to a single slice.</p></li>
 <li><p><strong>integral_method</strong> (<em>{'quadrature'</em><em>, </em><em>'analytic'}</em><em>, </em><em>optional</em>) – Specifies whether to perform projection integrals in real space or Fourier space. By default, finite projection
 integrals are computed in real space and infinite projection integrals are performed in Fourier space.</p></li>
 <li><p><strong>exit_planes</strong> (<em>int</em><em> or </em><em>tuple of int</em><em>, </em><em>optional</em>) – The <cite>exit_planes</cite> argument can be used to calculate thickness series.
 Providing <cite>exit_planes</cite> as a tuple of int indicates that the tuple contains the slice indices after which an
 exit plane is desired, and hence during a multislice simulation a measurement is created. If <cite>exit_planes</cite> is
 an integer a measurement will be collected every <cite>exit_planes</cite> number of slices.</p></li>
-<li><p><strong>plane</strong> (<em>str</em><em> or </em><em>two tuples of three float</em><em>, </em><em>optional</em>) – The plane relative to the provided Atoms mapped to xy plane of the Potential, i.e. provided plane is
-perpendicular to the propagation direction. If string, it must be a combination of two of ‘x’, ‘y’ and ‘z’,
-the default value ‘xy’ indicates that potential slices are cuts the ‘xy’-plane of the Atoms.
-The plane may also be specified with two arbitrary 3d vectors, which are mapped to the x and y directions of
-the potential, respectively. The length of the vectors has influence. If the vectors are not perpendicular,
-the second vector is rotated in the plane to become perpendicular. Providing a value of
+<li><p><strong>plane</strong> (<em>str</em><em> or </em><em>two tuples of three float</em><em>, </em><em>optional</em>) – The plane relative to the provided atoms mapped to <cite>xy</cite> plane of the potential, i.e. provided plane is
+perpendicular to the propagation direction. If string, it must be a concatenation of two of ‘x’, ‘y’ and ‘z’;
+the default value ‘xy’ indicates that potential slices are cuts along the <cite>xy</cite>-plane of the atoms.
+The plane may also be specified with two arbitrary 3D vectors, which are mapped to the <cite>x</cite> and <cite>y</cite> directions of
+the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,
+the second vector is rotated in the plane to become perpendicular to the first. Providing a value of
 ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing ‘xy’.</p></li>
-<li><p><strong>origin</strong> (<em>three float</em><em>, </em><em>optional</em>) – The origin relative to the provided Atoms mapped to the origin of the Potential. This is equivalent to shifting
-the atoms
-The default is (0., 0., 0.).</p></li>
-<li><p><strong>box</strong> (<em>three float</em><em>, </em><em>optional</em>) – The extent of the potential in x, y and z. If not given this is determined from the Atoms. If the box size does
-not match an integer number of the atoms’ supercell, an affine transformation may be necessary to preserve
-periodicity, determined by the <cite>periodic</cite> keyword.</p></li>
+<li><p><strong>origin</strong> (<em>three float</em><em>, </em><em>optional</em>) – The origin relative to the provided atoms mapped to the origin of the potential. This is equivalent to translating
+the atoms. The default is (0., 0., 0.).</p></li>
+<li><p><strong>box</strong> (<em>three float</em><em>, </em><em>optional</em>) – The extent of the potential in <cite>x</cite>, <cite>y</cite> and <cite>z</cite>. If not given this is determined from the atoms’ cell.
+If the box size does not match an integer number of the atoms’ supercell, an affine transformation may be
+necessary to preserve periodicity, determined by the <cite>periodic</cite> keyword.</p></li>
 <li><p><strong>periodic</strong> (<em>bool</em><em>, </em><em>True</em>) – If a transformation of the atomic structure is required, <cite>periodic</cite> determines how the atomic structure is
 transformed. If True, the periodicity of the Atoms is preserved, which may require applying a small affine
 transformation to the atoms. If False, the transformed potential is effectively cut out of a larger repeated
 potential, which may not preserve periodicity.</p></li>
-<li><p><strong>device</strong> (<em>str</em><em>, </em><em>optional</em>) – The device used for calculating the potential. The default is determined by the user configuration file.</p></li>
+<li><p><strong>integrator</strong> (<em>ProjectionIntegrator</em><em>, </em><em>optional</em>) – Provide a custom integrator for the projection integrals of the potential slicing.</p></li>
+<li><p><strong>device</strong> (<em>str</em><em>, </em><em>optional</em>) – The device used for calculating the potential, ‘cpu’ or ‘gpu’. The default is determined by the user configuration file.</p></li>
 </ul>
 </dd>
 </dl>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.potentials.Potential.__init__">
-<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">atoms</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gpts</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slice_thickness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">parametrization</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'lobato'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">projection</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'infinite'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">integral_method</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">exit_planes</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">plane</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'xy'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">origin</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(0.0,</span> <span class="pre">0.0,</span> <span class="pre">0.0)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">box</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">periodic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">integrator</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/potentials.html#Potential.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.potentials.Potential.__init__" title="Permalink to this definition">#</a></dt>
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">atoms</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gpts</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slice_thickness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">parametrization</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'lobato'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">projection</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'infinite'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">integral_method</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">exit_planes</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">plane</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'xy'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">origin</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(0.0,</span> <span class="pre">0.0,</span> <span class="pre">0.0)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">box</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">periodic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">integrator</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/potentials.html#Potential.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.potentials.Potential.__init__" title="Permalink to this definition">#</a></dt>
 <dd></dd></dl>
 
 <p class="rubric">Methods</p>
@@ -1092,7 +1087,7 @@ potential, which may not preserve periodicity.</p></li>
 <td><p></p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.Potential.build" title="abtem.potentials.Potential.build"><code class="xref py py-obj docutils literal notranslate"><span class="pre">build</span></code></a>([first_slice, last_slice, chunks, lazy])</p></td>
-<td><p>Build the potential producing a PotentialArray.</p></td>
+<td><p>Build the potential.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.Potential.copy" title="abtem.potentials.Potential.copy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">copy</span></code></a>()</p></td>
 <td><p>Make a copy.</p></td>
@@ -1103,8 +1098,8 @@ potential, which may not preserve periodicity.</p></li>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.Potential.generate_blocks" title="abtem.potentials.Potential.generate_blocks"><code class="xref py py-obj docutils literal notranslate"><span class="pre">generate_blocks</span></code></a>([chunks])</p></td>
 <td><p>Generate chunks of the ensemble.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">generate_slices</span></code>([first_slice, last_slice])</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.Potential.generate_slices" title="abtem.potentials.Potential.generate_slices"><code class="xref py py-obj docutils literal notranslate"><span class="pre">generate_slices</span></code></a>([first_slice, last_slice])</p></td>
+<td><p>Generate the slices for the potential.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">images</span></code>()</p></td>
 <td><p></p></td>
@@ -1126,7 +1121,7 @@ potential, which may not preserve periodicity.</p></li>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.Potential.select_block" title="abtem.potentials.Potential.select_block"><code class="xref py py-obj docutils literal notranslate"><span class="pre">select_block</span></code></a>(index, chunks)</p></td>
 <td><p>Select a block from the ensemble.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.Potential.show" title="abtem.potentials.Potential.show"><code class="xref py py-obj docutils literal notranslate"><span class="pre">show</span></code></a>([explode])</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.Potential.show" title="abtem.potentials.Potential.show"><code class="xref py py-obj docutils literal notranslate"><span class="pre">show</span></code></a>([project])</p></td>
 <td><p>Show the potential projection.</p></td>
 </tr>
 </tbody>
@@ -1271,22 +1266,22 @@ potential, which may not preserve periodicity.</p></li>
 <td><p>The size of each axis.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.potentials.Potential.slice_limits" title="abtem.potentials.Potential.slice_limits"><code class="xref py py-obj docutils literal notranslate"><span class="pre">slice_limits</span></code></a></p></td>
-<td><p>The entrance and exit depths of each slice in Ångstrom.</p></td>
+<td><p>The entrance and exit depths of each slice [Å].</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.Potential.slice_thickness" title="abtem.potentials.Potential.slice_thickness"><code class="xref py py-obj docutils literal notranslate"><span class="pre">slice_thickness</span></code></a></p></td>
-<td><p>Thickness of each slice in Ångstrom.</p></td>
+<td><p>Thickness of each slice [Å].</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">sliced_atoms</span></code></p></td>
 <td><p></p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.potentials.Potential.thickness" title="abtem.potentials.Potential.thickness"><code class="xref py py-obj docutils literal notranslate"><span class="pre">thickness</span></code></a></p></td>
-<td><p>The thickness of the potential in Ångstrom.</p></td>
+<td><p>The thickness of the potential [Å].</p></td>
 </tr>
 </tbody>
 </table>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.potentials.Potential.axes_metadata">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">AxesMetadataList</span></em><a class="headerlink" href="#abtem.potentials.Potential.axes_metadata" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.axes.AxesMetadataList</span></em><a class="headerlink" href="#abtem.potentials.Potential.axes_metadata" title="Permalink to this definition">#</a></dt>
 <dd><p>List of AxisMetadata.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1309,18 +1304,20 @@ potential, which may not preserve periodicity.</p></li>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.potentials.Potential.build">
 <span class="sig-name descname"><span class="pre">build</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">first_slice</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">last_slice</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lazy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.potentials.Potential.build" title="Permalink to this definition">#</a></dt>
-<dd><p>Build the potential producing a PotentialArray.</p>
+<dd><p>Build the potential.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>first_slice</strong> (<em>int</em><em>, </em><em>optional</em>) – </p></li>
-<li><p><strong>last_slice</strong> (<em>int</em><em>, </em><em>optional</em>) – </p></li>
-<li><p><strong>chunks</strong> (<em>int</em><em> or </em><em>tuple of int</em><em> or </em><em>tuple of tuple of int</em>) – </p></li>
-<li><p><strong>lazy</strong> (<em>bool</em>) – </p></li>
+<li><p><strong>first_slice</strong> (<em>int</em><em>, </em><em>optional</em>) – Index of the first slice of the generated potential.</p></li>
+<li><p><strong>last_slice</strong> (<em>int</em><em>, </em><em>optional</em>) – Index of the last slice of the generated potential</p></li>
+<li><p><strong>TODO</strong> (<em>replace with max_batches</em>) – </p></li>
+<li><p><strong>chunks</strong> (<em>int</em><em> or </em><em>tuple of int</em><em> or </em><em>tuple of tuple of int</em>) – Number of slices to include in each Dask worker batch. Default is 1.</p></li>
+<li><p><strong>lazy</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
+value set in the configuration file.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
-<dd class="field-even"><p><strong>potential_array</strong></p>
+<dd class="field-even"><p><strong>potential_array</strong> – Object representing the potential.</p>
 </dd>
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><a class="reference internal" href="abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray" title="abtem.potentials.PotentialArray">PotentialArray</a></p>
@@ -1402,6 +1399,26 @@ potential, which may not preserve periodicity.</p></li>
 </dl>
 </dd></dl>
 
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.potentials.Potential.generate_slices">
+<span class="sig-name descname"><span class="pre">generate_slices</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">first_slice</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">last_slice</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/potentials.html#Potential.generate_slices"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.potentials.Potential.generate_slices" title="Permalink to this definition">#</a></dt>
+<dd><p>Generate the slices for the potential.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>first_slice</strong> (<em>int</em><em>, </em><em>optional</em>) – Index of the first slice of the generated potential.</p></li>
+<li><p><strong>last_slice</strong> (<em>int</em><em>, </em><em>optional</em>) – Index of the last slice of the generated potential.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>slices</strong> – Generator for the array of slices.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>generator of np.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.potentials.Potential.gpts">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">gpts</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.potentials.Potential.gpts" title="Permalink to this definition">#</a></dt>
@@ -1415,7 +1432,7 @@ potential, which may not preserve periodicity.</p></li>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.potentials.Potential.grid">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Grid</span></em><a class="headerlink" href="#abtem.potentials.Potential.grid" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">grid</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.grid.Grid</span></em><a class="headerlink" href="#abtem.potentials.Potential.grid" title="Permalink to this definition">#</a></dt>
 <dd><p>Simulation grid.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1534,11 +1551,15 @@ potential, which may not preserve periodicity.</p></li>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.potentials.Potential.show">
-<span class="sig-name descname"><span class="pre">show</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">explode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.potentials.Potential.show" title="Permalink to this definition">#</a></dt>
+<span class="sig-name descname"><span class="pre">show</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">project</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.potentials.Potential.show" title="Permalink to this definition">#</a></dt>
 <dd><p>Show the potential projection. This requires building all potential slices.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>kwargs</strong> – Additional keyword arguments for abtem.plot.show_image.</p>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>project</strong> (<em>bool</em><em>, </em><em>optional</em>) – Show the projected potential (True, default) or show all potential slices. It is recommended to index a subset
+of the potential slices when this keyword set to False.</p></li>
+<li><p><strong>kwargs</strong> – Additional keyword arguments for the show method of <a class="reference internal" href="abtem.measurements.Images.html#abtem.measurements.Images" title="abtem.measurements.Images"><code class="xref py py-class docutils literal notranslate"><span class="pre">Images</span></code></a>.</p></li>
+</ul>
 </dd>
 </dl>
 </dd></dl>
@@ -1546,7 +1567,7 @@ potential, which may not preserve periodicity.</p></li>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.potentials.Potential.slice_limits">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">slice_limits</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.potentials.Potential.slice_limits" title="Permalink to this definition">#</a></dt>
-<dd><p>The entrance and exit depths of each slice in Ångstrom.</p>
+<dd><p>The entrance and exit depths of each slice [Å].</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">List</span></code>[<code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]]</p>
@@ -1557,7 +1578,7 @@ potential, which may not preserve periodicity.</p></li>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.potentials.Potential.slice_thickness">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">slice_thickness</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.potentials.Potential.slice_thickness" title="Permalink to this definition">#</a></dt>
-<dd><p>Thickness of each slice in Ångstrom.</p>
+<dd><p>Thickness of each slice [Å].</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>]</p>
@@ -1568,7 +1589,7 @@ potential, which may not preserve periodicity.</p></li>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.potentials.Potential.thickness">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">thickness</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">float</span></em><a class="headerlink" href="#abtem.potentials.Potential.thickness" title="Permalink to this definition">#</a></dt>
-<dd><p>The thickness of the potential in Ångstrom.</p>
+<dd><p>The thickness of the potential [Å].</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></p>
@@ -1593,7 +1614,7 @@ potential, which may not preserve periodicity.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library\api\_autosummary"
+            path: "./library/api/_autosummary"
         },
         predefinedOutput: true
     }

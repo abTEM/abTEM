@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -33,7 +33,6 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
@@ -55,7 +54,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -212,6 +211,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../user_guide/walkthrough/core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -795,11 +799,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -807,11 +806,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -977,7 +971,7 @@ title="Open an issue"
               <div>
                 
   <h1>Source code for abtem.potentials</h1><div class="highlight"><pre>
-<span></span><span class="sd">&quot;&quot;&quot;Module to calculate potentials using the independent atom model.&quot;&quot;&quot;</span>
+<span></span><span class="sd">&quot;&quot;&quot;Module to calculate electrostatic potentials using the independent atom model.&quot;&quot;&quot;</span>
 <span class="kn">from</span> <span class="nn">abc</span> <span class="kn">import</span> <span class="n">ABCMeta</span><span class="p">,</span> <span class="n">abstractmethod</span>
 <span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">partial</span>
 <span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">reduce</span>
@@ -1008,6 +1002,7 @@ title="Open an issue"
 <span class="kn">from</span> <span class="nn">abtem.core.energy</span> <span class="kn">import</span> <span class="n">HasAcceleratorMixin</span><span class="p">,</span> <span class="n">Accelerator</span><span class="p">,</span> <span class="n">energy2sigma</span>
 <span class="kn">from</span> <span class="nn">abtem.core.ensemble</span> <span class="kn">import</span> <span class="n">Ensemble</span>
 <span class="kn">from</span> <span class="nn">abtem.core.grid</span> <span class="kn">import</span> <span class="n">Grid</span><span class="p">,</span> <span class="n">HasGridMixin</span>
+<span class="kn">from</span> <span class="nn">abtem.core.integrals.base</span> <span class="kn">import</span> <span class="n">ProjectionIntegrator</span>
 <span class="kn">from</span> <span class="nn">abtem.core.integrals.gaussians</span> <span class="kn">import</span> <span class="n">GaussianProjectionIntegrals</span>
 <span class="kn">from</span> <span class="nn">abtem.core.integrals.infinite</span> <span class="kn">import</span> <span class="n">InfinitePotentialProjections</span>
 <span class="kn">from</span> <span class="nn">abtem.core.integrals.quadrature</span> <span class="kn">import</span> <span class="n">ProjectionQuadratureRule</span>
@@ -1121,7 +1116,7 @@ title="Open an issue"
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">slice_limits</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        The entrance and exit depths of each slice in Ångstrom.</span>
+<span class="sd">        The entrance and exit depths of each slice [Å].</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">cumulative_thickness</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(((</span><span class="mi">0</span><span class="p">,),</span> <span class="bp">self</span><span class="o">.</span><span class="n">slice_thickness</span><span class="p">)))</span>
         <span class="k">return</span> <span class="p">[</span>
@@ -1132,7 +1127,7 @@ title="Open an issue"
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">thickness</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        The thickness of the potential in Ångstrom.</span>
+<span class="sd">        The thickness of the potential [Å].</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">return</span> <span class="nb">sum</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">slice_thickness</span><span class="p">)</span>
 
@@ -1150,19 +1145,22 @@ title="Open an issue"
     <span class="k">def</span> <span class="nf">images</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">images</span><span class="p">()</span>
 
-<div class="viewcode-block" id="BasePotential.show"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.BasePotential.html#abtem.potentials.BasePotential.show">[docs]</a>    <span class="k">def</span> <span class="nf">show</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">explode</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<div class="viewcode-block" id="BasePotential.show"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.BasePotential.html#abtem.potentials.BasePotential.show">[docs]</a>    <span class="k">def</span> <span class="nf">show</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">project</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Show the potential projection. This requires building all potential slices.</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
-<span class="sd">        kwargs:</span>
-<span class="sd">            Additional keyword arguments for abtem.plot.show_image.</span>
+<span class="sd">        project : bool, optional</span>
+<span class="sd">            Show the projected potential (True, default) or show all potential slices. It is recommended to index a subset</span>
+<span class="sd">            of the potential slices when this keyword set to False.</span>
+<span class="sd">        kwargs :</span>
+<span class="sd">            Additional keyword arguments for the show method of :class:`.Images`.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">if</span> <span class="n">explode</span><span class="p">:</span>
-            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">images</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">project</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">project</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">project</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div></div>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">images</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div></div>
 
 
 <span class="k">def</span> <span class="nf">_validate_potential</span><span class="p">(</span>
@@ -1238,7 +1236,7 @@ title="Open an issue"
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">slice_thickness</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">]:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Thickness of each slice in Ångstrom.</span>
+<span class="sd">        Thickness of each slice [Å].</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_slice_thickness</span>
 
@@ -1305,18 +1303,25 @@ title="Open an issue"
         <span class="n">lazy</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;PotentialArray&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Build the potential producing a PotentialArray.</span>
+<span class="sd">        Build the potential.</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
 <span class="sd">        first_slice : int, optional</span>
+<span class="sd">            Index of the first slice of the generated potential.</span>
 <span class="sd">        last_slice : int, optional</span>
+<span class="sd">            Index of the last slice of the generated potential</span>
+<span class="sd">        TODO: replace with max_batches</span>
 <span class="sd">        chunks : int or tuple of int or tuple of tuple of int</span>
-<span class="sd">        lazy : bool</span>
+<span class="sd">            Number of slices to include in each Dask worker batch. Default is 1.</span>
+<span class="sd">        lazy : bool, optional</span>
+<span class="sd">            If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the</span>
+<span class="sd">            value set in the configuration file.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
 <span class="sd">        potential_array : PotentialArray</span>
+<span class="sd">            Object representing the potential.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="n">lazy</span> <span class="o">=</span> <span class="n">validate_lazy</span><span class="p">(</span><span class="n">lazy</span><span class="p">)</span>
@@ -1385,32 +1390,31 @@ title="Open an issue"
 
 <div class="viewcode-block" id="Potential"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.Potential.html#abtem.potentials.Potential">[docs]</a><span class="k">class</span> <span class="nc">Potential</span><span class="p">(</span><span class="n">_PotentialBuilder</span><span class="p">):</span>
     <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    The potential is used to calculate the electrostatic potential of a set of atoms represented by ASE Atoms.</span>
-<span class="sd">    The potential is calculated with the Independent Atom Model (IAM) using a user-defined parametrization of the atomic</span>
-<span class="sd">    potentials.</span>
+<span class="sd">    Calculate the electrostatic potential of a set of atoms or frozen phonon configurations. The potential is calculated</span>
+<span class="sd">    with the Independent Atom Model (IAM) using a user-defined parametrization of the atomic potentials.</span>
 
 <span class="sd">    Parameters</span>
 <span class="sd">    ----------</span>
-<span class="sd">    atoms : Atoms or FrozenPhonons</span>
+<span class="sd">    atoms : ase.Atoms or abtem.FrozenPhonons</span>
 <span class="sd">        Atoms or FrozenPhonons defining the atomic configuration(s) used in the independent atom model for calculating</span>
 <span class="sd">        the electrostatic potential(s).</span>
 <span class="sd">    gpts : one or two int, optional</span>
-<span class="sd">        Number of grid points in x and y describing each slice of the potential. Provide either &quot;sampling&quot; or &quot;gpts&quot;.</span>
+<span class="sd">        Number of grid points in `x` and `y` describing each slice of the potential. Provide either &quot;sampling&quot; (spacing</span>
+<span class="sd">        between consecutive grid points) or &quot;gpts&quot; (total number of grid points).</span>
 <span class="sd">    sampling : one or two float, optional</span>
-<span class="sd">        Sampling of the potential in x and y [1 / Å]. Provide either &quot;sampling&quot; or &quot;gpts&quot;.</span>
+<span class="sd">        Sampling of the potential in `x` and `y` [1 / Å]. Provide either &quot;sampling&quot; or &quot;gpts&quot;.</span>
 <span class="sd">    slice_thickness : float or sequence of float, optional</span>
-<span class="sd">        Thickness of the potential slices in Å. If given as a float the number of slices are calculated by dividing the</span>
-<span class="sd">        slice thickness into the z-height of supercell.</span>
+<span class="sd">        Thickness of the potential slices in the propagation direction in [Å] (default is 0.5 Å).</span>
+<span class="sd">        If given as a float, the number of slices is calculated by dividing the slice thickness into the `z`-height of supercell.</span>
 <span class="sd">        The slice thickness may be given as a sequence of values for each slice, in which case an error will be thrown</span>
 <span class="sd">        if the sum of slice thicknesses is not equal to the height of the atoms.</span>
-<span class="sd">        Default is 0.5 Å.</span>
 <span class="sd">    parametrization : &#39;lobato&#39; or &#39;kirkland&#39;, optional</span>
 <span class="sd">        The potential parametrization describes the radial dependence of the potential for each element. Two of the</span>
-<span class="sd">        most accurate parametrizations are available by Lobato et al. and Kirkland. The abTEM default is &#39;lobato&#39;.</span>
+<span class="sd">        most accurate parametrizations are available (by Lobato et al. and Kirkland; default is &#39;lobato&#39;).</span>
 <span class="sd">        See the citation guide for references.</span>
 <span class="sd">    projection : &#39;finite&#39; or &#39;infinite&#39;, optional</span>
-<span class="sd">        If &#39;finite&#39; the 3d potential is numerically integrated between the slice boundaries. If &#39;infinite&#39; the infinite</span>
-<span class="sd">        potential projection of each atom will be assigned to a single slice. Default is &#39;infinite&#39;.</span>
+<span class="sd">        If &#39;finite&#39; the 3D potential is numerically integrated between the slice boundaries. If &#39;infinite&#39; (default),</span>
+<span class="sd">        the infinite potential projection of each atom will be assigned to a single slice.</span>
 <span class="sd">    integral_method : {&#39;quadrature&#39;, &#39;analytic&#39;}, optional</span>
 <span class="sd">        Specifies whether to perform projection integrals in real space or Fourier space. By default, finite projection</span>
 <span class="sd">        integrals are computed in real space and infinite projection integrals are performed in Fourier space.</span>
@@ -1420,30 +1424,30 @@ title="Open an issue"
 <span class="sd">        exit plane is desired, and hence during a multislice simulation a measurement is created. If `exit_planes` is</span>
 <span class="sd">        an integer a measurement will be collected every `exit_planes` number of slices.</span>
 <span class="sd">    plane : str or two tuples of three float, optional</span>
-<span class="sd">        The plane relative to the provided Atoms mapped to xy plane of the Potential, i.e. provided plane is</span>
-<span class="sd">        perpendicular to the propagation direction. If string, it must be a combination of two of &#39;x&#39;, &#39;y&#39; and &#39;z&#39;,</span>
-<span class="sd">        the default value &#39;xy&#39; indicates that potential slices are cuts the &#39;xy&#39;-plane of the Atoms.</span>
-<span class="sd">        The plane may also be specified with two arbitrary 3d vectors, which are mapped to the x and y directions of</span>
-<span class="sd">        the potential, respectively. The length of the vectors has influence. If the vectors are not perpendicular,</span>
-<span class="sd">        the second vector is rotated in the plane to become perpendicular. Providing a value of</span>
+<span class="sd">        The plane relative to the provided atoms mapped to `xy` plane of the potential, i.e. provided plane is</span>
+<span class="sd">        perpendicular to the propagation direction. If string, it must be a concatenation of two of &#39;x&#39;, &#39;y&#39; and &#39;z&#39;;</span>
+<span class="sd">        the default value &#39;xy&#39; indicates that potential slices are cuts along the `xy`-plane of the atoms.</span>
+<span class="sd">        The plane may also be specified with two arbitrary 3D vectors, which are mapped to the `x` and `y` directions of</span>
+<span class="sd">        the potential, respectively. The length of the vectors has no influence. If the vectors are not perpendicular,</span>
+<span class="sd">        the second vector is rotated in the plane to become perpendicular to the first. Providing a value of</span>
 <span class="sd">        ((1., 0., 0.), (0., 1., 0.)) is equivalent to providing &#39;xy&#39;.</span>
 <span class="sd">    origin : three float, optional</span>
-<span class="sd">        The origin relative to the provided Atoms mapped to the origin of the Potential. This is equivalent to shifting</span>
-<span class="sd">        the atoms</span>
-<span class="sd">        The default is (0., 0., 0.).</span>
+<span class="sd">        The origin relative to the provided atoms mapped to the origin of the potential. This is equivalent to translating</span>
+<span class="sd">        the atoms. The default is (0., 0., 0.).</span>
 <span class="sd">    box : three float, optional</span>
-<span class="sd">        The extent of the potential in x, y and z. If not given this is determined from the Atoms. If the box size does</span>
-<span class="sd">        not match an integer number of the atoms&#39; supercell, an affine transformation may be necessary to preserve</span>
-<span class="sd">        periodicity, determined by the `periodic` keyword.</span>
+<span class="sd">        The extent of the potential in `x`, `y` and `z`. If not given this is determined from the atoms&#39; cell.</span>
+<span class="sd">        If the box size does not match an integer number of the atoms&#39; supercell, an affine transformation may be</span>
+<span class="sd">        necessary to preserve periodicity, determined by the `periodic` keyword.</span>
 <span class="sd">    periodic : bool, True</span>
 <span class="sd">        If a transformation of the atomic structure is required, `periodic` determines how the atomic structure is</span>
 <span class="sd">        transformed. If True, the periodicity of the Atoms is preserved, which may require applying a small affine</span>
 <span class="sd">        transformation to the atoms. If False, the transformed potential is effectively cut out of a larger repeated</span>
 <span class="sd">        potential, which may not preserve periodicity.</span>
+<span class="sd">    integrator : ProjectionIntegrator, optional</span>
+<span class="sd">        Provide a custom integrator for the projection integrals of the potential slicing.</span>
 <span class="sd">    device : str, optional</span>
-<span class="sd">        The device used for calculating the potential. The default is determined by the user configuration file.</span>
+<span class="sd">        The device used for calculating the potential, &#39;cpu&#39; or &#39;gpu&#39;. The default is determined by the user configuration file.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-
     <span class="n">_exclude_from_copy</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;parametrization&quot;</span><span class="p">,</span> <span class="s2">&quot;projection&quot;</span><span class="p">,</span> <span class="s2">&quot;integral_method&quot;</span><span class="p">)</span>
 
 <div class="viewcode-block" id="Potential.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.Potential.html#abtem.potentials.Potential.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
@@ -1456,14 +1460,14 @@ title="Open an issue"
         <span class="n">projection</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;infinite&quot;</span><span class="p">,</span>
         <span class="n">integral_method</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">exit_planes</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">plane</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span>
             <span class="nb">str</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span>
         <span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;xy&quot;</span><span class="p">,</span>
         <span class="n">origin</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span>
         <span class="n">box</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">periodic</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-        <span class="n">integrator</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+        <span class="n">integrator</span><span class="p">:</span> <span class="n">ProjectionIntegrator</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">):</span>
 
         <span class="k">if</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">atoms</span><span class="p">,</span> <span class="s2">&quot;randomize&quot;</span><span class="p">):</span>
@@ -1592,8 +1596,21 @@ title="Open an issue"
 
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_sliced_atoms</span>
 
-    <span class="k">def</span> <span class="nf">generate_slices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+<div class="viewcode-block" id="Potential.generate_slices"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.Potential.html#abtem.potentials.Potential.generate_slices">[docs]</a>    <span class="k">def</span> <span class="nf">generate_slices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generate the slices for the potential.</span>
 
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        first_slice : int, optional</span>
+<span class="sd">            Index of the first slice of the generated potential.</span>
+<span class="sd">        last_slice : int, optional</span>
+<span class="sd">            Index of the last slice of the generated potential.</span>
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        slices : generator of np.ndarray</span>
+<span class="sd">            Generator for the array of slices.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">if</span> <span class="n">last_slice</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">last_slice</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
 
@@ -1637,7 +1654,7 @@ title="Open an issue"
                 <span class="n">array</span><span class="p">,</span>
                 <span class="n">slice_thickness</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">slice_thickness</span><span class="p">[</span><span class="n">start</span><span class="p">:</span><span class="n">stop</span><span class="p">],</span>
                 <span class="n">extent</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">extent</span><span class="p">,</span>
-            <span class="p">)</span>
+            <span class="p">)</span></div>
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">ensemble_axes_metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
@@ -1665,16 +1682,16 @@ title="Open an issue"
 
 <div class="viewcode-block" id="PotentialArray"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray">[docs]</a><span class="k">class</span> <span class="nc">PotentialArray</span><span class="p">(</span><span class="n">BasePotential</span><span class="p">,</span> <span class="n">HasArray</span><span class="p">):</span>
     <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    The potential array represents slices of the electrostatic potential as an array. All other potentials builds</span>
+<span class="sd">    The potential array represents slices of the electrostatic potential as an array. All other potentials build</span>
 <span class="sd">    potential arrays.</span>
 
 <span class="sd">    Parameters</span>
 <span class="sd">    ----------</span>
-<span class="sd">    array: 3D array</span>
+<span class="sd">    array: 3D np.ndarray</span>
 <span class="sd">        The array representing the potential slices. The first dimension is the slice index and the last two are the</span>
 <span class="sd">        spatial dimensions.</span>
 <span class="sd">    slice_thickness: float</span>
-<span class="sd">        The thicknesses of potential slices in Å. If a float, the thickness is the same for all slices.</span>
+<span class="sd">        The thicknesses of potential slices [Å]. If a float, the thickness is the same for all slices.</span>
 <span class="sd">        If a sequence, the length must equal the length of the potential array.</span>
 <span class="sd">    extent: one or two float, optional</span>
 <span class="sd">        Lateral extent of the potential [Å].</span>
@@ -1685,9 +1702,12 @@ title="Open an issue"
 <span class="sd">        Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an</span>
 <span class="sd">        exit plane is desired, and hence during a multislice simulation a measurement is created. If `exit_planes` is</span>
 <span class="sd">        an integer a measurement will be collected every `exit_planes` number of slices.</span>
-
+<span class="sd">    ensemble_axes_metadata : list of AxesMetadata</span>
+<span class="sd">        Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.</span>
+<span class="sd">    metadata : dict</span>
+<span class="sd">        A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived</span>
+<span class="sd">        from the waves.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-
     <span class="n">_base_dims</span> <span class="o">=</span> <span class="mi">3</span>
 
 <div class="viewcode-block" id="PotentialArray.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
@@ -1702,7 +1722,7 @@ title="Open an issue"
     <span class="p">):</span>
 
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">3</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;PotentialArray must be 3d, not </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span><span class="si">}</span><span class="s2">d&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;PotentialArray must be 3D, not </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span><span class="si">}</span><span class="s2">D.&quot;</span><span class="p">)</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">_array</span> <span class="o">=</span> <span class="n">array</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_grid</span> <span class="o">=</span> <span class="n">Grid</span><span class="p">(</span><span class="n">extent</span><span class="o">=</span><span class="n">extent</span><span class="p">,</span> <span class="n">gpts</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:],</span> <span class="n">sampling</span><span class="o">=</span><span class="n">sampling</span><span class="p">)</span>
@@ -1834,7 +1854,6 @@ title="Open an issue"
                 <span class="p">)</span>
 
         <span class="k">else</span><span class="p">:</span>
-
             <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span><span class="o">.</span><span class="n">array</span>
             <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
                 <span class="n">blocks</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">1</span><span class="p">,),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">object</span><span class="p">)</span>
@@ -1870,8 +1889,21 @@ title="Open an issue"
             <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_copy_kwargs</span><span class="p">(</span><span class="n">exclude</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;array&quot;</span><span class="p">,</span> <span class="s2">&quot;ensemble_axes_metadata&quot;</span><span class="p">)),</span>
         <span class="p">)</span>
 
-    <span class="k">def</span> <span class="nf">generate_slices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">last_slice</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<div class="viewcode-block" id="PotentialArray.generate_slices"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.generate_slices">[docs]</a>    <span class="k">def</span> <span class="nf">generate_slices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">last_slice</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generate the slices for the potential.</span>
 
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        first_slice : int, optional</span>
+<span class="sd">            Index of the first slice of the generated potential.</span>
+<span class="sd">        last_slice : int, optional</span>
+<span class="sd">            Index of the last slice of the generated potential.</span>
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        slices : generator of np.ndarray</span>
+<span class="sd">            Generator for the array of slices.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">if</span> <span class="n">last_slice</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">last_slice</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
 
@@ -1880,10 +1912,10 @@ title="Open an issue"
             <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">[</span><span class="n">s</span><span class="p">][</span><span class="kc">None</span><span class="p">]</span>
             <span class="k">yield</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span>
                 <span class="n">array</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">slice_thickness</span><span class="p">[</span><span class="n">i</span> <span class="p">:</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">],</span> <span class="n">extent</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">extent</span>
-            <span class="p">)</span>
+            <span class="p">)</span></div>
 
-    <span class="k">def</span> <span class="nf">get_chunk</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">):</span>
-
+<div class="viewcode-block" id="PotentialArray.get_chunk"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.get_chunk">[docs]</a>    <span class="k">def</span> <span class="nf">get_chunk</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;TODO: check if can be made internal or deleted.&quot;&quot;&quot;</span>
         <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">[</span><span class="n">first_slice</span><span class="p">:</span><span class="n">last_slice</span><span class="p">]</span>
 
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
@@ -1891,11 +1923,11 @@ title="Open an issue"
 
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span>
             <span class="n">array</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">slice_thickness</span><span class="p">[</span><span class="n">first_slice</span><span class="p">:</span><span class="n">last_slice</span><span class="p">],</span> <span class="n">extent</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">extent</span>
-        <span class="p">)</span>
+        <span class="p">)</span></div>
 
 <div class="viewcode-block" id="PotentialArray.transmission_function"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.transmission_function">[docs]</a>    <span class="k">def</span> <span class="nf">transmission_function</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">energy</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;TransmissionFunction&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Calculate the transmission functions for a specific energy.</span>
+<span class="sd">        Calculate the transmission functions for each slice for a specific energy.</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
@@ -1904,9 +1936,9 @@ title="Open an issue"
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
-<span class="sd">        TransmissionFunction object</span>
+<span class="sd">        transmissionfunction : TransmissionFunction</span>
+<span class="sd">            Transmission functions for each slice.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-
         <span class="n">xp</span> <span class="o">=</span> <span class="n">get_array_module</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">)</span>
 
         <span class="k">def</span> <span class="nf">_transmission_function</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">energy</span><span class="p">):</span>
@@ -1937,15 +1969,14 @@ title="Open an issue"
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
 <span class="sd">        multiples: two or three int</span>
-<span class="sd">            The number of repetitions of the potential along each axis. If three integers are given the first represents</span>
-<span class="sd">            the number of repetitions along the z-axis.</span>
+<span class="sd">            The number of repetitions of the potential along each axis. NOTE: if three integers are given, the first represents</span>
+<span class="sd">            the number of repetitions along the `z`-axis.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
 <span class="sd">        PotentialArray object</span>
 <span class="sd">            The tiled potential.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">multiples</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
             <span class="n">multiples</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">multiples</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="mi">1</span><span class="p">,)</span>
 
@@ -1970,22 +2001,26 @@ title="Open an issue"
 
 <div class="viewcode-block" id="PotentialArray.transmit"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.transmit">[docs]</a>    <span class="k">def</span> <span class="nf">transmit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">waves</span><span class="p">:</span> <span class="s2">&quot;Waves&quot;</span><span class="p">,</span> <span class="n">conjugate</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;Waves&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Transmit a wavefunction.</span>
+<span class="sd">        Transmit a wave function through a potential slice.</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
-<span class="sd">        waves: Waves object</span>
+<span class="sd">        waves: Waves</span>
 <span class="sd">            Waves object to transmit.</span>
+<span class="sd">        conjugate : bool, optional</span>
+<span class="sd">            If True, use the conjugate of the transmission function. Default is False.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
-<span class="sd">        TransmissionFunction</span>
+<span class="sd">        transmissionfunction : TransmissionFunction</span>
+<span class="sd">            Transmission function for the wave function through the potential slice.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">transmission_function</span><span class="p">(</span><span class="n">waves</span><span class="o">.</span><span class="n">energy</span><span class="p">)</span><span class="o">.</span><span class="n">transmit</span><span class="p">(</span>
             <span class="n">waves</span><span class="p">,</span> <span class="n">conjugate</span><span class="o">=</span><span class="n">conjugate</span>
         <span class="p">)</span></div>
 
-    <span class="k">def</span> <span class="nf">images</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<div class="viewcode-block" id="PotentialArray.images"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.images">[docs]</a>    <span class="k">def</span> <span class="nf">images</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Convert slices of the potential to a stack of images.&quot;&quot;&quot;</span>
         <span class="n">metadata</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;label&quot;</span><span class="p">:</span> <span class="s2">&quot;potential&quot;</span><span class="p">,</span> <span class="s2">&quot;units&quot;</span><span class="p">:</span> <span class="s2">&quot;eV / e&quot;</span><span class="p">}</span>
 
         <span class="k">return</span> <span class="n">Images</span><span class="p">(</span>
@@ -1993,19 +2028,20 @@ title="Open an issue"
             <span class="n">sampling</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sampling</span><span class="p">,</span>
             <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">,</span>
             <span class="n">ensemble_axes_metadata</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">axes_metadata</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">],</span>
-        <span class="p">)</span>
+        <span class="p">)</span></div>
 
-<div class="viewcode-block" id="PotentialArray.project"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.project">[docs]</a>    <span class="k">def</span> <span class="nf">project</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cumulative</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Images</span><span class="p">:</span>
+<div class="viewcode-block" id="PotentialArray.project"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.project">[docs]</a>    <span class="k">def</span> <span class="nf">project</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Images</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Create a 2d xarray representing a measurement of the projected potential.</span>
+<span class="sd">        Create a 2D array representing a projected image of the potential(s).</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
-<span class="sd">        Measurement</span>
+<span class="sd">        images : Images</span>
+<span class="sd">            One or more images of the projected potential(s).</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">metadata</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;label&quot;</span><span class="p">:</span> <span class="s2">&quot;potential&quot;</span><span class="p">,</span> <span class="s2">&quot;units&quot;</span><span class="p">:</span> <span class="s2">&quot;eV / e&quot;</span><span class="p">}</span>
         <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="o">-</span><span class="mi">3</span><span class="p">)</span>
-        <span class="c1"># array = array - array.min((-2, -1), keepdims=True)</span>
+
         <span class="k">return</span> <span class="n">Images</span><span class="p">(</span>
             <span class="n">array</span><span class="o">=</span><span class="n">array</span><span class="p">,</span>
             <span class="n">sampling</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sampling</span><span class="p">,</span>
@@ -2015,8 +2051,23 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="TransmissionFunction"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.TransmissionFunction.html#abtem.potentials.TransmissionFunction">[docs]</a><span class="k">class</span> <span class="nc">TransmissionFunction</span><span class="p">(</span><span class="n">PotentialArray</span><span class="p">,</span> <span class="n">HasAcceleratorMixin</span><span class="p">):</span>
-    <span class="sd">&quot;&quot;&quot;Class to describe transmission functions.&quot;&quot;&quot;</span>
+    <span class="sd">&quot;&quot;&quot;Class to describe transmission functions.</span>
 
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    array : 3D np.ndarray</span>
+<span class="sd">        The array representing the potential slices. The first dimension is the slice index and the last two are the</span>
+<span class="sd">        spatial dimensions.</span>
+<span class="sd">    slice_thickness : float</span>
+<span class="sd">        The thicknesses of potential slices [Å]. If a float, the thickness is the same for all slices.</span>
+<span class="sd">        If a sequence, the length must equal the length of the potential array.</span>
+<span class="sd">    extent : one or two float, optional</span>
+<span class="sd">        Lateral extent of the potential [Å].</span>
+<span class="sd">    sampling : one or two float, optional</span>
+<span class="sd">        Lateral sampling of the potential [1 / Å].</span>
+<span class="sd">    energy : float</span>
+<span class="sd">        Electron energy [eV].</span>
+<span class="sd">    &quot;&quot;&quot;</span>
 <div class="viewcode-block" id="TransmissionFunction.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.TransmissionFunction.html#abtem.potentials.TransmissionFunction.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
@@ -2029,7 +2080,7 @@ title="Open an issue"
         <span class="bp">self</span><span class="o">.</span><span class="n">_accelerator</span> <span class="o">=</span> <span class="n">Accelerator</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="n">energy</span><span class="p">)</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">slice_thickness</span><span class="p">,</span> <span class="n">extent</span><span class="p">,</span> <span class="n">sampling</span><span class="p">)</span></div>
 
-    <span class="k">def</span> <span class="nf">get_chunk</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;TransmissionFunction&quot;</span><span class="p">:</span>
+<div class="viewcode-block" id="TransmissionFunction.get_chunk"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.TransmissionFunction.html#abtem.potentials.TransmissionFunction.get_chunk">[docs]</a>    <span class="k">def</span> <span class="nf">get_chunk</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;TransmissionFunction&quot;</span><span class="p">:</span>
         <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">[</span><span class="n">first_slice</span><span class="p">:</span><span class="n">last_slice</span><span class="p">]</span>
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
             <span class="n">array</span> <span class="o">=</span> <span class="n">array</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span>
@@ -2038,14 +2089,42 @@ title="Open an issue"
             <span class="bp">self</span><span class="o">.</span><span class="n">slice_thickness</span><span class="p">[</span><span class="n">first_slice</span><span class="p">:</span><span class="n">last_slice</span><span class="p">],</span>
             <span class="n">extent</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">extent</span><span class="p">,</span>
             <span class="n">energy</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">energy</span><span class="p">,</span>
-        <span class="p">)</span>
+        <span class="p">)</span></div>
 
 <div class="viewcode-block" id="TransmissionFunction.transmission_function"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.TransmissionFunction.html#abtem.potentials.TransmissionFunction.transmission_function">[docs]</a>    <span class="k">def</span> <span class="nf">transmission_function</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">energy</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;TransmissionFunction&quot;</span><span class="p">:</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Calculate the transmission functions for each slice for a specific energy.</span>
+
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        energy: float</span>
+<span class="sd">            Electron energy [eV].</span>
+
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        transmissionfunction : TransmissionFunction</span>
+<span class="sd">            Transmission functions for each slice.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">if</span> <span class="n">energy</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">energy</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">()</span>
         <span class="k">return</span> <span class="bp">self</span></div>
 
 <div class="viewcode-block" id="TransmissionFunction.transmit"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.TransmissionFunction.html#abtem.potentials.TransmissionFunction.transmit">[docs]</a>    <span class="k">def</span> <span class="nf">transmit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">waves</span><span class="p">:</span> <span class="s2">&quot;Waves&quot;</span><span class="p">,</span> <span class="n">conjugate</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;Waves&quot;</span><span class="p">:</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Transmit a wave function through a potential slice.</span>
+
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        waves: Waves</span>
+<span class="sd">            Waves object to transmit.</span>
+<span class="sd">        conjugate : bool, optional</span>
+<span class="sd">            If True, use the conjugate of the transmission function. Default is False.</span>
+
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        transmissionfunction : TransmissionFunction</span>
+<span class="sd">            Transmission function for the wave function through the potential slice.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">accelerator</span><span class="o">.</span><span class="n">check_match</span><span class="p">(</span><span class="n">waves</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">check_match</span><span class="p">(</span><span class="n">waves</span><span class="p">)</span>
 
@@ -2055,8 +2134,6 @@ title="Open an issue"
             <span class="n">waves</span><span class="o">.</span><span class="n">_array</span> <span class="o">*=</span> <span class="n">xp</span><span class="o">.</span><span class="n">conjugate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">waves</span><span class="o">.</span><span class="n">_array</span> <span class="o">*=</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-        <span class="c1"># else:</span>
-        <span class="c1">#    waves *= self.array</span>
 
         <span class="k">return</span> <span class="n">waves</span></div></div>
 
@@ -2066,8 +2143,8 @@ title="Open an issue"
 <span class="sd">    The crystal potential may be used to represent a potential consisting of a repeating unit. This may allow</span>
 <span class="sd">    calculations to be performed with lower computational cost by calculating the potential unit once and repeating it.</span>
 
-<span class="sd">    If the potential units is a potential with frozen phonons it is treated as an ensemble from which each repeating</span>
-<span class="sd">    unit along the z-direction is randomly drawn. If `num_frozen_phonons` an ensemble of crystal potentials are created</span>
+<span class="sd">    If the repeating unit is a potential with frozen phonons it is treated as an ensemble from which each repeating</span>
+<span class="sd">    unit along the `z`-direction is randomly drawn. If `num_frozen_phonons` an ensemble of crystal potentials are created</span>
 <span class="sd">    each with a random seed for choosing potential units.</span>
 
 <span class="sd">    Parameters</span>
@@ -2075,7 +2152,7 @@ title="Open an issue"
 <span class="sd">    potential_unit : BasePotential</span>
 <span class="sd">        The potential unit to assemble the crystal potential from.</span>
 <span class="sd">    repetitions : three int</span>
-<span class="sd">        The repetitions of the potential in x, y and z.</span>
+<span class="sd">        The repetitions of the potential in `x`, `y` and `z`.</span>
 <span class="sd">    num_frozen_phonons : int, optional</span>
 <span class="sd">        Number of frozen phonon configurations assembled from the potential units.</span>
 <span class="sd">    exit_planes : int or tuple of int, optional</span>
@@ -2084,9 +2161,8 @@ title="Open an issue"
 <span class="sd">        exit plane is desired, and hence during a multislice simulation a measurement is created. If `exit_planes` is</span>
 <span class="sd">        an integer a measurement will be collected every `exit_planes` number of slices.</span>
 <span class="sd">    seeds: int or sequence of int</span>
-<span class="sd">        Seed for the random number generator(rng), or one seed for each rng in the frozen phonon ensemble.</span>
+<span class="sd">        Seed for the random number generator (RNG), or one seed for each RNG in the frozen phonon ensemble.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-
 <div class="viewcode-block" id="CrystalPotential.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.CrystalPotential.html#abtem.potentials.CrystalPotential.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">potential_unit</span><span class="p">:</span> <span class="n">BasePotential</span><span class="p">,</span>
@@ -2106,6 +2182,7 @@ title="Open an issue"
 
             <span class="bp">self</span><span class="o">.</span><span class="n">_seeds</span> <span class="o">=</span> <span class="n">validate_seeds</span><span class="p">(</span><span class="n">seeds</span><span class="p">,</span> <span class="n">num_frozen_phonons</span><span class="p">)</span>
 
+        <span class="c1"># TODO: check if still needed</span>
         <span class="c1"># if (potential_unit.num_frozen_phonon_configs == 1) &amp; (num_frozen_phonon_configs &gt; 1):</span>
         <span class="c1">#     warnings.warn(&#39;&quot;num_frozen_phonon_configs&quot; is greater than one, but the potential unit does not have&#39;</span>
         <span class="c1">#                   &#39;frozen phonons&#39;)</span>
@@ -2140,6 +2217,7 @@ title="Open an issue"
         <span class="bp">self</span><span class="o">.</span><span class="n">_potential_unit</span> <span class="o">=</span> <span class="n">potential_unit</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_repetitions</span> <span class="o">=</span> <span class="n">repetitions</span></div>
 
+    <span class="c1"># TODO: check if could be documented</span>
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">ensemble_shape</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]:</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_seeds</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -2169,7 +2247,7 @@ title="Open an issue"
             <span class="ow">and</span> <span class="p">(</span><span class="n">gpts</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">repetitions</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
         <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;gpts must be divisible by the number of potential repetitions&quot;</span>
+                <span class="s2">&quot;Number of grid points must be divisible by the number of potential repetitions.&quot;</span>
             <span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">grid</span><span class="o">.</span><span class="n">gpts</span> <span class="o">=</span> <span class="n">gpts</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_potential_unit</span><span class="o">.</span><span class="n">gpts</span> <span class="o">=</span> <span class="p">(</span>
@@ -2277,8 +2355,21 @@ title="Open an issue"
             <span class="bp">self</span><span class="o">.</span><span class="n">_crystal_potential</span><span class="p">,</span> <span class="n">potential_partial</span><span class="o">=</span><span class="n">potential_partial</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span>
         <span class="p">)</span>
 
-    <span class="k">def</span> <span class="nf">generate_slices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+<div class="viewcode-block" id="CrystalPotential.generate_slices"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.potentials.CrystalPotential.html#abtem.potentials.CrystalPotential.generate_slices">[docs]</a>    <span class="k">def</span> <span class="nf">generate_slices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">first_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">last_slice</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generate the slices for the potential.</span>
 
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        first_slice : int, optional</span>
+<span class="sd">            Index of the first slice of the generated potential.</span>
+<span class="sd">        last_slice : int, optional</span>
+<span class="sd">            Index of the last slice of the generated potential.</span>
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        slices : generator of np.ndarray</span>
+<span class="sd">            Generator for the array of slices.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">potential_unit</span><span class="p">,</span> <span class="s2">&quot;array&quot;</span><span class="p">):</span>
             <span class="n">potentials</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">potential_unit</span>
         <span class="k">else</span><span class="p">:</span>
@@ -2287,19 +2378,6 @@ title="Open an issue"
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">potentials</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
             <span class="n">potentials</span> <span class="o">=</span> <span class="n">potentials</span><span class="o">.</span><span class="n">expand_dims</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 
-        <span class="c1"># first_layer = first_slice // self._potential_unit.num_slices</span>
-        <span class="c1"># if last_slice is None:</span>
-        <span class="c1">#     last_layer = self.repetitions[2]</span>
-        <span class="c1"># else:</span>
-        <span class="c1">#     last_layer = last_slice // self._potential_unit.num_slices</span>
-        <span class="c1">#</span>
-        <span class="c1"># first_slice = first_slice % self._potential_unit.num_slices</span>
-        <span class="c1"># last_slice = None</span>
-
-        <span class="c1"># if self.random_state:</span>
-        <span class="c1">#    random_state = self.random_state</span>
-        <span class="c1"># else:</span>
-        <span class="c1">#    random_state = np.random.RandomState()</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">seeds</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">seeds</span><span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
@@ -2312,7 +2390,7 @@ title="Open an issue"
             <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">potential_unit</span><span class="p">)):</span>
                 <span class="n">slic</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="n">generator</span><span class="p">)</span><span class="o">.</span><span class="n">tile</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">repetitions</span><span class="p">[:</span><span class="mi">2</span><span class="p">])</span>
 
-                <span class="k">yield</span> <span class="n">slic</span></div>
+                <span class="k">yield</span> <span class="n">slic</span></div></div>
 </pre></div>
 
               </div>

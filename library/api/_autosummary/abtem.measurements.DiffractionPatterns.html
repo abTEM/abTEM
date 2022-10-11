@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,6 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
@@ -51,12 +50,14 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
-    <link rel="next" title="FourierSpaceLineProfiles" href="abtem.measurements.FourierSpaceLineProfiles.html" />
+    <link rel="next" title="Images" href="abtem.measurements.Images.html" />
     <link rel="prev" title="BaseMeasurement" href="abtem.measurements.BaseMeasurement.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -213,6 +214,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/walkthrough/core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -457,11 +463,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.measurements.FourierSpaceLineProfiles.html">
-       FourierSpaceLineProfiles
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.measurements.Images.html">
        Images
       </a>
@@ -477,8 +478,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.measurements.SinglePointMeasurement.html">
-       SinglePointMeasurement
+      <a class="reference internal" href="abtem.measurements.ReciprocalSpaceLineProfiles.html">
+       ReciprocalSpaceLineProfiles
       </a>
      </li>
     </ul>
@@ -796,11 +797,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -808,11 +804,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -1024,29 +1015,29 @@ title="Print to PDF"
               <div>
                 
   <section id="diffractionpatterns">
-<h1>DiffractionPatterns<a class="headerlink" href="#diffractionpatterns" title="Permalink to this heading">#</a></h1>
+<h1>DiffractionPatterns<a class="headerlink" href="#diffractionpatterns" title="Permalink to this headline">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">abtem.measurements.</span></span><span class="sig-name descname"><span class="pre">DiffractionPatterns</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fftshift</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_axes_metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#DiffractionPatterns"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.DiffractionPatterns" title="Permalink to this definition">#</a></dt>
-<dd><p>Bases: <a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement"><code class="xref py py-class docutils literal notranslate"><span class="pre">BaseMeasurement</span></code></a></p>
-<dl class="py method">
-<dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.__init__">
-<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fftshift</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_axes_metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#DiffractionPatterns.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.__init__" title="Permalink to this definition">#</a></dt>
-<dd><p>One or more diffraction patterns.</p>
+<dd><p>Bases: <a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement"><code class="xref py py-class docutils literal notranslate"><span class="pre">abtem.measurements.BaseMeasurement</span></code></a></p>
+<p>One or more diffraction patterns.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>array</strong> (<em>ndarray</em>) – 2D or greater array containing data with <cite>float</cite> type. The second-to-last and last dimensions are the
-reciprocal space y- and x-axis of the diffraction pattern.</p></li>
+<li><p><strong>array</strong> (<em>np.ndarray</em>) – 2D or greater array containing data with <cite>float</cite> type. The second-to-last and last dimensions are the
+reciprocal space <cite>y</cite>- and <cite>x</cite>-axis of the diffraction pattern.</p></li>
 <li><p><strong>sampling</strong> (<em>float</em><em> or </em><em>two float</em>) – The Fourier space sampling of the diffraction patterns [1 / Å].</p></li>
 <li><p><strong>fftshift</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, the diffraction patterns are assumed to have the zero-frequency component to the center of the
-spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
+spectrum, otherwise the center(s) are assumed to be at (0,0).</p></li>
 <li><p><strong>ensemble_axes_metadata</strong> (<em>list of AxisMetadata</em><em>, </em><em>optional</em>) – Metadata associated with an ensemble axis.</p></li>
 <li><p><strong>metadata</strong> (<em>dict</em><em>, </em><em>optional</em>) – A dictionary defining simulation metadata.</p></li>
 </ul>
 </dd>
 </dl>
-</dd></dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fftshift</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ensemble_axes_metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#DiffractionPatterns.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.__init__" title="Permalink to this definition">#</a></dt>
+<dd></dd></dl>
 
 <p class="rubric">Methods</p>
 <table class="autosummary longtable table autosummary">
@@ -1056,39 +1047,36 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 </colgroup>
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.__init__" title="abtem.measurements.DiffractionPatterns.__init__"><code class="xref py py-obj docutils literal notranslate"><span class="pre">__init__</span></code></a>(array, sampling[, fftshift, ...])</p></td>
-<td><p>One or more diffraction patterns.</p></td>
+<td><p></p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.abs" title="abtem.measurements.DiffractionPatterns.abs"><code class="xref py py-obj docutils literal notranslate"><span class="pre">abs</span></code></a>()</p></td>
-<td><p>Calculate the absolute value from complex images.</p></td>
+<td><p>Calculates the absolute value of a complex-valued measurement.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.bandlimit" title="abtem.measurements.DiffractionPatterns.bandlimit"><code class="xref py py-obj docutils literal notranslate"><span class="pre">bandlimit</span></code></a>(inner, outer)</p></td>
-<td><p>Bandlimit the diffraction patterns by setting everything outside an annulus defined by two radial angles to zero.</p></td>
+<td><p>Bandlimit diffraction pattern(s) by setting everything outside an annulus defined by two radial angles to zero.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.block_direct" title="abtem.measurements.DiffractionPatterns.block_direct"><code class="xref py py-obj docutils literal notranslate"><span class="pre">block_direct</span></code></a>([radius])</p></td>
-<td><p>Block the direct beam by setting the pixels of the zeroth order disk to zero.</p></td>
+<td><p>Block the direct beam by setting the pixels of the zeroth-order Bragg reflection (non-scattered beam) to zero.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">center_bin</span></code>()</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.center_of_mass" title="abtem.measurements.DiffractionPatterns.center_of_mass"><code class="xref py py-obj docutils literal notranslate"><span class="pre">center_of_mass</span></code></a>([units])</p></td>
+<td><p>Calculate center-of-mass images or line profiles from diffraction patterns.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">check_is_compatible</span></code>(other)</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.center_of_mass" title="abtem.measurements.DiffractionPatterns.center_of_mass"><code class="xref py py-obj docutils literal notranslate"><span class="pre">center_of_mass</span></code></a>([units])</p></td>
-<td><p>Calculate center of mass images or line profiles from diffraction patterns.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">check_is_compatible</span></code>(other)</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">compute</span></code>([progress_bar, profiler, ...])</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">compute</span></code>([progress_bar])</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.copy" title="abtem.measurements.DiffractionPatterns.copy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">copy</span></code></a>()</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.copy" title="abtem.measurements.DiffractionPatterns.copy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">copy</span></code></a>()</p></td>
 <td><p>Make a copy.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.copy_to_device" title="abtem.measurements.DiffractionPatterns.copy_to_device"><code class="xref py py-obj docutils literal notranslate"><span class="pre">copy_to_device</span></code></a>(device)</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.copy_to_device" title="abtem.measurements.DiffractionPatterns.copy_to_device"><code class="xref py py-obj docutils literal notranslate"><span class="pre">copy_to_device</span></code></a>(device)</p></td>
 <td><p>Copy array to specified device.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">crop</span></code>(max_angle)</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">crop</span></code>(max_angle)</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">ensure_lazy</span></code>([chunks])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">ensure_lazy</span></code>([chunks])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1096,10 +1084,10 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.epie" title="abtem.measurements.DiffractionPatterns.epie"><code class="xref py py-obj docutils literal notranslate"><span class="pre">epie</span></code></a>(probe_guess[, max_batch, max_iter, ...])</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.epie" title="abtem.measurements.DiffractionPatterns.epie"><code class="xref py py-obj docutils literal notranslate"><span class="pre">epie</span></code></a>(probe_guess[, max_batch, max_iter, ...])</p></td>
 <td><p>Ptychographic reconstruction with the extended ptychographical engine (ePIE) algorithm.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">expand_dims</span></code>([axis, axis_metadata])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">expand_dims</span></code>([axis, axis_metadata])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1107,16 +1095,16 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">from_array_and_metadata</span></code>(array, axes_metadata)</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.from_array_and_metadata" title="abtem.measurements.DiffractionPatterns.from_array_and_metadata"><code class="xref py py-obj docutils literal notranslate"><span class="pre">from_array_and_metadata</span></code></a>(array, axes_metadata)</p></td>
+<td><p>Creates diffraction pattern(s) from a given array and metadata.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.from_zarr" title="abtem.measurements.DiffractionPatterns.from_zarr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">from_zarr</span></code></a>(url[, chunks])</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.from_zarr" title="abtem.measurements.DiffractionPatterns.from_zarr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">from_zarr</span></code></a>(url[, chunks])</p></td>
 <td><p>Read wave functions from a hdf5 file.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.gaussian_source_size" title="abtem.measurements.DiffractionPatterns.gaussian_source_size"><code class="xref py py-obj docutils literal notranslate"><span class="pre">gaussian_source_size</span></code></a>(sigma)</p></td>
-<td><p>Simulate Gaussian source size by applying a gaussian filter.</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.gaussian_source_size" title="abtem.measurements.DiffractionPatterns.gaussian_source_size"><code class="xref py py-obj docutils literal notranslate"><span class="pre">gaussian_source_size</span></code></a>(sigma)</p></td>
+<td><p>Simulate the effect of a finite source size on diffraction pattern(s) using a Gaussian filter.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_items</span></code>(items[, keep_dims])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_items</span></code>(items[, keep_dims])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1124,28 +1112,28 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.imag" title="abtem.measurements.DiffractionPatterns.imag"><code class="xref py py-obj docutils literal notranslate"><span class="pre">imag</span></code></a>()</p></td>
-<td><p>Calculate the phase from complex images.</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.imag" title="abtem.measurements.DiffractionPatterns.imag"><code class="xref py py-obj docutils literal notranslate"><span class="pre">imag</span></code></a>()</p></td>
+<td><p>Returns the imaginary part of a complex-valued measurement.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">index_diffraction_spots</span></code>(cell)</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.index_diffraction_spots" title="abtem.measurements.DiffractionPatterns.index_diffraction_spots"><code class="xref py py-obj docutils literal notranslate"><span class="pre">index_diffraction_spots</span></code></a>(cell)</p></td>
+<td><p>Indexes the Bragg reflections (diffraction spots) by their Miller indices.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.integrate_radial" title="abtem.measurements.DiffractionPatterns.integrate_radial"><code class="xref py py-obj docutils literal notranslate"><span class="pre">integrate_radial</span></code></a>(inner, outer)</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.integrate_radial" title="abtem.measurements.DiffractionPatterns.integrate_radial"><code class="xref py py-obj docutils literal notranslate"><span class="pre">integrate_radial</span></code></a>(inner, outer)</p></td>
 <td><p>Create images by integrating the diffraction patterns over an annulus defined by an inner and outer integration angle.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.integrated_center_of_mass" title="abtem.measurements.DiffractionPatterns.integrated_center_of_mass"><code class="xref py py-obj docutils literal notranslate"><span class="pre">integrated_center_of_mass</span></code></a>()</p></td>
-<td><p>Calculate integrated center of mass (iCOM) images from diffraction patterns.</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.integrated_center_of_mass" title="abtem.measurements.DiffractionPatterns.integrated_center_of_mass"><code class="xref py py-obj docutils literal notranslate"><span class="pre">integrated_center_of_mass</span></code></a>()</p></td>
+<td><p>Calculate integrated center-of-mass (iCOM) images from diffraction patterns.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.intensity" title="abtem.measurements.DiffractionPatterns.intensity"><code class="xref py py-obj docutils literal notranslate"><span class="pre">intensity</span></code></a>()</p></td>
-<td><p>Calculate the absolute square from complex images.</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.intensity" title="abtem.measurements.DiffractionPatterns.intensity"><code class="xref py py-obj docutils literal notranslate"><span class="pre">intensity</span></code></a>()</p></td>
+<td><p>Calculates the squared norm of a complex-valued measurement.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.interpolate" title="abtem.measurements.DiffractionPatterns.interpolate"><code class="xref py py-obj docutils literal notranslate"><span class="pre">interpolate</span></code></a>([sampling])</p></td>
-<td><p>Interpolate diffraction patterns producing equivalent patterns with a different sampling.</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.interpolate" title="abtem.measurements.DiffractionPatterns.interpolate"><code class="xref py py-obj docutils literal notranslate"><span class="pre">interpolate</span></code></a>([sampling])</p></td>
+<td><p>Interpolate diffraction pattern(s) producing equivalent pattern(s) with a different sampling.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">iterate_ensemble</span></code>([keep_dims])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">iterate_ensemble</span></code>([keep_dims])</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">max</span></code>([axes])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">max</span></code>([axes])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1153,7 +1141,7 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">mean</span></code>([axes])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">mean</span></code>([axes])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1161,7 +1149,7 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">min</span></code>([axes])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">min</span></code>([axes])</p></td>
 <td><p><dl class="field-list simple">
 <dt class="field-odd">rtype</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= HasArray)</p>
@@ -1169,46 +1157,38 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 </dl>
 </p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.phase" title="abtem.measurements.DiffractionPatterns.phase"><code class="xref py py-obj docutils literal notranslate"><span class="pre">phase</span></code></a>()</p></td>
-<td><p>Calculate the phase from complex images.</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.phase" title="abtem.measurements.DiffractionPatterns.phase"><code class="xref py py-obj docutils literal notranslate"><span class="pre">phase</span></code></a>()</p></td>
+<td><p>Calculates the phase of a complex-valued measurement.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.poisson_noise" title="abtem.measurements.DiffractionPatterns.poisson_noise"><code class="xref py py-obj docutils literal notranslate"><span class="pre">poisson_noise</span></code></a>([dose_per_area, total_dose, ...])</p></td>
-<td><p>Add Poisson noise to the DiffractionPattern.</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.poisson_noise" title="abtem.measurements.DiffractionPatterns.poisson_noise"><code class="xref py py-obj docutils literal notranslate"><span class="pre">poisson_noise</span></code></a>([dose_per_area, total_dose, ...])</p></td>
+<td><p>Add Poisson noise (ie.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.polar_binning" title="abtem.measurements.DiffractionPatterns.polar_binning"><code class="xref py py-obj docutils literal notranslate"><span class="pre">polar_binning</span></code></a>(nbins_radial, nbins_azimuthal)</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.polar_binning" title="abtem.measurements.DiffractionPatterns.polar_binning"><code class="xref py py-obj docutils literal notranslate"><span class="pre">polar_binning</span></code></a>(nbins_radial, nbins_azimuthal)</p></td>
 <td><p>Create polar measurements from the diffraction patterns by binning the measurements on a polar grid.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">power</span></code>(number)</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">power</span></code>(number)</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.radial_binning" title="abtem.measurements.DiffractionPatterns.radial_binning"><code class="xref py py-obj docutils literal notranslate"><span class="pre">radial_binning</span></code></a>([step_size, inner, outer])</p></td>
-<td><p>Create polar measurements from the diffraction patterns by binning the measurements in annular regions.</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.radial_binning" title="abtem.measurements.DiffractionPatterns.radial_binning"><code class="xref py py-obj docutils literal notranslate"><span class="pre">radial_binning</span></code></a>([step_size, inner, outer])</p></td>
+<td><p>Create polar measurement(s) from the diffraction pattern(s) by binning the measurements in annular regions.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.real" title="abtem.measurements.DiffractionPatterns.real"><code class="xref py py-obj docutils literal notranslate"><span class="pre">real</span></code></a>()</p></td>
-<td><p>Calculate the phase from complex images.</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.real" title="abtem.measurements.DiffractionPatterns.real"><code class="xref py py-obj docutils literal notranslate"><span class="pre">real</span></code></a>()</p></td>
+<td><p>Returns the real part of a complex-valued measurement.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">rechunk</span></code>(*args, **kwargs)</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">rechunk</span></code>(*args, **kwargs)</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">reduce_ensemble</span></code>()</p></td>
-<td><p><dl class="field-list simple">
-<dt class="field-odd">rtype</dt>
-<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= AbstractMeasurement)</p>
-</dd>
-</dl>
-</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.reduce_ensemble" title="abtem.measurements.DiffractionPatterns.reduce_ensemble"><code class="xref py py-obj docutils literal notranslate"><span class="pre">reduce_ensemble</span></code></a>()</p></td>
+<td><p>Takes the mean of an ensemble measurement (e.g.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">relative_difference</span></code>(other[, min_relative_tol])</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.relative_difference" title="abtem.measurements.DiffractionPatterns.relative_difference"><code class="xref py py-obj docutils literal notranslate"><span class="pre">relative_difference</span></code></a>(other[, min_relative_tol])</p></td>
+<td><p>Calculates the relative difference with respect to another compatible measurement.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scan_positions</span></code>()</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">select_frequency_bin</span></code>(bins)</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scan_positions</span></code>()</p></td>
 <td><p></p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.show" title="abtem.measurements.DiffractionPatterns.show"><code class="xref py py-obj docutils literal notranslate"><span class="pre">show</span></code></a>([units, cmap, explode, ax, figsize, ...])</p></td>
-<td><p>Show the image(s) using matplotlib.</p></td>
+<td><p>Show the diffraction pattern(s) using matplotlib.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">squeeze</span></code>([axis])</p></td>
 <td><p><dl class="field-list simple">
@@ -1254,7 +1234,7 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 </p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.to_hyperspy" title="abtem.measurements.DiffractionPatterns.to_hyperspy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_hyperspy</span></code></a>()</p></td>
-<td><p>Convert measurement to a hyperspy signal.</p></td>
+<td><p>Convert measurement to a Hyperspy signal.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.to_zarr" title="abtem.measurements.DiffractionPatterns.to_zarr"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_zarr</span></code></a>(url[, compute, overwrite])</p></td>
 <td><p>Write wave functions to a zarr file.</p></td>
@@ -1275,7 +1255,7 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 <td><p>Scattering angle coordinates [mrad].</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.angular_limits" title="abtem.measurements.DiffractionPatterns.angular_limits"><code class="xref py py-obj docutils literal notranslate"><span class="pre">angular_limits</span></code></a></p></td>
-<td><p>Lower and upper scattering angle in x and y [mrad].</p></td>
+<td><p>Lowest and highest scattering angle in <cite>x</cite> and <cite>y</cite> [mrad].</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">angular_sampling</span></code></p></td>
 <td><p><dl class="field-list simple">
@@ -1314,7 +1294,7 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 <td><p></p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.coordinates" title="abtem.measurements.DiffractionPatterns.coordinates"><code class="xref py py-obj docutils literal notranslate"><span class="pre">coordinates</span></code></a></p></td>
-<td><p>Reciprocal spatial frequency coordinates [1 / Å].</p></td>
+<td><p>Reciprocal-space frequency coordinates [1 / Å].</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">device</span></code></p></td>
 <td><p></p></td>
@@ -1362,10 +1342,10 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 <td><p></p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.limits" title="abtem.measurements.DiffractionPatterns.limits"><code class="xref py py-obj docutils literal notranslate"><span class="pre">limits</span></code></a></p></td>
-<td><p>Lower and upper spatial frequency in x and y [1 / Å].</p></td>
+<td><p>Lowest and highest spatial frequency in <cite>x</cite> and <cite>y</cite> [1 / Å].</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns.max_angles" title="abtem.measurements.DiffractionPatterns.max_angles"><code class="xref py py-obj docutils literal notranslate"><span class="pre">max_angles</span></code></a></p></td>
-<td><p>Maximum scattering angle in x and y [mrad]</p></td>
+<td><p>Maximum scattering angle in <cite>x</cite> and <cite>y</cite> [mrad].</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">metadata</span></code></p></td>
 <td><p><dl class="field-list simple">
@@ -1403,12 +1383,17 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.abs">
 <span class="sig-name descname"><span class="pre">abs</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.abs" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate the absolute value from complex images.</p>
+<dd><p>Calculates the absolute value of a complex-valued measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.angular_coordinates">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">angular_coordinates</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">ndarray</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">ndarray</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.angular_coordinates" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">angular_coordinates</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.angular_coordinates" title="Permalink to this definition">#</a></dt>
 <dd><p>Scattering angle coordinates [mrad].</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1420,7 +1405,7 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.angular_limits">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">angular_limits</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.angular_limits" title="Permalink to this definition">#</a></dt>
-<dd><p>Lower and upper scattering angle in x and y [mrad].</p>
+<dd><p>Lowest and highest scattering angle in <cite>x</cite> and <cite>y</cite> [mrad].</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">List</span></code>[<code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]]</p>
@@ -1430,7 +1415,7 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.axes_metadata">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">AxesMetadataList</span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.axes_metadata" title="Permalink to this definition">#</a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">axes_metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">abtem.core.axes.AxesMetadataList</span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.axes_metadata" title="Permalink to this definition">#</a></dt>
 <dd><p>List of AxisMetadata.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
@@ -1442,7 +1427,7 @@ spectrum, otherwise the centers are assumed to be at (0,0).</p></li>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.bandlimit">
 <span class="sig-name descname"><span class="pre">bandlimit</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">inner</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">outer</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#DiffractionPatterns.bandlimit"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.bandlimit" title="Permalink to this definition">#</a></dt>
-<dd><p>Bandlimit the diffraction patterns by setting everything outside an annulus defined by two radial angles to
+<dd><p>Bandlimit diffraction pattern(s) by setting everything outside an annulus defined by two radial angles to
 zero.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -1452,7 +1437,7 @@ zero.</p>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
-<dd class="field-even"><p><strong>bandlimited_diffraction_patterns</strong></p>
+<dd class="field-even"><p><strong>band-limited_diffraction_patterns</strong> – The band-limited diffraction pattern(s).</p>
 </dd>
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns" title="abtem.measurements.DiffractionPatterns">DiffractionPatterns</a></p>
@@ -1474,13 +1459,14 @@ zero.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.block_direct">
 <span class="sig-name descname"><span class="pre">block_direct</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">radius</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#DiffractionPatterns.block_direct"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.block_direct" title="Permalink to this definition">#</a></dt>
-<dd><p>Block the direct beam by setting the pixels of the zeroth order disk to zero.</p>
+<dd><p>Block the direct beam by setting the pixels of the zeroth-order Bragg reflection (non-scattered beam) to zero.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>radius</strong> (<em>float</em><em>, </em><em>optional</em>) – The radius of the zeroth order disk to block [mrad]. If not given this will be inferred from the metadata.</p>
+<dd class="field-odd"><p><strong>radius</strong> (<em>float</em><em>, </em><em>optional</em>) – The radius of the zeroth-order reflection to block [mrad]. If not given this will be inferred from the
+metadata, if available.</p>
 </dd>
 <dt class="field-even">Returns</dt>
-<dd class="field-even"><p><strong>diffraction_patterns</strong></p>
+<dd class="field-even"><p><strong>diffraction_patterns</strong> – The diffraction pattern(s) with the direct beam removed.</p>
 </dd>
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns" title="abtem.measurements.DiffractionPatterns">DiffractionPatterns</a></p>
@@ -1491,16 +1477,16 @@ zero.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.center_of_mass">
 <span class="sig-name descname"><span class="pre">center_of_mass</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">units</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'reciprocal'</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#DiffractionPatterns.center_of_mass"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.center_of_mass" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate center of mass images or line profiles from diffraction patterns. The results are complex type where
-the real and imaginary part represents the x and y component.</p>
+<dd><p>Calculate center-of-mass images or line profiles from diffraction patterns. The results are of type <cite>complex</cite>
+where the real and imaginary part represents the <cite>x</cite> and <cite>y</cite> component.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Union</span></code>[<a class="reference internal" href="abtem.measurements.Images.html#abtem.measurements.Images" title="abtem.measurements.Images"><code class="xref py py-class docutils literal notranslate"><span class="pre">Images</span></code></a>, <a class="reference internal" href="abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles" title="abtem.measurements.RealSpaceLineProfiles"><code class="xref py py-class docutils literal notranslate"><span class="pre">RealSpaceLineProfiles</span></code></a>]</p>
 </dd>
 <dt class="field-even">Returns</dt>
 <dd class="field-even"><p><ul class="simple">
-<li><p><strong>com_images</strong> (<em>Images</em>)</p></li>
-<li><p><strong>com_line_profiles</strong> (<em>RealSpaceLineProfiles</em>)</p></li>
+<li><p><strong>com_images</strong> (<em>Images</em>) – Center-of-mass images.</p></li>
+<li><p><strong>com_line_profiles</strong> (<em>RealSpaceLineProfiles</em>) – Center-of-mass line profiles (returned if there is only one scan axis).</p></li>
 </ul>
 </p>
 </dd>
@@ -1509,8 +1495,8 @@ the real and imaginary part represents the x and y component.</p>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.coordinates">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">coordinates</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">ndarray</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">ndarray</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.coordinates" title="Permalink to this definition">#</a></dt>
-<dd><p>Reciprocal spatial frequency coordinates [1 / Å].</p>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">coordinates</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.coordinates" title="Permalink to this definition">#</a></dt>
+<dd><p>Reciprocal-space frequency coordinates [1 / Å].</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>]</p>
@@ -1551,26 +1537,49 @@ the real and imaginary part represents the x and y component.</p>
 <span class="sig-name descname"><span class="pre">epie</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">probe_guess</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_batch</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">8</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_iter</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">4</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">alpha</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">beta</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fix_probe</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fix_com</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">crop_to_scan</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#DiffractionPatterns.epie"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.epie" title="Permalink to this definition">#</a></dt>
 <dd><p>Ptychographic reconstruction with the extended ptychographical engine (ePIE) algorithm.</p>
 <dl class="simple">
-<dt>probe_guess<span class="classifier">abtem.waves.Probe</span></dt><dd><p>The initial guess for the probe.</p>
+<dt>probe_guess<span class="classifier">Probe</span></dt><dd><p>The initial guess for the electron probe.</p>
 </dd>
-<dt>max_batch<span class="classifier">int</span></dt><dd><p>Maximum number of probe positions to update at every step.</p>
+<dt>max_batch<span class="classifier">int, optional</span></dt><dd><p>Maximum number of probe positions to update at every step (default is 8).</p>
 </dd>
-<dt>max_iter<span class="classifier">int</span></dt><dd><p>Maximum number of iterations to run the ePIE algorithm.</p>
+<dt>max_iter<span class="classifier">int, optional</span></dt><dd><p>Maximum number of iterations to run the ePIE algorithm (default is 4).</p>
 </dd>
-<dt>alpha<span class="classifier">float</span></dt><dd><p>Step size of iterative updates for the object.</p>
+<dt>alpha<span class="classifier">float, optional</span></dt><dd><p>Step size of iterative updates for the object (default is 1.0).</p>
 </dd>
-<dt>beta<span class="classifier">float</span></dt><dd><p>Step size of iterative updates for the probe.</p>
+<dt>beta<span class="classifier">float, optional</span></dt><dd><p>Step size of iterative updates for the probe (default is 1.0).</p>
 </dd>
-<dt>fix_probe<span class="classifier">bool</span></dt><dd><p>If True, the probe will not be updated by the algorithm. Default is False.</p>
+<dt>fix_probe<span class="classifier">bool, optional</span></dt><dd><p>If True, the probe will not be updated by the algorithm (default is False).</p>
 </dd>
-<dt>fix_com<span class="classifier">bool</span></dt><dd><p>If True, the center of mass of the probe will be centered. Default is True.</p>
+<dt>fix_com<span class="classifier">bool, optional</span></dt><dd><p>If True, the center of mass of the probe will be centered (default).</p>
 </dd>
-<dt>crop_to_scan<span class="classifier">bool</span></dt><dd><p>If true, the output is cropped to the scan area.</p>
+<dt>crop_to_scan<span class="classifier">bool, optional</span></dt><dd><p>If True, the output is cropped to the scan area (default).</p>
 </dd>
 </dl>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><a class="reference internal" href="abtem.measurements.Images.html#abtem.measurements.Images" title="abtem.measurements.Images"><code class="xref py py-class docutils literal notranslate"><span class="pre">Images</span></code></a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.from_array_and_metadata">
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_array_and_metadata</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">axes_metadata</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#DiffractionPatterns.from_array_and_metadata"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.from_array_and_metadata" title="Permalink to this definition">#</a></dt>
+<dd><p>Creates diffraction pattern(s) from a given array and metadata.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>array</strong> (<em>array</em>) – Complex array defining one or more 2D diffraction patterns. The second-to-last and last dimensions are the
+diffraction pattern <cite>y</cite>- and <cite>x</cite>-axis.</p></li>
+<li><p><strong>axes_metadata</strong> (<em>list of AxesMetadata</em>) – Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
+axes must be RealSpaceAxis.</p></li>
+<li><p><strong>metadata</strong> (<em>dict</em>) – A dictionary defining the measurement metadata.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>diffraction_patterns</strong> – Diffraction pattern(s) from the array and metadata.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns" title="abtem.measurements.DiffractionPatterns">DiffractionPatterns</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1596,18 +1605,18 @@ s3:// for remote data.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.gaussian_source_size">
 <span class="sig-name descname"><span class="pre">gaussian_source_size</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sigma</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#DiffractionPatterns.gaussian_source_size"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.gaussian_source_size" title="Permalink to this definition">#</a></dt>
-<dd><p>Simulate Gaussian source size by applying a gaussian filter.</p>
-<p>The filter is not applied to diffraction pattern individually, the intensity of diffraction patterns are mixed
+<dd><p>Simulate the effect of a finite source size on diffraction pattern(s) using a Gaussian filter.</p>
+<p>The filter is not applied to diffraction pattern individually, but the intensity of diffraction patterns are mixed
 across scan axes. Applying this filter requires two linear scan axes.</p>
 <p>Applying this filter before integrating the diffraction patterns will produce the same image as integrating
-the diffraction patterns first then applying a gaussian filter.</p>
+the diffraction patterns first then applying a Gaussian filter.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>sigma</strong> (<em>float</em><em>, </em><em>two float</em>) – Standard deviation of Gaussian kernel in the x and y-direction. If given as a single number, the standard
+<dd class="field-odd"><p><strong>sigma</strong> (<em>float</em><em> or </em><em>two float</em>) – Standard deviation of Gaussian kernel in the <cite>x</cite> and <cite>y</cite>-direction. If given as a single number, the standard
 deviation is equal for both axes.</p>
 </dd>
 <dt class="field-even">Returns</dt>
-<dd class="field-even"><p><strong>filtered_diffraction_patterns</strong></p>
+<dd class="field-even"><p><strong>filtered_diffraction_patterns</strong> – The filtered diffraction pattern(s).</p>
 </dd>
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns" title="abtem.measurements.DiffractionPatterns">DiffractionPatterns</a></p>
@@ -1618,7 +1627,30 @@ deviation is equal for both axes.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.imag">
 <span class="sig-name descname"><span class="pre">imag</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.imag" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate the phase from complex images.</p>
+<dd><p>Returns the imaginary part of a complex-valued measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.index_diffraction_spots">
+<span class="sig-name descname"><span class="pre">index_diffraction_spots</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cell</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#DiffractionPatterns.index_diffraction_spots"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.index_diffraction_spots" title="Permalink to this definition">#</a></dt>
+<dd><p>Indexes the Bragg reflections (diffraction spots) by their Miller indices.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>cell</strong> (<em>ase.cell.Cell</em><em> or </em><em>float</em><em> or </em><em>tuple of float</em>) – The assumed unit cell with respect to the diffraction pattern should be indexed. Must be one of ASE <cite>Cell</cite>
+object, float (for a cubic unit cell) or three floats (for orthorhombic unit cells).</p>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>indexed_patterns</strong> – The indexed diffraction pattern(s).</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>IndexedDiffractionPatterns</p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py method">
@@ -1634,7 +1666,7 @@ angle.</p>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
-<dd class="field-even"><p><strong>integrated_images</strong></p>
+<dd class="field-even"><p><strong>integrated_images</strong> – The integrated images.</p>
 </dd>
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><a class="reference internal" href="abtem.measurements.Images.html#abtem.measurements.Images" title="abtem.measurements.Images">Images</a></p>
@@ -1645,11 +1677,11 @@ angle.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.integrated_center_of_mass">
 <span class="sig-name descname"><span class="pre">integrated_center_of_mass</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#DiffractionPatterns.integrated_center_of_mass"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.integrated_center_of_mass" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate integrated center of mass (iCOM) images from diffraction patterns. This method is only implemented
+<dd><p>Calculate integrated center-of-mass (iCOM) images from diffraction patterns. This method is only implemented
 for diffraction patterns with exactly two scan axes.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Returns</dt>
-<dd class="field-odd"><p><strong>icom_images</strong></p>
+<dd class="field-odd"><p><strong>icom_images</strong> – The iCOM images.</p>
 </dd>
 <dt class="field-even">Return type</dt>
 <dd class="field-even"><p><a class="reference internal" href="abtem.measurements.Images.html#abtem.measurements.Images" title="abtem.measurements.Images">Images</a></p>
@@ -1660,21 +1692,26 @@ for diffraction patterns with exactly two scan axes.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.intensity">
 <span class="sig-name descname"><span class="pre">intensity</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.intensity" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate the absolute square from complex images.</p>
+<dd><p>Calculates the squared norm of a complex-valued measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.interpolate">
 <span class="sig-name descname"><span class="pre">interpolate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sampling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#DiffractionPatterns.interpolate"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.interpolate" title="Permalink to this definition">#</a></dt>
-<dd><p>Interpolate diffraction patterns producing equivalent patterns with a different sampling.</p>
+<dd><p>Interpolate diffraction pattern(s) producing equivalent pattern(s) with a different sampling.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>sampling</strong> (<em>two float</em><em> or </em><em>'uniform'</em>) – Sampling of diffraction patterns after interpolation in x and y [1 / Å]. If given as ‘uniform’ the
-diffraction patterns are downsampled along the axis with the smallest pixel size such that the sampling
-is uniform.</p>
+<dd class="field-odd"><p><strong>sampling</strong> (<em>'uniform'</em><em> or </em><em>float</em><em> or </em><em>two floats</em>) – Sampling of diffraction patterns after interpolation in <cite>x</cite> and <cite>y</cite> [1 / Å]. If a single value, the same
+sampling is used for both axes. If ‘uniform’, the diffraction patterns are down-sampled along the axis with
+the smallest pixel size such that the sampling is uniform.</p>
 </dd>
 <dt class="field-even">Returns</dt>
-<dd class="field-even"><p><strong>interpolated_diffraction_patterns</strong></p>
+<dd class="field-even"><p><strong>interpolated_diffraction_patterns</strong> – The interpolated diffraction pattern(s).</p>
 </dd>
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns" title="abtem.measurements.DiffractionPatterns">DiffractionPatterns</a></p>
@@ -1685,7 +1722,7 @@ is uniform.</p>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.limits">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">limits</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.limits" title="Permalink to this definition">#</a></dt>
-<dd><p>Lower and upper spatial frequency in x and y [1 / Å].</p>
+<dd><p>Lowest and highest spatial frequency in <cite>x</cite> and <cite>y</cite> [1 / Å].</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">List</span></code>[<code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code>]]</p>
@@ -1696,7 +1733,7 @@ is uniform.</p>
 <dl class="py property">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.max_angles">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">max_angles</span></span><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.max_angles" title="Permalink to this definition">#</a></dt>
-<dd><p>Maximum scattering angle in x and y [mrad]</p>
+<dd><p>Maximum scattering angle in <cite>x</cite> and <cite>y</cite> [mrad].</p>
 </dd></dl>
 
 <dl class="py property">
@@ -1735,28 +1772,34 @@ is uniform.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.phase">
 <span class="sig-name descname"><span class="pre">phase</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.phase" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate the phase from complex images.</p>
+<dd><p>Calculates the phase of a complex-valued measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.poisson_noise">
 <span class="sig-name descname"><span class="pre">poisson_noise</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dose_per_area</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">total_dose</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">samples</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.poisson_noise" title="Permalink to this definition">#</a></dt>
-<dd><p>Add Poisson noise to the DiffractionPattern.</p>
+<dd><p>Add Poisson noise (ie. shot noise) to a measurement corresponding to the provided ‘total_dose’ (per measurement
+if applied to an ensemble) or ‘dose_per_area’ (not applicable for single measurements).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>dose_per_area</strong> (<em>float</em><em>, </em><em>optional</em>) – The irradiation dose in electrons per Å^2. Provide either “total_dose” or “dose_per_area”.</p></li>
-<li><p><strong>total_dose</strong> (<em>float</em><em>, </em><em>optional</em>) – The irradiation dose per diffraction pattern. Provide either “total_dose” or “dose_per_area”.</p></li>
-<li><p><strong>samples</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of samples to draw from the poisson distribution. If this is greater than 1, an additional
+<li><p><strong>dose_per_area</strong> (<em>float</em><em>, </em><em>optional</em>) – The irradiation dose [electrons per Å:sup:<cite>2</cite>].</p></li>
+<li><p><strong>total_dose</strong> (<em>float</em><em>, </em><em>optional</em>) – The irradiation dose per diffraction pattern.</p></li>
+<li><p><strong>samples</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of samples to draw from a Poisson distribution. If this is greater than 1, an additional
 ensemble axis will be added to the measurement.</p></li>
 <li><p><strong>seed</strong> (<em>int</em><em>, </em><em>optional</em>) – Seed the random number generator.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
-<dd class="field-even"><p><strong>noisy_diffraction_patterns</strong> – The noisy diffraction patterns.</p>
+<dd class="field-even"><p><strong>noisy_measurement</strong> – The noisy measurement.</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference internal" href="#abtem.measurements.DiffractionPatterns" title="abtem.measurements.DiffractionPatterns">DiffractionPatterns</a></p>
+<dd class="field-odd"><p><a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement">BaseMeasurement</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1765,23 +1808,24 @@ ensemble axis will be added to the measurement.</p></li>
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.polar_binning">
 <span class="sig-name descname"><span class="pre">polar_binning</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">nbins_radial</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">nbins_azimuthal</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inner</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">outer</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rotation</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">offset</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(0.0,</span> <span class="pre">0.0)</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#DiffractionPatterns.polar_binning"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.polar_binning" title="Permalink to this definition">#</a></dt>
 <dd><p>Create polar measurements from the diffraction patterns by binning the measurements on a polar grid. This
-method may be used to simulate a segmented detector with a specified .</p>
+method may be used to simulate a segmented detector with a specified number of radial and azimuthal bins.</p>
 <p>Each bin is a segment of an annulus and the bins are spaced equally in the radial and azimuthal directions.
-The bins fit between a given inner and outer integration limit, they may be rotated around the origin and their
+The bins fit between a given inner and outer integration limit, they may be rotated around the origin, and their
 center may be shifted from the origin.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>nbins_radial</strong> (<em>int</em>) – Number of radial bins.</p></li>
 <li><p><strong>nbins_azimuthal</strong> (<em>int</em>) – Number of angular bins.</p></li>
-<li><p><strong>inner</strong> (<em>float</em>) – Inner integration limit of the bins [mrad].</p></li>
-<li><p><strong>outer</strong> (<em>float</em>) – Outer integration limit of the bins [mrad].</p></li>
-<li><p><strong>rotation</strong> (<em>float</em>) – Rotation of the bins around the origin [mrad].</p></li>
-<li><p><strong>offset</strong> (<em>two float</em>) – Offset of the bins from the origin in x and y [mrad].</p></li>
+<li><p><strong>inner</strong> (<em>float</em>) – Inner integration limit of the bins [mrad] (default is 0.0).</p></li>
+<li><p><strong>outer</strong> (<em>float</em>) – Outer integration limit of the bins [mrad]. If not specified, this is set to be the maximum detected angle
+of the diffraction pattern.</p></li>
+<li><p><strong>rotation</strong> (<em>float</em>) – Rotation of the bins around the origin [mrad] (default is 0.0).</p></li>
+<li><p><strong>offset</strong> (<em>two float</em>) – Offset of the bins from the origin in <cite>x</cite> and <cite>y</cite> [mrad] (default is (0.0, 0.0).</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
-<dd class="field-even"><p><strong>polar_measurements</strong></p>
+<dd class="field-even"><p><strong>polar_measurements</strong> – The polar measurements.</p>
 </dd>
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><a class="reference internal" href="abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements" title="abtem.measurements.PolarMeasurements">PolarMeasurements</a></p>
@@ -1792,18 +1836,20 @@ center may be shifted from the origin.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.radial_binning">
 <span class="sig-name descname"><span class="pre">radial_binning</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">step_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inner</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">outer</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#DiffractionPatterns.radial_binning"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.radial_binning" title="Permalink to this definition">#</a></dt>
-<dd><p>Create polar measurements from the diffraction patterns by binning the measurements in annular regions.</p>
-<p>This is equivalent to detecting a wave function using the FlexibleAnnularDetector.</p>
+<dd><p>Create polar measurement(s) from the diffraction pattern(s) by binning the measurements in annular regions. This
+method may be used to simulate a segmented detector with a specified number of radial bins.</p>
+<p>This is equivalent to detecting a wave function using the <cite>FlexibleAnnularDetector</cite>.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>step_size</strong> (<em>float</em><em>, </em><em>optional</em>) – Radial extent of the bins [mrad]. Default is 1.</p></li>
-<li><p><strong>inner</strong> (<em>float</em><em>, </em><em>optional</em>) – Inner integration limit of the bins [mrad].</p></li>
-<li><p><strong>outer</strong> (<em>float</em><em>, </em><em>optional</em>) – Outer integration limit of the bins [mrad].</p></li>
+<li><p><strong>step_size</strong> (<em>float</em><em>, </em><em>optional</em>) – Radial extent of the bins [mrad] (default is 1.0).</p></li>
+<li><p><strong>inner</strong> (<em>float</em><em>, </em><em>optional</em>) – Inner integration limit of the bins [mrad] (default is 0.0).</p></li>
+<li><p><strong>outer</strong> (<em>float</em><em>, </em><em>optional</em>) – Outer integration limit of the bins [mrad]. If not specified, this is set to be the maximum detected angle
+of the diffraction pattern.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
-<dd class="field-even"><p><strong>radially_binned_measurement</strong></p>
+<dd class="field-even"><p><strong>radially_binned_measurement</strong> – Radially binned polar measurement(s).</p>
 </dd>
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><a class="reference internal" href="abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements" title="abtem.measurements.PolarMeasurements">PolarMeasurements</a></p>
@@ -1814,7 +1860,43 @@ center may be shifted from the origin.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.real">
 <span class="sig-name descname"><span class="pre">real</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.real" title="Permalink to this definition">#</a></dt>
-<dd><p>Calculate the phase from complex images.</p>
+<dd><p>Returns the real part of a complex-valued measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.reduce_ensemble">
+<span class="sig-name descname"><span class="pre">reduce_ensemble</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.reduce_ensemble" title="Permalink to this definition">#</a></dt>
+<dd><p>Takes the mean of an ensemble measurement (e.g. of frozen phonon configurations).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><code class="xref py py-class docutils literal notranslate"><span class="pre">TypeVar</span></code>(<code class="docutils literal notranslate"><span class="pre">T</span></code>, bound= BaseMeasurement)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.relative_difference">
+<span class="sig-name descname"><span class="pre">relative_difference</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">other</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min_relative_tol</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.relative_difference" title="Permalink to this definition">#</a></dt>
+<dd><p>Calculates the relative difference with respect to another compatible measurement.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>other</strong> (<a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement"><em>BaseMeasurement</em></a>) – Measurement to which the difference is calculated.</p></li>
+<li><p><strong>min_relative_tol</strong> (<em>float</em>) – Avoids division by zero errors by defining a minimum value of the divisor in the relative difference.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p><strong>difference</strong> – The relative difference as a measurement of the same type.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement">BaseMeasurement</a></p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py property">
@@ -1831,44 +1913,43 @@ center may be shifted from the origin.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.show">
 <span class="sig-name descname"><span class="pre">show</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">units</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'reciprocal'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cmap</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'viridis'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">explode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ax</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">figsize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">title</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">panel_titles</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_ticks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y_ticks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_label</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y_label</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">row_super_label</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">col_super_label</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">power</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">vmin</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">vmax</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">common_color_scale</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cbar</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cbar_labels</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sizebar</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">float_formatting</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'.2f'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">panel_labels</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">image_grid_kwargs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">imshow_kwargs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">anchored_text_kwargs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">complex_coloring_kwargs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/measurements.html#DiffractionPatterns.show"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.show" title="Permalink to this definition">#</a></dt>
-<dd><p>Show the image(s) using matplotlib.</p>
+<dd><p>Show the diffraction pattern(s) using matplotlib.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>units</strong> (<em>bool</em><em>, </em><em>optional</em>) – </p></li>
-<li><p><strong>cmap</strong> (<em>str</em><em>, </em><em>optional</em>) – </p></li>
+<li><p><strong>units</strong> (<em>bool</em><em>, </em><em>optional</em>) – The units of the diffraction pattern(s) can be either ‘reciprocal’ (resulting in [1 / Å]), or ‘mrad’.</p></li>
+<li><p><strong>cmap</strong> (<em>str</em><em>, </em><em>optional</em>) – Matplotlib colormap name used to map scalar data to colors. Ignored if image array is complex.</p></li>
 <li><p><strong>explode</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, a grid of images is created for all the items of the last two ensemble axes. If False, the first
 ensemble item is shown.</p></li>
 <li><p><strong>ax</strong> (<em>matplotlib Axes</em><em>, </em><em>optional</em>) – If given the plots are added to the Axes. This is not available for image grids.</p></li>
-<li><p><strong>figsize</strong> (<em>two int</em><em>, </em><em>optional</em>) – The figure size given as width and height in inches, passed to matplotlib.pyplot.figure.</p></li>
-<li><p><strong>title</strong> (<em>bool</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – </p></li>
-<li><p><strong>title</strong> – Add a title to the figure. If True is given instead of a string the title will be given by the value
+<li><p><strong>figsize</strong> (<em>two int</em><em>, </em><em>optional</em>) – The figure size given as width and height in inches, passed to <cite>matplotlib.pyplot.figure</cite>.</p></li>
+<li><p><strong>title</strong> (<em>bool</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – Add a title to the figure. If True is given instead of a string the title will be given by the value
 corresponding to the “name” key of the metadata dictionary, if this item exists.</p></li>
 <li><p><strong>panel_titles</strong> (<em>bool</em><em> or </em><em>list of str</em><em>, </em><em>optional</em>) – Add titles to each panel. If True a title will be created from the axis metadata. If given as a list of
 strings an item must exist for each panel.</p></li>
-<li><p><strong>x_ticks</strong> (<em>bool</em><em> or </em><em>list</em><em>, </em><em>optional</em>) – If False, the ticks on the x-axis will be removed.</p></li>
-<li><p><strong>y_ticks</strong> (<em>bool</em><em> or </em><em>list</em><em>, </em><em>optional</em>) – If False, the ticks on the y-axis will be removed.</p></li>
-<li><p><strong>x_label</strong> (<em>bool</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – Add label to the x-axis of every plot. If True (default) the label will be created from the corresponding axis
+<li><p><strong>x_ticks</strong> (<em>bool</em><em> or </em><em>list</em><em>, </em><em>optional</em>) – If False, the ticks on the <cite>x</cite>-axis will be removed.</p></li>
+<li><p><strong>y_ticks</strong> (<em>bool</em><em> or </em><em>list</em><em>, </em><em>optional</em>) – If False, the ticks on the <cite>y</cite>-axis will be removed.</p></li>
+<li><p><strong>x_label</strong> (<em>bool</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – Add label to the <cite>x</cite>-axis of every plot. If True (default) the label will be created from the corresponding axis
 metadata. A string may be given to override this.</p></li>
-<li><p><strong>y_label</strong> (<em>bool</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – Add label to the x-axis of every plot. If True (default) the label will be created from the corresponding axis
+<li><p><strong>y_label</strong> (<em>bool</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – Add label to the <cite>x</cite>-axis of every plot. If True (default) the label will be created from the corresponding axis
 metadata. A string may be given to override this.</p></li>
-<li><p><strong>row_super_label</strong> (<em>bool</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – Add super label to the rows of an image grid. If True the label will be created from the corresponding axis
+<li><p><strong>row_super_label</strong> (<em>bool</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – Add super label to the rows of an image grid. If True (default) the label will be created from the corresponding axis
 metadata. A string may be given to override this. The default is no super label.</p></li>
-<li><p><strong>col_super_label</strong> (<em>bool</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – Add super label to the columns of an image grid. If True the label will be created from the corresponding
+<li><p><strong>col_super_label</strong> (<em>bool</em><em> or </em><em>str</em><em>, </em><em>optional</em>) – Add super label to the columns of an image grid. If True (default) the label will be created from the corresponding
 axis metadata. A string may be given to override this. The default is no super label.</p></li>
-<li><p><strong>power</strong> (<em>float</em>) – Show image on a power scale.</p></li>
+<li><p><strong>power</strong> (<em>float</em><em>, </em><em>optional</em>) – Show image on a power scale (default is a power of 1.0, ie. linear scale).</p></li>
 <li><p><strong>vmin</strong> (<em>float</em><em>, </em><em>optional</em>) – Minimum of the intensity color scale. Default is the minimum of the array values.</p></li>
 <li><p><strong>vmax</strong> (<em>float</em><em>, </em><em>optional</em>) – Maximum of the intensity color scale. Default is the maximum of the array values.</p></li>
 <li><p><strong>common_color_scale</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True all images in an image grid are shown on the same colorscale, and a single colorbar is created (if
 it is requested). Default is False.</p></li>
 <li><p><strong>cbar</strong> (<em>bool</em><em>, </em><em>optional</em>) – Add colorbar(s) to the image(s). The position and size of the colorbar(s) may be controlled by passing
-keyword arguments to mpl_toolkits.axes_grid1.axes_grid.ImageGrid through <cite>image_grid_kwargs</cite>.</p></li>
+keyword arguments to <cite>mpl_toolkits.axes_grid1.axes_grid.ImageGrid</cite> through ‘image_grid_kwargs’.</p></li>
 <li><p><strong>sizebar</strong> (<em>bool</em><em>, </em><em>optional</em><em>,</em>) – Add a size bar to the image(s).</p></li>
 <li><p><strong>float_formatting</strong> (<em>str</em><em>, </em><em>optional</em>) – A formatting string used for formatting the floats of the panel titles.</p></li>
 <li><p><strong>panel_labels</strong> (<em>list of str</em>) – A list of labels for each panel of a grid of images.</p></li>
-<li><p><strong>image_grid_kwargs</strong> (<em>dict</em>) – Additional keyword arguments passed to mpl_toolkits.axes_grid1.axes_grid.ImageGrid.</p></li>
-<li><p><strong>imshow_kwargs</strong> (<em>dict</em>) – Additional keyword arguments passed to matplotlib.axes.Axes.imshow.</p></li>
-<li><p><strong>anchored_text_kwargs</strong> (<em>dict</em>) – Additional keyword arguments passed to matplotlib.offsetbox.AnchoredText. This is used for creating panel
+<li><p><strong>image_grid_kwargs</strong> (<em>dict</em>) – Additional keyword arguments passed to <cite>mpl_toolkits.axes_grid1.axes_grid.ImageGrid</cite>.</p></li>
+<li><p><strong>imshow_kwargs</strong> (<em>dict</em>) – Additional keyword arguments passed to <cite>matplotlib.axes.Axes.imshow</cite>.</p></li>
+<li><p><strong>anchored_text_kwargs</strong> (<em>dict</em>) – Additional keyword arguments passed to <cite>matplotlib.offsetbox.AnchoredText</cite>. This is used for creating panel
 labels.</p></li>
 </ul>
 </dd>
@@ -1881,7 +1962,7 @@ labels.</p></li>
 <dl class="py method">
 <dt class="sig sig-object py" id="abtem.measurements.DiffractionPatterns.to_hyperspy">
 <span class="sig-name descname"><span class="pre">to_hyperspy</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#abtem.measurements.DiffractionPatterns.to_hyperspy" title="Permalink to this definition">#</a></dt>
-<dd><p>Convert measurement to a hyperspy signal.</p>
+<dd><p>Convert measurement to a Hyperspy signal.</p>
 </dd></dl>
 
 <dl class="py method">
@@ -1919,7 +2000,7 @@ existing data.</p></li>
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library\api\_autosummary"
+            path: "./library/api/_autosummary"
         },
         predefinedOutput: true
     }
@@ -1940,10 +2021,10 @@ existing data.</p></li>
             <p class="prev-next-title">BaseMeasurement</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="abtem.measurements.FourierSpaceLineProfiles.html" title="next page">
+    <a class='right-next' id="next-link" href="abtem.measurements.Images.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">FourierSpaceLineProfiles</p>
+        <p class="prev-next-title">Images</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>

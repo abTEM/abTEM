@@ -1,4 +1,4 @@
-﻿Images
+Images
 ======
 
 .. currentmodule:: abtem.measurements

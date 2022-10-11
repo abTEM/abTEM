@@ -1,4 +1,4 @@
-﻿PolarMeasurements
+PolarMeasurements
 =================
 
 .. currentmodule:: abtem.measurements

@@ -1,4 +1,4 @@
-﻿RealSpaceLineProfiles
+RealSpaceLineProfiles
 =====================
 
 .. currentmodule:: abtem.measurements

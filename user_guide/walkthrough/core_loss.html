@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,6 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
@@ -57,10 +56,10 @@ const thebe_selector_output = ".output, .cell_output"
     <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="&lt;no title&gt;" href="plasmons.html" />
+    <link rel="next" title="Plasmons" href="plasmons.html" />
     <link rel="prev" title="Parallelization and Dask" href="performance.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -217,6 +216,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2 current active">
     <a class="current reference internal" href="#">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -1085,7 +1089,7 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="core-loss-eels">
-<h1>Core loss EELS<a class="headerlink" href="#core-loss-eels" title="Permalink to this heading">#</a></h1>
+<h1>Core loss EELS<a class="headerlink" href="#core-loss-eels" title="Permalink to this headline">#</a></h1>
 <p>We calculate an “energy-filtered” STEM image of SrTiO<span class="math notranslate nohighlight">\(_3\)</span> targeting oxygen, specifically we target its <em>K</em>-edge (i.e. the 1<em>s</em> subshell; quantum numbers <span class="math notranslate nohighlight">\((n, \ell) = (1, 0)\)</span>)). In a hypothetical experiment, this would be roughly equivalent to setting your energy filter to 456 eV.</p>
 <p>The following code calculates projected overlap integrals following to Dwyer <em>et al.</em> (see <a class="reference external" href="https://doi.org/10.1016/j.ultramic.2005.03.005">https://doi.org/10.1016/j.ultramic.2005.03.005</a> or <a class="reference external" href="https://doi.org/10.1103/PhysRevB.57.3273">https://doi.org/10.1103/PhysRevB.57.3273</a>), dynamical scattering following Brown <em>et al.</em> (<a class="reference external" href="https://doi.org/10.1103/PhysRevResearch.1.033186">https://doi.org/10.1103/PhysRevResearch.1.033186</a>) and uses the density functional theory code <a class="reference external" href="https://wiki.fysik.dtu.dk/gpaw/index.html">GPAW</a> for calculating wave functions. Please see our citation guide if you use this code in a publication.</p>
 <div class="cell docutils container">
@@ -1373,7 +1377,7 @@ Strontium:
         },
         kernelOptions: {
             kernelName: "abtem-dask",
-            path: "./user_guide\walkthrough"
+            path: "./user_guide/walkthrough"
         },
         predefinedOutput: true
     }
@@ -1397,7 +1401,7 @@ Strontium:
     <a class='right-next' id="next-link" href="plasmons.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">&lt;no title&gt;</p>
+        <p class="prev-next-title">Plasmons</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>

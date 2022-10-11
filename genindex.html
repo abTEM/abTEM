@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -33,7 +33,6 @@
     <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
     <script src="_static/jquery.js"></script>
     <script src="_static/underscore.js"></script>
-    <script src="_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="_static/doctools.js"></script>
     <script src="_static/clipboard.min.js"></script>
     <script src="_static/copybutton.js"></script>
@@ -50,10 +49,12 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="#" />
     <link rel="search" title="Search" href="search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -210,6 +211,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="user_guide/walkthrough/core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="user_guide/walkthrough/plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -454,11 +460,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html">
-       FourierSpaceLineProfiles
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="library/api/_autosummary/abtem.measurements.Images.html">
        Images
       </a>
@@ -474,8 +475,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html">
-       SinglePointMeasurement
+      <a class="reference internal" href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html">
+       ReciprocalSpaceLineProfiles
       </a>
      </li>
     </ul>
@@ -793,11 +794,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="library/api/_autosummary/abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -805,11 +801,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="library/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="library/api/_autosummary/abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -1028,15 +1019,13 @@ title="Open an issue"
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.__init__">(abtem.measurements.DiffractionPatterns method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.__init__">(abtem.measurements.FourierSpaceLineProfiles method)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.__init__">(abtem.measurements.Images method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.__init__">(abtem.measurements.PolarMeasurements method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.__init__">(abtem.measurements.RealSpaceLineProfiles method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.__init__">(abtem.measurements.SinglePointMeasurement method)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.__init__">(abtem.measurements.ReciprocalSpaceLineProfiles method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.multislice.FresnelPropagator.html#abtem.multislice.FresnelPropagator.__init__">(abtem.multislice.FresnelPropagator method)</a>
 </li>
@@ -1108,15 +1097,13 @@ title="Open an issue"
       <ul>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.abs">(abtem.measurements.DiffractionPatterns method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.abs">(abtem.measurements.FourierSpaceLineProfiles method)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.abs">(abtem.measurements.Images method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.abs">(abtem.measurements.PolarMeasurements method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.abs">(abtem.measurements.RealSpaceLineProfiles method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.abs">(abtem.measurements.SinglePointMeasurement method)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.abs">(abtem.measurements.ReciprocalSpaceLineProfiles method)</a>
 </li>
       </ul></li>
       <li>
@@ -1278,15 +1265,13 @@ title="Open an issue"
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.axes_metadata">(abtem.measurements.DiffractionPatterns property)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.axes_metadata">(abtem.measurements.FourierSpaceLineProfiles property)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.axes_metadata">(abtem.measurements.Images property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.axes_metadata">(abtem.measurements.PolarMeasurements property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.axes_metadata">(abtem.measurements.RealSpaceLineProfiles property)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.axes_metadata">(abtem.measurements.SinglePointMeasurement property)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.axes_metadata">(abtem.measurements.ReciprocalSpaceLineProfiles property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.potentials.BasePotential.html#abtem.potentials.BasePotential.axes_metadata">(abtem.potentials.BasePotential property)</a>
 </li>
@@ -1324,15 +1309,13 @@ title="Open an issue"
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.base_axes">(abtem.measurements.DiffractionPatterns property)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.base_axes">(abtem.measurements.FourierSpaceLineProfiles property)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.base_axes">(abtem.measurements.Images property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.base_axes">(abtem.measurements.PolarMeasurements property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.base_axes">(abtem.measurements.RealSpaceLineProfiles property)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.base_axes">(abtem.measurements.SinglePointMeasurement property)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.base_axes">(abtem.measurements.ReciprocalSpaceLineProfiles property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.potentials.BasePotential.html#abtem.potentials.BasePotential.base_axes">(abtem.potentials.BasePotential property)</a>
 </li>
@@ -1399,6 +1382,8 @@ title="Open an issue"
 </li>
       <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.center_of_mass">center_of_mass() (abtem.measurements.DiffractionPatterns method)</a>
 </li>
+      <li><a href="library/api/_autosummary/abtem.gpaw.GPAWParametrization.html#abtem.gpaw.GPAWParametrization.charge">charge() (abtem.gpaw.GPAWParametrization method)</a>
+</li>
       <li><a href="library/api/_autosummary/abtem.charge_density.ChargeDensityPotential.html#abtem.charge_density.ChargeDensityPotential">ChargeDensityPotential (class in abtem.charge_density)</a>
 </li>
       <li><a href="library/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.convolve">convolve() (abtem.waves.Waves method)</a>
@@ -1432,15 +1417,13 @@ title="Open an issue"
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.copy">(abtem.measurements.DiffractionPatterns method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.copy">(abtem.measurements.FourierSpaceLineProfiles method)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.copy">(abtem.measurements.Images method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.copy">(abtem.measurements.PolarMeasurements method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.copy">(abtem.measurements.RealSpaceLineProfiles method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.copy">(abtem.measurements.SinglePointMeasurement method)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.copy">(abtem.measurements.ReciprocalSpaceLineProfiles method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.potentials.BasePotential.html#abtem.potentials.BasePotential.copy">(abtem.potentials.BasePotential method)</a>
 </li>
@@ -1494,15 +1477,13 @@ title="Open an issue"
       <ul>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.copy_to_device">(abtem.measurements.DiffractionPatterns method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.copy_to_device">(abtem.measurements.FourierSpaceLineProfiles method)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.copy_to_device">(abtem.measurements.Images method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.copy_to_device">(abtem.measurements.PolarMeasurements method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.copy_to_device">(abtem.measurements.RealSpaceLineProfiles method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.copy_to_device">(abtem.measurements.SinglePointMeasurement method)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.copy_to_device">(abtem.measurements.ReciprocalSpaceLineProfiles method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.copy_to_device">(abtem.potentials.PotentialArray method)</a>
 </li>
@@ -1618,15 +1599,13 @@ title="Open an issue"
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.ensemble_axes">(abtem.measurements.DiffractionPatterns property)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.ensemble_axes">(abtem.measurements.FourierSpaceLineProfiles property)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.ensemble_axes">(abtem.measurements.Images property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.ensemble_axes">(abtem.measurements.PolarMeasurements property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.ensemble_axes">(abtem.measurements.RealSpaceLineProfiles property)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.ensemble_axes">(abtem.measurements.SinglePointMeasurement property)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.ensemble_axes">(abtem.measurements.ReciprocalSpaceLineProfiles property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.potentials.BasePotential.html#abtem.potentials.BasePotential.ensemble_axes">(abtem.potentials.BasePotential property)</a>
 </li>
@@ -1763,16 +1742,26 @@ title="Open an issue"
         <li><a href="library/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.fourier_space_sampling">(abtem.waves.Waves property)</a>
 </li>
       </ul></li>
-      <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles">FourierSpaceLineProfiles (class in abtem.measurements)</a>
-</li>
-      <li><a href="library/api/_autosummary/abtem.multislice.fresnel_propagator.html#abtem.multislice.fresnel_propagator">fresnel_propagator() (in module abtem.multislice)</a>
-</li>
       <li><a href="library/api/_autosummary/abtem.multislice.FresnelPropagator.html#abtem.multislice.FresnelPropagator">FresnelPropagator (class in abtem.multislice)</a>
 </li>
+      <li><a href="library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.from_array_and_metadata">from_array_and_metadata() (abtem.measurements.BaseMeasurement method)</a>
+
+      <ul>
+        <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.from_array_and_metadata">(abtem.measurements.DiffractionPatterns class method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.from_array_and_metadata">(abtem.measurements.Images class method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.from_array_and_metadata">(abtem.measurements.PolarMeasurements class method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.from_array_and_metadata">(abtem.measurements.RealSpaceLineProfiles class method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.from_array_and_metadata">(abtem.measurements.ReciprocalSpaceLineProfiles class method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.from_array_and_metadata">(abtem.waves.Waves class method)</a>
+</li>
+      </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="library/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.from_array_and_metadata">from_array_and_metadata() (abtem.waves.Waves class method)</a>
-</li>
       <li><a href="library/api/_autosummary/abtem.scan.GridScan.html#abtem.scan.GridScan.from_fractional_coordinates">from_fractional_coordinates() (abtem.scan.GridScan class method)</a>
 
       <ul>
@@ -1786,15 +1775,13 @@ title="Open an issue"
       <ul>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.from_zarr">(abtem.measurements.DiffractionPatterns class method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.from_zarr">(abtem.measurements.FourierSpaceLineProfiles class method)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.from_zarr">(abtem.measurements.Images class method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.from_zarr">(abtem.measurements.PolarMeasurements class method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.from_zarr">(abtem.measurements.RealSpaceLineProfiles class method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.from_zarr">(abtem.measurements.SinglePointMeasurement class method)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.from_zarr">(abtem.measurements.ReciprocalSpaceLineProfiles class method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.from_zarr">(abtem.potentials.PotentialArray class method)</a>
 </li>
@@ -1868,7 +1855,27 @@ title="Open an issue"
 </li>
       </ul></li>
       <li><a href="library/api/_autosummary/abtem.charge_density.ChargeDensityPotential.html#abtem.charge_density.ChargeDensityPotential.generate_slices">generate_slices() (abtem.charge_density.ChargeDensityPotential method)</a>
+
+      <ul>
+        <li><a href="library/api/_autosummary/abtem.gpaw.GPAWPotential.html#abtem.gpaw.GPAWPotential.generate_slices">(abtem.gpaw.GPAWPotential method)</a>
 </li>
+        <li><a href="library/api/_autosummary/abtem.potentials.CrystalPotential.html#abtem.potentials.CrystalPotential.generate_slices">(abtem.potentials.CrystalPotential method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.potentials.Potential.html#abtem.potentials.Potential.generate_slices">(abtem.potentials.Potential method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.generate_slices">(abtem.potentials.PotentialArray method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.potentials.TransmissionFunction.html#abtem.potentials.TransmissionFunction.generate_slices">(abtem.potentials.TransmissionFunction method)</a>
+</li>
+      </ul></li>
+      <li><a href="library/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.get_chunk">get_chunk() (abtem.potentials.PotentialArray method)</a>
+
+      <ul>
+        <li><a href="library/api/_autosummary/abtem.potentials.TransmissionFunction.html#abtem.potentials.TransmissionFunction.get_chunk">(abtem.potentials.TransmissionFunction method)</a>
+</li>
+      </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="library/api/_autosummary/abtem.scan.BaseScan.html#abtem.scan.BaseScan.get_positions">get_positions() (abtem.scan.BaseScan method)</a>
 
       <ul>
@@ -1881,8 +1888,6 @@ title="Open an issue"
         <li><a href="library/api/_autosummary/abtem.scan.SourceOffset.html#abtem.scan.SourceOffset.get_positions">(abtem.scan.SourceOffset method)</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="library/api/_autosummary/abtem.gpaw.GPAWParametrization.html#abtem.gpaw.GPAWParametrization">GPAWParametrization (class in abtem.gpaw)</a>
 </li>
       <li><a href="library/api/_autosummary/abtem.gpaw.GPAWPotential.html#abtem.gpaw.GPAWPotential">GPAWPotential (class in abtem.gpaw)</a>
@@ -1952,20 +1957,26 @@ title="Open an issue"
       <ul>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.imag">(abtem.measurements.DiffractionPatterns method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.imag">(abtem.measurements.FourierSpaceLineProfiles method)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.imag">(abtem.measurements.Images method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.imag">(abtem.measurements.PolarMeasurements method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.imag">(abtem.measurements.RealSpaceLineProfiles method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.imag">(abtem.measurements.SinglePointMeasurement method)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.imag">(abtem.measurements.ReciprocalSpaceLineProfiles method)</a>
 </li>
       </ul></li>
       <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images">Images (class in abtem.measurements)</a>
 </li>
-      <li><a href="library/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.images">images() (abtem.waves.Waves method)</a>
+      <li><a href="library/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.images">images() (abtem.potentials.PotentialArray method)</a>
+
+      <ul>
+        <li><a href="library/api/_autosummary/abtem.potentials.TransmissionFunction.html#abtem.potentials.TransmissionFunction.images">(abtem.potentials.TransmissionFunction method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.images">(abtem.waves.Waves method)</a>
+</li>
+      </ul></li>
+      <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.index_diffraction_spots">index_diffraction_spots() (abtem.measurements.DiffractionPatterns method)</a>
 </li>
       <li><a href="library/api/_autosummary/abtem.detectors.AnnularDetector.html#abtem.detectors.AnnularDetector.inner">inner (abtem.detectors.AnnularDetector property)</a>
 
@@ -1980,7 +1991,11 @@ title="Open an issue"
       <li><a href="library/api/_autosummary/abtem.charge_density.integrate_gradient_fourier.html#abtem.charge_density.integrate_gradient_fourier">integrate_gradient_fourier() (in module abtem.charge_density)</a>
 </li>
       <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.integrate_radial">integrate_radial() (abtem.measurements.DiffractionPatterns method)</a>
+
+      <ul>
+        <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.integrate_radial">(abtem.measurements.PolarMeasurements method)</a>
 </li>
+      </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.integrated_center_of_mass">integrated_center_of_mass() (abtem.measurements.DiffractionPatterns method)</a>
@@ -1990,15 +2005,13 @@ title="Open an issue"
       <ul>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.intensity">(abtem.measurements.DiffractionPatterns method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.intensity">(abtem.measurements.FourierSpaceLineProfiles method)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.intensity">(abtem.measurements.Images method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.intensity">(abtem.measurements.PolarMeasurements method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.intensity">(abtem.measurements.RealSpaceLineProfiles method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.intensity">(abtem.measurements.SinglePointMeasurement method)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.intensity">(abtem.measurements.ReciprocalSpaceLineProfiles method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.intensity">(abtem.waves.Waves method)</a>
 </li>
@@ -2007,6 +2020,10 @@ title="Open an issue"
 
       <ul>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.interpolate">(abtem.measurements.Images method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.interpolate">(abtem.measurements.RealSpaceLineProfiles method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.interpolate">(abtem.measurements.ReciprocalSpaceLineProfiles method)</a>
 </li>
       </ul></li>
       <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.interpolate_line">interpolate_line() (abtem.measurements.Images method)</a>
@@ -2137,15 +2154,13 @@ title="Open an issue"
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.num_axes">(abtem.measurements.DiffractionPatterns property)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.num_axes">(abtem.measurements.FourierSpaceLineProfiles property)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.num_axes">(abtem.measurements.Images property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.num_axes">(abtem.measurements.PolarMeasurements property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.num_axes">(abtem.measurements.RealSpaceLineProfiles property)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.num_axes">(abtem.measurements.SinglePointMeasurement property)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.num_axes">(abtem.measurements.ReciprocalSpaceLineProfiles property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.potentials.BasePotential.html#abtem.potentials.BasePotential.num_axes">(abtem.potentials.BasePotential property)</a>
 </li>
@@ -2175,15 +2190,13 @@ title="Open an issue"
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.num_base_axes">(abtem.measurements.DiffractionPatterns property)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.num_base_axes">(abtem.measurements.FourierSpaceLineProfiles property)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.num_base_axes">(abtem.measurements.Images property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.num_base_axes">(abtem.measurements.PolarMeasurements property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.num_base_axes">(abtem.measurements.RealSpaceLineProfiles property)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.num_base_axes">(abtem.measurements.SinglePointMeasurement property)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.num_base_axes">(abtem.measurements.ReciprocalSpaceLineProfiles property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.potentials.BasePotential.html#abtem.potentials.BasePotential.num_base_axes">(abtem.potentials.BasePotential property)</a>
 </li>
@@ -2215,15 +2228,13 @@ title="Open an issue"
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.num_ensemble_axes">(abtem.measurements.DiffractionPatterns property)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.num_ensemble_axes">(abtem.measurements.FourierSpaceLineProfiles property)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.num_ensemble_axes">(abtem.measurements.Images property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.num_ensemble_axes">(abtem.measurements.PolarMeasurements property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.num_ensemble_axes">(abtem.measurements.RealSpaceLineProfiles property)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.num_ensemble_axes">(abtem.measurements.SinglePointMeasurement property)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.num_ensemble_axes">(abtem.measurements.ReciprocalSpaceLineProfiles property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.potentials.BasePotential.html#abtem.potentials.BasePotential.num_ensemble_axes">(abtem.potentials.BasePotential property)</a>
 </li>
@@ -2317,15 +2328,13 @@ title="Open an issue"
       <ul>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.phase">(abtem.measurements.DiffractionPatterns method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.phase">(abtem.measurements.FourierSpaceLineProfiles method)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.phase">(abtem.measurements.Images method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.phase">(abtem.measurements.PolarMeasurements method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.phase">(abtem.measurements.RealSpaceLineProfiles method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.phase">(abtem.measurements.SinglePointMeasurement method)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.phase">(abtem.measurements.ReciprocalSpaceLineProfiles method)</a>
 </li>
       </ul></li>
       <li><a href="library/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.phase_shift">phase_shift() (abtem.waves.Waves method)</a>
@@ -2347,15 +2356,13 @@ title="Open an issue"
       <ul>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.poisson_noise">(abtem.measurements.DiffractionPatterns method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.poisson_noise">(abtem.measurements.FourierSpaceLineProfiles method)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.poisson_noise">(abtem.measurements.Images method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.poisson_noise">(abtem.measurements.PolarMeasurements method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.poisson_noise">(abtem.measurements.RealSpaceLineProfiles method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.poisson_noise">(abtem.measurements.SinglePointMeasurement method)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.poisson_noise">(abtem.measurements.ReciprocalSpaceLineProfiles method)</a>
 </li>
       </ul></li>
       <li><a href="library/api/_autosummary/abtem.transfer.polar2cartesian.html#abtem.transfer.polar2cartesian">polar2cartesian() (in module abtem.transfer)</a>
@@ -2365,6 +2372,8 @@ title="Open an issue"
       <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements">PolarMeasurements (class in abtem.measurements)</a>
 </li>
       <li><a href="library/api/_autosummary/abtem.potentials.Potential.html#abtem.potentials.Potential">Potential (class in abtem.potentials)</a>
+</li>
+      <li><a href="library/api/_autosummary/abtem.gpaw.GPAWParametrization.html#abtem.gpaw.GPAWParametrization.potential">potential() (abtem.gpaw.GPAWParametrization method)</a>
 </li>
       <li><a href="library/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray">PotentialArray (class in abtem.potentials)</a>
 </li>
@@ -2395,20 +2404,18 @@ title="Open an issue"
       <ul>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.real">(abtem.measurements.DiffractionPatterns method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.real">(abtem.measurements.FourierSpaceLineProfiles method)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.real">(abtem.measurements.Images method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.real">(abtem.measurements.PolarMeasurements method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.real">(abtem.measurements.RealSpaceLineProfiles method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.real">(abtem.measurements.SinglePointMeasurement method)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.real">(abtem.measurements.ReciprocalSpaceLineProfiles method)</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles">RealSpaceLineProfiles (class in abtem.measurements)</a>
+</li>
+      <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles">ReciprocalSpaceLineProfiles (class in abtem.measurements)</a>
 </li>
       <li><a href="library/api/_autosummary/abtem.waves.BaseWaves.html#abtem.waves.BaseWaves.rectangle_cutoff_angles">rectangle_cutoff_angles (abtem.waves.BaseWaves property)</a>
 
@@ -2418,6 +2425,36 @@ title="Open an issue"
         <li><a href="library/api/_autosummary/abtem.waves.Probe.html#abtem.waves.Probe.rectangle_cutoff_angles">(abtem.waves.Probe property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.rectangle_cutoff_angles">(abtem.waves.Waves property)</a>
+</li>
+      </ul></li>
+      <li><a href="library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.reduce_ensemble">reduce_ensemble() (abtem.measurements.BaseMeasurement method)</a>
+
+      <ul>
+        <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.reduce_ensemble">(abtem.measurements.DiffractionPatterns method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.reduce_ensemble">(abtem.measurements.Images method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.reduce_ensemble">(abtem.measurements.PolarMeasurements method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.reduce_ensemble">(abtem.measurements.RealSpaceLineProfiles method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.reduce_ensemble">(abtem.measurements.ReciprocalSpaceLineProfiles method)</a>
+</li>
+      </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.relative_difference">relative_difference() (abtem.measurements.BaseMeasurement method)</a>
+
+      <ul>
+        <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.relative_difference">(abtem.measurements.DiffractionPatterns method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.relative_difference">(abtem.measurements.Images method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.relative_difference">(abtem.measurements.PolarMeasurements method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.relative_difference">(abtem.measurements.RealSpaceLineProfiles method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.relative_difference">(abtem.measurements.ReciprocalSpaceLineProfiles method)</a>
 </li>
       </ul></li>
       <li><a href="library/api/_autosummary/abtem.atoms.rotate_atoms_to_plane.html#abtem.atoms.rotate_atoms_to_plane">rotate_atoms_to_plane() (in module abtem.atoms)</a>
@@ -2527,15 +2564,13 @@ title="Open an issue"
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.shape">(abtem.measurements.DiffractionPatterns property)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.shape">(abtem.measurements.FourierSpaceLineProfiles property)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.shape">(abtem.measurements.Images property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.shape">(abtem.measurements.PolarMeasurements property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.shape">(abtem.measurements.RealSpaceLineProfiles property)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.shape">(abtem.measurements.SinglePointMeasurement property)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.shape">(abtem.measurements.ReciprocalSpaceLineProfiles property)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.potentials.BasePotential.html#abtem.potentials.BasePotential.shape">(abtem.potentials.BasePotential property)</a>
 </li>
@@ -2577,6 +2612,10 @@ title="Open an issue"
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.show">(abtem.measurements.Images method)</a>
 </li>
+        <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.show">(abtem.measurements.RealSpaceLineProfiles method)</a>
+</li>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.show">(abtem.measurements.ReciprocalSpaceLineProfiles method)</a>
+</li>
         <li><a href="library/api/_autosummary/abtem.potentials.BasePotential.html#abtem.potentials.BasePotential.show">(abtem.potentials.BasePotential method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.potentials.CrystalPotential.html#abtem.potentials.CrystalPotential.show">(abtem.potentials.CrystalPotential method)</a>
@@ -2599,8 +2638,6 @@ title="Open an issue"
       <li><a href="library/api/_autosummary/abtem.visualize.show_measurements_1d.html#abtem.visualize.show_measurements_1d">show_measurements_1d() (in module abtem.visualize)</a>
 </li>
       <li><a href="library/api/_autosummary/abtem.atoms.shrink_cell.html#abtem.atoms.shrink_cell">shrink_cell() (in module abtem.atoms)</a>
-</li>
-      <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement">SinglePointMeasurement (class in abtem.measurements)</a>
 </li>
       <li><a href="library/api/_autosummary/abtem.charge_density.ChargeDensityPotential.html#abtem.charge_density.ChargeDensityPotential.slice_limits">slice_limits (abtem.charge_density.ChargeDensityPotential property)</a>
 
@@ -2676,14 +2713,10 @@ title="Open an issue"
         <li><a href="library/api/_autosummary/abtem.waves.Waves.html#abtem.waves.Waves.tile">(abtem.waves.Waves method)</a>
 </li>
       </ul></li>
-      <li><a href="library/api/_autosummary/abtem.multislice.tilt_shift.html#abtem.multislice.tilt_shift">tilt_shift() (in module abtem.multislice)</a>
-</li>
       <li><a href="library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.to_hyperspy">to_hyperspy() (abtem.measurements.BaseMeasurement method)</a>
 
       <ul>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.to_hyperspy">(abtem.measurements.DiffractionPatterns method)</a>
-</li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.to_hyperspy">(abtem.measurements.FourierSpaceLineProfiles method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.to_hyperspy">(abtem.measurements.Images method)</a>
 </li>
@@ -2691,7 +2724,7 @@ title="Open an issue"
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.to_hyperspy">(abtem.measurements.RealSpaceLineProfiles method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.to_hyperspy">(abtem.measurements.SinglePointMeasurement method)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.to_hyperspy">(abtem.measurements.ReciprocalSpaceLineProfiles method)</a>
 </li>
       </ul></li>
   </ul></td>
@@ -2701,15 +2734,13 @@ title="Open an issue"
       <ul>
         <li><a href="library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.to_zarr">(abtem.measurements.DiffractionPatterns method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.to_zarr">(abtem.measurements.FourierSpaceLineProfiles method)</a>
-</li>
         <li><a href="library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.to_zarr">(abtem.measurements.Images method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.to_zarr">(abtem.measurements.PolarMeasurements method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.to_zarr">(abtem.measurements.RealSpaceLineProfiles method)</a>
 </li>
-        <li><a href="library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.to_zarr">(abtem.measurements.SinglePointMeasurement method)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.to_zarr">(abtem.measurements.ReciprocalSpaceLineProfiles method)</a>
 </li>
         <li><a href="library/api/_autosummary/abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray.to_zarr">(abtem.potentials.PotentialArray method)</a>
 </li>
@@ -2788,10 +2819,10 @@ title="Open an issue"
 </li>
       <li><a href="library/api/_autosummary/abtem.detectors.WavesDetector.html#abtem.detectors.WavesDetector">WavesDetector (class in abtem.detectors)</a>
 </li>
-      <li><a href="library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.width">width() (abtem.measurements.FourierSpaceLineProfiles method)</a>
+      <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.width">width() (abtem.measurements.RealSpaceLineProfiles method)</a>
 
       <ul>
-        <li><a href="library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.width">(abtem.measurements.RealSpaceLineProfiles method)</a>
+        <li><a href="library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.width">(abtem.measurements.ReciprocalSpaceLineProfiles method)</a>
 </li>
       </ul></li>
       <li><a href="library/api/_autosummary/abtem.atoms.wrap_with_tolerance.html#abtem.atoms.wrap_with_tolerance">wrap_with_tolerance() (in module abtem.atoms)</a>

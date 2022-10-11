@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,6 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
@@ -51,12 +50,14 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="BasePotential" href="abtem.potentials.BasePotential.html" />
     <link rel="prev" title="Waves" href="abtem.waves.Waves.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -213,6 +214,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/walkthrough/core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -796,11 +802,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -808,11 +809,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -1024,8 +1020,8 @@ title="Print to PDF"
               <div>
                 
   <section id="module-abtem.potentials">
-<span id="potentials"></span><h1>potentials<a class="headerlink" href="#module-abtem.potentials" title="Permalink to this heading">#</a></h1>
-<p>Module to calculate potentials using the independent atom model.</p>
+<span id="potentials"></span><h1>potentials<a class="headerlink" href="#module-abtem.potentials" title="Permalink to this headline">#</a></h1>
+<p>Module to calculate electrostatic potentials using the independent atom model.</p>
 <p class="rubric">Classes</p>
 <table class="autosummary longtable table autosummary">
 <colgroup>
@@ -1040,7 +1036,7 @@ title="Print to PDF"
 <td><p>The crystal potential may be used to represent a potential consisting of a repeating unit.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="abtem.potentials.Potential.html#abtem.potentials.Potential" title="abtem.potentials.Potential"><code class="xref py py-obj docutils literal notranslate"><span class="pre">Potential</span></code></a>([atoms, gpts, sampling, ...])</p></td>
-<td><p>The potential is used to calculate the electrostatic potential of a set of atoms represented by ASE Atoms.</p></td>
+<td><p>Calculate the electrostatic potential of a set of atoms or frozen phonon configurations.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="abtem.potentials.PotentialArray.html#abtem.potentials.PotentialArray" title="abtem.potentials.PotentialArray"><code class="xref py py-obj docutils literal notranslate"><span class="pre">PotentialArray</span></code></a>(array[, slice_thickness, ...])</p></td>
 <td><p>The potential array represents slices of the electrostatic potential as an array.</p></td>
@@ -1065,7 +1061,7 @@ title="Print to PDF"
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library\api\_autosummary"
+            path: "./library/api/_autosummary"
         },
         predefinedOutput: true
     }

@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
@@ -34,7 +34,6 @@
     <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
     <script src="../../../_static/jquery.js"></script>
     <script src="../../../_static/underscore.js"></script>
-    <script src="../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../../_static/doctools.js"></script>
     <script src="../../../_static/clipboard.min.js"></script>
     <script src="../../../_static/copybutton.js"></script>
@@ -51,12 +50,14 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://unpkg.com/@jupyter-widgets/html-manager@^0.20.0/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="multislice_step" href="abtem.multislice.multislice_step.html" />
-    <link rel="prev" title="fresnel_propagator" href="abtem.multislice.fresnel_propagator.html" />
+    <link rel="prev" title="allocate_multislice_measurements" href="abtem.multislice.allocate_multislice_measurements.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -213,6 +214,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../../user_guide/walkthrough/core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../../user_guide/walkthrough/plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -795,11 +801,6 @@ const thebe_selector_output = ".output, .cell_output"
        allocate_multislice_measurements
       </a>
      </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
      <li class="toctree-l3 current active">
       <a class="current reference internal" href="#">
        multislice_and_detect
@@ -808,11 +809,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -1024,27 +1020,28 @@ title="Print to PDF"
               <div>
                 
   <section id="multislice-and-detect">
-<h1>multislice_and_detect<a class="headerlink" href="#multislice-and-detect" title="Permalink to this heading">#</a></h1>
+<h1>multislice_and_detect<a class="headerlink" href="#multislice-and-detect" title="Permalink to this headline">#</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="abtem.multislice.multislice_and_detect">
 <span class="sig-prename descclassname"><span class="pre">abtem.multislice.</span></span><span class="sig-name descname"><span class="pre">multislice_and_detect</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">waves</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">potential</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">detectors</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">conjugate</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">transpose</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../_modules/abtem/multislice.html#multislice_and_detect"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#abtem.multislice.multislice_and_detect" title="Permalink to this definition">#</a></dt>
-<dd><p>Run the multislice algorithm given a batch of wave functions and a potential.</p>
+<dd><p>Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
+at each of the exit planes specified in the potential.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>waves</strong> (<a class="reference internal" href="abtem.waves.Waves.html#abtem.waves.Waves" title="abtem.waves.Waves"><em>Waves</em></a>) – A batch of wave functions as a <cite>abtem.Waves</cite> type object.</p></li>
-<li><p><strong>potential</strong> (<a class="reference internal" href="abtem.potentials.BasePotential.html#abtem.potentials.BasePotential" title="abtem.potentials.BasePotential"><em>BasePotential</em></a>) – A potential as <cite>abtem.potentials.AbstractPotential</cite>.</p></li>
-<li><p><strong>detectors</strong> (<em>detector</em><em>, </em><em>list of detectors</em><em>, </em><em>optional</em>) – A detector or a list of detectors defining how the wave functions should be converted to measurements after
-running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.</p></li>
-<li><p><strong>conjugate</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, use the conjugate of the transmission function. Default is False.</p></li>
-<li><p><strong>transpose</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, reverse the order of propagation and transmission. Default is False.</p></li>
+<li><p><strong>waves</strong> (<a class="reference internal" href="abtem.waves.Waves.html#abtem.waves.Waves" title="abtem.waves.Waves"><em>Waves</em></a>) – A batch of wave functions as a <a class="reference internal" href="abtem.waves.Waves.html#abtem.waves.Waves" title="abtem.waves.Waves"><code class="xref py py-class docutils literal notranslate"><span class="pre">Waves</span></code></a> object.</p></li>
+<li><p><strong>potential</strong> (<a class="reference internal" href="abtem.potentials.BasePotential.html#abtem.potentials.BasePotential" title="abtem.potentials.BasePotential"><em>BasePotential</em></a>) – A potential as <a class="reference internal" href="abtem.potentials.BasePotential.html#abtem.potentials.BasePotential" title="abtem.potentials.BasePotential"><code class="xref py py-class docutils literal notranslate"><span class="pre">BasePotential</span></code></a> object.</p></li>
+<li><p><strong>detectors</strong> (<em>(</em><em>list of</em><em>) </em><a class="reference internal" href="abtem.detectors.BaseDetector.html#abtem.detectors.BaseDetector" title="abtem.detectors.BaseDetector"><em>BaseDetector</em></a><em>, </em><em>optional</em>) – A detector or a list of detectors defining how the wave functions should be converted to measurements after
+running the multislice algorithm.</p></li>
+<li><p><strong>conjugate</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, use the conjugate of the transmission function (default is False).</p></li>
+<li><p><strong>transpose</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, reverse the order of propagation and transmission (default is False).</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
-<dd class="field-even"><p><strong>exit_waves</strong></p>
+<dd class="field-even"><p><strong>measurements</strong> – Exit waves or detected measurements or lists of measurements.</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference internal" href="abtem.waves.Waves.html#abtem.waves.Waves" title="abtem.waves.Waves">Waves</a></p>
+<dd class="field-odd"><p><a class="reference internal" href="abtem.waves.Waves.html#abtem.waves.Waves" title="abtem.waves.Waves">Waves</a> or (list of) <a class="reference internal" href="abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement" title="abtem.measurements.BaseMeasurement">BaseMeasurement</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1064,7 +1061,7 @@ running the multislice algorithm. See abtem.measurements.detect for a list of im
         },
         kernelOptions: {
             kernelName: "python3",
-            path: "./library\api\_autosummary"
+            path: "./library/api/_autosummary"
         },
         predefinedOutput: true
     }
@@ -1078,11 +1075,11 @@ running the multislice algorithm. See abtem.measurements.detect for a list of im
                 
     <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="abtem.multislice.fresnel_propagator.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="abtem.multislice.allocate_multislice_measurements.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">fresnel_propagator</p>
+            <p class="prev-next-title">allocate_multislice_measurements</p>
         </div>
     </a>
     <a class='right-next' id="next-link" href="abtem.multislice.multislice_step.html" title="next page">

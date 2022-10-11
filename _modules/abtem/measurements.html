@@ -1,7 +1,7 @@
 
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -33,7 +33,6 @@
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
     <script src="../../_static/jquery.js"></script>
     <script src="../../_static/underscore.js"></script>
-    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
     <script src="../../_static/doctools.js"></script>
     <script src="../../_static/clipboard.min.js"></script>
     <script src="../../_static/copybutton.js"></script>
@@ -50,10 +49,12 @@ const thebe_selector_input = "pre"
 const thebe_selector_output = ".output, .cell_output"
 </script>
     <script async="async" src="../../_static/sphinx-thebe.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="docsearch:language" content="en">
+    <meta name="docsearch:language" content="None">
     
 
     <!-- Google Analytics -->
@@ -210,6 +211,11 @@ const thebe_selector_output = ".output, .cell_output"
    <li class="toctree-l2">
     <a class="reference internal" href="../../user_guide/walkthrough/core_loss.html">
      Core loss EELS
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../user_guide/walkthrough/plasmons.html">
+     Plasmons
     </a>
    </li>
   </ul>
@@ -454,11 +460,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html">
-       FourierSpaceLineProfiles
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.Images.html">
        Images
       </a>
@@ -474,8 +475,8 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html">
-       SinglePointMeasurement
+      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html">
+       ReciprocalSpaceLineProfiles
       </a>
      </li>
     </ul>
@@ -793,11 +794,6 @@ const thebe_selector_output = ".output, .cell_output"
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
@@ -805,11 +801,6 @@ const thebe_selector_output = ".output, .cell_output"
      <li class="toctree-l3">
       <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.tilt_shift.html">
-       tilt_shift
       </a>
      </li>
      <li class="toctree-l3">
@@ -975,13 +966,15 @@ title="Open an issue"
               <div>
                 
   <h1>Source code for abtem.measurements</h1><div class="highlight"><pre>
-<span></span><span class="kn">from</span> <span class="nn">abc</span> <span class="kn">import</span> <span class="n">ABCMeta</span><span class="p">,</span> <span class="n">abstractmethod</span>
+<span></span><span class="sd">&quot;&quot;&quot;Module for handling measurements.&quot;&quot;&quot;</span>
+<span class="kn">from</span> <span class="nn">abc</span> <span class="kn">import</span> <span class="n">ABCMeta</span><span class="p">,</span> <span class="n">abstractmethod</span>
 <span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Union</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">TypeVar</span><span class="p">,</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Sequence</span><span class="p">,</span> <span class="n">Type</span><span class="p">,</span> <span class="n">TYPE_CHECKING</span>
 
 <span class="kn">import</span> <span class="nn">dask.array</span> <span class="k">as</span> <span class="nn">da</span>
 <span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 <span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 <span class="kn">from</span> <span class="nn">ase</span> <span class="kn">import</span> <span class="n">Atom</span>
+<span class="kn">from</span> <span class="nn">ase.cell</span> <span class="kn">import</span> <span class="n">Cell</span>
 <span class="kn">from</span> <span class="nn">matplotlib.axes</span> <span class="kn">import</span> <span class="n">Axes</span>
 <span class="kn">from</span> <span class="nn">numba</span> <span class="kn">import</span> <span class="n">prange</span><span class="p">,</span> <span class="n">jit</span>
 
@@ -1007,6 +1000,7 @@ title="Open an issue"
 <span class="kn">from</span> <span class="nn">abtem.inelastic.phonons</span> <span class="kn">import</span> <span class="n">validate_seeds</span>
 <span class="kn">from</span> <span class="nn">abtem.visualize</span> <span class="kn">import</span> <span class="n">show_measurement_2d</span><span class="p">,</span> <span class="n">show_measurements_1d</span><span class="p">,</span> <span class="n">_make_cbar_label</span>
 
+<span class="c1"># Enables CuPy-accelerated functions if it is available.</span>
 <span class="k">if</span> <span class="n">cp</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
     <span class="kn">from</span> <span class="nn">abtem.core.cuda</span> <span class="kn">import</span> <span class="n">sum_run_length_encoded</span> <span class="k">as</span> <span class="n">sum_run_length_encoded_cuda</span>
     <span class="kn">from</span> <span class="nn">abtem.core.cuda</span> <span class="kn">import</span> <span class="n">interpolate_bilinear</span> <span class="k">as</span> <span class="n">interpolate_bilinear_cuda</span>
@@ -1014,11 +1008,14 @@ title="Open an issue"
     <span class="n">sum_run_length_encoded_cuda</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">interpolate_bilinear_cuda</span> <span class="o">=</span> <span class="kc">None</span>
 
+<span class="c1"># Avoids circular imports.</span>
 <span class="k">if</span> <span class="n">TYPE_CHECKING</span><span class="p">:</span>
     <span class="kn">from</span> <span class="nn">abtem.waves</span> <span class="kn">import</span> <span class="n">BaseWaves</span>
 
-<span class="n">T</span> <span class="o">=</span> <span class="n">TypeVar</span><span class="p">(</span><span class="s2">&quot;T&quot;</span><span class="p">,</span> <span class="n">bound</span><span class="o">=</span><span class="s2">&quot;AbstractMeasurement&quot;</span><span class="p">)</span>
+<span class="c1"># Ensures that `Measurement` objects created by `Measurement` objects retain their type (e.g. `Images`).</span>
+<span class="n">T</span> <span class="o">=</span> <span class="n">TypeVar</span><span class="p">(</span><span class="s2">&quot;T&quot;</span><span class="p">,</span> <span class="n">bound</span><span class="o">=</span><span class="s2">&quot;BaseMeasurement&quot;</span><span class="p">)</span>
 
+<span class="c1"># Options for displaying alternative units.</span>
 <span class="n">angular_units</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;angular&quot;</span><span class="p">,</span> <span class="s2">&quot;mrad&quot;</span><span class="p">)</span>
 <span class="n">bins</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;bins&quot;</span><span class="p">,)</span>
 <span class="n">reciprocal_units</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;reciprocal&quot;</span><span class="p">,</span> <span class="s2">&quot;1/Å&quot;</span><span class="p">)</span>
@@ -1066,7 +1063,7 @@ title="Open an issue"
     <span class="n">measurement</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="s2">&quot;BaseMeasurement&quot;</span><span class="p">,</span> <span class="s2">&quot;BaseWaves&quot;</span><span class="p">]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Type</span><span class="p">[</span><span class="s2">&quot;BaseMeasurement&quot;</span><span class="p">]:</span>
     <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">_scan_shape</span><span class="p">(</span><span class="n">measurement</span><span class="p">))</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">SinglePointMeasurement</span>
+        <span class="k">return</span> <span class="n">_SinglePointMeasurement</span>
 
     <span class="k">elif</span> <span class="nb">len</span><span class="p">(</span><span class="n">_scan_shape</span><span class="p">(</span><span class="n">measurement</span><span class="p">))</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">RealSpaceLineProfiles</span>
@@ -1086,7 +1083,6 @@ title="Open an issue"
     <span class="n">old_measurement</span><span class="p">,</span>
     <span class="n">metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="s2">&quot;RealSpaceLineProfiles&quot;</span><span class="p">,</span> <span class="s2">&quot;Images&quot;</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
-
     <span class="k">if</span> <span class="n">metadata</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">metadata</span> <span class="o">=</span> <span class="p">{}</span>
 
@@ -1159,7 +1155,7 @@ title="Open an issue"
     <span class="k">if</span> <span class="n">_scan_sampling</span><span class="p">(</span><span class="n">measurements</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">_scan_sampling</span><span class="p">(</span><span class="n">measurements</span><span class="p">))</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;cannot infer pixel area from metadata&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Cannot infer pixel area from metadata.&quot;</span><span class="p">)</span>
 
 
 <span class="k">def</span> <span class="nf">_scan_extent</span><span class="p">(</span><span class="n">measurement</span><span class="p">):</span>
@@ -1181,7 +1177,6 @@ title="Open an issue"
     <span class="n">fftshift</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">return_indices</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]]:</span>
-
     <span class="n">alpha</span><span class="p">,</span> <span class="n">phi</span> <span class="o">=</span> <span class="n">polar_spatial_frequencies</span><span class="p">(</span>
         <span class="n">gpts</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span> <span class="o">/</span> <span class="n">sampling</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="n">gpts</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">1</span> <span class="o">/</span> <span class="n">sampling</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="n">gpts</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
     <span class="p">)</span>
@@ -1251,6 +1246,22 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="BaseMeasurement"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement">[docs]</a><span class="k">class</span> <span class="nc">BaseMeasurement</span><span class="p">(</span><span class="n">HasArray</span><span class="p">,</span> <span class="n">HasAxes</span><span class="p">,</span> <span class="n">EqualityMixin</span><span class="p">,</span> <span class="n">CopyMixin</span><span class="p">,</span> <span class="n">metaclass</span><span class="o">=</span><span class="n">ABCMeta</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Parent class common to all measurement types.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    array : ndarray</span>
+<span class="sd">        Array containing data of type `float` or ´complex´.</span>
+<span class="sd">    ensemble_axes_metadata : list of AxisMetadata, optional</span>
+<span class="sd">        Metadata associated with an ensemble axis.</span>
+<span class="sd">    metadata : dict, optional</span>
+<span class="sd">        A dictionary defining simulation metadata.</span>
+<span class="sd">    allow_base_axis_chunks : bool</span>
+<span class="sd">        Sets whether the measurement is allowed to be chunked along the base axis (e.g. `Images` are allowed, but</span>
+<span class="sd">        `DiffractionPatterns` are not).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
 <div class="viewcode-block" id="BaseMeasurement.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">array</span><span class="p">,</span>
@@ -1277,9 +1288,10 @@ title="Open an issue"
                 <span class="ow">not</span> <span class="nb">all</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">chunks</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span> <span class="k">for</span> <span class="n">chunks</span> <span class="ow">in</span> <span class="n">array</span><span class="o">.</span><span class="n">chunks</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:])</span>
             <span class="p">):</span>
                 <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;chunks not allowed in base axes of </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="si">}</span><span class="s2">&quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;Chunks not allowed in base axes of </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="si">}</span><span class="s2">.&quot;</span>
                 <span class="p">)</span></div>
 
+    <span class="c1"># TODO: should be removed and the more basic version in superclass used instead.</span>
     <span class="k">def</span> <span class="nf">iterate_ensemble</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">keep_dims</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">):</span>
         <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">np</span><span class="o">.</span><span class="n">ndindex</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">):</span>
             <span class="k">yield</span> <span class="n">i</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_items</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="n">keep_dims</span><span class="o">=</span><span class="n">keep_dims</span><span class="p">)</span>
@@ -1291,7 +1303,7 @@ title="Open an issue"
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">energy</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="s2">&quot;energy&quot;</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
-            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;energy not in measurement metadata&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Energy not in measurement metadata.&quot;</span><span class="p">)</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;energy&quot;</span><span class="p">]</span>
 
     <span class="nd">@property</span>
@@ -1324,53 +1336,57 @@ title="Open an issue"
     <span class="k">def</span> <span class="nf">dimensions</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
         <span class="k">return</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_array</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
 
-    <span class="c1"># def check_is_compatible(self, other: &#39;AbstractMeasurement&#39;):</span>
-    <span class="c1">#     if not isinstance(other, self.__class__):</span>
-    <span class="c1">#         raise RuntimeError(f&#39;Incompatible measurement types ({self.__class__} is not {other.__class__})&#39;)</span>
-    <span class="c1">#</span>
-    <span class="c1">#     if self.shape != other.shape:</span>
-    <span class="c1">#         raise RuntimeError()</span>
-    <span class="c1">#</span>
-    <span class="c1">#     for (key, value), (other_key, other_value) in zip(self.copy_kwargs(exclude=(&#39;array&#39;,)).items(),</span>
-    <span class="c1">#                                                       other.copy_kwargs(exclude=(&#39;array&#39;,)).items()):</span>
-    <span class="c1">#         if np.any(value != other_value):</span>
-    <span class="c1">#             raise RuntimeError(f&#39;{key}, {other_key} {value} {other_value}&#39;)</span>
-
     <span class="k">def</span> <span class="nf">_check_is_complex</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">iscomplexobj</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;function not implemented for non-complex measurement&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Function not implemented for non-complex measurements.&quot;</span><span class="p">)</span>
 
-<div class="viewcode-block" id="BaseMeasurement.real"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.real">[docs]</a>    <span class="k">def</span> <span class="nf">real</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="sd">&quot;&quot;&quot;Calculate the phase from complex images.&quot;&quot;&quot;</span>
+<div class="viewcode-block" id="BaseMeasurement.real"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.real">[docs]</a>    <span class="k">def</span> <span class="nf">real</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">T</span><span class="p">:</span>
+        <span class="sd">&quot;&quot;&quot;Returns the real part of a complex-valued measurement.&quot;&quot;&quot;</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_check_is_complex</span><span class="p">()</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_apply_element_wise_func</span><span class="p">(</span><span class="n">get_array_module</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">)</span><span class="o">.</span><span class="n">real</span><span class="p">)</span></div>
 
-<div class="viewcode-block" id="BaseMeasurement.imag"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.imag">[docs]</a>    <span class="k">def</span> <span class="nf">imag</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="sd">&quot;&quot;&quot;Calculate the phase from complex images.&quot;&quot;&quot;</span>
+<div class="viewcode-block" id="BaseMeasurement.imag"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.imag">[docs]</a>    <span class="k">def</span> <span class="nf">imag</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">T</span><span class="p">:</span>
+        <span class="sd">&quot;&quot;&quot;Returns the imaginary part of a complex-valued measurement.&quot;&quot;&quot;</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_check_is_complex</span><span class="p">()</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_apply_element_wise_func</span><span class="p">(</span><span class="n">get_array_module</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">)</span><span class="o">.</span><span class="n">imag</span><span class="p">)</span></div>
 
-<div class="viewcode-block" id="BaseMeasurement.phase"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.phase">[docs]</a>    <span class="k">def</span> <span class="nf">phase</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="sd">&quot;&quot;&quot;Calculate the phase from complex images.&quot;&quot;&quot;</span>
+<div class="viewcode-block" id="BaseMeasurement.phase"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.phase">[docs]</a>    <span class="k">def</span> <span class="nf">phase</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">T</span><span class="p">:</span>
+        <span class="sd">&quot;&quot;&quot;Calculates the phase of a complex-valued measurement.&quot;&quot;&quot;</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_check_is_complex</span><span class="p">()</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_apply_element_wise_func</span><span class="p">(</span><span class="n">get_array_module</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">)</span><span class="o">.</span><span class="n">angle</span><span class="p">)</span></div>
 
-<div class="viewcode-block" id="BaseMeasurement.abs"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.abs">[docs]</a>    <span class="k">def</span> <span class="nf">abs</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="sd">&quot;&quot;&quot;Calculate the absolute value from complex images.&quot;&quot;&quot;</span>
+<div class="viewcode-block" id="BaseMeasurement.abs"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.abs">[docs]</a>    <span class="k">def</span> <span class="nf">abs</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">T</span><span class="p">:</span>
+        <span class="sd">&quot;&quot;&quot;Calculates the absolute value of a complex-valued measurement.&quot;&quot;&quot;</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_check_is_complex</span><span class="p">()</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_apply_element_wise_func</span><span class="p">(</span><span class="n">get_array_module</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">)</span><span class="o">.</span><span class="n">abs</span><span class="p">)</span></div>
 
-<div class="viewcode-block" id="BaseMeasurement.intensity"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.intensity">[docs]</a>    <span class="k">def</span> <span class="nf">intensity</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="sd">&quot;&quot;&quot;Calculate the absolute square from complex images.&quot;&quot;&quot;</span>
+<div class="viewcode-block" id="BaseMeasurement.intensity"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.intensity">[docs]</a>    <span class="k">def</span> <span class="nf">intensity</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">T</span><span class="p">:</span>
+        <span class="sd">&quot;&quot;&quot;Calculates the squared norm of a complex-valued measurement.&quot;&quot;&quot;</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_check_is_complex</span><span class="p">()</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_apply_element_wise_func</span><span class="p">(</span><span class="n">abs2</span><span class="p">)</span></div>
 
-    <span class="k">def</span> <span class="nf">relative_difference</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">,</span> <span class="n">min_relative_tol</span><span class="o">=</span><span class="mf">0.0</span><span class="p">):</span>
+<div class="viewcode-block" id="BaseMeasurement.relative_difference"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.relative_difference">[docs]</a>    <span class="k">def</span> <span class="nf">relative_difference</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="s2">&quot;BaseMeasurement&quot;</span><span class="p">,</span> <span class="n">min_relative_tol</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span>
+    <span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Calculates the relative difference with respect to another compatible measurement.</span>
+
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        other : BaseMeasurement</span>
+<span class="sd">            Measurement to which the difference is calculated.</span>
+<span class="sd">        min_relative_tol : float</span>
+<span class="sd">            Avoids division by zero errors by defining a minimum value of the divisor in the relative difference.</span>
+
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        difference : BaseMeasurement</span>
+<span class="sd">            The relative difference as a measurement of the same type.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">difference</span> <span class="o">=</span> <span class="bp">self</span> <span class="o">-</span> <span class="n">other</span>
 
         <span class="n">xp</span> <span class="o">=</span> <span class="n">get_array_module</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">)</span>
 
-        <span class="c1"># if min_relative_tol &gt; 0.:</span>
         <span class="n">valid</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">min_relative_tol</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
         <span class="n">difference</span><span class="o">.</span><span class="n">_array</span><span class="p">[</span><span class="n">valid</span><span class="p">]</span> <span class="o">/=</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">[</span><span class="n">valid</span><span class="p">]</span>
         <span class="n">difference</span><span class="o">.</span><span class="n">_array</span><span class="p">[</span><span class="n">valid</span> <span class="o">==</span> <span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">difference</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">min</span><span class="p">()</span>
@@ -1380,27 +1396,28 @@ title="Open an issue"
         <span class="n">difference</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;label&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;Relative difference&quot;</span>
         <span class="n">difference</span><span class="o">.</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;units&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;%&quot;</span>
 
-        <span class="c1"># else:</span>
-        <span class="c1">#    difference._array[:] /= self.array</span>
-
-        <span class="k">return</span> <span class="n">difference</span>
+        <span class="k">return</span> <span class="n">difference</span></div>
 
     <span class="k">def</span> <span class="nf">power</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">number</span><span class="p">):</span>
         <span class="n">kwargs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_copy_kwargs</span><span class="p">(</span><span class="n">exclude</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;array&quot;</span><span class="p">,))</span>
-        <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;array&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span> <span class="o">**</span> <span class="n">number</span>
+        <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;array&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="o">**</span><span class="n">number</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
 
-    <span class="nd">@abstractmethod</span>
-    <span class="k">def</span> <span class="nf">from_array_and_metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">array</span><span class="p">,</span> <span class="n">axes_metadata</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;T&quot;</span><span class="p">:</span>
-        <span class="k">pass</span>
+<div class="viewcode-block" id="BaseMeasurement.from_array_and_metadata"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.from_array_and_metadata">[docs]</a>    <span class="nd">@abstractmethod</span>
+    <span class="k">def</span> <span class="nf">from_array_and_metadata</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">axes_metadata</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">AxisMetadata</span><span class="p">],</span> <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;T&quot;</span><span class="p">:</span>
+        <span class="sd">&quot;&quot;&quot;Documented in the subclasses.&quot;&quot;&quot;</span>
+        <span class="k">pass</span></div>
 
-    <span class="k">def</span> <span class="nf">reduce_ensemble</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;T&quot;</span><span class="p">:</span>
+<div class="viewcode-block" id="BaseMeasurement.reduce_ensemble"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.reduce_ensemble">[docs]</a>    <span class="k">def</span> <span class="nf">reduce_ensemble</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;T&quot;</span><span class="p">:</span>
+        <span class="sd">&quot;&quot;&quot;Takes the mean of an ensemble measurement (e.g. of frozen phonon configurations).&quot;&quot;&quot;</span>
         <span class="n">axes</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span>
             <span class="n">i</span>
             <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">axis</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">axes_metadata</span><span class="p">)</span>
             <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">axis</span><span class="p">,</span> <span class="s2">&quot;_ensemble_mean&quot;</span><span class="p">)</span> <span class="ow">and</span> <span class="n">axis</span><span class="o">.</span><span class="n">_ensemble_mean</span>
         <span class="p">)</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axes</span><span class="o">=</span><span class="n">axes</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axes</span><span class="o">=</span><span class="n">axes</span><span class="p">)</span></div>
 
     <span class="k">def</span> <span class="nf">_apply_element_wise_func</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">func</span><span class="p">:</span> <span class="n">callable</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;T&quot;</span><span class="p">:</span>
         <span class="n">d</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_copy_kwargs</span><span class="p">(</span><span class="n">exclude</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;array&quot;</span><span class="p">,))</span>
@@ -1434,6 +1451,7 @@ title="Open an issue"
             <span class="n">xp</span><span class="o">.</span><span class="n">float32</span>
         <span class="p">)</span>
 
+    <span class="c1"># TODO: add link to relevant example in the main docstring.</span>
 <div class="viewcode-block" id="BaseMeasurement.poisson_noise"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.poisson_noise">[docs]</a>    <span class="k">def</span> <span class="nf">poisson_noise</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">dose_per_area</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -1442,28 +1460,29 @@ title="Open an issue"
         <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Add Poisson noise to the DiffractionPattern.</span>
+<span class="sd">        Add Poisson noise (ie. shot noise) to a measurement corresponding to the provided &#39;total_dose&#39; (per measurement</span>
+<span class="sd">        if applied to an ensemble) or &#39;dose_per_area&#39; (not applicable for single measurements).</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
 <span class="sd">        dose_per_area : float, optional</span>
-<span class="sd">            The irradiation dose in electrons per Å^2. Provide either &quot;total_dose&quot; or &quot;dose_per_area&quot;.</span>
+<span class="sd">            The irradiation dose [electrons per Å:sup:`2`].</span>
 <span class="sd">        total_dose : float, optional</span>
-<span class="sd">            The irradiation dose per diffraction pattern. Provide either &quot;total_dose&quot; or &quot;dose_per_area&quot;.</span>
+<span class="sd">            The irradiation dose per diffraction pattern.</span>
 <span class="sd">        samples : int, optional</span>
-<span class="sd">            The number of samples to draw from the poisson distribution. If this is greater than 1, an additional</span>
+<span class="sd">            The number of samples to draw from a Poisson distribution. If this is greater than 1, an additional</span>
 <span class="sd">            ensemble axis will be added to the measurement.</span>
 <span class="sd">        seed : int, optional</span>
 <span class="sd">            Seed the random number generator.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
-<span class="sd">        noisy_diffraction_patterns: DiffractionPatterns</span>
-<span class="sd">            The noisy diffraction patterns.</span>
+<span class="sd">        noisy_measurement : BaseMeasurement</span>
+<span class="sd">            The noisy measurement.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="n">wrong_dose_error</span> <span class="o">=</span> <span class="ne">RuntimeError</span><span class="p">(</span>
-            <span class="s1">&#39;provide one of &quot;dose_per_area&quot; or &quot;total_dose&quot;&#39;</span>
+            <span class="s2">&quot;Provide one of &#39;dose_per_area&#39; or &#39;total_dose&#39;.&quot;</span>
         <span class="p">)</span>
 
         <span class="k">if</span> <span class="n">dose_per_area</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
@@ -1520,15 +1539,13 @@ title="Open an issue"
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div>
 
 <div class="viewcode-block" id="BaseMeasurement.to_hyperspy"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html#abtem.measurements.BaseMeasurement.to_hyperspy">[docs]</a>    <span class="k">def</span> <span class="nf">to_hyperspy</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Convert measurement to a hyperspy signal.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="sd">&quot;&quot;&quot;Convert measurement to a Hyperspy signal.&quot;&quot;&quot;</span>
 
         <span class="k">try</span><span class="p">:</span>
             <span class="kn">import</span> <span class="nn">hyperspy.api</span> <span class="k">as</span> <span class="nn">hs</span>
         <span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span>
-                <span class="s2">&quot;This functionality of abTEM requires hyperspy, see https://hyperspy.org/.&quot;</span>
+                <span class="s2">&quot;This functionality of abTEM requires Hyperspy, see https://hyperspy.org/.&quot;</span>
             <span class="p">)</span>
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_base_dims</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
@@ -1552,9 +1569,7 @@ title="Open an issue"
         <span class="p">)</span>
 
         <span class="n">s</span> <span class="o">=</span> <span class="n">signal_type</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">axes</span><span class="o">=</span><span class="n">axes_extra</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">axes_base</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
-        <span class="c1"># for axis in s.axes_manager.signal_axes:</span>
-        <span class="c1">#     axis.offset = -int(axis.size / 2) * axis.scale</span>
-        <span class="c1">#</span>
+
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_lazy</span><span class="p">:</span>
             <span class="n">s</span> <span class="o">=</span> <span class="n">s</span><span class="o">.</span><span class="n">as_lazy</span><span class="p">()</span>
 
@@ -1562,7 +1577,23 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="Images"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images">[docs]</a><span class="k">class</span> <span class="nc">Images</span><span class="p">(</span><span class="n">BaseMeasurement</span><span class="p">):</span>
-    <span class="n">_base_dims</span> <span class="o">=</span> <span class="mi">2</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A collection of 2D measurements such as HRTEM or STEM-ADF images. May be used to represent a reconstructed phase.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    array : np.ndarray</span>
+<span class="sd">        2D or greater array containing data of type `float` or ´complex´. The second-to-last and last</span>
+<span class="sd">        dimensions are the image `y`- and `x`-axis, respectively.</span>
+<span class="sd">    sampling : two float</span>
+<span class="sd">        Lateral sampling of images in `x` and `y` [Å].</span>
+<span class="sd">    ensemble_axes_metadata : list of AxisMetadata, optional</span>
+<span class="sd">        Metadata associated with an ensemble axis.</span>
+<span class="sd">    metadata : dict, optional</span>
+<span class="sd">        A dictionary defining simulation metadata.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">_base_dims</span> <span class="o">=</span> <span class="mi">2</span>  <span class="c1"># Images are assumed to be 2D</span>
 
 <div class="viewcode-block" id="Images.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
@@ -1571,23 +1602,6 @@ title="Open an issue"
         <span class="n">ensemble_axes_metadata</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">AxisMetadata</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">metadata</span><span class="p">:</span> <span class="n">Dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">):</span>
-
-        <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        A collection of 2d images such as images from HRTEM or STEM-ADF. The complex valued images may be used to</span>
-<span class="sd">        represent reconstructed phase.</span>
-
-<span class="sd">        Parameters</span>
-<span class="sd">        ----------</span>
-<span class="sd">        array : ndarray</span>
-<span class="sd">            2D or greater array containing data with `float` type or ´complex type´. The second-to-last and last</span>
-<span class="sd">            dimensions are the image y- and x-axis, respectively.</span>
-<span class="sd">        sampling : two float</span>
-<span class="sd">            Lateral sampling of images in x and y [Å].</span>
-<span class="sd">        ensemble_axes_metadata : list of AxisMetadata, optional</span>
-<span class="sd">            Metadata associated with an ensemble axis.</span>
-<span class="sd">        metadata : dict, optional</span>
-<span class="sd">            A dictionary defining simulation metadata.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">isscalar</span><span class="p">(</span><span class="n">sampling</span><span class="p">):</span>
             <span class="n">sampling</span> <span class="o">=</span> <span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">sampling</span><span class="p">),)</span> <span class="o">*</span> <span class="mi">2</span>
@@ -1603,9 +1617,27 @@ title="Open an issue"
             <span class="n">allow_base_axis_chunks</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
         <span class="p">)</span></div>
 
-    <span class="nd">@classmethod</span>
+<div class="viewcode-block" id="Images.from_array_and_metadata"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.from_array_and_metadata">[docs]</a>    <span class="nd">@classmethod</span>
     <span class="k">def</span> <span class="nf">from_array_and_metadata</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">array</span><span class="p">,</span> <span class="n">axes_metadata</span><span class="p">,</span> <span class="n">metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;Images&quot;</span><span class="p">:</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Creates an image from a given array and metadata.</span>
 
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        array : array</span>
+<span class="sd">            Complex array defining one or more 2D wave functions. The second-to-last and last dimensions are the</span>
+<span class="sd">            `y`- and `x`-axis.</span>
+<span class="sd">        axes_metadata : list of AxesMetadata</span>
+<span class="sd">            Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two</span>
+<span class="sd">            axes must be RealSpaceAxis.</span>
+<span class="sd">        metadata : dict</span>
+<span class="sd">            A dictionary defining the measurement metadata.</span>
+
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        images : Images</span>
+<span class="sd">            Images from the array and metadata.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">real_space_axes</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span>
             <span class="n">i</span> <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">axis</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">axes_metadata</span><span class="p">)</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">axis</span><span class="p">,</span> <span class="n">RealSpaceAxis</span><span class="p">)</span>
         <span class="p">)</span>
@@ -1628,7 +1660,7 @@ title="Open an issue"
             <span class="n">sampling</span><span class="o">=</span><span class="n">sampling</span><span class="p">,</span>
             <span class="n">ensemble_axes_metadata</span><span class="o">=</span><span class="n">other_axes_metadata</span><span class="p">,</span>
             <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">,</span>
-        <span class="p">)</span>
+        <span class="p">)</span></div>
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">_area_per_pixel</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
@@ -1636,12 +1668,12 @@ title="Open an issue"
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">sampling</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
-        <span class="sd">&quot;&quot;&quot;Sampling of images in x and y [Å].&quot;&quot;&quot;</span>
+        <span class="sd">&quot;&quot;&quot;Sampling of images in `x` and `y` [Å].&quot;&quot;&quot;</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_sampling</span>
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">extent</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
-        <span class="sd">&quot;&quot;&quot;Extent of images in x and y [Å].&quot;&quot;&quot;</span>
+        <span class="sd">&quot;&quot;&quot;Extent of images in `x` and `y` [Å].&quot;&quot;&quot;</span>
         <span class="k">return</span> <span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">sampling</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">base_shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">sampling</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">base_shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>
@@ -1649,7 +1681,7 @@ title="Open an issue"
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">coordinates</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
-        <span class="sd">&quot;&quot;&quot;Coordinates of pixels in x and y [Å].&quot;&quot;&quot;</span>
+        <span class="sd">&quot;&quot;&quot;Coordinates of pixels in `x` and `y` [Å].&quot;&quot;&quot;</span>
         <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">])</span>
         <span class="n">y</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
         <span class="k">return</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span>
@@ -1663,12 +1695,13 @@ title="Open an issue"
 
 <div class="viewcode-block" id="Images.integrate_gradient"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.integrate_gradient">[docs]</a>    <span class="k">def</span> <span class="nf">integrate_gradient</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Calculate integrated gradients. Requires complex images where the real and imaginary represents the x and y</span>
-<span class="sd">        component of a gradient.</span>
+<span class="sd">        Calculate integrated gradients. Requires complex images whose real and imaginary parts represent the `x` and `y`</span>
+<span class="sd">        components of a gradient.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
-<span class="sd">        intgrad_images : Images</span>
+<span class="sd">        integrated_gradient : Images</span>
+<span class="sd">            The integrated gradient.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_check_is_complex</span><span class="p">()</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_lazy</span><span class="p">:</span>
@@ -1696,14 +1729,15 @@ title="Open an issue"
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
-<span class="sd">        extent : two scalar</span>
-<span class="sd">            Extent of rectangular cropping region in x and y, respectively.</span>
-<span class="sd">        offset : two scalar, optional</span>
-<span class="sd">            Lower corner of cropping region in x and y, respectively. Default is (0,0).</span>
+<span class="sd">        extent : tuple of float</span>
+<span class="sd">            Extent of rectangular cropping region in `x` and `y` [Å].</span>
+<span class="sd">        offset : tuple of float</span>
+<span class="sd">            Lower corner of cropping region in `x` and `y` [Å] (default is (0,0)).</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
 <span class="sd">        cropped_images : Images</span>
+<span class="sd">            The cropped images.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="n">offset</span> <span class="o">=</span> <span class="p">(</span>
@@ -1736,14 +1770,15 @@ title="Open an issue"
         <span class="n">cval</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;Images&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Interpolate images producing equivalent images with a different sampling.</span>
+<span class="sd">        Interpolate images producing equivalent images with a different sampling. Either &#39;sampling&#39; or &#39;gpts&#39; must be</span>
+<span class="sd">        provided (but not both).</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
-<span class="sd">        sampling : float, two float</span>
-<span class="sd">            Sampling of images after interpolation in x and y [Å].</span>
-<span class="sd">        gpts : two int</span>
-<span class="sd">            Number of grid points of images after interpolation in x and y. Do not use if `sampling` is used.</span>
+<span class="sd">        sampling : float or two float</span>
+<span class="sd">            Sampling of images after interpolation in `x` and `y` [Å].</span>
+<span class="sd">        gpts : int or two int</span>
+<span class="sd">            Number of grid points of images after interpolation in `x` and `y`. Do not use if &#39;sampling&#39; is used.</span>
 <span class="sd">        method : {&#39;fft&#39;, &#39;spline&#39;}</span>
 <span class="sd">            The interpolation method.</span>
 
@@ -1759,36 +1794,39 @@ title="Open an issue"
 <span class="sd">            interpolation.</span>
 
 <span class="sd">                ``periodic`` :</span>
-<span class="sd">                    The images are extended by wrapping around to the opposite edge. Use this mode for periodic</span>
-<span class="sd">                    (Default)</span>
+<span class="sd">                    The images are extended by wrapping around to the opposite edge. Use this mode for periodic images</span>
+<span class="sd">                    (default).</span>
 
 <span class="sd">                ``reflect`` :</span>
 <span class="sd">                    The images are extended by reflecting about the edge of the last pixel.</span>
 
 <span class="sd">                ``constant`` :</span>
 <span class="sd">                    The images are extended by filling all values beyond the edge with the same constant value, defined</span>
-<span class="sd">                    by the cval parameter.</span>
+<span class="sd">                    by the &#39;cval&#39; parameter.</span>
 
 <span class="sd">        order : int</span>
-<span class="sd">            The order of the spline interpolation, default is 3. The order has to be in the range 0-5.</span>
+<span class="sd">            The order of the spline interpolation (default is 3). The order has to be in the range 0-5.</span>
 <span class="sd">        normalization : {&#39;values&#39;, &#39;amplitude&#39;}</span>
-<span class="sd">            The normalization parameter determines the preserved quantity after normalization.</span>
+<span class="sd">            The normalization parameter determines which quantity is preserved after normalization.</span>
 
 <span class="sd">                ``values`` :</span>
-<span class="sd">                    The pixelwise values of the wave function are preserved.</span>
+<span class="sd">                    The pixel-wise values of the images are preserved.</span>
 
 <span class="sd">                ``amplitude`` :</span>
-<span class="sd">                    The total amplitude of the wave function is preserved.</span>
+<span class="sd">                    The total amplitude of the images is preserved.</span>
 
 <span class="sd">        cval : scalar, optional</span>
-<span class="sd">            Value to fill past edges in spline interpolation input if boundary is ‘constant’. Default is 0.0.</span>
+<span class="sd">            Value to fill past edges in spline interpolation input if boundary is &#39;constant&#39; (default is 0.0).</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
 <span class="sd">        interpolated_images : Images</span>
+<span class="sd">            The interpolated images.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">if</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">&quot;fft&quot;</span> <span class="ow">and</span> <span class="n">boundary</span> <span class="o">!=</span> <span class="s2">&quot;periodic&quot;</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;only periodic boundaries available for FFT interpolation&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;Only periodic boundaries available for FFT interpolation.&quot;</span>
+            <span class="p">)</span>
 
         <span class="k">if</span> <span class="n">sampling</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">gpts</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">()</span>
@@ -1898,33 +1936,36 @@ title="Open an issue"
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">start</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">Atom</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">end</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">Atom</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">gpts</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">sampling</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">gpts</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">width</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
         <span class="n">order</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">3</span><span class="p">,</span>
         <span class="n">endpoint</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;RealSpaceLineProfiles&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Interpolate image along a line.</span>
+<span class="sd">        Interpolate image(s) along a given line. Either &#39;sampling&#39; or &#39;gpts&#39; must be provided.</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
 <span class="sd">        start : two float, Atom, optional</span>
-<span class="sd">            Start point of line [Å]. Also provide end, do not provide center, angle and extent.</span>
+<span class="sd">            Starting position of the line [Å] (alternatively taken from a selected atom).</span>
 <span class="sd">        end : two float, Atom, optional</span>
-<span class="sd">            End point of line [Å].</span>
-<span class="sd">        gpts : int</span>
-<span class="sd">            Number of grid points along line.</span>
+<span class="sd">            Ending position of the line [Å] (alternatively taken from a selected atom).</span>
 <span class="sd">        sampling : float</span>
-<span class="sd">            Sampling rate of grid points along line [1 / Å].</span>
+<span class="sd">            Sampling of grid points along the line [1 / Å].</span>
+<span class="sd">        gpts : int</span>
+<span class="sd">            Number of grid points along the line.</span>
 <span class="sd">        width : float, optional</span>
-<span class="sd">            The interpolation will be averaged across line of this width.</span>
-<span class="sd">        order : str, optional</span>
-<span class="sd">            The interpolation method.</span>
+<span class="sd">            The interpolation will be averaged across a perpendicular distance equal to this width.</span>
+<span class="sd">        order : int, optional</span>
+<span class="sd">            The spline interpolation order.</span>
+<span class="sd">        endpoint : bool</span>
+<span class="sd">            Sets whether the ending position is included or not.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
 <span class="sd">        line_profiles : RealSpaceLineProfiles</span>
+<span class="sd">            The interpolated line(s).</span>
 <span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="kn">from</span> <span class="nn">abtem.scan</span> <span class="kn">import</span> <span class="n">LineScan</span>
@@ -1986,16 +2027,17 @@ title="Open an issue"
 
 <div class="viewcode-block" id="Images.tile"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.tile">[docs]</a>    <span class="k">def</span> <span class="nf">tile</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">repetitions</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="s2">&quot;Images&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Tile images.</span>
+<span class="sd">        Tile image(s).</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
-<span class="sd">        repetitions : two int</span>
-<span class="sd">            The number of repetitions of the images along the x- and y-axis, respectively.</span>
+<span class="sd">        repetitions : tuple of int</span>
+<span class="sd">            The number of repetitions of the images along the `x`- and `y`-axis, respectively.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
 <span class="sd">        tiled_images : Images</span>
+<span class="sd">            The tiled image(s).</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">repetitions</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">()</span>
@@ -2012,13 +2054,13 @@ title="Open an issue"
         <span class="n">cval</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
     <span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Apply 2d gaussian filter to images.</span>
+<span class="sd">        Apply 2D gaussian filter to image(s).</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
-<span class="sd">        sigma : float, two float</span>
-<span class="sd">            Standard deviation for Gaussian kernel in the x and y-direction. If given as a single number, the standard</span>
-<span class="sd">            deviation is equal for both axes.</span>
+<span class="sd">        sigma : float or two float</span>
+<span class="sd">            Standard deviation for the Gaussian kernel in the `x` and `y`-direction. If given as a single number, the</span>
+<span class="sd">            standard deviation is equal for both axes.</span>
 
 <span class="sd">        boundary : {&#39;periodic&#39;, &#39;reflect&#39;, &#39;constant&#39;}</span>
 <span class="sd">            The boundary parameter determines how the images are extended beyond their boundaries when the filter</span>
@@ -2026,17 +2068,21 @@ title="Open an issue"
 
 <span class="sd">                ``periodic`` :</span>
 <span class="sd">                    The images are extended by wrapping around to the opposite edge. Use this mode for periodic</span>
-<span class="sd">                    (Default)</span>
+<span class="sd">                    (default).</span>
 
 <span class="sd">                ``reflect`` :</span>
 <span class="sd">                    The images are extended by reflecting about the edge of the last pixel.</span>
 
 <span class="sd">                ``constant`` :</span>
 <span class="sd">                    The images are extended by filling all values beyond the edge with the same constant value, defined</span>
-<span class="sd">                    by the cval parameter.</span>
+<span class="sd">                    by the &#39;cval&#39; parameter.</span>
+<span class="sd">        cval : scalar, optional</span>
+<span class="sd">            Value to fill past edges in spline interpolation input if boundary is &#39;constant&#39; (default is 0.0).</span>
+
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
 <span class="sd">        filtered_images : Images</span>
+<span class="sd">            The filtered image(s).</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">xp</span> <span class="o">=</span> <span class="n">get_array_module</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">)</span>
         <span class="n">gaussian_filter</span> <span class="o">=</span> <span class="n">get_ndimage_module</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">)</span><span class="o">.</span><span class="n">gaussian_filter</span>
@@ -2077,11 +2123,12 @@ title="Open an issue"
 
 <div class="viewcode-block" id="Images.diffractograms"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.Images.html#abtem.measurements.Images.diffractograms">[docs]</a>    <span class="k">def</span> <span class="nf">diffractograms</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;DiffractionPatterns&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Calculate the diffractograms (i.e. power spectra) from the images.</span>
+<span class="sd">        Calculate diffractograms (i.e. power spectra) from image(s).</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
 <span class="sd">        diffractograms : DiffractionPatterns</span>
+<span class="sd">            Diffractograms of image(s).</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">xp</span> <span class="o">=</span> <span class="n">get_array_module</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">)</span>
 
@@ -2141,14 +2188,14 @@ title="Open an issue"
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
 <span class="sd">        cmap : str, optional</span>
-<span class="sd">            TODO</span>
+<span class="sd">            Matplotlib colormap name used to map scalar data to colors. Ignored if image array is complex.</span>
 <span class="sd">        explode : bool, optional</span>
-<span class="sd">            If True, a grid of images are created for all the items of the last two ensemble axes. If False, the first</span>
+<span class="sd">            If True, a grid of images is created for all the items of the last two ensemble axes. If False, the first</span>
 <span class="sd">            ensemble item is shown.</span>
 <span class="sd">        ax : matplotlib.axes.Axes, optional</span>
 <span class="sd">            If given the plots are added to the axis. This is not available for image grids.</span>
 <span class="sd">        figsize : two int, optional</span>
-<span class="sd">            The figure size given as width and height in inches, passed to matplotlib.pyplot.figure.</span>
+<span class="sd">            The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.</span>
 <span class="sd">        title : bool or str, optional</span>
 <span class="sd">            Add a title to the figure. If True is given instead of a string the title will be given by the value</span>
 <span class="sd">            corresponding to the &quot;name&quot; key of the metadata dictionary, if this item exists.</span>
@@ -2156,14 +2203,14 @@ title="Open an issue"
 <span class="sd">            Add titles to each panel. If True a title will be created from the axis metadata. If given as a list of</span>
 <span class="sd">            strings an item must exist for each panel.</span>
 <span class="sd">        x_ticks : bool or list, optional</span>
-<span class="sd">            If False, the ticks on the x-axis will be removed.</span>
+<span class="sd">            If False, the ticks on the `x`-axis will be removed.</span>
 <span class="sd">        y_ticks : bool or list, optional</span>
-<span class="sd">            If False, the ticks on the y-axis will be removed.</span>
+<span class="sd">            If False, the ticks on the `y`-axis will be removed.</span>
 <span class="sd">        x_label : bool or str, optional</span>
-<span class="sd">            Add label to the x-axis of every plot. If True (default) the label will created from the corresponding axis</span>
+<span class="sd">            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis</span>
 <span class="sd">            metadata. A string may be given to override this.</span>
 <span class="sd">        y_label : bool or str, optional</span>
-<span class="sd">            Add label to the x-axis of every plot. If True (default) the label will created from the corresponding axis</span>
+<span class="sd">            Add label to the `x`-axis of every plot. If True (default) the label will created from the corresponding axis</span>
 <span class="sd">            metadata. A string may be given to override this.</span>
 <span class="sd">        row_super_label : bool or str, optional</span>
 <span class="sd">            Add super label to the rows of an image grid. If True the label will be created from the corresponding axis</span>
@@ -2182,8 +2229,9 @@ title="Open an issue"
 <span class="sd">            it is requested). Default is False.</span>
 <span class="sd">        cbar : bool, optional</span>
 <span class="sd">            Add colorbar(s) to the image(s). The position and size of the colorbar(s) may be controlled by passing</span>
-<span class="sd">            keyword arguments to mpl_toolkits.axes_grid1.axes_grid.ImageGrid through `image_grid_kwargs`.</span>
+<span class="sd">            keyword arguments to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid` through `image_grid_kwargs`.</span>
 <span class="sd">        cbar_labels : str or list of str</span>
+<span class="sd">            Label(s) for the colorbar(s).</span>
 <span class="sd">        sizebar : bool, optional,</span>
 <span class="sd">            Add a size bar to the image(s).</span>
 <span class="sd">        float_formatting : str, optional</span>
@@ -2191,24 +2239,23 @@ title="Open an issue"
 <span class="sd">        panel_labels : list of str</span>
 <span class="sd">            A list of labels for each panel of a grid of images.</span>
 <span class="sd">        image_grid_kwargs : dict</span>
-<span class="sd">            Additional keyword arguments passed to mpl_toolkits.axes_grid1.axes_grid.ImageGrid.</span>
+<span class="sd">            Additional keyword arguments passed to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid`.</span>
 <span class="sd">        imshow_kwargs : dict</span>
-<span class="sd">            Additional keyword arguments passed to matplotlib.axes.Axes.imshow.</span>
+<span class="sd">            Additional keyword arguments passed to `matplotlib.axes.Axes.imshow`.</span>
 <span class="sd">        anchored_text_kwargs : dict</span>
-<span class="sd">            Additional keyword arguments passed to matplotlib.offsetbox.AnchoredText. This is used for creating panel</span>
+<span class="sd">            Additional keyword arguments passed to `matplotlib.offsetbox.AnchoredText`. This is used for creating panel</span>
 <span class="sd">            labels.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
-<span class="sd">        matplotlib.axes.Axes</span>
+<span class="sd">        Figure, matplotlib.axes.Axes</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-
         <span class="k">if</span> <span class="ow">not</span> <span class="n">explode</span><span class="p">:</span>
             <span class="n">measurements</span> <span class="o">=</span> <span class="bp">self</span><span class="p">[(</span><span class="mi">0</span><span class="p">,)</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ensemble_shape</span><span class="p">)]</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="k">if</span> <span class="n">ax</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                 <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
-                    <span class="s2">&quot;`ax` not implemented for with `explode = True`&quot;</span>
+                    <span class="s2">&quot;`ax` not implemented for with `explode = True`.&quot;</span>
                 <span class="p">)</span>
             <span class="n">measurements</span> <span class="o">=</span> <span class="bp">self</span>
 
@@ -2241,11 +2288,11 @@ title="Open an issue"
         <span class="p">)</span></div></div>
 
 
-<div class="viewcode-block" id="SinglePointMeasurement"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement">[docs]</a><span class="k">class</span> <span class="nc">SinglePointMeasurement</span><span class="p">(</span><span class="n">BaseMeasurement</span><span class="p">):</span>
+<span class="k">class</span> <span class="nc">_SinglePointMeasurement</span><span class="p">(</span><span class="n">BaseMeasurement</span><span class="p">):</span>
     <span class="n">_base_dims</span> <span class="o">=</span> <span class="mi">0</span>
 
-<div class="viewcode-block" id="SinglePointMeasurement.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html#abtem.measurements.SinglePointMeasurement.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">array</span><span class="p">,</span> <span class="n">ensemble_axes_metadata</span><span class="p">,</span> <span class="n">metadata</span><span class="p">):</span>
-        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">ensemble_axes_metadata</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span></div></div>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">array</span><span class="p">,</span> <span class="n">ensemble_axes_metadata</span><span class="p">,</span> <span class="n">metadata</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">ensemble_axes_metadata</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
 
 
 <span class="k">class</span> <span class="nc">_AbstractMeasurement1d</span><span class="p">(</span><span class="n">BaseMeasurement</span><span class="p">):</span>
@@ -2270,10 +2317,28 @@ title="Open an issue"
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">_area_per_pixel</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;cannot infer pixel area from metadata&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Cannot infer pixel area from metadata.&quot;</span><span class="p">)</span>
 
     <span class="nd">@classmethod</span>
     <span class="k">def</span> <span class="nf">from_array_and_metadata</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">array</span><span class="p">,</span> <span class="n">axes_metadata</span><span class="p">,</span> <span class="n">metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;T&quot;</span><span class="p">:</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Creates line profile(s) from a given array and metadata.</span>
+
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        array : array</span>
+<span class="sd">            Complex array defining one or more 1D line profiles.</span>
+<span class="sd">        axes_metadata : list of AxesMetadata</span>
+<span class="sd">            Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two</span>
+<span class="sd">            axes must be RealSpaceAxis.</span>
+<span class="sd">        metadata : dict, optional</span>
+<span class="sd">            A dictionary defining the measurement metadata.</span>
+
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        line_profiles : RealSpaceLineProfiles</span>
+<span class="sd">            Line profiles from the array and metadata.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">sampling</span> <span class="o">=</span> <span class="n">axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">sampling</span>
         <span class="n">axes_metadata</span> <span class="o">=</span> <span class="n">axes_metadata</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
         <span class="k">return</span> <span class="bp">cls</span><span class="p">(</span>
@@ -2298,16 +2363,17 @@ title="Open an issue"
 
     <span class="k">def</span> <span class="nf">width</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">height</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.5</span><span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Calculate the width of lines at a given height.</span>
+<span class="sd">        Calculate the width of line(s) at a given height, e.g. full width at half maximum (the default).</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
 <span class="sd">        height : float</span>
-
+<span class="sd">            Fractional height at which the width is calculated.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
-<span class="sd">        float</span>
+<span class="sd">        width : float</span>
+<span class="sd">            The calculated width.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="k">def</span> <span class="nf">calculate_widths</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">sampling</span><span class="p">,</span> <span class="n">height</span><span class="p">):</span>
@@ -2337,7 +2403,24 @@ title="Open an issue"
         <span class="n">order</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">3</span><span class="p">,</span>
         <span class="n">endpoint</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;T&quot;</span><span class="p">:</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Interpolate line profile(s) producing equivalent line profile(s) with a different sampling. Either &#39;sampling&#39; or</span>
+<span class="sd">        &#39;gpts&#39; must be provided (but not both).</span>
 
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        sampling : float</span>
+<span class="sd">            Sampling of line profiles after interpolation [Å].</span>
+<span class="sd">        gpts : int</span>
+<span class="sd">            Number of grid points of line profiles after interpolation. Do not use if &#39;sampling&#39; is used.</span>
+<span class="sd">        order : int</span>
+<span class="sd">            The order of the spline interpolation (default is 3). The order has to be in the range 0-5.</span>
+
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        interpolated_profiles : RealSpaceLineProfiles</span>
+<span class="sd">            The interpolated line profile(s).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">map_coordinates</span> <span class="o">=</span> <span class="n">get_ndimage_module</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">)</span><span class="o">.</span><span class="n">map_coordinates</span>
         <span class="n">xp</span> <span class="o">=</span> <span class="n">get_array_module</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">)</span>
 
@@ -2388,6 +2471,21 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="RealSpaceLineProfiles"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles">[docs]</a><span class="k">class</span> <span class="nc">RealSpaceLineProfiles</span><span class="p">(</span><span class="n">_AbstractMeasurement1d</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A collection of real-space line profile(s).</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    array : np.ndarray</span>
+<span class="sd">        1D or greater array containing data of type `float` or ´complex´.</span>
+<span class="sd">    sampling : float</span>
+<span class="sd">        Sampling of line profiles [Å].</span>
+<span class="sd">    ensemble_axes_metadata : list of AxisMetadata, optional</span>
+<span class="sd">        Metadata associated with an ensemble axis.</span>
+<span class="sd">    metadata : dict, optional</span>
+<span class="sd">        A dictionary defining simulation metadata.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
 <div class="viewcode-block" id="RealSpaceLineProfiles.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
@@ -2419,31 +2517,72 @@ title="Open an issue"
 
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
 
-    <span class="k">def</span> <span class="nf">show</span><span class="p">(</span>
+<div class="viewcode-block" id="RealSpaceLineProfiles.show"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html#abtem.measurements.RealSpaceLineProfiles.show">[docs]</a>    <span class="k">def</span> <span class="nf">show</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">ax</span><span class="p">:</span> <span class="n">Axes</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">x_label</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-        <span class="n">title</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-        <span class="n">y_label</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+        <span class="n">figsize</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">title</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">x_label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">y_label</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>  <span class="c1"># TODO: needs to be implemented!</span>
         <span class="n">float_formatting</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;.2f&quot;</span><span class="p">,</span>
         <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
     <span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Show the line profile(s) using matplotlib.</span>
 
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        ax : matplotlib Axes, optional</span>
+<span class="sd">            If given the plots are added to the Axes. This is not available for image grids.</span>
+<span class="sd">        figsize : two int, optional</span>
+<span class="sd">            The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.</span>
+<span class="sd">        title : bool or str, optional</span>
+<span class="sd">            Add a title to the figure. If True is given instead of a string the title will be given by the value</span>
+<span class="sd">            corresponding to the &quot;name&quot; key of the metadata dictionary, if this item exists.</span>
+<span class="sd">        x_label : bool or str, optional</span>
+<span class="sd">            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis</span>
+<span class="sd">            metadata. A string may be given to override this.</span>
+<span class="sd">        y_label : bool or str, optional</span>
+<span class="sd">            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis</span>
+<span class="sd">            metadata. A string may be given to override this.</span>
+<span class="sd">        float_formatting : str, optional</span>
+<span class="sd">            A formatting string used for formatting the floats of the panel titles.</span>
+
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        matplotlib Axes</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">extent</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">extent</span><span class="p">]</span>
 
         <span class="k">return</span> <span class="n">show_measurements_1d</span><span class="p">(</span>
             <span class="bp">self</span><span class="p">,</span>
-            <span class="n">x_label</span><span class="o">=</span><span class="n">x_label</span><span class="p">,</span>
-            <span class="n">title</span><span class="o">=</span><span class="n">title</span><span class="p">,</span>
-            <span class="n">extent</span><span class="o">=</span><span class="n">extent</span><span class="p">,</span>
             <span class="n">ax</span><span class="o">=</span><span class="n">ax</span><span class="p">,</span>
+            <span class="n">figsize</span><span class="o">=</span><span class="n">figsize</span><span class="p">,</span>
+            <span class="n">title</span><span class="o">=</span><span class="n">title</span><span class="p">,</span>
+            <span class="n">x_label</span><span class="o">=</span><span class="n">x_label</span><span class="p">,</span>
+            <span class="n">extent</span><span class="o">=</span><span class="n">extent</span><span class="p">,</span>
             <span class="n">float_formatting</span><span class="o">=</span><span class="n">float_formatting</span><span class="p">,</span>
             <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
-        <span class="p">)</span></div>
+        <span class="p">)</span></div></div>
 
 
-<div class="viewcode-block" id="FourierSpaceLineProfiles"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles">[docs]</a><span class="k">class</span> <span class="nc">FourierSpaceLineProfiles</span><span class="p">(</span><span class="n">_AbstractMeasurement1d</span><span class="p">):</span>
-<div class="viewcode-block" id="FourierSpaceLineProfiles.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html#abtem.measurements.FourierSpaceLineProfiles.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
+<div class="viewcode-block" id="ReciprocalSpaceLineProfiles"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles">[docs]</a><span class="k">class</span> <span class="nc">ReciprocalSpaceLineProfiles</span><span class="p">(</span><span class="n">_AbstractMeasurement1d</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A collection of reciprocal-space line profile(s).</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    array : np.ndarray</span>
+<span class="sd">        1D or greater array containing data of type `float` or ´complex´.</span>
+<span class="sd">    sampling : float</span>
+<span class="sd">        Sampling of line profiles [1 / Å].</span>
+<span class="sd">    ensemble_axes_metadata : list of AxisMetadata, optional</span>
+<span class="sd">        Metadata associated with an ensemble axis.</span>
+<span class="sd">    metadata : dict, optional</span>
+<span class="sd">        A dictionary defining simulation metadata.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="ReciprocalSpaceLineProfiles.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">array</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
         <span class="n">sampling</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -2465,22 +2604,49 @@ title="Open an issue"
     <span class="k">def</span> <span class="nf">angular_extent</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">extent</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">wavelength</span> <span class="o">*</span> <span class="mf">1e3</span>
 
-    <span class="k">def</span> <span class="nf">show</span><span class="p">(</span>
+<div class="viewcode-block" id="ReciprocalSpaceLineProfiles.show"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html#abtem.measurements.ReciprocalSpaceLineProfiles.show">[docs]</a>    <span class="k">def</span> <span class="nf">show</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">ax</span><span class="p">:</span> <span class="n">Axes</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">x_label</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-        <span class="n">y_label</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-        <span class="n">title</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+        <span class="n">figsize</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">title</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">x_label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">y_label</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>  <span class="c1"># TODO: needs to be implemented</span>
         <span class="n">units</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;reciprocal&quot;</span><span class="p">,</span>
         <span class="n">float_formatting</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;.2f&quot;</span><span class="p">,</span>
         <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
     <span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Show the reciprocal-space line profile(s) using matplotlib.</span>
 
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        ax : matplotlib Axes, optional</span>
+<span class="sd">            If given the plots are added to the Axes. This is not available for image grids.</span>
+<span class="sd">        figsize : two int, optional</span>
+<span class="sd">            The figure size given as width and height in inches, passed to matplotlib.pyplot.figure.</span>
+<span class="sd">        title : bool or str, optional</span>
+<span class="sd">            Add a title to the figure. If True is given instead of a string the title will be given by the value</span>
+<span class="sd">            corresponding to the &quot;name&quot; key of the metadata dictionary, if this item exists.</span>
+<span class="sd">        x_label : bool or str, optional</span>
+<span class="sd">            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis</span>
+<span class="sd">            metadata. A string may be given to override this.</span>
+<span class="sd">        y_label : bool or str, optional</span>
+<span class="sd">            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis</span>
+<span class="sd">            metadata. A string may be given to override this.</span>
+<span class="sd">        units : str, optional</span>
+<span class="sd">            The units of the reciprocal line profile can be either &#39;reciprocal&#39; (resulting in [1 / Å]), or &#39;mrad&#39;.</span>
+<span class="sd">        float_formatting : str, optional</span>
+<span class="sd">            A formatting string used for formatting the floats of the panel titles.</span>
+
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        matplotlib Axes</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">if</span> <span class="n">units</span> <span class="ow">in</span> <span class="n">angular_units</span><span class="p">:</span>
             <span class="n">extent</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">angular_extent</span><span class="p">]</span>
 
             <span class="k">if</span> <span class="n">x_label</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-                <span class="n">x_label</span> <span class="o">=</span> <span class="s2">&quot;scattering angle [mrad]&quot;</span>
+                <span class="n">x_label</span> <span class="o">=</span> <span class="s2">&quot;Scattering angle [mrad]&quot;</span>
         <span class="k">elif</span> <span class="n">units</span> <span class="ow">in</span> <span class="n">reciprocal_units</span><span class="p">:</span>
             <span class="n">extent</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">extent</span><span class="p">]</span>
         <span class="k">else</span><span class="p">:</span>
@@ -2488,13 +2654,14 @@ title="Open an issue"
 
         <span class="k">return</span> <span class="n">show_measurements_1d</span><span class="p">(</span>
             <span class="bp">self</span><span class="p">,</span>
-            <span class="n">x_label</span><span class="o">=</span><span class="n">x_label</span><span class="p">,</span>
-            <span class="n">extent</span><span class="o">=</span><span class="n">extent</span><span class="p">,</span>
-            <span class="n">title</span><span class="o">=</span><span class="n">title</span><span class="p">,</span>
             <span class="n">ax</span><span class="o">=</span><span class="n">ax</span><span class="p">,</span>
+            <span class="n">figsize</span><span class="o">=</span><span class="n">figsize</span><span class="p">,</span>
+            <span class="n">title</span><span class="o">=</span><span class="n">title</span><span class="p">,</span>
+            <span class="n">x_label</span><span class="o">=</span><span class="n">x_label</span><span class="p">,</span>
             <span class="n">float_formatting</span><span class="o">=</span><span class="n">float_formatting</span><span class="p">,</span>
+            <span class="n">extent</span><span class="o">=</span><span class="n">extent</span><span class="p">,</span>
             <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
-        <span class="p">)</span></div>
+        <span class="p">)</span></div></div>
 
 
 <span class="k">def</span> <span class="nf">_integrate_gradient_2d</span><span class="p">(</span><span class="n">gradient</span><span class="p">,</span> <span class="n">sampling</span><span class="p">):</span>
@@ -2504,7 +2671,7 @@ title="Open an issue"
     <span class="n">ikx</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">fft</span><span class="o">.</span><span class="n">fftfreq</span><span class="p">(</span><span class="n">nx</span><span class="p">,</span> <span class="n">d</span><span class="o">=</span><span class="n">sampling</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
     <span class="n">iky</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">fft</span><span class="o">.</span><span class="n">fftfreq</span><span class="p">(</span><span class="n">ny</span><span class="p">,</span> <span class="n">d</span><span class="o">=</span><span class="n">sampling</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
     <span class="n">grid_ikx</span><span class="p">,</span> <span class="n">grid_iky</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">meshgrid</span><span class="p">(</span><span class="n">ikx</span><span class="p">,</span> <span class="n">iky</span><span class="p">,</span> <span class="n">indexing</span><span class="o">=</span><span class="s2">&quot;ij&quot;</span><span class="p">)</span>
-    <span class="n">k</span> <span class="o">=</span> <span class="n">grid_ikx</span> <span class="o">**</span> <span class="mi">2</span> <span class="o">+</span> <span class="n">grid_iky</span> <span class="o">**</span> <span class="mi">2</span>
+    <span class="n">k</span> <span class="o">=</span> <span class="n">grid_ikx</span><span class="o">**</span><span class="mi">2</span> <span class="o">+</span> <span class="n">grid_iky</span><span class="o">**</span><span class="mi">2</span>
     <span class="n">k</span><span class="p">[</span><span class="n">k</span> <span class="o">==</span> <span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="mf">1e-12</span>
     <span class="n">That</span> <span class="o">=</span> <span class="p">(</span><span class="n">xp</span><span class="o">.</span><span class="n">fft</span><span class="o">.</span><span class="n">fft2</span><span class="p">(</span><span class="n">gx</span><span class="p">)</span> <span class="o">*</span> <span class="n">grid_ikx</span> <span class="o">+</span> <span class="n">xp</span><span class="o">.</span><span class="n">fft</span><span class="o">.</span><span class="n">fft2</span><span class="p">(</span><span class="n">gy</span><span class="p">)</span> <span class="o">*</span> <span class="n">grid_iky</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="mi">2</span><span class="n">j</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">k</span><span class="p">)</span>
     <span class="n">T</span> <span class="o">=</span> <span class="n">xp</span><span class="o">.</span><span class="n">real</span><span class="p">(</span><span class="n">xp</span><span class="o">.</span><span class="n">fft</span><span class="o">.</span><span class="n">ifft2</span><span class="p">(</span><span class="n">That</span><span class="p">))</span>
@@ -2548,7 +2715,26 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="DiffractionPatterns"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns">[docs]</a><span class="k">class</span> <span class="nc">DiffractionPatterns</span><span class="p">(</span><span class="n">BaseMeasurement</span><span class="p">):</span>
-    <span class="n">_base_dims</span> <span class="o">=</span> <span class="mi">2</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    One or more diffraction patterns.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    array : np.ndarray</span>
+<span class="sd">        2D or greater array containing data with `float` type. The second-to-last and last dimensions are the</span>
+<span class="sd">        reciprocal space `y`- and `x`-axis of the diffraction pattern.</span>
+<span class="sd">    sampling : float or two float</span>
+<span class="sd">        The Fourier space sampling of the diffraction patterns [1 / Å].</span>
+<span class="sd">    fftshift : bool, optional</span>
+<span class="sd">        If True, the diffraction patterns are assumed to have the zero-frequency component to the center of the</span>
+<span class="sd">        spectrum, otherwise the center(s) are assumed to be at (0,0).</span>
+<span class="sd">    ensemble_axes_metadata : list of AxisMetadata, optional</span>
+<span class="sd">        Metadata associated with an ensemble axis.</span>
+<span class="sd">    metadata : dict, optional</span>
+<span class="sd">        A dictionary defining simulation metadata.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">_base_dims</span> <span class="o">=</span> <span class="mi">2</span>  <span class="c1"># The dimension of diffraction patterns is 2.</span>
 
 <div class="viewcode-block" id="DiffractionPatterns.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
@@ -2558,24 +2744,6 @@ title="Open an issue"
         <span class="n">ensemble_axes_metadata</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">AxisMetadata</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">):</span>
-        <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        One or more diffraction patterns.</span>
-
-<span class="sd">        Parameters</span>
-<span class="sd">        ----------</span>
-<span class="sd">        array : ndarray</span>
-<span class="sd">            2D or greater array containing data with `float` type. The second-to-last and last dimensions are the</span>
-<span class="sd">            reciprocal space y- and x-axis of the diffraction pattern.</span>
-<span class="sd">        sampling : float or two float</span>
-<span class="sd">            The Fourier space sampling of the diffraction patterns [1 / Å].</span>
-<span class="sd">        fftshift : bool, optional</span>
-<span class="sd">            If True, the diffraction patterns are assumed to have the zero-frequency component to the center of the</span>
-<span class="sd">            spectrum, otherwise the centers are assumed to be at (0,0).</span>
-<span class="sd">        ensemble_axes_metadata : list of AxisMetadata, optional</span>
-<span class="sd">            Metadata associated with an ensemble axis.</span>
-<span class="sd">        metadata : dict, optional</span>
-<span class="sd">            A dictionary defining simulation metadata.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">isscalar</span><span class="p">(</span><span class="n">sampling</span><span class="p">):</span>
             <span class="n">sampling</span> <span class="o">=</span> <span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">sampling</span><span class="p">),)</span> <span class="o">*</span> <span class="mi">2</span>
@@ -2597,8 +2765,27 @@ title="Open an issue"
     <span class="k">def</span> <span class="nf">_area_per_pixel</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">_scan_area_per_pixel</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
 
-    <span class="nd">@classmethod</span>
+<div class="viewcode-block" id="DiffractionPatterns.from_array_and_metadata"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.from_array_and_metadata">[docs]</a>    <span class="nd">@classmethod</span>
     <span class="k">def</span> <span class="nf">from_array_and_metadata</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">array</span><span class="p">,</span> <span class="n">axes_metadata</span><span class="p">,</span> <span class="n">metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Creates diffraction pattern(s) from a given array and metadata.</span>
+
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        array : array</span>
+<span class="sd">            Complex array defining one or more 2D diffraction patterns. The second-to-last and last dimensions are the</span>
+<span class="sd">            diffraction pattern `y`- and `x`-axis.</span>
+<span class="sd">        axes_metadata : list of AxesMetadata</span>
+<span class="sd">            Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two</span>
+<span class="sd">            axes must be RealSpaceAxis.</span>
+<span class="sd">        metadata : dict</span>
+<span class="sd">            A dictionary defining the measurement metadata.</span>
+
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        diffraction_patterns : DiffractionPatterns</span>
+<span class="sd">            Diffraction pattern(s) from the array and metadata.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">sampling</span> <span class="o">=</span> <span class="p">(</span><span class="n">axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">sampling</span><span class="p">,</span> <span class="n">axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">sampling</span><span class="p">)</span>
         <span class="n">fftshift</span> <span class="o">=</span> <span class="n">axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">fftshift</span>
         <span class="n">axes_metadata</span> <span class="o">=</span> <span class="n">axes_metadata</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
@@ -2608,7 +2795,7 @@ title="Open an issue"
             <span class="n">ensemble_axes_metadata</span><span class="o">=</span><span class="n">axes_metadata</span><span class="p">,</span>
             <span class="n">fftshift</span><span class="o">=</span><span class="n">fftshift</span><span class="p">,</span>
             <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">,</span>
-        <span class="p">)</span>
+        <span class="p">)</span></div>
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">base_axes_metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
@@ -2630,8 +2817,24 @@ title="Open an issue"
             <span class="p">),</span>
         <span class="p">]</span>
 
-    <span class="k">def</span> <span class="nf">index_diffraction_spots</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cell</span><span class="p">):</span>
-        <span class="k">return</span> <span class="n">IndexedDiffractionPatterns</span><span class="o">.</span><span class="n">index_diffraction_patterns</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cell</span><span class="p">)</span>
+<div class="viewcode-block" id="DiffractionPatterns.index_diffraction_spots"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.index_diffraction_spots">[docs]</a>    <span class="k">def</span> <span class="nf">index_diffraction_spots</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">cell</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Cell</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span>
+    <span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Indexes the Bragg reflections (diffraction spots) by their Miller indices.</span>
+
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        cell : ase.cell.Cell or float or tuple of float</span>
+<span class="sd">            The assumed unit cell with respect to the diffraction pattern should be indexed. Must be one of ASE `Cell`</span>
+<span class="sd">            object, float (for a cubic unit cell) or three floats (for orthorhombic unit cells).</span>
+
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        indexed_patterns : IndexedDiffractionPatterns</span>
+<span class="sd">            The indexed diffraction pattern(s).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="n">IndexedDiffractionPatterns</span><span class="o">.</span><span class="n">index_diffraction_patterns</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cell</span><span class="p">)</span></div>
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">fftshift</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
@@ -2650,7 +2853,7 @@ title="Open an issue"
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">max_angles</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="sd">&quot;&quot;&quot; Maximum scattering angle in x and y [mrad]&quot;&quot;&quot;</span>
+        <span class="sd">&quot;&quot;&quot;Maximum scattering angle in `x` and `y` [mrad].&quot;&quot;&quot;</span>
 
         <span class="k">return</span> <span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">//</span> <span class="mi">2</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">angular_sampling</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
@@ -2659,7 +2862,7 @@ title="Open an issue"
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">limits</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]:</span>
-        <span class="sd">&quot;&quot;&quot; Lower and upper spatial frequency in x and y [1 / Å]. &quot;&quot;&quot;</span>
+        <span class="sd">&quot;&quot;&quot;Lowest and highest spatial frequency in `x` and `y` [1 / Å].&quot;&quot;&quot;</span>
 
         <span class="n">limits</span> <span class="o">=</span> <span class="p">[]</span>
         <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="p">(</span><span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">):</span>
@@ -2681,7 +2884,7 @@ title="Open an issue"
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">angular_limits</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]:</span>
-        <span class="sd">&quot;&quot;&quot; Lower and upper scattering angle in x and y [mrad]. &quot;&quot;&quot;</span>
+        <span class="sd">&quot;&quot;&quot;Lowest and highest scattering angle in `x` and `y` [mrad].&quot;&quot;&quot;</span>
 
         <span class="n">limits</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">limits</span>
         <span class="n">limits</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
@@ -2696,7 +2899,7 @@ title="Open an issue"
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">coordinates</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
-        <span class="sd">&quot;&quot;&quot; Reciprocal spatial frequency coordinates [1 / Å]. &quot;&quot;&quot;</span>
+        <span class="sd">&quot;&quot;&quot;Reciprocal-space frequency coordinates [1 / Å].&quot;&quot;&quot;</span>
 
         <span class="k">return</span> <span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">coordinates</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">base_shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]),</span>
@@ -2705,7 +2908,7 @@ title="Open an issue"
 
     <span class="nd">@property</span>
     <span class="k">def</span> <span class="nf">angular_coordinates</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
-        <span class="sd">&quot;&quot;&quot; Scattering angle coordinates [mrad]. &quot;&quot;&quot;</span>
+        <span class="sd">&quot;&quot;&quot;Scattering angle coordinates [mrad].&quot;&quot;&quot;</span>
 
         <span class="n">xp</span> <span class="o">=</span> <span class="n">get_array_module</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">)</span>
         <span class="n">limits</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">angular_limits</span>
@@ -2746,7 +2949,7 @@ title="Open an issue"
     <span class="c1">#     Parameters</span>
     <span class="c1">#     ----------</span>
     <span class="c1">#     sampling : two float or &#39;uniform&#39;</span>
-    <span class="c1">#         Target scan sampling after interpolation in x and y [1 / Å].</span>
+    <span class="c1">#         Target scan sampling after interpolation in `x` and `y` [1 / Å].</span>
     <span class="c1">#</span>
     <span class="c1">#     Returns</span>
     <span class="c1">#     -------</span>
@@ -2786,18 +2989,19 @@ title="Open an issue"
 
 <div class="viewcode-block" id="DiffractionPatterns.interpolate"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.interpolate">[docs]</a>    <span class="k">def</span> <span class="nf">interpolate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">sampling</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Interpolate diffraction patterns producing equivalent patterns with a different sampling.</span>
+<span class="sd">        Interpolate diffraction pattern(s) producing equivalent pattern(s) with a different sampling.</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
-<span class="sd">        sampling : two float or &#39;uniform&#39;</span>
-<span class="sd">            Sampling of diffraction patterns after interpolation in x and y [1 / Å]. If given as &#39;uniform&#39; the</span>
-<span class="sd">            diffraction patterns are downsampled along the axis with the smallest pixel size such that the sampling</span>
-<span class="sd">            is uniform.</span>
+<span class="sd">        sampling : &#39;uniform&#39; or float or two floats</span>
+<span class="sd">            Sampling of diffraction patterns after interpolation in `x` and `y` [1 / Å]. If a single value, the same</span>
+<span class="sd">            sampling is used for both axes. If &#39;uniform&#39;, the diffraction patterns are down-sampled along the axis with</span>
+<span class="sd">            the smallest pixel size such that the sampling is uniform.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
 <span class="sd">        interpolated_diffraction_patterns : DiffractionPatterns</span>
+<span class="sd">            The interpolated diffraction pattern(s).</span>
 <span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="k">if</span> <span class="n">sampling</span> <span class="o">==</span> <span class="s2">&quot;uniform&quot;</span><span class="p">:</span>
@@ -2831,47 +3035,42 @@ title="Open an issue"
 
         <span class="k">if</span> <span class="n">inner</span> <span class="o">&gt;=</span> <span class="n">outer</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;inner detection (</span><span class="si">{</span><span class="n">inner</span><span class="si">}</span><span class="s2"> mrad) angle exceeds outer detection angle&quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;Inner detection (</span><span class="si">{</span><span class="n">inner</span><span class="si">}</span><span class="s2"> mrad) angle cannot exceed the outer detection angle.&quot;</span>
                 <span class="sa">f</span><span class="s2">&quot;(</span><span class="si">{</span><span class="n">outer</span><span class="si">}</span><span class="s2"> mrad)&quot;</span>
             <span class="p">)</span>
 
         <span class="k">if</span> <span class="p">(</span><span class="n">outer</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_angles</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="ow">or</span> <span class="p">(</span><span class="n">outer</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_angles</span><span class="p">[</span><span class="mi">1</span><span class="p">]):</span>
             <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;outer integration limit exceeds the maximum simulated angle (</span><span class="si">{</span><span class="n">outer</span><span class="si">}</span><span class="s2"> mrad &gt; &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">min</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">max_angles</span><span class="p">)</span><span class="si">}</span><span class="s2"> mrad), increase the number of grid points&quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;Outer integration limit cannot exceed the maximum simulated angle (</span><span class="si">{</span><span class="n">outer</span><span class="si">}</span><span class="s2"> mrad &gt; &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">min</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">max_angles</span><span class="p">)</span><span class="si">}</span><span class="s2"> mrad), please increase the number of grid points.&quot;</span>
             <span class="p">)</span>
-
-        <span class="c1"># integration_range = outer - inner</span>
-        <span class="c1"># if integration_range &lt; min(self.angular_sampling):</span>
-        <span class="c1">#     raise RuntimeError(</span>
-        <span class="c1">#         f&#39;integration range ({integration_range} mrad) smaller than angular sampling of simulation&#39;</span>
-        <span class="c1">#         f&#39; ({min(self.angular_sampling)} mrad)&#39;)</span>
 
 <div class="viewcode-block" id="DiffractionPatterns.gaussian_source_size"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.gaussian_source_size">[docs]</a>    <span class="k">def</span> <span class="nf">gaussian_source_size</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span> <span class="n">sigma</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;DiffractionPatterns&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Simulate Gaussian source size by applying a gaussian filter.</span>
+<span class="sd">        Simulate the effect of a finite source size on diffraction pattern(s) using a Gaussian filter.</span>
 
-<span class="sd">        The filter is not applied to diffraction pattern individually, the intensity of diffraction patterns are mixed</span>
+<span class="sd">        The filter is not applied to diffraction pattern individually, but the intensity of diffraction patterns are mixed</span>
 <span class="sd">        across scan axes. Applying this filter requires two linear scan axes.</span>
 
 <span class="sd">        Applying this filter before integrating the diffraction patterns will produce the same image as integrating</span>
-<span class="sd">        the diffraction patterns first then applying a gaussian filter.</span>
+<span class="sd">        the diffraction patterns first then applying a Gaussian filter.</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
-<span class="sd">        sigma : float, two float</span>
-<span class="sd">            Standard deviation of Gaussian kernel in the x and y-direction. If given as a single number, the standard</span>
+<span class="sd">        sigma : float or two float</span>
+<span class="sd">            Standard deviation of Gaussian kernel in the `x` and `y`-direction. If given as a single number, the standard</span>
 <span class="sd">            deviation is equal for both axes.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
 <span class="sd">        filtered_diffraction_patterns : DiffractionPatterns</span>
+<span class="sd">            The filtered diffraction pattern(s).</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">_scan_axes</span><span class="p">(</span><span class="bp">self</span><span class="p">))</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
-                <span class="s2">&quot;gaussian_source_size not implemented for DiffractionPatterns with less than 2 scan axes&quot;</span>
+                <span class="s2">&quot;Gaussian source size not implemented for diffraction patterns with less than two scan axes.&quot;</span>
             <span class="p">)</span>
 
         <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">isscalar</span><span class="p">(</span><span class="n">sigma</span><span class="p">):</span>
@@ -2926,10 +3125,10 @@ title="Open an issue"
     <span class="p">):</span>
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Create polar measurements from the diffraction patterns by binning the measurements on a polar grid. This</span>
-<span class="sd">        method may be used to simulate a segmented detector with a specified .</span>
+<span class="sd">        method may be used to simulate a segmented detector with a specified number of radial and azimuthal bins.</span>
 
 <span class="sd">        Each bin is a segment of an annulus and the bins are spaced equally in the radial and azimuthal directions.</span>
-<span class="sd">        The bins fit between a given inner and outer integration limit, they may be rotated around the origin and their</span>
+<span class="sd">        The bins fit between a given inner and outer integration limit, they may be rotated around the origin, and their</span>
 <span class="sd">        center may be shifted from the origin.</span>
 
 <span class="sd">        Parameters</span>
@@ -2939,17 +3138,19 @@ title="Open an issue"
 <span class="sd">        nbins_azimuthal : int</span>
 <span class="sd">            Number of angular bins.</span>
 <span class="sd">        inner : float</span>
-<span class="sd">            Inner integration limit of the bins [mrad].</span>
+<span class="sd">            Inner integration limit of the bins [mrad] (default is 0.0).</span>
 <span class="sd">        outer : float</span>
-<span class="sd">            Outer integration limit of the bins [mrad].</span>
+<span class="sd">            Outer integration limit of the bins [mrad]. If not specified, this is set to be the maximum detected angle</span>
+<span class="sd">            of the diffraction pattern.</span>
 <span class="sd">        rotation : float</span>
-<span class="sd">            Rotation of the bins around the origin [mrad].</span>
+<span class="sd">            Rotation of the bins around the origin [mrad] (default is 0.0).</span>
 <span class="sd">        offset : two float</span>
-<span class="sd">            Offset of the bins from the origin in x and y [mrad].</span>
+<span class="sd">            Offset of the bins from the origin in `x` and `y` [mrad] (default is (0.0, 0.0).</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
 <span class="sd">        polar_measurements : PolarMeasurements</span>
+<span class="sd">            The polar measurements.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="k">if</span> <span class="n">outer</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -3046,22 +3247,25 @@ title="Open an issue"
         <span class="bp">self</span><span class="p">,</span> <span class="n">step_size</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span> <span class="n">inner</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">outer</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;PolarMeasurements&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Create polar measurements from the diffraction patterns by binning the measurements in annular regions.</span>
+<span class="sd">        Create polar measurement(s) from the diffraction pattern(s) by binning the measurements in annular regions. This</span>
+<span class="sd">        method may be used to simulate a segmented detector with a specified number of radial bins.</span>
 
-<span class="sd">        This is equivalent to detecting a wave function using the FlexibleAnnularDetector.</span>
+<span class="sd">        This is equivalent to detecting a wave function using the `FlexibleAnnularDetector`.</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
 <span class="sd">        step_size : float, optional</span>
-<span class="sd">            Radial extent of the bins [mrad]. Default is 1.</span>
+<span class="sd">            Radial extent of the bins [mrad] (default is 1.0).</span>
 <span class="sd">        inner : float, optional</span>
-<span class="sd">            Inner integration limit of the bins [mrad].</span>
+<span class="sd">            Inner integration limit of the bins [mrad] (default is 0.0).</span>
 <span class="sd">        outer : float, optional</span>
-<span class="sd">            Outer integration limit of the bins [mrad].</span>
+<span class="sd">            Outer integration limit of the bins [mrad]. If not specified, this is set to be the maximum detected angle</span>
+<span class="sd">            of the diffraction pattern.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
 <span class="sd">        radially_binned_measurement : PolarMeasurements</span>
+<span class="sd">            Radially binned polar measurement(s).</span>
 <span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="k">if</span> <span class="n">outer</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -3085,6 +3289,7 @@ title="Open an issue"
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
 <span class="sd">        integrated_images : Images</span>
+<span class="sd">            The integrated images.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">_check_integration_limits</span><span class="p">(</span><span class="n">inner</span><span class="p">,</span> <span class="n">outer</span><span class="p">)</span>
@@ -3092,7 +3297,6 @@ title="Open an issue"
         <span class="n">xp</span> <span class="o">=</span> <span class="n">get_array_module</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">)</span>
 
         <span class="k">def</span> <span class="nf">integrate_fourier_space</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">sampling</span><span class="p">):</span>
-
             <span class="n">bins</span> <span class="o">=</span> <span class="n">_polar_detector_bins</span><span class="p">(</span>
                 <span class="n">gpts</span><span class="o">=</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:],</span>
                 <span class="n">sampling</span><span class="o">=</span><span class="n">sampling</span><span class="p">,</span>
@@ -3124,12 +3328,13 @@ title="Open an issue"
 
 <div class="viewcode-block" id="DiffractionPatterns.integrated_center_of_mass"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.integrated_center_of_mass">[docs]</a>    <span class="k">def</span> <span class="nf">integrated_center_of_mass</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Images</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Calculate integrated center of mass (iCOM) images from diffraction patterns. This method is only implemented</span>
+<span class="sd">        Calculate integrated center-of-mass (iCOM) images from diffraction patterns. This method is only implemented</span>
 <span class="sd">        for diffraction patterns with exactly two scan axes.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
 <span class="sd">        icom_images : Images</span>
+<span class="sd">            The iCOM images.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">com</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">center_of_mass</span><span class="p">()</span>
 
@@ -3137,8 +3342,8 @@ title="Open an issue"
             <span class="k">return</span> <span class="n">com</span><span class="o">.</span><span class="n">integrate_gradient</span><span class="p">()</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;integrated center of mass not implemented for DiffractionPatterns with &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">_scan_shape</span><span class="p">(</span><span class="bp">self</span><span class="p">))</span><span class="si">}</span><span class="s2"> scan axes&quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;Integrated center-of-mass not implemented for DiffractionPatterns with &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">_scan_shape</span><span class="p">(</span><span class="bp">self</span><span class="p">))</span><span class="si">}</span><span class="s2"> scan axes.&quot;</span>
             <span class="p">)</span></div>
 
     <span class="nd">@staticmethod</span>
@@ -3152,14 +3357,15 @@ title="Open an issue"
         <span class="bp">self</span><span class="p">,</span> <span class="n">units</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;reciprocal&quot;</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="n">Images</span><span class="p">,</span> <span class="n">RealSpaceLineProfiles</span><span class="p">]:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Calculate center of mass images or line profiles from diffraction patterns. The results are complex type where</span>
-<span class="sd">        the real and imaginary part represents the x and y component.</span>
+<span class="sd">        Calculate center-of-mass images or line profiles from diffraction patterns. The results are of type `complex`</span>
+<span class="sd">        where the real and imaginary part represents the `x` and `y` component.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
 <span class="sd">        com_images : Images</span>
-
+<span class="sd">            Center-of-mass images.</span>
 <span class="sd">        com_line_profiles : RealSpaceLineProfiles</span>
+<span class="sd">            Center-of-mass line profiles (returned if there is only one scan axis).</span>
 <span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="k">if</span> <span class="n">units</span> <span class="ow">in</span> <span class="n">angular_units</span><span class="p">:</span>
@@ -3197,22 +3403,22 @@ title="Open an issue"
         <span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Ptychographic reconstruction with the extended ptychographical engine (ePIE) algorithm.</span>
 
-<span class="sd">        probe_guess : abtem.waves.Probe</span>
-<span class="sd">            The initial guess for the probe.</span>
-<span class="sd">        max_batch : int</span>
-<span class="sd">            Maximum number of probe positions to update at every step.</span>
-<span class="sd">        max_iter : int</span>
-<span class="sd">            Maximum number of iterations to run the ePIE algorithm.</span>
-<span class="sd">        alpha : float</span>
-<span class="sd">            Step size of iterative updates for the object.</span>
-<span class="sd">        beta : float</span>
-<span class="sd">            Step size of iterative updates for the probe.</span>
-<span class="sd">        fix_probe : bool</span>
-<span class="sd">            If True, the probe will not be updated by the algorithm. Default is False.</span>
-<span class="sd">        fix_com : bool</span>
-<span class="sd">            If True, the center of mass of the probe will be centered. Default is True.</span>
-<span class="sd">        crop_to_scan : bool</span>
-<span class="sd">            If true, the output is cropped to the scan area.</span>
+<span class="sd">        probe_guess : Probe</span>
+<span class="sd">            The initial guess for the electron probe.</span>
+<span class="sd">        max_batch : int, optional</span>
+<span class="sd">            Maximum number of probe positions to update at every step (default is 8).</span>
+<span class="sd">        max_iter : int, optional</span>
+<span class="sd">            Maximum number of iterations to run the ePIE algorithm (default is 4).</span>
+<span class="sd">        alpha : float, optional</span>
+<span class="sd">            Step size of iterative updates for the object (default is 1.0).</span>
+<span class="sd">        beta : float, optional</span>
+<span class="sd">            Step size of iterative updates for the probe (default is 1.0).</span>
+<span class="sd">        fix_probe : bool, optional</span>
+<span class="sd">            If True, the probe will not be updated by the algorithm (default is False).</span>
+<span class="sd">        fix_com : bool, optional</span>
+<span class="sd">            If True, the center of mass of the probe will be centered (default).</span>
+<span class="sd">        crop_to_scan : bool, optional</span>
+<span class="sd">            If True, the output is cropped to the scan area (default).</span>
 <span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="kn">from</span> <span class="nn">abtem.reconstruct.epie</span> <span class="kn">import</span> <span class="n">epie</span>
@@ -3235,7 +3441,7 @@ title="Open an issue"
 
 <div class="viewcode-block" id="DiffractionPatterns.bandlimit"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.bandlimit">[docs]</a>    <span class="k">def</span> <span class="nf">bandlimit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">inner</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">outer</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;DiffractionPatterns&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Bandlimit the diffraction patterns by setting everything outside an annulus defined by two radial angles to</span>
+<span class="sd">        Bandlimit diffraction pattern(s) by setting everything outside an annulus defined by two radial angles to</span>
 <span class="sd">        zero.</span>
 
 <span class="sd">        Parameters</span>
@@ -3247,13 +3453,14 @@ title="Open an issue"
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
-<span class="sd">        bandlimited_diffraction_patterns : DiffractionPatterns</span>
+<span class="sd">        band-limited_diffraction_patterns : DiffractionPatterns</span>
+<span class="sd">            The band-limited diffraction pattern(s).</span>
 <span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="k">def</span> <span class="nf">bandlimit</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">inner</span><span class="p">,</span> <span class="n">outer</span><span class="p">):</span>
             <span class="n">alpha_x</span><span class="p">,</span> <span class="n">alpha_y</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">angular_coordinates</span>
             <span class="n">alpha</span> <span class="o">=</span> <span class="n">alpha_x</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">**</span> <span class="mi">2</span> <span class="o">+</span> <span class="n">alpha_y</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span> <span class="o">**</span> <span class="mi">2</span>
-            <span class="n">block</span> <span class="o">=</span> <span class="p">(</span><span class="n">alpha</span> <span class="o">&gt;=</span> <span class="n">inner</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="n">alpha</span> <span class="o">&lt;</span> <span class="n">outer</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span>
+            <span class="n">block</span> <span class="o">=</span> <span class="p">(</span><span class="n">alpha</span> <span class="o">&gt;=</span> <span class="n">inner</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="n">alpha</span> <span class="o">&lt;</span> <span class="n">outer</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
             <span class="k">return</span> <span class="n">array</span> <span class="o">*</span> <span class="n">block</span>
 
         <span class="n">xp</span> <span class="o">=</span> <span class="n">get_array_module</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">)</span>
@@ -3286,16 +3493,18 @@ title="Open an issue"
 
 <div class="viewcode-block" id="DiffractionPatterns.block_direct"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.block_direct">[docs]</a>    <span class="k">def</span> <span class="nf">block_direct</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">radius</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;DiffractionPatterns&quot;</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Block the direct beam by setting the pixels of the zeroth order disk to zero.</span>
+<span class="sd">        Block the direct beam by setting the pixels of the zeroth-order Bragg reflection (non-scattered beam) to zero.</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
 <span class="sd">        radius : float, optional</span>
-<span class="sd">            The radius of the zeroth order disk to block [mrad]. If not given this will be inferred from the metadata.</span>
+<span class="sd">            The radius of the zeroth-order reflection to block [mrad]. If not given this will be inferred from the</span>
+<span class="sd">            metadata, if available.</span>
 
 <span class="sd">        Returns</span>
 <span class="sd">        -------</span>
 <span class="sd">        diffraction_patterns : DiffractionPatterns</span>
+<span class="sd">            The diffraction pattern(s) with the direct beam removed.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
 
         <span class="k">if</span> <span class="n">radius</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -3306,10 +3515,10 @@ title="Open an issue"
 
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">bandlimit</span><span class="p">(</span><span class="n">radius</span><span class="p">,</span> <span class="n">outer</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">inf</span><span class="p">)</span></div>
 
-    <span class="k">def</span> <span class="nf">center_bin</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">_center_bin</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">//</span> <span class="mi">2</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">//</span> <span class="mi">2</span>
 
-    <span class="k">def</span> <span class="nf">select_frequency_bin</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bins</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">_select_frequency_bin</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bins</span><span class="p">):</span>
         <span class="n">bins</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">bins</span><span class="p">)</span>
         <span class="n">center</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">base_shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">//</span> <span class="mi">2</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">base_shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">//</span> <span class="mi">2</span><span class="p">])</span>
         <span class="n">indices</span> <span class="o">=</span> <span class="n">bins</span> <span class="o">+</span> <span class="n">center</span>
@@ -3319,16 +3528,6 @@ title="Open an issue"
             <span class="n">array</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">indices</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">indices</span><span class="p">[</span><span class="mi">1</span><span class="p">]]</span>
 
         <span class="k">return</span> <span class="n">array</span>
-
-        <span class="c1"># if len(array.shape) &gt; 1:</span>
-        <span class="c1">#     array = np.swapaxes(array, -1, -2)</span>
-        <span class="c1">#</span>
-        <span class="c1">#</span>
-        <span class="c1"># return LineProfiles(array=array,</span>
-        <span class="c1">#                     metadata=self.metadata,</span>
-        <span class="c1">#                     ensemble_axes_metadata=</span>
-        <span class="c1">#</span>
-        <span class="c1">#                     )</span>
 
 <div class="viewcode-block" id="DiffractionPatterns.show"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.DiffractionPatterns.html#abtem.measurements.DiffractionPatterns.show">[docs]</a>    <span class="k">def</span> <span class="nf">show</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
@@ -3360,20 +3559,21 @@ title="Open an issue"
         <span class="n">complex_coloring_kwargs</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Axes</span><span class="p">:</span>
         <span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Show the image(s) using matplotlib.</span>
+<span class="sd">        Show the diffraction pattern(s) using matplotlib.</span>
 
 <span class="sd">        Parameters</span>
 <span class="sd">        ----------</span>
 <span class="sd">        units : bool, optional</span>
+<span class="sd">            The units of the diffraction pattern(s) can be either &#39;reciprocal&#39; (resulting in [1 / Å]), or &#39;mrad&#39;.</span>
 <span class="sd">        cmap : str, optional</span>
+<span class="sd">            Matplotlib colormap name used to map scalar data to colors. Ignored if image array is complex.</span>
 <span class="sd">        explode : bool, optional</span>
 <span class="sd">            If True, a grid of images is created for all the items of the last two ensemble axes. If False, the first</span>
 <span class="sd">            ensemble item is shown.</span>
 <span class="sd">        ax : matplotlib Axes, optional</span>
 <span class="sd">            If given the plots are added to the Axes. This is not available for image grids.</span>
 <span class="sd">        figsize : two int, optional</span>
-<span class="sd">            The figure size given as width and height in inches, passed to matplotlib.pyplot.figure.</span>
-<span class="sd">        title : bool or str, optional</span>
+<span class="sd">            The figure size given as width and height in inches, passed to `matplotlib.pyplot.figure`.</span>
 <span class="sd">        title : bool or str, optional</span>
 <span class="sd">            Add a title to the figure. If True is given instead of a string the title will be given by the value</span>
 <span class="sd">            corresponding to the &quot;name&quot; key of the metadata dictionary, if this item exists.</span>
@@ -3381,23 +3581,23 @@ title="Open an issue"
 <span class="sd">            Add titles to each panel. If True a title will be created from the axis metadata. If given as a list of</span>
 <span class="sd">            strings an item must exist for each panel.</span>
 <span class="sd">        x_ticks : bool or list, optional</span>
-<span class="sd">            If False, the ticks on the x-axis will be removed.</span>
+<span class="sd">            If False, the ticks on the `x`-axis will be removed.</span>
 <span class="sd">        y_ticks : bool or list, optional</span>
-<span class="sd">            If False, the ticks on the y-axis will be removed.</span>
+<span class="sd">            If False, the ticks on the `y`-axis will be removed.</span>
 <span class="sd">        x_label : bool or str, optional</span>
-<span class="sd">            Add label to the x-axis of every plot. If True (default) the label will be created from the corresponding axis</span>
+<span class="sd">            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis</span>
 <span class="sd">            metadata. A string may be given to override this.</span>
 <span class="sd">        y_label : bool or str, optional</span>
-<span class="sd">            Add label to the x-axis of every plot. If True (default) the label will be created from the corresponding axis</span>
+<span class="sd">            Add label to the `x`-axis of every plot. If True (default) the label will be created from the corresponding axis</span>
 <span class="sd">            metadata. A string may be given to override this.</span>
 <span class="sd">        row_super_label : bool or str, optional</span>
-<span class="sd">            Add super label to the rows of an image grid. If True the label will be created from the corresponding axis</span>
+<span class="sd">            Add super label to the rows of an image grid. If True (default) the label will be created from the corresponding axis</span>
 <span class="sd">            metadata. A string may be given to override this. The default is no super label.</span>
 <span class="sd">        col_super_label : bool or str, optional</span>
-<span class="sd">            Add super label to the columns of an image grid. If True the label will be created from the corresponding</span>
+<span class="sd">            Add super label to the columns of an image grid. If True (default) the label will be created from the corresponding</span>
 <span class="sd">            axis metadata. A string may be given to override this. The default is no super label.</span>
-<span class="sd">        power : float</span>
-<span class="sd">            Show image on a power scale.</span>
+<span class="sd">        power : float, optional</span>
+<span class="sd">            Show image on a power scale (default is a power of 1.0, ie. linear scale).</span>
 <span class="sd">        vmin : float, optional</span>
 <span class="sd">            Minimum of the intensity color scale. Default is the minimum of the array values.</span>
 <span class="sd">        vmax : float, optional</span>
@@ -3407,7 +3607,7 @@ title="Open an issue"
 <span class="sd">            it is requested). Default is False.</span>
 <span class="sd">        cbar : bool, optional</span>
 <span class="sd">            Add colorbar(s) to the image(s). The position and size of the colorbar(s) may be controlled by passing</span>
-<span class="sd">            keyword arguments to mpl_toolkits.axes_grid1.axes_grid.ImageGrid through `image_grid_kwargs`.</span>
+<span class="sd">            keyword arguments to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid` through &#39;image_grid_kwargs&#39;.</span>
 <span class="sd">        sizebar : bool, optional,</span>
 <span class="sd">            Add a size bar to the image(s).</span>
 <span class="sd">        float_formatting : str, optional</span>
@@ -3415,11 +3615,11 @@ title="Open an issue"
 <span class="sd">        panel_labels : list of str</span>
 <span class="sd">            A list of labels for each panel of a grid of images.</span>
 <span class="sd">        image_grid_kwargs : dict</span>
-<span class="sd">            Additional keyword arguments passed to mpl_toolkits.axes_grid1.axes_grid.ImageGrid.</span>
+<span class="sd">            Additional keyword arguments passed to `mpl_toolkits.axes_grid1.axes_grid.ImageGrid`.</span>
 <span class="sd">        imshow_kwargs : dict</span>
-<span class="sd">            Additional keyword arguments passed to matplotlib.axes.Axes.imshow.</span>
+<span class="sd">            Additional keyword arguments passed to `matplotlib.axes.Axes.imshow`.</span>
 <span class="sd">        anchored_text_kwargs : dict</span>
-<span class="sd">            Additional keyword arguments passed to matplotlib.offsetbox.AnchoredText. This is used for creating panel</span>
+<span class="sd">            Additional keyword arguments passed to `matplotlib.offsetbox.AnchoredText`. This is used for creating panel</span>
 <span class="sd">            labels.</span>
 
 <span class="sd">        Returns</span>
@@ -3432,7 +3632,7 @@ title="Open an issue"
         <span class="k">else</span><span class="p">:</span>
             <span class="k">if</span> <span class="n">ax</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                 <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
-                    <span class="s2">&quot;`ax` not implemented for with `explode = True`&quot;</span>
+                    <span class="s2">&quot;`ax` not implemented for with `explode = True`.&quot;</span>
                 <span class="p">)</span>
             <span class="n">measurements</span> <span class="o">=</span> <span class="bp">self</span>
 
@@ -3487,7 +3687,32 @@ title="Open an issue"
 
 
 <div class="viewcode-block" id="PolarMeasurements"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements">[docs]</a><span class="k">class</span> <span class="nc">PolarMeasurements</span><span class="p">(</span><span class="n">BaseMeasurement</span><span class="p">):</span>
-    <span class="n">_base_dims</span> <span class="o">=</span> <span class="mi">2</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Class describing polar measurements with a specified number of radial and azimuthal bins.</span>
+
+<span class="sd">    Each bin is a segment of an annulus and the bins are spaced equally in the radial and azimuthal directions.</span>
+<span class="sd">    The bins may be rotated around the origin, and their center may be shifted from the origin.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    array : np.ndarray</span>
+<span class="sd">        Array containing the measurement.</span>
+<span class="sd">    radial_sampling : float</span>
+<span class="sd">        Sampling of the radial bins [mrad].</span>
+<span class="sd">    azimuthal_sampling : int</span>
+<span class="sd">        Sampling of the angular bins [mrad].</span>
+<span class="sd">    radial_offset : float, optional</span>
+<span class="sd">        Offset of the bins from the origin [mrad] (default is 0.0).</span>
+<span class="sd">    azimuthal_offset : float, optional</span>
+<span class="sd">        Rotation of the bins around the origin [mrad] (default is 0.0).</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    polar_measurements : PolarMeasurements</span>
+<span class="sd">        The polar measurements.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">_base_dims</span> <span class="o">=</span> <span class="mi">2</span>  <span class="c1"># The dimension of polar measurements is 2.</span>
 
 <div class="viewcode-block" id="PolarMeasurements.__init__"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
@@ -3499,7 +3724,6 @@ title="Open an issue"
         <span class="n">ensemble_axes_metadata</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">AxisMetadata</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">):</span>
-
         <span class="bp">self</span><span class="o">.</span><span class="n">_radial_sampling</span> <span class="o">=</span> <span class="n">radial_sampling</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_azimuthal_sampling</span> <span class="o">=</span> <span class="n">azimuthal_sampling</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_radial_offset</span> <span class="o">=</span> <span class="n">radial_offset</span>
@@ -3511,10 +3735,29 @@ title="Open an issue"
             <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">,</span>
         <span class="p">)</span></div>
 
-    <span class="nd">@classmethod</span>
+<div class="viewcode-block" id="PolarMeasurements.from_array_and_metadata"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.from_array_and_metadata">[docs]</a>    <span class="nd">@classmethod</span>
     <span class="k">def</span> <span class="nf">from_array_and_metadata</span><span class="p">(</span>
         <span class="bp">cls</span><span class="p">,</span> <span class="n">array</span><span class="p">,</span> <span class="n">axes_metadata</span><span class="p">,</span> <span class="n">metadata</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;PolarMeasurements&quot;</span><span class="p">:</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Creates polar measurements(s) from a given array and metadata.</span>
+
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        array : array</span>
+<span class="sd">            Complex array defining one or more polar measurements. The second-to-last and last dimensions are the</span>
+<span class="sd">            measurement `y`- and `x`-axis.</span>
+<span class="sd">        axes_metadata : list of AxesMetadata</span>
+<span class="sd">            Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two</span>
+<span class="sd">            axes must be RealSpaceAxis.</span>
+<span class="sd">        metadata : dict</span>
+<span class="sd">            A dictionary defining the measurement metadata.</span>
+
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        polar_measurements : PolarMeasurements</span>
+<span class="sd">            Polar measurement(s) from the array and metadata.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">radial_sampling</span> <span class="o">=</span> <span class="n">axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">sampling</span>
         <span class="n">radial_offset</span> <span class="o">=</span> <span class="n">axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">offset</span>
         <span class="n">azimuthal_sampling</span> <span class="o">=</span> <span class="n">axes_metadata</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">sampling</span>
@@ -3527,7 +3770,7 @@ title="Open an issue"
             <span class="n">azimuthal_offset</span><span class="o">=</span><span class="n">azimuthal_offset</span><span class="p">,</span>
             <span class="n">ensemble_axes_metadata</span><span class="o">=</span><span class="n">axes_metadata</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">],</span>
             <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">,</span>
-        <span class="p">)</span>
+        <span class="p">)</span></div>
 
     <span class="k">def</span> <span class="nf">_area_per_pixel</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">_scan_area_per_pixel</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
@@ -3569,11 +3812,30 @@ title="Open an issue"
     <span class="k">def</span> <span class="nf">azimuthal_offset</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_azimuthal_offset</span>
 
-    <span class="k">def</span> <span class="nf">integrate_radial</span><span class="p">(</span>
+<div class="viewcode-block" id="PolarMeasurements.integrate_radial"><a class="viewcode-back" href="../../library/api/_autosummary/abtem.measurements.PolarMeasurements.html#abtem.measurements.PolarMeasurements.integrate_radial">[docs]</a>    <span class="k">def</span> <span class="nf">integrate_radial</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span> <span class="n">inner</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">outer</span><span class="p">:</span> <span class="nb">float</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="n">Images</span><span class="p">,</span> <span class="n">RealSpaceLineProfiles</span><span class="p">]:</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">integrate</span><span class="p">(</span><span class="n">radial_limits</span><span class="o">=</span><span class="p">(</span><span class="n">inner</span><span class="p">,</span> <span class="n">outer</span><span class="p">))</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Create images by integrating the polar measurements over an annulus defined by an inner and outer integration</span>
+<span class="sd">        angle.</span>
 
+<span class="sd">        Parameters</span>
+<span class="sd">        ----------</span>
+<span class="sd">        inner : float</span>
+<span class="sd">            Inner integration limit [mrad].</span>
+<span class="sd">        outer : float</span>
+<span class="sd">            Outer integration limit [mrad].</span>
+
+<span class="sd">        Returns</span>
+<span class="sd">        -------</span>
+<span class="sd">        integrated_images : Images</span>
+<span class="sd">            The integrated images.</span>
+<span class="sd">        realspace_line_profiles : RealSpaceLineProfiles</span>
+<span class="sd">            Integrated line profiles (returned if there is only one scan axis).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">integrate</span><span class="p">(</span><span class="n">radial_limits</span><span class="o">=</span><span class="p">(</span><span class="n">inner</span><span class="p">,</span> <span class="n">outer</span><span class="p">))</span></div>
+
+    <span class="c1"># TODO: to be documented</span>
     <span class="k">def</span> <span class="nf">integrate</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">radial_limits</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -3611,6 +3873,7 @@ title="Open an issue"
 
         <span class="k">return</span> <span class="n">_reduced_scanned_images_or_line_profiles</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span>
 
+    <span class="c1"># TODO: to be revised and documented.</span>
     <span class="k">def</span> <span class="nf">differentials</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">direction_1_plus</span><span class="p">,</span>
@@ -3637,6 +3900,7 @@ title="Open an issue"
             <span class="n">array</span><span class="p">,</span> <span class="o">**</span><span class="n">differential_1</span><span class="o">.</span><span class="n">_copy_kwargs</span><span class="p">(</span><span class="n">exclude</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;array&quot;</span><span class="p">,))</span>
         <span class="p">)</span>
 
+    <span class="c1"># TODO: to be documented.</span>
     <span class="k">def</span> <span class="nf">show</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">ax</span><span class="p">:</span> <span class="n">Axes</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
