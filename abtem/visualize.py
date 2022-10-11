@@ -36,7 +36,7 @@ if TYPE_CHECKING:
         DiffractionPatterns,
         BaseMeasurement,
         RealSpaceLineProfiles,
-        FourierSpaceLineProfiles,
+        ReciprocalSpaceLineProfiles,
     )
     from abtem.core.indexing import IndexedDiffractionPattern
 
@@ -460,7 +460,7 @@ def _add_plot(x: np.ndarray, y: np.ndarray, ax: Axes, label: str = None, **kwarg
 
 
 def show_measurements_1d(
-    measurements: Union["RealSpaceLineProfiles", "FourierSpaceLineProfiles"],
+    measurements: Union["RealSpaceLineProfiles", "ReciprocalSpaceLineProfiles"],
     float_formatting: str,
     extent: Tuple[float, float] = None,
     ax: Axes = None,

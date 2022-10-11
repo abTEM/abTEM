@@ -18,7 +18,7 @@ from abtem.measurements import (
     Images,
     DiffractionPatterns,
     RealSpaceLineProfiles,
-    FourierSpaceLineProfiles,
+    ReciprocalSpaceLineProfiles,
     PolarMeasurements,
 )
 from abtem.prism.s_matrix import SMatrix, SMatrixArray
