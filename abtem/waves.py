@@ -1,3 +1,4 @@
+"""Module for describing wave functions of the incoming electron beam and the exit wave."""
 import itertools
 import numbers
 import warnings
@@ -119,16 +120,14 @@ def _ensure_parity(n, even, v=1):
 class BaseWaves(
     HasGridMixin, HasAcceleratorMixin, HasAxes, HasDevice, CopyMixin, EqualityMixin
 ):
-    """
-    Base class of all wave functions.
-    """
+    """Base class of all wave functions. Documented in the subclasses."""
 
     _base_axes = (-2, -1)
 
     @property
     @abstractmethod
     def metadata(self) -> dict:
-        """ Metadata stored as a dictionary. """
+        """Metadata stored as a dictionary."""
         pass
 
     @property
@@ -207,7 +206,9 @@ class BaseWaves(
             gpts = self._antialias_valid_gpts
 
         else:
-            raise ValueError('angle must be a number or one of "cutoff", "valid" or "full"')
+            raise ValueError(
+                "Angle must be a number or one of 'cutoff', 'valid' or 'full'"
+            )
 
         if parity == "same":
             return (
@@ -231,9 +232,7 @@ class BaseWaves(
 
     @property
     def cutoff_angles(self) -> Tuple[float, float]:
-        """
-        Scattering angles at the antialias cutoff [mrad].
-        """
+        """Scattering angles at the antialias cutoff [mrad]."""
         return (
             self.antialias_cutoff_gpts[0] // 2 * self.angular_sampling[0],
             self.antialias_cutoff_gpts[1] // 2 * self.angular_sampling[1],
@@ -241,9 +240,7 @@ class BaseWaves(
 
     @property
     def rectangle_cutoff_angles(self) -> Tuple[float, float]:
-        """
-        Scattering angles corresponding to the sides of the largest rectangle within the antialias cutoff [mrad].
-        """
+        """Scattering angles corresponding to the sides of the largest rectangle within the antialias cutoff [mrad]."""
         return (
             self.antialias_valid_gpts[0] // 2 * self.angular_sampling[0],
             self.antialias_valid_gpts[1] // 2 * self.angular_sampling[1],
@@ -251,9 +248,7 @@ class BaseWaves(
 
     @property
     def full_cutoff_angles(self) -> Tuple[float, float]:
-        """
-        Scattering angles corresponding to the full wave function size [mrad].
-        """
+        """Scattering angles corresponding to the full wave function size [mrad]."""
         return (
             self.gpts[0] // 2 * self.angular_sampling[0],
             self.gpts[1] // 2 * self.angular_sampling[1],
@@ -261,9 +256,7 @@ class BaseWaves(
 
     @property
     def angular_sampling(self) -> Tuple[float, float]:
-        """
-        Fourier space sampling in scattering angles [mrad].
-        """
+        """Reciprocal-space sampling in units of scattering angles [mrad]."""
         self.accelerator.check_is_defined()
         fourier_space_sampling = self.fourier_space_sampling
         return (
@@ -272,60 +265,28 @@ class BaseWaves(
         )
 
 
-# def map_blocks(
-#     waves: "Waves",
-#     func: callable,
-#     out_cls=None,
-# out_kwargs=None,
-#         overwrite_kwargs,
-#     dtype=np.complex64,
-#     map_blocks_kwargs: dict = None,
-#
-# ):
-#
-#     if out_cls is None:
-#         out_cls = Waves
-#
-#     if map_blocks_kwargs is None:
-#         map_blocks_kwargs = {}
-#
-#     xp = get_array_module(waves.array)
-#
-#     meta = xp.array((), dtype=dtype)
-#
-#     if waves.is_lazy:
-#         array = waves.array.map_blocks(func, meta=meta, **map_blocks_kwargs)
-#     else:
-#         array = func(waves.array)
-#
-#     kwargs = waves._copy_kwargs(exclude=("array",))
-#     kwargs.update(new_kwargs)
-#     return out_cls(array, **kwargs)
-
-
 class _WaveRenormalization(EmptyEnsemble, WaveTransform):
     def apply(self, waves):
         return waves.normalize()
 
 
-
 class Waves(HasArray, BaseWaves):
     """
-    Waves define a batch of arbitrary 2D wave functions defined by a complex numpy or cupy array.
+    Waves define a batch of arbitrary 2D wave functions defined by a complex array.
 
     Parameters
     ----------
     array : array
-        Complex array defining one or more 2d wave functions. The second-to-last and last dimensions are the wave
-        function y- and x-axis, respectively.
+        Complex array defining one or more 2D wave functions. The second-to-last and last dimensions are the wave
+        function `y`- and `x`-axes, respectively.
     energy : float
         Electron energy [eV].
     extent : one or two float
-        Extent of wave functions in x and y [Å].
+        Extent of wave functions in `x` and `y` [Å].
     sampling : one or two float
-        Sampling of wave functions in x and y [1 / Å].
-    fourier_space : bool, optional
-        If True, the wave functions are assumed to be represented in Fourier space instead of real space.
+        Sampling of wave functions in `x` and `y` [1 / Å].
+    reciprocal_space : bool, optional
+        If True, the wave functions are assumed to be represented in reciprocal space instead of real space (default is False).
     ensemble_axes_metadata : list of AxesMetadata
         Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.
     metadata : dict
@@ -333,7 +294,7 @@ class Waves(HasArray, BaseWaves):
         from the waves.
     """
 
-    _base_dims = 2
+    _base_dims = 2  # The dimension of waves is assumed to be 2D.
 
     def __init__(
         self,
@@ -341,13 +302,15 @@ class Waves(HasArray, BaseWaves):
         energy: float = None,
         extent: Union[float, Tuple[float, float]] = None,
         sampling: Union[float, Tuple[float, float]] = None,
-        fourier_space: bool = False,
+        reciprocal_space: bool = False,
         ensemble_axes_metadata: List[AxisMetadata] = None,
         metadata: Dict = None,
     ):
 
         if len(array.shape) < 2:
-            raise RuntimeError("Wave function array should have 2 dimensions or more")
+            raise RuntimeError(
+                "Wave-function array should have two or more dimensions."
+            )
 
         self._array = array
         self._grid = Grid(
@@ -359,7 +322,7 @@ class Waves(HasArray, BaseWaves):
         )
         self._metadata = {} if metadata is None else metadata
 
-        self._fourier_space = fourier_space
+        self._fourier_space = reciprocal_space
         self._check_axes_metadata()
 
     @property
@@ -404,13 +367,13 @@ class Waves(HasArray, BaseWaves):
     ) -> "Waves":
 
         """
-        Create Waves from an array and the related axis metadata and metadata.
+        Creates wave functions from a given array and metadata.
 
         Parameters
         ----------
         array : array
-            Complex array defining one or more 2d wave functions. The second-to-last and last dimensions are the wave
-            function y- and x-axis, respectively.
+            Complex array defining one or more 2D wave functions. The second-to-last and last dimensions are the wave
+            function `y`- and `x`-axis, respectively.
         axes_metadata : list of AxesMetadata
             Axis metadata for each axis. The axis metadata must be compatible with the shape of the array. The last two
             axes must be RealSpaceAxis.
@@ -421,6 +384,7 @@ class Waves(HasArray, BaseWaves):
         Returns
         -------
         wave_functions : Waves
+            The created wave functions.
         """
         energy = metadata["energy"]
 
@@ -445,24 +409,29 @@ class Waves(HasArray, BaseWaves):
         alpha *= self.wavelength
         return alpha, phi
 
+    # TODO: check that axes_metadata being optional is correctly handled. Also, rename "fourier_space" to "reciprocal_space", but carefully.
     def convolve(
         self,
         kernel: np.ndarray,
-        axes_metadata: List[AxisMetadata],
+        axes_metadata: List[AxisMetadata] = None,
         out_space: str = "in_space",
     ):
         """
-        Convolve the wave functions array with another array.
+        Convolve the wave-function array with a given array.
 
         Parameters
         ----------
         kernel : np.ndarray
-        axes_metadata : list of
-        out_space :
+            Array to be convolved with.
+        axes_metadata : list of AxisMetadata, optional
+            Metadata for the resulting convolved array. Needed only if the given array has more than two dimensions.
+        out_space : str, optional
+            Space in which the convolved array is represented. Options are 'reciprocal_space' and 'real_space' (default is the space of the wave functions).
 
         Returns
         -------
-
+        convolved : Waves
+            The convolved wave functions.
         """
 
         if out_space == "in_space":
@@ -474,7 +443,7 @@ class Waves(HasArray, BaseWaves):
 
         xp = get_array_module(self.device)
 
-        waves = self.ensure_fourier_space(in_place=False)
+        waves = self.ensure_reciprocal_space(in_place=False)
 
         waves_dims = tuple(range(len(kernel.shape) - 2))
         kernel_dims = tuple(
@@ -498,7 +467,21 @@ class Waves(HasArray, BaseWaves):
 
         return waves.__class__(**d)
 
-    def normalize(self, space: str = "fourier"):
+    def normalize(self, space: str = "reciprocal"):
+        """
+        Normalize the wave functions in real or reciprocal space.
+
+        Parameters
+        ----------
+        space : str
+            Should be one of 'real' or 'reciprocal' (default is 'reciprocal'). Defines whether the wave function should
+            be normalized such that the intensity sums to one in real or reciprocal space.
+
+        Returns
+        -------
+        normalized_waves : Waves
+            The normalized wave functions.
+        """
 
         if self.is_lazy:
             return self.apply_transform(_WaveRenormalization())
@@ -507,8 +490,8 @@ class Waves(HasArray, BaseWaves):
 
         fourier_space = self.fourier_space
 
-        if space == "fourier":
-            waves = self.ensure_fourier_space()
+        if space == "reciprocal":
+            waves = self.ensure_reciprocal_space()
             f = xp.sqrt(abs2(waves.array).sum((-2, -1), keepdims=True))
             waves = waves / f
             if not fourier_space:
@@ -521,20 +504,22 @@ class Waves(HasArray, BaseWaves):
 
         return waves
 
+    # TODO: throw an error if wave functions are in reciprocal space.
     def tile(self, repetitions: Tuple[int, int], renormalize: bool = False) -> "Waves":
         """
-        Tile wave functions.
+        Tile the wave functions. Can only be applied in real space.
 
         Parameters
         ----------
         repetitions : two int
-            The number of repetitions of the wave functions along the x- and y-axis.
-        renormalize : bool
-            If True, preserve the total intensity of the wave function.
+            The number of repetitions of the wave functions along the `x`- and `y`-axes.
+        renormalize : bool, optional
+            If True, preserve the total intensity of the wave function (default is False).
 
         Returns
         -------
         tiled_wave_functions : Waves
+            The tiled wave functions.
         """
 
         d = self._copy_kwargs(exclude=("array", "extent"))
@@ -557,17 +542,19 @@ class Waves(HasArray, BaseWaves):
 
         return self.__class__(**d)
 
-    def ensure_fourier_space(self, in_place: bool = False):
+    def ensure_reciprocal_space(self, in_place: bool = False):
         """
-        Apply Fourier transform if the wave functions represented in real space.
+        Transform to reciprocal space if the wave functions are represented in real space.
 
         Parameters
         ----------
-        in_place : bool
+        in_place : bool, optional
+            If True, modify the array in place; otherwise a copy is created (default is False).
 
         Returns
         -------
-
+        waves_in_reciprocal_space : Waves
+            The wave functions in reciprocal space.
         """
 
         if self.fourier_space:
@@ -580,15 +567,17 @@ class Waves(HasArray, BaseWaves):
 
     def ensure_real_space(self, in_place: bool = False):
         """
-        Apply inverse Fourier transform if the wave functions represented in Fourier space.
+        Transform to real space if the wave functions are represented in reciprocal space.
 
         Parameters
         ----------
-        in_place :
+        in_place : bool, optional
+            If True, modify the array in place; otherwise a copy is created (default is False).
 
         Returns
         -------
-
+        waves_in_real_space : Waves
+            The wave functions in real space.
         """
 
         if not self.fourier_space:
@@ -599,23 +588,24 @@ class Waves(HasArray, BaseWaves):
         d["fourier_space"] = False
         return self.__class__(**d)
 
-    def phase_shift(self, shift: float):
+    def phase_shift(self, amount: float):
         """
         Shift the phase of the wave functions.
 
         Parameters
         ----------
-        phase_shift : float
+        amount : float
             Amount of phase shift [rad].
 
         Returns
         -------
         phase_shifted_waves : Waves
+            The shifted wave functions.
         """
 
         def phase_shift(array):
             xp = get_array_module(self.array)
-            return xp.exp(1.0j * shift) * array
+            return xp.exp(1.0j * amount) * array
 
         d = self._copy_kwargs(exclude=("array",))
         d["array"] = phase_shift(self.array)
@@ -624,12 +614,12 @@ class Waves(HasArray, BaseWaves):
 
     def intensity(self) -> Images:
         """
-        Calculate the intensity of the wave functions at the image plane.
+        Calculate the intensity of the wave functions.
 
         Returns
         -------
         intensity_images : Images
-            The wave function intensity.
+            The intensity of the wave functions.
         """
 
         def intensity(array):
@@ -655,12 +645,12 @@ class Waves(HasArray, BaseWaves):
 
     def images(self):
         """
-        Calculate the complex array of the wave functions at the image plane.
+        The complex array of the wave functions at the image plane.
 
         Returns
         -------
-        intensity_images : Images
-            The wave function intensity.
+        complex_images : Images
+            The wave functions as a complex image.
         """
 
         array = self.array.copy()
@@ -681,38 +671,38 @@ class Waves(HasArray, BaseWaves):
         normalization: str = "values",
     ) -> "Waves":
         """
-        Downsample the wave function to a lower maximum scattering angle.
+        Downsample the wave functions to a lower maximum scattering angle.
 
         Parameters
         ----------
         max_angle : {'cutoff', 'valid'} or float, optional
-            If not False, the scattering matrix is downsampled to a maximum given scattering angle after running the
-            multislice algorithm.
+            Controls the downsampling of the wave functions.
 
                 ``cutoff`` :
-                    Downsample to the antialias cutoff scattering angle.
+                    Downsample to the antialias cutoff scattering angle (default).
 
                 ``valid`` :
-                    Downsample to the largest rectangle inside the circle with a radius defined by the antialias
+                    Downsample to the largest rectangle that fits inside the circle with a radius defined by the antialias
                     cutoff scattering angle.
 
                 float :
-                    Downsample to a maximum scattering angle specified by a float.
+                    Downsample to a maximum scattering angle specified by a float [mrad].
 
         gpts : two int, optional
-            Number of grid points of the waves after downsampling. If given, `max_angle` is not used.
+            Number of grid points of the wave functions after downsampling. If given, `max_angle` is not used.
 
         normalization : {'values', 'amplitude'}
             The normalization parameter determines the preserved quantity after normalization.
+
                 ``values`` :
-                The pixelwise values of the wave function are preserved.
+                    The pixel-wise values of the wave function are preserved (default).
 
                 ``amplitude`` :
-                The total amplitude of the wave function is preserved.
+                    The total amplitude of the wave function is preserved.
 
         Returns
         -------
-        Waves
+        downsampled_waves : Waves
             The downsampled wave functions.
         """
 
@@ -753,32 +743,39 @@ class Waves(HasArray, BaseWaves):
         Parameters
         ----------
         max_angle : {'cutoff', 'valid', 'full'} or float
-            Maximum scattering angle of the diffraction patterns.
+            Control the maximum scattering angle of the diffraction patterns.
 
                 ``cutoff`` :
-                    The maximum scattering angle will be the cutoff of the antialias aperture.
+                    Downsample to the antialias cutoff scattering angle (default).
 
                 ``valid`` :
-                    The maximum scattering angle will be the largest rectangle that fits inside the circular antialias
-                    aperture.
+                    Downsample to the largest rectangle that fits inside the circle with a radius defined by the antialias
+                    cutoff scattering angle.
 
-        block_direct : bool or float
-            If true the direct beam is masked.
-        fftshift : bool
-            If true, shift the zero-angle component to the center of the diffraction patterns.
+                ``full`` :
+                    The diffraction patterns are not cropped, and hence the antialiased region is included.
+
+                float :
+                    Downsample to a maximum scattering angle specified by a float [mrad].
+
+        block_direct : bool or float, optional
+            If True the direct beam is masked (default is False). If float, masks up to that scattering angle [mrad].
+        fftshift : bool, optional
+            If False, do not shift the direct beam to the center of the diffraction patterns (default is True).
         parity : {'same', 'even', 'odd', 'none'}
-            The parity of the shape of the diffraction patterns.
+            The parity of the shape of the diffraction patterns. Default is 'odd', so that the shape of the diffraction
+            pattern is odd with the zero at the middle.
 
         Returns
         -------
         diffraction_patterns : DiffractionPatterns
+            The diffraction pattern(s).
         """
 
         def _diffraction_pattern(array, new_gpts, return_complex, fftshift):
             xp = get_array_module(array)
 
             array = fft2(array, overwrite_x=False)
-
 
             if array.shape[-2:] != new_gpts:
                 array = fft_crop(array, new_shape=array.shape[:-2] + new_gpts)
@@ -844,19 +841,20 @@ class Waves(HasArray, BaseWaves):
         self, transform: WaveTransform, max_batch: Union[int, str] = "auto"
     ) -> "Waves":
         """
-        Apply wave function transformation to the wave functions.
+        Transform the wave functions by a given transformation.
 
         Parameters
         ----------
         transform : WaveTransform
-            Wave function transformation to apply.
+            The wave-function transformation to apply.
         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If None, the number of chunks are
-            automatically estimated based on "dask.chunk-size" in the user configuration.
+            The number of wave functions in each chunk of the Dask array. If not given, the number of chunks are
+            automatically set based on the user configuration.
 
         Returns
         -------
         transformed_waves : Waves
+            The transformed waves.
         """
 
         if self.is_lazy:
@@ -906,17 +904,17 @@ class Waves(HasArray, BaseWaves):
         self, ctf: CTF = None, max_batch: Union[int, str] = "auto", **kwargs
     ) -> "Waves":
         """
-        Apply the aberrations and apertures of a Contrast Transfer Function to the wave functions.
+        Apply the aberrations and apertures of a contrast transfer function to the wave functions.
 
         Parameters
         ----------
         ctf : CTF, optional
-            Contrast Transfer Function to be applied.
+            Contrast transfer function to be applied.
         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If None, the number of chunks are
-            automatically estimated based on "dask.chunk-size" in the user configuration.
+            The number of wave functions in each chunk of the Dask array. If not given, the number of chunks are
+            automatically set based on the user configuration.
         kwargs :
-            Provide the parameters of the contrast transfer function as keyword arguments. See `abtem.transfer.CTF`.
+            Provide the parameters of the contrast transfer function as keyword arguments (see :class:`.CTF`).
 
         Returns
         -------
@@ -956,24 +954,28 @@ class Waves(HasArray, BaseWaves):
         transpose: bool = False,
     ) -> "Waves":
         """
-        Propagate and transmit wave function through the provided potential using the multislice algorithm.
+        Propagate and transmit wave function through the provided potential using the multislice algorithm. When detector(s)
+        are given, output will be the corresponding measurement.
 
         Parameters
         ----------
-        potential : Potential
-            The potential through which to propagate the wave function.
-        detectors : BaseDetector or list of Detector
+        potential : BasePotential or ASE.Atoms
+            The potential through which to propagate the wave function. Optionally atoms can be directly given.
+        detectors : BaseDetector or list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be converted to measurements after
-            running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.
+            running the multislice algorithm. See `abtem.measurements.detect` for a list of implemented detectors. If not
+            given, returns the wave functions themselves.
         conjugate : bool, optional
-            If True, use the conjugate of the transmission function. Default is False.
+            If True, use the conjugate of the transmission function (default is False).
         transpose : bool, optional
-            If True, reverse the order of propagation and transmission. Default is False.
+            If True, reverse the order of propagation and transmission (default is False).
 
         Returns
         -------
+        detected_waves : BaseMeasurement or list of BaseMeasurement
+            The detected measurement (if detector(s) given).
         exit_waves : Waves
-            Wave function(s) at the exit plane(s) of the potential.
+            Wave functions at the exit plane(s) of the potential (if no detector(s) given).
         """
 
         potential = _validate_potential(potential, self)
@@ -1039,10 +1041,10 @@ class Waves(HasArray, BaseWaves):
 
     def show(self, **kwargs):
         """
-        Show the wave function intensities.
+        Show the wave-function intensities.
 
         kwargs :
-            Keyword arguments for the `abtem.measurements.Images.show` method.
+            Keyword arguments for `abtem.measurements.Images.show`.
         """
         return self.intensity().show(**kwargs)
 
@@ -1199,7 +1201,7 @@ class _WavesFactory(BaseWaves):
         )
 
         with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", message="Increasing number of chunks")
+            warnings.filterwarnings("ignore", message="Increasing number of chunks.")
             array = da.blockwise(
                 partial_build,
                 symbols,
@@ -1218,25 +1220,27 @@ class _WavesFactory(BaseWaves):
         )
 
 
+# TODO: thrown a warning if both gpts and sampling are given
 class PlaneWave(_WavesFactory):
     """
-    The PlaneWave represents a stack of electron probe wave functions for simulating experiments with plane wave
-    functions, such as HRTEM and SAED.
+    Represents electron probe wave functions for simulating experiments with a plane-wave probe, such as HRTEM and SAED.
 
     Parameters
     ----------
-    extent : two float
-        Lateral extent of wave function [Å].
-    gpts : two int
+    extent : two float, optional
+        Lateral extent of the wave function [Å].
+    gpts : two int, optional
         Number of grid points describing the wave function.
-    sampling : two float
-        Lateral sampling of wave functions [1 / Å].
-    energy : float
+    sampling : two float, optional
+        Lateral sampling of the wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
+    energy : float, optional
         Electron energy [eV].
-    tilt : two float
-        Small angle beam tilt [mrad]. Implemented by shifting the wave function at every slice. Default is (0., 0.).
+    tilt : two float, optional
+        Small-angle beam tilt [mrad] (default is (0., 0.)). Implemented by shifting the wave functions at every slice.
     device : str, optional
-        The wave function data is stored on this device. The default is determined by the user configuration.
+        The wave functions are stored on this device ('cpu' or 'gpu'). The default is determined by the user configuration.
+    transforms : list of WaveTransform, optional
+        Can apply any transformation to the wave functions (e.g. to describe a phase plate).
     """
 
     def __init__(
@@ -1248,7 +1252,7 @@ class PlaneWave(_WavesFactory):
         normalize: bool = False,
         tilt: Tuple[float, float] = (0.0, 0.0),
         device: str = None,
-        extra_transforms: List[WaveTransform] = None,
+        transforms: List[WaveTransform] = None,
     ):
 
         self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
@@ -1257,11 +1261,11 @@ class PlaneWave(_WavesFactory):
         self._normalize = normalize
         self._device = validate_device(device)
 
-        extra_transforms = [] if extra_transforms is None else extra_transforms
+        transforms = [] if transforms is None else transforms
 
-        extra_transforms = extra_transforms + [self._tilt]
+        transforms = transforms + [self._tilt]
 
-        super().__init__(transforms=extra_transforms)
+        super().__init__(transforms=transforms)
 
     @property
     def named_transforms(self):
@@ -1286,7 +1290,9 @@ class PlaneWave(_WavesFactory):
             else:
                 array = xp.ones(gpts, dtype=xp.complex64)
 
-            return Waves(array=array, energy=energy, extent=extent, fourier_space=False)
+            return Waves(
+                array=array, energy=energy, extent=extent, reciprocal_space=False
+            )
 
         return partial(
             base_plane_wave,
@@ -1298,20 +1304,26 @@ class PlaneWave(_WavesFactory):
         )
 
     def build(
-        self, lazy: bool = None, max_batch="auto", keep_ensemble_dims: bool = False
+        self,
+        lazy: bool = None,
+        max_batch="auto",
     ) -> Waves:
         """
-        Build the plane wave function as a Waves object.
+        Build plane-wave wave functions.
 
         Parameters
         ----------
         lazy : bool, optional
-            If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
-            value set in the configuration file.
+            If True, create the wave functions lazily, otherwise, calculate instantly. If not given, defaults to the
+            setting in the user configuration file.
+        max_batch : int, optional
+            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the number of chunks are
+            automatically estimated based on the user configuration.
 
         Returns
         -------
-
+        plane_waves : Waves
+            The wave functions.
         """
 
         self.grid.check_is_defined()
@@ -1327,6 +1339,7 @@ class PlaneWave(_WavesFactory):
         waves = self._base_waves_partial()()
         return waves
 
+    # TODO: multislice should probably take only a keyword for core-loss, and transition_potentials should be a property of the potential
     def multislice(
         self,
         potential: Union[BasePotential, Atoms],
@@ -1337,26 +1350,33 @@ class PlaneWave(_WavesFactory):
         transition_potentials=None,
     ) -> Waves:
         """
-        Build plane wave function and propagate it through the potential. The grid of the two will be matched.
+        Run the multislice algorithm, after building the plane-wave wave function as needed. The grid of the wave
+        functions will be set to the grid of the potential.
 
         Parameters
         ----------
         potential : BasePotential, Atoms
-            A potential as an BasePotential. The potential may also be provided as `ase.Atoms`,
+            The potential through which to propagate the wave function. Optionally atoms can be directly given.
         detectors : Detector, list of detectors, optional
             A detector or a list of detectors defining how the wave functions should be converted to measurements after
-            running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.
+            running the multislice algorithm.
         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If "auto", the number of chunks are
-            automatically estimated based on "dask.chunk-size" in the user configuration.
+            The number of wave functions in each chunk of the Dask array. If 'auto', the number of chunks are
+            automatically estimated based on the user configuration.
         lazy : bool, optional
             If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
-            value set in the configuration file.
+            setting in the user configuration file.
+        ctf : CTF, optional
+            A contrast transfer function may be applied before detecting to save memory.
+        transition_potentials : BaseTransitionPotential, optional
+            Used to describe inelastic core losses.
 
         Returns
         -------
-        Waves object
-            Wave function at the exit plane of the potential.
+        detected_waves : BaseMeasurement or list of BaseMeasurement
+            The detected measurement (if detector(s) given).
+        exit_waves : Waves
+            Wave functions at the exit plane(s) of the potential (if no detector(s) given).
         """
 
         if detectors is None:
@@ -1396,40 +1416,37 @@ class PlaneWave(_WavesFactory):
         return measurements
 
 
-
 class Probe(_WavesFactory):
     """
-    The Probe represents a stack of electron probe wave functions for simulating experiments with a convergent beam,
+    Represents electron-probe wave functions for simulating experiments with a convergent beam,
     such as CBED and STEM.
 
     Parameters
     ----------
-    semiangle_cutoff : float
-        The cutoff semiangle of the aperture [mrad]. This argument is unused if a custom aperture is provided.
-    extent : two float, optional
-        Lateral extent of wave functions [Å].
+    semiangle_cutoff : float, optional
+        The cutoff semiangle of the aperture [mrad]. Ignored if a custom aperture is given.
+    extent : float or two float, optional
+        Lateral extent of wave functions [Å] in `x` and `y` directions. If a single float is given, both are set equal.
     gpts : two ints, optional
         Number of grid points describing the wave functions.
     sampling : two float, optional
-        Lateral sampling of wave functions [1 / Å].
+        Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
     energy : float, optional
         Electron energy [eV].
     taper : float, optional
-        Taper the edge of the default aperture [mrad]. Default is 2.0. This argument is unused if a custom
-        aperture.
-    tilt : two float, two 1d :class:`.BaseDistribution`, 2d :class:`.BaseDistribution`, optional
-        Small angle beam tilt [mrad]. This value should generally not exceed one degree.
+        Taper the edge of the default aperture [mrad] (default is 2.0). Ignored if a custom aperture is given.
+    tilt : two float, two 1D :class:`.BaseDistribution`, 2D :class:`.BaseDistribution`, optional
+        Small-angle beam tilt [mrad]. This value should generally not exceed one degree.
     device : str, optional
-        The probe wave functions will be build and stored on this device.
-    aperture : BaseAperture
-        A custom aperture. The provided aperture should be a subtype of :class:`.BaseAperture`.
+        The probe wave functions will be build and stored on this device ('cpu' or 'gpu'). The default is determined by the user configuration.
+    aperture : BaseAperture, optional
+        An optional custom aperture. The provided aperture should be a subtype of :class:`.BaseAperture`.
     aberrations : dict or Aberrations
         The phase aberrations as a dictionary.
-    extra_transforms : list of :class:`.WaveTransform`
+    transforms : list of :class:`.WaveTransform`
         A list of additional wave function transforms which will be applied after creation of the probe wave functions.
     kwargs :
-        Provide the aberrations as keyword arguments. The arguments will be forwarded to the :class:`.Aberrations`
-        wave function transform.
+        Provide the aberrations as keyword arguments, forwarded to the :class:`.Aberrations`.
     """
 
     def __init__(
@@ -1443,11 +1460,14 @@ class Probe(_WavesFactory):
         tilt: Union[
             Tuple[Union[float, BaseDistribution], Union[float, BaseDistribution]],
             BaseDistribution,
-        ] = (0.0, 0.0,),
+        ] = (
+            0.0,
+            0.0,
+        ),
         device: str = None,
         aperture: Aperture = None,
         aberrations: Union[Aberrations, dict] = None,
-        extra_transforms: List[WaveTransform] = None,
+        transforms: List[WaveTransform] = None,
         **kwargs
     ):
 
@@ -1479,9 +1499,9 @@ class Probe(_WavesFactory):
 
         self._device = validate_device(device)
 
-        extra_transforms = [] if extra_transforms is None else extra_transforms
+        transforms = [] if transforms is None else transforms
 
-        transforms = extra_transforms + [self._tilt, self.aperture, self.aberrations]
+        transforms = transforms + [self._tilt, self.aperture, self.aberrations]
 
         super().__init__(transforms=transforms)
 
@@ -1498,9 +1518,7 @@ class Probe(_WavesFactory):
 
     @property
     def aperture(self) -> Aperture:
-        """
-        Condenser or probe-forming aperture.
-        """
+        """Condenser or probe-forming aperture."""
         return self._aperture
 
     @aperture.setter
@@ -1509,9 +1527,7 @@ class Probe(_WavesFactory):
 
     @property
     def aberrations(self) -> Aberrations:
-        """
-        Phase aberrations of the probe wave functions.
-        """
+        """Phase aberrations of the probe wave functions."""
         return self._aberrations
 
     @aberrations.setter
@@ -1520,9 +1536,7 @@ class Probe(_WavesFactory):
 
     @property
     def metadata(self) -> dict:
-        """
-        Metadata describing the probe wave functions.
-        """
+        """Metadata describing the probe wave functions."""
         return {"energy": self.energy, **self.aperture.metadata, **self._tilt.metadata}
 
     def _base_waves_partial(self):
@@ -1535,7 +1549,7 @@ class Probe(_WavesFactory):
                 array=array,
                 energy=energy,
                 extent=extent,
-                fourier_space=True,
+                reciprocal_space=True,
                 metadata=metadata,
             )
 
@@ -1552,7 +1566,7 @@ class Probe(_WavesFactory):
 
     def build(
         self,
-        scan: Union[tuple, str, BaseScan] = None,
+        scan: Union[tuple, BaseScan] = None,
         max_batch: Union[int, str] = "auto",
         lazy: bool = None,
     ) -> Waves:
@@ -1561,18 +1575,19 @@ class Probe(_WavesFactory):
 
         Parameters
         ----------
-        scan : BaseScan or array of xy-positions
-            Positions of the probe wave functions
+        scan : array of `xy`-positions or BaseScan, optional
+            Positions of the probe wave functions.
         max_batch : int, optional
-            The number of wave functions in each chunk of the Dask array. If "auto", the number of chunks are
-            automatically estimated based on "dask.chunk-size" in the user configuration.
+            The number of wave functions in each chunk of the Dask array. If 'auto', the number of chunks are
+            automatically estimated based on the user configuration.
         lazy : bool, optional
-            If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
-            value set in the configuration file.
+            If True, create the wave functions lazily, otherwise, calculate instantly. If not given, defaults to the
+            setting in the user configuration file.
 
         Returns
         -------
         probe_wave_functions : Waves
+            The built probe wave functions.
         """
 
         self.grid.check_is_defined()
@@ -1617,32 +1632,32 @@ class Probe(_WavesFactory):
     def multislice(
         self,
         potential: Union[BasePotential, Atoms],
-        scan: BaseScan = None,
+        scan: Union[tuple, BaseScan] = None,
         detectors: BaseDetector = None,
         max_batch: Union[int, str] = "auto",
         lazy: bool = None,
         transition_potentials=None,
     ) -> Union[BaseMeasurement, Waves, List[Union[BaseMeasurement, Waves]]]:
         """
-        Run the multislice algorithm from probe wave functions at the provided positions.
+        Run the multislice algorithm for probe wave functions at the provided positions.
 
         Parameters
         ----------
         potential : BasePotential or Atoms
-            The scattering potential.
-        scan : BaseScan or array of xy-positions, optional
-            Positions of the probe wave functions. If None, the positions are a single position at the center of the
-            potential.
+            The scattering potential. Optionally atoms can be directly given.
+        scan : array of xy-positions or BaseScan, optional
+            Positions of the probe wave functions. If not given, scans across the entire potential at Nyquist sampling.
         detectors : BaseDetector or list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be converted to measurements after
-            running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.
-        max_batch : str or int, optional
-            The number of wave functions in each chunk of the Dask array. If None, the number of chunks are
-            automatically estimated based on "dask.chunk-size" in the user configuration.
+            running the multislice algorithm. If not given, defaults to the flexible annular detector.
+         max_batch : int, optional
+            The number of wave functions in each chunk of the Dask array. If 'auto', the number of chunks are
+            automatically estimated based on the user configuration.
         lazy : bool, optional
-            If True, create the measurements lazily, otherwise, calculate instantly. If None, this defaults to the value
-            set in the configuration file.
-        transition_potentials :
+            If True, create the wave functions lazily, otherwise, calculate instantly. If None, this defaults to the
+            setting in the user configuration file.
+        transition_potentials : BaseTransitionPotential, optional
+            Used to describe inelastic core losses.
 
         Returns
         -------
@@ -1731,7 +1746,10 @@ class Probe(_WavesFactory):
 
         Returns
         -------
-        list_of_measurements : BaseMeasurement or Waves or list of BaseMeasurement
+        detected_waves : BaseMeasurement or list of BaseMeasurement
+            The detected measurement (if detector(s) given).
+        exit_waves : Waves
+            Wave functions at the exit plane(s) of the potential (if no detector(s) given).
         """
 
         if scan is None:
@@ -1755,8 +1773,8 @@ class Probe(_WavesFactory):
 
         Parameters
         ----------
-        angle : float
-            Angle to the x-axis of the line profile [rad].
+        angle : float, optional
+            Angle with respect to the `x`-axis of the line profile [degree].
         """
 
         def _line_intersect_rectangle(point0, point1, lower_corner, upper_corner):
@@ -1801,7 +1819,7 @@ class Probe(_WavesFactory):
 
         Parameters
         ----------
-        kwargs : Keyword arguments for the :func:`~Images.foo` function.
+        kwargs : Keyword arguments for the :func:`.Images.show` function.
         """
         return (
             self.build((self.extent[0] / 2, self.extent[1] / 2))
