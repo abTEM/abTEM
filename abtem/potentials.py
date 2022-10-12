@@ -62,11 +62,16 @@ if TYPE_CHECKING:
 
 
 class BasePotential(
-    Ensemble, HasAxes, HasGridMixin, EqualityMixin, CopyMixin, HasDeviceMixin, metaclass=ABCMeta
+    Ensemble,
+    HasAxes,
+    HasGridMixin,
+    EqualityMixin,
+    CopyMixin,
+    HasDeviceMixin,
+    metaclass=ABCMeta,
 ):
-    """
-    Base class of all potentials.
-    """
+    """Base class of all potentials. Documented in the subclasses."""
+
     @property
     def base_shape(self):
         return (self.num_slices,) + self.gpts
@@ -443,8 +448,8 @@ class Potential(_PotentialBuilder):
         If 'finite' the 3D potential is numerically integrated between the slice boundaries. If 'infinite' (default),
         the infinite potential projection of each atom will be assigned to a single slice.
     integral_method : {'quadrature', 'analytic'}, optional
-        Specifies whether to perform projection integrals in real space or Fourier space. By default, finite projection
-        integrals are computed in real space and infinite projection integrals are performed in Fourier space.
+        Specifies whether to perform projection integrals in real space or reciprocal space. By default, finite projection
+        integrals are computed in real space and infinite projection integrals are performed in reciprocal space.
     exit_planes : int or tuple of int, optional
         The `exit_planes` argument can be used to calculate thickness series.
         Providing `exit_planes` as a tuple of int indicates that the tuple contains the slice indices after which an
@@ -475,6 +480,7 @@ class Potential(_PotentialBuilder):
     device : str, optional
         The device used for calculating the potential, 'cpu' or 'gpu'. The default is determined by the user configuration file.
     """
+
     _exclude_from_copy = ("parametrization", "projection", "integral_method")
 
     def __init__(
@@ -735,6 +741,7 @@ class PotentialArray(BasePotential, HasArray):
         A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived
         from the waves.
     """
+
     _base_dims = 3
 
     def __init__(
@@ -1095,6 +1102,7 @@ class TransmissionFunction(PotentialArray, HasAcceleratorMixin):
     energy : float
         Electron energy [eV].
     """
+
     def __init__(
         self,
         array: np.ndarray,
@@ -1190,6 +1198,7 @@ class CrystalPotential(_PotentialBuilder):
     seeds: int or sequence of int
         Seed for the random number generator (RNG), or one seed for each RNG in the frozen phonon ensemble.
     """
+
     def __init__(
         self,
         potential_unit: BasePotential,

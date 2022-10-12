@@ -815,7 +815,7 @@ class Images(BaseMeasurement):
             The interpolation method.
 
                 ``fft`` :
-                    Interpolate by cropping or zero-padding in Fourier space. This method should be preferred for
+                    Interpolate by cropping or zero-padding in reciprocal space. This method should be preferred for
                     periodic images.
 
                 ``spline`` :
@@ -1756,7 +1756,7 @@ class DiffractionPatterns(BaseMeasurement):
         2D or greater array containing data with `float` type. The second-to-last and last dimensions are the
         reciprocal space `y`- and `x`-axis of the diffraction pattern.
     sampling : float or two float
-        The Fourier space sampling of the diffraction patterns [1 / Å].
+        The reciprocal-space sampling of the diffraction patterns [1 / Å].
     fftshift : bool, optional
         If True, the diffraction patterns are assumed to have the zero-frequency component to the center of the
         spectrum, otherwise the center(s) are assumed to be at (0,0).
