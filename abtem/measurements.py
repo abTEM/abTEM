@@ -29,7 +29,7 @@ from abtem.core.grid import adjusted_gpts, polar_spatial_frequencies
 from abtem.core.indexing import IndexedDiffractionPatterns
 from abtem.core.interpolate import interpolate_bilinear
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index
-from abtem.inelastic.phonons import validate_seeds
+from abtem.inelastic.phonons import _validate_seeds
 from abtem.visualize import show_measurement_2d, show_measurements_1d, _make_cbar_label
 
 # Enables CuPy-accelerated functions if it is available.
@@ -532,7 +532,7 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
 
         xp = get_array_module(self.array)
 
-        seeds = validate_seeds(seed, samples)
+        seeds = _validate_seeds(seed, samples)
 
         arrays = []
         for seed in seeds:

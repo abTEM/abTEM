@@ -1,3 +1,4 @@
+"""Module describing the scattering matrix used in the PRISM algorithm."""
 import inspect
 import operator
 import warnings
@@ -43,7 +44,9 @@ from abtem.scan import BaseScan, _validate_scan, GridScan
 from abtem.transfer import CTF
 
 
-class AbstractSMatrix(BaseWaves):
+class BaseSMatrix(BaseWaves):
+    """Base class for scattering matrices. Documented in subclasses"""
+
     @property
     @abstractmethod
     def wave_vectors(self):
@@ -63,39 +66,72 @@ class AbstractSMatrix(BaseWaves):
         return (len(self),) + super().base_shape
 
 
-def validate_interpolation(interpolation: Union[int, Tuple[int, int]]):
+def _validate_interpolation(interpolation: Union[int, Tuple[int, int]]):
     if isinstance(interpolation, int):
         interpolation = (interpolation,) * 2
     elif not len(interpolation) == 2:
-        raise ValueError("interpolation factor must be int")
+        raise ValueError("Interpolation factor must be an integer.")
     return tuple(interpolation)
 
 
-def common_kwargs(a, b):
+def _common_kwargs(a, b):
     a_kwargs = inspect.signature(a).parameters.keys()
     b_kwargs = inspect.signature(b).parameters.keys()
     return set(a_kwargs).intersection(b_kwargs)
 
 
-def validate_wave_vectors(wave_vectors):
+def _validate_wave_vectors(wave_vectors):
     return [
         (float(wave_vector[0]), float(wave_vector[1])) for wave_vector in wave_vectors
     ]
 
 
-class SMatrixArray(HasArray, AbstractSMatrix):
-    _base_dims = 3
+class SMatrixArray(HasArray, BaseSMatrix):
+    """
+    A scattering matrix defined by a given array of dimension 3, where the first indexes the probe plane waves and the
+    latter two are the `y` and `x` scan directions.
+
+    Parameters
+    ----------
+    array : np.ndarray
+        Array defining the scattering matrix.
+    wave_vectors : np.ndarray
+        Array defining the wave vectors corresponding to each probe plane wave.
+    planewave_cutoff : float
+        The radial cutoff of the plane-wave expansion [mrad].
+    energy : float
+        Electron energy [eV].
+    sampling : one or two float, optional
+        Lateral sampling of wave functions [1 / Å]. Provide only if potential is not given. Will be ignored if 'gpts'
+        is also provided.
+    extent : one or two float, optional
+        Lateral extent of wave functions [Å]. Provide only if potential is not given.
+    interpolation : one or two int, optional
+        Interpolation factor in the `x` and `y` directions (default is 1, ie. no interpolation). If a single value is
+        provided, assumed to be the same for both directions.
+    cropping_window  # TODO: add documentation
+    window_offset  # TODO: add documentation
+    device : str, optional
+        The calculations will be carried out on this device ('cpu' or 'gpu'). Default is 'cpu'. The default is determined by the user configuration.
+    ensemble_axes_metadata : list of AxesMetadata
+        Axis metadata for each ensemble axis. The axis metadata must be compatible with the shape of the array.
+    metadata : dict
+        A dictionary defining wave function metadata. All items will be added to the metadata of measurements derived
+        from the waves.
+    """
+
+    _base_dims = 3  # S matrices are assumed to have three dimensions
 
     def __init__(
         self,
         array: np.ndarray,
         wave_vectors: np.ndarray,
         planewave_cutoff: float,
-        interpolation: Union[int, Tuple[int, int]],
         energy: float = None,
-        extent: Union[float, Tuple[float, float]] = None,
         sampling: Union[float, Tuple[float, float]] = None,
-        tilt: Tuple[float, float] = (0.0, 0.0),
+        extent: Union[float, Tuple[float, float]] = None,
+        interpolation: Union[int, Tuple[int, int]],
+        # tilt: Tuple[float, float] = (0.0, 0.0),
         cropping_window: Tuple[int, int] = (0, 0),
         window_offset: Tuple[int, int] = (0, 0),
         device=None,
@@ -119,11 +155,11 @@ class SMatrixArray(HasArray, AbstractSMatrix):
 
         self._metadata = {} if metadata is None else metadata
 
-        self._wave_vectors = validate_wave_vectors(wave_vectors)
+        self._wave_vectors = _validate_wave_vectors(wave_vectors)
         self._planewave_cutoff = planewave_cutoff
         self._cropping_window = tuple(cropping_window)
         self._window_offset = tuple(window_offset)
-        self._interpolation = validate_interpolation(interpolation)
+        self._interpolation = _validate_interpolation(interpolation)
         self._device = device
 
         self._check_axes_metadata()
@@ -138,14 +174,14 @@ class SMatrixArray(HasArray, AbstractSMatrix):
 
     @classmethod
     def from_waves(cls, waves, **kwargs):
-        kwargs.update({key: getattr(waves, key) for key in common_kwargs(cls, Waves)})
+        kwargs.update({key: getattr(waves, key) for key in _common_kwargs(cls, Waves)})
         kwargs["ensemble_axes_metadata"] = kwargs["ensemble_axes_metadata"][:-1]
         return cls(**kwargs)
 
     @property
     def waves(self):
         kwargs = {
-            key: getattr(self, key) for key in common_kwargs(self.__class__, Waves)
+            key: getattr(self, key) for key in _common_kwargs(self.__class__, Waves)
         }
         kwargs["ensemble_axes_metadata"] = (
             kwargs["ensemble_axes_metadata"] + self.base_axes_metadata[:-2]
@@ -153,9 +189,9 @@ class SMatrixArray(HasArray, AbstractSMatrix):
         return Waves(**kwargs)
 
     def _copy_with_new_waves(self, waves):
-        keys = set(inspect.signature(self.__class__).parameters.keys()) - common_kwargs(
-            self.__class__, Waves
-        )
+        keys = set(
+            inspect.signature(self.__class__).parameters.keys()
+        ) - _common_kwargs(self.__class__, Waves)
         kwargs = {key: getattr(self, key) for key in keys}
         return self.from_waves(waves, **kwargs)
 
@@ -623,62 +659,64 @@ def round_gpts_to_multiple_of_interpolation(
     return tuple(n + (-n) % f for f, n in zip(interpolation, gpts))  # noqa
 
 
-class SMatrix(AbstractSMatrix):
+class SMatrix(BaseSMatrix):
     """
-    The SMatrix may be used for simulating STEM experiments using the PRISM algorithm.
+    The scattering matrix is used for simulating STEM experiments using the PRISM algorithm.
 
     Parameters
     ----------
     planewave_cutoff : float
-        The radial cutoff of the plane wave expansion [mrad].
-    potential : Atoms or AbstractPotential, optional
-        Potential or atoms represented by the scattering matrix. If given as atoms, a default Potential will be created.
-        If not provided the scattering matrix will represent a vacuum potential, in this case the sampling and extent
-        should be provided.
-    energy : float, optional
+        The radial cutoff of the plane-wave expansion [mrad].
+    energy : float
         Electron energy [eV].
-    interpolation : one or two int, optional
-        Interpolation factor. Default is 1 (no interpolation).
-    extent : one or two float, optional
-        Lateral extent of wave functions [Å]. Provide only if potential is not given.
+    potential : Atoms or AbstractPotential, optional
+        Atoms or a potential that the scattering matrix represents. If given as atoms, a default potential will be created.
+        If nothing is provided the scattering matrix will represent a vacuum potential, in which case the sampling and extent
+        must be provided.
     gpts : one or two int, optional
         Number of grid points describing the wave functions. Provide only if potential is not given.
     sampling : one or two float, optional
-        Lateral sampling of wave functions [1 / Å]. Provide only if potential is not given.
-    tilt : two float
-        Small angle beam tilt [mrad].
+        Lateral sampling of wave functions [1 / Å]. Provide only if potential is not given. Will be ignored if 'gpts'
+        is also provided.
+    extent : one or two float, optional
+        Lateral extent of wave functions [Å]. Provide only if potential is not given.
+    interpolation : one or two int, optional
+        Interpolation factor in the `x` and `y` directions (default is 1, ie. no interpolation). If a single value is
+        provided, assumed to be the same for both directions.
+    normalize : {'probe', 'planewaves'}
+        Normalization of the scattering matrix. The default 'probe' is standard S matrix formalism, whereby the sum of
+        all waves in the PRISM expansion is equal to 1; 'planewaves' is needed for core-loss calculations.
     downsample : {'cutoff', 'valid'} or float or bool
-        If not False, the scattering matrix is downsampled to a maximum given scattering angle after running the
-        multislice algorithm.
-            ``cutoff`` or True :
-                Downsample to the antialias cutoff scattering angle.
+        Controls whether to downsample the probe wave functions after each run of the multislice algorithm.
+
+            ``cutoff`` :
+                Downsample to the antialias cutoff scattering angle (default).
 
             ``valid`` :
-                Downsample to the largest rectangle inside the circle with a radius defined by the antialias cutoff
+                Downsample to the largest rectangle that fits inside the circle with a radius defined by the antialias cutoff
                 scattering angle.
 
             float :
-                Downsample to a maximum scattering angle specified by a float.
-    normalize : {'probe', 'planewaves'}
+                Downsample to a specified maximum scattering angle [mrad].
     device : str, optional
-        The calculations will be carried out on this device. Default is 'cpu'.
-    store_on_host : bool
-        If true, store the scattering matrix in host (cpu) memory. The necessary memory is transferred as chunks to
-        the device to run calculations.
+        The calculations will be carried out on this device ('cpu' or 'gpu'). Default is 'cpu'. The default is determined by the user configuration.
+    store_on_host : bool, optional
+        If True, store the scattering matrix in host (cpu) memory so that the necessary memory is transferred as chunks to
+        the device to run calculations (default is False).
     """
 
     def __init__(
         self,
         planewave_cutoff: float,
+        energy: float,
         potential: Union[Atoms, BasePotential] = None,
-        energy: float = None,
+        gpts: Union[int, Tuple[int, int]] = None,
+        sampling: Union[float, Tuple[float, float]] = None,
+        extent: Union[float, Tuple[float, float]] = None,
         interpolation: Union[int, Tuple[int, int]] = 1,
         normalize: str = "probe",
         downsample: Union[bool, str] = "cutoff",
-        tilt: Tuple[float, float] = (0.0, 0.0),
-        extent: Union[float, Tuple[float, float]] = None,
-        gpts: Union[int, Tuple[int, int]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
+        # tilt: Tuple[float, float] = (0.0, 0.0),
         device: str = None,
         store_on_host: bool = False,
     ):
@@ -688,7 +726,7 @@ class SMatrix(AbstractSMatrix):
 
         self.set_potential(potential)
 
-        self._interpolation = validate_interpolation(interpolation)
+        self._interpolation = _validate_interpolation(interpolation)
         self._planewave_cutoff = planewave_cutoff
         self._downsample = downsample
 
@@ -702,8 +740,7 @@ class SMatrix(AbstractSMatrix):
 
         if not all(n % f == 0 for f, n in zip(self.interpolation, self.gpts)):
             warnings.warn(
-                "the interpolation factor does not exactly divide gpts, normalization may not be exactly "
-                "preserved"
+                "The interpolation factor does not exactly divide 'gpts', normalization may not be exactly preserved."
             )
 
     def set_potential(self, potential):
@@ -716,7 +753,7 @@ class SMatrix(AbstractSMatrix):
             try:
                 self.grid.check_is_defined()
             except GridUndefinedError:
-                raise ValueError("provide a potential or provide extent and gpts")
+                raise ValueError("Provide a potential or provide 'extent' and 'gpts'.")
 
     @property
     def tilt(self):
@@ -761,7 +798,7 @@ class SMatrix(AbstractSMatrix):
         wave_vectors = prism_wave_vectors(
             self.planewave_cutoff, self.extent, self.energy, self.interpolation, xp=xp
         )
-        return validate_wave_vectors(wave_vectors)
+        return _validate_wave_vectors(wave_vectors)
 
     @property
     def potential(self) -> BasePotential:
@@ -778,7 +815,7 @@ class SMatrix(AbstractSMatrix):
 
     @property
     def planewave_cutoff(self) -> float:
-        """Plane wave expansion cutoff."""
+        """Plane-wave expansion cutoff."""
         return self._planewave_cutoff
 
     @planewave_cutoff.setter
@@ -844,8 +881,6 @@ class SMatrix(AbstractSMatrix):
             normalization_constant = xp.sqrt(abs2(fft2(cropped_array.sum(0))).sum())
 
         array = array / normalization_constant.astype(xp.float32)
-
-        #    array = array / xp.sqrt(np.prod(gpts).astype(xp.float32))
 
         waves = Waves(
             array,
@@ -916,25 +951,24 @@ class SMatrix(AbstractSMatrix):
     def build(
         self, lazy: bool = None, max_batch: Union[int, str] = "auto"
     ) -> SMatrixArray:
-
         """
-        Build the plane waves of the scattering matrix and propagate the waves through the potential using the
+        Build the plane waves of the scattering matrix and propagate them through the potential using the
         multislice algorithm.
 
         Parameters
         ----------
-        lazy : bool
-            If True, build the scattering matrix lazily.
-        max_batch : 'auto' or str
-            The maximum number of plane waves
+        lazy : bool, optional
+            If True, create the wave functions lazily, otherwise, calculate instantly. If not given, defaults to the
+            setting in the user configuration file.
+        max_batch : int or str, optional
+            The number of wave functions in each chunk of the Dask array. If 'auto' (default), the number of chunks are
+            automatically estimated based on the user configuration.
 
         Returns
         -------
-        s_matrix_array  : SMatrixArray
+        s_matrix_array : SMatrixArray
+            The built scattering matrix.
         """
-
-        initialize()
-
         lazy = validate_lazy(lazy)
 
         wave_vector_chunks = self._wave_vector_chunks(max_batch)
@@ -946,7 +980,7 @@ class SMatrix(AbstractSMatrix):
         if self.potential is not None:
             if len(self.potential.exit_planes) > 1:
                 raise NotImplementedError(
-                    "thickness series not yet implemented for PRISM"
+                    "Thickness series not yet implemented for PRISM."
                 )
 
             potential_blocks = self.potential._partition_args()[0], (0,)
@@ -1025,26 +1059,32 @@ class SMatrix(AbstractSMatrix):
         reduction_max_batch: Union[str, int] = "auto",
         rechunk_scheme: Union[Tuple[int, int], str] = "auto",
         lazy: bool = None,
-    ) -> Union[Waves, BaseMeasurement, List[BaseMeasurement]]:
-
+    ) -> Union[BaseMeasurement, Waves, List[Union[BaseMeasurement, Waves]]]:
         """
         Scan the probe across the potential and record a measurement for each detector.
 
         Parameters
         ----------
-        detectors : detector and list of Detector
-            The detectors recording the measurements.
-        scan : Scan object
-            Scan defining the positions of the probe wave functions.
+        scan : np.ndarray or BaseScan, optional
+            The positions of the probe wave functions. If not given, scans across the entire potential at Nyquist sampling.
+        detectors : BaseDetector or list of BaseDetector, optional
+            A detector or a list of detectors defining how the wave functions should be converted to measurements after
+            running the PRISM algorithm.
         ctf: CTF object, optional
-            The probe contrast transfer function. Default is None (aperture is set by the planewave cutoff).
-        distribute_scan : two int, optional
-            Partitioning of the scan. The scattering matrix will be reduced in similarly partitioned chunks.
-            Should be equal to or greater than the interpolation.
-        probes_per_reduction : int, optional
-            Number of probe positions per reduction operation.
-        lazy : bool
+            The probe contrast transfer function. If not given, the aperture is set by the planewave cutoff.
+        lazy : bool, optional
+            If True, create the measurements lazily, otherwise, calculate instantly. If None, this defaults to the value
+            set in the configuration file.
+        multislice_max_batch : str or int  # TODO: to be documented
+        reduction_max_batch : str or int  # TODO: to be documented
+        rechunk_scheme : tuple of int or str  # TODO: to be documented
 
+        Returns
+        -------
+        detected_waves : BaseMeasurement or list of BaseMeasurement
+            The detected measurement (if detector(s) given).
+        exit_waves : Waves
+            Wave functions at the exit plane(s) of the potential (if no detector(s) given).
         """
         if scan is None:
             scan = GridScan()

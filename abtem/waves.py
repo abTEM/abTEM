@@ -299,7 +299,7 @@ class Waves(HasArray, BaseWaves):
     def __init__(
         self,
         array: np.ndarray,
-        energy: float = None,
+        energy: float,
         extent: Union[float, Tuple[float, float]] = None,
         sampling: Union[float, Tuple[float, float]] = None,
         reciprocal_space: bool = False,
@@ -1234,7 +1234,7 @@ class PlaneWave(_WavesFactory):
     sampling : two float, optional
         Lateral sampling of the wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
     energy : float, optional
-        Electron energy [eV].
+        Electron energy [eV]. If not provided, inferred from the wave functions.
     tilt : two float, optional
         Small-angle beam tilt [mrad] (default is (0., 0.)). Implemented by shifting the wave functions at every slice.
     device : str, optional
@@ -1432,7 +1432,7 @@ class Probe(_WavesFactory):
     sampling : two float, optional
         Lateral sampling of wave functions [1 / Å]. If 'gpts' is also given, will be ignored.
     energy : float, optional
-        Electron energy [eV].
+        Electron energy [eV]. If not provided, inferred from the wave functions.
     taper : float, optional
         Taper the edge of the default aperture [mrad] (default is 2.0). Ignored if a custom aperture is given.
     tilt : two float, two 1D :class:`.BaseDistribution`, 2D :class:`.BaseDistribution`, optional
@@ -1576,7 +1576,7 @@ class Probe(_WavesFactory):
         Parameters
         ----------
         scan : array of `xy`-positions or BaseScan, optional
-            Positions of the probe wave functions.
+            Positions of the probe wave functions. If not given, scans across the entire potential at Nyquist sampling.
         max_batch : int, optional
             The number of wave functions in each chunk of the Dask array. If 'auto', the number of chunks are
             automatically estimated based on the user configuration.
@@ -1733,7 +1733,7 @@ class Probe(_WavesFactory):
         potential : BasePotential or Atoms
             The scattering potential.
         scan : BaseScan
-            Positions of the probe wave functions. If None, the positions
+            Positions of the probe wave functions. If not given, scans across the entire potential at Nyquist sampling.
         detectors : BaseDetector, list of BaseDetector, optional
             A detector or a list of detectors defining how the wave functions should be converted to measurements after
             running the multislice algorithm. See abtem.measurements.detect for a list of implemented detectors.

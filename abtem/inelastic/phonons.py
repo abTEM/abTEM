@@ -83,6 +83,8 @@ class AbstractFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMet
 
 
 class DummyFrozenPhonons(AbstractFrozenPhonons):
+    """Class to allow all potentials to be treated in the same way."""
+
     def __init__(
         self,
         atoms: Union[Atoms, Delayed],
@@ -169,12 +171,12 @@ class DummyFrozenPhonons(AbstractFrozenPhonons):
             return self._num_configs
 
 
-def validate_seeds(
+def _validate_seeds(
     seeds: Union[int, Tuple[int, ...]], num_seeds: int = None
 ) -> Tuple[int, ...]:
     if seeds is None or np.isscalar(seeds):
         if num_seeds is None:
-            raise ValueError("provide `num_configs` or a seed for each configuration")
+            raise ValueError("Provide `num_configs` or a seed for each configuration.")
 
         rng = np.random.default_rng(seed=seeds)
         seeds = ()
@@ -194,28 +196,28 @@ def validate_seeds(
 
 class FrozenPhonons(AbstractFrozenPhonons):
     """
-    The frozen phonons randomly displaces the atomic positions of an ASE Atoms object to emulate thermal vibrations.
+    The frozen phonons randomly displace the atomic positions to emulate thermal vibrations.
 
     Parameters
     ----------
-    atoms: ASE Atoms object
-        Atoms with the average atomic configuration.
-    num_configs: int
+    atoms : ASE.Atoms
+        Atomic configuration used for displacements.
+    num_configs : int
         Number of frozen phonon configurations.
-    sigmas: float or dict or list
+    sigmas : float or dict or list
         If float, the standard deviation of the displacements is assumed to be identical for all atoms.
         If dict, a displacement standard deviation should be provided for each species. The atomic species can be
         specified as atomic number or a symbol, using the ASE standard.
         If list or array, a displacement standard deviation should be provided for each atom.
-    directions: str, optional
-        The displacement directions of the atoms as a string; for example 'xy' for displacement in the `x`- and
-        `y`-direction. Default is 'xy'.
+    directions : str, optional
+        The displacement directions of the atoms as a string; for example 'xy' (default) for displacement in the `x`- and
+        `y`-direction (ie. perpendicular to the propagation direction).
     ensemble_mean : bool, optional
-        If True, the mean of the ensemble of results from a multislice simulation is calculated, otherwise, the result
-        of every frozen phonon is returned.
-    seeds: int or sequence of int
-        Seed for the random number generator(rng), or one seed for each rng in the frozen phonon ensemble.
-
+        If True (default), the mean of the ensemble of results from a multislice simulation is calculated, otherwise,
+        the result of every frozen phonon configuration is returned.
+    seeds : int or sequence of int
+        Seed(s) for the random number generator used to generate the displacements, or one seed for each configuration in
+         the frozen phonon ensemble.
     """
 
     def __init__(
@@ -226,8 +228,8 @@ class FrozenPhonons(AbstractFrozenPhonons):
         directions: str = "xyz",
         ensemble_mean: bool = True,
         seeds: Union[int, Tuple[int, ...]] = None,
-        atomic_numbers: Union[np.ndarray, Sequence[int]] = None,
-        cell: Union[Cell, np.ndarray] = None,
+        atomic_numbers: Union[np.ndarray, Sequence[int]] = None,  # TODO: to be removed
+        cell: Union[Cell, np.ndarray] = None,  # TODO: to be removed
     ):
 
         if isinstance(sigmas, dict) and atomic_numbers is None:
@@ -251,14 +253,14 @@ class FrozenPhonons(AbstractFrozenPhonons):
         elif isinstance(sigmas, dict):
             if not all([symbol in unique_symbols for symbol in sigmas.keys()]):
                 raise RuntimeError(
-                    "displacement standard deviation must be provided for all atomic species"
+                    "Displacement standard deviation must be provided for all atomic species."
                 )
 
         elif isinstance(sigmas, Iterable):
             sigmas = np.array(sigmas, dtype=np.float32)
             if len(sigmas) != len(atoms):
                 raise RuntimeError(
-                    "displacement standard deviation must be provided for all atoms"
+                    "Displacement standard deviation must be provided for all atoms."
                 )
         else:
             raise ValueError()
@@ -266,7 +268,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
         self._sigmas = sigmas
         self._directions = directions
 
-        self._seeds = validate_seeds(seeds, num_seeds=num_configs)
+        self._seeds = _validate_seeds(seeds, num_seeds=num_configs)
 
         super().__init__(
             atomic_numbers=atomic_numbers, cell=cell, ensemble_mean=ensemble_mean
@@ -322,7 +324,9 @@ class FrozenPhonons(AbstractFrozenPhonons):
             elif direction == "z":
                 axes += [2]
             else:
-                raise RuntimeError('Directions must be "x", "y" or "z" not {}.')
+                raise RuntimeError(
+                    "Directions must be 'x', 'y' or 'z', not {}."
+                )  # TODO
         return axes
 
     def randomize(self, atoms: Atoms) -> Atoms:
@@ -399,6 +403,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
         return (array,)
 
     def to_md_frozen_phonons(self):
+        """TODO"""
         trajectory = []
         for b in self.generate_blocks(1):
             trajectory.append(b[-1].randomize(b[-1].atoms))
@@ -407,22 +412,22 @@ class FrozenPhonons(AbstractFrozenPhonons):
 
 class MDFrozenPhonons(AbstractFrozenPhonons):
     """
-    Molecular dynamics frozen phonons.
+    Frozen phonons based on a molecular dynamics simulation..
 
     Parameters
     ----------
-    trajectory: List of ASE Atoms
-        Sequence of Atoms objects representing a thermal distribution of atomic configurations.
+    trajectory : sequence of ASE.Atoms
+        Sequence of atoms representing a thermal distribution of atomic configurations.
     ensemble_mean : True, optional
         If True, the mean of the ensemble of results from a multislice simulation is calculated, otherwise, the result
-        of every frozen phonon is returned.
+        of every frozen phonon is returned.i
     """
 
     def __init__(
         self,
         trajectory: Sequence[Atoms],
-        atomic_numbers=None,
-        cell=None,
+        atomic_numbers=None,  # TODO: to be removed
+        cell=None,  # TODO: to be removed
         ensemble_mean: bool = True,
     ):
 
@@ -504,10 +509,6 @@ class MDFrozenPhonons(AbstractFrozenPhonons):
 
     def randomize(self, atoms):
         return atoms
-
-    # def __getitem__(self, item) -> Atoms:
-    #    atoms = self._trajectory[item]
-    #    return atoms
 
     def standard_deviations(self) -> np.ndarray:
         mean_positions = np.mean(

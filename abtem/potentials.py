@@ -37,7 +37,7 @@ from abtem.core.utils import EqualityMixin, CopyMixin
 from abtem.inelastic.phonons import (
     AbstractFrozenPhonons,
     DummyFrozenPhonons,
-    validate_seeds,
+    _validate_seeds,
 )
 from abtem.inelastic.phonons import FrozenPhonons
 from abtem.measurements import Images
@@ -1216,7 +1216,7 @@ class CrystalPotential(_PotentialBuilder):
             elif num_frozen_phonons is None and seeds is None:
                 num_frozen_phonons = 1
 
-            self._seeds = validate_seeds(seeds, num_frozen_phonons)
+            self._seeds = _validate_seeds(seeds, num_frozen_phonons)
 
         # TODO: check if still needed
         # if (potential_unit.num_frozen_phonon_configs == 1) & (num_frozen_phonon_configs > 1):
