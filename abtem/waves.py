@@ -34,6 +34,7 @@ from abtem.detectors import (
     WavesDetector,
     FlexibleAnnularDetector,
 )
+from abtem.inelastic.core_loss import transition_potential_multislice_and_detect
 from abtem.measurements import (
     DiffractionPatterns,
     Images,

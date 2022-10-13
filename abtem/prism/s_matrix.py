@@ -130,7 +130,7 @@ class SMatrixArray(HasArray, BaseSMatrix):
         energy: float = None,
         sampling: Union[float, Tuple[float, float]] = None,
         extent: Union[float, Tuple[float, float]] = None,
-        interpolation: Union[int, Tuple[int, int]],
+        interpolation: Union[int, Tuple[int, int]] = 1,
         # tilt: Tuple[float, float] = (0.0, 0.0),
         cropping_window: Tuple[int, int] = (0, 0),
         window_offset: Tuple[int, int] = (0, 0),
