@@ -192,8 +192,7 @@ def _interpolate_pseudo_density(nt_sg, gd, gridrefinement=1):
         nt_sg = n_sg
         gd = finegd
 
-    return n_sg, finegd
-
+    return n_sg
 
 def _get_all_electron_density(
         nt_sG, gd, D_asp: dict, setups, atoms: Atoms, gridrefinement: int = 1

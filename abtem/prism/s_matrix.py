@@ -631,7 +631,7 @@ class SMatrix(AbstractSMatrix):
     ----------
     planewave_cutoff : float
         The radial cutoff of the plane wave expansion [mrad].
-    potential : Atoms or AbstractPotential, optional
+    potential : Atoms or BasePotential, optional
         Potential or atoms represented by the scattering matrix. If given as atoms, a default Potential will be created.
         If not provided the scattering matrix will represent a vacuum potential, in this case the sampling and extent
         should be provided.
@@ -932,9 +932,6 @@ class SMatrix(AbstractSMatrix):
         -------
         s_matrix_array  : SMatrixArray
         """
-
-        initialize()
-
         lazy = validate_lazy(lazy)
 
         wave_vector_chunks = self._wave_vector_chunks(max_batch)
