@@ -29,7 +29,7 @@ from abtem.core.grid import adjusted_gpts, polar_spatial_frequencies
 from abtem.core.indexing import IndexedDiffractionPatterns
 from abtem.core.interpolate import interpolate_bilinear
 from abtem.core.utils import CopyMixin, EqualityMixin, label_to_index
-from abtem.inelastic.phonons import validate_seeds
+from abtem.inelastic.phonons import _validate_seeds
 from abtem.visualize import show_measurement_2d, show_measurements_1d, _make_cbar_label
 
 # Enables CuPy-accelerated functions if it is available.
@@ -532,7 +532,7 @@ class BaseMeasurement(HasArray, HasAxes, EqualityMixin, CopyMixin, metaclass=ABC
 
         xp = get_array_module(self.array)
 
-        seeds = validate_seeds(seed, samples)
+        seeds = _validate_seeds(seed, samples)
 
         arrays = []
         for seed in seeds:
@@ -815,7 +815,7 @@ class Images(BaseMeasurement):
             The interpolation method.
 
                 ``fft`` :
-                    Interpolate by cropping or zero-padding in Fourier space. This method should be preferred for
+                    Interpolate by cropping or zero-padding in reciprocal space. This method should be preferred for
                     periodic images.
 
                 ``spline`` :
@@ -1756,7 +1756,7 @@ class DiffractionPatterns(BaseMeasurement):
         2D or greater array containing data with `float` type. The second-to-last and last dimensions are the
         reciprocal space `y`- and `x`-axis of the diffraction pattern.
     sampling : float or two float
-        The Fourier space sampling of the diffraction patterns [1 / Å].
+        The reciprocal-space sampling of the diffraction patterns [1 / Å].
     fftshift : bool, optional
         If True, the diffraction patterns are assumed to have the zero-frequency component to the center of the
         spectrum, otherwise the center(s) are assumed to be at (0,0).

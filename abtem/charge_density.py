@@ -46,7 +46,7 @@ def _spatial_frequencies(shape, cell):
 
 def _spatial_frequencies_squared(shape, cell: Cell):
     kx, ky, kz = _spatial_frequencies(shape, cell)
-    return kx ** 2 + ky ** 2 + kz ** 2
+    return kx**2 + ky**2 + kz**2
 
 
 def integrate_gradient_fourier(
@@ -76,7 +76,7 @@ def integrate_gradient_fourier(
 
     k2 = _spatial_frequencies_squared(array.shape, cell)
 
-    k2 = 2 ** 2 * np.pi ** 2 * k2
+    k2 = 2**2 * np.pi**2 * k2
     k2[0, 0, 0] = 1.0
     array /= k2
 
@@ -122,7 +122,9 @@ def _add_point_charges_real_space(array, atoms):
 
     for number in np.unique(atoms.numbers):
         array = _superpose_deltas(
-            positions[atoms.numbers == number], array, scale=number / pixel_volume,
+            positions[atoms.numbers == number],
+            array,
+            scale=number / pixel_volume,
         )
 
     return array
@@ -133,13 +135,15 @@ def _fourier_space_delta(kx, ky, kz, x, y, z):
 
 
 def _fourier_space_gaussian(k2, width):
-    a = np.sqrt(1 / (2 * width ** 2)) / (2 * np.pi)
-    return np.exp(-1 / (4 * a ** 2) * k2)
+    a = np.sqrt(1 / (2 * width**2)) / (2 * np.pi)
+    return np.exp(-1 / (4 * a**2) * k2)
 
 
-def add_point_charges_fourier(array: np.ndarray, atoms: Atoms, broadening: float = 0.0) -> np.ndarray:
+def add_point_charges_fourier(
+    array: np.ndarray, atoms: Atoms, broadening: float = 0.0
+) -> np.ndarray:
     """
-    Add the nuclear point charges in Fourier space.
+    Add the nuclear point charges in Reciprocal space.
 
     Parameters
     ----------
@@ -153,14 +157,14 @@ def add_point_charges_fourier(array: np.ndarray, atoms: Atoms, broadening: float
     Returns
     -------
     density : np.ndarray
-        3D charge density with added nuclear charges in Fourier space.
+        3D charge density with added nuclear charges in reciprocal space.
     """
     pixel_volume = np.prod(np.diag(atoms.cell)) / np.prod(array.shape)
 
     kx, ky, kz = _spatial_frequencies(array.shape, atoms.cell)
 
     if broadening:
-        broadening = _fourier_space_gaussian(kx ** 2 + ky ** 2 + kz ** 2, broadening)
+        broadening = _fourier_space_gaussian(kx**2 + ky**2 + kz**2, broadening)
     else:
         broadening = 1.0
 

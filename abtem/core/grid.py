@@ -360,7 +360,7 @@ class HasGridMixin:
 
     @property
     def fourier_space_sampling(self) -> Tuple[float, ...]:
-        """ Fourier space sampling in reciprocal Ångstrom. """
+        """ Reciprocal-space sampling in reciprocal Ångstrom. """
         return self.grid.fourier_space_sampling
 
     def match_grid(self, other: "HasGridMixin", check_match: bool = False):

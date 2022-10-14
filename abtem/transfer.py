@@ -1,4 +1,4 @@
-"""Module to describe the contrast transfer function."""
+"""Module to describe the contrast transfer function (CTF)."""
 import copy
 import re
 from collections import defaultdict
@@ -25,6 +25,8 @@ from abtem.measurements import ReciprocalSpaceLineProfiles
 
 
 class BaseAperture(FourierSpaceConvolution):
+    """Base class for apertures. Documented in the subclasses."""
+
     def __init__(self, semiangle_cutoff: float, energy: float, *args, **kwargs):
         self._semiangle_cutoff = semiangle_cutoff
         super().__init__(energy=energy, **kwargs)
@@ -53,23 +55,23 @@ class BaseAperture(FourierSpaceConvolution):
 class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
     """
     A circular aperture cutting off the wave function at a specified angle, employed in both STEM and HRTEM.
-    The hard cutoff may be softened by tapering it.
+    The abrupt cutoff may be softened by tapering it.
 
     Parameters
     ----------
-    semiangle_cutoff : float
-        The cutoff semiangle of the aperture [mrad].
-    taper : float
-        Soften the edge of the aperture over a range of angles to eliminate aliasing [mrad]. The default is 1 mrad.
+    semiangle_cutoff : float or BaseDistribution
+        The cutoff semiangle of the aperture [mrad]. Alternatively, a distribution of angles may be provided.
+    taper : float, optional
+        Smoothen the edge of the aperture over a range of angles to eliminate aliasing [mrad] (default is 1 mrad).
     energy : float, optional
-        Electron energy [eV].
+        Electron energy [eV]. If not provided, inferred from the wave functions.
     """
 
     def __init__(
         self,
         semiangle_cutoff: Union[float, BaseDistribution],
-        energy: float = None,
         taper: float = 1.0,
+        energy: float = None,
     ):
 
         semiangle_cutoff = _validate_distribution(semiangle_cutoff)
@@ -151,7 +153,7 @@ class Bullseye(_EnsembleFromDistributionsMixin, BaseAperture):
     num_spokes : int
         Number of spokes.
     spoke_width : float
-        Width of spokes [rad].
+        Width of spokes [degree].
     num_rings : int
         Number of rings.
     ring_width : float
@@ -159,7 +161,7 @@ class Bullseye(_EnsembleFromDistributionsMixin, BaseAperture):
     semiangle_cutoff : float
         The cutoff semiangle of the aperture [mrad].
     energy : float, optional
-        Electron energy [eV].
+        Electron energy [eV]. If not provided, inferred from the wave functions.
     """
 
     def __init__(
@@ -210,8 +212,9 @@ class Bullseye(_EnsembleFromDistributionsMixin, BaseAperture):
 
         # add crossbars
         array = array * (
-            ((phi + self.spoke_width / 2) * self.num_spokes) % (2 * np.pi)
-            > (self.spoke_width * self.num_spokes)
+            ((phi + np.pi * self.spoke_width / (180 * 2)) * self.num_spokes)
+            % (2 * np.pi)
+            > (np.pi * self.spoke_width / 180 * self.num_spokes)
         )
 
         # add ring bars
@@ -228,16 +231,16 @@ class Bullseye(_EnsembleFromDistributionsMixin, BaseAperture):
 
 class Vortex(_EnsembleFromDistributionsMixin, BaseAperture):
     """
-    Vortex beam aperture.
+    Vortex-beam aperture.
 
     Parameters
     ----------
     quantum_number : int
         Quantum number of vortex beam.
-    semiangle_cutoff (float):
+    semiangle_cutoff : float
         The cutoff semiangle of the aperture [mrad].
     energy : float, optional
-        Electron energy [eV].
+        Electron energy [eV]. If not provided, inferred from the wave functions.
     """
 
     def __init__(
@@ -276,13 +279,16 @@ class TemporalEnvelope(_EnsembleFromDistributionsMixin, FourierSpaceConvolution)
     Parameters
     ----------
     focal_spread: float or BaseDistribution
-            The standard deviation of the focal spread due to chromatic aberration and lens current instability [Å].
+        The standard deviation of the focal spread due to chromatic aberration and lens current instability [Å].
+        Alternatively, a distribution of values may be provided.
     energy : float, optional
-        Electron energy [eV].
+        Electron energy [eV]. If not provided, inferred from the wave functions.
     """
 
     def __init__(
-        self, focal_spread: Union[float, BaseDistribution], energy: float = None,
+        self,
+        focal_spread: Union[float, BaseDistribution],
+        energy: float = None,
     ):
 
         self._accelerator = Accelerator(energy=energy)
@@ -323,7 +329,7 @@ class TemporalEnvelope(_EnsembleFromDistributionsMixin, FourierSpaceConvolution)
         alpha = xp.expand_dims(alpha, axis=tuple(range(0, self._num_ensemble_axes)))
 
         array = xp.exp(
-            -((0.5 * xp.pi / self.wavelength * focal_spread * alpha ** 2) ** 2)
+            -((0.5 * xp.pi / self.wavelength * focal_spread * alpha**2) ** 2)
         ).astype(xp.float32)
 
         return array
@@ -507,7 +513,7 @@ class _HasAberrations:
 
         Parameters
         ----------
-        parameters: dict
+        parameters : dict
             Mapping from aberration symbols to their corresponding values.
         """
 
@@ -540,15 +546,16 @@ class SpatialEnvelope(
 
     Parameters
     ----------
-    angular_spread: float
-        The standard deviation of the angular deviations due to source size [Å].
-    aberration_coefficients: dict
+    angular_spread: float or BaseDistribution
+        The standard deviation of the angular deviations due to source size [Å]. Alternatively, a distribution of angles
+        may be provided.
+    aberration_coefficients: dict, optional
         Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in
-        Ångstrom and angles should be given in radians.
+        [Å] and angles should be given in [radian].
     energy : float, optional
-        Electron energy [eV].
-    kwargs:
-        Provide the aberration coefficients as keyword arguments.
+        Electron energy [eV]. If not provided, inferred from the wave functions.
+    kwargs : dict, optional
+        Optionally provide the aberration coefficients as keyword arguments.
     """
 
     def __init__(
@@ -624,26 +631,26 @@ class SpatialEnvelope(
                     parameters["C23"] * xp.cos(3.0 * (phi - parameters["phi23"]))
                     + parameters["C21"] * xp.cos(1.0 * (phi - parameters["phi21"]))
                 )
-                * alpha ** 2
+                * alpha**2
                 + (
                     parameters["C34"] * xp.cos(4.0 * (phi - parameters["phi34"]))
                     + parameters["C32"] * xp.cos(2.0 * (phi - parameters["phi32"]))
                     + parameters["C30"]
                 )
-                * alpha ** 3
+                * alpha**3
                 + (
                     parameters["C45"] * xp.cos(5.0 * (phi - parameters["phi45"]))
                     + parameters["C43"] * xp.cos(3.0 * (phi - parameters["phi43"]))
                     + parameters["C41"] * xp.cos(1.0 * (phi - parameters["phi41"]))
                 )
-                * alpha ** 4
+                * alpha**4
                 + (
                     parameters["C56"] * xp.cos(6.0 * (phi - parameters["phi56"]))
                     + parameters["C54"] * xp.cos(4.0 * (phi - parameters["phi54"]))
                     + parameters["C52"] * xp.cos(2.0 * (phi - parameters["phi52"]))
                     + parameters["C50"]
                 )
-                * alpha ** 5
+                * alpha**5
             )
         )
 
@@ -664,7 +671,7 @@ class SpatialEnvelope(
                     * parameters["C21"]
                     * xp.sin(1.0 * (phi - parameters["phi21"]))
                 )
-                * alpha ** 2
+                * alpha**2
                 + 1
                 / 4.0
                 * (
@@ -673,7 +680,7 @@ class SpatialEnvelope(
                     * parameters["C32"]
                     * xp.sin(2.0 * (phi - parameters["phi32"]))
                 )
-                * alpha ** 3
+                * alpha**3
                 + 1
                 / 5.0
                 * (
@@ -685,7 +692,7 @@ class SpatialEnvelope(
                     * parameters["C41"]
                     * xp.sin(1.0 * (phi - parameters["phi41"]))
                 )
-                * alpha ** 4
+                * alpha**4
                 + (1 / 6.0)
                 * (
                     6.0 * parameters["C56"] * xp.sin(6.0 * (phi - parameters["phi56"]))
@@ -696,14 +703,14 @@ class SpatialEnvelope(
                     * parameters["C52"]
                     * xp.sin(2.0 * (phi - parameters["phi52"]))
                 )
-                * alpha ** 5
+                * alpha**5
             )
         )
 
         array = xp.exp(
             -xp.sign(angular_spread)
             * (angular_spread / 2) ** 2
-            * (dchi_dk ** 2 + dchi_dphi ** 2)
+            * (dchi_dk**2 + dchi_dphi**2)
         )
 
         return array
@@ -717,13 +724,13 @@ class Aberrations(
 
     Parameters
     ----------
-    aberration_coefficients: dict
+    aberration_coefficients: dict, optional
         Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in
-        Ångstrom and angles should be given in radians.
+        [Å] and angles should be given in [radian].
     energy : float, optional
-        Electron energy [eV].
-    kwargs:
-        Provide the aberration coefficients as keyword arguments.
+        Electron energy [eV]. If not provided, inferred from the wave functions.
+    kwargs : dict, optional
+        Optionally provide the aberration coefficients as keyword arguments.
     """
 
     def __init__(
@@ -737,7 +744,6 @@ class Aberrations(
         aberration_coefficients = (
             {} if aberration_coefficients is None else aberration_coefficients
         )
-
 
         aberration_coefficients = {**aberration_coefficients, **kwargs}
         self._aberration_coefficients = self._default_aberration_coefficients()
@@ -771,7 +777,7 @@ class Aberrations(
         alpha = xp.array(alpha)
         alpha = xp.expand_dims(alpha, axis=axis)
         phi = xp.expand_dims(phi, axis=axis)
-        alpha2 = alpha ** 2
+        alpha2 = alpha**2
 
         array = xp.zeros(alpha.shape, dtype=np.float32)
 
@@ -808,7 +814,7 @@ class Aberrations(
             array = array + (
                 1
                 / 4
-                * alpha2 ** 2
+                * alpha2**2
                 * (
                     parameters["C30"]
                     + parameters["C32"] * xp.cos(2 * (phi - parameters["phi32"]))
@@ -823,7 +829,7 @@ class Aberrations(
             array = array + (
                 1
                 / 5
-                * alpha2 ** 2
+                * alpha2**2
                 * alpha
                 * (
                     parameters["C41"] * xp.cos((phi - parameters["phi41"]))
@@ -839,7 +845,7 @@ class Aberrations(
             array = array + (
                 1
                 / 6
-                * alpha2 ** 3
+                * alpha2**3
                 * (
                     parameters["C50"]
                     + parameters["C52"] * xp.cos(2 * (phi - parameters["phi52"]))
@@ -860,34 +866,36 @@ class Aberrations(
 
 class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
     """
-    The Contrast Transfer Function (CTF) describes the aberrations of the objective lens in HRTEM and specifies how
+    The contrast transfer function (CTF) describes the aberrations of the objective lens in HRTEM and specifies how
     the condenser system shapes the probe in STEM.
 
     abTEM implements phase aberrations up to 5th order using polar coefficients.
     See Eq. 2.22 in the reference [1]_.
 
-    Cartesian coefficients can be converted to polar using the utility function abtem.transfer.cartesian2polar.
+    Cartesian coefficients can be converted to polar using the utility function `abtem.transfer.cartesian2polar`.
 
     Partial coherence is included as envelopes in the quasi-coherent approximation.
     See Chapter 3.2 in reference [1]_.
 
     Parameters
     ----------
-    semiangle_cutoff: float
-        The semiangle cutoff describes the sharp Fourier space cutoff due to the objective aperture [mrad].
-    taper: float
-        Tapers the cutoff edge over the given angular range [mrad].
-    focal_spread: float
-        The standard deviation of the focal spread due to chromatic aberration and lens current instability [Å].
-    angular_spread: float
-        The standard deviation of the angular deviations due to source size [Å].
-    aberration_coefficients: dict
+    semiangle_cutoff: float, optional
+        The semiangle cutoff describes the sharp reciprocal-space cutoff due to the objective aperture [mrad]
+        (default is no cutoff).
+    taper: float, optional
+        Tapers the cutoff edge over the given angular range [mrad] (default is 0).
+    focal_spread: float, optional
+        The standard deviation of the focal spread due to chromatic aberration and lens current instability [Å]
+        (default is 0).
+    angular_spread: float, optional
+        The standard deviation of the angular deviations due to source size [Å] (default is 0).
+    aberration_coefficients: dict, optional
         Mapping from aberration symbols to their corresponding values. All aberration magnitudes should be given in
-        Ångstrom and angles should be given in radians.
+        [Å] and angles should be given in [radian].
     energy : float, optional
-        Electron energy [eV].
-    kwargs:
-        Provide the aberration coefficients as keyword arguments.
+        Electron energy [eV]. If not provided, inferred from the wave functions.
+    kwargs : dict, optional
+        Optionally provide the aberration coefficients as keyword arguments.
 
     References
     ----------
@@ -908,7 +916,11 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
 
         super().__init__(
             distributions=polar_symbols
-            + ("angular_spread", "focal_spread", "semiangle_cutoff",),
+            + (
+                "angular_spread",
+                "focal_spread",
+                "semiangle_cutoff",
+            ),
             energy=energy,
             semiangle_cutoff=semiangle_cutoff,
         )
@@ -969,7 +981,10 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
 
     @property
     def _temporal_envelope(self):
-        return TemporalEnvelope(focal_spread=self.focal_spread, energy=self.energy,)
+        return TemporalEnvelope(
+            focal_spread=self.focal_spread,
+            energy=self.energy,
+        )
 
     @property
     def ensemble_axes_metadata(self):
@@ -985,7 +1000,7 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
 
     @property
     def semiangle_cutoff(self) -> float:
-        """The semi-angle cutoff [mrad]."""
+        """The semiangle cutoff [mrad]."""
         return self._semiangle_cutoff
 
     @semiangle_cutoff.setter
@@ -1080,7 +1095,9 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
 
         if self._aperture.semiangle_cutoff != np.inf:
             profiles += [
-                ReciprocalSpaceLineProfiles(aperture, sampling=sampling, metadata=metadata)
+                ReciprocalSpaceLineProfiles(
+                    aperture, sampling=sampling, metadata=metadata
+                )
             ]
             axis_metadata += ["aperture"]
 
@@ -1089,7 +1106,9 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
             and self._spatial_envelope.angular_spread > 0.0
         ):
             profiles += [
-                ReciprocalSpaceLineProfiles(envelope, sampling=sampling, metadata=metadata)
+                ReciprocalSpaceLineProfiles(
+                    envelope, sampling=sampling, metadata=metadata
+                )
             ]
             axis_metadata += ["envelope"]
 
@@ -1114,12 +1133,12 @@ class CTF(_HasAberrations, _EnsembleFromDistributionsMixin, BaseAperture):
 
 def nyquist_sampling(semiangle_cutoff: float, energy: float) -> float:
     """
-    Calculate the nyquist sampling.
+    Calculate the Nyquist sampling.
 
     Parameters
     ----------
     semiangle_cutoff: float
-        Spherical aberration [Å].
+        Semiangle cutoff [mrad].
     energy: float
         Electron energy [eV].
     """
@@ -1143,7 +1162,7 @@ def scherzer_defocus(Cs: float, energy: float) -> float:
 
 def point_resolution(Cs: float, energy: float) -> float:
     """
-    Calculate the point resolution.
+    Calculate the Scherzer point resolution.
 
     Parameters
     ----------
@@ -1152,7 +1171,6 @@ def point_resolution(Cs: float, energy: float) -> float:
     energy: float
         Electron energy [eV].
     """
-
     return (energy2wavelength(energy) ** 3 * np.abs(Cs) / 6) ** (1 / 4)
 
 
@@ -1162,13 +1180,13 @@ def polar2cartesian(polar):
 
     Parameters
     ----------
-    polar: dict
+    polar : dict
         Mapping from polar aberration symbols to their corresponding values.
 
     Returns
     -------
-    dict
-        Mapping from cartesian aberration symbols to their corresponding values.
+    cartesian : dict
+        Mapping from Cartesian aberration symbols to their corresponding values.
     """
 
     polar = defaultdict(lambda: 0, polar)
@@ -1189,8 +1207,8 @@ def polar2cartesian(polar):
     cartesian["C34b"] = (
         1
         / 4.0
-        * (1 + K ** 2) ** 2
-        / (K ** 3 - K)
+        * (1 + K**2) ** 2
+        / (K**3 - K)
         * polar["C34"]
         * np.cos(4 * np.arctan(1 / K) - 4 * polar["phi34"])
     )
@@ -1204,12 +1222,12 @@ def cartesian2polar(cartesian):
 
     Parameters
     ----------
-    cartesian: dict
+    cartesian : dict
         Mapping from Cartesian aberration symbols to their corresponding values.
 
     Returns
     -------
-    dict
+    polar : dict
         Mapping from polar aberration symbols to their corresponding values.
     """
 
