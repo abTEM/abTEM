@@ -149,17 +149,17 @@ class SourceOffset(BaseScan):
 
 
 class CustomScan(BaseScan):
+    """
+    Custom scan based on explicit 2D probe positions.
+
+    Parameters
+    ----------
+    positions : np.ndarray, optional
+        Probe positions. Anything that can be converted to an ndarray of shape (n, 3) is accepted. Default is
+        (0., 0.).
+    """
+
     def __init__(self, positions: np.ndarray = (0.0, 0.0)):
-        """
-        Custom scan based on explicit 2d probe positions.
-
-        Parameters
-        ----------
-        positions : np.ndarray, optional
-            Probe positions. Anything that can be converted to an ndarray of shape (n, 3) is accepted. Default is
-            (0., 0.).
-        """
-
         positions = np.array(positions, dtype=np.float32)
 
         if len(positions.shape) == 1:
