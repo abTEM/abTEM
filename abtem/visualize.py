@@ -38,7 +38,7 @@ if TYPE_CHECKING:
         RealSpaceLineProfiles,
         ReciprocalSpaceLineProfiles,
     )
-    from abtem.core.indexing import IndexedDiffractionPattern
+    from abtem.core.indexing import IndexedDiffractionPatterns
 
 
 def _get_complex_colors(
