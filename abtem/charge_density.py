@@ -1,3 +1,4 @@
+"""Module for describing the nuclear and electronic charge density used as the electrostatic potential in multislice simulations."""
 from functools import partial
 from typing import Tuple, Union
 
