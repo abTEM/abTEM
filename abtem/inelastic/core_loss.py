@@ -19,12 +19,55 @@ from abtem.core.energy import (
 from abtem.core.fft import fft_shift_kernel
 from abtem.core.fft import ifft2
 from abtem.core.grid import HasGridMixin, Grid, polar_spatial_frequencies
-from abtem.ionization.utils import (
-    check_valid_quantum_number,
-    config_str_to_config_tuples,
-    remove_electron_from_config_str,
-)
+
 from abtem.core.chunks import generate_chunks
+
+from ase.data import chemical_symbols
+
+from abtem.core.electron_configurations import electron_configurations
+
+azimuthal_number = {"s": 0, "p": 1, "d": 2, "f": 3, "g": 4, "h": 5, "i": 6}
+azimuthal_letter = {value: key for key, value in azimuthal_number.items()}
+
+
+def config_str_to_config_tuples(config_str):
+    config_tuples = []
+    for subshell_string in config_str.split(" "):
+        config_tuples.append(
+            (
+                int(subshell_string[0]),
+                azimuthal_number[subshell_string[1]],
+                int(subshell_string[2]),
+            )
+        )
+    return config_tuples
+
+
+def config_tuples_to_config_str(config_tuples):
+    config_str = []
+    for n, ell, occ in config_tuples:
+        config_str.append(str(n) + azimuthal_letter[ell] + str(occ))
+    return " ".join(config_str)
+
+
+def remove_electron_from_config_str(config_str, n, ell):
+    config_tuples = []
+    for shell in config_str_to_config_tuples(config_str):
+        if shell[:2] == (n, ell):
+            config_tuples.append(shell[:2] + (shell[2] - 1,))
+        else:
+            config_tuples.append(shell)
+    return config_tuples_to_config_str(config_tuples)
+
+
+def check_valid_quantum_number(Z, n, ell):
+    symbol = chemical_symbols[Z]
+    config_tuple = config_str_to_config_tuples(electron_configurations[symbol])
+
+    if not any([shell[:2] == (n, ell) for shell in config_tuple]):
+        raise RuntimeError(
+            f"Quantum numbers (n, ell) = ({n}, {ell}) not valid for element {symbol}"
+        )
 
 
 class AbstractTransitionCollection(metaclass=ABCMeta):
@@ -42,14 +85,14 @@ class AbstractTransitionCollection(metaclass=ABCMeta):
 
 class SubshellTransitions(AbstractTransitionCollection):
     def __init__(
-        self,
-        Z: int,
-        n: int,
-        l: int,
-        order: int = 1,
-        min_contrast: float = 1.0,
-        epsilon: float = 1.0,
-        xc: str = "PBE",
+            self,
+            Z: int,
+            n: int,
+            l: int,
+            order: int = 1,
+            min_contrast: float = 1.0,
+            epsilon: float = 1.0,
+            xc: str = "PBE",
     ):
         check_valid_quantum_number(Z, n, l)
         self._n = n
@@ -145,7 +188,7 @@ class SubshellTransitions(AbstractTransitionCollection):
 
         def schroedinger_derivative(y, r, l, e, vr):
             (u, up) = y
-            return np.array([up, (l * (l + 1) / r**2 - 2 * vr(r) / r - e) * u])
+            return np.array([up, (l * (l + 1) / r ** 2 - 2 * vr(r) / r - e) * u])
 
         r = np.geomspace(1e-7, 200, 1000000)
         continuum_waves = {}
@@ -155,12 +198,12 @@ class SubshellTransitions(AbstractTransitionCollection):
             )
 
             sqrt_k = (
-                self.epsilon**0.5
-                / (
-                    self.epsilon
-                    * (1 + units.alpha**2 * self.epsilon / units.Rydberg / 4)
-                )
-                ** 0.25
+                    self.epsilon ** 0.5
+                    / (
+                            self.epsilon
+                            * (1 + units.alpha ** 2 * self.epsilon / units.Rydberg / 4)
+                    )
+                    ** 0.25
             )
 
             ur = ur[:, 0] / ur[:, 0].max() / sqrt_k / np.sqrt(np.pi)
@@ -175,7 +218,7 @@ class SubshellTransitions(AbstractTransitionCollection):
         return self._calculate_continuum()[1]
 
     def get_transition_quantum_numbers(
-        self,
+            self,
     ) -> List[Tuple[Tuple[int, int], Tuple[int, int]]]:
         transitions = []
         for ml in np.arange(-self.l, self.l + 1):
@@ -210,12 +253,12 @@ class SubshellTransitions(AbstractTransitionCollection):
         return arrays
 
     def get_transition_potentials(
-        self,
-        extent: Union[float, Sequence[float]] = None,
-        gpts: Union[float, Sequence[float]] = None,
-        sampling: Union[float, Sequence[float]] = None,
-        energy: float = None,
-        quantum_numbers=None,
+            self,
+            extent: Union[float, Sequence[float]] = None,
+            gpts: Union[float, Sequence[float]] = None,
+            sampling: Union[float, Sequence[float]] = None,
+            energy: float = None,
+            quantum_numbers=None,
     ):
 
         _, bound_wave = self._calculate_bound()
@@ -253,16 +296,16 @@ class BaseTransitionPotential(HasAcceleratorMixin, HasGridMixin):
 
 class SubshellTransitionPotentials(BaseTransitionPotential):
     def __init__(
-        self,
-        Z: int,
-        bound_wave: callable,
-        continuum_waves: dict,
-        quantum_numbers: List[Tuple[Tuple[int, int], Tuple[int, int]]],
-        energy_loss: float = 1.0,
-        extent: Union[float, Tuple[float, float]] = None,
-        gpts: Union[int, Tuple[float, float]] = None,
-        sampling: Union[float, Tuple[float, float]] = None,
-        energy: float = None,
+            self,
+            Z: int,
+            bound_wave: callable,
+            continuum_waves: dict,
+            quantum_numbers: List[Tuple[Tuple[int, int], Tuple[int, int]]],
+            energy_loss: float = 1.0,
+            extent: Union[float, Tuple[float, float]] = None,
+            gpts: Union[int, Tuple[float, float]] = None,
+            sampling: Union[float, Tuple[float, float]] = None,
+            energy: float = None,
     ):
 
         self._bound_wave = bound_wave
@@ -369,8 +412,8 @@ class SubshellTransitionPotentials(BaseTransitionPotential):
         d = waves._copy_as_dict(copy_array=False)
         d["array"] = array * waves.array[None]
         d["ensemble_axes_metadata"] = [
-            {"type": "ensemble", "label": "core ionization"}
-        ] + d["ensemble_axes_metadata"]
+                                          {"type": "ensemble", "label": "core ionization"}
+                                      ] + d["ensemble_axes_metadata"]
         return waves.__class__(**d)
 
     def generate_scattered_waves(self, waves, sites, chunks=1):
@@ -401,9 +444,9 @@ class SubshellTransitionPotentials(BaseTransitionPotential):
         )
 
         values = (
-            bound_wave(integration_grid)
-            * spherical_jn(lprimeprime, radial_grid[:, None] * integration_grid[None])
-            * continuum_wave(integration_grid)
+                bound_wave(integration_grid)
+                * spherical_jn(lprimeprime, radial_grid[:, None] * integration_grid[None])
+                * continuum_wave(integration_grid)
         )
 
         integral = np.trapz(values, integration_grid, axis=1)
@@ -420,7 +463,7 @@ class SubshellTransitionPotentials(BaseTransitionPotential):
         kz = self.momentum_transfer
 
         kt, phi = polar_spatial_frequencies(self.gpts, self.sampling)
-        k = np.sqrt(kt**2 + kz**2) * 2 * np.pi
+        k = np.sqrt(kt ** 2 + kz ** 2) * 2 * np.pi
         theta = np.pi - np.arctan(kt / kz)
 
         for i, ((l, ml), (lprime, mlprime)) in enumerate(self.quantum_numbers):
@@ -436,21 +479,21 @@ class SubshellTransitionPotentials(BaseTransitionPotential):
                         continue
 
                     prefactor = (
-                        np.sqrt(4 * np.pi)
-                        * ((-1.0j) ** lprimeprime)
-                        * np.sqrt(
-                            (2 * lprime + 1) * (2 * lprimeprime + 1) * (2 * l + 1)
-                        )
+                            np.sqrt(4 * np.pi)
+                            * ((-1.0j) ** lprimeprime)
+                            * np.sqrt(
+                        (2 * lprime + 1) * (2 * lprimeprime + 1) * (2 * l + 1)
+                    )
                     )
 
                     prefactor *= (
-                        (-1.0) ** (mlprime + mlprimeprime)
-                        * float(wigner_3j(lprime, lprimeprime, l, 0, 0, 0))
-                        * float(
-                            wigner_3j(
-                                lprime, lprimeprime, l, -mlprime, -mlprimeprime, ml
-                            )
+                            (-1.0) ** (mlprime + mlprimeprime)
+                            * float(wigner_3j(lprime, lprimeprime, l, 0, 0, 0))
+                            * float(
+                        wigner_3j(
+                            lprime, lprimeprime, l, -mlprime, -mlprimeprime, ml
                         )
+                    )
                     )
 
                     if np.abs(prefactor) < 1e-12:
@@ -478,9 +521,9 @@ class SubshellTransitionPotentials(BaseTransitionPotential):
         # inter = relativistic_mass_correction(self.energy) *
 
         array *= (
-            y
-            * np.sqrt(units.Rydberg)
-            / (2 * units.Bohr**2 * units.Rydberg * kn * k**2 / 4)
+                y
+                * np.sqrt(units.Rydberg)
+                / (2 * units.Bohr ** 2 * units.Rydberg * kn * k ** 2 / 4)
         )
 
         return array
@@ -543,12 +586,12 @@ def validate_sites(potential=None, sites=None):
 
 
 def transition_potential_multislice_and_detect(
-    waves,
-    potential,
-    detectors,
-    transition_potentials,
-    ctf=None,
-    keep_ensemble_dims=False,
+        waves,
+        potential,
+        detectors,
+        transition_potentials,
+        ctf=None,
+        keep_ensemble_dims=False,
 ):
     # print(potential.num_frozen_phonons)
     potential = _validate_potential(potential)
@@ -574,12 +617,12 @@ def transition_potential_multislice_and_detect(
     measurements = allocate_multislice_measurements(waves, potential, detectors)
 
     for scattering_index, (transmission_function_slice, sites_slice) in enumerate(
-        zip(transmission_function, sites)
+            zip(transmission_function, sites)
     ):
         sites_slice = transition_potentials.validate_sites(sites_slice)
 
         for _, scattered_waves in transition_potentials.generate_scattered_waves(
-            waves, sites_slice
+                waves, sites_slice
         ):
 
             slice_generator = transmission_function._generate_slices(
@@ -592,7 +635,7 @@ def transition_potential_multislice_and_detect(
             )
 
             for detect_index, exit_slice in enumerate(
-                potential.exit_planes[first_exit_slice:], first_exit_slice
+                    potential.exit_planes[first_exit_slice:], first_exit_slice
             ):
 
                 while exit_slice != current_slice_index:
@@ -624,7 +667,7 @@ def transition_potential_multislice_and_detect(
 
 
 def linear_scaling_transition_multislice(
-    S1: "SMatrix", S2: "SMatrix", scan, transition_potentials, reverse_multislice=False
+        S1: "SMatrix", S2: "SMatrix", scan, transition_potentials, reverse_multislice=False
 ):
     xp = get_array_module(S1._device)
     from tqdm.auto import tqdm
@@ -704,14 +747,14 @@ def linear_scaling_transition_multislice(
                 mask = xp.ones(len(coefficients), dtype=bool)
                 if S1.interpolation[0] > 1:
                     mask *= (
-                        xp.abs(positions[:, 0] - site[0])
-                        % (S1.extent[0] - prism_region[0])
-                    ) <= prism_region[0]
+                                    xp.abs(positions[:, 0] - site[0])
+                                    % (S1.extent[0] - prism_region[0])
+                            ) <= prism_region[0]
                 if S1.interpolation[1] > 1:
                     mask *= (
-                        xp.abs(positions[:, 1] - site[1])
-                        % (S1.extent[1] - prism_region[1])
-                    ) <= prism_region[1]
+                                    xp.abs(positions[:, 1] - site[1])
+                                    % (S1.extent[1] - prism_region[1])
+                            ) <= prism_region[1]
 
                 cropped_coefficients = coefficients[mask]
 
@@ -738,51 +781,3 @@ def linear_scaling_transition_multislice(
 
     images = Images(images.reshape(scan.gpts), sampling=scan.sampling)
     return images
-
-
-from ase.data import chemical_symbols
-
-from abtem.core.electron_configurations import electron_configurations
-
-azimuthal_number = {"s": 0, "p": 1, "d": 2, "f": 3, "g": 4, "h": 5, "i": 6}
-azimuthal_letter = {value: key for key, value in azimuthal_number.items()}
-
-
-def config_str_to_config_tuples(config_str):
-    config_tuples = []
-    for subshell_string in config_str.split(" "):
-        config_tuples.append(
-            (
-                int(subshell_string[0]),
-                azimuthal_number[subshell_string[1]],
-                int(subshell_string[2]),
-            )
-        )
-    return config_tuples
-
-
-def config_tuples_to_config_str(config_tuples):
-    config_str = []
-    for n, ell, occ in config_tuples:
-        config_str.append(str(n) + azimuthal_letter[ell] + str(occ))
-    return " ".join(config_str)
-
-
-def remove_electron_from_config_str(config_str, n, ell):
-    config_tuples = []
-    for shell in config_str_to_config_tuples(config_str):
-        if shell[:2] == (n, ell):
-            config_tuples.append(shell[:2] + (shell[2] - 1,))
-        else:
-            config_tuples.append(shell)
-    return config_tuples_to_config_str(config_tuples)
-
-
-def check_valid_quantum_number(Z, n, ell):
-    symbol = chemical_symbols[Z]
-    config_tuple = config_str_to_config_tuples(electron_configurations[symbol])
-
-    if not any([shell[:2] == (n, ell) for shell in config_tuple]):
-        raise RuntimeError(
-            f"Quantum numbers (n, ell) = ({n}, {ell}) not valid for element {symbol}"
-        )
