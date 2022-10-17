@@ -40,8 +40,8 @@ def _fresnel_propagator(
     kx, ky = kx[:, None], ky[None]
 
     f = complex_exponential(
-        -(kx ** 2) * np.pi * thickness * wavelength
-    ) * complex_exponential(-(ky ** 2) * np.pi * thickness * wavelength)
+        -(kx**2) * np.pi * thickness * wavelength
+    ) * complex_exponential(-(ky**2) * np.pi * thickness * wavelength)
 
     if tilt != (0.0, 0.0):
         f *= complex_exponential(
@@ -57,11 +57,12 @@ def _tilt_shift(k, tilt, thickness):
 
 
 class FresnelPropagator:
+    """
+    The Fresnel propagtor is used for propagating wave functions using the near-field approximation
+    (Fresnel diffraction).
+    """
+
     def __init__(self):
-        """
-        The Fresnel propagtor is used for propagating wave functions using the near-field approximation
-        (Fresnel diffraction).
-        """
         self._array = None
         self._key = None
 
@@ -269,9 +270,7 @@ def multislice_and_detect(
     detectors: List[BaseDetector],
     conjugate: bool = False,
     transpose: bool = False,
-) -> Union[
-    Tuple[Union[BaseMeasurement, "Waves"], ...], BaseMeasurement, "Waves"
-]:
+) -> Union[Tuple[Union[BaseMeasurement, "Waves"], ...], BaseMeasurement, "Waves"]:
     """
     Calculate the full multislice algorithm for the given batch of wave functions through a given potential, detecting
     at each of the exit planes specified in the potential.
