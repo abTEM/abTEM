@@ -31,7 +31,7 @@ from abtem.core.parametrizations.ewald import EwaldParametrization
 from abtem.inelastic.phonons import (
     DummyFrozenPhonons,
     FrozenPhonons,
-    AbstractFrozenPhonons,
+    BaseFrozenPhonons,
 )
 from abtem.potentials import _PotentialBuilder, Potential
 
@@ -192,7 +192,7 @@ def _interpolate_pseudo_density(nt_sg, gd, gridrefinement=1):
         nt_sg = n_sg
         gd = finegd
 
-    return n_sg
+    return n_sg, finegd
 
 def _get_all_electron_density(
         nt_sG, gd, D_asp: dict, setups, atoms: Atoms, gridrefinement: int = 1
@@ -349,7 +349,7 @@ class GPAWPotential(_PotentialBuilder):
             origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
             box: Tuple[float, float, float] = None,
             periodic: bool = True,
-            frozen_phonons: AbstractFrozenPhonons = None,
+            frozen_phonons: BaseFrozenPhonons = None,
             repetitions: Tuple[int, int, int] = (1, 1, 1),
             gridrefinement: int = 4,
             device: str = None

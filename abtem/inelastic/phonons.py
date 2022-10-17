@@ -1,8 +1,6 @@
 """Module to describe the effect of temperature on the atomic positions."""
-import inspect
-import itertools
+
 from abc import abstractmethod, ABCMeta
-from copy import copy
 from functools import partial
 from numbers import Number
 from typing import Mapping, Union, Sequence, List, Iterable, Tuple
@@ -11,18 +9,18 @@ import dask
 import dask.array as da
 import numpy as np
 from ase import Atoms
+from ase import data
 from ase.cell import Cell
 from ase.data import chemical_symbols
+from dask.delayed import Delayed
 
 from abtem.core.axes import FrozenPhononsAxis, AxisMetadata
-from abtem.core.ensemble import Ensemble
 from abtem.core.chunks import chunk_ranges, validate_chunks
+from abtem.core.ensemble import Ensemble
 from abtem.core.utils import CopyMixin, EqualityMixin
-from dask.delayed import Delayed
-from ase import data
 
 
-class AbstractFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
+class BaseFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMeta):
     """Base class for frozen phonons objects. Documented in the subclasses."""
 
     def __init__(self, atomic_numbers, cell, ensemble_mean: bool = True):
@@ -82,7 +80,7 @@ class AbstractFrozenPhonons(Ensemble, EqualityMixin, CopyMixin, metaclass=ABCMet
             yield self.randomize(fp.atoms)
 
 
-class DummyFrozenPhonons(AbstractFrozenPhonons):
+class DummyFrozenPhonons(BaseFrozenPhonons):
     """Class to allow all potentials to be treated in the same way."""
 
     def __init__(
@@ -194,7 +192,7 @@ def _validate_seeds(
     return seeds
 
 
-class FrozenPhonons(AbstractFrozenPhonons):
+class FrozenPhonons(BaseFrozenPhonons):
     """
     The frozen phonons randomly displace the atomic positions to emulate thermal vibrations.
 
@@ -410,7 +408,7 @@ class FrozenPhonons(AbstractFrozenPhonons):
         return MDFrozenPhonons(trajectory)
 
 
-class MDFrozenPhonons(AbstractFrozenPhonons):
+class MDFrozenPhonons(BaseFrozenPhonons):
     """
     Frozen phonons based on a molecular dynamics simulation..
 
