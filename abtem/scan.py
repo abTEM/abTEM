@@ -101,6 +101,7 @@ class BaseScan(WaveTransform, metaclass=ABCMeta):
         return waves.convolve(array, axes_metadata)
 
 
+# TODO: to be documented or made internal.
 class SourceOffset(BaseScan):
     def __init__(self, distribution):
         self._distribution = distribution
