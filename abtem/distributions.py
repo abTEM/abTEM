@@ -1,3 +1,4 @@
+"""Module for describing mathematical distributions of simulation parameters."""
 from abc import abstractmethod, ABCMeta
 from functools import partial
 from numbers import Number
@@ -49,7 +50,7 @@ class BaseDistribution(EqualityMixin, CopyMixin, metaclass=ABCMeta):
 
 class _DistributionFromValues(BaseDistribution):
     def __init__(
-            self, values: np.ndarray, weights: np.ndarray, ensemble_mean: bool = True
+        self, values: np.ndarray, weights: np.ndarray, ensemble_mean: bool = True
     ):
         self._values = values
         self._weights = weights
@@ -81,7 +82,7 @@ class _DistributionFromValues(BaseDistribution):
 
         blocks = np.empty(len(chunks), dtype=object)
         for i, (start, stop) in enumerate(
-                zip(np.cumsum((0,) + chunks), np.cumsum(chunks))
+            zip(np.cumsum((0,) + chunks), np.cumsum(chunks))
         ):
             blocks[i] = self.__class__(
                 self.values[start:stop].copy(),
@@ -183,7 +184,7 @@ class _AxisAlignedDistributionND(BaseDistribution):
 
 
 def from_values(
-        values: Sequence[Number], weights: np.ndarray = None, ensemble_mean: bool = False
+    values: Sequence[Number], weights: np.ndarray = None, ensemble_mean: bool = False
 ) -> _DistributionFromValues:
     """
     Return a distribution from user-defined values and weights.
@@ -206,11 +207,11 @@ def from_values(
 
 
 def uniform(
-        low: float,
-        high: float,
-        num_samples: int,
-        endpoint: bool = True,
-        ensemble_mean: bool = False,
+    low: float,
+    high: float,
+    num_samples: int,
+    endpoint: bool = True,
+    ensemble_mean: bool = False,
 ) -> _DistributionFromValues:
     """
     Return a distribution with uniformly weighted values evenly spaced over a specified interval.
@@ -239,13 +240,13 @@ def uniform(
 
 
 def gaussian(
-        standard_deviation: Union[float, Tuple[float, ...]],
-        num_samples: Union[int, Tuple[int, ...]],
-        dimension: int = 1,
-        center: Union[float, Tuple[float, ...]] = 0.0,
-        ensemble_mean: Union[bool, Tuple[bool, ...]] = True,
-        sampling_limit: Union[float, Tuple[float, ...]] = 3.0,
-        normalize: str = "intensity",
+    standard_deviation: Union[float, Tuple[float, ...]],
+    num_samples: Union[int, Tuple[int, ...]],
+    dimension: int = 1,
+    center: Union[float, Tuple[float, ...]] = 0.0,
+    ensemble_mean: Union[bool, Tuple[bool, ...]] = True,
+    sampling_limit: Union[float, Tuple[float, ...]] = 3.0,
+    normalize: str = "intensity",
 ):
     """
     Return a distribution with values weighted according to a (multidimensional) Gaussian distribution.
@@ -299,7 +300,7 @@ def gaussian(
         weights = np.exp(-0.5 * (values - center[i]) ** 2 / standard_deviation[i] ** 2)
 
         if normalize == "intensity":
-            weights /= np.sqrt((weights ** 2).sum())
+            weights /= np.sqrt((weights**2).sum())
         elif normalize == "amplitude":
             weights /= weights.sum()
         else:
