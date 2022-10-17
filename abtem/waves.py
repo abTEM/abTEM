@@ -126,6 +126,16 @@ class BaseWaves(
 
     @property
     @abstractmethod
+    def ensemble_shape(self):
+        pass
+
+    @property
+    @abstractmethod
+    def ensemble_axes_metadata(self):
+        pass
+
+    @property
+    @abstractmethod
     def metadata(self) -> dict:
         """Metadata stored as a dictionary."""
         pass

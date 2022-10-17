@@ -73,6 +73,16 @@ class BasePotential(
     """Base class of all potentials. Documented in the subclasses."""
 
     @property
+    @abstractmethod
+    def ensemble_shape(self):
+        pass
+
+    @property
+    @abstractmethod
+    def ensemble_axes_metadata(self):
+        pass
+
+    @property
     def base_shape(self):
         return (self.num_slices,) + self.gpts
 

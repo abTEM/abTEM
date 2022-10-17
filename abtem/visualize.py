@@ -517,7 +517,7 @@ def show_measurements_1d(
 
 
 def plot_diffraction_pattern(
-    indexed_diffraction_pattern: "IndexedDiffractionPattern",
+    indexed_diffraction_pattern,
     spot_scale: float = 1.0,
     ax: Axes = None,
     figsize: Tuple[float, float] = (6, 6),
