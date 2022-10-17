@@ -5,6 +5,7 @@ import re
 from contextlib import contextmanager
 
 import nbformat
+import pytest
 from deepdiff import DeepDiff
 from nbclient.client import NotebookClient
 
@@ -16,9 +17,9 @@ exclude_regex_paths = {
     r"root\['cells'\]\[\d+\]\['outputs'\]\[\d+\]\['execution_count'\]",
 }
 
-# ROOT_DIR = '../../docs/user_guide/'
-ROOT_DIR = "/Users/jacobmadsen/PycharmProjects/abtem-doc/docs/user_guide/walkthrough"
 
+ROOT_DIR = "/Users/jacobmadsen/PycharmProjects/abtem-doc/docs/user_guide/walkthrough"
+KERNEL_NAME = "abtem-dask"
 
 @contextmanager
 def working_directory(directory):
@@ -99,7 +100,7 @@ def _test_notebook(fname):
     with working_directory(ROOT_DIR):
         nb = nbformat.read(fname, DEFAULT_NB_VERSION)
         nb_old = copy.deepcopy(nb)
-        client = NotebookClient(nb)
+        client = NotebookClient(nb, kernel=KERNEL_NAME)
         nb_new = client.execute()
 
     nb_old = strip_skipped(nb_old)
@@ -111,29 +112,42 @@ def _test_notebook(fname):
         raise AssertionError(f"notebook changed - diff:\n{pprint.pformat(dict(diff))}")
 
 
+@pytest.mark.slow
 def test_atomic_models():
     _test_notebook("atomic_models.ipynb")
 
 
+@pytest.mark.slow
 def test_potentials():
     _test_notebook("potentials.ipynb")
 
 
+@pytest.mark.slow
 def test_wave_functions():
     _test_notebook("wave_functions.ipynb")
 
 
+@pytest.mark.slow
 def test_multislice():
     _test_notebook("multislice.ipynb")
 
 
+@pytest.mark.slow
 def test_contrast_transfer_function():
     _test_notebook("contrast_transfer_function.ipynb")
 
 
+@pytest.mark.slow
 def test_scan_and_detect():
     _test_notebook("scan_and_detect.ipynb")
 
 
-def test_frozen_phonons():
-    _test_notebook("frozen_phonons.ipynb")
+@pytest.mark.slow
+def test_partial_coherence():
+    _test_notebook("partial_coherence.ipynb")
+
+
+@pytest.mark.slow
+def test_charge_density():
+    _test_notebook("charge_density.ipynb")
+

@@ -91,18 +91,18 @@ def test_multislice_thickness_series(data, waves_builder, device, lazy):
 @given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False], ids=['lazy', 'not_lazy'])
 @pytest.mark.parametrize('device', ['cpu', gpu])
-@pytest.mark.parametrize('frozen_phonons', [True, False])
+@pytest.mark.parametrize('frozen_phonons', [True])
 @pytest.mark.parametrize('detector', [
     abtem_st.segmented_detector,
-    abtem_st.flexible_annular_detector,
-    abtem_st.pixelated_detector,
-    abtem_st.waves_detector,
-    abtem_st.annular_detector
+    #abtem_st.flexible_annular_detector,
+    #abtem_st.pixelated_detector,
+    #abtem_st.waves_detector,
+    #abtem_st.annular_detector
 ])
 @pytest.mark.parametrize('scan', [
     GridScan(),
-    LineScan(),
-    CustomScan(),
+    #LineScan(),
+    #CustomScan(),
 ])
 @pytest.mark.parametrize("waves_builder", [
     abtem_st.probe,

@@ -3,7 +3,7 @@ from numbers import Number
 import hypothesis.extra.numpy as numpy_st
 import hypothesis.strategies as st
 import pytest
-from hypothesis import given, assume
+from hypothesis import given, assume, reproduce_failure
 
 import strategies as abtem_st
 from abtem.core.array import stack, concatenate
@@ -252,8 +252,14 @@ def test_from_array_and_metadata(data, has_array, lazy, device):
     assert new == has_array
 
 
+def test_t():
+    import pathlib
+    import os
+    print(os.path.join(pathlib.Path(__file__).parent.resolve(), "data"))
+
+
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("lazy", [True])
 @pytest.mark.parametrize("device", ['cpu', gpu])
 @pytest.mark.parametrize("has_array", [
     abtem_st.images,
