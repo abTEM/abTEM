@@ -58,7 +58,7 @@ def _tilt_shift(k, tilt, thickness):
 
 class FresnelPropagator:
     """
-    The Fresnel propagtor is used for propagating wave functions using the near-field approximation
+    The Fresnel propagator is used for propagating wave functions using the near-field approximation
     (Fresnel diffraction).
     """
 
