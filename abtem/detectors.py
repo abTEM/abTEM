@@ -319,12 +319,14 @@ class _AbstractRadialDetector(BaseDetector):
                 label="Radial scattering angle",
                 offset=self.inner,
                 sampling=self.radial_sampling,
+                _concatenate=False,
                 units="mrad",
             ),
             LinearAxis(
                 label="Azimuthal scattering angle",
                 offset=self.rotation,
                 sampling=self.azimuthal_sampling,
+                _concatenate=False,
                 units="rad",
             ),
         ]

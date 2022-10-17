@@ -170,7 +170,7 @@ def test_empty_multislice_normalized(data, atoms, waves_builder, lazy):
     [
         abtem_st.probe,
         abtem_st.plane_wave,
-        abtem_st.s_matrix,
+        #abtem_st.s_matrix,
     ],
 )
 def test_multislice_scatter(data, potential, waves_builder, lazy):
@@ -338,17 +338,16 @@ def test_diffraction_patterns(data, max_angle, fftshift, block_direct, lazy, dev
     ),
     renormalize=st.booleans(),
 )
-@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("lazy", [True])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_tile(data, repetitions, renormalize, lazy, device):
     waves = data.draw(abtem_st.waves(lazy=lazy, device=device))
     old_extent = waves.extent
-    old_sum = waves.diffraction_patterns(max_angle=None).array.sum((-2, -1))
+    old_sum = waves.diffraction_patterns(max_angle=None).array.sum((-2, -1)).compute()
     tiled = waves.tile(repetitions, renormalize=renormalize)
     assert np.allclose(
         (old_extent[0] * repetitions[0], old_extent[1] * repetitions[1]), tiled.extent
     )
     if renormalize:
-        assert np.allclose(
-            old_sum, tiled.diffraction_patterns(max_angle=None).array.sum((-2, -1))
-        )
+        new_sum = tiled.diffraction_patterns(max_angle=None).array.sum((-2, -1)).compute()
+        assert np.allclose(old_sum, new_sum)

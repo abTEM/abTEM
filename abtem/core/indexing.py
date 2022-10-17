@@ -1,4 +1,5 @@
 from numbers import Number
+from typing import Union
 
 import numpy as np
 from ase.cell import Cell
@@ -38,7 +39,7 @@ def find_linearly_independent_row(array, row, tol: float = 1e-6):
 def find_independent_spots(array):
     spots = array > array.max() * 1e-2
     half = central_bin_index(array)
-    spots = spots[half[0] :, half[1] :]
+    spots = spots[half[0]:, half[1]:]
 
     spots = np.array(np.where(spots)).T
     spot_0 = spots[0]
@@ -59,9 +60,9 @@ def planar_angle_from_bin_indices(index1, index2, sampling):
 
 def orthorhombic_spacings(indices, d):
     g = (
-        indices[:, None, None] ** 2 / d[0] ** 2
-        + indices[None, :, None] ** 2 / d[1] ** 2
-        + indices[None, None] ** 2 / d[2] ** 2
+            indices[:, None, None] ** 2 / d[0] ** 2
+            + indices[None, :, None] ** 2 / d[1] ** 2
+            + indices[None, None] ** 2 / d[2] ** 2
     )
 
     planes = np.zeros_like(g)
@@ -86,9 +87,9 @@ def planar_angle(hkl1, hkl2, cell_edges):
     h1, k1, l1 = hkl1
     h2, k2, l2 = hkl2
     a, b, c = cell_edges
-    d1 = 1 / a**2 * h1**2 + 1 / b**2 * k1**2 + 1 / c**2 * l1**2
-    d2 = 1 / a**2 * h2**2 + 1 / b**2 * k2**2 + 1 / c**2 * l2**2
-    d3 = 1 / a**2 * h1 * h2 + 1 / b**2 * k1 * k2 + 1 / c**2 * l1 * l2
+    d1 = 1 / a ** 2 * h1 ** 2 + 1 / b ** 2 * k1 ** 2 + 1 / c ** 2 * l1 ** 2
+    d2 = 1 / a ** 2 * h2 ** 2 + 1 / b ** 2 * k2 ** 2 + 1 / c ** 2 * l2 ** 2
+    d3 = 1 / a ** 2 * h1 * h2 + 1 / b ** 2 * k1 * k2 + 1 / c ** 2 * l1 * l2
     return np.arccos(d3 / np.sqrt(d1 * d2))
 
 
@@ -201,7 +202,7 @@ def split_at_threshold(values, threshold):
     max_value = values.max()
 
     split = (np.diff(values[order]) > (max_value * threshold)) * (
-        np.diff(values[order]) > 1e-6
+            np.diff(values[order]) > 1e-6
     )
 
     split = np.insert(split, 0, False)
@@ -222,12 +223,12 @@ def find_equivalent_spots(hkl, intensities, intensity_split: float = 1.0):
 
 
 def tabulate_diffraction_pattern(
-    diffraction_pattern,
-    cell,
-    return_data_frame: bool = False,
-    normalize: bool = True,
-    spot_threshold: float = 0.01,
-    intensity_split: float = 1.0,
+        diffraction_pattern,
+        cell,
+        return_data_frame: bool = False,
+        normalize: bool = True,
+        spot_threshold: float = 0.01,
+        intensity_split: float = 1.0,
 ):
     # if len(diffraction_pattern.ensemble_shape) > 0:
     # raise NotImplementedError("tabulating not implemented for ensembles, select a single pattern by indexing")
@@ -331,9 +332,9 @@ class IndexedDiffractionPatterns:
 
     @classmethod
     def index_diffraction_patterns(
-        cls,
-        diffraction_patterns,
-        cell,
+            cls,
+            diffraction_patterns,
+            cell,
     ):
         bins, miller_indices = map_all_bin_indices_to_miller_indices(
             diffraction_patterns.array, diffraction_patterns.sampling, cell
@@ -354,11 +355,11 @@ class IndexedDiffractionPatterns:
         return self.__class__(spots, self._vectors)
 
     def to_dataframe(
-        self,
-        intensity_threshold=1e-2,
-        divide_threshold=1.0,
-        normalize: bool = False,
-        index=0,
+            self,
+            intensity_threshold: float = 1e-2,
+            divide_threshold: float = 1.0,
+            normalize: bool = False,
+            index: Union[int, str] = 0,
     ):
         import pandas as pd
 
@@ -366,7 +367,9 @@ class IndexedDiffractionPatterns:
             divide_threshold=divide_threshold
         ).remove_low_intensity(intensity_threshold)
 
-        if normalize:
+        if normalize is True:
+            indexed = indexed.normalize_intensity(spot=None)
+        elif normalize is not False:
             indexed = indexed.normalize_intensity(spot=normalize)
 
         spots = {
