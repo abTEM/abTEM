@@ -462,6 +462,33 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
 
 
 class SegmentedDetector(_AbstractRadialDetector):
+     """
+     The segmented detector covers an annular angular range, and is partitioned into several integration regions
+     divided to radial and angular segments. This can be used for simulating differential phase contrast (DPC)
+     imaging.
+
+     Parameters
+     ----------
+     nbins_radial : int
+         Number of radial bins.
+     nbins_azimuthal : int
+         Number of angular bins.
+     inner : float
+         Inner integration limit of the bins [mrad].
+     outer : float
+         Outer integration limit of the bins [mrad].
+     rotation : float
+         Rotation of the bins around the origin [mrad].
+     offset : two float
+         Offset of the bins from the origin in `x` and `y` [mrad].
+     to_cpu : bool, optional
+         If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
+         otherwise the data stays on the respective devices. Default is True.
+     url : str, optional
+         If this parameter is set the measurement data is saved at the specified location, typically a path to a
+         local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
+         the data stays in memory.
+     """
     def __init__(
         self,
         nbins_radial: int,
@@ -473,34 +500,6 @@ class SegmentedDetector(_AbstractRadialDetector):
         to_cpu: bool = False,
         url: str = None,
     ):
-        """
-        The segmented detector covers an annular angular range, and is partitioned into several integration regions
-        divided to radial and angular segments. This can be used for simulating differential phase contrast (DPC)
-        imaging.
-
-        Parameters
-        ----------
-        nbins_radial : int
-            Number of radial bins.
-        nbins_azimuthal : int
-            Number of angular bins.
-        inner : float
-            Inner integration limit of the bins [mrad].
-        outer : float
-            Outer integration limit of the bins [mrad].
-        rotation : float
-            Rotation of the bins around the origin [mrad].
-        offset : two float
-            Offset of the bins from the origin in `x` and `y` [mrad].
-        to_cpu : bool, optional
-            If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
-            otherwise the data stays on the respective devices. Default is True.
-        url : str, optional
-            If this parameter is set the measurement data is saved at the specified location, typically a path to a
-            local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
-            the data stays in memory.
-        """
-
         self._nbins_radial = nbins_radial
         self._nbins_azimuthal = nbins_azimuthal
         super().__init__(
@@ -550,6 +549,32 @@ class SegmentedDetector(_AbstractRadialDetector):
 
 
 class PixelatedDetector(BaseDetector):
+    """
+    The pixelated detector records the intensity of the Fourier-transformed exit wave function. This may be used for
+    example for simulating 4D-STEM.
+
+    Parameters
+    ----------
+    max_angle : str or float
+        The diffraction patterns will be detected up to this angle [mrad]. If str, it must be one of:
+        ``cutoff`` :
+        The maximum scattering angle will be the cutoff of the antialiasing aperture.
+        ``valid`` :
+        The maximum scattering angle will be the largest rectangle that fits inside the circular antialiasing aperture
+        (default).
+        ``full`` :
+        Diffraction patterns will not be cropped and will include angles outside the antialiasing aperture.
+    resample : str or False
+        If 'uniform', the diffraction patterns from rectangular cells will be downsampled to a uniform angular
+        sampling.
+    to_cpu : bool, optional
+        If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
+        otherwise the data stays on the respective devices. Default is True.
+    url : str, optional
+        If this parameter is set the measurement data is saved at the specified location, typically a path to a
+        local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
+        the data stays in memory.
+    """
     def __init__(
         self,
         max_angle: Union[str, float] = "valid",
@@ -558,32 +583,6 @@ class PixelatedDetector(BaseDetector):
         to_cpu: bool = True,
         url: str = None,
     ):
-        """
-        The pixelated detector records the intensity of the Fourier-transformed exit wave function. This may be used for
-        example for simulating 4D-STEM.
-
-        Parameters
-        ----------
-        max_angle : str or float
-            The diffraction patterns will be detected up to this angle [mrad]. If str, it must be one of:
-            ``cutoff`` :
-            The maximum scattering angle will be the cutoff of the antialiasing aperture.
-            ``valid`` :
-            The maximum scattering angle will be the largest rectangle that fits inside the circular antialiasing aperture
-            (default).
-            ``full`` :
-            Diffraction patterns will not be cropped and will include angles outside the antialiasing aperture.
-        resample : str or False
-            If 'uniform', the diffraction patterns from rectangular cells will be downsampled to a uniform angular
-            sampling.
-        to_cpu : bool, optional
-            If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
-            otherwise the data stays on the respective devices. Default is True.
-        url : str, optional
-            If this parameter is set the measurement data is saved at the specified location, typically a path to a
-            local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
-            the data stays in memory.
-        """
         self._resample = resample
         self._max_angle = max_angle
         self._fourier_space = fourier_space
