@@ -38,7 +38,7 @@ if TYPE_CHECKING:
         RealSpaceLineProfiles,
         ReciprocalSpaceLineProfiles,
     )
-    from abtem.core.indexing import IndexedDiffractionPattern
+    from abtem.core.indexing import IndexedDiffractionPatterns
 
 
 def _get_complex_colors(
@@ -517,7 +517,7 @@ def show_measurements_1d(
 
 
 def plot_diffraction_pattern(
-    indexed_diffraction_pattern: "IndexedDiffractionPattern",
+    indexed_diffraction_pattern,
     spot_scale: float = 1.0,
     ax: Axes = None,
     figsize: Tuple[float, float] = (6, 6),
