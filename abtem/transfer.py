@@ -1,4 +1,4 @@
-"""Module to describe the contrast transfer function (CTF)."""
+"""Module to describe the contrast transfer function (CTF) and the related apertures."""
 import copy
 import re
 from collections import defaultdict
