@@ -786,6 +786,10 @@ class PotentialArray(BasePotential, HasArray):
         self._metadata = {} if metadata is None else metadata
 
     @property
+    def ensemble_shape(self) -> Tuple[int, ...]:
+        return self.array.shape[: -self._base_dims]
+
+    @property
     def ensemble_axes_metadata(self):
         return self._ensemble_axes_metadata
 
