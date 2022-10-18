@@ -57,6 +57,7 @@ class BaseDetector(CopyMixin, metaclass=ABCMeta):
        local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
        the data stays in memory.
     """
+
     def __init__(self, to_cpu: bool = True, url: str = None):
         self._to_cpu = to_cpu
         self._url = url
@@ -204,7 +205,9 @@ class AnnularDetector(BaseDetector):
         else:
             outer = self.outer
 
-        diffraction_patterns = waves.diffraction_patterns(max_angle="cutoff", parity="same")
+        diffraction_patterns = waves.diffraction_patterns(
+            max_angle="cutoff", parity="same"
+        )
         measurement = diffraction_patterns.integrate_radial(
             inner=self.inner, outer=outer
         )
@@ -462,33 +465,34 @@ class FlexibleAnnularDetector(_AbstractRadialDetector):
 
 
 class SegmentedDetector(_AbstractRadialDetector):
-     """
-     The segmented detector covers an annular angular range, and is partitioned into several integration regions
-     divided to radial and angular segments. This can be used for simulating differential phase contrast (DPC)
-     imaging.
+    """
+    The segmented detector covers an annular angular range, and is partitioned into several integration regions
+    divided to radial and angular segments. This can be used for simulating differential phase contrast (DPC)
+    imaging.
 
-     Parameters
-     ----------
-     nbins_radial : int
-         Number of radial bins.
-     nbins_azimuthal : int
-         Number of angular bins.
-     inner : float
-         Inner integration limit of the bins [mrad].
-     outer : float
-         Outer integration limit of the bins [mrad].
-     rotation : float
-         Rotation of the bins around the origin [mrad].
-     offset : two float
-         Offset of the bins from the origin in `x` and `y` [mrad].
-     to_cpu : bool, optional
-         If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
-         otherwise the data stays on the respective devices. Default is True.
-     url : str, optional
-         If this parameter is set the measurement data is saved at the specified location, typically a path to a
-         local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
-         the data stays in memory.
-     """
+    Parameters
+    ----------
+    nbins_radial : int
+        Number of radial bins.
+    nbins_azimuthal : int
+        Number of angular bins.
+    inner : float
+        Inner integration limit of the bins [mrad].
+    outer : float
+        Outer integration limit of the bins [mrad].
+    rotation : float
+        Rotation of the bins around the origin [mrad].
+    offset : two float
+        Offset of the bins from the origin in `x` and `y` [mrad].
+    to_cpu : bool, optional
+        If True, copy the measurement data from the calculation device to CPU memory after applying the detector,
+        otherwise the data stays on the respective devices. Default is True.
+    url : str, optional
+        If this parameter is set the measurement data is saved at the specified location, typically a path to a
+        local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
+        the data stays in memory.
+    """
+
     def __init__(
         self,
         nbins_radial: int,
@@ -575,6 +579,7 @@ class PixelatedDetector(BaseDetector):
         local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
         the data stays in memory.
     """
+
     def __init__(
         self,
         max_angle: Union[str, float] = "valid",
@@ -677,7 +682,9 @@ class PixelatedDetector(BaseDetector):
             of the spatial frequency.
         """
         if self.fourier_space:
-            measurements = waves.diffraction_patterns(max_angle=self.max_angle, parity="same")
+            measurements = waves.diffraction_patterns(
+                max_angle=self.max_angle, parity="same"
+            )
 
         else:
             measurements = waves.intensity()
@@ -702,6 +709,7 @@ class WavesDetector(BaseDetector):
        local file. A URL can also include a protocol specifier like s3:// for remote data. If not set (default)
        the data stays in memory.
     """
+
     def __init__(self, to_cpu: bool = False, url: str = None):
         super().__init__(to_cpu=to_cpu, url=url)
 
