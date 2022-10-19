@@ -202,7 +202,10 @@ class BasePotential(
         if project:
             return self.project().show(**kwargs)
         else:
-            return self.images().show(explode=True, **kwargs)
+            if "explode" not in kwargs.keys():
+                kwargs["explode"] = True
+
+            return self.images().show(**kwargs)
 
 
 def _validate_potential(
