@@ -101,7 +101,7 @@ def test_array_waves_transform(data, ensemble, chunks):
     blocks = concatenate_array_blocks(blocks)
     assert array.shape[:-2] == ensemble.ensemble_shape
     assert blocks.shape[:-2] == ensemble.ensemble_shape
-    assert np.allclose(blocks, array)
+    assert np.allclose(blocks, array, atol=1e-5)
 
 
 @given(data=st.data())
