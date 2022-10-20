@@ -1,8 +1,13 @@
 import pytest
-from hypothesis import settings
+from hypothesis import settings, HealthCheck
+from abtem import config
 
-settings.register_profile("dev", max_examples=10, print_blob=True, deadline=None)
+config.set({"local_diagnostics.progress_bar": False})
+
+settings.register_profile("dev", max_examples=1000, print_blob=True, deadline=None,
+                          suppress_health_check=(HealthCheck.too_slow,))
 settings.load_profile("dev")
+
 
 def pytest_addoption(parser):
     parser.addoption(
@@ -22,4 +27,3 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "slow" in item.keywords:
             item.add_marker(skip_slow)
-

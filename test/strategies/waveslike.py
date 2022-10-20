@@ -1,3 +1,5 @@
+import warnings
+
 import hypothesis.strategies as st
 import numpy as np
 
@@ -88,7 +90,7 @@ def s_matrix(
     min_interpolation=1,
     max_interpolation=1,
     min_planewave_cutoff=5.0,
-    max_planewave_cutoff=20.0,
+    max_planewave_cutoff=15.0,
     downsample=False,
     potential=None,
     allow_distribution=False,
@@ -110,17 +112,21 @@ def s_matrix(
         st.floats(min_value=min_planewave_cutoff, max_value=max_planewave_cutoff)
     )
 
-    s_matrix = SMatrix(
-        potential=potential,
-        gpts=gpts,
-        extent=extent,
-        energy=energy,
-        planewave_cutoff=planewave_cutoff,
-        interpolation=interpolation,
-        downsample=downsample,
-        device=device,
-        store_on_host=store_on_host,
-    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", category=UserWarning
+        )
+        s_matrix = SMatrix(
+            potential=potential,
+            gpts=gpts,
+            extent=extent,
+            energy=energy,
+            planewave_cutoff=planewave_cutoff,
+            interpolation=interpolation,
+            downsample=downsample,
+            device=device,
+            store_on_host=store_on_host,
+        )
     return s_matrix
 
 

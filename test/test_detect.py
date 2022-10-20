@@ -1,7 +1,7 @@
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given, assume
+from hypothesis import given, assume, reproduce_failure
 from abtem.measurements import _scan_shape, _scan_axes, _scan_shape
 
 import strategies as abtem_st
@@ -51,7 +51,7 @@ def test_annular_detector(data, lazy, device):
     detector = data.draw(abtem_st.annular_detector())
 
     assume(len(_scan_shape(waves)) > 0)
-    assume(len(_scan_shape(waves))< 3)
+    assume(len(_scan_shape(waves)) < 3)
     assume(all(waves._gpts_within_angle(min(detector.angular_limits(waves)))))
     assume(min(waves.cutoff_angles) > 1.0)
 
