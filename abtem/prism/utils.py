@@ -26,8 +26,8 @@ def batch_crop_2d(array: np.ndarray, corners: np.ndarray, new_shape: Tuple[int, 
 
     # if xp is cp:
     i = xp.arange(array.shape[0])[:, None, None]
-    ix = cp.arange(new_shape[0]) + cp.asarray(corners[:, 0, None])
-    iy = cp.arange(new_shape[1]) + cp.asarray(corners[:, 1, None])
+    ix = xp.arange(new_shape[0]) + xp.asarray(corners[:, 0, None])
+    iy = xp.arange(new_shape[1]) + xp.asarray(corners[:, 1, None])
     ix = ix[:, :, None]
     iy = iy[:, None]
     array = array[i, ix, iy]

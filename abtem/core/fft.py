@@ -42,7 +42,7 @@ def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
 
             return getattr(mkl_fft, func_name)(x, overwrite_x=overwrite_x, **kwargs)
         elif config.get("fft") == "fftw":
-            pyfftw.config.NUM_THREADS = config.get("fftw.planning_effort")
+            pyfftw.config.NUM_THREADS = config.get("fftw.threads")
             #pyfftw.config.PLANNER_EFFORT = 'FFTW_MEASURE'
             #pyfftw.interfaces.cache.enable()
 
