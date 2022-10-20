@@ -10,6 +10,7 @@ import dask
 import dask.array as da
 import numpy as np
 import zarr
+from dask.array.utils import validate_axis
 from dask.diagnostics import ProgressBar, Profiler, ResourceProfiler
 from dask.utils import format_bytes, parse_bytes
 from tabulate import tabulate
@@ -443,7 +444,7 @@ class HasArray(HasAxes, CopyMixin):
             ensemble_axes_metadata.insert(a, am)
 
         kwargs = self._copy_kwargs(exclude=("array", "ensemble_axes_metadata"))
-        kwargs["array"] = np.expand_dims(self.array, axis=axis)
+        kwargs["array"] = expand_dims(self.array, axis=axis)
         kwargs["ensemble_axes_metadata"] = ensemble_axes_metadata
         return self.__class__(**kwargs)
 
@@ -597,6 +598,19 @@ class HasArray(HasAxes, CopyMixin):
         array = da.from_zarr(url, component="array", chunks=chunks).compute()
 
         return cls(array, ensemble_axes_metadata=ensemble_axes_metadata, **kwargs)
+
+
+def expand_dims(a, axis):
+    if type(axis) not in (tuple, list):
+        axis = (axis,)
+
+    out_ndim = len(axis) + a.ndim
+    axis = validate_axis(axis, out_ndim)
+
+    shape_it = iter(a.shape)
+    shape = [1 if ax in axis else next(shape_it) for ax in range(out_ndim)]
+
+    return a.reshape(shape)
 
 
 def from_zarr(url: str, chunks: Chunks = None):

@@ -12,7 +12,7 @@ import dask.array as da
 import numpy as np
 from ase import Atoms
 
-from abtem.core.array import HasArray, validate_lazy, ComputableList
+from abtem.core.array import HasArray, validate_lazy, ComputableList, expand_dims
 from abtem.core.axes import HasAxes
 from abtem.core.axes import RealSpaceAxis, FourierSpaceAxis, AxisMetadata
 from abtem.core.axes import TiltAxis, AxisAlignedTiltAxis
@@ -452,8 +452,6 @@ class Waves(HasArray, BaseWaves):
         else:
             raise ValueError
 
-        xp = get_array_module(self.device)
-
         waves = self.ensure_reciprocal_space(in_place=False)
 
         waves_dims = tuple(range(len(kernel.shape) - 2))
@@ -464,7 +462,7 @@ class Waves(HasArray, BaseWaves):
             )
         )
 
-        array = xp.expand_dims(waves.array, axis=waves_dims) * xp.expand_dims(
+        array = expand_dims(waves.array, axis=waves_dims) * expand_dims(
             kernel, axis=kernel_dims
         )
 
@@ -891,17 +889,19 @@ class Waves(HasArray, BaseWaves):
 
             kwargs = self._copy_kwargs(exclude=("array",))
 
-            array = da.blockwise(
-                self._apply_wave_transform,
-                tuple(range(len(args) + len(self.shape))),
-                *tuple(itertools.chain(*args)),
-                self.array,
-                tuple(range(len(args), len(args) + len(self.shape))),
-                adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
-                transform_partial=transform._from_partitioned_args(),
-                waves_partial=self.from_partitioned_args(),  # noqa
-                meta=xp.array((), dtype=np.complex64)
-            )
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="Increasing number of chunks")
+                array = da.blockwise(
+                    self._apply_wave_transform,
+                    tuple(range(len(args) + len(self.shape))),
+                    *tuple(itertools.chain(*args)),
+                    self.array,
+                    tuple(range(len(args), len(args) + len(self.shape))),
+                    adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
+                    transform_partial=transform._from_partitioned_args(),
+                    waves_partial=self.from_partitioned_args(),  # noqa
+                    meta=xp.array((), dtype=np.complex64)
+                )
 
             kwargs["array"] = array
             kwargs["ensemble_axes_metadata"] = (

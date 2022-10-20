@@ -1,5 +1,6 @@
 import itertools
 import operator
+import warnings
 from abc import abstractmethod, ABCMeta
 from functools import reduce, partial
 from typing import Tuple, List, Union
@@ -88,13 +89,15 @@ class Ensemble(metaclass=ABCMeta):
         args = tuple((block, (i,)) for i, block in zip(symbols, args))
         adjust_chunks = {i: c for i, c in enumerate(chunks)}
 
-        return da.blockwise(
-            self._wrapped_from_partitioned_args(),
-            symbols,
-            *tuple(itertools.chain(*args)),
-            adjust_chunks=adjust_chunks,
-            meta=np.array((), dtype=object)
-        )
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Increasing number of chunks")
+            return da.blockwise(
+                self._wrapped_from_partitioned_args(),
+                symbols,
+                *tuple(itertools.chain(*args)),
+                adjust_chunks=adjust_chunks,
+                meta=np.array((), dtype=object)
+            )
 
     def generate_blocks(self, chunks: Chunks = 1):
         """

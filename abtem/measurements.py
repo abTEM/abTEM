@@ -1,4 +1,5 @@
 """Module for handling measurements."""
+import warnings
 from abc import ABCMeta, abstractmethod
 from typing import Union, Tuple, TypeVar, Dict, List, Sequence, Type, TYPE_CHECKING
 
@@ -2065,13 +2066,14 @@ class DiffractionPatterns(BaseMeasurement):
 
     def _check_integration_limits(self, inner: float, outer: float):
 
-        if inner >= outer:
+        if inner > outer:
             raise RuntimeError(
                 f"Inner detection ({inner} mrad) angle cannot exceed the outer detection angle."
                 f"({outer} mrad)"
             )
 
-        if (outer > self.max_angles[0]) or (outer > self.max_angles[1]):
+        if (((outer > self.max_angles[0]) or (outer > self.max_angles[1])) and (
+                not np.isclose(min(self.max_angles), outer, atol=1e-5))):
             raise RuntimeError(
                 f"Outer integration limit cannot exceed the maximum simulated angle ({outer} mrad > "
                 f"{min(self.max_angles)} mrad), please increase the number of grid points."

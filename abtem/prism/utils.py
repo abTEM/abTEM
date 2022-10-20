@@ -24,16 +24,16 @@ def batch_crop_2d(array: np.ndarray, corners: np.ndarray, new_shape: Tuple[int, 
     else:
         old_shape = None
 
-    if xp is cp:
-        i = xp.arange(array.shape[0])[:, None, None]
-        ix = cp.arange(new_shape[0]) + cp.asarray(corners[:, 0, None])
-        iy = cp.arange(new_shape[1]) + cp.asarray(corners[:, 1, None])
-        ix = ix[:, :, None]
-        iy = iy[:, None]
-        array = array[i, ix, iy]
-    else:
-        array = np.lib.stride_tricks.sliding_window_view(array, (1,) + new_shape)
-        array = array[xp.arange(array.shape[0]), corners[:, 0], corners[:, 1], 0]
+    # if xp is cp:
+    i = xp.arange(array.shape[0])[:, None, None]
+    ix = cp.arange(new_shape[0]) + cp.asarray(corners[:, 0, None])
+    iy = cp.arange(new_shape[1]) + cp.asarray(corners[:, 1, None])
+    ix = ix[:, :, None]
+    iy = iy[:, None]
+    array = array[i, ix, iy]
+    # else:
+    #     array = np.lib.stride_tricks.sliding_window_view(array, (1,) + new_shape)
+    #     array = array[xp.arange(array.shape[0]), corners[:, 0], corners[:, 1], 0]
 
     if old_shape is not None:
         array = array.reshape(old_shape[:-2] + array.shape[-2:])
