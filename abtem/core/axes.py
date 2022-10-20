@@ -167,7 +167,7 @@ class NonLinearAxis(OrdinalAxis):
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class PlasmonAxis(OrdinalAxis):
-    units: str = "Å, mrad, rad"
+    units: str = "Excitations"
     label: str = "depths, radial angles, azimuthal angles"
     _ensemble_mean: bool = False
 
