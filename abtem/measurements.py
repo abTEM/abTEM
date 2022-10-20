@@ -249,7 +249,7 @@ def _polar_detector_bins(
         return bins
 
 
-@jit(nopython=True, nogil=True, parallel=True, fastmath=True)
+@jit(nopython=True, nogil=True, fastmath=True)
 def _sum_run_length_encoded(array, result, separators):
     for x in prange(result.shape[1]):
         for i in range(result.shape[0]):
