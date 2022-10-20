@@ -2187,6 +2187,9 @@ class DiffractionPatterns(BaseMeasurement):
             The polar measurements.
         """
 
+        if nbins_radial <= 0 or nbins_azimuthal <= 0:
+            raise RuntimeError("number of bins must be greater than zero")
+
         if outer is None:
             outer = min(self.max_angles)
 
@@ -2263,6 +2266,8 @@ class DiffractionPatterns(BaseMeasurement):
                 nbins_azimuthal=nbins_azimuthal,
                 sampling=self.angular_sampling,
             )
+
+
 
         radial_sampling = (outer - inner) / nbins_radial
         azimuthal_sampling = 2 * np.pi / nbins_azimuthal
