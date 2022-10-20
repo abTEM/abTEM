@@ -2072,12 +2072,12 @@ class DiffractionPatterns(BaseMeasurement):
                 f"({outer} mrad)"
             )
 
-        if (((outer > self.max_angles[0]) or (outer > self.max_angles[1])) and (
-                not np.isclose(min(self.max_angles), outer, atol=1e-5))):
-            raise RuntimeError(
-                f"Outer integration limit cannot exceed the maximum simulated angle ({outer} mrad > "
-                f"{min(self.max_angles)} mrad), please increase the number of grid points."
-            )
+        if (outer > self.max_angles[0]) or (outer > self.max_angles[1]):
+            if not np.isclose(min(self.max_angles), outer, atol=1e-5):
+                raise RuntimeError(
+                    f"Outer integration limit cannot exceed the maximum simulated angle ({outer} mrad > "
+                    f"{min(self.max_angles)} mrad), please increase the number of grid points."
+                )
 
     def gaussian_source_size(
             self, sigma: Union[float, Tuple[float, float]]
