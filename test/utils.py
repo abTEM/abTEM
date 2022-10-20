@@ -7,7 +7,7 @@ from hypothesis import assume
 
 from abtem.core.backend import get_array_module, cp
 from abtem.potentials import Potential
-from abtem.inelastic.phonons import AbstractFrozenPhonons
+from abtem.inelastic.phonons import BaseFrozenPhonons
 from abtem.waves import Waves
 
 
@@ -71,7 +71,7 @@ def assert_scanned_measurement_as_expected(measurements, atoms, waves, detectors
 
         expected_shape = ()
 
-        if isinstance(atoms, AbstractFrozenPhonons):
+        if isinstance(atoms, BaseFrozenPhonons):
             if (not atoms.ensemble_mean) or isinstance(measurement, Waves):
                 expected_shape = (len(atoms),)
 

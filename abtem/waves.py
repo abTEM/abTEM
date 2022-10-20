@@ -12,7 +12,7 @@ import dask.array as da
 import numpy as np
 from ase import Atoms
 
-from abtem.core.array import HasArray, validate_lazy, ComputableList
+from abtem.core.array import HasArray, validate_lazy, ComputableList, expand_dims
 from abtem.core.axes import HasAxes
 from abtem.core.axes import RealSpaceAxis, FourierSpaceAxis, AxisMetadata
 from abtem.core.axes import TiltAxis, AxisAlignedTiltAxis
@@ -34,6 +34,7 @@ from abtem.detectors import (
     WavesDetector,
     FlexibleAnnularDetector,
 )
+from abtem.inelastic.core_loss import transition_potential_multislice_and_detect
 from abtem.measurements import (
     DiffractionPatterns,
     Images,
@@ -123,6 +124,16 @@ class BaseWaves(
     """Base class of all wave functions. Documented in the subclasses."""
 
     _base_axes = (-2, -1)
+
+    @property
+    @abstractmethod
+    def ensemble_shape(self):
+        pass
+
+    @property
+    @abstractmethod
+    def ensemble_axes_metadata(self):
+        pass
 
     @property
     @abstractmethod
@@ -322,7 +333,7 @@ class Waves(HasArray, BaseWaves):
         )
         self._metadata = {} if metadata is None else metadata
 
-        self._fourier_space = reciprocal_space
+        self._reciprocal_space = reciprocal_space
         self._check_axes_metadata()
 
     @property
@@ -349,8 +360,8 @@ class Waves(HasArray, BaseWaves):
         return self._ensemble_axes_metadata
 
     @property
-    def fourier_space(self):
-        return self._fourier_space
+    def reciprocal_space(self):
+        return self._reciprocal_space
 
     @property
     def metadata(self) -> Dict:
@@ -409,7 +420,7 @@ class Waves(HasArray, BaseWaves):
         alpha *= self.wavelength
         return alpha, phi
 
-    # TODO: check that axes_metadata being optional is correctly handled. Also, rename "fourier_space" to "reciprocal_space", but carefully.
+    # TODO: check that axes_metadata being optional is correctly handled. Also, rename "reciprocal_space" to "reciprocal_space", but carefully.
     def convolve(
         self,
         kernel: np.ndarray,
@@ -435,13 +446,11 @@ class Waves(HasArray, BaseWaves):
         """
 
         if out_space == "in_space":
-            fourier_space_out = self.fourier_space
-        elif out_space in ("fourier_space", "real_space"):
-            fourier_space_out = out_space == "fourier_space"
+            fourier_space_out = self.reciprocal_space
+        elif out_space in ("reciprocal_space", "real_space"):
+            fourier_space_out = out_space == "reciprocal_space"
         else:
             raise ValueError
-
-        xp = get_array_module(self.device)
 
         waves = self.ensure_reciprocal_space(in_place=False)
 
@@ -453,7 +462,7 @@ class Waves(HasArray, BaseWaves):
             )
         )
 
-        array = xp.expand_dims(waves.array, axis=waves_dims) * xp.expand_dims(
+        array = expand_dims(waves.array, axis=waves_dims) * expand_dims(
             kernel, axis=kernel_dims
         )
 
@@ -461,7 +470,7 @@ class Waves(HasArray, BaseWaves):
             array = ifft2(array, overwrite_x=False)
 
         d = waves._copy_kwargs(exclude=("array",))
-        d["fourier_space"] = fourier_space_out
+        d["reciprocal_space"] = fourier_space_out
         d["array"] = array
         d["ensemble_axes_metadata"] = axes_metadata + d["ensemble_axes_metadata"]
 
@@ -488,13 +497,13 @@ class Waves(HasArray, BaseWaves):
 
         xp = get_array_module(self.device)
 
-        fourier_space = self.fourier_space
+        reciprocal_space = self.reciprocal_space
 
         if space == "reciprocal":
             waves = self.ensure_reciprocal_space()
             f = xp.sqrt(abs2(waves.array).sum((-2, -1), keepdims=True))
             waves = waves / f
-            if not fourier_space:
+            if not reciprocal_space:
                 waves = waves.ensure_real_space()
 
         elif space == "real":
@@ -557,12 +566,12 @@ class Waves(HasArray, BaseWaves):
             The wave functions in reciprocal space.
         """
 
-        if self.fourier_space:
+        if self.reciprocal_space:
             return self
 
         d = self._copy_kwargs(exclude=("array",))
         d["array"] = fft2(self.array, overwrite_x=in_place)
-        d["fourier_space"] = True
+        d["reciprocal_space"] = True
         return self.__class__(**d)
 
     def ensure_real_space(self, in_place: bool = False):
@@ -580,12 +589,12 @@ class Waves(HasArray, BaseWaves):
             The wave functions in real space.
         """
 
-        if not self.fourier_space:
+        if not self.reciprocal_space:
             return self
 
         d = self._copy_kwargs(exclude=("array",))
         d["array"] = ifft2(self.array, overwrite_x=in_place)
-        d["fourier_space"] = False
+        d["reciprocal_space"] = False
         return self.__class__(**d)
 
     def phase_shift(self, amount: float):
@@ -609,7 +618,7 @@ class Waves(HasArray, BaseWaves):
 
         d = self._copy_kwargs(exclude=("array",))
         d["array"] = phase_shift(self.array)
-        d["fourier_space"] = False
+        d["reciprocal_space"] = False
         return self.__class__(**d)
 
     def intensity(self) -> Images:
@@ -880,17 +889,19 @@ class Waves(HasArray, BaseWaves):
 
             kwargs = self._copy_kwargs(exclude=("array",))
 
-            array = da.blockwise(
-                self._apply_wave_transform,
-                tuple(range(len(args) + len(self.shape))),
-                *tuple(itertools.chain(*args)),
-                self.array,
-                tuple(range(len(args), len(args) + len(self.shape))),
-                adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
-                transform_partial=transform._from_partitioned_args(),
-                waves_partial=self.from_partitioned_args(),  # noqa
-                meta=xp.array((), dtype=np.complex64)
-            )
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="Increasing number of chunks")
+                array = da.blockwise(
+                    self._apply_wave_transform,
+                    tuple(range(len(args) + len(self.shape))),
+                    *tuple(itertools.chain(*args)),
+                    self.array,
+                    tuple(range(len(args), len(args) + len(self.shape))),
+                    adjust_chunks={i: chunk for i, chunk in enumerate(chunks)},
+                    transform_partial=transform._from_partitioned_args(),
+                    waves_partial=self.from_partitioned_args(),  # noqa
+                    meta=xp.array((), dtype=np.complex64)
+                )
 
             kwargs["array"] = array
             kwargs["ensemble_axes_metadata"] = (

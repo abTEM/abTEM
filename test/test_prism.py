@@ -1,3 +1,5 @@
+import warnings
+
 import hypothesis.strategies as st
 import numpy as np
 import pytest
@@ -55,6 +57,7 @@ def test_prism_matches_probe_with_interpolation(data, lazy, device):
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])
 def test_prism_matches_probe_with_multislice(data, lazy, device):
+
     potential = data.draw(abtem_st.potential(device=device))
     s_matrix = data.draw(
         abtem_st.s_matrix(potential=potential, max_interpolation=1, device=device)

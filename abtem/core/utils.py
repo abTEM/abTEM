@@ -2,7 +2,7 @@
 import copy
 import inspect
 import warnings
-from typing import Tuple
+from typing import Tuple, Iterable
 
 import numpy as np
 
@@ -57,9 +57,12 @@ def safe_equality(a, b, exclude: Tuple[str, ...] = ()) -> bool:
         except (KeyError, TypeError):
             return False
 
+        #if (not isinstance(value, Iterable)) or (not isinstance(b.__dict__[key], Iterable)):
+        #    return False
+
         with warnings.catch_warnings():
             warnings.filterwarnings(
-                "ignore", r"Creating an ndarray from nested sequences"
+                "ignore", category=np.VisibleDeprecationWarning
             )
             # TODO: properly handle this warning
 

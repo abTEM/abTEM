@@ -3,7 +3,7 @@ from numbers import Number
 import hypothesis.extra.numpy as numpy_st
 import hypothesis.strategies as st
 import pytest
-from hypothesis import given, assume
+from hypothesis import given, assume, reproduce_failure
 
 import strategies as abtem_st
 from abtem.core.array import stack, concatenate
@@ -194,9 +194,10 @@ def test_squeeze(data, has_array, lazy, device):
     assert remove_dummy_dimensions(waves.ensemble_shape) + waves.base_shape == squeezed.shape
 
 
-@given(data=st.data(), destination=st.sampled_from(['cpu', 'gpu']))
+@given(data=st.data())
 @pytest.mark.parametrize('lazy', [True, False])
 @pytest.mark.parametrize("device", ['cpu', gpu])
+@pytest.mark.parametrize("destination", ['cpu', gpu])
 @pytest.mark.parametrize("has_array", [
     abtem_st.images,
     abtem_st.diffraction_patterns,
@@ -206,8 +207,7 @@ def test_squeeze(data, has_array, lazy, device):
     abtem_st.potential_array,
     abtem_st.s_matrix_array
 ])
-@pytest.mark.skipif(cp is None, reason="no gpu")
-def test_to_cpu(data, has_array, destination, lazy, device):
+def test_to_cpu(data, has_array, lazy, device, destination):
     has_array = data.draw(has_array(lazy=lazy, device=device))
     has_array = has_array.copy_to_device(device=destination)
     assert_array_matches_device(has_array.array, destination)
@@ -253,7 +253,7 @@ def test_from_array_and_metadata(data, has_array, lazy, device):
 
 
 @given(data=st.data())
-@pytest.mark.parametrize("lazy", [True, False])
+@pytest.mark.parametrize("lazy", [True])
 @pytest.mark.parametrize("device", ['cpu', gpu])
 @pytest.mark.parametrize("has_array", [
     abtem_st.images,

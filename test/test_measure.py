@@ -1,3 +1,6 @@
+import os
+import pathlib
+
 import hypothesis.strategies as st
 import numpy as np
 import pytest
@@ -356,13 +359,15 @@ def test_line_profiles_tile(data, reps, lazy, device):
 
 
 def test_line_profiles_interpolate_comparison():
-    images = Images.from_zarr('data/silicon_image.zarr').compute().interpolate(.2)
+    path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data/silicon_image.zarr")
+    images = Images.from_zarr(path).compute().interpolate(.2)
     assert np.allclose(images.interpolate_line().interpolate(.01).array,
                        images.interpolate(.01).interpolate_line().array, rtol=.01)
 
 
 def test_interpolate_periodic_spline_and_fft():
-    images = Images.from_zarr('data/silicon_image.zarr')
+    path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data/silicon_image.zarr")
+    images = Images.from_zarr(path)
     spline_interpolated = images.interpolate(method='spline', sampling=.05, boundary='periodic', order=5)
     fft_interpolated = images.interpolate(method='fft', sampling=.05)
     array_is_close(spline_interpolated.array, fft_interpolated.array, rel_tol=0.01)

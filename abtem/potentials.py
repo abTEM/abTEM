@@ -35,7 +35,7 @@ from abtem.core.integrals.infinite import InfinitePotentialProjections
 from abtem.core.integrals.quadrature import ProjectionQuadratureRule
 from abtem.core.utils import EqualityMixin, CopyMixin
 from abtem.inelastic.phonons import (
-    AbstractFrozenPhonons,
+    BaseFrozenPhonons,
     DummyFrozenPhonons,
     _validate_seeds,
 )
@@ -71,6 +71,16 @@ class BasePotential(
     metaclass=ABCMeta,
 ):
     """Base class of all potentials. Documented in the subclasses."""
+
+    @property
+    @abstractmethod
+    def ensemble_shape(self):
+        pass
+
+    @property
+    @abstractmethod
+    def ensemble_axes_metadata(self):
+        pass
 
     @property
     def base_shape(self):
@@ -192,13 +202,16 @@ class BasePotential(
         if project:
             return self.project().show(**kwargs)
         else:
-            return self.images().show(explode=True, **kwargs)
+            if "explode" not in kwargs.keys():
+                kwargs["explode"] = True
+
+            return self.images().show(**kwargs)
 
 
 def _validate_potential(
     potential: Union[Atoms, BasePotential], waves: "Waves" = None
 ) -> BasePotential:
-    if isinstance(potential, (Atoms, AbstractFrozenPhonons)):
+    if isinstance(potential, (Atoms, BaseFrozenPhonons)):
         device = None
         if waves is not None:
             device = waves.device
@@ -485,7 +498,7 @@ class Potential(_PotentialBuilder):
 
     def __init__(
         self,
-        atoms: Union[Atoms, AbstractFrozenPhonons] = None,
+        atoms: Union[Atoms, BaseFrozenPhonons] = None,
         gpts: Union[int, Tuple[int, int]] = None,
         sampling: Union[float, Tuple[float, float]] = None,
         slice_thickness: Union[float, Tuple[float, ...]] = 1,
@@ -545,7 +558,7 @@ class Potential(_PotentialBuilder):
         )
 
     @property
-    def frozen_phonons(self) -> AbstractFrozenPhonons:
+    def frozen_phonons(self) -> BaseFrozenPhonons:
         return self._frozen_phonons
 
     @property
@@ -774,6 +787,10 @@ class PotentialArray(BasePotential, HasArray):
         self._ensemble_axes_metadata = ensemble_axes_metadata
         self._check_axes_metadata()
         self._metadata = {} if metadata is None else metadata
+
+    @property
+    def ensemble_shape(self) -> Tuple[int, ...]:
+        return self.array.shape[: -self._base_dims]
 
     @property
     def ensemble_axes_metadata(self):

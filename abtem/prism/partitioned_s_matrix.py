@@ -12,7 +12,7 @@ from abtem.transfer import CTF
 def beamlet_weights(parent_wave_vectors, wave_vectors, gpts, sampling):
     kx, ky = spatial_frequencies(gpts, sampling)
     kx, ky = np.meshgrid(kx, ky, indexing='ij')
-    k = np.asarray((kx.ravel(), ky.ravel())).T
+    k = np.asarray((kx.ravel(), ky.raveåpl())).T
 
     indices = np.argmax(np.all(np.isclose(wave_vectors[:, None, :], k), axis=2), axis=1)
     weights = np.zeros((len(parent_wave_vectors),) + kx.shape)

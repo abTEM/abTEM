@@ -42,19 +42,23 @@ def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
 
             return getattr(mkl_fft, func_name)(x, overwrite_x=overwrite_x, **kwargs)
         elif config.get("fft") == "fftw":
+            pyfftw.config.NUM_THREADS = config.get("fftw.threads")
+            #pyfftw.config.PLANNER_EFFORT = 'FFTW_MEASURE'
+            #pyfftw.interfaces.cache.enable()
+
             if pyfftw is None:
                 raise_fft_lib_not_present("pyfftw")
 
-            fftw_obj = getattr(pyfftw.builders, func_name)(
-                x,
-                overwrite_input=overwrite_x,
-                planner_effort=config.get("fftw.planning_effort"),
-                threads=config.get("fftw.threads"),
-                avoid_copy=False,
-                **kwargs,
-            )
-
-            return fftw_obj()
+            # fftw_obj = getattr(pyfftw.builders, func_name)(
+            #     x,
+            #     overwrite_input=overwrite_x,
+            #     planner_effort=config.get("fftw.planning_effort"),
+            #     threads=config.get("fftw.threads"),
+            #     avoid_copy=False,
+            #     **kwargs,
+            # )
+            #return getattr(np.fft, func_name)(x, **kwargs)
+            return getattr(pyfftw.interfaces.numpy_fft, func_name)(x) #fftw_obj()
         elif config.get("fft") == "numpy":
             return getattr(np.fft, func_name)(x, **kwargs)
         else:

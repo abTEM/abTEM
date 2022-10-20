@@ -31,7 +31,7 @@ from abtem.core.parametrizations.ewald import EwaldParametrization
 from abtem.inelastic.phonons import (
     DummyFrozenPhonons,
     FrozenPhonons,
-    AbstractFrozenPhonons,
+    BaseFrozenPhonons,
 )
 from abtem.potentials import _PotentialBuilder, Potential
 
@@ -64,8 +64,10 @@ except:
 
 
 def _safe_read_atoms(calculator, clean: bool = True):
+
     if isinstance(calculator, str):
-        atoms = read_atoms(Reader(calculator).atoms)
+        with Reader(calculator) as reader:
+            atoms = read_atoms(reader.atoms)
     else:
         atoms = calculator.atoms
 
@@ -120,32 +122,32 @@ class _DummyGPAW:
         if lazy:
             return dask.delayed(cls.from_file)(path, lazy=False)
 
-        reader = Reader(path)
-        atoms = read_atoms(reader.atoms)
+        with Reader(path) as reader:
+            atoms = read_atoms(reader.atoms)
 
-        from gpaw.calculator import GPAW
+            from gpaw.calculator import GPAW
 
-        parameters = copy.copy(GPAW.default_parameters)
-        parameters.update(reader.parameters.asdict())
+            parameters = copy.copy(GPAW.default_parameters)
+            parameters.update(reader.parameters.asdict())
 
-        setup_mode = parameters["mode"]
-        setup_xc = parameters["xc"]
+            setup_mode = parameters["mode"]
+            setup_xc = parameters["xc"]
 
-        if isinstance(setup_xc, dict) and "setup_name" in setup_xc:
-            setup_xc = setup_xc["setup_name"]
+            if isinstance(setup_xc, dict) and "setup_name" in setup_xc:
+                setup_xc = setup_xc["setup_name"]
 
-        assert isinstance(setup_xc, str)
+            assert isinstance(setup_xc, str)
 
-        density = reader.density.density * units.Bohr ** 3
-        gd = GridDescriptor(
-            N_c=density.shape[-3:],
-            cell_cv=atoms.get_cell() / Bohr,
-            comm=SerialCommunicator(),
-        )
+            density = reader.density.density * units.Bohr ** 3
+            gd = GridDescriptor(
+                N_c=density.shape[-3:],
+                cell_cv=atoms.get_cell() / Bohr,
+                comm=SerialCommunicator(),
+            )
 
-        setups = _get_gpaw_setups(atoms, setup_mode, setup_xc)
+            setups = _get_gpaw_setups(atoms, setup_mode, setup_xc)
 
-        D_asp = unpack_atomic_matrices(reader.density.atomic_density_matrices, setups)
+            D_asp = unpack_atomic_matrices(reader.density.atomic_density_matrices, setups)
 
         kwargs = {
             "setup_mode": setup_mode,
@@ -193,7 +195,6 @@ def _interpolate_pseudo_density(nt_sg, gd, gridrefinement=1):
         gd = finegd
 
     return n_sg, finegd
-
 
 def _get_all_electron_density(
         nt_sG, gd, D_asp: dict, setups, atoms: Atoms, gridrefinement: int = 1
@@ -350,7 +351,7 @@ class GPAWPotential(_PotentialBuilder):
             origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
             box: Tuple[float, float, float] = None,
             periodic: bool = True,
-            frozen_phonons: AbstractFrozenPhonons = None,
+            frozen_phonons: BaseFrozenPhonons = None,
             repetitions: Tuple[int, int, int] = (1, 1, 1),
             gridrefinement: int = 4,
             device: str = None

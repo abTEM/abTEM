@@ -1,4 +1,4 @@
-"""Module to describe the contrast transfer function (CTF)."""
+"""Module to describe the contrast transfer function (CTF) and the related apertures."""
 import copy
 import re
 from collections import defaultdict
@@ -127,7 +127,7 @@ class Aperture(_EnsembleFromDistributionsMixin, BaseAperture):
         if self.semiangle_cutoff == xp.inf:
             return xp.ones_like(alpha)
 
-        if self.taper > 0.0:
+        if self.taper > 1.e-2:
             taper = self.taper / 1000.0
             array = 0.5 * (
                 1 + xp.cos(np.pi * (alpha - semiangle_cutoff + taper) / taper)

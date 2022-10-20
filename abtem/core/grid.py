@@ -278,8 +278,8 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
 
         if other.sampling is None:
             other.sampling = self.sampling
-        elif np.any(
-            np.array(self.sampling, np.float32) != np.array(other.sampling, np.float32)
+        elif not np.allclose(
+            np.array(self.sampling, np.float32), np.array(other.sampling, np.float32)
         ):
             self.sampling = other.sampling
 

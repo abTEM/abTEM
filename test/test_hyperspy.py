@@ -1,4 +1,5 @@
 import sys
+import warnings
 
 import hypothesis.strategies as st
 import pytest
@@ -24,4 +25,11 @@ except ImportError:
 @pytest.mark.skipif('hyperspy' not in sys.modules, reason="requires hyperspy")
 def test_hyperspy(data, measurement, lazy, device):
     measurement = data.draw(measurement(lazy=lazy, device=device))
-    hyperspy_signal = measurement.to_hyperspy()
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", category=RuntimeWarning
+        )
+        warnings.filterwarnings(
+            "ignore", category=DeprecationWarning
+        )
+        hyperspy_signal = measurement.to_hyperspy()

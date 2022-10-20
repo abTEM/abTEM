@@ -1,7 +1,7 @@
 import hypothesis.strategies as st
 import numpy as np
 import pytest
-from hypothesis import given, assume
+from hypothesis import given, assume, reproduce_failure
 from abtem.measurements import _scan_shape, _scan_axes, _scan_shape
 
 import strategies as abtem_st
@@ -42,7 +42,7 @@ def test_detect(data, detector, lazy, device):
     if detector.to_cpu:
         assert measurement.device == "cpu"
 
-
+#@reproduce_failure('6.29.3', b'AXicE2RgBEIQIgQYGRc9sH4WvpmnqCHlztL9nC/Xz5pQNpn/PxgA9QMAEZYRRA==')
 @given(data=st.data())
 @pytest.mark.parametrize("lazy", [True, False])
 @pytest.mark.parametrize("device", ["cpu", gpu])
@@ -51,9 +51,10 @@ def test_annular_detector(data, lazy, device):
     detector = data.draw(abtem_st.annular_detector())
 
     assume(len(_scan_shape(waves)) > 0)
-    assume(len(_scan_shape(waves))< 3)
+    assume(len(_scan_shape(waves)) < 3)
     assume(all(waves._gpts_within_angle(min(detector.angular_limits(waves)))))
     assume(min(waves.cutoff_angles) > 1.0)
+    assume(detector.angular_limits(waves)[1] < min(waves.cutoff_angles))
 
     measurement = detector.detect(waves)
 
