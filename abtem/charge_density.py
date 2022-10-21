@@ -73,7 +73,7 @@ def integrate_gradient_fourier(
         Integrated gradient.
     """
     if in_space == "real":
-        array = fftn(array)
+        array = np.fft.fftn(array)
 
     k2 = _spatial_frequencies_squared(array.shape, cell)
 
@@ -82,7 +82,7 @@ def integrate_gradient_fourier(
     array /= k2
 
     if out_space == "real":
-        array = ifftn(array, overwrite_x=True).real
+        array = np.fft.ifftn(array).real
 
     return array
 
@@ -228,7 +228,7 @@ def _generate_slices(
 
     atoms = ewald_potential.frozen_phonons.randomize(atoms)
 
-    charge = -fftn(charge, overwrite_x=True)
+    charge = -np.fft.fftn(charge)
 
     charge = fft_crop(
         charge, charge.shape[:2] + (ewald_potential.num_slices,), normalize=True
