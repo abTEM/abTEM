@@ -137,7 +137,7 @@ class ProjectedScatteringFactors(ProjectionIntegrator):
         if fourier_space:
             return array
         else:
-            return ifft2(array).real
+            return ifft2(array / sinc(self.gpts, sampling, device)).real
 
 
 class InfinitePotentialProjections(ProjectionIntegratorPlan):
