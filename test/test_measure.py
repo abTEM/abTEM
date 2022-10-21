@@ -144,12 +144,12 @@ def test_gaussian_filter_images(data, sigma, lazy, device):
         assert not np.allclose(filtered.array, measurement.array)
 
 
-@given(data=st.data())
-@pytest.mark.parametrize('lazy', [True, False])
-@pytest.mark.parametrize('device', ['cpu', gpu])
-def test_diffractograms(data, lazy, device):
-    measurement = data.draw(abtem_st.images(lazy=lazy, device=device))
-    measurement.diffractograms()
+# @given(data=st.data())
+# @pytest.mark.parametrize('lazy', [True, False])
+# @pytest.mark.parametrize('device', ['cpu', gpu])
+# def test_diffractograms(data, lazy, device):
+#     measurement = data.draw(abtem_st.images(lazy=lazy, device=device))
+#     measurement.diffractograms()
 
 
 @given(data=st.data())
