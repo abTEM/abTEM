@@ -13,6 +13,7 @@ from abtem.core import config
 from abtem.core.backend import get_array_module, check_cupy_is_installed
 from abtem.core.complex import complex_exponential
 from abtem.core.grid import spatial_frequencies
+from threading import local
 
 try:
     import mkl_fft
@@ -32,6 +33,22 @@ def raise_fft_lib_not_present(lib_name):
     )
 
 
+
+threadsafe = local()
+
+def get_fftw_obj(name, shape, dtype, threads):
+    key = (name, shape, dtype, threads)
+
+    if not hasattr(threadsafe, "cache"):
+        threadsafe.cache = {}
+
+    if not key in threadsafe.cache.keys():
+        dummy_in = np.zeros(shape, dtype=dtype)
+        func = getattr(pyfftw.builders, name)(dummy_in, threads=threads)
+        threadsafe.cache[key] = func
+
+    return threadsafe.cache[key]
+
 def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
     xp = get_array_module(x)
 
@@ -42,12 +59,17 @@ def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
 
             return getattr(mkl_fft, func_name)(x, overwrite_x=overwrite_x, **kwargs)
         elif config.get("fft") == "fftw":
-            pyfftw.config.NUM_THREADS = config.get("fftw.threads")
+            #pyfftw.config.NUM_THREADS = config.get("fftw.threads")
             #pyfftw.config.PLANNER_EFFORT = 'FFTW_MEASURE'
             #pyfftw.interfaces.cache.enable()
 
             if pyfftw is None:
                 raise_fft_lib_not_present("pyfftw")
+
+            fftw_obj = get_fftw_obj(func_name, x.shape, x.dtype.str, 1)
+            fftw_obj.update_arrays(x.copy(), x.copy())
+            #fftw_obj.output_array[:] = x
+            return fftw_obj()
 
             # fftw_obj = getattr(pyfftw.builders, func_name)(
             #     x,
@@ -57,8 +79,9 @@ def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
             #     avoid_copy=False,
             #     **kwargs,
             # )
-            #return getattr(np.fft, func_name)(x, **kwargs)
-            return getattr(pyfftw.interfaces.numpy_fft, func_name)(x) #fftw_obj()
+            # return getattr(np.fft, func_name)(x, **kwargs)
+
+            #return getattr(pyfftw.interfaces.numpy_fft, func_name)(x) #fftw_obj()
         elif config.get("fft") == "numpy":
             return getattr(np.fft, func_name)(x, **kwargs)
         else:
