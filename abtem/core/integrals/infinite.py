@@ -128,11 +128,11 @@ class ProjectedScatteringFactors(ProjectionIntegrator):
 
         positions = (positions[:, :2] / sampling).astype(xp.float32)
 
-        array = xp.zeros(gpts, dtype=xp.float32)
+        array = xp.zeros(gpts, dtype=xp.complex64)
 
         array = superpose_deltas(positions, array)
 
-        array = fft2(array, overwrite_x=True) * self._scattering_factor
+        array = fft2(array) * self._scattering_factor
 
         if fourier_space:
             return array
