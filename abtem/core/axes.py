@@ -1,16 +1,19 @@
 import dataclasses
+from copy import copy
 from dataclasses import dataclass
 from numbers import Number
 from typing import List, Tuple, Union
 from tabulate import tabulate
 import numpy as np
-
+import dask.array as da
+from abtem.core.chunks import validate_chunks, iterate_chunk_ranges
 from abtem.core.utils import safe_equality
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class AxisMetadata:
     _concatenate: bool = True
+    _events: bool = False
     label: str = "unknown"
 
     def _tabular_repr_data(self, n):
@@ -36,6 +39,13 @@ class AxisMetadata:
 
     def __getitem__(self, item):
         return self
+
+    def _to_blocks(self, chunks):
+        arr = np.empty((len(chunks[0]),), dtype=object)
+        for i, slic in iterate_chunk_ranges(chunks):
+            arr[i] = copy(self)
+        arr = da.from_array(arr, chunks=1)
+        return arr
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
@@ -146,6 +156,17 @@ class OrdinalAxis(AxisMetadata):
 
         return self.__class__(**kwargs)  # noqa
 
+    def _to_blocks(self, chunks):
+        chunks = validate_chunks(shape=(len(self),), chunks=chunks)
+
+        arr = np.empty((len(chunks[0]),), dtype=object)
+        for i, slic in iterate_chunk_ranges(chunks):
+            arr[i] = self[slic]
+
+        arr = da.from_array(arr, chunks=1)
+
+        return arr
+
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
 class NonLinearAxis(OrdinalAxis):
@@ -166,16 +187,21 @@ class NonLinearAxis(OrdinalAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
-class PlasmonAxis(OrdinalAxis):
-    units: str = "Å, mrad, rad"
-    label: str = "depths, radial angles, azimuthal angles"
-    _ensemble_mean: bool = False
-
-
-@dataclass(eq=False, repr=False, unsafe_hash=True)
 class AxisAlignedTiltAxis(NonLinearAxis):
     units: str = "mrad"
     direction: str = "x"
+
+    @property
+    def tilt(self):
+        if self.direction == "x":
+            values = tuple((value, 0.0) for value in self.values)
+        elif self.direction == "y":
+            values = tuple((0.0, value) for value in self.values)
+        else:
+            raise RuntimeError()
+
+        return values
+
     _ensemble_mean: bool = False
 
 
@@ -183,6 +209,10 @@ class AxisAlignedTiltAxis(NonLinearAxis):
 class TiltAxis(OrdinalAxis):
     units: str = "mrad"
     _ensemble_mean: bool = False
+
+    @property
+    def tilt(self):
+        return self.values
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
@@ -210,13 +240,13 @@ class PositionsAxis(OrdinalAxis):
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
-class FrozenPhononsAxis(OrdinalAxis):
+class FrozenPhononsAxis(AxisMetadata):
     label: str = "Frozen phonons"
     _ensemble_mean: bool = False
 
 
 @dataclass(eq=False, repr=False, unsafe_hash=True)
-class PrismPlaneWavesAxis(OrdinalAxis):
+class PrismPlaneWavesAxis(AxisMetadata):
     pass
 
 
@@ -243,11 +273,16 @@ def format_axes_metadata(axes_metadata, shape):
     return tabulate(data, headers=["type", "label", "coordinates"], tablefmt="simple")
 
 
-def _find_axes_type(has_axes, axis_type):
-    indices = ()
+def _iterate_axes_type(has_axes, axis_type):
     for i, axis_metadata in enumerate(has_axes.axes_metadata):
         if isinstance(axis_metadata, axis_type):
-            indices += (i,)
+            yield axis_metadata
+
+
+def _find_axes_type(has_axes, axis_type):
+    indices = ()
+    for i, _ in enumerate(_iterate_axes_type(has_axes, axis_type)):
+        indices += (i,)
 
     return indices
 

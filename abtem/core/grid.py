@@ -4,7 +4,6 @@ from typing import Union, Sequence, Tuple
 import numpy as np
 
 from abtem.core.backend import get_array_module, xp_to_str
-from abtem.core.events import Events, HasEventsMixin, watch
 from abtem.core.utils import CopyMixin, EqualityMixin
 
 
@@ -40,7 +39,7 @@ def safe_divide(a, b):
         return a / b
 
 
-class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
+class Grid(CopyMixin, EqualityMixin):
     """
     Grid object.
 
@@ -99,8 +98,6 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
         if sampling is None or extent is not None:
             self._adjust_sampling(self.extent, self.gpts)
 
-        self._events = Events()
-
     def _validate(self, value, dtype):
         if isinstance(value, (np.ndarray, list, tuple)):
             if len(value) != self.dimensions:
@@ -136,7 +133,6 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
         return self._extent
 
     @extent.setter
-    @watch
     def extent(self, extent: Union[float, Sequence[float]]):
         if self._lock_extent:
             raise RuntimeError("Extent cannot be modified")
@@ -157,7 +153,6 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
         return self._gpts
 
     @gpts.setter
-    @watch
     def gpts(self, gpts: Union[int, Sequence[int]]):
         if self._lock_gpts:
             raise RuntimeError("Grid gpts cannot be modified")
@@ -179,7 +174,6 @@ class Grid(HasEventsMixin, CopyMixin, EqualityMixin):
         return self._sampling
 
     @sampling.setter
-    @watch
     def sampling(self, sampling):
         if self._lock_sampling:
             raise RuntimeError("Sampling cannot be modified")
@@ -328,12 +322,12 @@ class HasGridMixin:
 
     @property
     def grid(self) -> Grid:
-        """ Simulation grid. """
+        """Simulation grid."""
         return self._grid
 
     @property
     def extent(self) -> Tuple[float, ...]:
-        """ Extent of grid for each dimension in Ångstrom. """
+        """Extent of grid for each dimension in Ångstrom."""
         return self.grid.extent
 
     @extent.setter
@@ -342,7 +336,7 @@ class HasGridMixin:
 
     @property
     def gpts(self) -> Tuple[int, ...]:
-        """ Number of grid points for each dimension. """
+        """Number of grid points for each dimension."""
         return self.grid.gpts
 
     @gpts.setter
@@ -351,7 +345,7 @@ class HasGridMixin:
 
     @property
     def sampling(self) -> Tuple[float, ...]:
-        """ Grid sampling for each dimension in Ångstrom per grid point. """
+        """Grid sampling for each dimension in Ångstrom per grid point."""
         return self.grid.sampling
 
     @sampling.setter
@@ -360,11 +354,11 @@ class HasGridMixin:
 
     @property
     def fourier_space_sampling(self) -> Tuple[float, ...]:
-        """ Reciprocal-space sampling in reciprocal Ångstrom. """
+        """Reciprocal-space sampling in reciprocal Ångstrom."""
         return self.grid.fourier_space_sampling
 
     def match_grid(self, other: "HasGridMixin", check_match: bool = False):
-        """ Match the grid to another object with a Grid. """
+        """Match the grid to another object with a Grid."""
         self.grid.match(other, check_match=check_match)
         return self
 
@@ -412,5 +406,5 @@ def disc_meshgrid(r):
     cols = np.zeros((2 * r + 1, 2 * r + 1)).astype(np.int32)
     cols[:] = np.linspace(0, 2 * r, 2 * r + 1) - r
     rows = cols.T
-    inside = (rows ** 2 + cols ** 2) <= r ** 2
+    inside = (rows**2 + cols**2) <= r**2
     return np.array((rows[inside], cols[inside])).T

@@ -348,7 +348,7 @@ class Waves(HasArray, BaseWaves):
         return tuple(
             i
             for i, axis in enumerate(self.ensemble_axes_metadata)
-            if isinstance(axis, (TiltAxis, AxisAlignedTiltAxis))
+            if hasattr(axis, "tilt")
         )
 
     @property
@@ -369,7 +369,7 @@ class Waves(HasArray, BaseWaves):
         return self._metadata
 
     def from_partitioned_args(self):
-        d = self._copy_kwargs(exclude=("array", "extent"))
+        d = self._copy_kwargs(exclude=("array", "extent", "ensemble_axes_metadata"))
         return partial(lambda *args, **kwargs: self.__class__(args[0], **kwargs), **d)
 
     @classmethod
@@ -947,7 +947,8 @@ class Waves(HasArray, BaseWaves):
     @staticmethod
     def _lazy_multislice(*args, potential_partial, waves_partial, detectors, **kwargs):
         potential = potential_partial(*(arg.item() for arg in args[:1]))
-        waves = waves_partial(*args[-1:])
+        ensemble_axes_metadata = [axis.item() for axis in args[1:-1]]
+        waves = waves_partial(*args[-1:], ensemble_axes_metadata=ensemble_axes_metadata)
 
         measurements = waves.multislice(potential, detectors=detectors, **kwargs)
         measurements = (
@@ -994,8 +995,8 @@ class Waves(HasArray, BaseWaves):
         detectors = _validate_detectors(detectors)
 
         if self.is_lazy:
-            blocks = potential._partition_args()
-            blocks = tuple((block, (i,)) for i, block in enumerate(blocks))
+            potential_blocks = potential._partition_args()
+            potential_blocks = tuple((block, (i,)) for i, block in enumerate(potential_blocks))
 
             num_new_symbols = len(potential.ensemble_shape)
             extra_ensemble_axes_metadata = potential.ensemble_axes_metadata
@@ -1009,10 +1010,20 @@ class Waves(HasArray, BaseWaves):
             else:
                 new_axes = None
 
+
+            axes_blocks = ()
+            for i, (axis, chunks) in enumerate(zip(self.ensemble_axes_metadata, self.array.chunks)):
+                axes_blocks += (axis._to_blocks((chunks),), (num_new_symbols + i,))
+
+            #print(axes_blocks)
+            #sss
+            #sss
+
             arrays = da.blockwise(
                 self._lazy_multislice,
                 tuple(range(num_new_symbols + len(self.shape) - 2)),
-                *tuple(itertools.chain(*blocks)),
+                *tuple(itertools.chain(*potential_blocks)),
+                *axes_blocks,
                 self.array,
                 tuple(range(num_new_symbols, num_new_symbols + len(self.shape))),
                 potential_partial=potential._from_partitioned_args(),
@@ -1136,6 +1147,7 @@ class _WavesFactory(BaseWaves):
         detectors: List[BaseDetector],
         max_batch: int = None,
         potential: BasePotential = None,
+        events=None,
         multislice_func=multislice_and_detect,
     ):
 

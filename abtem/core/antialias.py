@@ -44,11 +44,6 @@ class AntialiasAperture(HasGridMixin, CopyMixin, EqualityMixin):
         self._device = device
         self._array = None
 
-        def clear_data(*args):
-            self._array = None
-
-        self.grid.events.observe(clear_data, ("sampling", "gpts", "extent"))
-
     @property
     def array(self):
         if self._array is None:
