@@ -1,10 +1,11 @@
 """Module for running the multislice algorithm."""
+import copy
 from typing import TYPE_CHECKING, Union, Tuple, List, Dict
 
 import numpy as np
 
 from abtem.core.antialias import AntialiasAperture
-from abtem.core.axes import AxisMetadata, AxisAlignedTiltAxis
+from abtem.core.axes import AxisMetadata
 from abtem.core.backend import get_array_module
 from abtem.core.complex import complex_exponential
 from abtem.core.energy import energy2wavelength
@@ -12,23 +13,21 @@ from abtem.core.fft import fft2_convolve
 from abtem.core.grid import spatial_frequencies
 from abtem.core.utils import expand_dims_to_match
 from abtem.detectors import BaseDetector
+from abtem.inelastic.plasmons import _update_plasmon_axes
 from abtem.measurements import BaseMeasurement
 from abtem.potentials import (
     BasePotential,
     TransmissionFunction,
     PotentialArray,
 )
-from abtem.atoms import plane_to_axes
-
 
 if TYPE_CHECKING:
     from abtem.waves import Waves
     from abtem.waves import BaseWaves
 
 
-def _fresnel_propagator(
+def _fresnel_propagator_array(
     thickness: float,
-    tilt: Tuple[float, float],
     gpts: Tuple[int, int],
     sampling: Tuple[float, float],
     energy: float,
@@ -43,17 +42,44 @@ def _fresnel_propagator(
         -(kx**2) * np.pi * thickness * wavelength
     ) * complex_exponential(-(ky**2) * np.pi * thickness * wavelength)
 
-    if tilt != (0.0, 0.0):
-        f *= complex_exponential(
-            -kx * xp.tan(tilt[0] / 1e3) * thickness * 2 * np.pi
-        ) * complex_exponential(-ky * xp.tan(tilt[1] / 1e3) * thickness * 2 * np.pi)
+    # if tilt != (0.0, 0.0):
+    #     f *= complex_exponential(
+    #         -kx * xp.tan(tilt[0] / 1e3) * thickness * 2 * np.pi
+    #     ) * complex_exponential(-ky * xp.tan(tilt[1] / 1e3) * thickness * 2 * np.pi)
 
     return f
 
 
-def _tilt_shift(k, tilt, thickness):
-    xp = get_array_module(k)
-    return complex_exponential(-k * xp.tan(tilt / 1e3) * thickness * 2 * np.pi)
+def _apply_tilt_to_fresnel_propagator_array(
+    array: np.ndarray,
+    sampling: Tuple[float, float],
+    thickness: float,
+    tilt: Union[Tuple[float, float], Tuple[Tuple[float, float], ...]],
+):
+    xp = get_array_module(array)
+    tilt = xp.array(tilt)
+
+    remove_first_dim = False
+    if tilt.shape == (2,):
+        remove_first_dim = True
+
+    kx, ky = spatial_frequencies(array.shape[-2:], sampling, xp=xp)
+    kx, ky = kx[None, :, None], ky[None, None]
+
+    tilt = complex_exponential(
+        -kx * xp.tan(tilt[:, 0, None, None] / 1e3) * thickness * 2 * np.pi
+    ) * complex_exponential(
+        -ky * xp.tan(tilt[:, 1, None, None] / 1e3) * thickness * 2 * np.pi
+    )
+
+    tilt, array = expand_dims_to_match(tilt, array, match_dims=[(-2, -1), (-2, -1)])
+
+    array = tilt * array
+
+    if remove_first_dim:
+        array = array[0]
+
+    return array
 
 
 class FresnelPropagator:
@@ -78,7 +104,10 @@ class FresnelPropagator:
         )
 
         if waves.tilt_axes:
-            key += (waves.tilt_axes_metadata,)
+            key += (copy.deepcopy(waves.tilt_axes_metadata),)
+
+        #if self._key:
+        #    print(waves.tilt_axes_metadata[0].values == self._key[-1][0].values)
 
         if key == self._key:
             return self._array
@@ -94,31 +123,36 @@ class FresnelPropagator:
         antialias_aperture.grid.match(waves)
         array = antialias_aperture.array.astype(np.complex64)
 
-        array *= _fresnel_propagator(
+        array *= _fresnel_propagator_array(
+            thickness=thickness,
             gpts=waves.gpts,
             sampling=waves.sampling,
-            thickness=thickness,
-            tilt=waves.base_tilt,
             energy=waves.energy,
             device=waves.device,
         )
+
+        if waves.base_tilt != (0.0, 0.0):
+            array = _apply_tilt_to_fresnel_propagator_array(
+                array,
+                sampling=waves.sampling,
+                thickness=thickness,
+                tilt=waves.base_tilt,
+            )
 
         xp = get_array_module(waves.device)
 
         if not waves.tilt_axes:
             return array
 
-        for i in range(len(waves.ensemble_shape)):
-            axis = waves.ensemble_axes_metadata[i]
-            if isinstance(axis, AxisAlignedTiltAxis):
-                j = plane_to_axes(axis.direction)[0]
-                k = spatial_frequencies((waves.gpts[j],), (waves.sampling[j],), xp=xp)
-                tilts = xp.array(axis.values)[:, None]
-                shift = _tilt_shift(k[0][None], tilts, thickness)
-                shift, array = expand_dims_to_match(
-                    shift, array, match_dims=[(-1,), (-2 + j,)]
+        for axis in waves.ensemble_axes_metadata:
+
+            if hasattr(axis, "tilt"):
+                tilt = xp.array(axis.tilt)
+
+                array = _apply_tilt_to_fresnel_propagator_array(
+                    array, sampling=waves.sampling, tilt=tilt, thickness=thickness
                 )
-                array = array * shift
+
             else:
                 array = array[..., None, :, :]
 
@@ -327,10 +361,14 @@ def multislice_and_detect(
         slice_generator = potential_configuration.generate_slices()
 
         current_slice_index = 0
+        depth = 0.0
         for exit_plane_index, exit_plane in enumerate(potential.exit_planes):
 
             while exit_plane != current_slice_index:
+
                 potential_slice = next(slice_generator)
+                depth += potential_slice.thickness
+
                 waves = multislice_step(
                     waves,
                     potential_slice,
@@ -339,6 +377,9 @@ def multislice_and_detect(
                     conjugate=conjugate,
                     transpose=transpose,
                 )
+
+                _update_plasmon_axes(waves, depth)
+
                 current_slice_index += 1
 
             for detector in detectors:

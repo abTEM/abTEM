@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from functools import partial
 from typing import Union, Tuple, List, TYPE_CHECKING
 
@@ -7,7 +8,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
 
-from abtem.core.axes import AxisMetadata, PlasmonAxis
+from abtem.core.axes import (
+    AxisMetadata,
+    OrdinalAxis,
+    _iterate_axes_type,
+)
 from abtem.core.backend import get_array_module
 from abtem.core.chunks import validate_chunks, chunk_ranges
 from abtem.core.transform import WaveTransform
@@ -56,12 +61,12 @@ def draw_scattering_depths(
     num_samples: int,
     mean_free_path: float,
     max_depth: float,
-    max_batch: int = 1000,
-    max_attempts: int = 1_000_000,
+    max_batch: int = 10_000,
+    max_attempts: int = 10_000_000,
 ) -> Tuple[Tuple]:
 
     if num_depths == 0:
-        return ((),) * num_samples # noqa
+        return ((),) * num_samples  # noqa
 
     max_num_batches = max_attempts // max_batch
 
@@ -114,6 +119,67 @@ def excitations_weights(n: int, thickness: float, mean_free_path: float) -> floa
         * (thickness / mean_free_path) ** n
         * np.exp(-thickness / mean_free_path)
     )
+
+
+@dataclass(eq=False, repr=False, unsafe_hash=True)
+class PlasmonAxis(OrdinalAxis):
+    units: str = "Excitations"
+    label: str = "depths, radial angles, azimuthal angles, excitations"
+    _ensemble_mean: bool = False
+
+    @property
+    def excitations(self):
+        return tuple(value[3] for value in self.values)
+
+    @property
+    def azimuthal_angles(self):
+        return tuple(value[2] for value in self.values)
+
+    @property
+    def radial_angles(self):
+        return tuple(value[1] for value in self.values)
+
+    @property
+    def depths(self):
+        return tuple(value[0] for value in self.values)
+
+    @property
+    def tilt(self):
+        tilt = ()
+        for radial_angles, azimuthal_angles, excitations in zip(
+            self.radial_angles, self.azimuthal_angles, self.excitations
+        ):
+            radial_angle = sum(radial_angles[:excitations])
+            azimuthal_angle = sum(radial_angles[:excitations])
+
+            tilt += (
+                (
+                    radial_angle * np.cos(azimuthal_angle),
+                    radial_angle * np.sin(azimuthal_angle),
+                ),
+            )
+
+        return tilt
+
+    def update(self, depth):
+
+        values = ()
+        for excitation_depths, value in zip(self.depths, self.values):
+
+            for i, excitation_depth in enumerate(excitation_depths):
+                if excitation_depth > depth:
+                    break
+            else:
+                i = len(excitation_depths)
+
+            values += (value[:-1] + (i,),)
+
+        self.values = values
+
+
+def _update_plasmon_axes(waves, depth):
+    for axis in _iterate_axes_type(waves, PlasmonAxis):
+        axis.update(depth)
 
 
 class PlasmonScatteringEvents(WaveTransform):
@@ -197,7 +263,7 @@ class PlasmonScatteringEvents(WaveTransform):
         return [
             PlasmonAxis(
                 values=tuple(
-                    (depths, radial_angles, azimuthal_angles)
+                    (depths, radial_angles, azimuthal_angles, 0)
                     for depths, radial_angles, azimuthal_angles in zip(
                         self.depths, self.radial_angles, self.azimuthal_angles
                     )
@@ -233,7 +299,7 @@ class PlasmonScatteringEvents(WaveTransform):
                 "depths": depths,
                 "radial_angles": radial_angles,
                 "azimuthal_angles": azimuthal_angles,
-                "weights" : weights,
+                "weights": weights,
             },
         )
         return arr
@@ -253,7 +319,7 @@ class PlasmonScatteringEvents(WaveTransform):
                     depths=depths,
                     radial_angles=radial_angles,
                     azimuthal_angles=azimuthal_angles,
-                    weights=weights
+                    weights=weights,
                 )
                 array.itemset(
                     i, da.from_delayed(lazy_frozen_phonon, shape=(1,), dtype=object)
@@ -265,7 +331,7 @@ class PlasmonScatteringEvents(WaveTransform):
                         depths=depths,
                         radial_angles=radial_angles,
                         azimuthal_angles=azimuthal_angles,
-                        weights=weights
+                        weights=weights,
                     ),
                 )
 
@@ -336,7 +402,7 @@ class MonteCarloPlasmons:
         return self.num_samples
 
     def characteristic_angle(self, energy: float) -> float:
-        return self._excitation_energy / (2 * energy)
+        return self._excitation_energy / (2 * energy) * 1e3
 
     def draw_events(
         self, waves: "Waves", potential: "BasePotential"
@@ -358,7 +424,7 @@ class MonteCarloPlasmons:
         radial_angles = tuple(
             tuple(
                 draw_radial_scattering_angle(
-                    self._critical_angle / 1e-3, self.characteristic_angle(energy)
+                    self._critical_angle, self.characteristic_angle(energy)
                 )
                 for _ in range(n)
             )

@@ -61,7 +61,6 @@ def infinite_potential_projections(atoms, shape, sampling, scattering_factors, s
     if slice_index is None:
         shape = shape[1:]
 
-
     positions = (atoms.positions[:, :2] / sampling).astype(xp.float32)
 
     unique = np.unique(atoms.numbers)
@@ -128,9 +127,9 @@ class ProjectedScatteringFactors(ProjectionIntegrator):
 
         positions = (positions[:, :2] / sampling).astype(xp.float32)
 
-        array = xp.zeros(gpts, dtype=xp.complex64)
+        array = xp.zeros(gpts, dtype=xp.float32)
 
-        array = superpose_deltas(positions, array)
+        array = superpose_deltas(positions, array).astype(xp.complex64)
 
         array = fft2(array) * self._scattering_factor
 

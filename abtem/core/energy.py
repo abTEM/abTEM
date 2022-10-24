@@ -4,7 +4,6 @@ from typing import Optional
 
 import numpy as np
 from ase import units
-from abtem.core.events import Events, watch, HasEventsMixin
 from abtem.core.utils import EqualityMixin, CopyMixin
 
 
@@ -72,7 +71,7 @@ class EnergyUndefinedError(Exception):
     pass
 
 
-class Accelerator(HasEventsMixin, EqualityMixin, CopyMixin):
+class Accelerator(EqualityMixin, CopyMixin):
     """
     Accelerator object describes the energy of wave functions and transfer functions.
 
@@ -88,7 +87,6 @@ class Accelerator(HasEventsMixin, EqualityMixin, CopyMixin):
 
         self._energy = energy
         self._lock_energy = lock_energy
-        self._events = Events()
 
     @property
     def energy(self) -> float:
@@ -98,7 +96,6 @@ class Accelerator(HasEventsMixin, EqualityMixin, CopyMixin):
         return self._energy
 
     @energy.setter
-    @watch
     def energy(self, value: float):
         if self._lock_energy:
             raise RuntimeError('Energy cannot be modified')

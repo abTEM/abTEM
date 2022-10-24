@@ -29,12 +29,12 @@ except ModuleNotFoundError:
 def raise_fft_lib_not_present(lib_name):
     raise RuntimeError(
         f"FFT library {lib_name} not present. Install this package or change the FFT library in your "
-        f"configuration"
+        f"configuration."
     )
 
 
-
 threadsafe = local()
+
 
 def get_fftw_obj(name, shape, dtype, threads):
     key = (name, shape, dtype, threads)
@@ -49,6 +49,7 @@ def get_fftw_obj(name, shape, dtype, threads):
 
     return threadsafe.cache[key]
 
+
 def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
     xp = get_array_module(x)
 
@@ -59,16 +60,16 @@ def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
 
             return getattr(mkl_fft, func_name)(x, overwrite_x=overwrite_x, **kwargs)
         elif config.get("fft") == "fftw":
-            #pyfftw.config.NUM_THREADS = config.get("fftw.threads")
-            #pyfftw.config.PLANNER_EFFORT = 'FFTW_MEASURE'
-            #pyfftw.interfaces.cache.enable()
+            # pyfftw.config.NUM_THREADS = config.get("fftw.threads")
+            # pyfftw.config.PLANNER_EFFORT = 'FFTW_MEASURE'
+            # pyfftw.interfaces.cache.enable()
 
             if pyfftw is None:
                 raise_fft_lib_not_present("pyfftw")
 
             fftw_obj = get_fftw_obj(func_name, x.shape, x.dtype.str, 1)
             fftw_obj.update_arrays(x.copy(), x.copy())
-            #fftw_obj.output_array[:] = x
+            # fftw_obj.output_array[:] = x
             return fftw_obj()
 
             # fftw_obj = getattr(pyfftw.builders, func_name)(
@@ -81,7 +82,7 @@ def _fft_dispatch(x, func_name, overwrite_x: bool = False, **kwargs):
             # )
             # return getattr(np.fft, func_name)(x, **kwargs)
 
-            #return getattr(pyfftw.interfaces.numpy_fft, func_name)(x) #fftw_obj()
+            # return getattr(pyfftw.interfaces.numpy_fft, func_name)(x) #fftw_obj()
         elif config.get("fft") == "numpy":
             return getattr(np.fft, func_name)(x, **kwargs)
         else:

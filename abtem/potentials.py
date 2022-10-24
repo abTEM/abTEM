@@ -1328,7 +1328,7 @@ class CrystalPotential(_PotentialBuilder):
         else:
             return [
                 FrozenPhononsAxis(
-                    values=tuple(range(self.num_frozen_phonons)), _ensemble_mean=True
+                    _ensemble_mean=True
                 )
             ]
 

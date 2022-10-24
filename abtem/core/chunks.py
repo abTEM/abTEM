@@ -62,10 +62,15 @@ def validate_chunks(
         return auto_chunks(shape, chunks, limit, dtype=dtype, device=device)
 
     if all(isinstance(c, tuple) for c in chunks):
+        assert len(shape) == len(chunks)
         return chunks
 
     if any(isinstance(c, str) for c in chunks):
         return auto_chunks(shape, chunks, limit, dtype=dtype, device=device)
+
+    if len(shape) == 1 and len(chunks) != len(shape):
+        assert sum(chunks) == shape[0]
+        return chunks,
 
     validated_chunks = ()
     for s, c in zip(shape, chunks):

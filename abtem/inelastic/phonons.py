@@ -123,7 +123,7 @@ class DummyFrozenPhonons(BaseFrozenPhonons):
         else:
             return [
                 FrozenPhononsAxis(
-                    values=tuple(range(len(self))), _ensemble_mean=self.ensemble_mean
+                    _ensemble_mean=self.ensemble_mean
                 )
             ]
 
@@ -284,7 +284,7 @@ class FrozenPhonons(BaseFrozenPhonons):
     def ensemble_axes_metadata(self) -> List[AxisMetadata]:
         return [
             FrozenPhononsAxis(
-                values=tuple(range(len(self))), _ensemble_mean=self.ensemble_mean
+                _ensemble_mean=self.ensemble_mean
             )
         ]
 
@@ -446,7 +446,7 @@ class MDFrozenPhonons(BaseFrozenPhonons):
     def ensemble_axes_metadata(self) -> List[AxisMetadata]:
         return [
             FrozenPhononsAxis(
-                values=tuple(range(len(self))), _ensemble_mean=self.ensemble_mean
+                _ensemble_mean=self.ensemble_mean
             )
         ]
 
