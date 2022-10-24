@@ -57,7 +57,7 @@ const thebe_selector_output = ".output, .cell_output"
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Wave functions" href="wave_functions.html" />
-    <link rel="prev" title="Atomic models with ASE" href="atomic_models.html" />
+    <link rel="prev" title="Atomic models" href="atomic_models.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="None">
     
@@ -113,7 +113,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../intro.html">
-                    Welcome to abTEM
+                    Welcome to abTEM!
                 </a>
             </li>
         </ul>
@@ -157,7 +157,7 @@ const thebe_selector_output = ".output, .cell_output"
   <ul class="current">
    <li class="toctree-l2">
     <a class="reference internal" href="atomic_models.html">
-     Atomic models with ASE
+     Atomic models
     </a>
    </li>
    <li class="toctree-l2 current active">
@@ -177,7 +177,7 @@ const thebe_selector_output = ".output, .cell_output"
    </li>
    <li class="toctree-l2">
     <a class="reference internal" href="contrast_transfer_function.html">
-     Contrast Transfer Function
+     Contrast transfer function
     </a>
    </li>
    <li class="toctree-l2">
@@ -191,7 +191,66 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="charge_density.html">
+    <a class="reference internal" href="parallelization.html">
+     Parallelization
+    </a>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../appendix/appendix.html">
+     Appendix
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+    <label for="toctree-checkbox-2">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../appendix/multislice_derivation.html">
+       Deriving the Multislice Algorithm
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../appendix/antialiasing.html">
+       Sampling and antialiasing
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../appendix/potential_integrals.html">
+       Potential integrals
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../appendix/performance_tips.html">
+       Parallel performance tips
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../tutorials/tutorials.html">
+   Advanced tutorials
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
+  <label for="toctree-checkbox-3">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../tutorials/advanced_atomic_models.html">
+     Advanced atomic models
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../tutorials/partial_coherence.html">
+     Partial coherence
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../tutorials/charge_density.html">
      <em>
       ab initio
      </em>
@@ -199,50 +258,18 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="partial_coherence.html">
-     Partial coherence
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="prism.html">
+    <a class="reference internal" href="../tutorials/prism.html">
      PRISM
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="performance.html">
-     Parallelization and Dask
+    <a class="reference internal" href="../tutorials/core_loss.html">
+     Core-loss filtered images
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="core_loss.html">
-     Core loss EELS
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="plasmons.html">
+    <a class="reference internal" href="../tutorials/plasmons.html">
      Plasmons
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../appendix/appendix.html">
-   Appendix
-  </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
-  <label for="toctree-checkbox-2">
-   <i class="fas fa-chevron-down">
-   </i>
-  </label>
-  <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/multislice_derivation.html">
-     Deriving the Multislice Algorithm
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/antialiasing.html">
-     Sampling and antialiasing
     </a>
    </li>
   </ul>
@@ -251,8 +278,8 @@ const thebe_selector_output = ".output, .cell_output"
   <a class="reference internal" href="../examples/examples.html">
    Example gallery
   </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
-  <label for="toctree-checkbox-3">
+  <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
+  <label for="toctree-checkbox-4">
    <i class="fas fa-chevron-down">
    </i>
   </label>
@@ -273,64 +300,42 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
+    <a class="reference internal" href="../examples/notebooks/stem_quickstart.html">
+     STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
     <a class="reference internal" href="../examples/notebooks/hbn_dft_iam.html">
      DFT vs. IAM in hBN diffraction
     </a>
    </li>
   </ul>
  </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../bibliography.html">
+   Bibliography
+  </a>
+ </li>
 </ul>
 <p aria-level="2" class="caption" role="heading">
  <span class="caption-text">
-  Library
+  Reference
  </span>
 </p>
 <ul class="nav bd-sidenav">
  <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../../library/api/api.html">
+  <a class="reference internal" href="../../reference/api/api.html">
    API
   </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
-  <label for="toctree-checkbox-4">
+  <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
+  <label for="toctree-checkbox-5">
    <i class="fas fa-chevron-down">
    </i>
   </label>
   <ul>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.html">
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.waves.html">
      waves
-    </a>
-    <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
-    <label for="toctree-checkbox-5">
-     <i class="fas fa-chevron-down">
-     </i>
-    </label>
-    <ul>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.BaseWaves.html">
-       BaseWaves
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.PlaneWave.html">
-       PlaneWave
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.Probe.html">
-       Probe
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.Waves.html">
-       Waves
-      </a>
-     </li>
-    </ul>
-   </li>
-   <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.html">
-     potentials
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/>
     <label for="toctree-checkbox-6">
@@ -339,35 +344,30 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.BasePotential.html">
-       BasePotential
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.waves.BaseWaves.html">
+       BaseWaves
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.CrystalPotential.html">
-       CrystalPotential
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.waves.PlaneWave.html">
+       PlaneWave
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.Potential.html">
-       Potential
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.waves.Probe.html">
+       Probe
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.PotentialArray.html">
-       PotentialArray
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.TransmissionFunction.html">
-       TransmissionFunction
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.waves.Waves.html">
+       Waves
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.html">
-     scan
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.html">
+     potentials
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" type="checkbox"/>
     <label for="toctree-checkbox-7">
@@ -376,35 +376,35 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.BaseScan.html">
-       BaseScan
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.BasePotential.html">
+       BasePotential
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.CustomScan.html">
-       CustomScan
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.CrystalPotential.html">
+       CrystalPotential
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.GridScan.html">
-       GridScan
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.Potential.html">
+       Potential
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.LineScan.html">
-       LineScan
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.PotentialArray.html">
+       PotentialArray
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.SourceOffset.html">
-       SourceOffset
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.TransmissionFunction.html">
+       TransmissionFunction
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.html">
-     detectors
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.html">
+     scan
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" type="checkbox"/>
     <label for="toctree-checkbox-8">
@@ -413,40 +413,35 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
-       AnnularDetector
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.BaseScan.html">
+       BaseScan
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.BaseDetector.html">
-       BaseDetector
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.CustomScan.html">
+       CustomScan
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.FlexibleAnnularDetector.html">
-       FlexibleAnnularDetector
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.GridScan.html">
+       GridScan
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.PixelatedDetector.html">
-       PixelatedDetector
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.LineScan.html">
+       LineScan
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.SegmentedDetector.html">
-       SegmentedDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.WavesDetector.html">
-       WavesDetector
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.SourceOffset.html">
+       SourceOffset
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.html">
-     measurements
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.html">
+     detectors
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" type="checkbox"/>
     <label for="toctree-checkbox-9">
@@ -455,45 +450,40 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html">
-       BaseMeasurement
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.AnnularDetector.html">
+       AnnularDetector
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.DiffractionPatterns.html">
-       DiffractionPatterns
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.BaseDetector.html">
+       BaseDetector
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html">
-       FourierSpaceLineProfiles
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.FlexibleAnnularDetector.html">
+       FlexibleAnnularDetector
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.Images.html">
-       Images
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.PixelatedDetector.html">
+       PixelatedDetector
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.PolarMeasurements.html">
-       PolarMeasurements
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.SegmentedDetector.html">
+       SegmentedDetector
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html">
-       RealSpaceLineProfiles
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html">
-       SinglePointMeasurement
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.WavesDetector.html">
+       WavesDetector
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.html">
-     transfer
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.html">
+     measurements
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" type="checkbox"/>
     <label for="toctree-checkbox-10">
@@ -502,75 +492,40 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.cartesian2polar.html">
-       cartesian2polar
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.BaseMeasurement.html">
+       BaseMeasurement
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.nyquist_sampling.html">
-       nyquist_sampling
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.DiffractionPatterns.html">
+       DiffractionPatterns
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.point_resolution.html">
-       point_resolution
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.Images.html">
+       Images
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.polar2cartesian.html">
-       polar2cartesian
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.PolarMeasurements.html">
+       PolarMeasurements
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.scherzer_defocus.html">
-       scherzer_defocus
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html">
+       RealSpaceLineProfiles
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Aberrations.html">
-       Aberrations
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Aperture.html">
-       Aperture
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.BaseAperture.html">
-       BaseAperture
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Bullseye.html">
-       Bullseye
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.CTF.html">
-       CTF
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.SpatialEnvelope.html">
-       SpatialEnvelope
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.TemporalEnvelope.html">
-       TemporalEnvelope
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Vortex.html">
-       Vortex
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html">
+       ReciprocalSpaceLineProfiles
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.html">
-     distributions
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.html">
+     transfer
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" type="checkbox"/>
     <label for="toctree-checkbox-11">
@@ -579,30 +534,75 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.from_values.html">
-       from_values
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.cartesian2polar.html">
+       cartesian2polar
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.gaussian.html">
-       gaussian
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.nyquist_sampling.html">
+       nyquist_sampling
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.uniform.html">
-       uniform
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.point_resolution.html">
+       point_resolution
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
-       BaseDistribution
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.polar2cartesian.html">
+       polar2cartesian
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.scherzer_defocus.html">
+       scherzer_defocus
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.Aberrations.html">
+       Aberrations
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.Aperture.html">
+       Aperture
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.BaseAperture.html">
+       BaseAperture
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.Bullseye.html">
+       Bullseye
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.CTF.html">
+       CTF
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.SpatialEnvelope.html">
+       SpatialEnvelope
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.TemporalEnvelope.html">
+       TemporalEnvelope
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.Vortex.html">
+       Vortex
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.html">
-     charge_density
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.distributions.html">
+     distributions
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" type="checkbox"/>
     <label for="toctree-checkbox-12">
@@ -611,25 +611,30 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.add_point_charges_fourier.html">
-       add_point_charges_fourier
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.distributions.from_values.html">
+       from_values
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.integrate_gradient_fourier.html">
-       integrate_gradient_fourier
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.distributions.gaussian.html">
+       gaussian
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.ChargeDensityPotential.html">
-       ChargeDensityPotential
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.distributions.uniform.html">
+       uniform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.distributions.BaseDistribution.html">
+       BaseDistribution
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.html">
-     gpaw
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.charge_density.html">
+     charge_density
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" type="checkbox"/>
     <label for="toctree-checkbox-13">
@@ -638,20 +643,25 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html">
-       GPAWParametrization
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.charge_density.add_point_charges_fourier.html">
+       add_point_charges_fourier
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html">
-       GPAWPotential
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.charge_density.integrate_gradient_fourier.html">
+       integrate_gradient_fourier
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.charge_density.ChargeDensityPotential.html">
+       ChargeDensityPotential
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.html">
-     visualize
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.gpaw.html">
+     gpaw
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" type="checkbox"/>
     <label for="toctree-checkbox-14">
@@ -660,30 +670,20 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.plot_diffraction_pattern.html">
-       plot_diffraction_pattern
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.gpaw.GPAWParametrization.html">
+       GPAWParametrization
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_atoms.html">
-       show_atoms
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_measurement_2d.html">
-       show_measurement_2d
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_measurements_1d.html">
-       show_measurements_1d
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.gpaw.GPAWPotential.html">
+       GPAWPotential
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.html">
-     atoms
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.visualize.html">
+     visualize
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" type="checkbox"/>
     <label for="toctree-checkbox-15">
@@ -692,105 +692,30 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.atoms_in_cell.html">
-       atoms_in_cell
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.visualize.plot_diffraction_pattern.html">
+       plot_diffraction_pattern
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
-       best_orthogonal_cell
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.visualize.show_atoms.html">
+       show_atoms
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_cell.html">
-       cut_cell
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.visualize.show_measurement_2d.html">
+       show_measurement_2d
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.decompose_affine_transform.html">
-       decompose_affine_transform
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.flip_atoms.html">
-       flip_atoms
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_hexagonal.html">
-       is_cell_hexagonal
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_orthogonal.html">
-       is_cell_orthogonal
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_valid.html">
-       is_cell_valid
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.merge_close_atoms.html">
-       merge_close_atoms
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.orthogonalize_cell.html">
-       orthogonalize_cell
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.pad_atoms.html">
-       pad_atoms
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.plane_to_axes.html">
-       plane_to_axes
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.pretty_print_transform.html">
-       pretty_print_transform
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotate_atoms_to_plane.html">
-       rotate_atoms_to_plane
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotation_matrix_from_plane.html">
-       rotation_matrix_from_plane
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotation_matrix_to_euler.html">
-       rotation_matrix_to_euler
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.shrink_cell.html">
-       shrink_cell
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.standardize_cell.html">
-       standardize_cell
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.wrap_with_tolerance.html">
-       wrap_with_tolerance
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.visualize.show_measurements_1d.html">
+       show_measurements_1d
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.html">
-     multislice
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.html">
+     atoms
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" type="checkbox"/>
     <label for="toctree-checkbox-16">
@@ -799,32 +724,129 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.atoms_in_cell.html">
+       atoms_in_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.cut_cell.html">
+       cut_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.decompose_affine_transform.html">
+       decompose_affine_transform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.flip_atoms.html">
+       flip_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.is_cell_hexagonal.html">
+       is_cell_hexagonal
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.is_cell_orthogonal.html">
+       is_cell_orthogonal
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.is_cell_valid.html">
+       is_cell_valid
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.merge_close_atoms.html">
+       merge_close_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.orthogonalize_cell.html">
+       orthogonalize_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.pad_atoms.html">
+       pad_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.plane_to_axes.html">
+       plane_to_axes
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.pretty_print_transform.html">
+       pretty_print_transform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.rotate_atoms_to_plane.html">
+       rotate_atoms_to_plane
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.rotation_matrix_from_plane.html">
+       rotation_matrix_from_plane
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.rotation_matrix_to_euler.html">
+       rotation_matrix_to_euler
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.shrink_cell.html">
+       shrink_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.standardize_cell.html">
+       standardize_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.wrap_with_tolerance.html">
+       wrap_with_tolerance
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.html">
+     multislice
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" type="checkbox"/>
+    <label for="toctree-checkbox-17">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.fresnel_propagator.html">
-       fresnel_propagator
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_step.html">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.tilt_shift.html">
-       tilt_shift
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.FresnelPropagator.html">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.FresnelPropagator.html">
        FresnelPropagator
       </a>
      </li>
@@ -833,22 +855,34 @@ const thebe_selector_output = ".output, .cell_output"
   </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library/config.html">
+  <a class="reference internal" href="../../reference/config.html">
    Configuration
   </a>
  </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  abTEM
+ </span>
+</p>
+<ul class="nav bd-sidenav">
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library/contributing.html">
+  <a class="reference internal" href="../../abtem/contact.html">
+   Contact
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../abtem/contributing.html">
    Contributing
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library/bibliography.html">
-   Bibliography
+  <a class="reference internal" href="../../abtem/citing.html">
+   Citing
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library/changelog.html">
+  <a class="reference internal" href="../../abtem/changelog.html">
    Changelog
   </a>
  </li>
@@ -1076,8 +1110,7 @@ title="Print to PDF"
   </a>
   <ul class="visible nav section-nav flex-column">
    <li class="toc-h2 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#the-potential">
-     The
+    <a class="reference internal nav-link" href="#potential">
      <code class="docutils literal notranslate">
       <span class="pre">
        Potential
@@ -1151,8 +1184,7 @@ title="Print to PDF"
   </a>
   <ul class="visible nav section-nav flex-column">
    <li class="toc-h2 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#the-potential">
-     The
+    <a class="reference internal nav-link" href="#potential">
      <code class="docutils literal notranslate">
       <span class="pre">
        Potential
@@ -1218,11 +1250,11 @@ title="Print to PDF"
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="potentials">
 <span id="walkthrough-potentials"></span><h1>Potentials<a class="headerlink" href="#potentials" title="Permalink to this headline">#</a></h1>
-<p>An electron beam interacts with a specimen (mainly) through the Coulomb potential of its electrons and nuclei. Thus the total electrostatic potential of the sample is required for image simulations. Typically, the so-called independent atom model (IAM) is used, which calculates the potential as a superposition of atomic potentials, hence neglecting effects due to bonding.</p>
+<p>An electron beam interacts with a specimen principally through the Coulomb potential of its electrons and nuclei. Thus the total electrostatic potential of the sample is required for image simulations. Typically, a so-called independent atom model (IAM) is used, which calculates the potential as a superposition of atomic potentials, hence neglecting effects due to valence bonding.</p>
 <section id="atomic-potential-parametrization">
 <h2>Atomic potential parametrization<a class="headerlink" href="#atomic-potential-parametrization" title="Permalink to this headline">#</a></h2>
-<p>The electron charge distribution of a single atom can be calculated from a first-principles electronic structure calculation, for example using the <a class="reference external" href="https://en.wikipedia.org/wiki/Hartree%E2%80%93Fock_method">Hartree-Fock method</a> or <a class="reference external" href="https://en.wikipedia.org/wiki/Density_functional_theory">Density Functional Theory</a>. Given a charge distribution, the potential can be obtained via <a class="reference external" href="https://en.wikipedia.org/wiki/Poisson%27s_equation">Poisson’s equation</a>. Most multislice simulation codes include a parametrization of the atomic potentials, with a table of parameters for each element fitted to the potential calculated from first principles.</p>
-<p>We show the radial dependence of the electrostatic potential of five selected elements below. Note, that the potentials goes to infinity at <span class="math notranslate nohighlight">\(r=0\)</span>.</p>
+<p>The electron charge distribution of a single atom can be calculated from a first-principles electronic structure calculation, for example using the <a class="reference external" href="https://en.wikipedia.org/wiki/Hartree%E2%80%93Fock_method">Hartree-Fock method</a> or <a class="reference external" href="https://en.wikipedia.org/wiki/Density_functional_theory">density functional theory</a>. Given a charge distribution, the potential can be obtained via <a class="reference external" href="https://en.wikipedia.org/wiki/Poisson%27s_equation">Poisson’s equation</a>. Most multislice simulation codes include a parametrization of the atomic potentials, with a table of parameters for each element fitted to the potential calculated elsewhere from first principles.</p>
+<p>We show the radial dependence of the electrostatic potential of five selected elements below. Note that the potentials tend to infinity at <span class="math notranslate nohighlight">\(r=0\)</span> due to the point-like nuclear charge.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">symbols</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;C&quot;</span><span class="p">,</span> <span class="s2">&quot;N&quot;</span><span class="p">,</span> <span class="s2">&quot;Si&quot;</span><span class="p">,</span> <span class="s2">&quot;Au&quot;</span><span class="p">,</span> <span class="s2">&quot;U&quot;</span><span class="p">]</span>
@@ -1248,7 +1280,7 @@ title="Print to PDF"
 <img alt="../../_images/potentials_2_0.png" src="../../_images/potentials_2_0.png" />
 </div>
 </div>
-<p>The default parametrization in abTEM, which is shown above, is created by Ivan Lobato<span id="id1">[<a class="reference internal" href="../../library/bibliography.html#id4" title="Ivan Lobato and Dirk Van Dyck. An accurate parameterization for the scattering factors, electron densities and electrostatic potentials for neutral atoms that obey all physical constraints. Acta Crystallographica Section A, 70:636-649, 2014.">LD14</a>]</span>. We also implement the parametrization by Earl J. Kirkland<span id="id2">[]</span> and the parametrization by Peng<span id="id3">[<a class="reference internal" href="../../library/bibliography.html#id6" title="Lian-Mao Peng. Electron atomic scattering factors and scattering potentials of crystals. Micron, 30(6):625-648, 1999.">Pen99</a>]</span>. The differences between the parametrizations are generally negligible at low scattering angles, however, the parametrization by Lobato is more accurate at high scattering angles<span id="id4">[<a class="reference internal" href="../../library/bibliography.html#id4" title="Ivan Lobato and Dirk Van Dyck. An accurate parameterization for the scattering factors, electron densities and electrostatic potentials for neutral atoms that obey all physical constraints. Acta Crystallographica Section A, 70:636-649, 2014.">LD14</a>]</span>.</p>
+<p>The default parametrization in abTEM, which is shown above, is created by Ivan Lobato<span id="id1">[<a class="reference internal" href="../bibliography.html#id4" title="Ivan Lobato and Dirk Van Dyck. An accurate parameterization for the scattering factors, electron densities and electrostatic potentials for neutral atoms that obey all physical constraints. Acta Crystallographica Section A, 70:636-649, 2014.">LD14</a>]</span>. We also implement the parametrization by Earl J. Kirkland<span id="id2">[<a class="reference internal" href="../bibliography.html#id5" title="Earl J. Kirkland. Advanced computing in electron microscopy. Springer, 2 edition, 2010. ISBN 978-1-4419-6532-5.">Kir10</a>]</span> and the parametrization by Peng<span id="id3">[<a class="reference internal" href="../bibliography.html#id6" title="Lian-Mao Peng. Electron atomic scattering factors and scattering potentials of crystals. Micron, 30(6):625-648, 1999.">Pen99</a>]</span>. The differences between the parametrizations are generally negligible at low scattering angles, but the parametrization by Lobato is more accurate at higher angles<span id="id4">[<a class="reference internal" href="../bibliography.html#id4" title="Ivan Lobato and Dirk Van Dyck. An accurate parameterization for the scattering factors, electron densities and electrostatic potentials for neutral atoms that obey all physical constraints. Acta Crystallographica Section A, 70:636-649, 2014.">LD14</a>]</span>.</p>
 </section>
 </section>
 <section class="tex2jax_ignore mathjax_ignore" id="independent-atom-model">
@@ -1258,10 +1290,10 @@ title="Print to PDF"
 \[
     V(r) = \sum_i V_i(r-r_i) \quad,
 \]</div>
-<p>where <span class="math notranslate nohighlight">\(V_i(r)\)</span> is the atomic potential of the <span class="math notranslate nohighlight">\(i\)</span>’th atom. This is known as the Independent Atom Model (IAM). The IAM neglects bonding effects, which is usually a good approximation. However, in some special cases it is important to include bonding effects, see  our <span class="xref myst">introduction to charge transfer</span>.</p>
-<section id="the-potential">
-<h2>The <code class="docutils literal notranslate"><span class="pre">Potential</span></code><a class="headerlink" href="#the-potential" title="Permalink to this headline">#</a></h2>
-<p>Here, we create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> representing an IAM potential of SrTiO<sub>3</sub> with the Lobato parametrization. The <code class="docutils literal notranslate"><span class="pre">sampling</span></code> denotes the spacing of the <span class="math notranslate nohighlight">\(xy\)</span>-samples of the potential, <code class="docutils literal notranslate"><span class="pre">slice_thickness</span></code> determines the spacing the slices in direction of electron beam and <code class="docutils literal notranslate"><span class="pre">projection</span></code> determines how those slices are calculated (as described <span class="xref myst">later in this document</span>).</p>
+<p>where <span class="math notranslate nohighlight">\(V_i(r)\)</span> is the atomic potential of the <span class="math notranslate nohighlight">\(i\)</span>’th atom. This is known as the independent atom model (IAM), and as a superposition of independent atoms, it neglects bonding effects. While this is in many cases an adequate approximation, there are situations where that is not the case (<span id="id5">[<a class="reference internal" href="../bibliography.html#id15" title="Jacob Madsen, Timothy J. Pennycook, and Toma Susi. Ab initio description of bonding for transmission electron microscopy. Ultramicroscopy, 231:113253, 2021. doi:https://doi.org/10.1016/j.ultramic.2021.113253.">MPS21</a>]</span>) which <em>ab</em>TEM is particularly designed to address (as discussed <a class="reference internal" href="../tutorials/charge_density.html#walkthrough-charge-density"><span class="std std-ref">later in the walkthrough</span></a>.</p>
+<section id="potential">
+<h2><code class="docutils literal notranslate"><span class="pre">Potential</span></code><a class="headerlink" href="#potential" title="Permalink to this headline">#</a></h2>
+<p>Here, we create a <code class="docutils literal notranslate"><span class="pre">Potential</span></code> object representing an IAM potential of SrTiO<sub>3</sub> with the Lobato parametrization. The <code class="docutils literal notranslate"><span class="pre">sampling</span></code> denotes the spacing of the <span class="math notranslate nohighlight">\(xy\)</span>-samples of the potential, <code class="docutils literal notranslate"><span class="pre">slice_thickness</span></code> determines the spacing the slices in direction of electron beam and <code class="docutils literal notranslate"><span class="pre">projection</span></code> determines how those slices are calculated (as described <a class="reference internal" href="#walkthrough-slicing"><span class="std std-ref">later in this document</span></a>).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">sto_lto_interface</span> <span class="o">=</span> <span class="n">read</span><span class="p">(</span><span class="s2">&quot;./data/STO_LTO.cif&quot;</span><span class="p">)</span>
@@ -1277,7 +1309,7 @@ title="Print to PDF"
 </div>
 </div>
 </div>
-<p>The potential has 23 slices as may be determined from getting its length.</p>
+<p>The potential has 23 slices along the <span class="math notranslate nohighlight">\(z\)</span> propagation direction, as may be determined from getting its length.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="nb">len</span><span class="p">(</span><span class="n">potential</span><span class="p">)</span>
@@ -1302,25 +1334,28 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/potentials_9_0.png" src="../../_images/potentials_9_0.png" />
+<img alt="../../_images/potentials_10_0.png" src="../../_images/potentials_10_0.png" />
 </div>
 </div>
-<p>The <code class="docutils literal notranslate"><span class="pre">Potential</span></code> may be indexed to return a subset of slices. Below we select the first 5 slices and show them all by setting <code class="docutils literal notranslate"><span class="pre">explode=True</span></code>.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">Potential</span></code> may be indexed to return a subset of slices. Below we select the first 5 slices (using the Python syntax for indexing lists, <code class="docutils literal notranslate"><span class="pre">[:5]</span></code>) and show them all by setting <code class="docutils literal notranslate"><span class="pre">project=False</span></code> (the default is to show the projected potential) and <code class="docutils literal notranslate"><span class="pre">explode=True</span></code> (which automatically creates a multi-panel figure; in this instance the latter setting is assumed if the former is set). The titles of the panels are automatically set based on the selected slices.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential</span><span class="p">[:</span><span class="mi">5</span><span class="p">]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">});</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential</span><span class="p">[:</span><span class="mi">5</span><span class="p">]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">project</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                   <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                   <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+                   <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">});</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/potentials_11_0.png" src="../../_images/potentials_11_0.png" />
+<img alt="../../_images/potentials_12_0.png" src="../../_images/potentials_12_0.png" />
 </div>
 </div>
 </section>
 <section id="building-and-saving-the-potential">
 <h2>Building and saving the potential<a class="headerlink" href="#building-and-saving-the-potential" title="Permalink to this headline">#</a></h2>
-<p>The <code class="docutils literal notranslate"><span class="pre">Potential</span></code> object does not store the calculated potential slices. Hence, if a simulation, such as STEM requires multiple propagations, each slice have to be calculated multiple times. For this reason, abTEM often precalculates the potential, whenever it has to be used more than once.</p>
-<p>The potential can be precalculated manually using the <code class="docutils literal notranslate"><span class="pre">build</span></code> method, however, it should typically be preferred to let abTEM decide whether to precalculate the potential.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">Potential</span></code> does not store the calculated potential slices. Hence, if a simulation, such as STEM requires multiple propagations, each slice have to be calculated multiple times. For this reason, <em>ab</em>TEM often precalculates the potential whenever it has to be used more than once.</p>
+<p>The potential can be precalculated manually using the <code class="docutils literal notranslate"><span class="pre">build</span></code> method, but you should typically let <em>ab</em>TEM decide whether to precalculate the potential. Note that we also need to <code class="docutils literal notranslate"><span class="pre">compute</span></code> it, <em>ab</em>TEM by default uses so-called lazy arrays (see our <a class="reference internal" href="parallelization.html#walkthrough-parallelization"><span class="std std-ref">description of Dask</span></a> for detail); a progress bar is displayed by default.</p>
 <div class="cell tag_skip-test docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_array</span> <span class="o">=</span> <span class="n">potential</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
@@ -1328,7 +1363,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  4.2s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 4.08 ss
 </pre></div>
 </div>
 </div>
@@ -1346,8 +1381,8 @@ title="Print to PDF"
 </div>
 </div>
 </div>
-<p>The calculated potential can be stored in the <code class="docutils literal notranslate"><span class="pre">zarr</span></code> file format and read back.</p>
-<div class="cell docutils container">
+<p>The calculated potential can be stored in the open-source <a class="reference external" href="https://zarr.readthedocs.io/en/stable/">Zarr file format</a> and conveniently read back in.</p>
+<div class="cell tag_skip-test docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_array</span><span class="o">.</span><span class="n">to_zarr</span><span class="p">(</span><span class="s2">&quot;data/srtio3_110_potential.zarr&quot;</span><span class="p">,</span> <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
@@ -1356,33 +1391,33 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed |  0.1s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 105.42 ms
 </pre></div>
 </div>
 </div>
 </div>
-<p>(walkthrough:potentials:slicing) =</p>
 </section>
 <section id="slicing-the-potential">
-<h2>Slicing the potential<a class="headerlink" href="#slicing-the-potential" title="Permalink to this headline">#</a></h2>
-<p>The multislice method requires a mathematical slicing of the potential and is only correct in the limit of thin slices, however, more slices increases the computational cost. A reasonable value for slice thickness is generally between <span class="math notranslate nohighlight">\(0.5 \ \mathrm{Å}\)</span> and <span class="math notranslate nohighlight">\(2 \ \mathrm{Å}\)</span>. The default is <span class="math notranslate nohighlight">\(1 \ \mathrm{Å}\)</span>. abTEM provides multiple options for evaluating the integrals required for slicing the potential.</p>
+<span id="walkthrough-slicing"></span><h2>Slicing the potential<a class="headerlink" href="#slicing-the-potential" title="Permalink to this headline">#</a></h2>
+<p>The multislice algorithm underlying most modern TEM image simulations requires a mathematical discretization of the potential into slices, which is exact in the limit of infinitely thin slices. The slice thickness can be considered a convergence parameter, and since more slices increases the computational cost, an optimum providing sufficient precision at an acceptable cost can be selected.</p>
+<p>A reasonable value for slice thickness is generally between <span class="math notranslate nohighlight">\(0.5 \ \mathrm{Å}\)</span> and <span class="math notranslate nohighlight">\(2 \ \mathrm{Å}\)</span>; our default value is <span class="math notranslate nohighlight">\(1 \ \mathrm{Å}\)</span>. <em>ab</em>TEM also provides multiple options for evaluating the integrals required for slicing the potential that make slightly different tradeoffs in terms of precision and performance.</p>
 <section id="finite-projection-integrals">
 <h3>Finite projection integrals<a class="headerlink" href="#finite-projection-integrals" title="Permalink to this headline">#</a></h3>
-<p>abTEM implements an accurate finite potential projection method. Numerical integration is used to calculate the integrals of the form</p>
+<p><em>ab</em>TEM implements an accurate finite potential projection method. Numerical integration is used to calculate the integrals of the form</p>
 <div class="math notranslate nohighlight" id="equation-eq-potentials-slice">
 <span class="eqno">(1)<a class="headerlink" href="#equation-eq-potentials-slice" title="Permalink to this equation">#</a></span>\[
 V_{n}(x, y) = \int_{z_n}^{z_n+\Delta z} V(x,y,z) dz \quad ,
 \]</div>
 <p>where <span class="math notranslate nohighlight">\(z_n\)</span> is the <span class="math notranslate nohighlight">\(z\)</span>-position at the entrance of the <span class="math notranslate nohighlight">\(n\)</span>’th slice and <span class="math notranslate nohighlight">\(\Delta z\)</span> is the slice thickness.</p>
-<p>We used <code class="docutils literal notranslate"><span class="pre">abTEM</span></code>s default method of handling finite projection integrals above, additional options and a description of the methods is given in appendix ???.</p>
+<p>We used the <em>ab</em>TEM default method of handling finite projection integrals above; additional options and a description of the methods is given in <a class="reference internal" href="../appendix/potential_integrals.html"><span class="doc std std-doc">an appendix</span></a>.</p>
 </section>
 <section id="infinite-projection-integrals">
 <h3>Infinite projection integrals<a class="headerlink" href="#infinite-projection-integrals" title="Permalink to this headline">#</a></h3>
-<p>Since the finite projection method can be computationally demanding abTEM also implements a potential using infinite projection integrals. The finite integrals are replaced by infinite integrals, which may be evaluated analytically</p>
+<p>Since the finite projection method can be computationally demanding, <em>ab</em>TEM also implements potentials using infinite projection integrals. The finite integrals are replaced by infinite integrals, which may be evaluated analytically</p>
 <div class="math notranslate nohighlight">
 \[ \int_{-\infty}^{\infty} V(x,y,z) dz \approx \int_{z_i}^{z_i+\Delta z} V(x,y,z) dz \]</div>
-<p>The infinite projection of the atomic potential for each atom is assigned to a single slice. The implementation uses the hybrid real-space/Fourier-space approach by W. van den Broek et. al. (<a class="reference external" href="https://doi.org/10.1016/j.ultramic.2015.07.005">https://doi.org/10.1016/j.ultramic.2015.07.005</a>).</p>
-<p>Below we create the same SrTiO3 potential as above with infinite projections. The potential looks almost identical to the finite projection, however, note that the slice at <span class="math notranslate nohighlight">\(z=3.88 \ \mathrm{Å}\)</span> has zero intensity, because there is not atoms in this slice.</p>
+<p>The infinite projection of the atomic potential for each atom is assigned to a single slice. The implementation uses the hybrid real-space/Fourier-space approach by van den Broek <span id="id6">[<a class="reference internal" href="../bibliography.html#id17" title="W. Van den Broek, X. Jiang, and C.T. Koch. Fdes, a gpu-based multislice algorithm with increased efficiency of the computation of the projected potential. Ultramicroscopy, 158:89–97, 2015. doi:10.1016/j.ultramic.2015.07.005.">VdBJK15</a>]</span>).</p>
+<p>Below we create the same SrTiO3 potential as above with infinite projections. The potential looks almost identical to the finite projection, but note that the slice at <span class="math notranslate nohighlight">\(z=3.88 \ \mathrm{Å}\)</span> has zero intensity because there is not atoms in this slice.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_infinite</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Potential</span><span class="p">(</span>
@@ -1394,24 +1429,24 @@ V_{n}(x, y) = \int_{z_n}^{z_n+\Delta z} V(x,y,z) dz \quad ,
 <span class="p">)</span>
 
 <span class="n">potential_infinite</span><span class="p">[:</span><span class="mi">5</span><span class="p">]</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
-    <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">}</span>
+    <span class="n">project</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">}</span>
 <span class="p">);</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/potentials_19_0.png" src="../../_images/potentials_19_0.png" />
+<img alt="../../_images/potentials_20_0.png" src="../../_images/potentials_20_0.png" />
 </div>
 </div>
-<p>Using infinite projections can be <em>much</em> faster, especially for potentials with a large numbers of atoms. As show by the time below, the potential only took 0.2 s to calculate, you may compare this to the finite projection calculated above, which took 4.1 s. The error introduced by using infinite integrals is negligible compared to other sources of error in most cases.</p>
-<div class="cell docutils container">
+<p>Using infinite projections can be <em>much</em> faster, especially for potentials with a large numbers of atoms. As shown by the time below, the potential takes less than 0.5 s to calculate, which you may compare this to the finite projection calculated above that took 4 s. The error introduced by using infinite integrals is in most cases negligible compared to other sources of error.</p>
+<div class="cell tag_skip-test docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">potential_infinite</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">compute</span><span class="p">();</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[                                        ] | 0% Completed |  0.1s
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 307.32 ms
 </pre></div>
 </div>
 </div>
@@ -1420,9 +1455,9 @@ V_{n}(x, y) = \int_{z_n}^{z_n+\Delta z} V(x,y,z) dz \quad ,
 </section>
 <section id="crystal-potentials">
 <h2>Crystal potentials<a class="headerlink" href="#crystal-potentials" title="Permalink to this headline">#</a></h2>
-<p>Calculating the potential is generally not a significant cost for simulations where the same potential is used in many runs of the multislice algorithm. However, for simulations that require just one or a few wave functions, such as HRTEM and CBED, it can also be an advantage to use the <code class="docutils literal notranslate"><span class="pre">CrystalPotential</span></code>.</p>
-<p>The <code class="docutils literal notranslate"><span class="pre">CrystalPotential</span></code> allows fast calculation for potentials of crystals by tiling a repeating unit of the potential. Here create a <code class="docutils literal notranslate"><span class="pre">CrystalPotential</span></code> tiling the already calculated finite projected potential.</p>
-<div class="cell docutils container">
+<p>Calculating the potential is generally not a significant cost for simulations where the same potential is used in many runs of the multislice algorithm. However, for simulations that require just one or a few wave functions, such as HRTEM and CBED, it can also be an advantage to use the a periodic crystal potential.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">CrystalPotential</span></code> allows fast calculation for potentials of crystals by tiling a repeating unit of the potential. Below we create a <code class="docutils literal notranslate"><span class="pre">CrystalPotential</span></code> by tiling the already calculated finite projected potential.</p>
+<div class="cell tag_skip-test docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">crystal_potential</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">CrystalPotential</span><span class="p">(</span>
     <span class="n">potential_unit</span><span class="o">=</span><span class="n">potential_array</span><span class="p">,</span> <span class="n">repetitions</span><span class="o">=</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span>
@@ -1432,8 +1467,13 @@ V_{n}(x, y) = \int_{z_n}^{z_n+\Delta z} V(x,y,z) dz \quad ,
 </pre></div>
 </div>
 </div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>[########################################] | 100% Completed | 1.63 sms
+</pre></div>
 </div>
-<p>We also implement a fast frozen phonon algorithm for crystal potentials by reshuffling precalculated slices <span id="id5">[<a class="reference internal" href="../../library/bibliography.html#id11" title="J. Barthel. Dr. probe: a software for high-resolution stem image simulation,. Ultramicroscopy, 193:1-11, 2018.">Bar18</a>]</span>, see our walkthrough on <a class="reference internal" href="frozen_phonons.html#walkthrough-frozen-phonons"><span class="std std-ref">frozen phonons</span></a>.</p>
+</div>
+</div>
+<p>We also implement a fast frozen phonon algorithm for crystal potentials by reshuffling precalculated slices <span id="id7">[<a class="reference internal" href="../bibliography.html#id11" title="J. Barthel. Dr. probe: a software for high-resolution stem image simulation,. Ultramicroscopy, 193:1-11, 2018.">Bar18</a>]</span>; see our walkthrough on <a class="reference internal" href="frozen_phonons.html#walkthrough-frozen-phonons"><span class="std std-ref">frozen phonons</span></a>.</p>
 </section>
 </section>
 
@@ -1446,16 +1486,16 @@ V_{n}(x, y) = \int_{z_n}^{z_n+\Delta z} V(x,y,z) dz \quad ,
         },
         codeMirrorConfig: {
             theme: "abcdef",
-            mode: "abtem-dask"
+            mode: "abtem"
         },
         kernelOptions: {
-            kernelName: "abtem-dask",
+            kernelName: "abtem",
             path: "./user_guide/walkthrough"
         },
         predefinedOutput: true
     }
     </script>
-    <script>kernelName = 'abtem-dask'</script>
+    <script>kernelName = 'abtem'</script>
 
               </div>
               
@@ -1468,7 +1508,7 @@ V_{n}(x, y) = \int_{z_n}^{z_n+\Delta z} V(x,y,z) dz \quad ,
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Atomic models with ASE</p>
+            <p class="prev-next-title">Atomic models</p>
         </div>
     </a>
     <a class='right-next' id="next-link" href="wave_functions.html" title="next page">
@@ -1485,7 +1525,7 @@ V_{n}(x, y) = \int_{z_n}^{z_n+\Delta z} V(x,y,z) dz \quad ,
     <div class="footer-content row">
         <footer class="col footer"><p>
   
-    By The abTEM developers<br/>
+    By abTEM developers<br/>
   
       &copy; Copyright 2022.<br/>
 </p>

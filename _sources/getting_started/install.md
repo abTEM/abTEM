@@ -1,17 +1,18 @@
 # Installation
 
-There are two ways to install the abTEM package, using pip or conda:
+There are two ways to install the *ab*TEM package, using conda or pip:
 
 `````{tab-set}
 
 ````{tab-item} conda
-Install abtem using conda:
+Install *ab*TEM using conda:
 ```{code-block}
 conda install -c conda-forge abtem
 ```
+(Instructions on how to install miniconda can be found [here](https://docs.conda.io/en/latest/miniconda.html).)
 ````
 ````{tab-item} pip
-Install abtem using pip:
+Install *ab*TEM using pip:
 ```{code-block}
 pip install abtem
 ```
@@ -27,21 +28,21 @@ pip install git+https://github.com/abTEM/abTEM
 
 ### GPAW (not available on Windows)
 
-Some features of abTEM, such as calculating potentials from DFT require a working installation
+Some features of *ab*TEM, such as calculating potentials from DFT, require a working installation
 of [GPAW](https://wiki.fysik.dtu.dk/gpaw/index.html). See [here](https://wiki.fysik.dtu.dk/gpaw/install.html) for
 detailed installation instructions.
 
 `````{tab-set}
 ````{tab-item} conda
-Install gpaw using conda:
+Install GPAW using conda:
 ```{code-block}
 conda install -c conda-forge gpaw
 ```
 ````
 ````{tab-item} pip
 
+Install GPAW using pip:
 ```{code-block}
-Install gpaw using pip:
 pip install gpaw
 ```
 Install the PAW datasets into the folder `<dir>` using this command:
@@ -53,7 +54,7 @@ gpaw install-data <dir>
 
 ### GPU (only Nvidia) 
 
-GPU calculations with abTEM require a working installation of [CuPy](https://cupy.dev/).
+GPU calculations with *ab*TEM require a working installation of [CuPy](https://cupy.dev/) and compatible hardware.
 See [here](https://docs.cupy.dev/en/stable/install.html) for detailed installation instructions.
 
 `````{tab-set}
@@ -65,7 +66,7 @@ conda install -c conda-forge cupy
 ```
 ````
 ````{tab-item} pip
-Install [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit).
+First, install the [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit).
 
 Install CuPy using pip:
 ```{code-block}
@@ -77,4 +78,4 @@ where * should be substituted for the CUDA Toolkit version.
 
 ### Development
 
-See [our guide to contributing](library:contributing) for instructions on a development installation `abTEM`.
+See [our guide to contributing](library:contributing) for instructions on a development installation of *ab*TEM.

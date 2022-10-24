@@ -19,6 +19,7 @@ import abtem
 ## Atomic model
 abTEM uses the atomic simulation environment for importing atomic models:
 
+```
 
 We can also procedurally create and modify structures: 
 

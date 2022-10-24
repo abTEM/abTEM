@@ -113,7 +113,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../intro.html">
-                    Welcome to abTEM
+                    Welcome to abTEM!
                 </a>
             </li>
         </ul>
@@ -157,7 +157,7 @@ const thebe_selector_output = ".output, .cell_output"
   <ul class="current">
    <li class="toctree-l2">
     <a class="reference internal" href="atomic_models.html">
-     Atomic models with ASE
+     Atomic models
     </a>
    </li>
    <li class="toctree-l2">
@@ -177,7 +177,7 @@ const thebe_selector_output = ".output, .cell_output"
    </li>
    <li class="toctree-l2">
     <a class="reference internal" href="contrast_transfer_function.html">
-     Contrast Transfer Function
+     Contrast transfer function
     </a>
    </li>
    <li class="toctree-l2">
@@ -191,7 +191,66 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="charge_density.html">
+    <a class="reference internal" href="parallelization.html">
+     Parallelization
+    </a>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../appendix/appendix.html">
+     Appendix
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+    <label for="toctree-checkbox-2">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../appendix/multislice_derivation.html">
+       Deriving the Multislice Algorithm
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../appendix/antialiasing.html">
+       Sampling and antialiasing
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../appendix/potential_integrals.html">
+       Potential integrals
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../appendix/performance_tips.html">
+       Parallel performance tips
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../tutorials/tutorials.html">
+   Advanced tutorials
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
+  <label for="toctree-checkbox-3">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../tutorials/advanced_atomic_models.html">
+     Advanced atomic models
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../tutorials/partial_coherence.html">
+     Partial coherence
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../tutorials/charge_density.html">
      <em>
       ab initio
      </em>
@@ -199,50 +258,18 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="partial_coherence.html">
-     Partial coherence
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="prism.html">
+    <a class="reference internal" href="../tutorials/prism.html">
      PRISM
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="performance.html">
-     Parallelization and Dask
+    <a class="reference internal" href="../tutorials/core_loss.html">
+     Core-loss filtered images
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="core_loss.html">
-     Core loss EELS
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="plasmons.html">
+    <a class="reference internal" href="../tutorials/plasmons.html">
      Plasmons
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../appendix/appendix.html">
-   Appendix
-  </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
-  <label for="toctree-checkbox-2">
-   <i class="fas fa-chevron-down">
-   </i>
-  </label>
-  <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/multislice_derivation.html">
-     Deriving the Multislice Algorithm
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/antialiasing.html">
-     Sampling and antialiasing
     </a>
    </li>
   </ul>
@@ -251,8 +278,8 @@ const thebe_selector_output = ".output, .cell_output"
   <a class="reference internal" href="../examples/examples.html">
    Example gallery
   </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
-  <label for="toctree-checkbox-3">
+  <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
+  <label for="toctree-checkbox-4">
    <i class="fas fa-chevron-down">
    </i>
   </label>
@@ -273,64 +300,42 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
+    <a class="reference internal" href="../examples/notebooks/stem_quickstart.html">
+     STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
     <a class="reference internal" href="../examples/notebooks/hbn_dft_iam.html">
      DFT vs. IAM in hBN diffraction
     </a>
    </li>
   </ul>
  </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../bibliography.html">
+   Bibliography
+  </a>
+ </li>
 </ul>
 <p aria-level="2" class="caption" role="heading">
  <span class="caption-text">
-  Library
+  Reference
  </span>
 </p>
 <ul class="nav bd-sidenav">
  <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../../library/api/api.html">
+  <a class="reference internal" href="../../reference/api/api.html">
    API
   </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
-  <label for="toctree-checkbox-4">
+  <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
+  <label for="toctree-checkbox-5">
    <i class="fas fa-chevron-down">
    </i>
   </label>
   <ul>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.html">
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.waves.html">
      waves
-    </a>
-    <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
-    <label for="toctree-checkbox-5">
-     <i class="fas fa-chevron-down">
-     </i>
-    </label>
-    <ul>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.BaseWaves.html">
-       BaseWaves
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.PlaneWave.html">
-       PlaneWave
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.Probe.html">
-       Probe
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.Waves.html">
-       Waves
-      </a>
-     </li>
-    </ul>
-   </li>
-   <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.html">
-     potentials
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/>
     <label for="toctree-checkbox-6">
@@ -339,35 +344,30 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.BasePotential.html">
-       BasePotential
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.waves.BaseWaves.html">
+       BaseWaves
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.CrystalPotential.html">
-       CrystalPotential
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.waves.PlaneWave.html">
+       PlaneWave
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.Potential.html">
-       Potential
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.waves.Probe.html">
+       Probe
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.PotentialArray.html">
-       PotentialArray
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.TransmissionFunction.html">
-       TransmissionFunction
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.waves.Waves.html">
+       Waves
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.html">
-     scan
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.html">
+     potentials
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" type="checkbox"/>
     <label for="toctree-checkbox-7">
@@ -376,35 +376,35 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.BaseScan.html">
-       BaseScan
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.BasePotential.html">
+       BasePotential
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.CustomScan.html">
-       CustomScan
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.CrystalPotential.html">
+       CrystalPotential
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.GridScan.html">
-       GridScan
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.Potential.html">
+       Potential
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.LineScan.html">
-       LineScan
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.PotentialArray.html">
+       PotentialArray
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.SourceOffset.html">
-       SourceOffset
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.TransmissionFunction.html">
+       TransmissionFunction
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.html">
-     detectors
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.html">
+     scan
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" type="checkbox"/>
     <label for="toctree-checkbox-8">
@@ -413,40 +413,35 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
-       AnnularDetector
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.BaseScan.html">
+       BaseScan
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.BaseDetector.html">
-       BaseDetector
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.CustomScan.html">
+       CustomScan
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.FlexibleAnnularDetector.html">
-       FlexibleAnnularDetector
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.GridScan.html">
+       GridScan
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.PixelatedDetector.html">
-       PixelatedDetector
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.LineScan.html">
+       LineScan
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.SegmentedDetector.html">
-       SegmentedDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.WavesDetector.html">
-       WavesDetector
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.SourceOffset.html">
+       SourceOffset
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.html">
-     measurements
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.html">
+     detectors
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" type="checkbox"/>
     <label for="toctree-checkbox-9">
@@ -455,45 +450,40 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html">
-       BaseMeasurement
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.AnnularDetector.html">
+       AnnularDetector
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.DiffractionPatterns.html">
-       DiffractionPatterns
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.BaseDetector.html">
+       BaseDetector
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html">
-       FourierSpaceLineProfiles
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.FlexibleAnnularDetector.html">
+       FlexibleAnnularDetector
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.Images.html">
-       Images
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.PixelatedDetector.html">
+       PixelatedDetector
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.PolarMeasurements.html">
-       PolarMeasurements
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.SegmentedDetector.html">
+       SegmentedDetector
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html">
-       RealSpaceLineProfiles
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html">
-       SinglePointMeasurement
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.WavesDetector.html">
+       WavesDetector
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.html">
-     transfer
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.html">
+     measurements
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" type="checkbox"/>
     <label for="toctree-checkbox-10">
@@ -502,75 +492,40 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.cartesian2polar.html">
-       cartesian2polar
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.BaseMeasurement.html">
+       BaseMeasurement
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.nyquist_sampling.html">
-       nyquist_sampling
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.DiffractionPatterns.html">
+       DiffractionPatterns
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.point_resolution.html">
-       point_resolution
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.Images.html">
+       Images
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.polar2cartesian.html">
-       polar2cartesian
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.PolarMeasurements.html">
+       PolarMeasurements
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.scherzer_defocus.html">
-       scherzer_defocus
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html">
+       RealSpaceLineProfiles
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Aberrations.html">
-       Aberrations
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Aperture.html">
-       Aperture
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.BaseAperture.html">
-       BaseAperture
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Bullseye.html">
-       Bullseye
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.CTF.html">
-       CTF
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.SpatialEnvelope.html">
-       SpatialEnvelope
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.TemporalEnvelope.html">
-       TemporalEnvelope
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Vortex.html">
-       Vortex
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html">
+       ReciprocalSpaceLineProfiles
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.html">
-     distributions
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.html">
+     transfer
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" type="checkbox"/>
     <label for="toctree-checkbox-11">
@@ -579,30 +534,75 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.from_values.html">
-       from_values
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.cartesian2polar.html">
+       cartesian2polar
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.gaussian.html">
-       gaussian
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.nyquist_sampling.html">
+       nyquist_sampling
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.uniform.html">
-       uniform
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.point_resolution.html">
+       point_resolution
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
-       BaseDistribution
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.polar2cartesian.html">
+       polar2cartesian
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.scherzer_defocus.html">
+       scherzer_defocus
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.Aberrations.html">
+       Aberrations
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.Aperture.html">
+       Aperture
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.BaseAperture.html">
+       BaseAperture
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.Bullseye.html">
+       Bullseye
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.CTF.html">
+       CTF
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.SpatialEnvelope.html">
+       SpatialEnvelope
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.TemporalEnvelope.html">
+       TemporalEnvelope
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.Vortex.html">
+       Vortex
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.html">
-     charge_density
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.distributions.html">
+     distributions
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" type="checkbox"/>
     <label for="toctree-checkbox-12">
@@ -611,25 +611,30 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.add_point_charges_fourier.html">
-       add_point_charges_fourier
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.distributions.from_values.html">
+       from_values
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.integrate_gradient_fourier.html">
-       integrate_gradient_fourier
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.distributions.gaussian.html">
+       gaussian
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.ChargeDensityPotential.html">
-       ChargeDensityPotential
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.distributions.uniform.html">
+       uniform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.distributions.BaseDistribution.html">
+       BaseDistribution
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.html">
-     gpaw
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.charge_density.html">
+     charge_density
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" type="checkbox"/>
     <label for="toctree-checkbox-13">
@@ -638,20 +643,25 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html">
-       GPAWParametrization
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.charge_density.add_point_charges_fourier.html">
+       add_point_charges_fourier
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html">
-       GPAWPotential
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.charge_density.integrate_gradient_fourier.html">
+       integrate_gradient_fourier
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.charge_density.ChargeDensityPotential.html">
+       ChargeDensityPotential
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.html">
-     visualize
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.gpaw.html">
+     gpaw
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" type="checkbox"/>
     <label for="toctree-checkbox-14">
@@ -660,30 +670,20 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.plot_diffraction_pattern.html">
-       plot_diffraction_pattern
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.gpaw.GPAWParametrization.html">
+       GPAWParametrization
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_atoms.html">
-       show_atoms
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_measurement_2d.html">
-       show_measurement_2d
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_measurements_1d.html">
-       show_measurements_1d
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.gpaw.GPAWPotential.html">
+       GPAWPotential
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.html">
-     atoms
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.visualize.html">
+     visualize
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" type="checkbox"/>
     <label for="toctree-checkbox-15">
@@ -692,105 +692,30 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.atoms_in_cell.html">
-       atoms_in_cell
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.visualize.plot_diffraction_pattern.html">
+       plot_diffraction_pattern
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
-       best_orthogonal_cell
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.visualize.show_atoms.html">
+       show_atoms
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_cell.html">
-       cut_cell
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.visualize.show_measurement_2d.html">
+       show_measurement_2d
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.decompose_affine_transform.html">
-       decompose_affine_transform
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.flip_atoms.html">
-       flip_atoms
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_hexagonal.html">
-       is_cell_hexagonal
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_orthogonal.html">
-       is_cell_orthogonal
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_valid.html">
-       is_cell_valid
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.merge_close_atoms.html">
-       merge_close_atoms
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.orthogonalize_cell.html">
-       orthogonalize_cell
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.pad_atoms.html">
-       pad_atoms
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.plane_to_axes.html">
-       plane_to_axes
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.pretty_print_transform.html">
-       pretty_print_transform
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotate_atoms_to_plane.html">
-       rotate_atoms_to_plane
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotation_matrix_from_plane.html">
-       rotation_matrix_from_plane
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotation_matrix_to_euler.html">
-       rotation_matrix_to_euler
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.shrink_cell.html">
-       shrink_cell
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.standardize_cell.html">
-       standardize_cell
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.wrap_with_tolerance.html">
-       wrap_with_tolerance
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.visualize.show_measurements_1d.html">
+       show_measurements_1d
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.html">
-     multislice
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.html">
+     atoms
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" type="checkbox"/>
     <label for="toctree-checkbox-16">
@@ -799,22 +724,129 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.atoms_in_cell.html">
+       atoms_in_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.cut_cell.html">
+       cut_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.decompose_affine_transform.html">
+       decompose_affine_transform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.flip_atoms.html">
+       flip_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.is_cell_hexagonal.html">
+       is_cell_hexagonal
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.is_cell_orthogonal.html">
+       is_cell_orthogonal
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.is_cell_valid.html">
+       is_cell_valid
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.merge_close_atoms.html">
+       merge_close_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.orthogonalize_cell.html">
+       orthogonalize_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.pad_atoms.html">
+       pad_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.plane_to_axes.html">
+       plane_to_axes
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.pretty_print_transform.html">
+       pretty_print_transform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.rotate_atoms_to_plane.html">
+       rotate_atoms_to_plane
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.rotation_matrix_from_plane.html">
+       rotation_matrix_from_plane
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.rotation_matrix_to_euler.html">
+       rotation_matrix_to_euler
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.shrink_cell.html">
+       shrink_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.standardize_cell.html">
+       standardize_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.wrap_with_tolerance.html">
+       wrap_with_tolerance
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.html">
+     multislice
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" type="checkbox"/>
+    <label for="toctree-checkbox-17">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_step.html">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.FresnelPropagator.html">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.FresnelPropagator.html">
        FresnelPropagator
       </a>
      </li>
@@ -823,22 +855,34 @@ const thebe_selector_output = ".output, .cell_output"
   </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library/config.html">
+  <a class="reference internal" href="../../reference/config.html">
    Configuration
   </a>
  </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  abTEM
+ </span>
+</p>
+<ul class="nav bd-sidenav">
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library/contributing.html">
+  <a class="reference internal" href="../../abtem/contact.html">
+   Contact
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../abtem/contributing.html">
    Contributing
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library/bibliography.html">
-   Bibliography
+  <a class="reference internal" href="../../abtem/citing.html">
+   Citing
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library/changelog.html">
+  <a class="reference internal" href="../../abtem/changelog.html">
    Changelog
   </a>
  </li>
@@ -1065,7 +1109,7 @@ title="Print to PDF"
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#wave-function-ensembles">
-   Wave function ensembles
+   Wave-function ensembles
   </a>
  </li>
 </ul>
@@ -1104,7 +1148,7 @@ title="Print to PDF"
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#wave-function-ensembles">
-   Wave function ensembles
+   Wave-function ensembles
   </a>
  </li>
 </ul>
@@ -1133,25 +1177,25 @@ title="Print to PDF"
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="wave-functions">
 <span id="walkthrough-wave-functions"></span><h1>Wave functions<a class="headerlink" href="#wave-functions" title="Permalink to this headline">#</a></h1>
-<p>The multislice algorithm works by propagating the <span class="math notranslate nohighlight">\(xy\)</span> part of the wave function (defined as <span class="math notranslate nohighlight">\(\psi\)</span> in the <span class="xref myst">appendix</span>) through the electrostatic potential. To initiate this process, we need to assume the initial conditions for the wave function, i.e. the wave function describing the electron beam formed by the electron optics before the sample.</p>
-<p>abTEM defines three types of wave functions:</p>
+<p>The multislice algorithm works by propagating the <span class="math notranslate nohighlight">\(xy\)</span> part of the wave function (defined as <span class="math notranslate nohighlight">\(\psi\)</span> in the <a class="reference internal" href="../appendix/multislice_derivation.html"><span class="doc std std-doc">appendix</span></a>) through the electrostatic potential. To start the propagation, we need to assume the initial conditions for the wave function, i.e. a wave function describing the electron beam formed by the electron optics before the sample.</p>
+<p><em>ab</em>TEM defines three types of wave functions:</p>
 <ul class="simple">
-<li><p><a class="reference internal" href="#wave-functions-plane-wave"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code></span></a>: Simulate HRTEM, SAED or other imaging modes with plane wave illumination.</p></li>
+<li><p><a class="reference internal" href="#wave-functions-plane-wave"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code></span></a>: Simulate HRTEM, SAED or other imaging modes with parallel-beam plane wave illumination.</p></li>
 <li><p><a class="reference internal" href="#wave-functions-probe"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">Probe</span></code></span></a>: Simulate CBED, STEM or other imaging modes with a converged electron beam.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">Waves</span></code>: Defines any custom wave function. The <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> and <code class="docutils literal notranslate"><span class="pre">Probe</span></code> can be converted to <code class="docutils literal notranslate"><span class="pre">Waves</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Waves</span></code>: Defines any custom wave function. <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> and <code class="docutils literal notranslate"><span class="pre">Probe</span></code> can be converted to <code class="docutils literal notranslate"><span class="pre">Waves</span></code>.</p></li>
 </ul>
 <div class="admonition seealso">
 <p class="admonition-title">See also</p>
-<p>The PRISM <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code> is not included in the list above. However, it can be used to achieve most of the goals of using the <code class="docutils literal notranslate"><span class="pre">Probe</span></code>. See our <a class="reference internal" href="prism.html#walkthrough-prism"><span class="std std-ref">introduction to PRISM in abTEM</span></a>.</p>
+<p>The PRISM algorithm uses <code class="docutils literal notranslate"><span class="pre">SMatrix</span></code>, which is not included in the list above. However, in most ways it can be used similar to <code class="docutils literal notranslate"><span class="pre">Probe</span></code>; see our <a class="reference internal" href="../tutorials/prism.html#walkthrough-prism"><span class="std std-ref">introduction to PRISM in abTEM</span></a> for more detail.</p>
 </div>
 <section id="plane-wave-functions">
 <span id="wave-functions-plane-wave"></span><h2>Plane wave functions<a class="headerlink" href="#plane-wave-functions" title="Permalink to this headline">#</a></h2>
-<p>The default plane wave is just defined to be one everywhere</p>
+<p>The default plane wave is just defined to be equal to unity everywhere in the plane</p>
 <div class="math notranslate nohighlight">
 \[
     \psi(\vec{r}) = 1 \quad ,
 \]</div>
-<p>where <span class="math notranslate nohighlight">\(\vec{r} = (x, y)\)</span> is the real space coordinate in the <span class="math notranslate nohighlight">\(x\)</span>- and <span class="math notranslate nohighlight">\(y\)</span>-direction.</p>
+<p>where <span class="math notranslate nohighlight">\(\vec{r} = (x, y)\)</span> is the real space coordinate in the <span class="math notranslate nohighlight">\(x\)</span>- and <span class="math notranslate nohighlight">\(y\)</span>-direction. While mathematically, those coordinates are usually considered to be continuous, in a numerical simulation we have define a discrete grid with a finite extent to represent them.</p>
 <p>We create a plane wave on a <span class="math notranslate nohighlight">\(256 \times 256\)</span> grid with a lateral extent of <span class="math notranslate nohighlight">\(5\times 5\)</span> <span class="math notranslate nohighlight">\(\mathrm{Å}^2\)</span> and an energy of <span class="math notranslate nohighlight">\(300 \ \mathrm{keV}\)</span>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1160,7 +1204,7 @@ title="Print to PDF"
 </div>
 </div>
 </div>
-<p>The real-space sampling, or pixel size, is calculated by dividing the <code class="docutils literal notranslate"><span class="pre">extent</span></code> by the number of grid points (<code class="docutils literal notranslate"><span class="pre">gpts</span></code>). The properties related to the grid, i.e. the <code class="docutils literal notranslate"><span class="pre">extent</span></code>, <code class="docutils literal notranslate"><span class="pre">gpts</span></code> and <code class="docutils literal notranslate"><span class="pre">sampling</span></code>, can be accessed as.</p>
+<p>The real-space sampling, or pixel size, is calculated by dividing the <code class="docutils literal notranslate"><span class="pre">extent</span></code> by the number of grid points (<code class="docutils literal notranslate"><span class="pre">gpts</span></code>). The properties related to the grid, i.e. the <code class="docutils literal notranslate"><span class="pre">extent</span></code>, <code class="docutils literal notranslate"><span class="pre">gpts</span></code> and <code class="docutils literal notranslate"><span class="pre">sampling</span></code>, can be accessed as properties of the <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> object.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">plane_wave</span><span class="o">.</span><span class="n">extent</span><span class="p">,</span> <span class="n">plane_wave</span><span class="o">.</span><span class="n">gpts</span><span class="p">,</span> <span class="n">plane_wave</span><span class="o">.</span><span class="n">sampling</span>
@@ -1173,7 +1217,7 @@ title="Print to PDF"
 </div>
 </div>
 </div>
-<p>The grid is fully defined from just two of the three quantities listed above, hence, we may pick any combination of two to define the grid.</p>
+<p>The grid is fully defined from just two of the three quantities listed above, and thus we may pick any combination of two to define it.</p>
 <p>The relativistic wavelength in Ångstrom, derived from the energy, is accessed as:</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1189,9 +1233,9 @@ title="Print to PDF"
 </div>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>abTEM uses the same unit conventions as ASE, as defined in the <code class="docutils literal notranslate"><span class="pre">ase.units</span></code> module. Thus, electron volts (eV), Ångström (Å), and atomic mass units are defined as 1.0. The electrostatic potential is given in (eV / e). Angles in <em>abTEM</em> are for convenience given in milliradians (mrad).</p>
+<p>abTEM uses the same unit conventions as ASE, as defined in the <code class="docutils literal notranslate"><span class="pre">ase.units</span></code> module. Thus, electron volts (eV), Ångström (Å), and atomic mass units are defined as 1.0. The electrostatic potential is given in (eV / e). Angles in <em>ab</em>TEM are for convenience given in milliradians (mrad).</p>
 </div>
-<p>We can turn the <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> into the generic <code class="docutils literal notranslate"><span class="pre">Waves</span></code> by using <code class="docutils literal notranslate"><span class="pre">build</span></code>.</p>
+<p>We can turn the <code class="docutils literal notranslate"><span class="pre">PlaneWave</span></code> into a generic <code class="docutils literal notranslate"><span class="pre">Waves</span></code> by using <code class="docutils literal notranslate"><span class="pre">build</span></code>.</p>
 <div class="cell tag_skip-test docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">waves</span> <span class="o">=</span> <span class="n">plane_wave</span><span class="o">.</span><span class="n">build</span><span class="p">()</span>
@@ -1200,12 +1244,12 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.Waves object at 0x000001F016B26800&gt;
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&lt;abtem.waves.Waves object at 0x14315e880&gt;
 </pre></div>
 </div>
 </div>
 </div>
-<p>The <code class="docutils literal notranslate"><span class="pre">Waves</span></code> describe the wave function as a complex Dask array accessed below.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">Waves</span></code> describe the wave function as a complex Dask array (see our page on <a class="reference internal" href="parallelization.html"><span class="doc std std-doc">parallelization</span></a>), as accessed below.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">waves</span><span class="o">.</span><span class="n">array</span>
@@ -1272,7 +1316,7 @@ title="Print to PDF"
     </tr>
 </table></div></div>
 </div>
-<p>After computing the wave function is described as a NumPy array.</p>
+<p>After actually computing the values of the wave function, it will be described as a NumPy array.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">waves</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
@@ -1294,7 +1338,7 @@ title="Print to PDF"
 </div>
 </div>
 </div>
-<p>The normalization of the wave function used above ensures that the intensity per area is constant when the grid is changed. However, this is not a very natural normalization in Fourier space, we may instead define the plane wave such that is the direct beam is <span class="math notranslate nohighlight">\(1\)</span> before scattering.</p>
+<p>The normalization of the wave function used above ensures that the intensity per area is constant when the grid is changed. However, this is not a very natural normalization in Fourier space, and we may instead define the plane wave such that the direct beam is <span class="math notranslate nohighlight">\(1\)</span> before scattering.</p>
 <div class="math notranslate nohighlight">
 \[
     \hat{\psi}(\vec{k}) = \delta(0) \quad .
@@ -1312,7 +1356,7 @@ title="Print to PDF"
 </section>
 <section id="probe-wave-functions">
 <span id="wave-functions-probe"></span><h2>Probe wave functions<a class="headerlink" href="#probe-wave-functions" title="Permalink to this headline">#</a></h2>
-<p>In abTEM, a focused beam of electrons, or <code class="docutils literal notranslate"><span class="pre">Probe</span></code>, is defined in Fourier space as</p>
+<p>In <em>ab</em>TEM, a focused beam of electrons, or <code class="docutils literal notranslate"><span class="pre">Probe</span></code>, is defined in Fourier space as</p>
 <div class="math notranslate nohighlight">
 \[
     \hat{\psi}(\vec{k}) = A(\vec{k}) \ \exp(-i \chi(\vec{k})) \quad ,
@@ -1320,14 +1364,14 @@ title="Print to PDF"
 <p>where <span class="math notranslate nohighlight">\(A(k)\)</span> is the aperture function, <span class="math notranslate nohighlight">\(\chi(\vec{k})\)</span> is the phase error and <span class="math notranslate nohighlight">\(\vec{k} = (k_x, k_y)\)</span> is the spatial frequency in <span class="math notranslate nohighlight">\(x\)</span> and <span class="math notranslate nohighlight">\(y\)</span>, respectively. The real-space probe is just the inverse Fourier transform</p>
 <div class="math notranslate nohighlight">
 \[
-    \psi(\vec{r}) = \mathcal{F}^{-1} \left[ \hat{\psi}(\vec{r}) \right] \quad ,
+    \psi(\vec{r}) = \mathcal{F}^{-1} \left[ \hat{\psi}(\vec{r}) \right] \quad .
 \]</div>
 <p>The probe wave function is normalized such that its intensity sums to <span class="math notranslate nohighlight">\(1\)</span> in Fourier space</p>
 <div class="math notranslate nohighlight">
 \[
     \int \|\hat{\psi}\|^2 d\vec{k} = 1 \quad .
 \]</div>
-<p>We create a probe with a <code class="docutils literal notranslate"><span class="pre">sampling</span></code> of <span class="math notranslate nohighlight">\(0.05 \ \mathrm{Å}\)</span>, an <code class="docutils literal notranslate"><span class="pre">extent</span></code> of <span class="math notranslate nohighlight">\(20\times 20\)</span> <span class="math notranslate nohighlight">\(\mathrm{Å}^2\)</span>, an <code class="docutils literal notranslate"><span class="pre">energy</span></code> of <span class="math notranslate nohighlight">\(80 \ \mathrm{keV}\)</span>, a convergence semiangle (<code class="docutils literal notranslate"><span class="pre">semiangle_cutoff</span></code>) of <span class="math notranslate nohighlight">\(30 \ \mathrm{mrad}\)</span>, a defocus of <span class="math notranslate nohighlight">\(-50 \ \mathrm{Å}\)</span> and spherical aberration (<code class="docutils literal notranslate"><span class="pre">Cs</span></code>) of <span class="math notranslate nohighlight">\(-50 \ \mathrm{\mu m}\)</span>.</p>
+<p>We create a probe with a <code class="docutils literal notranslate"><span class="pre">sampling</span></code> of <span class="math notranslate nohighlight">\(0.05 \ \mathrm{Å}\)</span>, an <code class="docutils literal notranslate"><span class="pre">extent</span></code> of <span class="math notranslate nohighlight">\(20\times 20\)</span> <span class="math notranslate nohighlight">\(\mathrm{Å}^2\)</span>, an <code class="docutils literal notranslate"><span class="pre">energy</span></code> of <span class="math notranslate nohighlight">\(80 \ \mathrm{keV}\)</span>, a convergence semiangle (<code class="docutils literal notranslate"><span class="pre">semiangle_cutoff</span></code>) of <span class="math notranslate nohighlight">\(30 \ \mathrm{mrad}\)</span>, a defocus (<code class="docutils literal notranslate"><span class="pre">C10</span></code>; note the common negative sign convention here) of <span class="math notranslate nohighlight">\(-50 \ \mathrm{Å}\)</span> and spherical aberration (<code class="docutils literal notranslate"><span class="pre">Cs</span></code>) of <span class="math notranslate nohighlight">\(-50 \ \mathrm{\mu m}\)</span> (note the conversion to <span class="math notranslate nohighlight">\(\mathrm{m}\)</span> and then to <span class="math notranslate nohighlight">\(\mathrm{Å}\)</span>).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">probe</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">Probe</span><span class="p">(</span>
@@ -1346,32 +1390,80 @@ title="Print to PDF"
 <p class="admonition-title">See also</p>
 <p>See our <a class="reference internal" href="contrast_transfer_function.html#walkthrough-contrast-transfer-function"><span class="std std-ref">introduction to the contrast transfer function</span></a> for a full list of phase aberrations.</p>
 </div>
-<p>We can turn the <code class="docutils literal notranslate"><span class="pre">Probe</span></code> into the generic <code class="docutils literal notranslate"><span class="pre">Waves</span></code> by using <code class="docutils literal notranslate"><span class="pre">build</span></code>.</p>
-<p>Which, as the plane wave, is represented by a Dask array.</p>
+<p>We can again turn the <code class="docutils literal notranslate"><span class="pre">Probe</span></code> into the generic <code class="docutils literal notranslate"><span class="pre">Waves</span></code> by using <code class="docutils literal notranslate"><span class="pre">build</span></code>, which, as the plane wave, is represented by a Dask array.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">waves</span><span class="o">.</span><span class="n">array</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">waves</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">build</span><span class="p">()</span>
+
+<span class="n">waves</span><span class="o">.</span><span class="n">array</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>array([[1.+0.j, 1.+0.j, 1.+0.j, ..., 1.+0.j, 1.+0.j, 1.+0.j],
-       [1.+0.j, 1.+0.j, 1.+0.j, ..., 1.+0.j, 1.+0.j, 1.+0.j],
-       [1.+0.j, 1.+0.j, 1.+0.j, ..., 1.+0.j, 1.+0.j, 1.+0.j],
-       ...,
-       [1.+0.j, 1.+0.j, 1.+0.j, ..., 1.+0.j, 1.+0.j, 1.+0.j],
-       [1.+0.j, 1.+0.j, 1.+0.j, ..., 1.+0.j, 1.+0.j, 1.+0.j],
-       [1.+0.j, 1.+0.j, 1.+0.j, ..., 1.+0.j, 1.+0.j, 1.+0.j]],
-      dtype=complex64)
-</pre></div>
-</div>
-</div>
+<div class="output text_html"><table>
+    <tr>
+        <td>
+            <table>
+                <thead>
+                    <tr>
+                        <td> </td>
+                        <th> Array </th>
+                        <th> Chunk </th>
+                    </tr>
+                </thead>
+                <tbody>
+
+                    <tr>
+                        <th> Bytes </th>
+                        <td> 1.22 MiB </td>
+                        <td> 1.22 MiB </td>
+                    </tr>
+
+                    <tr>
+                        <th> Shape </th>
+                        <td> (400, 400) </td>
+                        <td> (400, 400) </td>
+                    </tr>
+                    <tr>
+                        <th> Count </th>
+                        <td> 4 Graph Layers </td>
+                        <td> 1 Chunks </td>
+                    </tr>
+                    <tr>
+                    <th> Type </th>
+                    <td> complex64 </td>
+                    <td> numpy.ndarray </td>
+                    </tr>
+                </tbody>
+            </table>
+        </td>
+        <td>
+        <svg width="170" height="170" style="stroke:rgb(0,0,0);stroke-width:1" >
+
+  <!-- Horizontal lines -->
+  <line x1="0" y1="0" x2="120" y2="0" style="stroke-width:2" />
+  <line x1="0" y1="120" x2="120" y2="120" style="stroke-width:2" />
+
+  <!-- Vertical lines -->
+  <line x1="0" y1="0" x2="0" y2="120" style="stroke-width:2" />
+  <line x1="120" y1="0" x2="120" y2="120" style="stroke-width:2" />
+
+  <!-- Colored Rectangle -->
+  <polygon points="0.0,0.0 120.0,0.0 120.0,120.0 0.0,120.0" style="fill:#ECB172A0;stroke-width:0"/>
+
+  <!-- Text -->
+  <text x="60.000000" y="140.000000" font-size="1.0rem" font-weight="100" text-anchor="middle" >400</text>
+  <text x="140.000000" y="60.000000" font-size="1.0rem" font-weight="100" text-anchor="middle" transform="rotate(-90,140.000000,60.000000)">400</text>
+</svg>
+        </td>
+    </tr>
+</table></div></div>
 </div>
 </section>
 <section id="visualizing-the-wave-function">
 <h2>Visualizing the wave function<a class="headerlink" href="#visualizing-the-wave-function" title="Permalink to this headline">#</a></h2>
-<p>To visualize the wave function using abTEM’s builtin visualization module, we first have to convert it to a measurement type. The most common methods are <code class="docutils literal notranslate"><span class="pre">intensity</span></code> and <code class="docutils literal notranslate"><span class="pre">diffraction_patterns</span></code>, which will return a measurement as an <code class="docutils literal notranslate"><span class="pre">Images</span></code> and <code class="docutils literal notranslate"><span class="pre">DiffractionPatterns</span></code> type, respectively.</p>
-<p>The real space intensity, <span class="math notranslate nohighlight">\(\|\psi\|^2\)</span>, is calculated and shown below.</p>
+<p>To visualize the wave function using <em>ab</em>TEM’s built-in visualization module, we first have to convert it to a measurement type. The most common methods are <code class="docutils literal notranslate"><span class="pre">intensity</span></code> and <code class="docutils literal notranslate"><span class="pre">diffraction_patterns</span></code>, which will return a measurement of type <code class="docutils literal notranslate"><span class="pre">Images</span></code> and <code class="docutils literal notranslate"><span class="pre">DiffractionPatterns</span></code>, respectively.</p>
+<p>The real space intensity, <span class="math notranslate nohighlight">\(\|\psi\|^2\)</span>, is calculated and shown below. The parameter <code class="docutils literal notranslate"><span class="pre">cbar=True</span></code> displays the color intensity scale.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">intensity</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span>
@@ -1381,249 +1473,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<div class="output traceback highlight-ipythontb notranslate"><div class="highlight"><pre><span></span><span class="gt">---------------------------------------------------------------------------</span>
-<span class="ne">RuntimeError</span><span class="g g-Whitespace">                              </span>Traceback (most recent call last)
-<span class="n">Cell</span> <span class="n">In</span> <span class="p">[</span><span class="mi">15</span><span class="p">],</span> <span class="n">line</span> <span class="mi">3</span>
-<span class="g g-Whitespace">      </span><span class="mi">1</span> <span class="n">intensity</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span>
-<span class="ne">----&gt; </span><span class="mi">3</span> <span class="n">intensity</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\measurements.py:1253,</span> in <span class="ni">Images.show</span><span class="nt">(self, cmap, explode, ax, figsize, title, panel_titles, x_ticks, y_ticks, x_label, y_label, row_super_label, col_super_label, power, vmin, vmax, common_color_scale, cbar, cbar_labels, sizebar, float_formatting, panel_labels, image_grid_kwargs, imshow_kwargs, anchored_text_kwargs, complex_coloring_kwargs)</span>
-<span class="g g-Whitespace">   </span><span class="mi">1248</span>         <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
-<span class="g g-Whitespace">   </span><span class="mi">1249</span>             <span class="s2">&quot;`ax` not implemented for with `explode = True`&quot;</span>
-<span class="g g-Whitespace">   </span><span class="mi">1250</span>         <span class="p">)</span>
-<span class="g g-Whitespace">   </span><span class="mi">1251</span>     <span class="n">measurements</span> <span class="o">=</span> <span class="bp">self</span>
-<span class="ne">-&gt; </span><span class="mi">1253</span> <span class="k">return</span> <span class="n">show_measurement_2d</span><span class="p">(</span>
-<span class="g g-Whitespace">   </span><span class="mi">1254</span>     <span class="n">measurements</span><span class="o">=</span><span class="n">measurements</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1255</span>     <span class="n">cmap</span><span class="o">=</span><span class="n">cmap</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1256</span>     <span class="n">figsize</span><span class="o">=</span><span class="n">figsize</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1257</span>     <span class="n">super_title</span><span class="o">=</span><span class="n">title</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1258</span>     <span class="n">sub_title</span><span class="o">=</span><span class="n">panel_titles</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1259</span>     <span class="n">x_ticks</span><span class="o">=</span><span class="n">x_ticks</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1260</span>     <span class="n">y_ticks</span><span class="o">=</span><span class="n">y_ticks</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1261</span>     <span class="n">x_label</span><span class="o">=</span><span class="n">x_label</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1262</span>     <span class="n">y_label</span><span class="o">=</span><span class="n">y_label</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1263</span>     <span class="n">row_super_label</span><span class="o">=</span><span class="n">row_super_label</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1264</span>     <span class="n">col_super_label</span><span class="o">=</span><span class="n">col_super_label</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1265</span>     <span class="n">power</span><span class="o">=</span><span class="n">power</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1266</span>     <span class="n">vmin</span><span class="o">=</span><span class="n">vmin</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1267</span>     <span class="n">vmax</span><span class="o">=</span><span class="n">vmax</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1268</span>     <span class="n">common_color_scale</span><span class="o">=</span><span class="n">common_color_scale</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1269</span>     <span class="n">cbar</span><span class="o">=</span><span class="n">cbar</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1270</span>     <span class="n">cbar_labels</span><span class="o">=</span><span class="n">cbar_labels</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1271</span>     <span class="n">sizebar</span><span class="o">=</span><span class="n">sizebar</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1272</span>     <span class="n">float_formatting</span><span class="o">=</span><span class="n">float_formatting</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1273</span>     <span class="n">panel_labels</span><span class="o">=</span><span class="n">panel_labels</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1274</span>     <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="n">image_grid_kwargs</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1275</span>     <span class="n">imshow_kwargs</span><span class="o">=</span><span class="n">imshow_kwargs</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1276</span>     <span class="n">anchored_text_kwargs</span><span class="o">=</span><span class="n">anchored_text_kwargs</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1277</span>     <span class="n">complex_coloring_kwargs</span><span class="o">=</span><span class="n">complex_coloring_kwargs</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1278</span>     <span class="n">axes</span><span class="o">=</span><span class="n">ax</span><span class="p">,</span>
-<span class="g g-Whitespace">   </span><span class="mi">1279</span> <span class="p">)</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\visualize.py:214,</span> in <span class="ni">show_measurement_2d</span><span class="nt">(measurements, figsize, super_title, sub_title, x_label, y_label, x_ticks, y_ticks, row_super_label, col_super_label, power, vmin, vmax, common_color_scale, cbar, cbar_labels, float_formatting, cmap, extent, panel_labels, sizebar, image_grid_kwargs, imshow_kwargs, anchored_text_kwargs, anchored_size_bar_kwargs, complex_coloring_kwargs, axes)</span>
-<span class="g g-Whitespace">    </span><span class="mi">185</span> <span class="k">def</span> <span class="nf">show_measurement_2d</span><span class="p">(</span>
-<span class="g g-Whitespace">    </span><span class="mi">186</span>     <span class="n">measurements</span><span class="p">:</span> <span class="s2">&quot;BaseMeasurement&quot;</span><span class="p">,</span>
-<span class="g g-Whitespace">    </span><span class="mi">187</span>     <span class="n">figsize</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span>
-   <span class="p">(</span><span class="o">...</span><span class="p">)</span>
-<span class="g g-Whitespace">    </span><span class="mi">212</span>     <span class="n">axes</span><span class="p">:</span> <span class="n">Axes</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-<span class="g g-Whitespace">    </span><span class="mi">213</span> <span class="p">):</span>
-<span class="ne">--&gt; </span><span class="mi">214</span>     <span class="n">measurements</span> <span class="o">=</span> <span class="n">measurements</span><span class="o">.</span><span class="n">to_cpu</span><span class="p">()</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
-<span class="g g-Whitespace">    </span><span class="mi">216</span>     <span class="n">imshow_kwargs</span> <span class="o">=</span> <span class="p">{}</span> <span class="k">if</span> <span class="n">imshow_kwargs</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">imshow_kwargs</span>
-<span class="g g-Whitespace">    </span><span class="mi">217</span>     <span class="n">image_grid_kwargs</span> <span class="o">=</span> <span class="p">{}</span> <span class="k">if</span> <span class="n">image_grid_kwargs</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">image_grid_kwargs</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\core\array.py:459,</span> in <span class="ni">HasArray.compute</span><span class="nt">(self, progress_bar, **kwargs)</span>
-<span class="g g-Whitespace">    </span><span class="mi">456</span> <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_lazy</span><span class="p">:</span>
-<span class="g g-Whitespace">    </span><span class="mi">457</span>     <span class="k">return</span> <span class="bp">self</span>
-<span class="ne">--&gt; </span><span class="mi">459</span> <span class="k">return</span> <span class="n">_compute</span><span class="p">([</span><span class="bp">self</span><span class="p">],</span> <span class="n">progress_bar</span><span class="o">=</span><span class="n">progress_bar</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\core\array.py:77,</span> in <span class="ni">_compute</span><span class="nt">(dask_array_wrappers, progress_bar, **kwargs)</span>
-<span class="g g-Whitespace">     </span><span class="mi">70</span> <span class="k">def</span> <span class="nf">_compute</span><span class="p">(</span><span class="n">dask_array_wrappers</span><span class="p">,</span> <span class="n">progress_bar</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
-<span class="g g-Whitespace">     </span><span class="mi">71</span>     <span class="c1"># if cp is not None:</span>
-<span class="g g-Whitespace">     </span><span class="mi">72</span>     <span class="c1">#     cache = cp.fft.config.get_plan_cache()</span>
-<span class="g g-Whitespace">     </span><span class="mi">73</span>     <span class="c1">#     cache_size = parse_bytes(config.get(&#39;cupy.fft-cache-size&#39;))</span>
-<span class="g g-Whitespace">     </span><span class="mi">74</span>     <span class="c1">#     cache.set_size(cache_size)</span>
-<span class="g g-Whitespace">     </span><span class="mi">76</span>     <span class="k">with</span> <span class="n">_compute_context</span><span class="p">(</span><span class="n">progress_bar</span><span class="p">):</span>
-<span class="ne">---&gt; </span><span class="mi">77</span>         <span class="n">arrays</span> <span class="o">=</span> <span class="n">dask</span><span class="o">.</span><span class="n">compute</span><span class="p">(</span>
-<span class="g g-Whitespace">     </span><span class="mi">78</span>             <span class="p">[</span><span class="n">wrapper</span><span class="o">.</span><span class="n">array</span> <span class="k">for</span> <span class="n">wrapper</span> <span class="ow">in</span> <span class="n">dask_array_wrappers</span><span class="p">],</span> <span class="o">**</span><span class="n">kwargs</span>
-<span class="g g-Whitespace">     </span><span class="mi">79</span>         <span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
-<span class="g g-Whitespace">     </span><span class="mi">81</span>     <span class="k">for</span> <span class="n">array</span><span class="p">,</span> <span class="n">wrapper</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">arrays</span><span class="p">,</span> <span class="n">dask_array_wrappers</span><span class="p">):</span>
-<span class="g g-Whitespace">     </span><span class="mi">82</span>         <span class="n">wrapper</span><span class="o">.</span><span class="n">_array</span> <span class="o">=</span> <span class="n">array</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\base.py:600,</span> in <span class="ni">compute</span><span class="nt">(traverse, optimize_graph, scheduler, get, *args, **kwargs)</span>
-<span class="g g-Whitespace">    </span><span class="mi">597</span>     <span class="n">keys</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">__dask_keys__</span><span class="p">())</span>
-<span class="g g-Whitespace">    </span><span class="mi">598</span>     <span class="n">postcomputes</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">__dask_postcompute__</span><span class="p">())</span>
-<span class="ne">--&gt; </span><span class="mi">600</span> <span class="n">results</span> <span class="o">=</span> <span class="n">schedule</span><span class="p">(</span><span class="n">dsk</span><span class="p">,</span> <span class="n">keys</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
-<span class="nn">    601 return repack([f(r, *a) for r, (f, a)</span> in <span class="ni">zip</span><span class="nt">(results, postcomputes)])</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\threaded.py:89,</span> in <span class="ni">get</span><span class="nt">(dsk, keys, cache, num_workers, pool, **kwargs)</span>
-<span class="g g-Whitespace">     </span><span class="mi">86</span>     <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">pool</span><span class="p">,</span> <span class="n">multiprocessing</span><span class="o">.</span><span class="n">pool</span><span class="o">.</span><span class="n">Pool</span><span class="p">):</span>
-<span class="g g-Whitespace">     </span><span class="mi">87</span>         <span class="n">pool</span> <span class="o">=</span> <span class="n">MultiprocessingPoolExecutor</span><span class="p">(</span><span class="n">pool</span><span class="p">)</span>
-<span class="ne">---&gt; </span><span class="mi">89</span> <span class="n">results</span> <span class="o">=</span> <span class="n">get_async</span><span class="p">(</span>
-<span class="g g-Whitespace">     </span><span class="mi">90</span>     <span class="n">pool</span><span class="o">.</span><span class="n">submit</span><span class="p">,</span>
-<span class="g g-Whitespace">     </span><span class="mi">91</span>     <span class="n">pool</span><span class="o">.</span><span class="n">_max_workers</span><span class="p">,</span>
-<span class="g g-Whitespace">     </span><span class="mi">92</span>     <span class="n">dsk</span><span class="p">,</span>
-<span class="g g-Whitespace">     </span><span class="mi">93</span>     <span class="n">keys</span><span class="p">,</span>
-<span class="g g-Whitespace">     </span><span class="mi">94</span>     <span class="n">cache</span><span class="o">=</span><span class="n">cache</span><span class="p">,</span>
-<span class="g g-Whitespace">     </span><span class="mi">95</span>     <span class="n">get_id</span><span class="o">=</span><span class="n">_thread_get_id</span><span class="p">,</span>
-<span class="g g-Whitespace">     </span><span class="mi">96</span>     <span class="n">pack_exception</span><span class="o">=</span><span class="n">pack_exception</span><span class="p">,</span>
-<span class="g g-Whitespace">     </span><span class="mi">97</span>     <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
-<span class="g g-Whitespace">     </span><span class="mi">98</span> <span class="p">)</span>
-<span class="g g-Whitespace">    </span><span class="mi">100</span> <span class="c1"># Cleanup pools associated to dead threads</span>
-<span class="g g-Whitespace">    </span><span class="mi">101</span> <span class="k">with</span> <span class="n">pools_lock</span><span class="p">:</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\local.py:511,</span> in <span class="ni">get_async</span><span class="nt">(submit, num_workers, dsk, result, cache, get_id, rerun_exceptions_locally, pack_exception, raise_exception, callbacks, dumps, loads, chunksize, **kwargs)</span>
-<span class="g g-Whitespace">    </span><span class="mi">509</span>         <span class="n">_execute_task</span><span class="p">(</span><span class="n">task</span><span class="p">,</span> <span class="n">data</span><span class="p">)</span>  <span class="c1"># Re-execute locally</span>
-<span class="g g-Whitespace">    </span><span class="mi">510</span>     <span class="k">else</span><span class="p">:</span>
-<span class="ne">--&gt; </span><span class="mi">511</span>         <span class="n">raise_exception</span><span class="p">(</span><span class="n">exc</span><span class="p">,</span> <span class="n">tb</span><span class="p">)</span>
-<span class="g g-Whitespace">    </span><span class="mi">512</span> <span class="n">res</span><span class="p">,</span> <span class="n">worker_id</span> <span class="o">=</span> <span class="n">loads</span><span class="p">(</span><span class="n">res_info</span><span class="p">)</span>
-<span class="g g-Whitespace">    </span><span class="mi">513</span> <span class="n">state</span><span class="p">[</span><span class="s2">&quot;cache&quot;</span><span class="p">][</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">res</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\local.py:319,</span> in <span class="ni">reraise</span><span class="nt">(exc, tb)</span>
-<span class="g g-Whitespace">    </span><span class="mi">317</span> <span class="k">if</span> <span class="n">exc</span><span class="o">.</span><span class="n">__traceback__</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">tb</span><span class="p">:</span>
-<span class="g g-Whitespace">    </span><span class="mi">318</span>     <span class="k">raise</span> <span class="n">exc</span><span class="o">.</span><span class="n">with_traceback</span><span class="p">(</span><span class="n">tb</span><span class="p">)</span>
-<span class="ne">--&gt; </span><span class="mi">319</span> <span class="k">raise</span> <span class="n">exc</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\local.py:224,</span> in <span class="ni">execute_task</span><span class="nt">(key, task_info, dumps, loads, get_id, pack_exception)</span>
-<span class="g g-Whitespace">    </span><span class="mi">222</span> <span class="k">try</span><span class="p">:</span>
-<span class="g g-Whitespace">    </span><span class="mi">223</span>     <span class="n">task</span><span class="p">,</span> <span class="n">data</span> <span class="o">=</span> <span class="n">loads</span><span class="p">(</span><span class="n">task_info</span><span class="p">)</span>
-<span class="ne">--&gt; </span><span class="mi">224</span>     <span class="n">result</span> <span class="o">=</span> <span class="n">_execute_task</span><span class="p">(</span><span class="n">task</span><span class="p">,</span> <span class="n">data</span><span class="p">)</span>
-<span class="g g-Whitespace">    </span><span class="mi">225</span>     <span class="nb">id</span> <span class="o">=</span> <span class="n">get_id</span><span class="p">()</span>
-<span class="g g-Whitespace">    </span><span class="mi">226</span>     <span class="n">result</span> <span class="o">=</span> <span class="n">dumps</span><span class="p">((</span><span class="n">result</span><span class="p">,</span> <span class="nb">id</span><span class="p">))</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:119,</span> in <span class="ni">_execute_task</span><span class="nt">(arg, cache, dsk)</span>
-<span class="g g-Whitespace">    </span><span class="mi">115</span>     <span class="n">func</span><span class="p">,</span> <span class="n">args</span> <span class="o">=</span> <span class="n">arg</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">arg</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
-<span class="g g-Whitespace">    </span><span class="mi">116</span>     <span class="c1"># Note: Don&#39;t assign the subtask results to a variable. numpy detects</span>
-<span class="g g-Whitespace">    </span><span class="mi">117</span>     <span class="c1"># temporaries by their reference count and can execute certain</span>
-<span class="g g-Whitespace">    </span><span class="mi">118</span>     <span class="c1"># operations in-place.</span>
-<span class="ne">--&gt; </span><span class="mi">119</span>     <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">_execute_task</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">args</span><span class="p">))</span>
-<span class="g g-Whitespace">    </span><span class="mi">120</span> <span class="k">elif</span> <span class="ow">not</span> <span class="n">ishashable</span><span class="p">(</span><span class="n">arg</span><span class="p">):</span>
-<span class="g g-Whitespace">    </span><span class="mi">121</span>     <span class="k">return</span> <span class="n">arg</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:119,</span> in <span class="ni">&lt;genexpr&gt;</span><span class="nt">(.0)</span>
-<span class="g g-Whitespace">    </span><span class="mi">115</span>     <span class="n">func</span><span class="p">,</span> <span class="n">args</span> <span class="o">=</span> <span class="n">arg</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">arg</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
-<span class="g g-Whitespace">    </span><span class="mi">116</span>     <span class="c1"># Note: Don&#39;t assign the subtask results to a variable. numpy detects</span>
-<span class="g g-Whitespace">    </span><span class="mi">117</span>     <span class="c1"># temporaries by their reference count and can execute certain</span>
-<span class="g g-Whitespace">    </span><span class="mi">118</span>     <span class="c1"># operations in-place.</span>
-<span class="ne">--&gt; </span><span class="mi">119</span>     <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">_execute_task</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">args</span><span class="p">))</span>
-<span class="g g-Whitespace">    </span><span class="mi">120</span> <span class="k">elif</span> <span class="ow">not</span> <span class="n">ishashable</span><span class="p">(</span><span class="n">arg</span><span class="p">):</span>
-<span class="g g-Whitespace">    </span><span class="mi">121</span>     <span class="k">return</span> <span class="n">arg</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:119,</span> in <span class="ni">_execute_task</span><span class="nt">(arg, cache, dsk)</span>
-<span class="g g-Whitespace">    </span><span class="mi">115</span>     <span class="n">func</span><span class="p">,</span> <span class="n">args</span> <span class="o">=</span> <span class="n">arg</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">arg</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
-<span class="g g-Whitespace">    </span><span class="mi">116</span>     <span class="c1"># Note: Don&#39;t assign the subtask results to a variable. numpy detects</span>
-<span class="g g-Whitespace">    </span><span class="mi">117</span>     <span class="c1"># temporaries by their reference count and can execute certain</span>
-<span class="g g-Whitespace">    </span><span class="mi">118</span>     <span class="c1"># operations in-place.</span>
-<span class="ne">--&gt; </span><span class="mi">119</span>     <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">_execute_task</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">args</span><span class="p">))</span>
-<span class="g g-Whitespace">    </span><span class="mi">120</span> <span class="k">elif</span> <span class="ow">not</span> <span class="n">ishashable</span><span class="p">(</span><span class="n">arg</span><span class="p">):</span>
-<span class="g g-Whitespace">    </span><span class="mi">121</span>     <span class="k">return</span> <span class="n">arg</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:119,</span> in <span class="ni">&lt;genexpr&gt;</span><span class="nt">(.0)</span>
-<span class="g g-Whitespace">    </span><span class="mi">115</span>     <span class="n">func</span><span class="p">,</span> <span class="n">args</span> <span class="o">=</span> <span class="n">arg</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">arg</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
-<span class="g g-Whitespace">    </span><span class="mi">116</span>     <span class="c1"># Note: Don&#39;t assign the subtask results to a variable. numpy detects</span>
-<span class="g g-Whitespace">    </span><span class="mi">117</span>     <span class="c1"># temporaries by their reference count and can execute certain</span>
-<span class="g g-Whitespace">    </span><span class="mi">118</span>     <span class="c1"># operations in-place.</span>
-<span class="ne">--&gt; </span><span class="mi">119</span>     <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">_execute_task</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">args</span><span class="p">))</span>
-<span class="g g-Whitespace">    </span><span class="mi">120</span> <span class="k">elif</span> <span class="ow">not</span> <span class="n">ishashable</span><span class="p">(</span><span class="n">arg</span><span class="p">):</span>
-<span class="g g-Whitespace">    </span><span class="mi">121</span>     <span class="k">return</span> <span class="n">arg</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:119,</span> in <span class="ni">_execute_task</span><span class="nt">(arg, cache, dsk)</span>
-<span class="g g-Whitespace">    </span><span class="mi">115</span>     <span class="n">func</span><span class="p">,</span> <span class="n">args</span> <span class="o">=</span> <span class="n">arg</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">arg</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
-<span class="g g-Whitespace">    </span><span class="mi">116</span>     <span class="c1"># Note: Don&#39;t assign the subtask results to a variable. numpy detects</span>
-<span class="g g-Whitespace">    </span><span class="mi">117</span>     <span class="c1"># temporaries by their reference count and can execute certain</span>
-<span class="g g-Whitespace">    </span><span class="mi">118</span>     <span class="c1"># operations in-place.</span>
-<span class="ne">--&gt; </span><span class="mi">119</span>     <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">_execute_task</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">args</span><span class="p">))</span>
-<span class="g g-Whitespace">    </span><span class="mi">120</span> <span class="k">elif</span> <span class="ow">not</span> <span class="n">ishashable</span><span class="p">(</span><span class="n">arg</span><span class="p">):</span>
-<span class="g g-Whitespace">    </span><span class="mi">121</span>     <span class="k">return</span> <span class="n">arg</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\optimization.py:990,</span> in <span class="ni">SubgraphCallable.__call__</span><span class="nt">(self, *args)</span>
-<span class="g g-Whitespace">    </span><span class="mi">988</span> <span class="k">if</span> <span class="ow">not</span> <span class="nb">len</span><span class="p">(</span><span class="n">args</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">inkeys</span><span class="p">):</span>
-<span class="g g-Whitespace">    </span><span class="mi">989</span>     <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Expected </span><span class="si">%d</span><span class="s2"> args, got </span><span class="si">%d</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">inkeys</span><span class="p">),</span> <span class="nb">len</span><span class="p">(</span><span class="n">args</span><span class="p">)))</span>
-<span class="ne">--&gt; </span><span class="mi">990</span> <span class="k">return</span> <span class="n">core</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dsk</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">outkey</span><span class="p">,</span> <span class="nb">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">inkeys</span><span class="p">,</span> <span class="n">args</span><span class="p">)))</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:149,</span> in <span class="ni">get</span><span class="nt">(dsk, out, cache)</span>
-<span class="g g-Whitespace">    </span><span class="mi">147</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">toposort</span><span class="p">(</span><span class="n">dsk</span><span class="p">):</span>
-<span class="g g-Whitespace">    </span><span class="mi">148</span>     <span class="n">task</span> <span class="o">=</span> <span class="n">dsk</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
-<span class="ne">--&gt; </span><span class="mi">149</span>     <span class="n">result</span> <span class="o">=</span> <span class="n">_execute_task</span><span class="p">(</span><span class="n">task</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span>
-<span class="g g-Whitespace">    </span><span class="mi">150</span>     <span class="n">cache</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">result</span>
-<span class="g g-Whitespace">    </span><span class="mi">151</span> <span class="n">result</span> <span class="o">=</span> <span class="n">_execute_task</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:119,</span> in <span class="ni">_execute_task</span><span class="nt">(arg, cache, dsk)</span>
-<span class="g g-Whitespace">    </span><span class="mi">115</span>     <span class="n">func</span><span class="p">,</span> <span class="n">args</span> <span class="o">=</span> <span class="n">arg</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">arg</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
-<span class="g g-Whitespace">    </span><span class="mi">116</span>     <span class="c1"># Note: Don&#39;t assign the subtask results to a variable. numpy detects</span>
-<span class="g g-Whitespace">    </span><span class="mi">117</span>     <span class="c1"># temporaries by their reference count and can execute certain</span>
-<span class="g g-Whitespace">    </span><span class="mi">118</span>     <span class="c1"># operations in-place.</span>
-<span class="ne">--&gt; </span><span class="mi">119</span>     <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">_execute_task</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">args</span><span class="p">))</span>
-<span class="g g-Whitespace">    </span><span class="mi">120</span> <span class="k">elif</span> <span class="ow">not</span> <span class="n">ishashable</span><span class="p">(</span><span class="n">arg</span><span class="p">):</span>
-<span class="g g-Whitespace">    </span><span class="mi">121</span>     <span class="k">return</span> <span class="n">arg</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:119,</span> in <span class="ni">&lt;genexpr&gt;</span><span class="nt">(.0)</span>
-<span class="g g-Whitespace">    </span><span class="mi">115</span>     <span class="n">func</span><span class="p">,</span> <span class="n">args</span> <span class="o">=</span> <span class="n">arg</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">arg</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
-<span class="g g-Whitespace">    </span><span class="mi">116</span>     <span class="c1"># Note: Don&#39;t assign the subtask results to a variable. numpy detects</span>
-<span class="g g-Whitespace">    </span><span class="mi">117</span>     <span class="c1"># temporaries by their reference count and can execute certain</span>
-<span class="g g-Whitespace">    </span><span class="mi">118</span>     <span class="c1"># operations in-place.</span>
-<span class="ne">--&gt; </span><span class="mi">119</span>     <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">_execute_task</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">args</span><span class="p">))</span>
-<span class="g g-Whitespace">    </span><span class="mi">120</span> <span class="k">elif</span> <span class="ow">not</span> <span class="n">ishashable</span><span class="p">(</span><span class="n">arg</span><span class="p">):</span>
-<span class="g g-Whitespace">    </span><span class="mi">121</span>     <span class="k">return</span> <span class="n">arg</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\dask\core.py:119,</span> in <span class="ni">_execute_task</span><span class="nt">(arg, cache, dsk)</span>
-<span class="g g-Whitespace">    </span><span class="mi">115</span>     <span class="n">func</span><span class="p">,</span> <span class="n">args</span> <span class="o">=</span> <span class="n">arg</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">arg</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
-<span class="g g-Whitespace">    </span><span class="mi">116</span>     <span class="c1"># Note: Don&#39;t assign the subtask results to a variable. numpy detects</span>
-<span class="g g-Whitespace">    </span><span class="mi">117</span>     <span class="c1"># temporaries by their reference count and can execute certain</span>
-<span class="g g-Whitespace">    </span><span class="mi">118</span>     <span class="c1"># operations in-place.</span>
-<span class="ne">--&gt; </span><span class="mi">119</span>     <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">_execute_task</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">cache</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">args</span><span class="p">))</span>
-<span class="g g-Whitespace">    </span><span class="mi">120</span> <span class="k">elif</span> <span class="ow">not</span> <span class="n">ishashable</span><span class="p">(</span><span class="n">arg</span><span class="p">):</span>
-<span class="g g-Whitespace">    </span><span class="mi">121</span>     <span class="k">return</span> <span class="n">arg</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\waves.py:1107,</span> in <span class="ni">_WavesFactory._build_waves_multislice_detect</span><span class="nt">(partials, multislice_func, detectors, *args)</span>
-<span class="g g-Whitespace">   </span><span class="mi">1103</span>     <span class="n">potential</span> <span class="o">=</span> <span class="kc">None</span>
-<span class="g g-Whitespace">   </span><span class="mi">1105</span> <span class="n">waves</span> <span class="o">=</span> <span class="n">transform</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">waves</span><span class="p">)</span>
-<span class="ne">-&gt; </span><span class="mi">1107</span> <span class="n">waves</span> <span class="o">=</span> <span class="n">waves</span><span class="o">.</span><span class="n">ensure_real_space</span><span class="p">()</span>
-<span class="g g-Whitespace">   </span><span class="mi">1109</span> <span class="k">if</span> <span class="n">potential</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-<span class="g g-Whitespace">   </span><span class="mi">1110</span>     <span class="n">measurements</span> <span class="o">=</span> <span class="n">multislice_func</span><span class="p">(</span>
-<span class="g g-Whitespace">   </span><span class="mi">1111</span>         <span class="n">waves</span><span class="p">,</span> <span class="n">potential</span><span class="o">=</span><span class="n">potential</span><span class="p">,</span> <span class="n">detectors</span><span class="o">=</span><span class="n">detectors</span>
-<span class="g g-Whitespace">   </span><span class="mi">1112</span>     <span class="p">)</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\waves.py:598,</span> in <span class="ni">Waves.ensure_real_space</span><span class="nt">(self, in_place)</span>
-<span class="g g-Whitespace">    </span><span class="mi">595</span>     <span class="k">return</span> <span class="bp">self</span>
-<span class="g g-Whitespace">    </span><span class="mi">597</span> <span class="n">d</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_copy_kwargs</span><span class="p">(</span><span class="n">exclude</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;array&quot;</span><span class="p">,))</span>
-<span class="ne">--&gt; </span><span class="mi">598</span> <span class="n">d</span><span class="p">[</span><span class="s2">&quot;array&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">ifft2</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">array</span><span class="p">,</span> <span class="n">overwrite_x</span><span class="o">=</span><span class="n">in_place</span><span class="p">)</span>
-<span class="g g-Whitespace">    </span><span class="mi">599</span> <span class="n">d</span><span class="p">[</span><span class="s2">&quot;fourier_space&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
-<span class="g g-Whitespace">    </span><span class="mi">600</span> <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">(</span><span class="o">**</span><span class="n">d</span><span class="p">)</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\core\fft.py:83,</span> in <span class="ni">ifft2</span><span class="nt">(x, overwrite_x, **kwargs)</span>
-<span class="g g-Whitespace">     </span><span class="mi">82</span> <span class="k">def</span> <span class="nf">ifft2</span><span class="p">(</span><span class="n">x</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">overwrite_x</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
-<span class="ne">---&gt; </span><span class="mi">83</span>     <span class="k">return</span> <span class="n">_fft_dispatch</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">func_name</span><span class="o">=</span><span class="s2">&quot;ifft2&quot;</span><span class="p">,</span> <span class="n">overwrite_x</span><span class="o">=</span><span class="n">overwrite_x</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\core\fft.py:41,</span> in <span class="ni">_fft_dispatch</span><span class="nt">(x, func_name, overwrite_x, **kwargs)</span>
-<span class="g g-Whitespace">     </span><span class="mi">39</span> <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;fft&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;mkl&quot;</span><span class="p">:</span>
-<span class="g g-Whitespace">     </span><span class="mi">40</span>     <span class="k">if</span> <span class="n">mkl_fft</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-<span class="ne">---&gt; </span><span class="mi">41</span>         <span class="n">raise_fft_lib_not_present</span><span class="p">(</span><span class="s2">&quot;mkl_fft&quot;</span><span class="p">)</span>
-<span class="g g-Whitespace">     </span><span class="mi">43</span>     <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">mkl_fft</span><span class="p">,</span> <span class="n">func_name</span><span class="p">)(</span><span class="n">x</span><span class="p">,</span> <span class="n">overwrite_x</span><span class="o">=</span><span class="n">overwrite_x</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
-<span class="g g-Whitespace">     </span><span class="mi">44</span> <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;fft&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;fftw&quot;</span><span class="p">:</span>
-
-<span class="nn">File ~\anaconda3\envs\abtem-test\lib\site-packages\abtem\core\fft.py:29,</span> in <span class="ni">raise_fft_lib_not_present</span><span class="nt">(lib_name)</span>
-<span class="g g-Whitespace">     </span><span class="mi">28</span> <span class="k">def</span> <span class="nf">raise_fft_lib_not_present</span><span class="p">(</span><span class="n">lib_name</span><span class="p">):</span>
-<span class="ne">---&gt; </span><span class="mi">29</span>     <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
-<span class="g g-Whitespace">     </span><span class="mi">30</span>         <span class="sa">f</span><span class="s2">&quot;FFT library </span><span class="si">{</span><span class="n">lib_name</span><span class="si">}</span><span class="s2"> not present. Install this package or change the FFT library in your &quot;</span>
-<span class="g g-Whitespace">     </span><span class="mi">31</span>         <span class="sa">f</span><span class="s2">&quot;configuration&quot;</span>
-<span class="g g-Whitespace">     </span><span class="mi">32</span>     <span class="p">)</span>
-
-<span class="ne">RuntimeError</span>: FFT library mkl_fft not present. Install this package or change the FFT library in your configuration
-</pre></div>
-</div>
-</div>
-</div>
-<p>The Fourier-space intensity, <span class="math notranslate nohighlight">\(\|\hat{\psi}\|^2\)</span>, is calculated and shown below. We set <code class="docutils literal notranslate"><span class="pre">max_angle=60</span></code> to only include angles up to <span class="math notranslate nohighlight">\(60 \ \mathrm{mrad}\)</span>.</p>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_patterns</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">60</span><span class="p">)</span>
-
-<span class="n">diffraction_patterns</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<img alt="../../_images/wave_functions_23_0.png" src="../../_images/wave_functions_23_0.png" />
+<img alt="../../_images/wave_functions_21_0.png" src="../../_images/wave_functions_21_0.png" />
 </div>
 </div>
 <div class="admonition note">
@@ -1647,10 +1497,10 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/wave_functions_26_0.png" src="../../_images/wave_functions_26_0.png" />
+<img alt="../../_images/wave_functions_24_0.png" src="../../_images/wave_functions_24_0.png" />
 </div>
 </div>
-<p>It is often useful to know the width of the probe. Below we calculate the width at <span class="math notranslate nohighlight">\(0.5\)</span> of the height of the probe (i.e. the full width at half-maximum).</p>
+<p>It is often useful to know the width of the probe. Below we calculate the width at <span class="math notranslate nohighlight">\(0.5\)</span> of the height of the probe (i.e. the full width at half-maximum, FWHM).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">fwhm</span> <span class="o">=</span> <span class="n">lineprofile</span><span class="o">.</span><span class="n">width</span><span class="p">(</span><span class="n">height</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
@@ -1665,10 +1515,34 @@ title="Print to PDF"
 </div>
 </div>
 </div>
+<p>The Fourier-space intensity, <span class="math notranslate nohighlight">\(\|\hat{\psi}\|^2\)</span>, is calculated and shown below. We set <code class="docutils literal notranslate"><span class="pre">max_angle=60</span></code> to only include angles up to <span class="math notranslate nohighlight">\(60 \ \mathrm{mrad}\)</span>.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_patterns</span> <span class="o">=</span> <span class="n">probe</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">diffraction_patterns</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">60</span><span class="p">)</span>
+
+<span class="n">diffraction_patterns</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../_images/wave_functions_28_0.png" src="../../_images/wave_functions_28_0.png" />
+</div>
+</div>
+<p>Alternative to reciprocal-space units, we can display diffraction patterns in angular units by using the keyword <code class="docutils literal notranslate"><span class="pre">units='mrad'</span></code>.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">diffraction_patterns</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">units</span><span class="o">=</span><span class="s1">&#39;mrad&#39;</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<img alt="../../_images/wave_functions_30_0.png" src="../../_images/wave_functions_30_0.png" />
+</div>
+</div>
 </section>
 <section id="wave-function-ensembles">
-<h2>Wave function ensembles<a class="headerlink" href="#wave-function-ensembles" title="Permalink to this headline">#</a></h2>
-<p>In general, the <code class="docutils literal notranslate"><span class="pre">Waves</span></code> represent an ensemble of wave functions as a multidimensional array.  The last two dimensions of the <code class="docutils literal notranslate"><span class="pre">Waves</span></code> represent the spatial dimensions, these are the mandatory or <em>base</em> dimensions of the <code class="docutils literal notranslate"><span class="pre">Waves</span></code>. Any preceeding dimension is an optional <em>ensemble</em> dimension. The ensemble dimensions may represent a range of defocii, positions, frozen phonons, tilt and more. abTEM will automatically parallelize over the ensemble dimensions.</p>
+<h2>Wave-function ensembles<a class="headerlink" href="#wave-function-ensembles" title="Permalink to this headline">#</a></h2>
+<p>In general, <code class="docutils literal notranslate"><span class="pre">Waves</span></code> can represent an ensemble of wave functions as a multidimensional array.  The last two dimensions of <code class="docutils literal notranslate"><span class="pre">Waves</span></code> represent the spatial dimensions, which are the mandatory or <em>base</em> dimensions of the object. Any preceeding dimension is an optional <em>ensemble</em> dimension. The ensemble dimensions may represent a range of defocii, positions, frozen phonons, tilt and more. In computations, <em>ab</em>TEM will automatically parallelize over the ensemble dimensions.</p>
 <p>As an example, we create an ensemble of probes with different values for their defocus.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1689,10 +1563,10 @@ title="Print to PDF"
 </div>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>
-<p>Not every parameter in abTEM allows</p>
-<p>The uniform distribution created by <code class="docutils literal notranslate"><span class="pre">abtem.distributions.uniform</span></code> is not just <code class="docutils literal notranslate"><span class="pre">np.linspace</span></code> under a different name. We explain distributions in our <a class="reference internal" href="partial_coherence.html#walkthrough-partial-coherence"><span class="std std-ref">walkthrough on partial coherence</span></a>.</p>
+<p>Not every parameter in <em>ab</em>TEM allows this!</p>
+<p>The uniform distribution created by <code class="docutils literal notranslate"><span class="pre">abtem.distributions.uniform</span></code> is not just <code class="docutils literal notranslate"><span class="pre">np.linspace</span></code> under a different name. We explain distributions in our <a class="reference internal" href="../tutorials/partial_coherence.html"><span class="doc std std-doc">tutorial on partial coherence</span></a>.</p>
 </div>
-<p>The <code class="docutils literal notranslate"><span class="pre">Waves</span></code> are a 1d ensemble of 2d wave functions, hence the shape is 3d.</p>
+<p>Now <code class="docutils literal notranslate"><span class="pre">Waves</span></code> is a 1D ensemble of 2D wave functions, hence its shape is 3D.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">waves_focal_series</span><span class="o">.</span><span class="n">shape</span>
@@ -1705,7 +1579,7 @@ title="Print to PDF"
 </div>
 </div>
 </div>
-<p>We can inspect the <code class="docutils literal notranslate"><span class="pre">axes_metadata</span></code> to see that the first axis is the ensemble <code class="docutils literal notranslate"><span class="pre">ParameterAxis</span></code> over <code class="docutils literal notranslate"><span class="pre">C10</span></code>, equivalent to negative defocus, and the base <code class="docutils literal notranslate"><span class="pre">RealSpaceAxis</span></code>.</p>
+<p>We can inspect the <code class="docutils literal notranslate"><span class="pre">axes_metadata</span></code> property to see that the first axis is the ensemble <code class="docutils literal notranslate"><span class="pre">ParameterAxis</span></code> over <code class="docutils literal notranslate"><span class="pre">C10</span></code>, equivalent to negative defocus, and the base are <code class="docutils literal notranslate"><span class="pre">RealSpaceAxis</span></code>.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">waves_focal_series</span><span class="o">.</span><span class="n">axes_metadata</span>
@@ -1722,7 +1596,7 @@ RealSpaceAxis  y [Å]    0.00 0.08 ... 19.92
 </div>
 </div>
 </div>
-<p>When calculating the intensity we obtain an ensemble of <code class="docutils literal notranslate"><span class="pre">Images</span></code>, which can be shown in an “exploded” plot.</p>
+<p>When calculating the intensity we obtain an ensemble of <code class="docutils literal notranslate"><span class="pre">Images</span></code>, which can be conveniently shown in an “exploded” plot.</p>
 <div class="cell tag_full-width docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">waves_focal_series</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span><span class="o">.</span><span class="n">show</span><span class="p">(</span>
@@ -1732,7 +1606,7 @@ RealSpaceAxis  y [Å]    0.00 0.08 ... 19.92
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/wave_functions_36_0.png" src="../../_images/wave_functions_36_0.png" />
+<img alt="../../_images/wave_functions_38_0.png" src="../../_images/wave_functions_38_0.png" />
 </div>
 </div>
 <div class="admonition tip">
@@ -1743,7 +1617,7 @@ RealSpaceAxis  y [Å]    0.00 0.08 ... 19.92
 </div>
 <p><em>Note: This requires using a matplotlib backend that supports interactivity.</em></p>
 </div>
-<p>When using methods, such as <code class="docutils literal notranslate"><span class="pre">interpolate_line_profiles</span></code>, on an ensemble, it will be applied to each member of the ensemble.</p>
+<p>When using methods, such as <code class="docutils literal notranslate"><span class="pre">interpolate_line_profiles</span></code>, on an ensemble, it will be applied to each member of the ensemble. The <code class="docutils literal notranslate"><span class="pre">show</span></code> method handles these automatically.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">line_profiles</span> <span class="o">=</span> <span class="n">waves_focal_series</span><span class="o">.</span><span class="n">intensity</span><span class="p">()</span><span class="o">.</span><span class="n">interpolate_line_at_position</span><span class="p">(</span>
@@ -1755,10 +1629,10 @@ RealSpaceAxis  y [Å]    0.00 0.08 ... 19.92
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/wave_functions_39_0.png" src="../../_images/wave_functions_39_0.png" />
+<img alt="../../_images/wave_functions_41_0.png" src="../../_images/wave_functions_41_0.png" />
 </div>
 </div>
-<p>The <code class="docutils literal notranslate"><span class="pre">Waves</span></code> can have any number of ensemble dimensions, for example, we can add two additional axes representing a scan in the <span class="math notranslate nohighlight">\(x\)</span>- and <span class="math notranslate nohighlight">\(y\)</span>- direction, thus producing a 3d ensemble of 2d wave functions.</p>
+<p><code class="docutils literal notranslate"><span class="pre">Waves</span></code> can have any number of ensemble dimensions, for example, we can add two additional axes representing a scan in the <span class="math notranslate nohighlight">\(x\)</span>- and <span class="math notranslate nohighlight">\(y\)</span>- direction, thus producing a 3D ensemble of 2D wave functions.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">scan</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">GridScan</span><span class="p">()</span>
@@ -1777,7 +1651,7 @@ RealSpaceAxis  y [Å]    0.00 0.08 ... 19.92
 </div>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>
-<p>Be careful when adding ensemble dimensions without also applying a reduction operation, such as taking an ensemble mean or applying a detector. The above wave function ensemble would require <span class="math notranslate nohighlight">\(5\times 43 \times 43 \times 500 \times 500 \times 32 bits \sim 18 \ \mathrm{GB}\)</span> of memory to store.</p>
+<p>Be careful when adding ensemble dimensions without also applying a reduction operation, such as taking an ensemble mean or applying a detector. The above wave function ensemble would require <span class="math notranslate nohighlight">\(5\times 43 \times 43 \times 500 \times 500 \times 32 \ \mathrm{bits} \sim 18 \ \mathrm{GB}\)</span> of memory to store.</p>
 </div>
 </section>
 </section>
@@ -1791,16 +1665,16 @@ RealSpaceAxis  y [Å]    0.00 0.08 ... 19.92
         },
         codeMirrorConfig: {
             theme: "abcdef",
-            mode: "nnabtem"
+            mode: "abtem"
         },
         kernelOptions: {
-            kernelName: "nnabtem",
+            kernelName: "abtem",
             path: "./user_guide/walkthrough"
         },
         predefinedOutput: true
     }
     </script>
-    <script>kernelName = 'nnabtem'</script>
+    <script>kernelName = 'abtem'</script>
 
               </div>
               
@@ -1830,7 +1704,7 @@ RealSpaceAxis  y [Å]    0.00 0.08 ... 19.92
     <div class="footer-content row">
         <footer class="col footer"><p>
   
-    By The abTEM developers<br/>
+    By abTEM developers<br/>
   
       &copy; Copyright 2022.<br/>
 </p>

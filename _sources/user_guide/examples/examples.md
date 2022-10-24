@@ -8,6 +8,7 @@
    notebooks/cbed_quickstart
    notebooks/hrtem_quickstart
    notebooks/prism_quickstart
+   notebooks/stem_quickstart
    notebooks/hbn_dft_iam
 ```
 
@@ -40,6 +41,9 @@ it. For more detailed instructions see our guide on contributing to abTEM.
 {bdg-success}`basic`
 :::
 
+
+
+
 :::{grid-item-card}
 :link: examples:hrtem_quickstart
 :link-type: ref
@@ -55,6 +59,27 @@ it. For more detailed instructions see our guide on contributing to abTEM.
 +++
 {bdg-success}`basic`
 :::
+
+
+
+
+:::{grid-item-card}
+:link: examples:stem_quickstart
+:link-type: ref
+:class-body: text-center
+:class-header: bg-light text-center
+
+**STEM**
+^^^
+
+```{glue:} prism_quickstart
+```
+
++++
+{bdg-success}`basic`
+:::
+
+
 
 :::{grid-item-card}
 :link: examples:prism_quickstart

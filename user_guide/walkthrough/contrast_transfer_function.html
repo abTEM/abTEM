@@ -6,7 +6,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
 
-    <title>Contrast Transfer Function &#8212; abTEM Documentation</title>
+    <title>Contrast transfer function &#8212; abTEM Documentation</title>
     
   <!-- Loaded before other Sphinx assets -->
   <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -113,7 +113,7 @@ const thebe_selector_output = ".output, .cell_output"
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="../../intro.html">
-                    Welcome to abTEM
+                    Welcome to abTEM!
                 </a>
             </li>
         </ul>
@@ -157,7 +157,7 @@ const thebe_selector_output = ".output, .cell_output"
   <ul class="current">
    <li class="toctree-l2">
     <a class="reference internal" href="atomic_models.html">
-     Atomic models with ASE
+     Atomic models
     </a>
    </li>
    <li class="toctree-l2">
@@ -177,7 +177,7 @@ const thebe_selector_output = ".output, .cell_output"
    </li>
    <li class="toctree-l2 current active">
     <a class="current reference internal" href="#">
-     Contrast Transfer Function
+     Contrast transfer function
     </a>
    </li>
    <li class="toctree-l2">
@@ -191,7 +191,66 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="charge_density.html">
+    <a class="reference internal" href="parallelization.html">
+     Parallelization
+    </a>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../appendix/appendix.html">
+     Appendix
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+    <label for="toctree-checkbox-2">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../appendix/multislice_derivation.html">
+       Deriving the Multislice Algorithm
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../appendix/antialiasing.html">
+       Sampling and antialiasing
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../appendix/potential_integrals.html">
+       Potential integrals
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../appendix/performance_tips.html">
+       Parallel performance tips
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../tutorials/tutorials.html">
+   Advanced tutorials
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
+  <label for="toctree-checkbox-3">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../tutorials/advanced_atomic_models.html">
+     Advanced atomic models
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../tutorials/partial_coherence.html">
+     Partial coherence
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../tutorials/charge_density.html">
      <em>
       ab initio
      </em>
@@ -199,50 +258,18 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="partial_coherence.html">
-     Partial coherence
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="prism.html">
+    <a class="reference internal" href="../tutorials/prism.html">
      PRISM
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="performance.html">
-     Parallelization and Dask
+    <a class="reference internal" href="../tutorials/core_loss.html">
+     Core-loss filtered images
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="core_loss.html">
-     Core loss EELS
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="plasmons.html">
+    <a class="reference internal" href="../tutorials/plasmons.html">
      Plasmons
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../appendix/appendix.html">
-   Appendix
-  </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
-  <label for="toctree-checkbox-2">
-   <i class="fas fa-chevron-down">
-   </i>
-  </label>
-  <ul>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/multislice_derivation.html">
-     Deriving the Multislice Algorithm
-    </a>
-   </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="../appendix/antialiasing.html">
-     Sampling and antialiasing
     </a>
    </li>
   </ul>
@@ -251,8 +278,8 @@ const thebe_selector_output = ".output, .cell_output"
   <a class="reference internal" href="../examples/examples.html">
    Example gallery
   </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
-  <label for="toctree-checkbox-3">
+  <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
+  <label for="toctree-checkbox-4">
    <i class="fas fa-chevron-down">
    </i>
   </label>
@@ -273,64 +300,42 @@ const thebe_selector_output = ".output, .cell_output"
     </a>
    </li>
    <li class="toctree-l2">
+    <a class="reference internal" href="../examples/notebooks/stem_quickstart.html">
+     STEM quickstart
+    </a>
+   </li>
+   <li class="toctree-l2">
     <a class="reference internal" href="../examples/notebooks/hbn_dft_iam.html">
      DFT vs. IAM in hBN diffraction
     </a>
    </li>
   </ul>
  </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../bibliography.html">
+   Bibliography
+  </a>
+ </li>
 </ul>
 <p aria-level="2" class="caption" role="heading">
  <span class="caption-text">
-  Library
+  Reference
  </span>
 </p>
 <ul class="nav bd-sidenav">
  <li class="toctree-l1 has-children">
-  <a class="reference internal" href="../../library/api/api.html">
+  <a class="reference internal" href="../../reference/api/api.html">
    API
   </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
-  <label for="toctree-checkbox-4">
+  <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
+  <label for="toctree-checkbox-5">
    <i class="fas fa-chevron-down">
    </i>
   </label>
   <ul>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.html">
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.waves.html">
      waves
-    </a>
-    <input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" type="checkbox"/>
-    <label for="toctree-checkbox-5">
-     <i class="fas fa-chevron-down">
-     </i>
-    </label>
-    <ul>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.BaseWaves.html">
-       BaseWaves
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.PlaneWave.html">
-       PlaneWave
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.Probe.html">
-       Probe
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.waves.Waves.html">
-       Waves
-      </a>
-     </li>
-    </ul>
-   </li>
-   <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.html">
-     potentials
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" type="checkbox"/>
     <label for="toctree-checkbox-6">
@@ -339,35 +344,30 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.BasePotential.html">
-       BasePotential
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.waves.BaseWaves.html">
+       BaseWaves
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.CrystalPotential.html">
-       CrystalPotential
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.waves.PlaneWave.html">
+       PlaneWave
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.Potential.html">
-       Potential
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.waves.Probe.html">
+       Probe
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.PotentialArray.html">
-       PotentialArray
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.potentials.TransmissionFunction.html">
-       TransmissionFunction
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.waves.Waves.html">
+       Waves
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.html">
-     scan
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.html">
+     potentials
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" type="checkbox"/>
     <label for="toctree-checkbox-7">
@@ -376,35 +376,35 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.BaseScan.html">
-       BaseScan
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.BasePotential.html">
+       BasePotential
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.CustomScan.html">
-       CustomScan
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.CrystalPotential.html">
+       CrystalPotential
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.GridScan.html">
-       GridScan
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.Potential.html">
+       Potential
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.LineScan.html">
-       LineScan
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.PotentialArray.html">
+       PotentialArray
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.scan.SourceOffset.html">
-       SourceOffset
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.potentials.TransmissionFunction.html">
+       TransmissionFunction
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.html">
-     detectors
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.html">
+     scan
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" type="checkbox"/>
     <label for="toctree-checkbox-8">
@@ -413,40 +413,35 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.AnnularDetector.html">
-       AnnularDetector
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.BaseScan.html">
+       BaseScan
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.BaseDetector.html">
-       BaseDetector
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.CustomScan.html">
+       CustomScan
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.FlexibleAnnularDetector.html">
-       FlexibleAnnularDetector
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.GridScan.html">
+       GridScan
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.PixelatedDetector.html">
-       PixelatedDetector
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.LineScan.html">
+       LineScan
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.SegmentedDetector.html">
-       SegmentedDetector
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.detectors.WavesDetector.html">
-       WavesDetector
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.scan.SourceOffset.html">
+       SourceOffset
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.html">
-     measurements
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.html">
+     detectors
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" type="checkbox"/>
     <label for="toctree-checkbox-9">
@@ -455,45 +450,40 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.BaseMeasurement.html">
-       BaseMeasurement
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.AnnularDetector.html">
+       AnnularDetector
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.DiffractionPatterns.html">
-       DiffractionPatterns
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.BaseDetector.html">
+       BaseDetector
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.FourierSpaceLineProfiles.html">
-       FourierSpaceLineProfiles
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.FlexibleAnnularDetector.html">
+       FlexibleAnnularDetector
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.Images.html">
-       Images
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.PixelatedDetector.html">
+       PixelatedDetector
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.PolarMeasurements.html">
-       PolarMeasurements
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.SegmentedDetector.html">
+       SegmentedDetector
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html">
-       RealSpaceLineProfiles
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.measurements.SinglePointMeasurement.html">
-       SinglePointMeasurement
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.detectors.WavesDetector.html">
+       WavesDetector
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.html">
-     transfer
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.html">
+     measurements
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" type="checkbox"/>
     <label for="toctree-checkbox-10">
@@ -502,75 +492,40 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.cartesian2polar.html">
-       cartesian2polar
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.BaseMeasurement.html">
+       BaseMeasurement
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.nyquist_sampling.html">
-       nyquist_sampling
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.DiffractionPatterns.html">
+       DiffractionPatterns
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.point_resolution.html">
-       point_resolution
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.Images.html">
+       Images
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.polar2cartesian.html">
-       polar2cartesian
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.PolarMeasurements.html">
+       PolarMeasurements
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.scherzer_defocus.html">
-       scherzer_defocus
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.RealSpaceLineProfiles.html">
+       RealSpaceLineProfiles
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Aberrations.html">
-       Aberrations
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Aperture.html">
-       Aperture
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.BaseAperture.html">
-       BaseAperture
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Bullseye.html">
-       Bullseye
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.CTF.html">
-       CTF
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.SpatialEnvelope.html">
-       SpatialEnvelope
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.TemporalEnvelope.html">
-       TemporalEnvelope
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.transfer.Vortex.html">
-       Vortex
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.measurements.ReciprocalSpaceLineProfiles.html">
+       ReciprocalSpaceLineProfiles
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.html">
-     distributions
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.html">
+     transfer
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" type="checkbox"/>
     <label for="toctree-checkbox-11">
@@ -579,30 +534,75 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.from_values.html">
-       from_values
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.cartesian2polar.html">
+       cartesian2polar
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.gaussian.html">
-       gaussian
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.nyquist_sampling.html">
+       nyquist_sampling
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.uniform.html">
-       uniform
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.point_resolution.html">
+       point_resolution
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.distributions.BaseDistribution.html">
-       BaseDistribution
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.polar2cartesian.html">
+       polar2cartesian
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.scherzer_defocus.html">
+       scherzer_defocus
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.Aberrations.html">
+       Aberrations
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.Aperture.html">
+       Aperture
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.BaseAperture.html">
+       BaseAperture
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.Bullseye.html">
+       Bullseye
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.CTF.html">
+       CTF
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.SpatialEnvelope.html">
+       SpatialEnvelope
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.TemporalEnvelope.html">
+       TemporalEnvelope
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.transfer.Vortex.html">
+       Vortex
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.html">
-     charge_density
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.distributions.html">
+     distributions
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" type="checkbox"/>
     <label for="toctree-checkbox-12">
@@ -611,25 +611,30 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.add_point_charges_fourier.html">
-       add_point_charges_fourier
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.distributions.from_values.html">
+       from_values
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.integrate_gradient_fourier.html">
-       integrate_gradient_fourier
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.distributions.gaussian.html">
+       gaussian
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.charge_density.ChargeDensityPotential.html">
-       ChargeDensityPotential
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.distributions.uniform.html">
+       uniform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.distributions.BaseDistribution.html">
+       BaseDistribution
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.html">
-     gpaw
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.charge_density.html">
+     charge_density
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" type="checkbox"/>
     <label for="toctree-checkbox-13">
@@ -638,20 +643,25 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWParametrization.html">
-       GPAWParametrization
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.charge_density.add_point_charges_fourier.html">
+       add_point_charges_fourier
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.gpaw.GPAWPotential.html">
-       GPAWPotential
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.charge_density.integrate_gradient_fourier.html">
+       integrate_gradient_fourier
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.charge_density.ChargeDensityPotential.html">
+       ChargeDensityPotential
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.html">
-     visualize
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.gpaw.html">
+     gpaw
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" type="checkbox"/>
     <label for="toctree-checkbox-14">
@@ -660,30 +670,20 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.plot_diffraction_pattern.html">
-       plot_diffraction_pattern
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.gpaw.GPAWParametrization.html">
+       GPAWParametrization
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_atoms.html">
-       show_atoms
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_measurement_2d.html">
-       show_measurement_2d
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.visualize.show_measurements_1d.html">
-       show_measurements_1d
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.gpaw.GPAWPotential.html">
+       GPAWPotential
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.html">
-     atoms
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.visualize.html">
+     visualize
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" type="checkbox"/>
     <label for="toctree-checkbox-15">
@@ -692,105 +692,30 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.atoms_in_cell.html">
-       atoms_in_cell
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.visualize.plot_diffraction_pattern.html">
+       plot_diffraction_pattern
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
-       best_orthogonal_cell
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.visualize.show_atoms.html">
+       show_atoms
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.cut_cell.html">
-       cut_cell
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.visualize.show_measurement_2d.html">
+       show_measurement_2d
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.decompose_affine_transform.html">
-       decompose_affine_transform
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.flip_atoms.html">
-       flip_atoms
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_hexagonal.html">
-       is_cell_hexagonal
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_orthogonal.html">
-       is_cell_orthogonal
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.is_cell_valid.html">
-       is_cell_valid
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.merge_close_atoms.html">
-       merge_close_atoms
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.orthogonalize_cell.html">
-       orthogonalize_cell
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.pad_atoms.html">
-       pad_atoms
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.plane_to_axes.html">
-       plane_to_axes
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.pretty_print_transform.html">
-       pretty_print_transform
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotate_atoms_to_plane.html">
-       rotate_atoms_to_plane
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotation_matrix_from_plane.html">
-       rotation_matrix_from_plane
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.rotation_matrix_to_euler.html">
-       rotation_matrix_to_euler
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.shrink_cell.html">
-       shrink_cell
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.standardize_cell.html">
-       standardize_cell
-      </a>
-     </li>
-     <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.atoms.wrap_with_tolerance.html">
-       wrap_with_tolerance
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.visualize.show_measurements_1d.html">
+       show_measurements_1d
       </a>
      </li>
     </ul>
    </li>
    <li class="toctree-l2 has-children">
-    <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.html">
-     multislice
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.html">
+     atoms
     </a>
     <input class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" type="checkbox"/>
     <label for="toctree-checkbox-16">
@@ -799,22 +724,129 @@ const thebe_selector_output = ".output, .cell_output"
     </label>
     <ul>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.atoms_in_cell.html">
+       atoms_in_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.best_orthogonal_cell.html">
+       best_orthogonal_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.cut_cell.html">
+       cut_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.decompose_affine_transform.html">
+       decompose_affine_transform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.flip_atoms.html">
+       flip_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.is_cell_hexagonal.html">
+       is_cell_hexagonal
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.is_cell_orthogonal.html">
+       is_cell_orthogonal
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.is_cell_valid.html">
+       is_cell_valid
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.merge_close_atoms.html">
+       merge_close_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.orthogonalize_cell.html">
+       orthogonalize_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.pad_atoms.html">
+       pad_atoms
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.plane_to_axes.html">
+       plane_to_axes
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.pretty_print_transform.html">
+       pretty_print_transform
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.rotate_atoms_to_plane.html">
+       rotate_atoms_to_plane
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.rotation_matrix_from_plane.html">
+       rotation_matrix_from_plane
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.rotation_matrix_to_euler.html">
+       rotation_matrix_to_euler
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.shrink_cell.html">
+       shrink_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.standardize_cell.html">
+       standardize_cell
+      </a>
+     </li>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.atoms.wrap_with_tolerance.html">
+       wrap_with_tolerance
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toctree-l2 has-children">
+    <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.html">
+     multislice
+    </a>
+    <input class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" type="checkbox"/>
+    <label for="toctree-checkbox-17">
+     <i class="fas fa-chevron-down">
+     </i>
+    </label>
+    <ul>
+     <li class="toctree-l3">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.allocate_multislice_measurements.html">
        allocate_multislice_measurements
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_and_detect.html">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.multislice_and_detect.html">
        multislice_and_detect
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.multislice_step.html">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.multislice_step.html">
        multislice_step
       </a>
      </li>
      <li class="toctree-l3">
-      <a class="reference internal" href="../../library/api/_autosummary/abtem.multislice.FresnelPropagator.html">
+      <a class="reference internal" href="../../reference/api/_autosummary/abtem.multislice.FresnelPropagator.html">
        FresnelPropagator
       </a>
      </li>
@@ -823,22 +855,34 @@ const thebe_selector_output = ".output, .cell_output"
   </ul>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library/config.html">
+  <a class="reference internal" href="../../reference/config.html">
    Configuration
   </a>
  </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  abTEM
+ </span>
+</p>
+<ul class="nav bd-sidenav">
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library/contributing.html">
+  <a class="reference internal" href="../../abtem/contact.html">
+   Contact
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../abtem/contributing.html">
    Contributing
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library/bibliography.html">
-   Bibliography
+  <a class="reference internal" href="../../abtem/citing.html">
+   Citing
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../../library/changelog.html">
+  <a class="reference internal" href="../../abtem/changelog.html">
    Changelog
   </a>
  </li>
@@ -1101,7 +1145,7 @@ title="Print to PDF"
         <div class="col pl-md-3 pl-lg-5 content-container">
             <!-- Table of contents that is only displayed when printing the page -->
             <div id="jb-print-docs-body" class="onlyprint">
-                <h1>Contrast Transfer Function</h1>
+                <h1>Contrast transfer function</h1>
                 <!-- Table of contents -->
                 <div id="print-main-content">
                     <div id="jb-print-toc">
@@ -1183,8 +1227,8 @@ title="Print to PDF"
 </div>
 </div>
 <section class="tex2jax_ignore mathjax_ignore" id="contrast-transfer-function">
-<span id="walkthrough-contrast-transfer-function"></span><h1>Contrast Transfer Function<a class="headerlink" href="#contrast-transfer-function" title="Permalink to this headline">#</a></h1>
-<p>The <a class="reference external" href="https://en.wikipedia.org/wiki/Contrast_transfer_function">Contrast Transfer Function</a> (CTF) describes the aberrations of the objective lens in HRTEM and  how the condenser system shapes the probe in STEM. Here we describe how to create a CTF with specific aberrations and how this affects the resulting images.</p>
+<span id="walkthrough-contrast-transfer-function"></span><h1>Contrast transfer function<a class="headerlink" href="#contrast-transfer-function" title="Permalink to this headline">#</a></h1>
+<p>The <a class="reference external" href="https://en.wikipedia.org/wiki/Contrast_transfer_function">contrast transfer function</a> (CTF) describes the aberrations of the objective lens in HRTEM and  how the condenser system shapes the probe in STEM. Here we describe how to create a CTF with specific aberrations and how this affects the resulting images.</p>
 <section id="phase-aberrations">
 <h2>Phase aberrations<a class="headerlink" href="#phase-aberrations" title="Permalink to this headline">#</a></h2>
 <p>Ideally, a lens forms a spherical wave converging on or emerging from a single point. In practice, aberrations cause the wave front to deviate from a spherical surface. In a polar representation, this deviation, or phase aberration, can be written as <span class="math notranslate nohighlight">\(\chi(k, \phi)\)</span>, where <span class="math notranslate nohighlight">\(k = \sqrt{k_x^2 + k_y^2}\)</span> is the radial component and <span class="math notranslate nohighlight">\(\phi = \arctan(k_y / k_x)\)</span> is the azimuthal component. We expand the phase error as a series expansion</p>
@@ -1192,12 +1236,12 @@ title="Print to PDF"
 \[ 
     \chi(k, \phi) = \frac{2 \pi}{\lambda} \sum_{n,m} \frac{1}{n + 1} C_{n,m} (k \lambda)^{n+1} \cos\left[m (\phi - \phi_{n,m}) \right] \quad ,
 \]</div>
-<p>where <span class="math notranslate nohighlight">\(n\)</span> and <span class="math notranslate nohighlight">\(m\)</span> is the radial and azimuthal order, respectively.</p>
+<p>where <span class="math notranslate nohighlight">\(n\)</span> and <span class="math notranslate nohighlight">\(m\)</span> are the radial and azimuthal order, respectively.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p><code class="docutils literal notranslate"><span class="pre">abTEM</span></code> exclusively uses polar expansion coefficients; however, a conversion utility from the Cartesian to the polar representation is available in <code class="docutils literal notranslate"><span class="pre">abtem.waves.transfer.cartesian2polar</span></code>.</p>
+<p><em>ab</em>TEM exclusively uses polar expansion coefficients; however, a conversion utility from the Cartesian to the polar representation is available in <code class="docutils literal notranslate"><span class="pre">abtem.waves.transfer.cartesian2polar</span></code>.</p>
 </div>
-<p>If the microscope is well aligned then off-axis aberrations (astigmatisms and comas) are small and the aberrations are dominated by the first two isotropic terms. The aberrations reduces an expression you may be more familiar with</p>
+<p>If the microscope is well aligned then off-axis aberrations (astigmatisms and comas) are small and the aberrations are dominated by the first two isotropic terms. The aberrations reduce to an expression you may be more familiar with</p>
 <div class="math notranslate nohighlight">
 \[
     \chi(k) \approx \frac{2\pi}{\lambda}\left( \frac{\lambda^2 k^2}{2} \Delta f + \frac{\lambda^4 k^4}{4} C_s \right) \quad ,
@@ -1205,7 +1249,7 @@ title="Print to PDF"
 <p>where <span class="math notranslate nohighlight">\(\Delta f = -C_{1,1}\)</span> is the defocus and <span class="math notranslate nohighlight">\(C_s=C_{3,3}\)</span> is the third order spherical aberration.</p>
 <div class="dropdown admonition note">
 <p class="admonition-title">Note</p>
-<p>Note the sign convention used for the defocus (<span class="math notranslate nohighlight">\(\Delta f = -C_{1,1}\)</span>). Positive defocus is equivalent to backward free-space propagation, or equivalently, if the starts with a positive defocus, its focus is inside the potential. Below we propagate a probe wave function through vacuum a probe by 50 Å, this is completely undone by apply a defocus of 50 Å, i.e. the assertion below is valid.</p>
+<p>Note the sign convention used for the defocus (<span class="math notranslate nohighlight">\(\Delta f = -C_{1,1}\)</span>). Positive defocus is equivalent to backward free-space propagation, or equivalently, with a positive defocus, the focus is inside the potential. Below we propagate a probe wave function through vacuum by 5 Å, which is completely undone by applying a defocus of 5 Å, i.e. the assertion below is valid.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">propagator</span> <span class="o">=</span> <span class="n">FresnelPropagator</span><span class="p">()</span>
  
 <span class="n">probe1</span> <span class="o">=</span> <span class="n">Probe</span><span class="p">(</span><span class="n">extent</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">gpts</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span> <span class="n">energy</span><span class="o">=</span><span class="mf">150e3</span><span class="p">,</span> <span class="n">semiangle_cutoff</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span><span class="o">.</span><span class="n">build</span><span class="p">()</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
@@ -1217,7 +1261,7 @@ title="Print to PDF"
 </pre></div>
 </div>
 </div>
-<p>In abTEM the <code class="docutils literal notranslate"><span class="pre">CTF</span></code> object takes parameters of the form <code class="docutils literal notranslate"><span class="pre">Cnm</span></code> and <code class="docutils literal notranslate"><span class="pre">phinm</span></code>, and some may also be given using their common aliases, e.g. <code class="docutils literal notranslate"><span class="pre">defocus</span> <span class="pre">=</span> <span class="pre">-C10</span></code>. The expansion is implemented up to 5th order and all the coefficients keyword are given in the table below.</p>
+<p>In <em>ab</em>TEM, the <code class="docutils literal notranslate"><span class="pre">CTF</span></code> object takes parameters of the form <code class="docutils literal notranslate"><span class="pre">Cnm</span></code> and <code class="docutils literal notranslate"><span class="pre">phinm</span></code>, and some may alternatively also be given using their common aliases, e.g. <code class="docutils literal notranslate"><span class="pre">defocus</span> <span class="pre">=</span> <span class="pre">-C10</span></code>. The expansion is implemented up to 5th order and all the coefficients keyword are given in the table below.</p>
 <table class="table">
 <colgroup>
 <col style="width: 20%" />
@@ -1263,7 +1307,7 @@ title="Print to PDF"
 </table>
 <section id="point-spread-function">
 <h3>Point spread function<a class="headerlink" href="#point-spread-function" title="Permalink to this headline">#</a></h3>
-<p>We can visualize each phase aberration by showing its effect on a small probe wave function. This is called the point spread function (PSF) and describes the response of an imaging system to a point source. In the grid below, the indicated aberration is applied to the probe shown in the bottom left. Both magnitude and phase is indicated through domain coloring. The magnitude of the coefficients are scaled by the radial order according to a power law.</p>
+<p>We can visualize each phase aberration by showing its effect on a small probe wave function. This is called the point spread function (PSF) and describes the response of an imaging system to a point source. In the image grid below, the indicated aberration is applied to the probe shown in the bottom left. Both magnitude and phase are indicated through domain coloring. The magnitude of the coefficients are scaled by the radial order according to a power law.</p>
 <div class="cell tag_hide-input docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">coefficients</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">symbol</span> <span class="k">for</span> <span class="n">symbol</span> <span class="ow">in</span> <span class="n">polar_symbols</span> <span class="k">if</span> <span class="n">symbol</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;C&quot;</span><span class="p">)</span>
@@ -1276,11 +1320,11 @@ title="Print to PDF"
         <span class="p">)</span>
         <span class="o">.</span><span class="n">build</span><span class="p">()</span>
         <span class="o">.</span><span class="n">phase_shift</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span>
-        <span class="o">.</span><span class="n">image</span><span class="p">()</span>
+        <span class="o">.</span><span class="n">images</span><span class="p">()</span>
         <span class="o">.</span><span class="n">crop</span><span class="p">(</span><span class="n">extent</span><span class="o">=</span><span class="p">(</span><span class="mi">15</span><span class="p">,</span> <span class="mi">15</span><span class="p">),</span> <span class="n">offset</span><span class="o">=</span><span class="p">(</span><span class="mf">17.5</span><span class="p">,</span> <span class="mf">17.5</span><span class="p">))</span>
         <span class="o">.</span><span class="n">compute</span><span class="p">()</span>
     <span class="p">)</span>
-    <span class="k">return</span> <span class="n">psf</span>  <span class="c1"># * 4e4</span>
+    <span class="k">return</span> <span class="n">psf</span>
 
 
 <span class="k">def</span> <span class="nf">make_coefficient_plot</span><span class="p">(</span><span class="n">func</span><span class="p">,</span> <span class="n">coefficients</span><span class="p">):</span>
@@ -1288,18 +1332,13 @@ title="Print to PDF"
     <span class="n">cols</span> <span class="o">=</span> <span class="p">[</span><span class="n">x</span> <span class="o">-</span> <span class="mi">1</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">orders</span><span class="p">]</span>
     <span class="n">rows</span> <span class="o">=</span> <span class="p">[</span><span class="n">j</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="n">orders</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="k">for</span> <span class="n">j</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">orders</span><span class="o">.</span><span class="n">count</span><span class="p">(</span><span class="n">i</span><span class="p">))]</span>
     <span class="n">aberrations</span> <span class="o">=</span> <span class="p">[</span>
-        <span class="p">{</span><span class="n">coefficient</span><span class="p">:</span> <span class="mi">50</span><span class="o">**</span><span class="n">order</span><span class="p">}</span> <span class="k">for</span> <span class="n">coefficient</span><span class="p">,</span> <span class="n">order</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">coefficients</span><span class="p">,</span> <span class="n">orders</span><span class="p">)</span>
+        <span class="p">{</span><span class="n">coefficient</span><span class="p">:</span> <span class="mi">50</span> <span class="o">**</span> <span class="n">order</span><span class="p">}</span> <span class="k">for</span> <span class="n">coefficient</span><span class="p">,</span> <span class="n">order</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">coefficients</span><span class="p">,</span> <span class="n">orders</span><span class="p">)</span>
     <span class="p">]</span>
     <span class="n">images</span> <span class="o">=</span> <span class="p">[</span><span class="n">func</span><span class="p">(</span><span class="n">aberration</span><span class="p">)</span> <span class="k">for</span> <span class="n">aberration</span> <span class="ow">in</span> <span class="n">aberrations</span><span class="p">]</span>
 
     <span class="n">nrows</span><span class="p">,</span> <span class="n">ncols</span> <span class="o">=</span> <span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
     <span class="n">fig</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">14</span><span class="p">,</span> <span class="mi">14</span><span class="p">))</span>
-    <span class="n">axes</span> <span class="o">=</span> <span class="n">ImageGrid</span><span class="p">(</span>
-        <span class="n">fig</span><span class="p">,</span>
-        <span class="mi">111</span><span class="p">,</span>
-        <span class="n">nrows_ncols</span><span class="o">=</span><span class="p">(</span><span class="n">nrows</span><span class="p">,</span> <span class="n">ncols</span><span class="p">),</span>
-        <span class="o">**</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
-    <span class="p">)</span>
+    <span class="n">axes</span> <span class="o">=</span> <span class="n">ImageGrid</span><span class="p">(</span><span class="n">fig</span><span class="p">,</span> <span class="mi">111</span><span class="p">,</span> <span class="n">nrows_ncols</span><span class="o">=</span><span class="p">(</span><span class="n">nrows</span><span class="p">,</span> <span class="n">ncols</span><span class="p">),</span> <span class="o">**</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},)</span>
 
     <span class="k">for</span> <span class="n">ax</span> <span class="ow">in</span> <span class="n">axes</span><span class="p">:</span>
         <span class="n">ax</span><span class="o">.</span><span class="n">set_axis_off</span><span class="p">()</span>
@@ -1333,12 +1372,12 @@ title="Print to PDF"
 </section>
 <section id="applying-phase-aberrations-to-wave-functions">
 <h3>Applying phase aberrations to wave functions<a class="headerlink" href="#applying-phase-aberrations-to-wave-functions" title="Permalink to this headline">#</a></h3>
-<p>Given the exit wave function <span class="math notranslate nohighlight">\(\phi_{exit}\)</span> and an objective lens with a phase error <span class="math notranslate nohighlight">\(\chi\)</span> (and infinite aperture), the wave function at the image plane is given by</p>
+<p>Given an exit wave function <span class="math notranslate nohighlight">\(\phi_{exit}\)</span> and an objective lens with a phase error <span class="math notranslate nohighlight">\(\chi\)</span> (and infinite aperture), the wave function at the image plane is given by</p>
 <div class="math notranslate nohighlight" id="equation-eq-user-guide-walkthrough-contrast-transfer-function-apply-ctf">
 <span class="eqno">(4)<a class="headerlink" href="#equation-eq-user-guide-walkthrough-contrast-transfer-function-apply-ctf" title="Permalink to this equation">#</a></span>\[  
     \psi_{image}(k, \phi) = \psi_{exit}(k, \phi) \exp(-i \chi(k, \phi)) \quad .
 \]</div>
-<p>We start by simulating an exit wave for an MoS&lt;\sub&gt;2 model. An atomic model with a hexagonal cell is created using the ASE’s <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/build/surface.html#ase.build.mx2"><code class="docutils literal notranslate"><span class="pre">mx2</span></code></a>, which we make orthogonal using <code class="docutils literal notranslate"><span class="pre">orthogonalize_cell</span></code>.</p>
+<p>We start by simulating an exit wave for an MoS<sub>2</sub> model. An atomic model with a hexagonal cell is created using the ASE’s <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/ase/build/surface.html#ase.build.mx2"><code class="docutils literal notranslate"><span class="pre">mx2</span></code></a> method, which we make orthogonal using <code class="docutils literal notranslate"><span class="pre">orthogonalize_cell</span></code> (see our walkthrough on <a class="reference internal" href="atomic_models.html"><span class="doc std std-doc">atomic models</span></a>).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">atoms</span> <span class="o">=</span> <span class="n">ase</span><span class="o">.</span><span class="n">build</span><span class="o">.</span><span class="n">mx2</span><span class="p">(</span><span class="n">vacuum</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
@@ -1355,7 +1394,7 @@ title="Print to PDF"
 <img alt="../../_images/contrast_transfer_function_5_0.png" src="../../_images/contrast_transfer_function_5_0.png" />
 </div>
 </div>
-<p>We run the multislice algorithm given an incident plane wave at <span class="math notranslate nohighlight">\(80 \ \mathrm{keV}\)</span> for a default potential.</p>
+<p>We run the multislice algorithm for an incident plane wave at <span class="math notranslate nohighlight">\(80 \ \mathrm{keV}\)</span> through a default potential (using the Lobato indepdent atom parameterization, see our <a class="reference internal" href="potentials.html"><span class="doc std std-doc">walkthrough on potentials</span></a>).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">exit_wave</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">PlaneWave</span><span class="p">(</span><span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">,</span> <span class="n">sampling</span><span class="o">=</span><span class="mf">0.02</span><span class="p">)</span><span class="o">.</span><span class="n">multislice</span><span class="p">(</span><span class="n">atoms</span><span class="p">)</span>
@@ -1363,10 +1402,10 @@ title="Print to PDF"
 </div>
 </div>
 </div>
-<p>We create a compatible <code class="docutils literal notranslate"><span class="pre">CTF</span></code> for electrons with an energy of <span class="math notranslate nohighlight">\(80 \ \mathrm{keV}\)</span>. The spherical aberration will be set to <span class="math notranslate nohighlight">\(-20~\mu \mathrm{m}\)</span> (remember that abTEM uses units of Å) and the defocus is set to the <a class="reference external" href="https://en.wikipedia.org/wiki/High-resolution_transmission_electron_microscopy">Scherzer defocus</a> (here <span class="math notranslate nohighlight">\(-111.92 \ \mathrm{Å}\)</span>).</p>
+<p>We create a compatible <code class="docutils literal notranslate"><span class="pre">CTF</span></code> for electrons of the same energy of <span class="math notranslate nohighlight">\(80 \ \mathrm{keV}\)</span>. The spherical aberration will be set to <span class="math notranslate nohighlight">\(-20~\mu \mathrm{m}\)</span> (remember that <em>ab</em>TEM uses units of <span class="math notranslate nohighlight">\(\mathrm{Å}\)</span>) and the defocus is set to the <a class="reference external" href="https://en.wikipedia.org/wiki/High-resolution_transmission_electron_microscopy">Scherzer defocus</a> (here <span class="math notranslate nohighlight">\(-111.92 \ \mathrm{Å}\)</span>).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">Cs</span> <span class="o">=</span> <span class="o">-</span><span class="mf">20e-6</span> <span class="o">*</span> <span class="mf">1e10</span>  <span class="c1"># 20 microns</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">Cs</span> <span class="o">=</span> <span class="o">-</span><span class="mf">20e-6</span> <span class="o">*</span> <span class="mf">1e10</span>  <span class="c1"># 20 micrometers</span>
 
 <span class="n">ctf</span> <span class="o">=</span> <span class="n">abtem</span><span class="o">.</span><span class="n">CTF</span><span class="p">(</span><span class="n">Cs</span><span class="o">=</span><span class="n">Cs</span><span class="p">,</span> <span class="n">energy</span><span class="o">=</span><span class="mf">80e3</span><span class="p">)</span>
 <span class="n">ctf</span><span class="o">.</span><span class="n">defocus</span> <span class="o">=</span> <span class="n">ctf</span><span class="o">.</span><span class="n">scherzer_defocus</span>
@@ -1391,7 +1430,7 @@ title="Print to PDF"
 </div>
 </div>
 </div>
-<p>We can get radial <code class="docutils literal notranslate"><span class="pre">LineProfiles</span></code> up to a given angle to preview the CTF. We show <em>by convention</em> the imaginary part of complex exponential of the phase error.</p>
+<p>We can get radial <code class="docutils literal notranslate"><span class="pre">LineProfiles</span></code> up to a given angle to preview the CTF, which <em>by convention</em> display the imaginary part of complex exponential of the phase error.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">ctf</span><span class="o">.</span><span class="n">profiles</span><span class="p">(</span><span class="n">max_angle</span><span class="o">=</span><span class="mi">50</span><span class="p">)</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="n">units</span><span class="o">=</span><span class="s2">&quot;mrad&quot;</span><span class="p">);</span>
@@ -1427,10 +1466,11 @@ title="Print to PDF"
 <img alt="../../_images/contrast_transfer_function_17_0.png" src="../../_images/contrast_transfer_function_17_0.png" />
 </div>
 </div>
+<p>Without an aperture, the high-frequency components of the CTF lead to the observed complicated contrast variation.</p>
 </section>
 <section id="focal-series">
 <h3>Focal series<a class="headerlink" href="#focal-series" title="Permalink to this headline">#</a></h3>
-<p>It common that the aberrations of your microscope are not known exactly, hence, it is useful to simulate an ensemble of images with different aberrations.</p>
+<p>It common that the aberrations of your microscope are not known exactly, and thus it is useful to simulate an ensemble of images with different aberrations.</p>
 <p>We create an ensemble of <code class="docutils literal notranslate"><span class="pre">CTF</span></code>s for an range of defocii.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -1457,24 +1497,24 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/contrast_transfer_function_21_0.png" src="../../_images/contrast_transfer_function_21_0.png" />
+<img alt="../../_images/contrast_transfer_function_22_0.png" src="../../_images/contrast_transfer_function_22_0.png" />
 </div>
 </div>
 </section>
 </section>
 <section id="aperture">
 <h2>Aperture<a class="headerlink" href="#aperture" title="Permalink to this headline">#</a></h2>
-<p>The maximum transferred frequency is limited by the aperture of the objective lens. This is conventionally described as a multiplication with the aperture function.</p>
+<p>In practice, the maximum transferred frequency is limited by the aperture of the objective lens. This is conventionally described as a multiplication with the aperture function:</p>
 <div class="math notranslate nohighlight">
 \[
-    \psi_{\mathrm{image}}(k, \phi) = A(k) \exp[-i \chi(k, \phi)] \psi_{\mathrm{exit}}(k, \phi)
+    \psi_{\mathrm{image}}(k, \phi) = A(k) \exp[-i \chi(k, \phi)] \psi_{\mathrm{exit}}(k, \phi),
 \]</div>
 <p>where <span class="math notranslate nohighlight">\(A(k)\)</span> is the aperture function</p>
 <div class="math notranslate nohighlight">
 \[\begin{split}
     A(k) = \begin{cases} 1 &amp; \text{if } x \geq k_{cut} \\ 0 &amp; \text{if } x &lt; k_{cut} \end{cases} .
 \end{split}\]</div>
-<p>We will cut off the <code class="docutils literal notranslate"><span class="pre">CTF</span></code> at the angle corresponding to the Scherzer <a class="reference external" href="https://en.wikipedia.org/wiki/High-resolution_transmission_electron_microscopy#Scherzer_defocus">point resolution</a>, which is defined as the angle where the phase of the <code class="docutils literal notranslate"><span class="pre">CTF</span></code> crosses the abscissa for the first time.</p>
+<p>We will cut off the <code class="docutils literal notranslate"><span class="pre">CTF</span></code> at the angle corresponding to the Scherzer <a class="reference external" href="https://en.wikipedia.org/wiki/High-resolution_transmission_electron_microscopy#Scherzer_defocus">point resolution</a>, which is defined as the angle where the phase of the <code class="docutils literal notranslate"><span class="pre">CTF</span></code> crosses the abscissa for the first time (<code class="docutils literal notranslate"><span class="pre">crossover_angle</span></code>).</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">ctf_cutoff</span> <span class="o">=</span> <span class="n">ctf</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
@@ -1498,7 +1538,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/contrast_transfer_function_24_0.png" src="../../_images/contrast_transfer_function_24_0.png" />
+<img alt="../../_images/contrast_transfer_function_25_0.png" src="../../_images/contrast_transfer_function_25_0.png" />
 </div>
 </div>
 <p>We show the resulting image below and see, as expected, that applying this aperture removes high-frequency information from the wave function intensity.</p>
@@ -1512,48 +1552,48 @@ title="Print to PDF"
     <span class="n">explode</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
     <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
     <span class="n">common_color_scale</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-    <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.05</span><span class="p">},</span>
+    <span class="n">image_grid_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;axes_pad&quot;</span><span class="p">:</span> <span class="mf">0.1</span><span class="p">},</span>
     <span class="n">cbar</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
 <span class="p">);</span>
 </pre></div>
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/contrast_transfer_function_26_0.png" src="../../_images/contrast_transfer_function_26_0.png" />
+<img alt="../../_images/contrast_transfer_function_27_0.png" src="../../_images/contrast_transfer_function_27_0.png" />
 </div>
 </div>
 </section>
 <section id="partial-coherence-quasi-coherent">
 <h2>Partial coherence (quasi-coherent)<a class="headerlink" href="#partial-coherence-quasi-coherent" title="Permalink to this headline">#</a></h2>
-<p>Partial coherence acts similarly to the aperture function to dampen the high spatial frequencies of the signal. Partial coherence may be approximated by multiplying the <code class="docutils literal notranslate"><span class="pre">CTF</span></code> by envelope functions</p>
+<p>Partial coherence acts similarly to the aperture function to dampen the high spatial frequencies of the signal. Partial coherence may be approximated by multiplying the <code class="docutils literal notranslate"><span class="pre">CTF</span></code> by envelope functions:</p>
 <div class="math notranslate nohighlight">
 \[
-    \psi_{\mathrm{image}}(k, \phi) = \mathrm{CTF}(k, \phi) \psi_{\mathrm{exit}}(k, \phi)
+    \psi_{\mathrm{image}}(k, \phi) = \mathrm{CTF}(k, \phi) \psi_{\mathrm{exit}}(k, \phi),
 \]</div>
-<p>where the <span class="math notranslate nohighlight">\(\mathrm{CTF}\)</span> is given as</p>
+<p>where the <span class="math notranslate nohighlight">\(\mathrm{CTF}\)</span> is now given as</p>
 <div class="math notranslate nohighlight">
 \[
     \mathrm{CTF}(k, \phi) = E_t(k) E_s(k) A(k) \exp[-i \chi(k, \phi)]
 \]</div>
-<p>and <span class="math notranslate nohighlight">\(E_t(k)\)</span> and <span class="math notranslate nohighlight">\(E_s(k)\)</span>, to be defined below are the temporal and spatial envelopes, respectively.</p>
+<p>and <span class="math notranslate nohighlight">\(E_t(k)\)</span> and <span class="math notranslate nohighlight">\(E_s(k)\)</span>, to be defined below, are the temporal and spatial envelopes, respectively.</p>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>
-<p>Here partial coherence is applied using the convenient quasi-coherent approximation. This is only appropriate for HRTEM simulations when the effect is sufficiently small, it is generally <em>never</em> appropriate for STEM simulations. The more accurate approach of using an incoherent summation is <a class="reference internal" href="partial_coherence.html#walkthrough-partial-coherence"><span class="std std-ref">introduced here</span></a>.</p>
+<p>Here partial coherence is applied using the convenient quasi-coherent approximation. This is only appropriate for HRTEM simulations when the effect is sufficiently small, but it is generally <em>never</em> appropriate for STEM simulations. The more accurate approach of using an incoherent summation is <a class="reference internal" href="../tutorials/partial_coherence.html"><span class="doc std std-doc">introduced in a tutorial</span></a>.</p>
 </div>
 <section id="partial-temporal-coherence">
 <h3>Partial temporal coherence<a class="headerlink" href="#partial-temporal-coherence" title="Permalink to this headline">#</a></h3>
-<p>The most important source of partial coherence in HRTEM is partial temporal coherence. A small spread in energy, <span class="math notranslate nohighlight">\(\Delta E\)</span>, of the incident electrons, due to the chromatic aberration of the objective lens, is equivalent to a small spread in defocus. Fluctuations in the focusing currents, <span class="math notranslate nohighlight">\(\Delta I\)</span>, of the objective lens also produce an incoherent spread in defocus. Combining these effects, the standard deviation of the focal spread may be written</p>
+<p>The most important source of partial coherence in HRTEM is partial temporal coherence. A small spread in energy of the incident electrons, <span class="math notranslate nohighlight">\(\Delta E\)</span>, is due to the chromatic aberration of the objective lens equivalent to a small spread in defocus. Fluctuations in the focusing currents of the objective lens, <span class="math notranslate nohighlight">\(\Delta I\)</span>, also produce an incoherent spread in defocus. Combining these effects, the standard deviation of the focal spread may be written as</p>
 <div class="math notranslate nohighlight">
 \[
     \delta = C_c \sqrt{4 \left(\frac{\Delta I_\text{obj}}{I_\text{obj}}\right)^2 + \left(\frac{\Delta E}{V_\text{acc}}\right)^2 + \left(\frac{\Delta V_\text{acc}}{V_\text{acc}}\right)^2} \quad.
 \]</div>
-<p>The terms <span class="math notranslate nohighlight">\(\Delta I_\text{obj}/I_\text{obj}\)</span> and <span class="math notranslate nohighlight">\(\Delta V_\text{acc}/V_\text{acc}\)</span> represent instabilities in of the total current in the magnetic lenses and the acceleration voltage. <span class="math notranslate nohighlight">\(\Delta E/V_\text{acc}\)</span> is the energy spread of electrons emitted by the source. <span class="math notranslate nohighlight">\(C_c\)</span> is the chromatic aberration coefficient. Assuming <span class="math notranslate nohighlight">\(\delta\)</span> is small, and focal spread follows a Gaussian distribution, the temporal envelope may be written <span id="id1">[<a class="reference internal" href="../../library/bibliography.html#id5" title="Earl J. Kirkland. Advanced computing in electron microscopy. Springer, 2 edition, 2010. ISBN 978-1-4419-6532-5.">Kir10</a>]</span></p>
+<p>The terms <span class="math notranslate nohighlight">\(\Delta I_\text{obj}/I_\text{obj}\)</span> and <span class="math notranslate nohighlight">\(\Delta V_\text{acc}/V_\text{acc}\)</span> represent instabilities in of the total current in the magnetic lenses and the acceleration voltage. <span class="math notranslate nohighlight">\(\Delta E/V_\text{acc}\)</span> is the energy spread of electrons emitted by the source. <span class="math notranslate nohighlight">\(C_c\)</span> is the chromatic aberration coefficient. Assuming <span class="math notranslate nohighlight">\(\delta\)</span> is small, and focal spread follows a Gaussian distribution, the temporal envelope may be written <span id="id1">[<a class="reference internal" href="../bibliography.html#id5" title="Earl J. Kirkland. Advanced computing in electron microscopy. Springer, 2 edition, 2010. ISBN 978-1-4419-6532-5.">Kir10</a>]</span></p>
 <div class="math notranslate nohighlight">
 \[
     E_t(k) = \exp\left[-\frac{1}{4} \left(\pi \lambda \delta \right)^2 k^4 \right] \quad .
 \]</div>
 <p>The parameter <span class="math notranslate nohighlight">\(\delta\)</span> above is equivalent to the <code class="docutils literal notranslate"><span class="pre">focal_spread</span></code> keyword and given in <span class="math notranslate nohighlight">\(\mathrm{Å}\)</span>.</p>
-<p>We calculate a realistic value of the focal spread to <span class="math notranslate nohighlight">\(52.5 \ \mathrm{Å}\)</span>. This was calculated using a typical energy spread of <span class="math notranslate nohighlight">\(0.35 \ \mathrm{eV}\)</span> for a non-monochromated beam and a typical chromatic aberration of <span class="math notranslate nohighlight">\(1.2 \ \mathrm{mm}\)</span> which would be considered good for microscope with chromatic aberration correction. We assume that the contributions to the focal spread from instabilities in the magnetic lenses are negligible.</p>
+<p>We calculate a realistic value of the focal spread to be <span class="math notranslate nohighlight">\(52.5 \ \mathrm{Å}\)</span>. This was estimated using a typical energy spread of <span class="math notranslate nohighlight">\(0.35 \ \mathrm{eV}\)</span> for a non-monochromated beam and a typical chromatic aberration of <span class="math notranslate nohighlight">\(1.2 \ \mathrm{mm}\)</span> which would be considered good for a microscope without chromatic aberration correction. We assume that the contributions to the focal spread from instabilities in the magnetic lenses are negligible.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">Cc</span> <span class="o">=</span> <span class="mf">1.2e-3</span> <span class="o">*</span> <span class="mf">1e10</span>
@@ -1572,7 +1612,7 @@ title="Print to PDF"
 </div>
 </div>
 </div>
-<p>We show a plot of the <code class="docutils literal notranslate"><span class="pre">CTF</span></code> below. Given this plot we may conclude that for a focal spread of this size, the aperture have almost no effect as the envelope already goes to zero at the cutoff.</p>
+<p>We show a plot of the resulting <code class="docutils literal notranslate"><span class="pre">CTF</span></code> below. Given this we may conclude that for a focal spread of this magnitude, the aperture will have almost no effect as the envelope already goes to zero at the cutoff.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">ctf_partial</span> <span class="o">=</span> <span class="n">ctf_cutoff</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
@@ -1582,20 +1622,20 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/contrast_transfer_function_30_0.png" src="../../_images/contrast_transfer_function_30_0.png" />
+<img alt="../../_images/contrast_transfer_function_32_0.png" src="../../_images/contrast_transfer_function_32_0.png" />
 </div>
 </div>
 </section>
 <section id="partial-spatial-coherence">
 <h3>Partial spatial coherence<a class="headerlink" href="#partial-spatial-coherence" title="Permalink to this headline">#</a></h3>
-<p>As the electron source has a finite size, the incident beam contains a distribution of incident directions. In HRTEM this is quantified by the angular spread. Assuming that each incident direction performs its own scattering and that the distribution of incident directions is small, then it can be shown that the angular spread can be modelled by the spatial coherence envelope function<span id="id2">[<a class="reference internal" href="../../library/bibliography.html#id5" title="Earl J. Kirkland. Advanced computing in electron microscopy. Springer, 2 edition, 2010. ISBN 978-1-4419-6532-5.">Kir10</a>]</span>, as given by</p>
+<p>As the electron source has a finite size, the incident beam contains a distribution of incident directions. In HRTEM this is quantified by <em>angular spread</em>. Assuming that each incident direction performs its own scattering and that the distribution of incident directions is small, it can be shown that the angular spread can be modelled by the spatial coherence envelope function<span id="id2">[<a class="reference internal" href="../bibliography.html#id5" title="Earl J. Kirkland. Advanced computing in electron microscopy. Springer, 2 edition, 2010. ISBN 978-1-4419-6532-5.">Kir10</a>]</span>, as given by</p>
 <div class="math notranslate nohighlight">
 \[
     E_s(k) = \exp\left(-\frac{\beta}{4\lambda^2}\left| \frac{\partial \chi(k)}{\partial k}\right|^2  \right) \quad .
 \]</div>
 <p>where <span class="math notranslate nohighlight">\(\beta\)</span> is the <span class="math notranslate nohighlight">\(1/e\)</span> width of the distribution of angles. The parameter <span class="math notranslate nohighlight">\(\beta\)</span> is equivalent the <code class="docutils literal notranslate"><span class="pre">angular_spread</span></code> keyword and given in <span class="math notranslate nohighlight">\(\mathrm{mrad}\)</span>.</p>
-<p>Given a modern electron source such as a field emmission gun, the partial spatial coherence is typically negligible, even in microscopes with chromatic aberration correction.</p>
-<p>Given an angular spread of <span class="math notranslate nohighlight">\(0.5 \ \mathrm{mrad}\)</span>, which would be considered large, we obtain the spatial envelope illustrated below. We see that the spatial envelope have almost no effect.</p>
+<p>Given a modern electron source such as a field emission gun, the partial spatial coherence is typically negligible, even in microscopes without chromatic aberration correction.</p>
+<p>Given an angular spread of <span class="math notranslate nohighlight">\(1 \ \mathrm{mrad}\)</span>, which would be considered large, we obtain the spatial envelope illustrated below, which we see has almost no effect in the presence of partial temporal coherence.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">ctf_partial</span><span class="o">.</span><span class="n">angular_spread</span> <span class="o">=</span> <span class="mi">1</span>
@@ -1605,7 +1645,7 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/contrast_transfer_function_32_0.png" src="../../_images/contrast_transfer_function_32_0.png" />
+<img alt="../../_images/contrast_transfer_function_34_0.png" src="../../_images/contrast_transfer_function_34_0.png" />
 </div>
 </div>
 <p>Finally we apply the <code class="docutils literal notranslate"><span class="pre">CTF</span></code> with the partial coherence envelope to the wave function. The effect is to further blur the image and to lower the contrast.</p>
@@ -1627,12 +1667,12 @@ title="Print to PDF"
 </div>
 </div>
 <div class="cell_output docutils container">
-<img alt="../../_images/contrast_transfer_function_34_0.png" src="../../_images/contrast_transfer_function_34_0.png" />
+<img alt="../../_images/contrast_transfer_function_36_0.png" src="../../_images/contrast_transfer_function_36_0.png" />
 </div>
 </div>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>Blurring can also be caused by noise leading to random deflection of the image relative to the detector, such as vibrations, drift of the stage and magnetic noise in the lenses. Such effects may be reasonably included by applying a gaussian blur.</p>
+<p>Blurring can also be caused by noise leading to random deflection of the image relative to the detector, such as vibrations, drift of the stage and magnetic noise in the lenses. Such effects may be reasonably included by applying a Gaussian blur.</p>
 </div>
 </section>
 </section>
@@ -1647,16 +1687,16 @@ title="Print to PDF"
         },
         codeMirrorConfig: {
             theme: "abcdef",
-            mode: "abtem-dask"
+            mode: "abtem"
         },
         kernelOptions: {
-            kernelName: "abtem-dask",
+            kernelName: "abtem",
             path: "./user_guide/walkthrough"
         },
         predefinedOutput: true
     }
     </script>
-    <script>kernelName = 'abtem-dask'</script>
+    <script>kernelName = 'abtem'</script>
 
               </div>
               
@@ -1686,7 +1726,7 @@ title="Print to PDF"
     <div class="footer-content row">
         <footer class="col footer"><p>
   
-    By The abTEM developers<br/>
+    By abTEM developers<br/>
   
       &copy; Copyright 2022.<br/>
 </p>
