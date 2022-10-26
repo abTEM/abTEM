@@ -9,27 +9,41 @@ from abtem.measure import Measurement, Calibration
 from abtem.waves import Probe, FresnelPropagator
 from abtem.base_classes import AntialiasFilter
 from abtem.transfer import CTF, polar_symbols, polar_aliases
-from abtem.utils import fft_shift,energy2wavelength, ProgressBar
-from abtem.device import copy_to_device, get_array_module, get_array_module_from_device, get_scipy_module, asnumpy, get_device_function
+from abtem.utils import fft_shift, energy2wavelength, ProgressBar
+from abtem.device import (
+    copy_to_device,
+    get_array_module,
+    get_array_module_from_device,
+    get_scipy_module,
+    asnumpy,
+    get_device_function,
+)
 
-experimental_symbols   = ('rotation_angle',
-                          'scan_step_sizes',
-                          'angular_sampling',
-                          'background_counts_cutoff',
-                          'counts_scaling_factor',
-                          'grid_scan_shape',
-                          'object_px_padding')
+experimental_symbols = (
+    "rotation_angle",
+    "scan_step_sizes",
+    "angular_sampling",
+    "background_counts_cutoff",
+    "counts_scaling_factor",
+    "grid_scan_shape",
+    "object_px_padding",
+)
 
-reconstruction_symbols = {'alpha': 1.0, 'beta': 1.0,
-                          'object_step_size': 1.0, 'probe_step_size': 1.0, 'position_step_size': 1.0,
-                          'step_size_damping_rate': 0.995,
-                          'pre_position_correction_update_steps': None,
-                          'pre_probe_correction_update_steps': None,
-                         }
+reconstruction_symbols = {
+    "alpha": 1.0,
+    "beta": 1.0,
+    "object_step_size": 1.0,
+    "probe_step_size": 1.0,
+    "position_step_size": 1.0,
+    "step_size_damping_rate": 0.995,
+    "pre_position_correction_update_steps": None,
+    "pre_probe_correction_update_steps": None,
+}
 
-def _wrapped_indices_2D_window(center_position: np.ndarray,
-                               window_shape: Sequence[int],
-                               array_shape: Sequence[int]):
+
+def _wrapped_indices_2D_window(
+    center_position: np.ndarray, window_shape: Sequence[int], array_shape: Sequence[int]
+):
     """
     Computes periodic indices for a window_shape probe centered at center_position, in object of size array_shape.
 
@@ -44,38 +58,43 @@ def _wrapped_indices_2D_window(center_position: np.ndarray,
 
     Returns
     -------
-    window_indices: length-2 tuple of 
+    window_indices: length-2 tuple of
         The 2D indices of the window
     """
 
-    sx, sy     = array_shape
-    nx, ny     = window_shape
+    sx, sy = array_shape
+    nx, ny = window_shape
 
-    cx, cy     = np.round(asnumpy(center_position)).astype(int)
-    ox, oy     = (cx - nx//2,cy - ny//2)
+    cx, cy = np.round(asnumpy(center_position)).astype(int)
+    ox, oy = (cx - nx // 2, cy - ny // 2)
 
-    return np.ix_(np.arange(ox,ox+nx)%sx, np.arange(oy,oy+ny)%sy)
+    return np.ix_(np.arange(ox, ox + nx) % sx, np.arange(oy, oy + ny) % sy)
 
-def _projection(u: np.ndarray,v: np.ndarray):
+
+def _projection(u: np.ndarray, v: np.ndarray):
     """Projection of vector u onto vector v."""
-    return u * np.vdot(u,v) / np.vdot(u,u)
+    return u * np.vdot(u, v) / np.vdot(u, u)
+
 
 def _orthogonalize(V):
     """Non-normalized QR decomposition using repeated projections."""
     U = V.copy()
     for i in range(1, V.shape[0]):
         for j in range(i):
-            U[i,:] -= _projection(U[j,:], V[i,:])
+            U[i, :] -= _projection(U[j, :], V[i, :])
     return U
 
-def _propagate_array(propagator:FresnelPropagator,
-                     waves_array: np.ndarray,
-                     sampling: Sequence[float],
-                     wavelength: float,
-                     thickness: float,
-                     fft2_convolve: Callable = None,
-                     overwrite: bool = False,
-                     xp = np):
+
+def _propagate_array(
+    propagator: FresnelPropagator,
+    waves_array: np.ndarray,
+    sampling: Sequence[float],
+    wavelength: float,
+    thickness: float,
+    fft2_convolve: Callable = None,
+    overwrite: bool = False,
+    xp=np,
+):
     """
     Propagates complex wave function array through free space distance dz.
 
@@ -101,10 +120,12 @@ def _propagate_array(propagator:FresnelPropagator,
     Returns
     -------
     propagated_array: np.ndarray
-        Propagated array 
+        Propagated array
     """
-    propagator_array = propagator._evaluate_propagator_array(waves_array.shape,sampling,wavelength,thickness,None,xp)
-    return fft2_convolve(waves_array,propagator_array, overwrite_x = overwrite)
+    propagator_array = propagator._evaluate_propagator_array(
+        waves_array.shape, sampling, wavelength, thickness, None, xp
+    )
+    return fft2_convolve(waves_array, propagator_array, overwrite_x=overwrite)
 
 
 class AbstractPtychographicOperator(metaclass=ABCMeta):
@@ -127,25 +148,27 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
 
     @staticmethod
     @abstractmethod
-    def _overlap_projection(objects,probes,position,old_position,**kwargs):
+    def _overlap_projection(objects, probes, position, old_position, **kwargs):
         """Abstract method all subclasses must define to perform overlap projection."""
         pass
 
     @staticmethod
     @abstractmethod
-    def _fourier_projection(exit_waves,diffraction_patterns,sse,**kwargs):
+    def _fourier_projection(exit_waves, diffraction_patterns, sse, **kwargs):
         """Abstract method all subclasses must define to perform fourier projection."""
         pass
 
     @staticmethod
     @abstractmethod
-    def _update_function(objects,probes,position,exit_waves,modified_exit_waves,**kwargs):
+    def _update_function(
+        objects, probes, position, exit_waves, modified_exit_waves, **kwargs
+    ):
         """Abstract method all subclasses must define to update the current probes, objects, and position estimates."""
         pass
 
     @staticmethod
     @abstractmethod
-    def _position_correction(objects, probes, position,**kwargs):
+    def _position_correction(objects, probes, position, **kwargs):
         """
         Abstract method all subclasses must define to perform position correction.
         Typically gets called inside the subclass _update_function() method.
@@ -154,7 +177,7 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
 
     @staticmethod
     @abstractmethod
-    def _fix_probe_center_of_mass(probes, center_of_mass,**kwargs):
+    def _fix_probe_center_of_mass(probes, center_of_mass, **kwargs):
         """Abstract method all subclasses must define to fix the center of mass of the probes."""
         pass
 
@@ -164,7 +187,17 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def reconstruct(self,max_iterations,return_iterations,fix_com,random_seed,verbose,functions_queue,parameters,**kwargs):
+    def reconstruct(
+        self,
+        max_iterations,
+        return_iterations,
+        fix_com,
+        random_seed,
+        verbose,
+        functions_queue,
+        parameters,
+        **kwargs,
+    ):
         """
         Abstract method all subclasses must define which does the following:
         - Precomputes the order of function calls using the subclass _prepare_functions_queue() method
@@ -179,9 +212,11 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
         pass
 
     @staticmethod
-    def _update_parameters(parameters: dict,
-                           polar_parameters: dict = {},
-                           experimental_parameters:dict = {}):
+    def _update_parameters(
+        parameters: dict,
+        polar_parameters: dict = {},
+        experimental_parameters: dict = {},
+    ):
         """
         Common static method to update polar and experimental parameters during initialization.
 
@@ -204,30 +239,31 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
         for symbol, value in parameters.items():
             if symbol in polar_symbols:
                 polar_parameters[symbol] = value
-            elif symbol == 'defocus':
+            elif symbol == "defocus":
                 polar_parameters[polar_aliases[symbol]] = -value
             elif symbol in polar_aliases.keys():
                 polar_parameters[polar_aliases[symbol]] = value
             elif symbol in experimental_symbols:
                 experimental_parameters[symbol] = value
             else:
-                raise ValueError('{} not a recognized parameter'.format(symbol))
+                raise ValueError("{} not a recognized parameter".format(symbol))
 
         return polar_parameters, experimental_parameters
 
     @staticmethod
-    def _pad_diffraction_patterns(diffraction_patterns: np.ndarray,
-                                  region_of_interest_shape: Sequence[int]):
+    def _pad_diffraction_patterns(
+        diffraction_patterns: np.ndarray, region_of_interest_shape: Sequence[int]
+    ):
         """
         Common static method to zero-pad CBED patterns to a certain region of interest shape.
-        
+
         Parameters
         ----------
         diffraction_patterns: (J,M,N) np.ndarray
             Flat array of CBED patterns to be zero-padded
         region_of_interest_shape: (2,) Sequence[int]
             Pixel dimensions (R,S) the CBED patterns will be padded to
-            
+
 
         Returns
         -------
@@ -236,26 +272,35 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
         """
 
         diffraction_patterns_size = diffraction_patterns.shape[-2:]
-        xp                        = get_array_module(diffraction_patterns)
+        xp = get_array_module(diffraction_patterns)
 
-        if any(dp_shape > roi_shape for dp_shape, roi_shape
-                                    in zip(diffraction_patterns_size,region_of_interest_shape)):
+        if any(
+            dp_shape > roi_shape
+            for dp_shape, roi_shape in zip(
+                diffraction_patterns_size, region_of_interest_shape
+            )
+        ):
             raise ValueError()
 
         if diffraction_patterns_size != region_of_interest_shape:
-            padding_list = [(0,0)]  # No padding along first dimension
-            for current_dim, target_dim in zip(diffraction_patterns_size, region_of_interest_shape):
-                pad_value = (target_dim - current_dim)
-                pad_tuple = ((pad_value//2, pad_value//2 + pad_value%2))
+            padding_list = [(0, 0)]  # No padding along first dimension
+            for current_dim, target_dim in zip(
+                diffraction_patterns_size, region_of_interest_shape
+            ):
+                pad_value = target_dim - current_dim
+                pad_tuple = (pad_value // 2, pad_value // 2 + pad_value % 2)
                 padding_list.append(pad_tuple)
 
-            diffraction_patterns = xp.pad(diffraction_patterns, tuple(padding_list), mode='constant')
+            diffraction_patterns = xp.pad(
+                diffraction_patterns, tuple(padding_list), mode="constant"
+            )
 
         return diffraction_patterns
 
     @staticmethod
-    def _extract_calibrations_from_measurement_object(measurement: Measurement,
-                                                      energy: float = None):
+    def _extract_calibrations_from_measurement_object(
+        measurement: Measurement, energy: float = None
+    ):
         """
         Common static method to extract angular sampling and scan step sizes from Measurement object.
 
@@ -276,33 +321,37 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
             Measurement scan step sizes in Å if Measurement holds a 4D array
             None if Measurement holds a 3D array
         """
-        calibrations               = measurement.calibrations
-        calibration_units          = measurement.calibration_units
-        diffraction_patterns       = measurement.array
+        calibrations = measurement.calibrations
+        calibration_units = measurement.calibration_units
+        diffraction_patterns = measurement.array
 
-        if any(unit != 'Å' for unit in calibration_units[:-2]):
+        if any(unit != "Å" for unit in calibration_units[:-2]):
             raise ValueError()
 
-        if any(unit != 'mrad' and unit != '1/Å' for unit in calibration_units[-2:]):
+        if any(unit != "mrad" and unit != "1/Å" for unit in calibration_units[-2:]):
             raise ValueError()
 
-        angular_sampling  = []
-        for cal, cal_unit in zip(calibrations[-2:],calibration_units[-2:]):
-            scale_factor  = 1. if cal_unit == 'mrad' else energy2wavelength(energy)*1e3
+        angular_sampling = []
+        for cal, cal_unit in zip(calibrations[-2:], calibration_units[-2:]):
+            scale_factor = (
+                1.0 if cal_unit == "mrad" else energy2wavelength(energy) * 1e3
+            )
             angular_sampling.append(cal.sampling * scale_factor)
-        angular_sampling  = tuple(angular_sampling)
+        angular_sampling = tuple(angular_sampling)
 
-        step_sizes     = None
+        step_sizes = None
         if len(diffraction_patterns.shape) == 4:
             step_sizes = tuple(cal.sampling for cal in calibrations[:2])
 
         return diffraction_patterns, angular_sampling, step_sizes
 
     @staticmethod
-    def _calculate_scan_positions_in_pixels(positions:np.ndarray,
-                                            sampling: Sequence[float],
-                                            region_of_interest_shape: Sequence[int],
-                                            experimental_parameters: dict):
+    def _calculate_scan_positions_in_pixels(
+        positions: np.ndarray,
+        sampling: Sequence[float],
+        region_of_interest_shape: Sequence[int],
+        experimental_parameters: dict,
+    ):
         """
         Common static method to compute the initial guess of scan positions in pixels.
 
@@ -326,10 +375,10 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
             Updated experimental parameters dataset
         """
 
-        grid_scan_shape   = experimental_parameters['grid_scan_shape']
-        step_sizes        = experimental_parameters['scan_step_sizes']
-        rotation_angle    = experimental_parameters['rotation_angle']
-        object_px_padding = experimental_parameters['object_px_padding']
+        grid_scan_shape = experimental_parameters["grid_scan_shape"]
+        step_sizes = experimental_parameters["scan_step_sizes"]
+        rotation_angle = experimental_parameters["rotation_angle"]
+        object_px_padding = experimental_parameters["object_px_padding"]
 
         if positions is None:
             if grid_scan_shape is not None:
@@ -337,35 +386,37 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
 
                 if step_sizes is not None:
                     sx, sy = step_sizes
-                    x      = np.arange(nx)*sx
-                    y      = np.arange(ny)*sy
+                    x = np.arange(nx) * sx
+                    y = np.arange(ny) * sy
                 else:
                     raise ValueError()
             else:
                 raise ValueError()
 
         else:
-            x = positions[:,0]
-            y = positions[:,1]
+            x = positions[:, 0]
+            y = positions[:, 1]
 
-        x     = (x-np.ptp(x)/2) / sampling[0]
-        y     = (y-np.ptp(y)/2) / sampling[1]
-        x, y  = np.meshgrid(x, y, indexing='ij')
+        x = (x - np.ptp(x) / 2) / sampling[0]
+        y = (y - np.ptp(y) / 2) / sampling[1]
+        x, y = np.meshgrid(x, y, indexing="ij")
 
         if rotation_angle is not None:
-            x, y       = x*np.cos(rotation_angle) + y*np.sin(rotation_angle), -x*np.sin(rotation_angle) + y*np.cos(rotation_angle)
+            x, y = x * np.cos(rotation_angle) + y * np.sin(rotation_angle), -x * np.sin(
+                rotation_angle
+            ) + y * np.cos(rotation_angle)
 
-        positions      = np.array([x.ravel(),y.ravel()]).T
-        positions     -= np.min(positions,axis=0)
+        positions = np.array([x.ravel(), y.ravel()]).T
+        positions -= np.min(positions, axis=0)
 
         if object_px_padding is None:
-            object_px_padding = np.array(region_of_interest_shape)/2
+            object_px_padding = np.array(region_of_interest_shape) / 2
         else:
             object_px_padding = np.array(object_px_padding)
 
-        positions     += object_px_padding
+        positions += object_px_padding
 
-        experimental_parameters['object_px_padding'] = object_px_padding
+        experimental_parameters["object_px_padding"] = object_px_padding
         return positions, experimental_parameters
 
     @property
@@ -374,7 +425,7 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
         if not self._preprocessed:
             return None
 
-        return self._experimental_parameters['angular_sampling']
+        return self._experimental_parameters["angular_sampling"]
 
     @property
     def sampling(self):
@@ -382,8 +433,10 @@ class AbstractPtychographicOperator(metaclass=ABCMeta):
         if not self._preprocessed:
             return None
 
-        return tuple(energy2wavelength(self._energy)*1e3/dk/n
-                         for dk,n in zip(self.angular_sampling,self._region_of_interest_shape))
+        return tuple(
+            energy2wavelength(self._energy) * 1e3 / dk / n
+            for dk, n in zip(self.angular_sampling, self._region_of_interest_shape)
+        )
 
 
 class RegularizedPtychographicOperator(AbstractPtychographicOperator):
@@ -424,49 +477,57 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
        Dictionary specifying any of the abtem.transfer.polar_symbols or abtem.reconstruct.experimental_symbols parameters
        Additionally, these can also be specified using kwargs
     """
-    def __init__(self,
-                 diffraction_patterns:Union[np.ndarray,Measurement],
-                 energy: float,
-                 region_of_interest_shape: Sequence[int] = None,
-                 objects: np.ndarray = None,
-                 probes: Union[np.ndarray,Probe] = None,
-                 positions: np.ndarray = None,
-                 semiangle_cutoff: float = None,
-                 preprocess: bool = False,
-                 device: str = 'cpu',
-                 parameters: Mapping[str,float] = None,
-                 **kwargs):
-        
+
+    def __init__(
+        self,
+        diffraction_patterns: Union[np.ndarray, Measurement],
+        energy: float,
+        region_of_interest_shape: Sequence[int] = None,
+        objects: np.ndarray = None,
+        probes: Union[np.ndarray, Probe] = None,
+        positions: np.ndarray = None,
+        semiangle_cutoff: float = None,
+        preprocess: bool = False,
+        device: str = "cpu",
+        parameters: Mapping[str, float] = None,
+        **kwargs,
+    ):
+
         for key in kwargs.keys():
-            if (key not in polar_symbols) and (key not in polar_aliases.keys()) and (key not in experimental_symbols):
-                raise ValueError('{} not a recognized parameter'.format(key))
-    
-        self._polar_parameters        = dict(zip(polar_symbols, [0.] * len(polar_symbols)))
-        self._experimental_parameters = dict(zip(experimental_symbols, [None] * len(experimental_symbols)))
-        
+            if (
+                (key not in polar_symbols)
+                and (key not in polar_aliases.keys())
+                and (key not in experimental_symbols)
+            ):
+                raise ValueError("{} not a recognized parameter".format(key))
+
+        self._polar_parameters = dict(zip(polar_symbols, [0.0] * len(polar_symbols)))
+        self._experimental_parameters = dict(
+            zip(experimental_symbols, [None] * len(experimental_symbols))
+        )
+
         if parameters is None:
             parameters = {}
-        
+
         parameters.update(kwargs)
-        self._polar_parameters, self._experimental_parameters = self._update_parameters(parameters,
-                                                                                        self._polar_parameters,
-                                                                                        self._experimental_parameters)
-        
-        self._region_of_interest_shape   = region_of_interest_shape
-        self._energy                     = energy
-        self._semiangle_cutoff           = semiangle_cutoff
-        self._positions                  = positions
-        self._device                     = device
-        self._objects                    = objects
-        self._probes                     = probes
-        self._diffraction_patterns       = diffraction_patterns
-    
+        self._polar_parameters, self._experimental_parameters = self._update_parameters(
+            parameters, self._polar_parameters, self._experimental_parameters
+        )
+
+        self._region_of_interest_shape = region_of_interest_shape
+        self._energy = energy
+        self._semiangle_cutoff = semiangle_cutoff
+        self._positions = positions
+        self._device = device
+        self._objects = objects
+        self._probes = probes
+        self._diffraction_patterns = diffraction_patterns
+
         if preprocess:
             self.preprocess()
         else:
             self._preprocessed = False
-            
-        
+
     def preprocess(self):
         """
         Preprocess method to do the following:
@@ -479,94 +540,128 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         -------
         preprocessed_ptychographic_operator: RegularizedPtychographicOperator
         """
-        
+
         self._preprocessed = True
-        
+
         # Convert Measurement Objects
         if isinstance(self._diffraction_patterns, Measurement):
-            self._diffraction_patterns, angular_sampling, step_sizes = self._extract_calibrations_from_measurement_object(
-                                                                                              self._diffraction_patterns,
-                                                                                              self._energy)
-            self._experimental_parameters['angular_sampling'] = angular_sampling
+            (
+                self._diffraction_patterns,
+                angular_sampling,
+                step_sizes,
+            ) = self._extract_calibrations_from_measurement_object(
+                self._diffraction_patterns, self._energy
+            )
+            self._experimental_parameters["angular_sampling"] = angular_sampling
             if step_sizes is not None:
-                self._experimental_parameters['scan_step_sizes']   = step_sizes
-                
+                self._experimental_parameters["scan_step_sizes"] = step_sizes
+
         # Preprocess Diffraction Patterns
-        xp                             = get_array_module_from_device(self._device)
-        self._diffraction_patterns     = copy_to_device(self._diffraction_patterns,self._device)
-        
+        xp = get_array_module_from_device(self._device)
+        self._diffraction_patterns = copy_to_device(
+            self._diffraction_patterns, self._device
+        )
+
         if len(self._diffraction_patterns.shape) == 4:
-            self._experimental_parameters['grid_scan_shape'] = self._diffraction_patterns.shape[:2]
-            self._diffraction_patterns                       = self._diffraction_patterns.reshape(
-                                                                    (-1,)+self._diffraction_patterns.shape[-2:])
-            
+            self._experimental_parameters[
+                "grid_scan_shape"
+            ] = self._diffraction_patterns.shape[:2]
+            self._diffraction_patterns = self._diffraction_patterns.reshape(
+                (-1,) + self._diffraction_patterns.shape[-2:]
+            )
+
         if self._region_of_interest_shape is None:
             self._region_of_interest_shape = self._diffraction_patterns.shape[-2:]
-        
-        self._diffraction_patterns         = self._pad_diffraction_patterns(self._diffraction_patterns,
-                                                                            self._region_of_interest_shape)
-        self._num_diffraction_patterns     = self._diffraction_patterns.shape[0]
-        
-        if self._experimental_parameters['background_counts_cutoff'] is not None:
-            self._diffraction_patterns[self._diffraction_patterns < self._experimental_parameters['background_counts_cutoff']] = 0.0
 
-        if self._experimental_parameters['counts_scaling_factor'] is not None:
-            self._diffraction_patterns /= self._experimental_parameters['counts_scaling_factor']   
+        self._diffraction_patterns = self._pad_diffraction_patterns(
+            self._diffraction_patterns, self._region_of_interest_shape
+        )
+        self._num_diffraction_patterns = self._diffraction_patterns.shape[0]
 
-        self._diffraction_patterns      = xp.fft.ifftshift(xp.sqrt(self._diffraction_patterns),axes=(-2,-1))
-        
-        
+        if self._experimental_parameters["background_counts_cutoff"] is not None:
+            self._diffraction_patterns[
+                self._diffraction_patterns
+                < self._experimental_parameters["background_counts_cutoff"]
+            ] = 0.0
+
+        if self._experimental_parameters["counts_scaling_factor"] is not None:
+            self._diffraction_patterns /= self._experimental_parameters[
+                "counts_scaling_factor"
+            ]
+
+        self._diffraction_patterns = xp.fft.ifftshift(
+            xp.sqrt(self._diffraction_patterns), axes=(-2, -1)
+        )
+
         # Scan Positions Initialization
-        positions_px, self._experimental_parameters = self._calculate_scan_positions_in_pixels(self._positions,
-                                                                                               self.sampling,
-                                                                                               self._region_of_interest_shape,
-                                                                                               self._experimental_parameters)
-        
+        (
+            positions_px,
+            self._experimental_parameters,
+        ) = self._calculate_scan_positions_in_pixels(
+            self._positions,
+            self.sampling,
+            self._region_of_interest_shape,
+            self._experimental_parameters,
+        )
+
         # Objects Initialization
         if self._objects is None:
-            pad_x, pad_y  = self._experimental_parameters['object_px_padding']
-            p, q          = np.max(positions_px,axis=0)
-            p             = np.max([np.round(p + pad_x), self._region_of_interest_shape[0]]).astype(int)
-            q             = np.max([np.round(q + pad_y), self._region_of_interest_shape[1]]).astype(int)
-            self._objects = xp.ones((p,q),dtype=xp.complex64)
+            pad_x, pad_y = self._experimental_parameters["object_px_padding"]
+            p, q = np.max(positions_px, axis=0)
+            p = np.max([np.round(p + pad_x), self._region_of_interest_shape[0]]).astype(
+                int
+            )
+            q = np.max([np.round(q + pad_y), self._region_of_interest_shape[1]]).astype(
+                int
+            )
+            self._objects = xp.ones((p, q), dtype=xp.complex64)
         else:
-            self._objects = copy_to_device(self._objects,self._device)
-                
-        self._positions_px                                = copy_to_device(positions_px,self._device)
-        self._positions_px_com                            = xp.mean(self._positions_px,axis=0)
-        
+            self._objects = copy_to_device(self._objects, self._device)
+
+        self._positions_px = copy_to_device(positions_px, self._device)
+        self._positions_px_com = xp.mean(self._positions_px, axis=0)
+
         # Probes Initialization
         if self._probes is None:
-            ctf           = CTF(energy=self._energy,
-                                semiangle_cutoff=self._semiangle_cutoff,
-                                parameters= self._polar_parameters)
-            self._probes = Probe(semiangle_cutoff = self._semiangle_cutoff,
-                                 energy           = self._energy,
-                                 gpts             = self._region_of_interest_shape,
-                                 sampling         = self.sampling,
-                                 ctf              = ctf,
-                                 device           = self._device).build().array
+            ctf = CTF(
+                energy=self._energy,
+                semiangle_cutoff=self._semiangle_cutoff,
+                parameters=self._polar_parameters,
+            )
+            self._probes = (
+                Probe(
+                    semiangle_cutoff=self._semiangle_cutoff,
+                    energy=self._energy,
+                    gpts=self._region_of_interest_shape,
+                    sampling=self.sampling,
+                    ctf=ctf,
+                    device=self._device,
+                )
+                .build()
+                .array
+            )
         else:
-            if isinstance(self._probes,Probe):
+            if isinstance(self._probes, Probe):
                 if self._probes.gpts != self._region_of_interest_shape:
                     raise ValueError()
-                self._probes = copy_to_device(self._probes.build().array,self._device)
+                self._probes = copy_to_device(self._probes.build().array, self._device)
             else:
-                self._probes = copy_to_device(self._probes,self._device)
-        
+                self._probes = copy_to_device(self._probes, self._device)
+
         return self
-        
-        
+
     @staticmethod
-    def _overlap_projection(objects:np.ndarray,
-                            probes:np.ndarray,
-                            position:np.ndarray,
-                            old_position:np.ndarray,
-                            xp = np,
-                            **kwargs):
+    def _overlap_projection(
+        objects: np.ndarray,
+        probes: np.ndarray,
+        position: np.ndarray,
+        old_position: np.ndarray,
+        xp=np,
+        **kwargs,
+    ):
         """
         Regularized-PIE overlap projection static method:
-        .. math:: 
+        .. math::
             \psi_{R_j}(r) = O_{R_j}(r) * P(r)
 
 
@@ -591,26 +686,30 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         exit_wave: np.ndarray
             Overlap projection of illuminated probe
         """
-        
-        fractional_position      = position - xp.round(position)
-        old_fractional_position  = old_position - xp.round(old_position)
-        
-        probes                   = fft_shift(probes,fractional_position - old_fractional_position)
-        object_indices           = _wrapped_indices_2D_window(position,probes.shape,objects.shape)
-        object_roi               = objects[object_indices]
-        exit_wave                = object_roi * probes
-        
+
+        fractional_position = position - xp.round(position)
+        old_fractional_position = old_position - xp.round(old_position)
+
+        probes = fft_shift(probes, fractional_position - old_fractional_position)
+        object_indices = _wrapped_indices_2D_window(
+            position, probes.shape, objects.shape
+        )
+        object_roi = objects[object_indices]
+        exit_wave = object_roi * probes
+
         return probes, exit_wave
-     
+
     @staticmethod
-    def _fourier_projection(exit_waves:np.ndarray,
-                            diffraction_patterns:np.ndarray,
-                            sse:float,
-                            xp = np,
-                            **kwargs):
+    def _fourier_projection(
+        exit_waves: np.ndarray,
+        diffraction_patterns: np.ndarray,
+        sse: float,
+        xp=np,
+        **kwargs,
+    ):
         """
         Regularized-PIE fourier projection static method:
-        .. math:: 
+        .. math::
             \psi'_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi_{R_j}(u)] / |F[\psi_{R_j}(u)]|]
 
 
@@ -632,25 +731,31 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         sse: float
             Updated sum of squares error estimate
         """
-        exit_wave_fft       = xp.fft.fft2(exit_waves)
-        sse                += xp.mean(xp.abs(xp.abs(exit_wave_fft) - diffraction_patterns)**2)/xp.sum(diffraction_patterns**2)
-        modified_exit_wave  = xp.fft.ifft2(diffraction_patterns * xp.exp(1j * xp.angle(exit_wave_fft)))
-        
+        exit_wave_fft = xp.fft.fft2(exit_waves)
+        sse += xp.mean(
+            xp.abs(xp.abs(exit_wave_fft) - diffraction_patterns) ** 2
+        ) / xp.sum(diffraction_patterns**2)
+        modified_exit_wave = xp.fft.ifft2(
+            diffraction_patterns * xp.exp(1j * xp.angle(exit_wave_fft))
+        )
+
         return modified_exit_wave, sse
-        
-    @staticmethod   
-    def _update_function(objects:np.ndarray,
-                         probes:np.ndarray,
-                         position:np.ndarray,
-                         exit_waves:np.ndarray,
-                         modified_exit_waves:np.ndarray,
-                         diffraction_patterns:np.ndarray,
-                         fix_probe: bool = False,
-                         position_correction: Callable = None,
-                         sobel: Callable = None,
-                         reconstruction_parameters: Mapping[str,float] = None,
-                         xp = np,
-                         **kwargs):
+
+    @staticmethod
+    def _update_function(
+        objects: np.ndarray,
+        probes: np.ndarray,
+        position: np.ndarray,
+        exit_waves: np.ndarray,
+        modified_exit_waves: np.ndarray,
+        diffraction_patterns: np.ndarray,
+        fix_probe: bool = False,
+        position_correction: Callable = None,
+        sobel: Callable = None,
+        reconstruction_parameters: Mapping[str, float] = None,
+        xp=np,
+        **kwargs,
+    ):
         """
         Regularized-PIE objects and probes update static method:
         .. math::
@@ -692,37 +797,55 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         position: np.ndarray
             Updated probe position estimate
         """
-        
-        object_indices           = _wrapped_indices_2D_window(position,probes.shape,objects.shape)
-        object_roi               = objects[object_indices]
-        
-        exit_wave_diff           = modified_exit_waves - exit_waves
-        
-        probe_conj               = xp.conj(probes)
-        probe_abs_squared        = xp.abs(probes)**2
-        obj_conj                 = xp.conj(object_roi)
-        obj_abs_squared          = xp.abs(object_roi)**2
-        
+
+        object_indices = _wrapped_indices_2D_window(
+            position, probes.shape, objects.shape
+        )
+        object_roi = objects[object_indices]
+
+        exit_wave_diff = modified_exit_waves - exit_waves
+
+        probe_conj = xp.conj(probes)
+        probe_abs_squared = xp.abs(probes) ** 2
+        obj_conj = xp.conj(object_roi)
+        obj_abs_squared = xp.abs(object_roi) ** 2
+
         if position_correction is not None:
-            position_step_size   = reconstruction_parameters['position_step_size']
-            position             = position_correction(objects, probes,position, exit_waves, modified_exit_waves, diffraction_patterns,
-                                                       sobel=sobel,position_step_size=position_step_size, xp=xp)
-            
-        alpha                    = reconstruction_parameters['alpha']
-        object_step_size         = reconstruction_parameters['object_step_size']
-        objects[object_indices] += object_step_size * probe_conj*exit_wave_diff / (
-                                    (1-alpha)*probe_abs_squared + alpha*xp.max(probe_abs_squared))
-        
+            position_step_size = reconstruction_parameters["position_step_size"]
+            position = position_correction(
+                objects,
+                probes,
+                position,
+                exit_waves,
+                modified_exit_waves,
+                diffraction_patterns,
+                sobel=sobel,
+                position_step_size=position_step_size,
+                xp=xp,
+            )
+
+        alpha = reconstruction_parameters["alpha"]
+        object_step_size = reconstruction_parameters["object_step_size"]
+        objects[object_indices] += (
+            object_step_size
+            * probe_conj
+            * exit_wave_diff
+            / ((1 - alpha) * probe_abs_squared + alpha * xp.max(probe_abs_squared))
+        )
+
         if not fix_probe:
-            beta                 = reconstruction_parameters['beta']
-            probe_step_size      = reconstruction_parameters['probe_step_size']
-            probes              += probe_step_size * obj_conj*exit_wave_diff / (
-                                    (1-beta)*obj_abs_squared + beta*xp.max(obj_abs_squared))
-            
+            beta = reconstruction_parameters["beta"]
+            probe_step_size = reconstruction_parameters["probe_step_size"]
+            probes += (
+                probe_step_size
+                * obj_conj
+                * exit_wave_diff
+                / ((1 - beta) * obj_abs_squared + beta * xp.max(obj_abs_squared))
+            )
+
         return objects, probes, position
-    
-        
-    '''
+
+    """
     @staticmethod
     def _position_correction(objects: np.ndarray,
                              probes: np.ndarray,
@@ -756,19 +879,21 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         displacements              = xp.linalg.lstsq(coefficients_matrix,difference_intensity,rcond=None)[0]
         
         return position - position_step_size*displacements
-    '''
-    
+    """
+
     @staticmethod
-    def _position_correction(objects: np.ndarray,
-                             probes: np.ndarray,
-                             position:np.ndarray,
-                             exit_wave:np.ndarray,
-                             modified_exit_wave: np.ndarray,
-                             diffraction_pattern:np.ndarray,
-                             sobel:Callable,
-                             position_step_size: float = 1.0,
-                             xp=np,
-                             **kwargs):
+    def _position_correction(
+        objects: np.ndarray,
+        probes: np.ndarray,
+        position: np.ndarray,
+        exit_wave: np.ndarray,
+        modified_exit_wave: np.ndarray,
+        diffraction_pattern: np.ndarray,
+        sobel: Callable,
+        position_step_size: float = 1.0,
+        xp=np,
+        **kwargs,
+    ):
         """
         Regularized-PIE probe position correction method.
 
@@ -800,25 +925,31 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
             Updated probe position estimate
         """
 
-        object_dx       = sobel(objects,axis=0,mode='wrap')
-        object_dy       = sobel(objects,axis=1,mode='wrap')
-        
-        object_indices  = _wrapped_indices_2D_window(position,probes.shape,objects.shape)
-        exit_wave_dx    = object_dx[object_indices]*probes
-        exit_wave_dy    = object_dy[object_indices]*probes
-        
-        exit_wave_diff  = modified_exit_wave - exit_wave
-        displacement_x  = xp.sum(xp.real(xp.conj(exit_wave_dx)*exit_wave_diff))/xp.sum(xp.abs(exit_wave_dx)**2)
-        displacement_y  = xp.sum(xp.real(xp.conj(exit_wave_dy)*exit_wave_diff))/xp.sum(xp.abs(exit_wave_dy)**2)
-        
-        return position + position_step_size*xp.array([displacement_x,displacement_y])
-    
-    
+        object_dx = sobel(objects, axis=0, mode="wrap")
+        object_dy = sobel(objects, axis=1, mode="wrap")
+
+        object_indices = _wrapped_indices_2D_window(
+            position, probes.shape, objects.shape
+        )
+        exit_wave_dx = object_dx[object_indices] * probes
+        exit_wave_dy = object_dy[object_indices] * probes
+
+        exit_wave_diff = modified_exit_wave - exit_wave
+        displacement_x = xp.sum(
+            xp.real(xp.conj(exit_wave_dx) * exit_wave_diff)
+        ) / xp.sum(xp.abs(exit_wave_dx) ** 2)
+        displacement_y = xp.sum(
+            xp.real(xp.conj(exit_wave_dy) * exit_wave_diff)
+        ) / xp.sum(xp.abs(exit_wave_dy) ** 2)
+
+        return position + position_step_size * xp.array(
+            [displacement_x, displacement_y]
+        )
+
     @staticmethod
-    def _fix_probe_center_of_mass(probes:np.ndarray,
-                                  center_of_mass:Callable,
-                                  xp = np,
-                                  **kwargs):
+    def _fix_probe_center_of_mass(
+        probes: np.ndarray, center_of_mass: Callable, xp=np, **kwargs
+    ):
         """
         Regularized-PIE probe center correction method.
 
@@ -837,21 +968,23 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         probes: np.ndarray
             Center-of-mass corrected probes array
         """
-        
-        probe_center = xp.array(probes.shape)/2
-        com          = center_of_mass(xp.abs(probes) ** 2)
-        probes       = fft_shift(probes, probe_center - xp.array(com))
-        
+
+        probe_center = xp.array(probes.shape) / 2
+        com = center_of_mass(xp.abs(probes) ** 2)
+        probes = fft_shift(probes, probe_center - xp.array(com))
+
         return probes
-        
-    def _prepare_functions_queue(self,
-                                 max_iterations: int,
-                                 pre_position_correction_update_steps: int = None,
-                                 pre_probe_correction_update_steps: int = None,
-                                 **kwargs):
+
+    def _prepare_functions_queue(
+        self,
+        max_iterations: int,
+        pre_position_correction_update_steps: int = None,
+        pre_probe_correction_update_steps: int = None,
+        **kwargs,
+    ):
         """
         Precomputes the order in which functions will be called in the reconstruction loop.
-        Additionally, prepares a summary of steps to be printed for reporting. 
+        Additionally, prepares a summary of steps to be printed for reporting.
 
         Parameters
         ----------
@@ -869,44 +1002,63 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         queue_summary: str
             Summary of function calls the reconstruction loop will perform
         """
-        total_update_steps   = max_iterations*self._num_diffraction_patterns
-        queue_summary        = "Ptychographic reconstruction will perform the following steps:"
-    
-        functions_tuple      = (self._overlap_projection,self._fourier_projection, self._update_function, None)
-        functions_queue      = [functions_tuple]
+        total_update_steps = max_iterations * self._num_diffraction_patterns
+        queue_summary = "Ptychographic reconstruction will perform the following steps:"
+
+        functions_tuple = (
+            self._overlap_projection,
+            self._fourier_projection,
+            self._update_function,
+            None,
+        )
+        functions_queue = [functions_tuple]
         if pre_position_correction_update_steps is None:
             functions_queue *= total_update_steps
-            queue_summary   += f"\n--Regularized PIE for {total_update_steps} steps"
+            queue_summary += f"\n--Regularized PIE for {total_update_steps} steps"
         else:
             functions_queue *= pre_position_correction_update_steps
-            queue_summary   += f"\n--Regularized PIE for {pre_position_correction_update_steps} steps"
+            queue_summary += (
+                f"\n--Regularized PIE for {pre_position_correction_update_steps} steps"
+            )
 
-            functions_tuple = (self._overlap_projection,self._fourier_projection, self._update_function, self._position_correction)
+            functions_tuple = (
+                self._overlap_projection,
+                self._fourier_projection,
+                self._update_function,
+                self._position_correction,
+            )
 
-            remaining_update_steps = total_update_steps - pre_position_correction_update_steps
-            functions_queue += [functions_tuple]*remaining_update_steps
-            queue_summary   += f"\n--Regularized PIE with position correction for {remaining_update_steps} steps"
-        
+            remaining_update_steps = (
+                total_update_steps - pre_position_correction_update_steps
+            )
+            functions_queue += [functions_tuple] * remaining_update_steps
+            queue_summary += f"\n--Regularized PIE with position correction for {remaining_update_steps} steps"
+
         if pre_probe_correction_update_steps is None:
             queue_summary += f"\n--Probe correction is enabled"
         elif pre_probe_correction_update_steps > total_update_steps:
             queue_summary += f"\n--Probe correction is disabled"
         else:
             queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
-        
-        functions_queue = [functions_queue[x:x+self._num_diffraction_patterns] for x in range(0, total_update_steps, self._num_diffraction_patterns)]
-        
+
+        functions_queue = [
+            functions_queue[x : x + self._num_diffraction_patterns]
+            for x in range(0, total_update_steps, self._num_diffraction_patterns)
+        ]
+
         return functions_queue, queue_summary
-    
-    def reconstruct(self,
-                    max_iterations: int = 5,
-                    return_iterations: bool = False,
-                    fix_com: bool = True,
-                    random_seed = None,
-                    verbose: bool = False,
-                    functions_queue: Iterable = None,
-                    parameters: Mapping[str,float] = None,
-                    **kwargs):
+
+    def reconstruct(
+        self,
+        max_iterations: int = 5,
+        return_iterations: bool = False,
+        fix_com: bool = True,
+        random_seed=None,
+        verbose: bool = False,
+        functions_queue: Iterable = None,
+        parameters: Mapping[str, float] = None,
+        **kwargs,
+    ):
         """
         Main reconstruction loop method to do the following:
         - Precompute the order of function calls using the RegularizedPtychographicOperator._prepare_functions_queue method
@@ -943,65 +1095,82 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
             If return_iterations, a list of the reconstruction error at each iteration is returned
         """
         for key in kwargs.keys():
-            if (key not in reconstruction_symbols.keys()):
-                raise ValueError('{} not a recognized parameter'.format(key))
-                
+            if key not in reconstruction_symbols.keys():
+                raise ValueError("{} not a recognized parameter".format(key))
+
         if parameters is None:
             parameters = {}
         self._reconstruction_parameters = reconstruction_symbols.copy()
         self._reconstruction_parameters.update(parameters)
         self._reconstruction_parameters.update(kwargs)
-                 
+
         if functions_queue is None:
             functions_queue, summary = self._prepare_functions_queue(
-                                        max_iterations,
-                                        pre_position_correction_update_steps = self._reconstruction_parameters['pre_position_correction_update_steps'],
-                                        pre_probe_correction_update_steps    = self._reconstruction_parameters['pre_probe_correction_update_steps'])
+                max_iterations,
+                pre_position_correction_update_steps=self._reconstruction_parameters[
+                    "pre_position_correction_update_steps"
+                ],
+                pre_probe_correction_update_steps=self._reconstruction_parameters[
+                    "pre_probe_correction_update_steps"
+                ],
+            )
             if verbose:
                 print(summary)
         else:
             if len(functions_queue) == max_iterations:
                 if callable(functions_queue[0]):
-                    functions_queue = [[function_tuples]*self._num_diffraction_patterns for function_tuples in functions_queue]
-            elif len(functions_queue) == max_iterations*self._num_diffraction_patterns:
-                functions_queue = [functions_queue[x:x+self._num_diffraction_patterns] for x in range(0, total_update_steps, self._num_diffraction_patterns)]
+                    functions_queue = [
+                        [function_tuples] * self._num_diffraction_patterns
+                        for function_tuples in functions_queue
+                    ]
+            elif (
+                len(functions_queue) == max_iterations * self._num_diffraction_patterns
+            ):
+                functions_queue = [
+                    functions_queue[x : x + self._num_diffraction_patterns]
+                    for x in range(
+                        0, total_update_steps, self._num_diffraction_patterns
+                    )
+                ]
             else:
                 raise ValueError()
-        
+
         self._functions_queue = functions_queue
-        
+
         ### Main Loop
-        xp                  = get_array_module_from_device(self._device)
-        outer_pbar          = ProgressBar(total=max_iterations,leave=False)
-        inner_pbar          = ProgressBar(total=self._num_diffraction_patterns,leave=False)
-        indices             = np.arange(self._num_diffraction_patterns)
-        position_px_padding = xp.array(self._experimental_parameters['object_px_padding'])
-        center_of_mass      = get_scipy_module(xp).ndimage.center_of_mass
-        sobel               = get_scipy_module(xp).ndimage.sobel
-        
+        xp = get_array_module_from_device(self._device)
+        outer_pbar = ProgressBar(total=max_iterations, leave=False)
+        inner_pbar = ProgressBar(total=self._num_diffraction_patterns, leave=False)
+        indices = np.arange(self._num_diffraction_patterns)
+        position_px_padding = xp.array(
+            self._experimental_parameters["object_px_padding"]
+        )
+        center_of_mass = get_scipy_module(xp).ndimage.center_of_mass
+        sobel = get_scipy_module(xp).ndimage.sobel
+
         if return_iterations:
-            objects_iterations   = []
-            probes_iterations    = []
+            objects_iterations = []
+            probes_iterations = []
             positions_iterations = []
-            sse_iterations       = []
-        
+            sse_iterations = []
+
         if random_seed is not None:
             np.random.seed(random_seed)
-            
+
         for iteration_index, iteration_step in enumerate(self._functions_queue):
-            
+
             inner_pbar.reset()
-            
+
             # Set iteration-specific parameters
             np.random.shuffle(indices)
             old_position = position_px_padding
-            self._sse    = 0.0
-            
+            self._sse = 0.0
+
             for update_index, update_step in enumerate(iteration_step):
-                
-                index               = indices[update_index]
-                position            = self._positions_px[index]
-                
+
+                index = indices[update_index]
+                position = self._positions_px[index]
+
                 # Skip empty diffraction patterns
                 diffraction_pattern = self._diffraction_patterns[index]
                 if xp.sum(diffraction_pattern) == 0.0:
@@ -1009,94 +1178,131 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
                     continue
 
                 # Set update-specific parameters
-                global_iteration_i  = iteration_index*self._num_diffraction_patterns + update_index
-                
-                if self._reconstruction_parameters['pre_probe_correction_update_steps'] is None:
-                    fix_probe       = False
+                global_iteration_i = (
+                    iteration_index * self._num_diffraction_patterns + update_index
+                )
+
+                if (
+                    self._reconstruction_parameters["pre_probe_correction_update_steps"]
+                    is None
+                ):
+                    fix_probe = False
                 else:
-                    fix_probe       = global_iteration_i < self._reconstruction_parameters['pre_probe_correction_update_steps']
+                    fix_probe = (
+                        global_iteration_i
+                        < self._reconstruction_parameters[
+                            "pre_probe_correction_update_steps"
+                        ]
+                    )
 
-                _overlap_projection,_fourier_projection,_update_function,_position_correction = update_step
-            
-                self._probes, exit_wave                                = _overlap_projection(self._objects,
-                                                                                             self._probes,
-                                                                                             position,
-                                                                                             old_position,
-                                                                                             xp=xp)
-                
-                modified_exit_wave, self._sse                          = _fourier_projection(exit_wave,
-                                                                                             diffraction_pattern,
-                                                                                             self._sse,
-                                                                                             xp=xp)
+                (
+                    _overlap_projection,
+                    _fourier_projection,
+                    _update_function,
+                    _position_correction,
+                ) = update_step
 
-                self._objects, self._probes, self._positions_px[index] = _update_function(self._objects,
-                                                                                          self._probes,
-                                                                                          position,
-                                                                                          exit_wave,
-                                                                                          modified_exit_wave,
-                                                                                          diffraction_pattern,
-                                                                                          fix_probe = fix_probe,
-                                                                                          position_correction = _position_correction,
-                                                                                          sobel = sobel,
-                                                                                          reconstruction_parameters = self._reconstruction_parameters,
-                                                                                          xp = xp)
-                    
-                old_position    = position
+                self._probes, exit_wave = _overlap_projection(
+                    self._objects, self._probes, position, old_position, xp=xp
+                )
+
+                modified_exit_wave, self._sse = _fourier_projection(
+                    exit_wave, diffraction_pattern, self._sse, xp=xp
+                )
+
+                (
+                    self._objects,
+                    self._probes,
+                    self._positions_px[index],
+                ) = _update_function(
+                    self._objects,
+                    self._probes,
+                    position,
+                    exit_wave,
+                    modified_exit_wave,
+                    diffraction_pattern,
+                    fix_probe=fix_probe,
+                    position_correction=_position_correction,
+                    sobel=sobel,
+                    reconstruction_parameters=self._reconstruction_parameters,
+                    xp=xp,
+                )
+
+                old_position = position
                 inner_pbar.update(1)
-              
+
             # Shift probe back to origin
-            self._probes     = fft_shift(self._probes,xp.round(position) - position)
-            
+            self._probes = fft_shift(self._probes, xp.round(position) - position)
+
             # Probe CoM
             if fix_com:
-                self._probes = self._fix_probe_center_of_mass(self._probes,center_of_mass,xp=xp)
-                 
+                self._probes = self._fix_probe_center_of_mass(
+                    self._probes, center_of_mass, xp=xp
+                )
+
             # Positions CoM
             if _position_correction is not None:
-                self._positions_px -= (xp.mean(self._positions_px,axis=0) - self._positions_px_com)
-                self._reconstruction_parameters['position_step_size']  *= self._reconstruction_parameters['step_size_damping_rate']
-            
+                self._positions_px -= (
+                    xp.mean(self._positions_px, axis=0) - self._positions_px_com
+                )
+                self._reconstruction_parameters[
+                    "position_step_size"
+                ] *= self._reconstruction_parameters["step_size_damping_rate"]
+
             # Update Parameters
-            self._reconstruction_parameters['object_step_size'] *= self._reconstruction_parameters['step_size_damping_rate']
-            self._reconstruction_parameters['probe_step_size']  *= self._reconstruction_parameters['step_size_damping_rate']
-            self._sse                                           /= self._num_diffraction_patterns
-            
+            self._reconstruction_parameters[
+                "object_step_size"
+            ] *= self._reconstruction_parameters["step_size_damping_rate"]
+            self._reconstruction_parameters[
+                "probe_step_size"
+            ] *= self._reconstruction_parameters["step_size_damping_rate"]
+            self._sse /= self._num_diffraction_patterns
+
             if return_iterations:
                 objects_iterations.append(self._objects.copy())
                 probes_iterations.append(self._probes.copy())
-                positions_iterations.append(self._positions_px.copy() * xp.array(self.sampling))
+                positions_iterations.append(
+                    self._positions_px.copy() * xp.array(self.sampling)
+                )
                 sse_iterations.append(self._sse)
-            
+
             if verbose:
-                print(f'----Iteration {iteration_index:<{len(str(max_iterations))}}, SSE = {float(self._sse):.3e}')
-            
+                print(
+                    f"----Iteration {iteration_index:<{len(str(max_iterations))}}, SSE = {float(self._sse):.3e}"
+                )
+
             outer_pbar.update(1)
-        
+
         inner_pbar.close()
         outer_pbar.close()
-        
+
         #  Return Results
         if return_iterations:
-            results = map(self._prepare_measurement_outputs,
-                          objects_iterations,
-                          probes_iterations,
-                          positions_iterations,
-                          sse_iterations)
-            
+            results = map(
+                self._prepare_measurement_outputs,
+                objects_iterations,
+                probes_iterations,
+                positions_iterations,
+                sse_iterations,
+            )
+
             return tuple(map(list, zip(*results)))
         else:
-            results = self._prepare_measurement_outputs(self._objects,
-                                                        self._probes,
-                                                        self._positions_px * xp.array(self.sampling),
-                                                        self._sse)
+            results = self._prepare_measurement_outputs(
+                self._objects,
+                self._probes,
+                self._positions_px * xp.array(self.sampling),
+                self._sse,
+            )
             return results
-        
-        
-    def _prepare_measurement_outputs(self,
-                                     objects:np.ndarray,
-                                     probes: np.ndarray,
-                                     positions: np.ndarray,
-                                     sse: np.ndarray):
+
+    def _prepare_measurement_outputs(
+        self,
+        objects: np.ndarray,
+        probes: np.ndarray,
+        positions: np.ndarray,
+        sse: np.ndarray,
+    ):
         """
         Method to format the reconstruction outputs as Measurement objects.
 
@@ -1122,13 +1328,17 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
         sse: float
             Reconstruction error
         """
-        
-        calibrations = tuple(Calibration(0, s, units='Å', name = n, endpoint=False) for s,n in zip(self.sampling,('x','y')))
-        
-        measurement_objects = Measurement(asnumpy(objects),calibrations)
-        measurement_probes  = Measurement(asnumpy(probes),calibrations)
-        
+
+        calibrations = tuple(
+            Calibration(0, s, units="Å", name=n, endpoint=False)
+            for s, n in zip(self.sampling, ("x", "y"))
+        )
+
+        measurement_objects = Measurement(asnumpy(objects), calibrations)
+        measurement_probes = Measurement(asnumpy(probes), calibrations)
+
         return measurement_objects, measurement_probes, asnumpy(positions), sse
+
 
 class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
     """
@@ -1168,53 +1378,64 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
        Dictionary specifying any of the abtem.transfer.polar_symbols or abtem.reconstruct.experimental_symbols parameters
        Additionally, these can also be specified using kwargs
     """
-    def __init__(self,
-                 diffraction_patterns:Union[Sequence[np.ndarray],Sequence[Measurement]],
-                 energy: float,
-                 region_of_interest_shape: Sequence[int] = None,
-                 objects: np.ndarray = None,
-                 probes: Union[np.ndarray,Probe] = None,
-                 positions: np.ndarray = None,
-                 semiangle_cutoff: float = None,
-                 preprocess: bool = False,
-                 device: str = 'cpu',
-                 parameters: Mapping[str,float] = None,
-                 **kwargs):
-        
+
+    def __init__(
+        self,
+        diffraction_patterns: Union[Sequence[np.ndarray], Sequence[Measurement]],
+        energy: float,
+        region_of_interest_shape: Sequence[int] = None,
+        objects: np.ndarray = None,
+        probes: Union[np.ndarray, Probe] = None,
+        positions: np.ndarray = None,
+        semiangle_cutoff: float = None,
+        preprocess: bool = False,
+        device: str = "cpu",
+        parameters: Mapping[str, float] = None,
+        **kwargs,
+    ):
+
         if len(diffraction_patterns) != 2:
-            raise NotImplementedError('Simultaneous ptychographic reconstruction is currently only implemented for two sets of diffraction patterns'
-                                      'allowing reconstruction of the electrostatic and magnetic phase contributions.'
-                                      'See the documentation for AbstractPtychographicOperator to implement your own class to handle more cases.')
-        
+            raise NotImplementedError(
+                "Simultaneous ptychographic reconstruction is currently only implemented for two sets of diffraction patterns"
+                "allowing reconstruction of the electrostatic and magnetic phase contributions."
+                "See the documentation for AbstractPtychographicOperator to implement your own class to handle more cases."
+            )
+
         for key in kwargs.keys():
-            if (key not in polar_symbols) and (key not in polar_aliases.keys()) and (key not in experimental_symbols):
-                raise ValueError('{} not a recognized parameter'.format(key))
-    
-        self._polar_parameters        = dict(zip(polar_symbols, [0.] * len(polar_symbols)))
-        self._experimental_parameters = dict(zip(experimental_symbols, [None] * len(experimental_symbols)))
-        
+            if (
+                (key not in polar_symbols)
+                and (key not in polar_aliases.keys())
+                and (key not in experimental_symbols)
+            ):
+                raise ValueError("{} not a recognized parameter".format(key))
+
+        self._polar_parameters = dict(zip(polar_symbols, [0.0] * len(polar_symbols)))
+        self._experimental_parameters = dict(
+            zip(experimental_symbols, [None] * len(experimental_symbols))
+        )
+
         if parameters is None:
             parameters = {}
-        
+
         parameters.update(kwargs)
-        self._polar_parameters, self._experimental_parameters = self._update_parameters(parameters,
-                                                                                        self._polar_parameters,
-                                                                                        self._experimental_parameters)
-        
-        self._region_of_interest_shape   = region_of_interest_shape
-        self._energy                     = energy
-        self._semiangle_cutoff           = semiangle_cutoff
-        self._positions                  = positions
-        self._device                     = device
-        self._objects                    = objects
-        self._probes                     = probes
-        self._diffraction_patterns       = diffraction_patterns
-    
+        self._polar_parameters, self._experimental_parameters = self._update_parameters(
+            parameters, self._polar_parameters, self._experimental_parameters
+        )
+
+        self._region_of_interest_shape = region_of_interest_shape
+        self._energy = energy
+        self._semiangle_cutoff = semiangle_cutoff
+        self._positions = positions
+        self._device = device
+        self._objects = objects
+        self._probes = probes
+        self._diffraction_patterns = diffraction_patterns
+
         if preprocess:
             self.preprocess()
         else:
             self._preprocessed = False
-            
+
     def preprocess(self):
         """
         Preprocess method to do the following:
@@ -1227,100 +1448,133 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         -------
         preprocessed_ptychographic_operator: SimultaneousPtychographicOperator
         """
-        
-        self._preprocessed    = True
-        
-        xp                    = get_array_module_from_device(self._device)
+
+        self._preprocessed = True
+
+        xp = get_array_module_from_device(self._device)
         _diffraction_patterns = []
         for dp in self._diffraction_patterns:
-            
-            # Convert Measurement Objects    
+
+            # Convert Measurement Objects
             if isinstance(dp, Measurement):
-                _dp, angular_sampling, step_sizes = self._extract_calibrations_from_measurement_object(dp, self._energy)
-                
+                (
+                    _dp,
+                    angular_sampling,
+                    step_sizes,
+                ) = self._extract_calibrations_from_measurement_object(dp, self._energy)
+
             # Preprocess Diffraction Patterns
-            _dp     = copy_to_device(_dp,self._device)
+            _dp = copy_to_device(_dp, self._device)
 
             if len(_dp.shape) == 4:
-                self._experimental_parameters['grid_scan_shape']   = _dp.shape[:2]
-                _dp                                                = _dp.reshape((-1,)+_dp.shape[-2:])
-                
+                self._experimental_parameters["grid_scan_shape"] = _dp.shape[:2]
+                _dp = _dp.reshape((-1,) + _dp.shape[-2:])
+
             if self._region_of_interest_shape is None:
                 self._region_of_interest_shape = _dp.shape[-2:]
-            _dp     = self._pad_diffraction_patterns(_dp,self._region_of_interest_shape)
-            
-            if self._experimental_parameters['background_counts_cutoff'] is not None:
-                _dp[_dp < self._experimental_parameters['background_counts_cutoff']] = 0.0
+            _dp = self._pad_diffraction_patterns(_dp, self._region_of_interest_shape)
 
-            if self._experimental_parameters['counts_scaling_factor'] is not None:
-                _dp    /= self._experimental_parameters['counts_scaling_factor'] 
-                
-            _dp         = xp.fft.ifftshift(xp.sqrt(_dp),axes=(-2,-1))
+            if self._experimental_parameters["background_counts_cutoff"] is not None:
+                _dp[
+                    _dp < self._experimental_parameters["background_counts_cutoff"]
+                ] = 0.0
+
+            if self._experimental_parameters["counts_scaling_factor"] is not None:
+                _dp /= self._experimental_parameters["counts_scaling_factor"]
+
+            _dp = xp.fft.ifftshift(xp.sqrt(_dp), axes=(-2, -1))
             _diffraction_patterns.append(_dp)
-        
-        
-        self._diffraction_patterns                              = tuple(_diffraction_patterns)
-        self._experimental_parameters['angular_sampling']       = angular_sampling
-        self._num_diffraction_patterns                          = self._diffraction_patterns[0].shape[0]
+
+        self._diffraction_patterns = tuple(_diffraction_patterns)
+        self._experimental_parameters["angular_sampling"] = angular_sampling
+        self._num_diffraction_patterns = self._diffraction_patterns[0].shape[0]
         if step_sizes is not None:
-            self._experimental_parameters['scan_step_sizes']    = step_sizes
-            
+            self._experimental_parameters["scan_step_sizes"] = step_sizes
+
         # Scan Positions Initialization
-        positions_px, self._experimental_parameters = self._calculate_scan_positions_in_pixels(self._positions,
-                                                                                               self.sampling,
-                                                                                               self._region_of_interest_shape,
-                                                                                               self._experimental_parameters)
-        
+        (
+            positions_px,
+            self._experimental_parameters,
+        ) = self._calculate_scan_positions_in_pixels(
+            self._positions,
+            self.sampling,
+            self._region_of_interest_shape,
+            self._experimental_parameters,
+        )
+
         # Objects Initialization
         if self._objects is None:
-            pad_x, pad_y  = self._experimental_parameters['object_px_padding']
-            p, q          = np.max(positions_px,axis=0)
-            p             = np.max([np.round(p + pad_x), self._region_of_interest_shape[0]]).astype(int)
-            q             = np.max([np.round(q + pad_y), self._region_of_interest_shape[1]]).astype(int)
-            self._objects = tuple(xp.ones((p,q),dtype=xp.complex64) for _obj_i in range(2))
+            pad_x, pad_y = self._experimental_parameters["object_px_padding"]
+            p, q = np.max(positions_px, axis=0)
+            p = np.max([np.round(p + pad_x), self._region_of_interest_shape[0]]).astype(
+                int
+            )
+            q = np.max([np.round(q + pad_y), self._region_of_interest_shape[1]]).astype(
+                int
+            )
+            self._objects = tuple(
+                xp.ones((p, q), dtype=xp.complex64) for _obj_i in range(2)
+            )
         else:
             if len(self._objects) != 2:
                 raise ValueError()
-            self._objects = tuple(copy_to_device(_obj,self._device) for _obj in self._objects)
-                
-        self._positions_px                                = copy_to_device(positions_px,self._device)
-        self._positions_px_com                            = xp.mean(self._positions_px,axis=0)
-        
+            self._objects = tuple(
+                copy_to_device(_obj, self._device) for _obj in self._objects
+            )
+
+        self._positions_px = copy_to_device(positions_px, self._device)
+        self._positions_px_com = xp.mean(self._positions_px, axis=0)
+
         # Probes Initialization
         if self._probes is None:
-            ctf          = CTF(energy=self._energy,
-                               semiangle_cutoff=self._semiangle_cutoff,
-                               parameters= self._polar_parameters)
-            self._probes = Probe(semiangle_cutoff = self._semiangle_cutoff,
-                                 energy           = self._energy,
-                                 gpts             = self._region_of_interest_shape,
-                                 sampling         = self.sampling,
-                                 ctf              = ctf,
-                                 device           = self._device).build().array
-                                  
+            ctf = CTF(
+                energy=self._energy,
+                semiangle_cutoff=self._semiangle_cutoff,
+                parameters=self._polar_parameters,
+            )
+            self._probes = (
+                Probe(
+                    semiangle_cutoff=self._semiangle_cutoff,
+                    energy=self._energy,
+                    gpts=self._region_of_interest_shape,
+                    sampling=self.sampling,
+                    ctf=ctf,
+                    device=self._device,
+                )
+                .build()
+                .array
+            )
+
             self._probes = (self._probes, self._probes.copy())
         else:
             if len(self._probes) != 2:
                 raise ValueError()
-            if isinstance(self._probes[0],Probe):
+            if isinstance(self._probes[0], Probe):
                 if self._probes[0].gpts != self._region_of_interest_shape:
                     raise ValueError()
-                self._probes = tuple(copy_to_device(_probe.build().array,self._device) for _probe in self._probes)
+                self._probes = tuple(
+                    copy_to_device(_probe.build().array, self._device)
+                    for _probe in self._probes
+                )
             else:
-                self._probes = tuple(copy_to_device(_probe,self._device) for _probe in self._probes)
-        
+                self._probes = tuple(
+                    copy_to_device(_probe, self._device) for _probe in self._probes
+                )
+
         return self
-        
+
     @staticmethod
-    def _warmup_overlap_projection(objects:Sequence[np.ndarray],
-                                   probes:Sequence[np.ndarray],
-                                   position:np.ndarray,
-                                   old_position:np.ndarray,
-                                   xp = np,
-                                   **kwargs):
+    def _warmup_overlap_projection(
+        objects: Sequence[np.ndarray],
+        probes: Sequence[np.ndarray],
+        position: np.ndarray,
+        old_position: np.ndarray,
+        xp=np,
+        **kwargs,
+    ):
         """
         Regularized-PIE overlap projection static method using the forward probe and electrostatic object
-        .. math:: 
+        .. math::
             \psi_{R_j}(r) = V_{R_j}(r) * P^{\mathrm{forward}}(r)
 
 
@@ -1345,29 +1599,35 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         exit_waves: Sequence[np.ndarray]
             Overlap projection of electrostatic object with forward probe, dummy reverse exit wave
         """
-        
-        fractional_position      = position - xp.round(position)
-        old_fractional_position  = old_position - xp.round(old_position)
-        
+
+        fractional_position = position - xp.round(position)
+        old_fractional_position = old_position - xp.round(old_position)
+
         probe_forward, probe_reverse = probes
-        probe_forward                = fft_shift(probe_forward,fractional_position - old_fractional_position)
+        probe_forward = fft_shift(
+            probe_forward, fractional_position - old_fractional_position
+        )
 
         electrostatic_object, magnetic_object = objects
 
-        object_indices           = _wrapped_indices_2D_window(position,probe_forward.shape,electrostatic_object.shape)
-        electrostatic_roi        = electrostatic_object[object_indices]
+        object_indices = _wrapped_indices_2D_window(
+            position, probe_forward.shape, electrostatic_object.shape
+        )
+        electrostatic_roi = electrostatic_object[object_indices]
 
-        exit_wave_forward        = electrostatic_roi*probe_forward
+        exit_wave_forward = electrostatic_roi * probe_forward
 
-        return (probe_forward,probe_reverse), (exit_wave_forward, None)
-        
+        return (probe_forward, probe_reverse), (exit_wave_forward, None)
+
     @staticmethod
-    def _overlap_projection(objects:Sequence[np.ndarray],
-                            probes:Sequence[np.ndarray],
-                            position:np.ndarray,
-                            old_position:np.ndarray,
-                            xp = np,
-                            **kwargs):
+    def _overlap_projection(
+        objects: Sequence[np.ndarray],
+        probes: Sequence[np.ndarray],
+        position: np.ndarray,
+        old_position: np.ndarray,
+        xp=np,
+        **kwargs,
+    ):
         """
         Simultaneous-PIE overlap projection static method:
         .. math:: 
@@ -1396,32 +1656,40 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         exit_waves: Sequence[np.ndarray]
             Overlap projection of objects with forward and reverse probes
         """
-        
-        fractional_position      = position - xp.round(position)
-        old_fractional_position  = old_position - xp.round(old_position)
-        
+
+        fractional_position = position - xp.round(position)
+        old_fractional_position = old_position - xp.round(old_position)
+
         probe_forward, probe_reverse = probes
-        probe_forward                = fft_shift(probe_forward,fractional_position - old_fractional_position)
-        probe_reverse                = fft_shift(probe_reverse,fractional_position - old_fractional_position)
+        probe_forward = fft_shift(
+            probe_forward, fractional_position - old_fractional_position
+        )
+        probe_reverse = fft_shift(
+            probe_reverse, fractional_position - old_fractional_position
+        )
 
         electrostatic_object, magnetic_object = objects
 
-        object_indices           = _wrapped_indices_2D_window(position,probe_forward.shape,electrostatic_object.shape)
-        electrostatic_roi        = electrostatic_object[object_indices]
-        magnetic_roi             = magnetic_object[object_indices]
+        object_indices = _wrapped_indices_2D_window(
+            position, probe_forward.shape, electrostatic_object.shape
+        )
+        electrostatic_roi = electrostatic_object[object_indices]
+        magnetic_roi = magnetic_object[object_indices]
 
-        exit_wave_forward        = electrostatic_roi*magnetic_roi*probe_forward
-        exit_wave_reverse        = electrostatic_roi*xp.conj(magnetic_roi)*probe_reverse
+        exit_wave_forward = electrostatic_roi * magnetic_roi * probe_forward
+        exit_wave_reverse = electrostatic_roi * xp.conj(magnetic_roi) * probe_reverse
 
-        return (probe_forward,probe_reverse), (exit_wave_forward,exit_wave_reverse)
-    
+        return (probe_forward, probe_reverse), (exit_wave_forward, exit_wave_reverse)
+
     @staticmethod
-    def _alternative_overlap_projection(objects:Sequence[np.ndarray],
-                                        probes:Sequence[np.ndarray],
-                                        position:np.ndarray,
-                                        old_position:np.ndarray,
-                                        xp = np,
-                                        **kwargs):
+    def _alternative_overlap_projection(
+        objects: Sequence[np.ndarray],
+        probes: Sequence[np.ndarray],
+        position: np.ndarray,
+        old_position: np.ndarray,
+        xp=np,
+        **kwargs,
+    ):
         """
         Simultaneous-PIE overlap projection static method using a common probe
         .. math:: 
@@ -1450,33 +1718,39 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         exit_waves: Sequence[np.ndarray]
             Overlap projection of objects with forward probe
         """
-        
-        fractional_position      = position - xp.round(position)
-        old_fractional_position  = old_position - xp.round(old_position)
-        
+
+        fractional_position = position - xp.round(position)
+        old_fractional_position = old_position - xp.round(old_position)
+
         probe_forward, probe_reverse = probes
-        probe_forward                = fft_shift(probe_forward,fractional_position - old_fractional_position)
+        probe_forward = fft_shift(
+            probe_forward, fractional_position - old_fractional_position
+        )
 
         electrostatic_object, magnetic_object = objects
 
-        object_indices           = _wrapped_indices_2D_window(position,probe_forward.shape,electrostatic_object.shape)
-        electrostatic_roi        = electrostatic_object[object_indices]
-        magnetic_roi             = magnetic_object[object_indices]
+        object_indices = _wrapped_indices_2D_window(
+            position, probe_forward.shape, electrostatic_object.shape
+        )
+        electrostatic_roi = electrostatic_object[object_indices]
+        magnetic_roi = magnetic_object[object_indices]
 
-        exit_wave_forward        = electrostatic_roi*magnetic_roi*probe_forward
-        exit_wave_reverse        = electrostatic_roi*xp.conj(magnetic_roi)*probe_forward
-        
-        return (probe_forward,probe_reverse), (exit_wave_forward,exit_wave_reverse)
-    
+        exit_wave_forward = electrostatic_roi * magnetic_roi * probe_forward
+        exit_wave_reverse = electrostatic_roi * xp.conj(magnetic_roi) * probe_forward
+
+        return (probe_forward, probe_reverse), (exit_wave_forward, exit_wave_reverse)
+
     @staticmethod
-    def _warmup_fourier_projection(exit_waves: Sequence[np.ndarray],
-                                   diffraction_patterns:Sequence[np.ndarray],
-                                   sse:float,
-                                   xp = np,
-                                   **kwargs):
+    def _warmup_fourier_projection(
+        exit_waves: Sequence[np.ndarray],
+        diffraction_patterns: Sequence[np.ndarray],
+        sse: float,
+        xp=np,
+        **kwargs,
+    ):
         """
         Regularized-PIE fourier projection static method:
-        .. math:: 
+        .. math::
             \psi'_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi_{R_j}(u)] / |F[\psi_{R_j}(u)]|]
 
 
@@ -1498,21 +1772,27 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         sse: float
             Updated sum of squares error estimate
         """
-        exit_wave_forward  , exit_wave_reverse   = exit_waves
+        exit_wave_forward, exit_wave_reverse = exit_waves
         diffraction_forward, diffraction_reverse = diffraction_patterns
 
-        exit_wave_forward_fft                    = xp.fft.fft2(exit_wave_forward)
-        sse                                     += xp.mean(xp.abs(xp.abs(exit_wave_forward_fft) - diffraction_forward)**2)/xp.sum(diffraction_forward**2)
-        modified_exit_wave_forward               = xp.fft.ifft2(diffraction_forward * xp.exp(1j * xp.angle(exit_wave_forward_fft)))
+        exit_wave_forward_fft = xp.fft.fft2(exit_wave_forward)
+        sse += xp.mean(
+            xp.abs(xp.abs(exit_wave_forward_fft) - diffraction_forward) ** 2
+        ) / xp.sum(diffraction_forward**2)
+        modified_exit_wave_forward = xp.fft.ifft2(
+            diffraction_forward * xp.exp(1j * xp.angle(exit_wave_forward_fft))
+        )
 
-        return (modified_exit_wave_forward,None), sse
-        
+        return (modified_exit_wave_forward, None), sse
+
     @staticmethod
-    def _fourier_projection(exit_waves:Sequence[np.ndarray],
-                            diffraction_patterns:Sequence[np.ndarray],
-                            sse:float,
-                            xp = np,
-                            **kwargs):
+    def _fourier_projection(
+        exit_waves: Sequence[np.ndarray],
+        diffraction_patterns: Sequence[np.ndarray],
+        sse: float,
+        xp=np,
+        **kwargs,
+    ):
         """
         Simultaneous-PIE fourier projection static method:
         .. math:: 
@@ -1538,33 +1818,47 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         sse: float
             Updated sum of squares error estimate
         """
-        exit_wave_forward  , exit_wave_reverse   = exit_waves
+        exit_wave_forward, exit_wave_reverse = exit_waves
         diffraction_forward, diffraction_reverse = diffraction_patterns
 
-        exit_wave_forward_fft                    = xp.fft.fft2(exit_wave_forward)
-        exit_wave_reverse_fft                    = xp.fft.fft2(exit_wave_reverse)
+        exit_wave_forward_fft = xp.fft.fft2(exit_wave_forward)
+        exit_wave_reverse_fft = xp.fft.fft2(exit_wave_reverse)
 
-        sse                                     += xp.mean(xp.abs(xp.abs(exit_wave_forward_fft) - diffraction_forward)**2)/xp.sum(diffraction_forward**2)/2
-        sse                                     += xp.mean(xp.abs(xp.abs(exit_wave_reverse_fft) - diffraction_reverse)**2)/xp.sum(diffraction_reverse**2)/2
+        sse += (
+            xp.mean(xp.abs(xp.abs(exit_wave_forward_fft) - diffraction_forward) ** 2)
+            / xp.sum(diffraction_forward**2)
+            / 2
+        )
+        sse += (
+            xp.mean(xp.abs(xp.abs(exit_wave_reverse_fft) - diffraction_reverse) ** 2)
+            / xp.sum(diffraction_reverse**2)
+            / 2
+        )
 
-        modified_exit_wave_forward               = xp.fft.ifft2(diffraction_forward * xp.exp(1j * xp.angle(exit_wave_forward_fft)))
-        modified_exit_wave_reverse               = xp.fft.ifft2(diffraction_reverse * xp.exp(1j * xp.angle(exit_wave_reverse_fft)))
+        modified_exit_wave_forward = xp.fft.ifft2(
+            diffraction_forward * xp.exp(1j * xp.angle(exit_wave_forward_fft))
+        )
+        modified_exit_wave_reverse = xp.fft.ifft2(
+            diffraction_reverse * xp.exp(1j * xp.angle(exit_wave_reverse_fft))
+        )
 
-        return (modified_exit_wave_forward,modified_exit_wave_reverse), sse
+        return (modified_exit_wave_forward, modified_exit_wave_reverse), sse
 
-    @staticmethod   
-    def _warmup_update_function(objects:Sequence[np.ndarray],
-                                probes:Sequence[np.ndarray],
-                                position:np.ndarray,
-                                exit_waves:Sequence[np.ndarray],
-                                modified_exit_waves:Sequence[np.ndarray],
-                                diffraction_patterns:Sequence[np.ndarray],
-                                fix_probe: bool = False,
-                                position_correction: Callable = None,
-                                sobel: Callable = None,
-                                reconstruction_parameters: Mapping[str,float] = None,
-                                xp = np,
-                                **kwargs):
+    @staticmethod
+    def _warmup_update_function(
+        objects: Sequence[np.ndarray],
+        probes: Sequence[np.ndarray],
+        position: np.ndarray,
+        exit_waves: Sequence[np.ndarray],
+        modified_exit_waves: Sequence[np.ndarray],
+        diffraction_patterns: Sequence[np.ndarray],
+        fix_probe: bool = False,
+        position_correction: Callable = None,
+        sobel: Callable = None,
+        reconstruction_parameters: Mapping[str, float] = None,
+        xp=np,
+        **kwargs,
+    ):
         """
         Regularized-PIE objects and probes update static method:
         .. math::
@@ -1606,54 +1900,84 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         position: np.ndarray
             Updated probe position estimate
         """
-        exit_wave_forward,exit_wave_reverse                   = exit_waves
-        modified_exit_wave_forward,modified_exit_wave_reverse = modified_exit_waves
-        electrostatic_object, magnetic_object                 = objects
-        probe_forward, probe_reverse                          = probes
-        
-        exit_wave_diff_forward   = modified_exit_wave_forward - exit_wave_forward
-        
-        object_indices           = _wrapped_indices_2D_window(position, probe_forward.shape, electrostatic_object.shape)
-        electrostatic_roi        = electrostatic_object[object_indices]
+        exit_wave_forward, exit_wave_reverse = exit_waves
+        modified_exit_wave_forward, modified_exit_wave_reverse = modified_exit_waves
+        electrostatic_object, magnetic_object = objects
+        probe_forward, probe_reverse = probes
 
-        probe_forward_conj                                   = xp.conj(probe_forward)
-        electrostatic_conj                                   = xp.conj(electrostatic_roi)
+        exit_wave_diff_forward = modified_exit_wave_forward - exit_wave_forward
 
-        probe_forward_abs_squared                            = xp.abs(probe_forward)**2
-        electrostatic_abs_squared                            = xp.abs(electrostatic_roi)**2
+        object_indices = _wrapped_indices_2D_window(
+            position, probe_forward.shape, electrostatic_object.shape
+        )
+        electrostatic_roi = electrostatic_object[object_indices]
+
+        probe_forward_conj = xp.conj(probe_forward)
+        electrostatic_conj = xp.conj(electrostatic_roi)
+
+        probe_forward_abs_squared = xp.abs(probe_forward) ** 2
+        electrostatic_abs_squared = xp.abs(electrostatic_roi) ** 2
 
         if position_correction is not None:
-            position_step_size   = reconstruction_parameters['position_step_size']
-            position             = position_correction(objects, probes, position, exit_waves, modified_exit_waves, diffraction_patterns,
-                                                       sobel=sobel,position_step_size=position_step_size, xp=xp)
+            position_step_size = reconstruction_parameters["position_step_size"]
+            position = position_correction(
+                objects,
+                probes,
+                position,
+                exit_waves,
+                modified_exit_waves,
+                diffraction_patterns,
+                sobel=sobel,
+                position_step_size=position_step_size,
+                xp=xp,
+            )
 
         if not fix_probe:
-            beta                 = reconstruction_parameters['beta']
-            probe_step_size      = reconstruction_parameters['probe_step_size']
-            probe_forward                    += probe_step_size*electrostatic_conj*exit_wave_diff_forward/(
-                                                                (1-beta)*electrostatic_abs_squared + beta*xp.max(electrostatic_abs_squared))
+            beta = reconstruction_parameters["beta"]
+            probe_step_size = reconstruction_parameters["probe_step_size"]
+            probe_forward += (
+                probe_step_size
+                * electrostatic_conj
+                * exit_wave_diff_forward
+                / (
+                    (1 - beta) * electrostatic_abs_squared
+                    + beta * xp.max(electrostatic_abs_squared)
+                )
+            )
 
-        alpha                    = reconstruction_parameters['alpha']
-        object_step_size         = reconstruction_parameters['object_step_size']
-        electrostatic_object[object_indices] += object_step_size*probe_forward_conj*exit_wave_diff_forward/ (
-                                                                 (1-alpha)*probe_forward_abs_squared + alpha*xp.max(probe_forward_abs_squared))
+        alpha = reconstruction_parameters["alpha"]
+        object_step_size = reconstruction_parameters["object_step_size"]
+        electrostatic_object[object_indices] += (
+            object_step_size
+            * probe_forward_conj
+            * exit_wave_diff_forward
+            / (
+                (1 - alpha) * probe_forward_abs_squared
+                + alpha * xp.max(probe_forward_abs_squared)
+            )
+        )
 
-        return (electrostatic_object, magnetic_object), (probe_forward,probe_reverse), position
-    
-    
-    @staticmethod   
-    def _update_function(objects:Sequence[np.ndarray],
-                         probes:Sequence[np.ndarray],
-                         position:np.ndarray,
-                         exit_waves:Sequence[np.ndarray],
-                         modified_exit_waves:Sequence[np.ndarray],
-                         diffraction_patterns:Sequence[np.ndarray],
-                         fix_probe: bool = False,
-                         position_correction: Callable = None,
-                         sobel: Callable = None,
-                         reconstruction_parameters: Mapping[str,float] = None,
-                         xp = np,
-                         **kwargs):
+        return (
+            (electrostatic_object, magnetic_object),
+            (probe_forward, probe_reverse),
+            position,
+        )
+
+    @staticmethod
+    def _update_function(
+        objects: Sequence[np.ndarray],
+        probes: Sequence[np.ndarray],
+        position: np.ndarray,
+        exit_waves: Sequence[np.ndarray],
+        modified_exit_waves: Sequence[np.ndarray],
+        diffraction_patterns: Sequence[np.ndarray],
+        fix_probe: bool = False,
+        position_correction: Callable = None,
+        sobel: Callable = None,
+        reconstruction_parameters: Mapping[str, float] = None,
+        xp=np,
+        **kwargs,
+    ):
         """
         Simultaneous-PIE objects and probes update static method.
 
@@ -1692,69 +2016,146 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         position: np.ndarray
             Updated probe position estimate
         """
-        exit_wave_forward,exit_wave_reverse                   = exit_waves
-        modified_exit_wave_forward,modified_exit_wave_reverse = modified_exit_waves
-        electrostatic_object, magnetic_object                 = objects
-        probe_forward, probe_reverse                          = probes
-        
-        exit_wave_diff_forward   = modified_exit_wave_forward - exit_wave_forward
-        exit_wave_diff_reverse   = modified_exit_wave_reverse - exit_wave_reverse
-        
-        object_indices           = _wrapped_indices_2D_window(position, probe_forward.shape, electrostatic_object.shape)
-        electrostatic_roi        = electrostatic_object[object_indices]
-        magnetic_roi             = magnetic_object[object_indices]
+        exit_wave_forward, exit_wave_reverse = exit_waves
+        modified_exit_wave_forward, modified_exit_wave_reverse = modified_exit_waves
+        electrostatic_object, magnetic_object = objects
+        probe_forward, probe_reverse = probes
 
-        probe_forward_conj                                   = xp.conj(probe_forward)
-        probe_reverse_conj                                   = xp.conj(probe_reverse)
-        electrostatic_conj                                   = xp.conj(electrostatic_roi)
-        magnetic_conj                                        = xp.conj(magnetic_roi)
+        exit_wave_diff_forward = modified_exit_wave_forward - exit_wave_forward
+        exit_wave_diff_reverse = modified_exit_wave_reverse - exit_wave_reverse
 
-        probe_forward_magnetic_abs_squared                   = xp.abs(probe_forward*magnetic_roi)**2
-        probe_reverse_magnetic_abs_squared                   = xp.abs(probe_reverse*magnetic_roi)**2
-        probe_forward_electrostatic_abs_squared              = xp.abs(probe_forward*electrostatic_roi)**2
-        probe_reverse_electrostatic_abs_squared              = xp.abs(probe_reverse*electrostatic_roi)**2
-        electrostatic_magnetic_abs_squared                   = xp.abs(electrostatic_roi*magnetic_roi)**2
+        object_indices = _wrapped_indices_2D_window(
+            position, probe_forward.shape, electrostatic_object.shape
+        )
+        electrostatic_roi = electrostatic_object[object_indices]
+        magnetic_roi = magnetic_object[object_indices]
+
+        probe_forward_conj = xp.conj(probe_forward)
+        probe_reverse_conj = xp.conj(probe_reverse)
+        electrostatic_conj = xp.conj(electrostatic_roi)
+        magnetic_conj = xp.conj(magnetic_roi)
+
+        probe_forward_magnetic_abs_squared = xp.abs(probe_forward * magnetic_roi) ** 2
+        probe_reverse_magnetic_abs_squared = xp.abs(probe_reverse * magnetic_roi) ** 2
+        probe_forward_electrostatic_abs_squared = (
+            xp.abs(probe_forward * electrostatic_roi) ** 2
+        )
+        probe_reverse_electrostatic_abs_squared = (
+            xp.abs(probe_reverse * electrostatic_roi) ** 2
+        )
+        electrostatic_magnetic_abs_squared = (
+            xp.abs(electrostatic_roi * magnetic_roi) ** 2
+        )
 
         if position_correction is not None:
-            position_step_size   = reconstruction_parameters['position_step_size']
-            position             = position_correction(objects, probes, position, exit_waves, modified_exit_waves, diffraction_patterns,
-                                                       sobel=sobel,position_step_size=position_step_size, xp=xp)
+            position_step_size = reconstruction_parameters["position_step_size"]
+            position = position_correction(
+                objects,
+                probes,
+                position,
+                exit_waves,
+                modified_exit_waves,
+                diffraction_patterns,
+                sobel=sobel,
+                position_step_size=position_step_size,
+                xp=xp,
+            )
 
         if not fix_probe:
-            beta                 = reconstruction_parameters['beta']
-            probe_step_size      = reconstruction_parameters['probe_step_size']
-            probe_forward                    += probe_step_size*electrostatic_conj*magnetic_conj*exit_wave_diff_forward/(
-                                                                (1-beta)*electrostatic_magnetic_abs_squared + beta*xp.max(electrostatic_magnetic_abs_squared))/2
-            probe_reverse                    += probe_step_size*electrostatic_conj*magnetic_roi*exit_wave_diff_reverse/(
-                                                                (1-beta)*electrostatic_magnetic_abs_squared + beta*xp.max(electrostatic_magnetic_abs_squared))/2
+            beta = reconstruction_parameters["beta"]
+            probe_step_size = reconstruction_parameters["probe_step_size"]
+            probe_forward += (
+                probe_step_size
+                * electrostatic_conj
+                * magnetic_conj
+                * exit_wave_diff_forward
+                / (
+                    (1 - beta) * electrostatic_magnetic_abs_squared
+                    + beta * xp.max(electrostatic_magnetic_abs_squared)
+                )
+                / 2
+            )
+            probe_reverse += (
+                probe_step_size
+                * electrostatic_conj
+                * magnetic_roi
+                * exit_wave_diff_reverse
+                / (
+                    (1 - beta) * electrostatic_magnetic_abs_squared
+                    + beta * xp.max(electrostatic_magnetic_abs_squared)
+                )
+                / 2
+            )
 
-        alpha                    = reconstruction_parameters['alpha']
-        object_step_size         = reconstruction_parameters['object_step_size']
-        electrostatic_object[object_indices] += object_step_size*probe_forward_conj*magnetic_conj*exit_wave_diff_forward/ (
-                                                                 (1-alpha)*probe_forward_magnetic_abs_squared + alpha*xp.max(probe_forward_magnetic_abs_squared))/2
-        electrostatic_object[object_indices] += object_step_size*probe_reverse_conj*magnetic_roi*exit_wave_diff_reverse/ (
-                                                                 (1-alpha)*probe_reverse_magnetic_abs_squared + alpha*xp.max(probe_reverse_magnetic_abs_squared))/2
+        alpha = reconstruction_parameters["alpha"]
+        object_step_size = reconstruction_parameters["object_step_size"]
+        electrostatic_object[object_indices] += (
+            object_step_size
+            * probe_forward_conj
+            * magnetic_conj
+            * exit_wave_diff_forward
+            / (
+                (1 - alpha) * probe_forward_magnetic_abs_squared
+                + alpha * xp.max(probe_forward_magnetic_abs_squared)
+            )
+            / 2
+        )
+        electrostatic_object[object_indices] += (
+            object_step_size
+            * probe_reverse_conj
+            * magnetic_roi
+            * exit_wave_diff_reverse
+            / (
+                (1 - alpha) * probe_reverse_magnetic_abs_squared
+                + alpha * xp.max(probe_reverse_magnetic_abs_squared)
+            )
+            / 2
+        )
 
-        magnetic_object[object_indices]      += object_step_size*probe_forward_conj*electrostatic_conj*exit_wave_diff_forward/(
-                                                                 (1-alpha)*probe_forward_electrostatic_abs_squared + alpha*xp.max(probe_forward_electrostatic_abs_squared))/2
-        magnetic_object[object_indices]      -= object_step_size*probe_reverse_conj*electrostatic_conj*exit_wave_diff_reverse/(
-                                                                 (1-alpha)*probe_reverse_electrostatic_abs_squared + alpha*xp.max(probe_reverse_electrostatic_abs_squared))/2
+        magnetic_object[object_indices] += (
+            object_step_size
+            * probe_forward_conj
+            * electrostatic_conj
+            * exit_wave_diff_forward
+            / (
+                (1 - alpha) * probe_forward_electrostatic_abs_squared
+                + alpha * xp.max(probe_forward_electrostatic_abs_squared)
+            )
+            / 2
+        )
+        magnetic_object[object_indices] -= (
+            object_step_size
+            * probe_reverse_conj
+            * electrostatic_conj
+            * exit_wave_diff_reverse
+            / (
+                (1 - alpha) * probe_reverse_electrostatic_abs_squared
+                + alpha * xp.max(probe_reverse_electrostatic_abs_squared)
+            )
+            / 2
+        )
 
-        return (electrostatic_object, magnetic_object), (probe_forward,probe_reverse), position
-        
-    @staticmethod   
-    def _alternative_update_function(objects:Sequence[np.ndarray],
-                                     probes:Sequence[np.ndarray],
-                                     position:np.ndarray,
-                                     exit_waves:Sequence[np.ndarray],
-                                     modified_exit_waves:Sequence[np.ndarray],
-                                     diffraction_patterns:Sequence[np.ndarray],
-                                     fix_probe: bool = False,
-                                     position_correction: Callable = None,
-                                     sobel: Callable = None,
-                                     reconstruction_parameters: Mapping[str,float] = None,
-                                     xp = np,
-                                     **kwargs):
+        return (
+            (electrostatic_object, magnetic_object),
+            (probe_forward, probe_reverse),
+            position,
+        )
+
+    @staticmethod
+    def _alternative_update_function(
+        objects: Sequence[np.ndarray],
+        probes: Sequence[np.ndarray],
+        position: np.ndarray,
+        exit_waves: Sequence[np.ndarray],
+        modified_exit_waves: Sequence[np.ndarray],
+        diffraction_patterns: Sequence[np.ndarray],
+        fix_probe: bool = False,
+        position_correction: Callable = None,
+        sobel: Callable = None,
+        reconstruction_parameters: Mapping[str, float] = None,
+        xp=np,
+        **kwargs,
+    ):
         """
         Simultaneous-PIE objects and probes update static method using a common probe.
 
@@ -1793,64 +2194,139 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         position: np.ndarray
             Updated probe position estimate
         """
-        exit_wave_forward,exit_wave_reverse                   = exit_waves
-        modified_exit_wave_forward,modified_exit_wave_reverse = modified_exit_waves
-        electrostatic_object, magnetic_object                 = objects
-        probe_forward, probe_reverse                          = probes
-        
-        exit_wave_diff_forward   = modified_exit_wave_forward - exit_wave_forward
-        exit_wave_diff_reverse   = modified_exit_wave_reverse - exit_wave_reverse
-        
-        object_indices           = _wrapped_indices_2D_window(position, probe_forward.shape, electrostatic_object.shape)
-        electrostatic_roi        = electrostatic_object[object_indices]
-        magnetic_roi             = magnetic_object[object_indices]
+        exit_wave_forward, exit_wave_reverse = exit_waves
+        modified_exit_wave_forward, modified_exit_wave_reverse = modified_exit_waves
+        electrostatic_object, magnetic_object = objects
+        probe_forward, probe_reverse = probes
 
-        probe_forward_conj                                   = xp.conj(probe_forward)
-        electrostatic_conj                                   = xp.conj(electrostatic_roi)
-        magnetic_conj                                        = xp.conj(magnetic_roi)
+        exit_wave_diff_forward = modified_exit_wave_forward - exit_wave_forward
+        exit_wave_diff_reverse = modified_exit_wave_reverse - exit_wave_reverse
 
-        probe_forward_magnetic_abs_squared                   = xp.abs(probe_forward*magnetic_roi)**2
-        probe_forward_electrostatic_abs_squared              = xp.abs(probe_forward*electrostatic_roi)**2
-        electrostatic_magnetic_abs_squared                   = xp.abs(electrostatic_roi*magnetic_roi)**2
+        object_indices = _wrapped_indices_2D_window(
+            position, probe_forward.shape, electrostatic_object.shape
+        )
+        electrostatic_roi = electrostatic_object[object_indices]
+        magnetic_roi = magnetic_object[object_indices]
+
+        probe_forward_conj = xp.conj(probe_forward)
+        electrostatic_conj = xp.conj(electrostatic_roi)
+        magnetic_conj = xp.conj(magnetic_roi)
+
+        probe_forward_magnetic_abs_squared = xp.abs(probe_forward * magnetic_roi) ** 2
+        probe_forward_electrostatic_abs_squared = (
+            xp.abs(probe_forward * electrostatic_roi) ** 2
+        )
+        electrostatic_magnetic_abs_squared = (
+            xp.abs(electrostatic_roi * magnetic_roi) ** 2
+        )
 
         if position_correction is not None:
-            position_step_size   = reconstruction_parameters['position_step_size']
-            position             = position_correction(objects, probes, position, exit_waves, modified_exit_waves, diffraction_patterns,
-                                                       sobel=sobel,position_step_size=position_step_size, xp=xp)
+            position_step_size = reconstruction_parameters["position_step_size"]
+            position = position_correction(
+                objects,
+                probes,
+                position,
+                exit_waves,
+                modified_exit_waves,
+                diffraction_patterns,
+                sobel=sobel,
+                position_step_size=position_step_size,
+                xp=xp,
+            )
 
         if not fix_probe:
-            beta                 = reconstruction_parameters['beta']
-            probe_step_size      = reconstruction_parameters['probe_step_size']
-            probe_forward                    += probe_step_size*electrostatic_conj*magnetic_conj*exit_wave_diff_forward/(
-                                                                (1-beta)*electrostatic_magnetic_abs_squared + beta*xp.max(electrostatic_magnetic_abs_squared))/2
-            probe_forward                    += probe_step_size*electrostatic_conj*magnetic_roi*exit_wave_diff_reverse/(
-                                                                (1-beta)*electrostatic_magnetic_abs_squared + beta*xp.max(electrostatic_magnetic_abs_squared))/2
+            beta = reconstruction_parameters["beta"]
+            probe_step_size = reconstruction_parameters["probe_step_size"]
+            probe_forward += (
+                probe_step_size
+                * electrostatic_conj
+                * magnetic_conj
+                * exit_wave_diff_forward
+                / (
+                    (1 - beta) * electrostatic_magnetic_abs_squared
+                    + beta * xp.max(electrostatic_magnetic_abs_squared)
+                )
+                / 2
+            )
+            probe_forward += (
+                probe_step_size
+                * electrostatic_conj
+                * magnetic_roi
+                * exit_wave_diff_reverse
+                / (
+                    (1 - beta) * electrostatic_magnetic_abs_squared
+                    + beta * xp.max(electrostatic_magnetic_abs_squared)
+                )
+                / 2
+            )
 
-        alpha                    = reconstruction_parameters['alpha']
-        object_step_size         = reconstruction_parameters['object_step_size']
-        electrostatic_object[object_indices] += object_step_size*probe_forward_conj*magnetic_conj*exit_wave_diff_forward/ (
-                                                                 (1-alpha)*probe_forward_magnetic_abs_squared + alpha*xp.max(probe_forward_magnetic_abs_squared))/2
-        electrostatic_object[object_indices] += object_step_size*probe_forward_conj*magnetic_roi*exit_wave_diff_reverse/ (
-                                                                 (1-alpha)*probe_forward_magnetic_abs_squared + alpha*xp.max(probe_forward_magnetic_abs_squared))/2
+        alpha = reconstruction_parameters["alpha"]
+        object_step_size = reconstruction_parameters["object_step_size"]
+        electrostatic_object[object_indices] += (
+            object_step_size
+            * probe_forward_conj
+            * magnetic_conj
+            * exit_wave_diff_forward
+            / (
+                (1 - alpha) * probe_forward_magnetic_abs_squared
+                + alpha * xp.max(probe_forward_magnetic_abs_squared)
+            )
+            / 2
+        )
+        electrostatic_object[object_indices] += (
+            object_step_size
+            * probe_forward_conj
+            * magnetic_roi
+            * exit_wave_diff_reverse
+            / (
+                (1 - alpha) * probe_forward_magnetic_abs_squared
+                + alpha * xp.max(probe_forward_magnetic_abs_squared)
+            )
+            / 2
+        )
 
-        magnetic_object[object_indices]      += object_step_size*probe_forward_conj*electrostatic_conj*exit_wave_diff_forward/(
-                                                                 (1-alpha)*probe_forward_electrostatic_abs_squared + alpha*xp.max(probe_forward_electrostatic_abs_squared))/2
-        magnetic_object[object_indices]      -= object_step_size*probe_forward_conj*electrostatic_conj*exit_wave_diff_reverse/(
-                                                                 (1-alpha)*probe_forward_electrostatic_abs_squared + alpha*xp.max(probe_forward_electrostatic_abs_squared))/2
+        magnetic_object[object_indices] += (
+            object_step_size
+            * probe_forward_conj
+            * electrostatic_conj
+            * exit_wave_diff_forward
+            / (
+                (1 - alpha) * probe_forward_electrostatic_abs_squared
+                + alpha * xp.max(probe_forward_electrostatic_abs_squared)
+            )
+            / 2
+        )
+        magnetic_object[object_indices] -= (
+            object_step_size
+            * probe_forward_conj
+            * electrostatic_conj
+            * exit_wave_diff_reverse
+            / (
+                (1 - alpha) * probe_forward_electrostatic_abs_squared
+                + alpha * xp.max(probe_forward_electrostatic_abs_squared)
+            )
+            / 2
+        )
 
-        return (electrostatic_object, magnetic_object), (probe_forward,probe_reverse), position
-    
+        return (
+            (electrostatic_object, magnetic_object),
+            (probe_forward, probe_reverse),
+            position,
+        )
+
     @staticmethod
-    def _position_correction(objects: Sequence[np.ndarray],
-                             probes: Sequence[np.ndarray],
-                             position: np.ndarray,
-                             exit_wave: Sequence[np.ndarray],
-                             modified_exit_wave: Sequence[np.ndarray],
-                             diffraction_pattern: Sequence[np.ndarray],
-                             sobel:Callable,
-                             position_step_size: float = 1.0,
-                             xp=np,
-                             **kwargs):
+    def _position_correction(
+        objects: Sequence[np.ndarray],
+        probes: Sequence[np.ndarray],
+        position: np.ndarray,
+        exit_wave: Sequence[np.ndarray],
+        modified_exit_wave: Sequence[np.ndarray],
+        diffraction_pattern: Sequence[np.ndarray],
+        sobel: Callable,
+        position_step_size: float = 1.0,
+        xp=np,
+        **kwargs,
+    ):
         """
         Regularized-PIE probe position correction method.
 
@@ -1881,32 +2357,38 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         position: np.ndarray
             Updated probe position estimate
         """
-        
-        electrostatic_object, magnetic_object                 = objects
-        probe_forward, probe_reverse                          = probes
-        exit_wave_forward,exit_wave_reverse                   = exit_waves
-        modified_exit_wave_forward,modified_exit_wave_reverse = modified_exit_waves
-        exit_wave_diff_forward   = modified_exit_wave_forward - exit_wave_forward
-        
-        object_dx       = sobel(electrostatic_object,axis=0,mode='wrap')
-        object_dy       = sobel(electrostatic_object,axis=1,mode='wrap')
-        
-        object_indices  = _wrapped_indices_2D_window(position,probe_forward.shape,electrostatic_object.shape)
-        exit_wave_dx    = object_dx[object_indices]*probe_forward
-        exit_wave_dy    = object_dy[object_indices]*probe_forward
-        
-        exit_wave_diff  = modified_exit_wave - exit_wave
-        displacement_x  = xp.sum(xp.real(xp.conj(exit_wave_dx)*exit_wave_diff_forward))/xp.sum(xp.abs(exit_wave_dx)**2)
-        displacement_y  = xp.sum(xp.real(xp.conj(exit_wave_dy)*exit_wave_diff_forward))/xp.sum(xp.abs(exit_wave_dy)**2)
-        
-        return position + position_step_size*xp.array([displacement_x,displacement_y])
-    
-    
+
+        electrostatic_object, magnetic_object = objects
+        probe_forward, probe_reverse = probes
+        exit_wave_forward, exit_wave_reverse = exit_waves
+        modified_exit_wave_forward, modified_exit_wave_reverse = modified_exit_waves
+        exit_wave_diff_forward = modified_exit_wave_forward - exit_wave_forward
+
+        object_dx = sobel(electrostatic_object, axis=0, mode="wrap")
+        object_dy = sobel(electrostatic_object, axis=1, mode="wrap")
+
+        object_indices = _wrapped_indices_2D_window(
+            position, probe_forward.shape, electrostatic_object.shape
+        )
+        exit_wave_dx = object_dx[object_indices] * probe_forward
+        exit_wave_dy = object_dy[object_indices] * probe_forward
+
+        exit_wave_diff = modified_exit_wave - exit_wave
+        displacement_x = xp.sum(
+            xp.real(xp.conj(exit_wave_dx) * exit_wave_diff_forward)
+        ) / xp.sum(xp.abs(exit_wave_dx) ** 2)
+        displacement_y = xp.sum(
+            xp.real(xp.conj(exit_wave_dy) * exit_wave_diff_forward)
+        ) / xp.sum(xp.abs(exit_wave_dy) ** 2)
+
+        return position + position_step_size * xp.array(
+            [displacement_x, displacement_y]
+        )
+
     @staticmethod
-    def _fix_probe_center_of_mass(probes: Sequence[np.ndarray],
-                                  center_of_mass:Callable,
-                                  xp = np,
-                                  **kwargs):
+    def _fix_probe_center_of_mass(
+        probes: Sequence[np.ndarray], center_of_mass: Callable, xp=np, **kwargs
+    ):
         """
         Simultaneous-PIE probe center correction method.
 
@@ -1925,26 +2407,28 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         probes: Sequence[np.ndarray]
             Center-of-mass corrected probes array
         """
-        
-        probe_center = xp.array(probes[0].shape)/2
-        
-        _probes      = []
+
+        probe_center = xp.array(probes[0].shape) / 2
+
+        _probes = []
         for k in range(len(probes)):
-            com          = center_of_mass(xp.abs(probes[k]) ** 2)
+            com = center_of_mass(xp.abs(probes[k]) ** 2)
             _probes.append(fft_shift(probes[k], probe_center - xp.array(com)))
-        
+
         return tuple(_probes)
-        
-    def _prepare_functions_queue(self,
-                                 max_iterations: int,
-                                 warmup_update_steps: int = 0,
-                                 common_probe:bool = False,
-                                 pre_position_correction_update_steps: int = None,
-                                 pre_probe_correction_update_steps: int = None,
-                                 **kwargs):
+
+    def _prepare_functions_queue(
+        self,
+        max_iterations: int,
+        warmup_update_steps: int = 0,
+        common_probe: bool = False,
+        pre_position_correction_update_steps: int = None,
+        pre_probe_correction_update_steps: int = None,
+        **kwargs,
+    ):
         """
         Precomputes the order in which functions will be called in the reconstruction loop.
-        Additionally, prepares a summary of steps to be printed for reporting. 
+        Additionally, prepares a summary of steps to be printed for reporting.
 
         Parameters
         ----------
@@ -1966,76 +2450,127 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         queue_summary: str
             Summary of function calls the reconstruction loop will perform
         """
-        _overlap_projection  = self._alternative_overlap_projection if common_probe else self._overlap_projection
-        _update_function     = self._alternative_update_function    if common_probe else self._update_function
-        
-        total_update_steps   = max_iterations*self._num_diffraction_patterns
-        queue_summary        = "Ptychographic reconstruction will perform the following steps:"
-        
-        functions_tuple      = (self._warmup_overlap_projection,self._warmup_fourier_projection, self._warmup_update_function, None)
-        functions_queue      = [functions_tuple]
-        
+        _overlap_projection = (
+            self._alternative_overlap_projection
+            if common_probe
+            else self._overlap_projection
+        )
+        _update_function = (
+            self._alternative_update_function if common_probe else self._update_function
+        )
+
+        total_update_steps = max_iterations * self._num_diffraction_patterns
+        queue_summary = "Ptychographic reconstruction will perform the following steps:"
+
+        functions_tuple = (
+            self._warmup_overlap_projection,
+            self._warmup_fourier_projection,
+            self._warmup_update_function,
+            None,
+        )
+        functions_queue = [functions_tuple]
+
         if pre_position_correction_update_steps is None:
             functions_queue *= warmup_update_steps
-            queue_summary   += f"\n--Regularized PIE for {warmup_update_steps} steps"
+            queue_summary += f"\n--Regularized PIE for {warmup_update_steps} steps"
 
-            functions_tuple = (_overlap_projection,self._fourier_projection, _update_function, None)
+            functions_tuple = (
+                _overlap_projection,
+                self._fourier_projection,
+                _update_function,
+                None,
+            )
             remaining_update_steps = total_update_steps - warmup_update_steps
-            functions_queue += [functions_tuple]*remaining_update_steps
-            queue_summary   += f"\n--Simultaneous PIE for {remaining_update_steps} steps"
+            functions_queue += [functions_tuple] * remaining_update_steps
+            queue_summary += f"\n--Simultaneous PIE for {remaining_update_steps} steps"
         else:
             if warmup_update_steps <= pre_position_correction_update_steps:
                 functions_queue *= warmup_update_steps
-                queue_summary   += f"\n--Regularized PIE for {warmup_update_steps} steps"
+                queue_summary += f"\n--Regularized PIE for {warmup_update_steps} steps"
 
-                functions_tuple = (_overlap_projection,self._fourier_projection, _update_function, None)
-                remaining_update_steps = pre_position_correction_update_steps - warmup_update_steps
-                functions_queue += [functions_tuple]*remaining_update_steps
-                queue_summary   += f"\n--Simultaneous PIE for {remaining_update_steps} steps"
-                
-                functions_tuple = (_overlap_projection,self._fourier_projection, _update_function, self._position_correction)
-                remaining_update_steps = total_update_steps - pre_position_correction_update_steps
-                functions_queue += [functions_tuple]*remaining_update_steps
-                queue_summary   += f"\n--Simultaneous PIE with position correction for {remaining_update_steps} steps"
+                functions_tuple = (
+                    _overlap_projection,
+                    self._fourier_projection,
+                    _update_function,
+                    None,
+                )
+                remaining_update_steps = (
+                    pre_position_correction_update_steps - warmup_update_steps
+                )
+                functions_queue += [functions_tuple] * remaining_update_steps
+                queue_summary += (
+                    f"\n--Simultaneous PIE for {remaining_update_steps} steps"
+                )
+
+                functions_tuple = (
+                    _overlap_projection,
+                    self._fourier_projection,
+                    _update_function,
+                    self._position_correction,
+                )
+                remaining_update_steps = (
+                    total_update_steps - pre_position_correction_update_steps
+                )
+                functions_queue += [functions_tuple] * remaining_update_steps
+                queue_summary += f"\n--Simultaneous PIE with position correction for {remaining_update_steps} steps"
             else:
                 functions_queue *= pre_position_correction_update_steps
-                queue_summary   += f"\n--Regularized PIE for {pre_position_correction_update_steps} steps"
+                queue_summary += f"\n--Regularized PIE for {pre_position_correction_update_steps} steps"
 
-                functions_tuple = (self._warmup_overlap_projection,self._warmup_fourier_projection, self._warmup_update_function, self._position_correction)
-                remaining_update_steps = warmup_update_steps - pre_position_correction_update_steps
-                functions_queue += [functions_tuple]*remaining_update_steps
-                queue_summary   += f"\n--Regularized PIE with position correction for {remaining_update_steps} steps"
-                
-                functions_tuple = (_overlap_projection,self._fourier_projection, _update_function, self._position_correction)
+                functions_tuple = (
+                    self._warmup_overlap_projection,
+                    self._warmup_fourier_projection,
+                    self._warmup_update_function,
+                    self._position_correction,
+                )
+                remaining_update_steps = (
+                    warmup_update_steps - pre_position_correction_update_steps
+                )
+                functions_queue += [functions_tuple] * remaining_update_steps
+                queue_summary += f"\n--Regularized PIE with position correction for {remaining_update_steps} steps"
+
+                functions_tuple = (
+                    _overlap_projection,
+                    self._fourier_projection,
+                    _update_function,
+                    self._position_correction,
+                )
                 remaining_update_steps = total_update_steps - warmup_update_steps
-                functions_queue += [functions_tuple]*remaining_update_steps
-                queue_summary   += f"\n--Simultaneous PIE with position correction for {remaining_update_steps} steps"
-        
+                functions_queue += [functions_tuple] * remaining_update_steps
+                queue_summary += f"\n--Simultaneous PIE with position correction for {remaining_update_steps} steps"
+
         if pre_probe_correction_update_steps is None:
             queue_summary += f"\n--Probe correction is enabled"
         elif pre_probe_correction_update_steps > total_update_steps:
             queue_summary += f"\n--Probe correction is disabled"
         else:
             queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
-            
+
         if common_probe:
-            queue_summary += f"\n--Using the first probe as a common probe for both objects"
-        
-        functions_queue = [functions_queue[x:x+self._num_diffraction_patterns] for x in range(0, total_update_steps, self._num_diffraction_patterns)]
-        
+            queue_summary += (
+                f"\n--Using the first probe as a common probe for both objects"
+            )
+
+        functions_queue = [
+            functions_queue[x : x + self._num_diffraction_patterns]
+            for x in range(0, total_update_steps, self._num_diffraction_patterns)
+        ]
+
         return functions_queue, queue_summary
-    
-    def reconstruct(self,
-                    max_iterations: int = 5,
-                    return_iterations: bool = False,
-                    warmup_update_steps: int = 0,
-                    common_probe: bool = False,
-                    fix_com: bool = True,
-                    random_seed = None,
-                    verbose: bool = False,
-                    functions_queue: Iterable = None,
-                    parameters: Mapping[str,float] = None,
-                    **kwargs):
+
+    def reconstruct(
+        self,
+        max_iterations: int = 5,
+        return_iterations: bool = False,
+        warmup_update_steps: int = 0,
+        common_probe: bool = False,
+        fix_com: bool = True,
+        random_seed=None,
+        verbose: bool = False,
+        functions_queue: Iterable = None,
+        parameters: Mapping[str, float] = None,
+        **kwargs,
+    ):
         """
         Main reconstruction loop method to do the following:
         - Precompute the order of function calls using the SimultaneousPtychographicOperator._prepare_functions_queue method
@@ -2076,166 +2611,227 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
             If return_iterations, a list of the reconstruction error at each iteration is returned
         """
         for key in kwargs.keys():
-            if (key not in reconstruction_symbols.keys()):
-                raise ValueError('{} not a recognized parameter'.format(key))
-                
+            if key not in reconstruction_symbols.keys():
+                raise ValueError("{} not a recognized parameter".format(key))
+
         if parameters is None:
             parameters = {}
         self._reconstruction_parameters = reconstruction_symbols.copy()
         self._reconstruction_parameters.update(parameters)
         self._reconstruction_parameters.update(kwargs)
-                 
+
         if functions_queue is None:
             functions_queue, summary = self._prepare_functions_queue(
-                                        max_iterations,
-                                        warmup_update_steps= warmup_update_steps,
-                                        common_probe= common_probe,
-                                        pre_position_correction_update_steps = self._reconstruction_parameters['pre_position_correction_update_steps'],
-                                        pre_probe_correction_update_steps    = self._reconstruction_parameters['pre_probe_correction_update_steps'])
+                max_iterations,
+                warmup_update_steps=warmup_update_steps,
+                common_probe=common_probe,
+                pre_position_correction_update_steps=self._reconstruction_parameters[
+                    "pre_position_correction_update_steps"
+                ],
+                pre_probe_correction_update_steps=self._reconstruction_parameters[
+                    "pre_probe_correction_update_steps"
+                ],
+            )
             if verbose:
                 print(summary)
         else:
             if len(functions_queue) == max_iterations:
                 if callable(functions_queue[0]):
-                    functions_queue = [[function_tuples]*self._num_diffraction_patterns for function_tuples in functions_queue]
-            elif len(functions_queue) == max_iterations*self._num_diffraction_patterns:
-                functions_queue = [functions_queue[x:x+self._num_diffraction_patterns] for x in range(0, total_update_steps, self._num_diffraction_patterns)]
+                    functions_queue = [
+                        [function_tuples] * self._num_diffraction_patterns
+                        for function_tuples in functions_queue
+                    ]
+            elif (
+                len(functions_queue) == max_iterations * self._num_diffraction_patterns
+            ):
+                functions_queue = [
+                    functions_queue[x : x + self._num_diffraction_patterns]
+                    for x in range(
+                        0, total_update_steps, self._num_diffraction_patterns
+                    )
+                ]
             else:
                 raise ValueError()
-        
+
         self._functions_queue = functions_queue
-        
+
         ### Main Loop
-        xp                  = get_array_module_from_device(self._device)
-        outer_pbar          = ProgressBar(total=max_iterations,leave=False)
-        inner_pbar          = ProgressBar(total=self._num_diffraction_patterns,leave=False)
-        indices             = np.arange(self._num_diffraction_patterns)
-        position_px_padding = xp.array(self._experimental_parameters['object_px_padding'])
-        center_of_mass      = get_scipy_module(xp).ndimage.center_of_mass
-        sobel               = get_scipy_module(xp).ndimage.sobel
-        
+        xp = get_array_module_from_device(self._device)
+        outer_pbar = ProgressBar(total=max_iterations, leave=False)
+        inner_pbar = ProgressBar(total=self._num_diffraction_patterns, leave=False)
+        indices = np.arange(self._num_diffraction_patterns)
+        position_px_padding = xp.array(
+            self._experimental_parameters["object_px_padding"]
+        )
+        center_of_mass = get_scipy_module(xp).ndimage.center_of_mass
+        sobel = get_scipy_module(xp).ndimage.sobel
+
         if return_iterations:
-            objects_iterations   = []
-            probes_iterations    = []
+            objects_iterations = []
+            probes_iterations = []
             positions_iterations = []
-            sse_iterations       = []
-        
+            sse_iterations = []
+
         if random_seed is not None:
             np.random.seed(random_seed)
-            
+
         for iteration_index, iteration_step in enumerate(self._functions_queue):
-            
+
             inner_pbar.reset()
-            
+
             # Set iteration-specific parameters
             np.random.shuffle(indices)
             old_position = position_px_padding
-            self._sse    = 0.0
-            
+            self._sse = 0.0
+
             for update_index, update_step in enumerate(iteration_step):
-                
-                index               = indices[update_index]
-                position            = self._positions_px[index]
-                
+
+                index = indices[update_index]
+                position = self._positions_px[index]
+
                 # Skip empty diffraction patterns
-                diffraction_pattern = tuple(dp[index] for dp in self._diffraction_patterns)
-                
+                diffraction_pattern = tuple(
+                    dp[index] for dp in self._diffraction_patterns
+                )
+
                 if any(tuple(xp.sum(dp) == 0.0 for dp in diffraction_pattern)):
                     inner_pbar.update(1)
                     continue
 
                 # Set update-specific parameters
-                global_iteration_i  = iteration_index*self._num_diffraction_patterns + update_index
-                
-                if self._reconstruction_parameters['pre_probe_correction_update_steps'] is None:
-                    fix_probe       = False
+                global_iteration_i = (
+                    iteration_index * self._num_diffraction_patterns + update_index
+                )
+
+                if (
+                    self._reconstruction_parameters["pre_probe_correction_update_steps"]
+                    is None
+                ):
+                    fix_probe = False
                 else:
-                    fix_probe       = global_iteration_i < self._reconstruction_parameters['pre_probe_correction_update_steps']
-                    
-                if warmup_update_steps != 0 and global_iteration_i == (warmup_update_steps + 1):
+                    fix_probe = (
+                        global_iteration_i
+                        < self._reconstruction_parameters[
+                            "pre_probe_correction_update_steps"
+                        ]
+                    )
+
+                if warmup_update_steps != 0 and global_iteration_i == (
+                    warmup_update_steps + 1
+                ):
                     self._probes = (self._probes[0], self._probes[0].copy())
 
-                _overlap_projection,_fourier_projection,_update_function,_position_correction = update_step
-            
-                self._probes, exit_wave                                = _overlap_projection(self._objects,
-                                                                                             self._probes,
-                                                                                             position,
-                                                                                             old_position,
-                                                                                             xp=xp)
-                
-                modified_exit_wave, self._sse                          = _fourier_projection(exit_wave,
-                                                                                             diffraction_pattern,
-                                                                                             self._sse,
-                                                                                             xp=xp)
+                (
+                    _overlap_projection,
+                    _fourier_projection,
+                    _update_function,
+                    _position_correction,
+                ) = update_step
 
-                self._objects, self._probes, self._positions_px[index] = _update_function(self._objects,
-                                                                                          self._probes,
-                                                                                          position,
-                                                                                          exit_wave,
-                                                                                          modified_exit_wave,
-                                                                                          diffraction_pattern,
-                                                                                          fix_probe = fix_probe,
-                                                                                          position_correction = _position_correction,
-                                                                                          sobel = sobel,
-                                                                                          reconstruction_parameters = self._reconstruction_parameters,
-                                                                                          xp = xp)
-                    
-                old_position    = position
+                self._probes, exit_wave = _overlap_projection(
+                    self._objects, self._probes, position, old_position, xp=xp
+                )
+
+                modified_exit_wave, self._sse = _fourier_projection(
+                    exit_wave, diffraction_pattern, self._sse, xp=xp
+                )
+
+                (
+                    self._objects,
+                    self._probes,
+                    self._positions_px[index],
+                ) = _update_function(
+                    self._objects,
+                    self._probes,
+                    position,
+                    exit_wave,
+                    modified_exit_wave,
+                    diffraction_pattern,
+                    fix_probe=fix_probe,
+                    position_correction=_position_correction,
+                    sobel=sobel,
+                    reconstruction_parameters=self._reconstruction_parameters,
+                    xp=xp,
+                )
+
+                old_position = position
                 inner_pbar.update(1)
-              
+
             # Shift probe back to origin
-            self._probes     = tuple(fft_shift(_probe,xp.round(position) - position) for _probe in self._probes)
-            
+            self._probes = tuple(
+                fft_shift(_probe, xp.round(position) - position)
+                for _probe in self._probes
+            )
+
             # Probe CoM
             if fix_com:
-                self._probes = self._fix_probe_center_of_mass(self._probes,center_of_mass,xp=xp)
-                 
+                self._probes = self._fix_probe_center_of_mass(
+                    self._probes, center_of_mass, xp=xp
+                )
+
             # Positions CoM
             if _position_correction is not None:
-                self._positions_px -= (xp.mean(self._positions_px,axis=0) - self._positions_px_com)
-                self._reconstruction_parameters['position_step_size']  *= self._reconstruction_parameters['step_size_damping_rate']
-            
+                self._positions_px -= (
+                    xp.mean(self._positions_px, axis=0) - self._positions_px_com
+                )
+                self._reconstruction_parameters[
+                    "position_step_size"
+                ] *= self._reconstruction_parameters["step_size_damping_rate"]
+
             # Update Parameters
-            self._reconstruction_parameters['object_step_size'] *= self._reconstruction_parameters['step_size_damping_rate']
-            self._reconstruction_parameters['probe_step_size']  *= self._reconstruction_parameters['step_size_damping_rate']
-            self._sse                                           /= self._num_diffraction_patterns
-            
+            self._reconstruction_parameters[
+                "object_step_size"
+            ] *= self._reconstruction_parameters["step_size_damping_rate"]
+            self._reconstruction_parameters[
+                "probe_step_size"
+            ] *= self._reconstruction_parameters["step_size_damping_rate"]
+            self._sse /= self._num_diffraction_patterns
+
             if return_iterations:
                 objects_iterations.append(copy(self._objects))
                 probes_iterations.append(copy(self._probes))
-                positions_iterations.append(self._positions_px.copy() * xp.array(self.sampling))
+                positions_iterations.append(
+                    self._positions_px.copy() * xp.array(self.sampling)
+                )
                 sse_iterations.append(self._sse)
-            
+
             if verbose:
-                print(f'----Iteration {iteration_index:<{len(str(max_iterations))}}, SSE = {float(self._sse):.3e}')
-            
+                print(
+                    f"----Iteration {iteration_index:<{len(str(max_iterations))}}, SSE = {float(self._sse):.3e}"
+                )
+
             outer_pbar.update(1)
-        
+
         inner_pbar.close()
         outer_pbar.close()
-        
+
         #  Return Results
         if return_iterations:
-            results = map(self._prepare_measurement_outputs,
-                          objects_iterations,
-                          probes_iterations,
-                          positions_iterations,
-                          sse_iterations)
-            
+            results = map(
+                self._prepare_measurement_outputs,
+                objects_iterations,
+                probes_iterations,
+                positions_iterations,
+                sse_iterations,
+            )
+
             return tuple(map(list, zip(*results)))
         else:
-            results = self._prepare_measurement_outputs(self._objects,
-                                                        self._probes,
-                                                        self._positions_px * xp.array(self.sampling),
-                                                        self._sse)
+            results = self._prepare_measurement_outputs(
+                self._objects,
+                self._probes,
+                self._positions_px * xp.array(self.sampling),
+                self._sse,
+            )
             return results
-        
-        
-    def _prepare_measurement_outputs(self,
-                                     objects:Sequence[np.ndarray],
-                                     probes: Sequence[np.ndarray],
-                                     positions: np.ndarray,
-                                     sse: np.ndarray):
+
+    def _prepare_measurement_outputs(
+        self,
+        objects: Sequence[np.ndarray],
+        probes: Sequence[np.ndarray],
+        positions: np.ndarray,
+        sse: np.ndarray,
+    ):
         """
         Method to format the reconstruction outputs as Measurement objects.
 
@@ -2261,13 +2857,21 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         sse: float
             Reconstruction error
         """
-        
-        calibrations = tuple(Calibration(0, s, units='Å', name = n, endpoint=False) for s,n in zip(self.sampling,('x','y')))
-        
-        measurement_objects = tuple(Measurement(asnumpy(_object),calibrations) for _object in objects)
-        measurement_probes  = tuple(Measurement(asnumpy(_probe),calibrations) for _probe in probes)
-        
+
+        calibrations = tuple(
+            Calibration(0, s, units="Å", name=n, endpoint=False)
+            for s, n in zip(self.sampling, ("x", "y"))
+        )
+
+        measurement_objects = tuple(
+            Measurement(asnumpy(_object), calibrations) for _object in objects
+        )
+        measurement_probes = tuple(
+            Measurement(asnumpy(_probe), calibrations) for _probe in probes
+        )
+
         return measurement_objects, measurement_probes, asnumpy(positions), sse
+
 
 class MixedStatePtychographicOperator(AbstractPtychographicOperator):
     """
@@ -2308,51 +2912,59 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
        Dictionary specifying any of the abtem.transfer.polar_symbols or abtem.reconstruct.experimental_symbols parameters
        Additionally, these can also be specified using kwargs
     """
-    def __init__(self,
-                 diffraction_patterns:Union[np.ndarray,Measurement],
-                 energy: float,
-                 num_probes:int,
-                 region_of_interest_shape: Sequence[int] = None,
-                 objects: np.ndarray = None,
-                 probes: Union[np.ndarray,Probe] = None,
-                 positions: np.ndarray = None,
-                 semiangle_cutoff: float = None,
-                 preprocess: bool = False,
-                 device: str = 'cpu',
-                 parameters: Mapping[str,float] = None,
-                 **kwargs):
-        
+
+    def __init__(
+        self,
+        diffraction_patterns: Union[np.ndarray, Measurement],
+        energy: float,
+        num_probes: int,
+        region_of_interest_shape: Sequence[int] = None,
+        objects: np.ndarray = None,
+        probes: Union[np.ndarray, Probe] = None,
+        positions: np.ndarray = None,
+        semiangle_cutoff: float = None,
+        preprocess: bool = False,
+        device: str = "cpu",
+        parameters: Mapping[str, float] = None,
+        **kwargs,
+    ):
+
         for key in kwargs.keys():
-            if (key not in polar_symbols) and (key not in polar_aliases.keys()) and (key not in experimental_symbols):
-                raise ValueError('{} not a recognized parameter'.format(key))
-    
-        self._polar_parameters        = dict(zip(polar_symbols, [0.] * len(polar_symbols)))
-        self._experimental_parameters = dict(zip(experimental_symbols, [None] * len(experimental_symbols)))
-        
+            if (
+                (key not in polar_symbols)
+                and (key not in polar_aliases.keys())
+                and (key not in experimental_symbols)
+            ):
+                raise ValueError("{} not a recognized parameter".format(key))
+
+        self._polar_parameters = dict(zip(polar_symbols, [0.0] * len(polar_symbols)))
+        self._experimental_parameters = dict(
+            zip(experimental_symbols, [None] * len(experimental_symbols))
+        )
+
         if parameters is None:
             parameters = {}
-        
+
         parameters.update(kwargs)
-        self._polar_parameters, self._experimental_parameters = self._update_parameters(parameters,
-                                                                                        self._polar_parameters,
-                                                                                        self._experimental_parameters)
-        
-        self._region_of_interest_shape          = region_of_interest_shape
-        self._energy                            = energy
-        self._semiangle_cutoff                  = semiangle_cutoff
-        self._positions                         = positions
-        self._device                            = device
-        self._objects                           = objects
-        self._probes                            = probes
-        self._num_probes                        = num_probes
-        self._diffraction_patterns              = diffraction_patterns
-    
+        self._polar_parameters, self._experimental_parameters = self._update_parameters(
+            parameters, self._polar_parameters, self._experimental_parameters
+        )
+
+        self._region_of_interest_shape = region_of_interest_shape
+        self._energy = energy
+        self._semiangle_cutoff = semiangle_cutoff
+        self._positions = positions
+        self._device = device
+        self._objects = objects
+        self._probes = probes
+        self._num_probes = num_probes
+        self._diffraction_patterns = diffraction_patterns
+
         if preprocess:
             self.preprocess()
         else:
             self._preprocessed = False
-            
-        
+
     def preprocess(self):
         """
         Preprocess method to do the following:
@@ -2365,98 +2977,131 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         -------
         preprocessed_ptychographic_operator: MixedStatePtychographicOperator
         """
-        
+
         self._preprocessed = True
-        
+
         # Convert Measurement Objects
         if isinstance(self._diffraction_patterns, Measurement):
-            self._diffraction_patterns, angular_sampling, step_sizes = self._extract_calibrations_from_measurement_object(
-                                                                                              self._diffraction_patterns,
-                                                                                              self._energy)
-            self._experimental_parameters['angular_sampling'] = angular_sampling
+            (
+                self._diffraction_patterns,
+                angular_sampling,
+                step_sizes,
+            ) = self._extract_calibrations_from_measurement_object(
+                self._diffraction_patterns, self._energy
+            )
+            self._experimental_parameters["angular_sampling"] = angular_sampling
             if step_sizes is not None:
-                self._experimental_parameters['scan_step_sizes']   = step_sizes
-                
+                self._experimental_parameters["scan_step_sizes"] = step_sizes
+
         # Preprocess Diffraction Patterns
-        xp                             = get_array_module_from_device(self._device)
-        self._diffraction_patterns     = copy_to_device(self._diffraction_patterns,self._device)
-        
+        xp = get_array_module_from_device(self._device)
+        self._diffraction_patterns = copy_to_device(
+            self._diffraction_patterns, self._device
+        )
+
         if len(self._diffraction_patterns.shape) == 4:
-            self._experimental_parameters['grid_scan_shape'] = self._diffraction_patterns.shape[:2]
-            self._diffraction_patterns                       = self._diffraction_patterns.reshape(
-                                                                    (-1,)+self._diffraction_patterns.shape[-2:])
-            
+            self._experimental_parameters[
+                "grid_scan_shape"
+            ] = self._diffraction_patterns.shape[:2]
+            self._diffraction_patterns = self._diffraction_patterns.reshape(
+                (-1,) + self._diffraction_patterns.shape[-2:]
+            )
+
         if self._region_of_interest_shape is None:
             self._region_of_interest_shape = self._diffraction_patterns.shape[-2:]
-        
-        self._diffraction_patterns         = self._pad_diffraction_patterns(self._diffraction_patterns,
-                                                                            self._region_of_interest_shape)
-        self._num_diffraction_patterns     = self._diffraction_patterns.shape[0]
-        
-        if self._experimental_parameters['background_counts_cutoff'] is not None:
-            self._diffraction_patterns[self._diffraction_patterns < self._experimental_parameters['background_counts_cutoff']] = 0.0
 
-        if self._experimental_parameters['counts_scaling_factor'] is not None:
-            self._diffraction_patterns /= self._experimental_parameters['counts_scaling_factor']   
+        self._diffraction_patterns = self._pad_diffraction_patterns(
+            self._diffraction_patterns, self._region_of_interest_shape
+        )
+        self._num_diffraction_patterns = self._diffraction_patterns.shape[0]
 
-        self._diffraction_patterns      = xp.fft.ifftshift(xp.sqrt(self._diffraction_patterns),axes=(-2,-1))
-        
-        
+        if self._experimental_parameters["background_counts_cutoff"] is not None:
+            self._diffraction_patterns[
+                self._diffraction_patterns
+                < self._experimental_parameters["background_counts_cutoff"]
+            ] = 0.0
+
+        if self._experimental_parameters["counts_scaling_factor"] is not None:
+            self._diffraction_patterns /= self._experimental_parameters[
+                "counts_scaling_factor"
+            ]
+
+        self._diffraction_patterns = xp.fft.ifftshift(
+            xp.sqrt(self._diffraction_patterns), axes=(-2, -1)
+        )
+
         # Scan Positions Initialization
-        positions_px, self._experimental_parameters = self._calculate_scan_positions_in_pixels(self._positions,
-                                                                                               self.sampling,
-                                                                                               self._region_of_interest_shape,
-                                                                                               self._experimental_parameters)
-        
+        (
+            positions_px,
+            self._experimental_parameters,
+        ) = self._calculate_scan_positions_in_pixels(
+            self._positions,
+            self.sampling,
+            self._region_of_interest_shape,
+            self._experimental_parameters,
+        )
+
         # Objects Initialization
         if self._objects is None:
-            pad_x, pad_y  = self._experimental_parameters['object_px_padding']
-            p, q          = np.max(positions_px,axis=0)
-            p             = np.max([np.round(p + pad_x), self._region_of_interest_shape[0]]).astype(int)
-            q             = np.max([np.round(q + pad_y), self._region_of_interest_shape[1]]).astype(int)
-            self._objects = xp.ones((p,q),dtype=xp.complex64)
+            pad_x, pad_y = self._experimental_parameters["object_px_padding"]
+            p, q = np.max(positions_px, axis=0)
+            p = np.max([np.round(p + pad_x), self._region_of_interest_shape[0]]).astype(
+                int
+            )
+            q = np.max([np.round(q + pad_y), self._region_of_interest_shape[1]]).astype(
+                int
+            )
+            self._objects = xp.ones((p, q), dtype=xp.complex64)
         else:
-            self._objects = copy_to_device(self._objects,self._device)
-                
-        self._positions_px                                = copy_to_device(positions_px,self._device)
-        self._positions_px_com                            = xp.mean(self._positions_px,axis=0)
-        
+            self._objects = copy_to_device(self._objects, self._device)
+
+        self._positions_px = copy_to_device(positions_px, self._device)
+        self._positions_px_com = xp.mean(self._positions_px, axis=0)
+
         # Probes Initialization
         if self._probes is None:
-            ctf           = CTF(energy=self._energy,
-                                semiangle_cutoff=self._semiangle_cutoff,
-                                parameters= self._polar_parameters)
-            self._probes  = Probe(semiangle_cutoff = self._semiangle_cutoff,
-                                 energy           = self._energy,
-                                 gpts             = self._region_of_interest_shape,
-                                 sampling         = self.sampling,
-                                 ctf              = ctf,
-                                 device           = self._device).build().array
+            ctf = CTF(
+                energy=self._energy,
+                semiangle_cutoff=self._semiangle_cutoff,
+                parameters=self._polar_parameters,
+            )
+            self._probes = (
+                Probe(
+                    semiangle_cutoff=self._semiangle_cutoff,
+                    energy=self._energy,
+                    gpts=self._region_of_interest_shape,
+                    sampling=self.sampling,
+                    ctf=ctf,
+                    device=self._device,
+                )
+                .build()
+                .array
+            )
         else:
-            if isinstance(self._probes,Probe):
+            if isinstance(self._probes, Probe):
                 if self._probes.gpts != self._region_of_interest_shape:
                     raise ValueError()
-                self._probes = copy_to_device(self._probes.build().array,self._device)
+                self._probes = copy_to_device(self._probes.build().array, self._device)
             else:
-                self._probes = copy_to_device(self._probes,self._device)
-                
-                
-        self._probes  = xp.tile(self._probes,(self._num_probes,1,1))
-        self._probes /= (xp.arange(self._num_probes)[:,None,None]+1)
-        
+                self._probes = copy_to_device(self._probes, self._device)
+
+        self._probes = xp.tile(self._probes, (self._num_probes, 1, 1))
+        self._probes /= xp.arange(self._num_probes)[:, None, None] + 1
+
         return self
-        
-        
+
     @staticmethod
-    def _warmup_overlap_projection(objects:np.ndarray,
-                                   probes:np.ndarray,
-                                   position:np.ndarray,
-                                   old_position:np.ndarray,
-                                   xp = np,
-                                   **kwargs):
+    def _warmup_overlap_projection(
+        objects: np.ndarray,
+        probes: np.ndarray,
+        position: np.ndarray,
+        old_position: np.ndarray,
+        xp=np,
+        **kwargs,
+    ):
         """
         Regularized-PIE overlap projection static method using a single probe:
-        .. math:: 
+        .. math::
             \psi^0_{R_j}(r) = O_{R_j}(r) * P^0(r)
 
 
@@ -2481,27 +3126,31 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         exit_wave: np.ndarray
             Overlap projection of illuminated probe
         """
-        
-        fractional_position      = position - xp.round(position)
-        old_fractional_position  = old_position - xp.round(old_position)
-        
-        probes[0]                = fft_shift(probes[0],fractional_position - old_fractional_position)
-        object_indices           = _wrapped_indices_2D_window(position,probes.shape[-2:],objects.shape)
-        object_roi               = objects[object_indices]
-        exit_wave                = object_roi * probes[0]
-        
+
+        fractional_position = position - xp.round(position)
+        old_fractional_position = old_position - xp.round(old_position)
+
+        probes[0] = fft_shift(probes[0], fractional_position - old_fractional_position)
+        object_indices = _wrapped_indices_2D_window(
+            position, probes.shape[-2:], objects.shape
+        )
+        object_roi = objects[object_indices]
+        exit_wave = object_roi * probes[0]
+
         return probes, exit_wave
-    
+
     @staticmethod
-    def _overlap_projection(objects:np.ndarray,
-                            probes:np.ndarray,
-                            position:np.ndarray,
-                            old_position:np.ndarray,
-                            xp = np,
-                            **kwargs):
+    def _overlap_projection(
+        objects: np.ndarray,
+        probes: np.ndarray,
+        position: np.ndarray,
+        old_position: np.ndarray,
+        xp=np,
+        **kwargs,
+    ):
         """
         Mixed-State-PIE overlap projection static method:
-        .. math:: 
+        .. math::
             \psi^k_{R_j}(r) = O_{R_j}(r) * P^k(r)
 
 
@@ -2526,29 +3175,33 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         exit_waves: np.ndarray
             Overlap projection of illuminated probes
         """
-        
-        fractional_position      = position - xp.round(position)
-        old_fractional_position  = old_position - xp.round(old_position)
-        
-        probes                   = fft_shift(probes,fractional_position - old_fractional_position)
-        object_indices           = _wrapped_indices_2D_window(position,probes.shape[-2:],objects.shape)
-        object_roi               = objects[object_indices]
-        
-        exit_waves               = xp.empty_like(probes)
+
+        fractional_position = position - xp.round(position)
+        old_fractional_position = old_position - xp.round(old_position)
+
+        probes = fft_shift(probes, fractional_position - old_fractional_position)
+        object_indices = _wrapped_indices_2D_window(
+            position, probes.shape[-2:], objects.shape
+        )
+        object_roi = objects[object_indices]
+
+        exit_waves = xp.empty_like(probes)
         for k in range(probes.shape[0]):
-            exit_waves[k]        = object_roi * probes[k]
-        
+            exit_waves[k] = object_roi * probes[k]
+
         return probes, exit_waves
-     
+
     @staticmethod
-    def _warmup_fourier_projection(exit_waves:np.ndarray,
-                                   diffraction_patterns:np.ndarray,
-                                   sse:float,
-                                   xp = np,
-                                   **kwargs):
+    def _warmup_fourier_projection(
+        exit_waves: np.ndarray,
+        diffraction_patterns: np.ndarray,
+        sse: float,
+        xp=np,
+        **kwargs,
+    ):
         """
         Regularized-PIE fourier projection static method using a single probe:
-        .. math:: 
+        .. math::
             \psi'^0_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi^0_{R_j}(u)] / |F[\psi^0_{R_j}(u)]|]
 
 
@@ -2570,21 +3223,27 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         sse: float
             Updated sum of squares error estimate
         """
-        exit_wave_fft       = xp.fft.fft2(exit_waves)
-        sse                += xp.mean(xp.abs(xp.abs(exit_wave_fft) - diffraction_patterns)**2)/xp.sum(diffraction_patterns**2)
-        modified_exit_wave  = xp.fft.ifft2(diffraction_patterns * xp.exp(1j * xp.angle(exit_wave_fft)))
-        
+        exit_wave_fft = xp.fft.fft2(exit_waves)
+        sse += xp.mean(
+            xp.abs(xp.abs(exit_wave_fft) - diffraction_patterns) ** 2
+        ) / xp.sum(diffraction_patterns**2)
+        modified_exit_wave = xp.fft.ifft2(
+            diffraction_patterns * xp.exp(1j * xp.angle(exit_wave_fft))
+        )
+
         return modified_exit_wave, sse
-    
+
     @staticmethod
-    def _fourier_projection(exit_waves:np.ndarray,
-                            diffraction_patterns:np.ndarray,
-                            sse:float,
-                            xp = np,
-                            **kwargs):
+    def _fourier_projection(
+        exit_waves: np.ndarray,
+        diffraction_patterns: np.ndarray,
+        sse: float,
+        xp=np,
+        **kwargs,
+    ):
         """
         Mixed-State-PIE fourier projection static method:
-        .. math:: 
+        .. math::
             \psi'^k_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi^k_{R_j}(u)] / \sqrt{\sum_k|F[\psi^k_{R_j}(u)]|^2}]
 
 
@@ -2606,28 +3265,34 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         sse: float
             Updated sum of squares error estimate
         """
-        exit_waves_fft            = xp.fft.fft2(exit_waves,axes=(-2,-1))
-        intensity_norm            = xp.sqrt(xp.sum(xp.abs(exit_waves_fft)**2,axis=0))
-        amplitude_modification    = diffraction_patterns/intensity_norm
-        sse                      += xp.mean(xp.abs(intensity_norm - diffraction_patterns)**2)/xp.sum(diffraction_patterns**2)
+        exit_waves_fft = xp.fft.fft2(exit_waves, axes=(-2, -1))
+        intensity_norm = xp.sqrt(xp.sum(xp.abs(exit_waves_fft) ** 2, axis=0))
+        amplitude_modification = diffraction_patterns / intensity_norm
+        sse += xp.mean(xp.abs(intensity_norm - diffraction_patterns) ** 2) / xp.sum(
+            diffraction_patterns**2
+        )
 
-        modified_exit_wave        = xp.fft.ifft2(amplitude_modification[None]*exit_waves_fft,axes=(-2,-1))
-        
+        modified_exit_wave = xp.fft.ifft2(
+            amplitude_modification[None] * exit_waves_fft, axes=(-2, -1)
+        )
+
         return modified_exit_wave, sse
 
-    @staticmethod   
-    def _warmup_update_function(objects:np.ndarray,
-                                probes:np.ndarray,
-                                position:np.ndarray,
-                                exit_waves:np.ndarray,
-                                modified_exit_waves:np.ndarray,
-                                diffraction_patterns:np.ndarray,
-                                fix_probe: bool = False,
-                                position_correction: Callable = None,
-                                sobel: Callable = None,
-                                reconstruction_parameters: Mapping[str,float] = None,
-                                xp = np,
-                                **kwargs):
+    @staticmethod
+    def _warmup_update_function(
+        objects: np.ndarray,
+        probes: np.ndarray,
+        position: np.ndarray,
+        exit_waves: np.ndarray,
+        modified_exit_waves: np.ndarray,
+        diffraction_patterns: np.ndarray,
+        fix_probe: bool = False,
+        position_correction: Callable = None,
+        sobel: Callable = None,
+        reconstruction_parameters: Mapping[str, float] = None,
+        xp=np,
+        **kwargs,
+    ):
         """
         Regularized-PIE objects and probes update static method using a single probe:
         .. math::
@@ -2669,49 +3334,70 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         position: np.ndarray
             Updated probe position estimate
         """
-        
-        object_indices           = _wrapped_indices_2D_window(position,probes.shape[-2:],objects.shape)
-        object_roi               = objects[object_indices]
-        
-        exit_wave_diff           = modified_exit_waves - exit_waves
-        
-        probe_conj               = xp.conj(probes[0])
-        probe_abs_squared        = xp.abs(probes[0])**2
-        obj_conj                 = xp.conj(object_roi)
-        obj_abs_squared          = xp.abs(object_roi)**2
-        
+
+        object_indices = _wrapped_indices_2D_window(
+            position, probes.shape[-2:], objects.shape
+        )
+        object_roi = objects[object_indices]
+
+        exit_wave_diff = modified_exit_waves - exit_waves
+
+        probe_conj = xp.conj(probes[0])
+        probe_abs_squared = xp.abs(probes[0]) ** 2
+        obj_conj = xp.conj(object_roi)
+        obj_abs_squared = xp.abs(object_roi) ** 2
+
         if position_correction is not None:
-            position_step_size   = reconstruction_parameters['position_step_size']
-            position             = position_correction(objects, probes, position, exit_waves, modified_exit_waves, diffraction_patterns,
-                                                       sobel=sobel,position_step_size=position_step_size, xp=xp)
-            
-        alpha                    = reconstruction_parameters['alpha']
-        object_step_size         = reconstruction_parameters['object_step_size']
-        objects[object_indices] += object_step_size * probe_conj*exit_wave_diff / (
-                                    (1-alpha)*probe_abs_squared + alpha*xp.max(probe_abs_squared))
-        
+            position_step_size = reconstruction_parameters["position_step_size"]
+            position = position_correction(
+                objects,
+                probes,
+                position,
+                exit_waves,
+                modified_exit_waves,
+                diffraction_patterns,
+                sobel=sobel,
+                position_step_size=position_step_size,
+                xp=xp,
+            )
+
+        alpha = reconstruction_parameters["alpha"]
+        object_step_size = reconstruction_parameters["object_step_size"]
+        objects[object_indices] += (
+            object_step_size
+            * probe_conj
+            * exit_wave_diff
+            / ((1 - alpha) * probe_abs_squared + alpha * xp.max(probe_abs_squared))
+        )
+
         if not fix_probe:
-            beta                 = reconstruction_parameters['beta']
-            probe_step_size      = reconstruction_parameters['probe_step_size']
-            probes[0]           += probe_step_size * obj_conj*exit_wave_diff / (
-                                    (1-beta)*obj_abs_squared + beta*xp.max(obj_abs_squared))
-            
+            beta = reconstruction_parameters["beta"]
+            probe_step_size = reconstruction_parameters["probe_step_size"]
+            probes[0] += (
+                probe_step_size
+                * obj_conj
+                * exit_wave_diff
+                / ((1 - beta) * obj_abs_squared + beta * xp.max(obj_abs_squared))
+            )
+
         return objects, probes, position
-    
-    @staticmethod   
-    def _update_function(objects:np.ndarray,
-                         probes:np.ndarray,
-                         position:np.ndarray,
-                         exit_waves:np.ndarray,
-                         modified_exit_waves:np.ndarray,
-                         diffraction_patterns:np.ndarray,
-                         fix_probe: bool = False,
-                         orthogonalize_probes: bool = False,
-                         position_correction: Callable = None,
-                         sobel: Callable = None,
-                         reconstruction_parameters: Mapping[str,float] = None,
-                         xp = np,
-                         **kwargs):
+
+    @staticmethod
+    def _update_function(
+        objects: np.ndarray,
+        probes: np.ndarray,
+        position: np.ndarray,
+        exit_waves: np.ndarray,
+        modified_exit_waves: np.ndarray,
+        diffraction_patterns: np.ndarray,
+        fix_probe: bool = False,
+        orthogonalize_probes: bool = False,
+        position_correction: Callable = None,
+        sobel: Callable = None,
+        reconstruction_parameters: Mapping[str, float] = None,
+        xp=np,
+        **kwargs,
+    ):
         """
         Mixed-State-PIE objects and probes update static method:
         .. math::
@@ -2753,50 +3439,73 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         position: np.ndarray
             Updated probe position estimate
         """
-        
-        object_indices           = _wrapped_indices_2D_window(position,probes.shape[-2:],objects.shape)
-        object_roi               = objects[object_indices]
-        
-        exit_wave_diff           = modified_exit_waves - exit_waves
-        
-        probe_conj               = xp.conj(probes)
-        probe_abs_squared_norm   = xp.sum(xp.abs(probes)**2,axis=0)
-        obj_conj                 = xp.conj(object_roi)
-        obj_abs_squared          = xp.abs(object_roi)**2
-        
+
+        object_indices = _wrapped_indices_2D_window(
+            position, probes.shape[-2:], objects.shape
+        )
+        object_roi = objects[object_indices]
+
+        exit_wave_diff = modified_exit_waves - exit_waves
+
+        probe_conj = xp.conj(probes)
+        probe_abs_squared_norm = xp.sum(xp.abs(probes) ** 2, axis=0)
+        obj_conj = xp.conj(object_roi)
+        obj_abs_squared = xp.abs(object_roi) ** 2
+
         if position_correction is not None:
-            position_step_size   = reconstruction_parameters['position_step_size']
-            position             = position_correction(objects, probes,position, exit_waves, modified_exit_waves, diffraction_patterns,
-                                                       sobel=sobel,position_step_size=position_step_size, xp=xp)
-            
-        alpha                    = reconstruction_parameters['alpha']
-        object_step_size         = reconstruction_parameters['object_step_size']
-        objects[object_indices] += object_step_size * xp.sum(probe_conj*exit_wave_diff,axis=0) / (
-                                    (1-alpha)*probe_abs_squared_norm + alpha*xp.max(probe_abs_squared_norm))
-        
+            position_step_size = reconstruction_parameters["position_step_size"]
+            position = position_correction(
+                objects,
+                probes,
+                position,
+                exit_waves,
+                modified_exit_waves,
+                diffraction_patterns,
+                sobel=sobel,
+                position_step_size=position_step_size,
+                xp=xp,
+            )
+
+        alpha = reconstruction_parameters["alpha"]
+        object_step_size = reconstruction_parameters["object_step_size"]
+        objects[object_indices] += (
+            object_step_size
+            * xp.sum(probe_conj * exit_wave_diff, axis=0)
+            / (
+                (1 - alpha) * probe_abs_squared_norm
+                + alpha * xp.max(probe_abs_squared_norm)
+            )
+        )
+
         if not fix_probe:
-            beta                 = reconstruction_parameters['beta']
-            probe_step_size      = reconstruction_parameters['probe_step_size']
-            update_numerator     = probe_step_size * obj_conj[None]*exit_wave_diff
-            update_denominator   = (1-beta)*obj_abs_squared + beta*xp.max(obj_abs_squared)
-            probes              += update_numerator/update_denominator[None]
-            
+            beta = reconstruction_parameters["beta"]
+            probe_step_size = reconstruction_parameters["probe_step_size"]
+            update_numerator = probe_step_size * obj_conj[None] * exit_wave_diff
+            update_denominator = (1 - beta) * obj_abs_squared + beta * xp.max(
+                obj_abs_squared
+            )
+            probes += update_numerator / update_denominator[None]
+
             if orthogonalize_probes:
-                probes           = _orthogonalize(probes.reshape((probes.shape[0],-1))).reshape(probes.shape)
-            
+                probes = _orthogonalize(probes.reshape((probes.shape[0], -1))).reshape(
+                    probes.shape
+                )
+
         return objects, probes, position
-    
+
     @staticmethod
-    def _position_correction(objects: np.ndarray,
-                             probes: np.ndarray,
-                             position:np.ndarray,
-                             exit_wave:np.ndarray,
-                             modified_exit_wave: np.ndarray,
-                             diffraction_pattern:np.ndarray,
-                             sobel:Callable,
-                             position_step_size: float = 1.0,
-                             xp=np,
-                             **kwargs):
+    def _position_correction(
+        objects: np.ndarray,
+        probes: np.ndarray,
+        position: np.ndarray,
+        exit_wave: np.ndarray,
+        modified_exit_wave: np.ndarray,
+        diffraction_pattern: np.ndarray,
+        sobel: Callable,
+        position_step_size: float = 1.0,
+        xp=np,
+        **kwargs,
+    ):
         """
         Regularized-PIE probe position correction method.
 
@@ -2828,25 +3537,31 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
             Updated probe position estimate
         """
 
-        object_dx       = sobel(objects,axis=0,mode='wrap')
-        object_dy       = sobel(objects,axis=1,mode='wrap')
-        
-        object_indices  = _wrapped_indices_2D_window(position,probes.shape[-2:],objects.shape)
-        exit_wave_dx    = object_dx[object_indices]*probes[0]
-        exit_wave_dy    = object_dy[object_indices]*probes[0]
-        
-        exit_wave_diff  = modified_exit_wave[0] - exit_wave[0]
-        displacement_x  = xp.sum(xp.real(xp.conj(exit_wave_dx)*exit_wave_diff))/xp.sum(xp.abs(exit_wave_dx)**2)
-        displacement_y  = xp.sum(xp.real(xp.conj(exit_wave_dy)*exit_wave_diff))/xp.sum(xp.abs(exit_wave_dy)**2)
-        
-        return position + position_step_size*xp.array([displacement_x,displacement_y])
-    
-    
+        object_dx = sobel(objects, axis=0, mode="wrap")
+        object_dy = sobel(objects, axis=1, mode="wrap")
+
+        object_indices = _wrapped_indices_2D_window(
+            position, probes.shape[-2:], objects.shape
+        )
+        exit_wave_dx = object_dx[object_indices] * probes[0]
+        exit_wave_dy = object_dy[object_indices] * probes[0]
+
+        exit_wave_diff = modified_exit_wave[0] - exit_wave[0]
+        displacement_x = xp.sum(
+            xp.real(xp.conj(exit_wave_dx) * exit_wave_diff)
+        ) / xp.sum(xp.abs(exit_wave_dx) ** 2)
+        displacement_y = xp.sum(
+            xp.real(xp.conj(exit_wave_dy) * exit_wave_diff)
+        ) / xp.sum(xp.abs(exit_wave_dy) ** 2)
+
+        return position + position_step_size * xp.array(
+            [displacement_x, displacement_y]
+        )
+
     @staticmethod
-    def _fix_probe_center_of_mass(probes:np.ndarray,
-                                  center_of_mass:Callable,
-                                  xp = np,
-                                  **kwargs):
+    def _fix_probe_center_of_mass(
+        probes: np.ndarray, center_of_mass: Callable, xp=np, **kwargs
+    ):
         """
         Mixed-State-PIE probe center correction method.
 
@@ -2865,23 +3580,25 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         probes: np.ndarray
             Center-of-mass corrected probes array
         """
-        
-        probe_center = xp.array(probes.shape[-2:])/2
+
+        probe_center = xp.array(probes.shape[-2:]) / 2
         for k in range(probes.shape[0]):
-            com          = center_of_mass(xp.abs(probes[k]) ** 2)
-            probes[k]    = fft_shift(probes[k], probe_center - xp.array(com))
-        
+            com = center_of_mass(xp.abs(probes[k]) ** 2)
+            probes[k] = fft_shift(probes[k], probe_center - xp.array(com))
+
         return probes
-        
-    def _prepare_functions_queue(self,
-                                 max_iterations: int,
-                                 warmup_update_steps: int = 0,
-                                 pre_position_correction_update_steps: int = None,
-                                 pre_probe_correction_update_steps: int = None,
-                                 **kwargs):
+
+    def _prepare_functions_queue(
+        self,
+        max_iterations: int,
+        warmup_update_steps: int = 0,
+        pre_position_correction_update_steps: int = None,
+        pre_probe_correction_update_steps: int = None,
+        **kwargs,
+    ):
         """
         Precomputes the order in which functions will be called in the reconstruction loop.
-        Additionally, prepares a summary of steps to be printed for reporting. 
+        Additionally, prepares a summary of steps to be printed for reporting.
 
         Parameters
         ----------
@@ -2901,70 +3618,113 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         queue_summary: str
             Summary of function calls the reconstruction loop will perform
         """
-        total_update_steps   = max_iterations*self._num_diffraction_patterns
-        queue_summary        = "Ptychographic reconstruction will perform the following steps:"
-    
-        functions_tuple      = (self._warmup_overlap_projection,self._warmup_fourier_projection, self._warmup_update_function, None)
-        functions_queue      = [functions_tuple]
-        
+        total_update_steps = max_iterations * self._num_diffraction_patterns
+        queue_summary = "Ptychographic reconstruction will perform the following steps:"
+
+        functions_tuple = (
+            self._warmup_overlap_projection,
+            self._warmup_fourier_projection,
+            self._warmup_update_function,
+            None,
+        )
+        functions_queue = [functions_tuple]
+
         if pre_position_correction_update_steps is None:
             functions_queue *= warmup_update_steps
-            queue_summary   += f"\n--Regularized PIE for {warmup_update_steps} steps"
+            queue_summary += f"\n--Regularized PIE for {warmup_update_steps} steps"
 
-            functions_tuple = (self._overlap_projection,self._fourier_projection, self._update_function, None)
+            functions_tuple = (
+                self._overlap_projection,
+                self._fourier_projection,
+                self._update_function,
+                None,
+            )
             remaining_update_steps = total_update_steps - warmup_update_steps
-            functions_queue += [functions_tuple]*remaining_update_steps
-            queue_summary   += f"\n--Mixed-State PIE for {remaining_update_steps} steps"
+            functions_queue += [functions_tuple] * remaining_update_steps
+            queue_summary += f"\n--Mixed-State PIE for {remaining_update_steps} steps"
         else:
             if warmup_update_steps <= pre_position_correction_update_steps:
                 functions_queue *= warmup_update_steps
-                queue_summary   += f"\n--Regularized PIE for {warmup_update_steps} steps"
+                queue_summary += f"\n--Regularized PIE for {warmup_update_steps} steps"
 
-                functions_tuple = (self._overlap_projection,self._fourier_projection, self._update_function, None)
-                remaining_update_steps = pre_position_correction_update_steps - warmup_update_steps
-                functions_queue += [functions_tuple]*remaining_update_steps
-                queue_summary   += f"\n--Mixed-State PIE for {remaining_update_steps} steps"
-                
-                functions_tuple = (self._overlap_projection,self._fourier_projection, self._update_function, self._position_correction)
-                remaining_update_steps = total_update_steps - pre_position_correction_update_steps
-                functions_queue += [functions_tuple]*remaining_update_steps
-                queue_summary   += f"\n--Mixed-State PIE with position correction for {remaining_update_steps} steps"
+                functions_tuple = (
+                    self._overlap_projection,
+                    self._fourier_projection,
+                    self._update_function,
+                    None,
+                )
+                remaining_update_steps = (
+                    pre_position_correction_update_steps - warmup_update_steps
+                )
+                functions_queue += [functions_tuple] * remaining_update_steps
+                queue_summary += (
+                    f"\n--Mixed-State PIE for {remaining_update_steps} steps"
+                )
+
+                functions_tuple = (
+                    self._overlap_projection,
+                    self._fourier_projection,
+                    self._update_function,
+                    self._position_correction,
+                )
+                remaining_update_steps = (
+                    total_update_steps - pre_position_correction_update_steps
+                )
+                functions_queue += [functions_tuple] * remaining_update_steps
+                queue_summary += f"\n--Mixed-State PIE with position correction for {remaining_update_steps} steps"
             else:
                 functions_queue *= pre_position_correction_update_steps
-                queue_summary   += f"\n--Regularized PIE for {pre_position_correction_update_steps} steps"
+                queue_summary += f"\n--Regularized PIE for {pre_position_correction_update_steps} steps"
 
-                functions_tuple = (self._warmup_overlap_projection,self._warmup_fourier_projection, self._warmup_update_function, self._position_correction)
-                remaining_update_steps = warmup_update_steps - pre_position_correction_update_steps
-                functions_queue += [functions_tuple]*remaining_update_steps
-                queue_summary   += f"\n--Regularized PIE with position correction for {remaining_update_steps} steps"
-                
-                functions_tuple = (self._overlap_projection,self._fourier_projection, self._update_function, self._position_correction)
+                functions_tuple = (
+                    self._warmup_overlap_projection,
+                    self._warmup_fourier_projection,
+                    self._warmup_update_function,
+                    self._position_correction,
+                )
+                remaining_update_steps = (
+                    warmup_update_steps - pre_position_correction_update_steps
+                )
+                functions_queue += [functions_tuple] * remaining_update_steps
+                queue_summary += f"\n--Regularized PIE with position correction for {remaining_update_steps} steps"
+
+                functions_tuple = (
+                    self._overlap_projection,
+                    self._fourier_projection,
+                    self._update_function,
+                    self._position_correction,
+                )
                 remaining_update_steps = total_update_steps - warmup_update_steps
-                functions_queue += [functions_tuple]*remaining_update_steps
-                queue_summary   += f"\n--Mixed-State PIE with position correction for {remaining_update_steps} steps"
-        
+                functions_queue += [functions_tuple] * remaining_update_steps
+                queue_summary += f"\n--Mixed-State PIE with position correction for {remaining_update_steps} steps"
+
         if pre_probe_correction_update_steps is None:
             queue_summary += f"\n--Probe correction is enabled"
         elif pre_probe_correction_update_steps > total_update_steps:
             queue_summary += f"\n--Probe correction is disabled"
         else:
             queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
-        
-        functions_queue = [functions_queue[x:x+self._num_diffraction_patterns] for x in range(0, total_update_steps, self._num_diffraction_patterns)]
-        
+
+        functions_queue = [
+            functions_queue[x : x + self._num_diffraction_patterns]
+            for x in range(0, total_update_steps, self._num_diffraction_patterns)
+        ]
+
         return functions_queue, queue_summary
-    
-    def reconstruct(self,
-                    max_iterations: int = 5,
-                    return_iterations: bool = False,
-                    probe_orthogonalization_frequency: int = None,
-                    warmup_update_steps: int = 0,
-                    fix_com: bool = True,
-                    random_seed = None,
-                    verbose: bool = False,
-                    parameters: Mapping[str,float] = None,
-                    functions_queue: Iterable = None,
-                    **kwargs):
+
+    def reconstruct(
+        self,
+        max_iterations: int = 5,
+        return_iterations: bool = False,
+        probe_orthogonalization_frequency: int = None,
+        warmup_update_steps: int = 0,
+        fix_com: bool = True,
+        random_seed=None,
+        verbose: bool = False,
+        parameters: Mapping[str, float] = None,
+        functions_queue: Iterable = None,
+        **kwargs,
+    ):
         """
         Main reconstruction loop method to do the following:
         - Precompute the order of function calls using the MixedStatePtychographicOperator._prepare_functions_queue method
@@ -3007,66 +3767,83 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
             If return_iterations, a list of the reconstruction error at each iteration is returned
         """
         for key in kwargs.keys():
-            if (key not in reconstruction_symbols.keys()):
-                raise ValueError('{} not a recognized parameter'.format(key))
-                
+            if key not in reconstruction_symbols.keys():
+                raise ValueError("{} not a recognized parameter".format(key))
+
         if parameters is None:
             parameters = {}
         self._reconstruction_parameters = reconstruction_symbols.copy()
         self._reconstruction_parameters.update(parameters)
         self._reconstruction_parameters.update(kwargs)
-                 
+
         if functions_queue is None:
             functions_queue, summary = self._prepare_functions_queue(
-                                        max_iterations,
-                                        warmup_update_steps=warmup_update_steps,
-                                        pre_position_correction_update_steps = self._reconstruction_parameters['pre_position_correction_update_steps'],
-                                        pre_probe_correction_update_steps    = self._reconstruction_parameters['pre_probe_correction_update_steps'])
+                max_iterations,
+                warmup_update_steps=warmup_update_steps,
+                pre_position_correction_update_steps=self._reconstruction_parameters[
+                    "pre_position_correction_update_steps"
+                ],
+                pre_probe_correction_update_steps=self._reconstruction_parameters[
+                    "pre_probe_correction_update_steps"
+                ],
+            )
             if verbose:
                 print(summary)
         else:
             if len(functions_queue) == max_iterations:
                 if callable(functions_queue[0]):
-                    functions_queue = [[function_tuples]*self._num_diffraction_patterns for function_tuples in functions_queue]
-            elif len(functions_queue) == max_iterations*self._num_diffraction_patterns:
-                functions_queue = [functions_queue[x:x+self._num_diffraction_patterns] for x in range(0, total_update_steps, self._num_diffraction_patterns)]
+                    functions_queue = [
+                        [function_tuples] * self._num_diffraction_patterns
+                        for function_tuples in functions_queue
+                    ]
+            elif (
+                len(functions_queue) == max_iterations * self._num_diffraction_patterns
+            ):
+                functions_queue = [
+                    functions_queue[x : x + self._num_diffraction_patterns]
+                    for x in range(
+                        0, total_update_steps, self._num_diffraction_patterns
+                    )
+                ]
             else:
                 raise ValueError()
-        
+
         self._functions_queue = functions_queue
-        
+
         ### Main Loop
-        xp                  = get_array_module_from_device(self._device)
-        outer_pbar          = ProgressBar(total=max_iterations,leave=False)
-        inner_pbar          = ProgressBar(total=self._num_diffraction_patterns,leave=False)
-        indices             = np.arange(self._num_diffraction_patterns)
-        position_px_padding = xp.array(self._experimental_parameters['object_px_padding'])
-        center_of_mass      = get_scipy_module(xp).ndimage.center_of_mass
-        sobel               = get_scipy_module(xp).ndimage.sobel
-        
+        xp = get_array_module_from_device(self._device)
+        outer_pbar = ProgressBar(total=max_iterations, leave=False)
+        inner_pbar = ProgressBar(total=self._num_diffraction_patterns, leave=False)
+        indices = np.arange(self._num_diffraction_patterns)
+        position_px_padding = xp.array(
+            self._experimental_parameters["object_px_padding"]
+        )
+        center_of_mass = get_scipy_module(xp).ndimage.center_of_mass
+        sobel = get_scipy_module(xp).ndimage.sobel
+
         if return_iterations:
-            objects_iterations   = []
-            probes_iterations    = []
+            objects_iterations = []
+            probes_iterations = []
             positions_iterations = []
-            sse_iterations       = []
-        
+            sse_iterations = []
+
         if random_seed is not None:
             np.random.seed(random_seed)
-            
+
         for iteration_index, iteration_step in enumerate(self._functions_queue):
-            
+
             inner_pbar.reset()
-            
+
             # Set iteration-specific parameters
             np.random.shuffle(indices)
             old_position = position_px_padding
-            self._sse    = 0.0
-            
+            self._sse = 0.0
+
             for update_index, update_step in enumerate(iteration_step):
-                
-                index               = indices[update_index]
-                position            = self._positions_px[index]
-                
+
+                index = indices[update_index]
+                position = self._positions_px[index]
+
                 # Skip empty diffraction patterns
                 diffraction_pattern = self._diffraction_patterns[index]
                 if xp.sum(diffraction_pattern) == 0.0:
@@ -3074,104 +3851,145 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                     continue
 
                 # Set update-specific parameters
-                global_iteration_i  = iteration_index*self._num_diffraction_patterns + update_index
-                
-                if self._reconstruction_parameters['pre_probe_correction_update_steps'] is None:
-                    fix_probe       = False
+                global_iteration_i = (
+                    iteration_index * self._num_diffraction_patterns + update_index
+                )
+
+                if (
+                    self._reconstruction_parameters["pre_probe_correction_update_steps"]
+                    is None
+                ):
+                    fix_probe = False
                 else:
-                    fix_probe       = global_iteration_i < self._reconstruction_parameters['pre_probe_correction_update_steps']
-                    
+                    fix_probe = (
+                        global_iteration_i
+                        < self._reconstruction_parameters[
+                            "pre_probe_correction_update_steps"
+                        ]
+                    )
+
                 if probe_orthogonalization_frequency is None:
                     orthogonalize_probes = False
                 else:
-                    orthogonalize_probes = not (global_iteration_i % probe_orthogonalization_frequency)
+                    orthogonalize_probes = not (
+                        global_iteration_i % probe_orthogonalization_frequency
+                    )
 
-                _overlap_projection,_fourier_projection,_update_function,_position_correction = update_step
-            
-                self._probes, exit_wave                                = _overlap_projection(self._objects,
-                                                                                             self._probes,
-                                                                                             position,
-                                                                                             old_position,
-                                                                                             xp=xp)
-                
-                modified_exit_wave, self._sse                          = _fourier_projection(exit_wave,
-                                                                                             diffraction_pattern,
-                                                                                             self._sse,
-                                                                                             xp=xp)
+                (
+                    _overlap_projection,
+                    _fourier_projection,
+                    _update_function,
+                    _position_correction,
+                ) = update_step
 
-                self._objects, self._probes, self._positions_px[index] = _update_function(self._objects,
-                                                                                          self._probes,
-                                                                                          position,
-                                                                                          exit_wave,
-                                                                                          modified_exit_wave,
-                                                                                          diffraction_pattern,
-                                                                                          fix_probe = fix_probe,
-                                                                                          orthogonalize_probes = orthogonalize_probes,
-                                                                                          position_correction = _position_correction,
-                                                                                          sobel = sobel,
-                                                                                          reconstruction_parameters = self._reconstruction_parameters,
-                                                                                          xp = xp)
-                    
-                old_position    = position
+                self._probes, exit_wave = _overlap_projection(
+                    self._objects, self._probes, position, old_position, xp=xp
+                )
+
+                modified_exit_wave, self._sse = _fourier_projection(
+                    exit_wave, diffraction_pattern, self._sse, xp=xp
+                )
+
+                (
+                    self._objects,
+                    self._probes,
+                    self._positions_px[index],
+                ) = _update_function(
+                    self._objects,
+                    self._probes,
+                    position,
+                    exit_wave,
+                    modified_exit_wave,
+                    diffraction_pattern,
+                    fix_probe=fix_probe,
+                    orthogonalize_probes=orthogonalize_probes,
+                    position_correction=_position_correction,
+                    sobel=sobel,
+                    reconstruction_parameters=self._reconstruction_parameters,
+                    xp=xp,
+                )
+
+                old_position = position
                 inner_pbar.update(1)
-              
+
             # Shift probe back to origin
-            self._probes     = fft_shift(self._probes,xp.round(position) - position)
-            
+            self._probes = fft_shift(self._probes, xp.round(position) - position)
+
             # Probe CoM
             if fix_com:
-                self._probes = self._fix_probe_center_of_mass(self._probes,center_of_mass,xp=xp)
-                
+                self._probes = self._fix_probe_center_of_mass(
+                    self._probes, center_of_mass, xp=xp
+                )
+
             # Probe Orthogonalization
             if probe_orthogonalization_frequency is not None:
-                self._probes    = _orthogonalize(self._probes.reshape((self._num_probes,-1))).reshape(self._probes.shape)  
-                 
+                self._probes = _orthogonalize(
+                    self._probes.reshape((self._num_probes, -1))
+                ).reshape(self._probes.shape)
+
             # Positions CoM
             if _position_correction is not None:
-                self._positions_px -= (xp.mean(self._positions_px,axis=0) - self._positions_px_com)
-                self._reconstruction_parameters['position_step_size']  *= self._reconstruction_parameters['step_size_damping_rate']
-            
+                self._positions_px -= (
+                    xp.mean(self._positions_px, axis=0) - self._positions_px_com
+                )
+                self._reconstruction_parameters[
+                    "position_step_size"
+                ] *= self._reconstruction_parameters["step_size_damping_rate"]
+
             # Update Parameters
-            self._reconstruction_parameters['object_step_size'] *= self._reconstruction_parameters['step_size_damping_rate']
-            self._reconstruction_parameters['probe_step_size']  *= self._reconstruction_parameters['step_size_damping_rate']
-            self._sse                                           /= self._num_diffraction_patterns
-            
+            self._reconstruction_parameters[
+                "object_step_size"
+            ] *= self._reconstruction_parameters["step_size_damping_rate"]
+            self._reconstruction_parameters[
+                "probe_step_size"
+            ] *= self._reconstruction_parameters["step_size_damping_rate"]
+            self._sse /= self._num_diffraction_patterns
+
             if return_iterations:
                 objects_iterations.append(self._objects.copy())
                 probes_iterations.append(self._probes.copy())
-                positions_iterations.append(self._positions_px.copy() * xp.array(self.sampling))
+                positions_iterations.append(
+                    self._positions_px.copy() * xp.array(self.sampling)
+                )
                 sse_iterations.append(self._sse)
-            
+
             if verbose:
-                print(f'----Iteration {iteration_index:<{len(str(max_iterations))}}, SSE = {float(self._sse):.3e}')
-            
+                print(
+                    f"----Iteration {iteration_index:<{len(str(max_iterations))}}, SSE = {float(self._sse):.3e}"
+                )
+
             outer_pbar.update(1)
-        
+
         inner_pbar.close()
         outer_pbar.close()
-        
+
         #  Return Results
         if return_iterations:
-            results = map(self._prepare_measurement_outputs,
-                          objects_iterations,
-                          probes_iterations,
-                          positions_iterations,
-                          sse_iterations)
-            
+            results = map(
+                self._prepare_measurement_outputs,
+                objects_iterations,
+                probes_iterations,
+                positions_iterations,
+                sse_iterations,
+            )
+
             return tuple(map(list, zip(*results)))
         else:
-            results = self._prepare_measurement_outputs(self._objects,
-                                                        self._probes,
-                                                        self._positions_px * xp.array(self.sampling),
-                                                        self._sse)
+            results = self._prepare_measurement_outputs(
+                self._objects,
+                self._probes,
+                self._positions_px * xp.array(self.sampling),
+                self._sse,
+            )
             return results
-        
-        
-    def _prepare_measurement_outputs(self,
-                                     objects:np.ndarray,
-                                     probes: np.ndarray,
-                                     positions: np.ndarray,
-                                     sse: np.ndarray):
+
+    def _prepare_measurement_outputs(
+        self,
+        objects: np.ndarray,
+        probes: np.ndarray,
+        positions: np.ndarray,
+        sse: np.ndarray,
+    ):
         """
         Method to format the reconstruction outputs as Measurement objects.
 
@@ -3197,13 +4015,19 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         sse: float
             Reconstruction error
         """
-        
-        calibrations = tuple(Calibration(0, s, units='Å', name = n, endpoint=False) for s,n in zip(self.sampling,('x','y')))
-        
-        measurement_objects = Measurement(asnumpy(objects),calibrations)
-        measurement_probes  = [Measurement(asnumpy(probe),calibrations) for probe in probes]
-        
+
+        calibrations = tuple(
+            Calibration(0, s, units="Å", name=n, endpoint=False)
+            for s, n in zip(self.sampling, ("x", "y"))
+        )
+
+        measurement_objects = Measurement(asnumpy(objects), calibrations)
+        measurement_probes = [
+            Measurement(asnumpy(probe), calibrations) for probe in probes
+        ]
+
         return measurement_objects, measurement_probes, asnumpy(positions), sse
+
 
 class MultislicePtychographicOperator(AbstractPtychographicOperator):
     """
@@ -3247,57 +4071,65 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
        Dictionary specifying any of the abtem.transfer.polar_symbols or abtem.reconstruct.experimental_symbols parameters
        Additionally, these can also be specified using kwargs
     """
-    def __init__(self,
-                 diffraction_patterns:Union[np.ndarray,Measurement],
-                 energy: float,
-                 num_slices: int,
-                 slice_thicknesses: Union[float,Sequence[float]],
-                 region_of_interest_shape: Sequence[int] = None,
-                 objects: np.ndarray = None,
-                 probes: Union[np.ndarray,Probe] = None,
-                 positions: np.ndarray = None,
-                 semiangle_cutoff: float = None,
-                 preprocess: bool = False,
-                 device: str = 'cpu',
-                 parameters: Mapping[str,float] = None,
-                 **kwargs):
-        
+
+    def __init__(
+        self,
+        diffraction_patterns: Union[np.ndarray, Measurement],
+        energy: float,
+        num_slices: int,
+        slice_thicknesses: Union[float, Sequence[float]],
+        region_of_interest_shape: Sequence[int] = None,
+        objects: np.ndarray = None,
+        probes: Union[np.ndarray, Probe] = None,
+        positions: np.ndarray = None,
+        semiangle_cutoff: float = None,
+        preprocess: bool = False,
+        device: str = "cpu",
+        parameters: Mapping[str, float] = None,
+        **kwargs,
+    ):
+
         for key in kwargs.keys():
-            if (key not in polar_symbols) and (key not in polar_aliases.keys()) and (key not in experimental_symbols):
-                raise ValueError('{} not a recognized parameter'.format(key))
-    
-        self._polar_parameters        = dict(zip(polar_symbols, [0.] * len(polar_symbols)))
-        self._experimental_parameters = dict(zip(experimental_symbols, [None] * len(experimental_symbols)))
-        
+            if (
+                (key not in polar_symbols)
+                and (key not in polar_aliases.keys())
+                and (key not in experimental_symbols)
+            ):
+                raise ValueError("{} not a recognized parameter".format(key))
+
+        self._polar_parameters = dict(zip(polar_symbols, [0.0] * len(polar_symbols)))
+        self._experimental_parameters = dict(
+            zip(experimental_symbols, [None] * len(experimental_symbols))
+        )
+
         if parameters is None:
             parameters = {}
-        
+
         parameters.update(kwargs)
-        self._polar_parameters, self._experimental_parameters = self._update_parameters(parameters,
-                                                                                        self._polar_parameters,
-                                                                                        self._experimental_parameters)
-        
-        slice_thicknesses      = np.array(slice_thicknesses)
+        self._polar_parameters, self._experimental_parameters = self._update_parameters(
+            parameters, self._polar_parameters, self._experimental_parameters
+        )
+
+        slice_thicknesses = np.array(slice_thicknesses)
         if slice_thicknesses.shape == ():
-            slice_thicknesses  = np.tile(slice_thicknesses,num_slices)
-        
-        self._region_of_interest_shape   = region_of_interest_shape
-        self._energy                     = energy
-        self._semiangle_cutoff           = semiangle_cutoff
-        self._positions                  = positions
-        self._device                     = device
-        self._objects                    = objects
-        self._probes                     = probes
-        self._num_slices                 = num_slices
-        self._slice_thicknesses          = slice_thicknesses
-        self._diffraction_patterns       = diffraction_patterns
-    
+            slice_thicknesses = np.tile(slice_thicknesses, num_slices)
+
+        self._region_of_interest_shape = region_of_interest_shape
+        self._energy = energy
+        self._semiangle_cutoff = semiangle_cutoff
+        self._positions = positions
+        self._device = device
+        self._objects = objects
+        self._probes = probes
+        self._num_slices = num_slices
+        self._slice_thicknesses = slice_thicknesses
+        self._diffraction_patterns = diffraction_patterns
+
         if preprocess:
             self.preprocess()
         else:
             self._preprocessed = False
-            
-        
+
     def preprocess(self):
         """
         Preprocess method to do the following:
@@ -3310,102 +4142,137 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         -------
         preprocessed_ptychographic_operator: MultislicePtychographicOperator
         """
-        
+
         self._preprocessed = True
-        
+
         # Convert Measurement Objects
         if isinstance(self._diffraction_patterns, Measurement):
-            self._diffraction_patterns, angular_sampling, step_sizes = self._extract_calibrations_from_measurement_object(
-                                                                                              self._diffraction_patterns,
-                                                                                              self._energy)
-            self._experimental_parameters['angular_sampling'] = angular_sampling
+            (
+                self._diffraction_patterns,
+                angular_sampling,
+                step_sizes,
+            ) = self._extract_calibrations_from_measurement_object(
+                self._diffraction_patterns, self._energy
+            )
+            self._experimental_parameters["angular_sampling"] = angular_sampling
             if step_sizes is not None:
-                self._experimental_parameters['scan_step_sizes']   = step_sizes
-                
+                self._experimental_parameters["scan_step_sizes"] = step_sizes
+
         # Preprocess Diffraction Patterns
-        xp                             = get_array_module_from_device(self._device)
-        self._diffraction_patterns     = copy_to_device(self._diffraction_patterns,self._device)
-        
+        xp = get_array_module_from_device(self._device)
+        self._diffraction_patterns = copy_to_device(
+            self._diffraction_patterns, self._device
+        )
+
         if len(self._diffraction_patterns.shape) == 4:
-            self._experimental_parameters['grid_scan_shape'] = self._diffraction_patterns.shape[:2]
-            self._diffraction_patterns                       = self._diffraction_patterns.reshape(
-                                                                    (-1,)+self._diffraction_patterns.shape[-2:])
-            
+            self._experimental_parameters[
+                "grid_scan_shape"
+            ] = self._diffraction_patterns.shape[:2]
+            self._diffraction_patterns = self._diffraction_patterns.reshape(
+                (-1,) + self._diffraction_patterns.shape[-2:]
+            )
+
         if self._region_of_interest_shape is None:
             self._region_of_interest_shape = self._diffraction_patterns.shape[-2:]
-        
-        self._diffraction_patterns         = self._pad_diffraction_patterns(self._diffraction_patterns,
-                                                                            self._region_of_interest_shape)
-        self._num_diffraction_patterns     = self._diffraction_patterns.shape[0]
-        
-        if self._experimental_parameters['background_counts_cutoff'] is not None:
-            self._diffraction_patterns[self._diffraction_patterns < self._experimental_parameters['background_counts_cutoff']] = 0.0
 
-        if self._experimental_parameters['counts_scaling_factor'] is not None:
-            self._diffraction_patterns /= self._experimental_parameters['counts_scaling_factor']   
+        self._diffraction_patterns = self._pad_diffraction_patterns(
+            self._diffraction_patterns, self._region_of_interest_shape
+        )
+        self._num_diffraction_patterns = self._diffraction_patterns.shape[0]
 
-        self._diffraction_patterns      = xp.fft.ifftshift(xp.sqrt(self._diffraction_patterns),axes=(-2,-1))
-        
-        
+        if self._experimental_parameters["background_counts_cutoff"] is not None:
+            self._diffraction_patterns[
+                self._diffraction_patterns
+                < self._experimental_parameters["background_counts_cutoff"]
+            ] = 0.0
+
+        if self._experimental_parameters["counts_scaling_factor"] is not None:
+            self._diffraction_patterns /= self._experimental_parameters[
+                "counts_scaling_factor"
+            ]
+
+        self._diffraction_patterns = xp.fft.ifftshift(
+            xp.sqrt(self._diffraction_patterns), axes=(-2, -1)
+        )
+
         # Scan Positions Initialization
-        positions_px, self._experimental_parameters = self._calculate_scan_positions_in_pixels(self._positions,
-                                                                                               self.sampling,
-                                                                                               self._region_of_interest_shape,
-                                                                                               self._experimental_parameters)
-        
+        (
+            positions_px,
+            self._experimental_parameters,
+        ) = self._calculate_scan_positions_in_pixels(
+            self._positions,
+            self.sampling,
+            self._region_of_interest_shape,
+            self._experimental_parameters,
+        )
+
         # Objects Initialization
         if self._objects is None:
-            pad_x, pad_y  = self._experimental_parameters['object_px_padding']
-            p, q          = np.max(positions_px,axis=0)
-            p             = np.max([np.round(p + pad_x), self._region_of_interest_shape[0]]).astype(int)
-            q             = np.max([np.round(q + pad_y), self._region_of_interest_shape[1]]).astype(int)
-            self._objects = xp.ones((self._num_slices,p,q),dtype=xp.complex64)
+            pad_x, pad_y = self._experimental_parameters["object_px_padding"]
+            p, q = np.max(positions_px, axis=0)
+            p = np.max([np.round(p + pad_x), self._region_of_interest_shape[0]]).astype(
+                int
+            )
+            q = np.max([np.round(q + pad_y), self._region_of_interest_shape[1]]).astype(
+                int
+            )
+            self._objects = xp.ones((self._num_slices, p, q), dtype=xp.complex64)
         else:
-            self._objects = copy_to_device(self._objects,self._device)
-                
-        self._positions_px                                = copy_to_device(positions_px,self._device)
-        self._positions_px_com                            = xp.mean(self._positions_px,axis=0)
-        
+            self._objects = copy_to_device(self._objects, self._device)
+
+        self._positions_px = copy_to_device(positions_px, self._device)
+        self._positions_px_com = xp.mean(self._positions_px, axis=0)
+
         # Probes Initialization
         if self._probes is None:
-            ctf           = CTF(energy=self._energy,
-                                semiangle_cutoff=self._semiangle_cutoff,
-                                parameters= self._polar_parameters)
-            _probes       = Probe(semiangle_cutoff = self._semiangle_cutoff,
-                                 energy           = self._energy,
-                                 gpts             = self._region_of_interest_shape,
-                                 sampling         = self.sampling,
-                                 ctf              = ctf,
-                                 device           = self._device).build().array
-            
+            ctf = CTF(
+                energy=self._energy,
+                semiangle_cutoff=self._semiangle_cutoff,
+                parameters=self._polar_parameters,
+            )
+            _probes = (
+                Probe(
+                    semiangle_cutoff=self._semiangle_cutoff,
+                    energy=self._energy,
+                    gpts=self._region_of_interest_shape,
+                    sampling=self.sampling,
+                    ctf=ctf,
+                    device=self._device,
+                )
+                .build()
+                .array
+            )
+
         else:
-            if isinstance(self._probes,Probe):
+            if isinstance(self._probes, Probe):
                 if self._probes.gpts != self._region_of_interest_shape:
                     raise ValueError()
-                _probes = copy_to_device(self._probes.build().array,self._device)
+                _probes = copy_to_device(self._probes.build().array, self._device)
             else:
-                _probes = copy_to_device(self._probes,self._device)
-        
+                _probes = copy_to_device(self._probes, self._device)
+
         self._probes = xp.zeros((self._num_slices,) + _probes.shape, dtype=xp.complex64)
         self._probes[0] = _probes
-        
+
         return self
-        
+
     @staticmethod
-    def _overlap_projection(objects:np.ndarray,
-                            probes:np.ndarray,
-                            position:np.ndarray,
-                            old_position:np.ndarray,
-                            propagator: FresnelPropagator = None,
-                            slice_thicknesses: Sequence[float] = None,
-                            sampling: Sequence[float] = None,
-                            wavelength: float = None,
-                            fft2_convolve: Callable = None,
-                            xp = np,
-                            **kwargs):
+    def _overlap_projection(
+        objects: np.ndarray,
+        probes: np.ndarray,
+        position: np.ndarray,
+        old_position: np.ndarray,
+        propagator: FresnelPropagator = None,
+        slice_thicknesses: Sequence[float] = None,
+        sampling: Sequence[float] = None,
+        wavelength: float = None,
+        fft2_convolve: Callable = None,
+        xp=np,
+        **kwargs,
+    ):
         """
         Multislice-PIE overlap projection static method:
-        .. math:: 
+        .. math::
             \psi^n_{R_j}(r) = O^n_{R_j}(r) * P^n(r)
 
 
@@ -3430,41 +4297,47 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         exit_wave: np.ndarray
             Overlap projection of illuminated probe
         """
-        
-        fractional_position      = position - xp.round(position)
-        old_fractional_position  = old_position - xp.round(old_position)
-        
-        probes[0]                = fft_shift(probes[0],fractional_position - old_fractional_position)
-        object_indices           = _wrapped_indices_2D_window(position,probes.shape[-2:],objects.shape[-2:])
-        exit_waves               = xp.empty_like(probes)
-        
+
+        fractional_position = position - xp.round(position)
+        old_fractional_position = old_position - xp.round(old_position)
+
+        probes[0] = fft_shift(probes[0], fractional_position - old_fractional_position)
+        object_indices = _wrapped_indices_2D_window(
+            position, probes.shape[-2:], objects.shape[-2:]
+        )
+        exit_waves = xp.empty_like(probes)
+
         # Removed antialiasing - didn't seem to add much, and more consistent w/o modifying self._objects here
-        #objects                  = antialias_filter._bandlimit(objects)
-        
+        # objects                  = antialias_filter._bandlimit(objects)
+
         num_slices = slice_thicknesses.shape[0]
         for s in range(num_slices):
-            exit_waves[s] = objects[s][object_indices]*probes[s]
-            if s+1 < num_slices:
-                probes[s+1] = _propagate_array(propagator,
-                                               exit_waves[s],
-                                               sampling,
-                                               wavelength,
-                                               slice_thicknesses[s],
-                                               fft2_convolve = fft2_convolve,
-                                               overwrite = False,
-                                               xp = xp)
-            
+            exit_waves[s] = objects[s][object_indices] * probes[s]
+            if s + 1 < num_slices:
+                probes[s + 1] = _propagate_array(
+                    propagator,
+                    exit_waves[s],
+                    sampling,
+                    wavelength,
+                    slice_thicknesses[s],
+                    fft2_convolve=fft2_convolve,
+                    overwrite=False,
+                    xp=xp,
+                )
+
         return probes, exit_waves
-     
+
     @staticmethod
-    def _fourier_projection(exit_waves:np.ndarray,
-                            diffraction_patterns:np.ndarray,
-                            sse:float,
-                            xp = np,
-                            **kwargs):
+    def _fourier_projection(
+        exit_waves: np.ndarray,
+        diffraction_patterns: np.ndarray,
+        sse: float,
+        xp=np,
+        **kwargs,
+    ):
         """
         Multislice-PIE fourier projection static method:
-        .. math:: 
+        .. math::
             \psi^{N'}_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi^N_{R_j}(u)] / |F[\psi^N_{R_j}(u)]|]
 
 
@@ -3486,36 +4359,42 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         sse: float
             Updated sum of squares error estimate
         """
-        '''
+        """
         MS-PIE Fourier-amplitude modification projection:
         \psi'^N_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi^N_{R_j}(u)] / |F[\psi^N_{R_j}(u)]|]
-        '''
-        
-        modified_exit_waves     = xp.empty_like(exit_waves)
-        exit_wave_fft           = xp.fft.fft2(exit_waves[-1])
-        sse                    += xp.mean(xp.abs(xp.abs(exit_wave_fft) - diffraction_patterns)**2)/xp.sum(diffraction_patterns**2)
-        modified_exit_waves[-1] = xp.fft.ifft2(diffraction_patterns * xp.exp(1j * xp.angle(exit_wave_fft)))
-        
+        """
+
+        modified_exit_waves = xp.empty_like(exit_waves)
+        exit_wave_fft = xp.fft.fft2(exit_waves[-1])
+        sse += xp.mean(
+            xp.abs(xp.abs(exit_wave_fft) - diffraction_patterns) ** 2
+        ) / xp.sum(diffraction_patterns**2)
+        modified_exit_waves[-1] = xp.fft.ifft2(
+            diffraction_patterns * xp.exp(1j * xp.angle(exit_wave_fft))
+        )
+
         return modified_exit_waves, sse
-        
-    @staticmethod   
-    def _update_function(objects:np.ndarray,
-                         probes:np.ndarray,
-                         position:np.ndarray,
-                         exit_waves:np.ndarray,
-                         modified_exit_waves:np.ndarray,
-                         diffraction_patterns:np.ndarray,
-                         fix_probe: bool = False,
-                         position_correction: Callable = None,
-                         sobel: Callable = None,
-                         reconstruction_parameters: Mapping[str,float] = None,
-                         propagator: FresnelPropagator = None,
-                         slice_thicknesses: Sequence[float] = None,
-                         sampling: Sequence[float] = None,
-                         wavelength: float = None,
-                         fft2_convolve: Callable = None,
-                         xp = np,
-                         **kwargs):
+
+    @staticmethod
+    def _update_function(
+        objects: np.ndarray,
+        probes: np.ndarray,
+        position: np.ndarray,
+        exit_waves: np.ndarray,
+        modified_exit_waves: np.ndarray,
+        diffraction_patterns: np.ndarray,
+        fix_probe: bool = False,
+        position_correction: Callable = None,
+        sobel: Callable = None,
+        reconstruction_parameters: Mapping[str, float] = None,
+        propagator: FresnelPropagator = None,
+        slice_thicknesses: Sequence[float] = None,
+        sampling: Sequence[float] = None,
+        wavelength: float = None,
+        fft2_convolve: Callable = None,
+        xp=np,
+        **kwargs,
+    ):
         """
         Multislice-PIE objects and probes update static method:
 
@@ -3553,59 +4432,81 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         position: np.ndarray
             Updated probe position estimate
         """
-        
-        object_indices           = _wrapped_indices_2D_window(position,probes.shape[-2:],objects.shape[-2:])
-        num_slices               = slice_thicknesses.shape[0]
-        
+
+        object_indices = _wrapped_indices_2D_window(
+            position, probes.shape[-2:], objects.shape[-2:]
+        )
+        num_slices = slice_thicknesses.shape[0]
+
         if position_correction is not None:
-            position             = position_correction(objects, probes, position, exit_waves, modified_exit_waves, diffraction_patterns,
-                                                       sobel=sobel,position_step_size=position_step_size, xp=xp)
-        
+            position = position_correction(
+                objects,
+                probes,
+                position,
+                exit_waves,
+                modified_exit_waves,
+                diffraction_patterns,
+                sobel=sobel,
+                position_step_size=position_step_size,
+                xp=xp,
+            )
+
         for s in reversed(range(num_slices)):
-            exit_wave                   = exit_waves[s]
-            modified_exit_wave          = modified_exit_waves[s]
-            exit_wave_diff              = modified_exit_wave - exit_wave
-        
-            probe_conj                  = xp.conj(probes[s])
-            probe_abs_squared           = xp.abs(probes[s])**2
-            obj_conj                    = xp.conj(objects[s][object_indices])
-            obj_abs_squared             = xp.abs(objects[s][object_indices])**2
-            
-            alpha                       = reconstruction_parameters['alpha']
-            object_step_size            = reconstruction_parameters['object_step_size']
-            objects[s][object_indices] += object_step_size * probe_conj*exit_wave_diff / (
-                                           (1-alpha)*probe_abs_squared + alpha*xp.max(probe_abs_squared))
-        
+            exit_wave = exit_waves[s]
+            modified_exit_wave = modified_exit_waves[s]
+            exit_wave_diff = modified_exit_wave - exit_wave
+
+            probe_conj = xp.conj(probes[s])
+            probe_abs_squared = xp.abs(probes[s]) ** 2
+            obj_conj = xp.conj(objects[s][object_indices])
+            obj_abs_squared = xp.abs(objects[s][object_indices]) ** 2
+
+            alpha = reconstruction_parameters["alpha"]
+            object_step_size = reconstruction_parameters["object_step_size"]
+            objects[s][object_indices] += (
+                object_step_size
+                * probe_conj
+                * exit_wave_diff
+                / ((1 - alpha) * probe_abs_squared + alpha * xp.max(probe_abs_squared))
+            )
+
             if not fix_probe or s > 0:
-                beta                 = reconstruction_parameters['beta']
-                probe_step_size      = reconstruction_parameters['probe_step_size']
-                probes[s]           += probe_step_size * obj_conj*exit_wave_diff / (
-                                        (1-beta)*obj_abs_squared + beta*xp.max(obj_abs_squared))
-                
+                beta = reconstruction_parameters["beta"]
+                probe_step_size = reconstruction_parameters["probe_step_size"]
+                probes[s] += (
+                    probe_step_size
+                    * obj_conj
+                    * exit_wave_diff
+                    / ((1 - beta) * obj_abs_squared + beta * xp.max(obj_abs_squared))
+                )
+
             if s > 0:
-                modified_exit_waves[s-1] = _propagate_array(propagator,
-                                                            probes[s],
-                                                            sampling,
-                                                            wavelength,
-                                                            -slice_thicknesses[s-1],
-                                                            fft2_convolve = fft2_convolve,
-                                                            overwrite = False,
-                                                            xp = xp)
-            
+                modified_exit_waves[s - 1] = _propagate_array(
+                    propagator,
+                    probes[s],
+                    sampling,
+                    wavelength,
+                    -slice_thicknesses[s - 1],
+                    fft2_convolve=fft2_convolve,
+                    overwrite=False,
+                    xp=xp,
+                )
+
         return objects, probes, position
-    
-    
+
     @staticmethod
-    def _position_correction(objects: np.ndarray,
-                             probes: np.ndarray,
-                             position:np.ndarray,
-                             exit_wave:np.ndarray,
-                             modified_exit_wave: np.ndarray,
-                             diffraction_pattern:np.ndarray,
-                             sobel:Callable,
-                             position_step_size: float = 1.0,
-                             xp=np,
-                             **kwargs):
+    def _position_correction(
+        objects: np.ndarray,
+        probes: np.ndarray,
+        position: np.ndarray,
+        exit_wave: np.ndarray,
+        modified_exit_wave: np.ndarray,
+        diffraction_pattern: np.ndarray,
+        sobel: Callable,
+        position_step_size: float = 1.0,
+        xp=np,
+        **kwargs,
+    ):
         """
         Multislice-PIE probe position correction method using the last slice.
 
@@ -3637,24 +4538,31 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
             Updated probe position estimate
         """
 
-        object_dx       = sobel(objects[-1],axis=0,mode='wrap')
-        object_dy       = sobel(objects[-1],axis=1,mode='wrap')
-        
-        object_indices  = _wrapped_indices_2D_window(position,probes.shape[-2:],objects.shape[-2:])
-        exit_wave_dx    = object_dx[object_indices]*probes[-1]
-        exit_wave_dy    = object_dy[object_indices]*probes[-1]
-        
-        exit_wave_diff  = modified_exit_wave[-1] - exit_wave[-1]
-        displacement_x  = xp.sum(xp.real(xp.conj(exit_wave_dx)*exit_wave_diff))/xp.sum(xp.abs(exit_wave_dx)**2)
-        displacement_y  = xp.sum(xp.real(xp.conj(exit_wave_dy)*exit_wave_diff))/xp.sum(xp.abs(exit_wave_dy)**2)
-        
-        return position + position_step_size*xp.array([displacement_x,displacement_y])
-    
+        object_dx = sobel(objects[-1], axis=0, mode="wrap")
+        object_dy = sobel(objects[-1], axis=1, mode="wrap")
+
+        object_indices = _wrapped_indices_2D_window(
+            position, probes.shape[-2:], objects.shape[-2:]
+        )
+        exit_wave_dx = object_dx[object_indices] * probes[-1]
+        exit_wave_dy = object_dy[object_indices] * probes[-1]
+
+        exit_wave_diff = modified_exit_wave[-1] - exit_wave[-1]
+        displacement_x = xp.sum(
+            xp.real(xp.conj(exit_wave_dx) * exit_wave_diff)
+        ) / xp.sum(xp.abs(exit_wave_dx) ** 2)
+        displacement_y = xp.sum(
+            xp.real(xp.conj(exit_wave_dy) * exit_wave_diff)
+        ) / xp.sum(xp.abs(exit_wave_dy) ** 2)
+
+        return position + position_step_size * xp.array(
+            [displacement_x, displacement_y]
+        )
+
     @staticmethod
-    def _fix_probe_center_of_mass(probes:np.ndarray,
-                                  center_of_mass:Callable,
-                                  xp = np,
-                                  **kwargs):
+    def _fix_probe_center_of_mass(
+        probes: np.ndarray, center_of_mass: Callable, xp=np, **kwargs
+    ):
         """
         Multislice-PIE probe center correction method.
 
@@ -3673,21 +4581,23 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         probes: np.ndarray
             Center-of-mass corrected probes array
         """
-        
-        probe_center = xp.array(probes.shape[-2:])/2
-        com          = center_of_mass(xp.abs(probes[0]) ** 2)
-        probes[0]    = fft_shift(probes[0], probe_center - xp.array(com))
-        
+
+        probe_center = xp.array(probes.shape[-2:]) / 2
+        com = center_of_mass(xp.abs(probes[0]) ** 2)
+        probes[0] = fft_shift(probes[0], probe_center - xp.array(com))
+
         return probes
-        
-    def _prepare_functions_queue(self,
-                                 max_iterations: int,
-                                 pre_position_correction_update_steps: int = None,
-                                 pre_probe_correction_update_steps: int = None,
-                                 **kwargs):
+
+    def _prepare_functions_queue(
+        self,
+        max_iterations: int,
+        pre_position_correction_update_steps: int = None,
+        pre_probe_correction_update_steps: int = None,
+        **kwargs,
+    ):
         """
         Precomputes the order in which functions will be called in the reconstruction loop.
-        Additionally, prepares a summary of steps to be printed for reporting. 
+        Additionally, prepares a summary of steps to be printed for reporting.
 
         Parameters
         ----------
@@ -3705,45 +4615,64 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         queue_summary: str
             Summary of function calls the reconstruction loop will perform
         """
-        total_update_steps   = max_iterations*self._num_diffraction_patterns
-        queue_summary        = "Ptychographic reconstruction will perform the following steps:"
-    
-        functions_tuple      = (self._overlap_projection,self._fourier_projection, self._update_function, None)
-        functions_queue      = [functions_tuple]
+        total_update_steps = max_iterations * self._num_diffraction_patterns
+        queue_summary = "Ptychographic reconstruction will perform the following steps:"
+
+        functions_tuple = (
+            self._overlap_projection,
+            self._fourier_projection,
+            self._update_function,
+            None,
+        )
+        functions_queue = [functions_tuple]
         if pre_position_correction_update_steps is None:
             functions_queue *= total_update_steps
-            queue_summary   += f"\n--Multislice PIE for {total_update_steps} steps"
+            queue_summary += f"\n--Multislice PIE for {total_update_steps} steps"
         else:
             functions_queue *= pre_position_correction_update_steps
-            queue_summary   += f"\n--Multislice PIE for {pre_position_correction_update_steps} steps"
+            queue_summary += (
+                f"\n--Multislice PIE for {pre_position_correction_update_steps} steps"
+            )
 
-            functions_tuple = (self._overlap_projection,self._fourier_projection, self._update_function, self._position_correction)
+            functions_tuple = (
+                self._overlap_projection,
+                self._fourier_projection,
+                self._update_function,
+                self._position_correction,
+            )
 
-            remaining_update_steps = total_update_steps - pre_position_correction_update_steps
-            functions_queue += [functions_tuple]*remaining_update_steps
-            queue_summary   += f"\n--Multislice PIE with position correction for {remaining_update_steps} steps"
-        
+            remaining_update_steps = (
+                total_update_steps - pre_position_correction_update_steps
+            )
+            functions_queue += [functions_tuple] * remaining_update_steps
+            queue_summary += f"\n--Multislice PIE with position correction for {remaining_update_steps} steps"
+
         if pre_probe_correction_update_steps is None:
             queue_summary += f"\n--Probe correction is enabled"
         elif pre_probe_correction_update_steps > total_update_steps:
             queue_summary += f"\n--Probe correction is disabled"
         else:
             queue_summary += f"\n--Probe correction will be enabled after the first {pre_probe_correction_update_steps} steps"
-        
-        functions_queue = [functions_queue[x:x+self._num_diffraction_patterns] for x in range(0, total_update_steps, self._num_diffraction_patterns)]
-        
+
+        functions_queue = [
+            functions_queue[x : x + self._num_diffraction_patterns]
+            for x in range(0, total_update_steps, self._num_diffraction_patterns)
+        ]
+
         return functions_queue, queue_summary
-    
-    def reconstruct(self,
-                    max_iterations: int = 5,
-                    return_iterations: bool = False,
-                    fix_com: bool = True,
-                    random_seed = None,
-                    verbose: bool = False,
-                    parameters: Mapping[str,float] = None,
-                    measurement_output_view: str = 'padded',
-                    functions_queue: Iterable = None,
-                    **kwargs):
+
+    def reconstruct(
+        self,
+        max_iterations: int = 5,
+        return_iterations: bool = False,
+        fix_com: bool = True,
+        random_seed=None,
+        verbose: bool = False,
+        parameters: Mapping[str, float] = None,
+        measurement_output_view: str = "padded",
+        functions_queue: Iterable = None,
+        **kwargs,
+    ):
         """
         Main reconstruction loop method to do the following:
         - Precompute the order of function calls using the MultislicePtychographicOperator._prepare_functions_queue method
@@ -3780,68 +4709,85 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
             If return_iterations, a list of the reconstruction error at each iteration is returned
         """
         for key in kwargs.keys():
-            if (key not in reconstruction_symbols.keys()):
-                raise ValueError('{} not a recognized parameter'.format(key))
-                
+            if key not in reconstruction_symbols.keys():
+                raise ValueError("{} not a recognized parameter".format(key))
+
         if parameters is None:
             parameters = {}
         self._reconstruction_parameters = reconstruction_symbols.copy()
         self._reconstruction_parameters.update(parameters)
         self._reconstruction_parameters.update(kwargs)
-                 
+
         if functions_queue is None:
             functions_queue, summary = self._prepare_functions_queue(
-                                        max_iterations,
-                                        pre_position_correction_update_steps = self._reconstruction_parameters['pre_position_correction_update_steps'],
-                                        pre_probe_correction_update_steps    = self._reconstruction_parameters['pre_probe_correction_update_steps'])
+                max_iterations,
+                pre_position_correction_update_steps=self._reconstruction_parameters[
+                    "pre_position_correction_update_steps"
+                ],
+                pre_probe_correction_update_steps=self._reconstruction_parameters[
+                    "pre_probe_correction_update_steps"
+                ],
+            )
             if verbose:
                 print(summary)
         else:
             if len(functions_queue) == max_iterations:
                 if callable(functions_queue[0]):
-                    functions_queue = [[function_tuples]*self._num_diffraction_patterns for function_tuples in functions_queue]
-            elif len(functions_queue) == max_iterations*self._num_diffraction_patterns:
-                functions_queue = [functions_queue[x:x+self._num_diffraction_patterns] for x in range(0, total_update_steps, self._num_diffraction_patterns)]
+                    functions_queue = [
+                        [function_tuples] * self._num_diffraction_patterns
+                        for function_tuples in functions_queue
+                    ]
+            elif (
+                len(functions_queue) == max_iterations * self._num_diffraction_patterns
+            ):
+                functions_queue = [
+                    functions_queue[x : x + self._num_diffraction_patterns]
+                    for x in range(
+                        0, total_update_steps, self._num_diffraction_patterns
+                    )
+                ]
             else:
                 raise ValueError()
-        
+
         self._functions_queue = functions_queue
-        
+
         ### Main Loop
-        xp                  = get_array_module_from_device(self._device)
-        outer_pbar          = ProgressBar(total=max_iterations,leave=False)
-        inner_pbar          = ProgressBar(total=self._num_diffraction_patterns,leave=False)
-        indices             = np.arange(self._num_diffraction_patterns)
-        position_px_padding = xp.array(self._experimental_parameters['object_px_padding'])
-        center_of_mass      = get_scipy_module(xp).ndimage.center_of_mass
-        sobel               = get_scipy_module(xp).ndimage.sobel
-        fft2_convolve       = get_device_function(xp, 'fft2_convolve')
-        propagator          = FresnelPropagator()
-        wavelength          = energy2wavelength(self._energy)
-        
+        xp = get_array_module_from_device(self._device)
+        outer_pbar = ProgressBar(total=max_iterations, leave=False)
+        inner_pbar = ProgressBar(total=self._num_diffraction_patterns, leave=False)
+        indices = np.arange(self._num_diffraction_patterns)
+        position_px_padding = xp.array(
+            self._experimental_parameters["object_px_padding"]
+        )
+        center_of_mass = get_scipy_module(xp).ndimage.center_of_mass
+        sobel = get_scipy_module(xp).ndimage.sobel
+        fft2_convolve = get_device_function(xp, "fft2_convolve")
+        propagator = FresnelPropagator()
+        wavelength = energy2wavelength(self._energy)
+
         if return_iterations:
-            objects_iterations   = []
-            probes_iterations    = []
+            objects_iterations = []
+            probes_iterations = []
             positions_iterations = []
-            sse_iterations       = []
-        
+            sse_iterations = []
+
         if random_seed is not None:
             np.random.seed(random_seed)
-            
+
         for iteration_index, iteration_step in enumerate(self._functions_queue):
-            
+
             inner_pbar.reset()
-            
+
             # Set iteration-specific parameters
             np.random.shuffle(indices)
             old_position = position_px_padding
-            self._sse    = 0.0
-            
+            self._sse = 0.0
+
             for update_index, update_step in enumerate(iteration_step):
-                
-                index               = indices[update_index]
-                position            = self._positions_px[index]
-                
+
+                index = indices[update_index]
+                position = self._positions_px[index]
+
                 # Skip empty diffraction patterns
                 diffraction_pattern = self._diffraction_patterns[index]
                 if xp.sum(diffraction_pattern) == 0.0:
@@ -3849,107 +4795,151 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                     continue
 
                 # Set update-specific parameters
-                global_iteration_i  = iteration_index*self._num_diffraction_patterns + update_index
-                
-                if self._reconstruction_parameters['pre_probe_correction_update_steps'] is None:
-                    fix_probe       = False
+                global_iteration_i = (
+                    iteration_index * self._num_diffraction_patterns + update_index
+                )
+
+                if (
+                    self._reconstruction_parameters["pre_probe_correction_update_steps"]
+                    is None
+                ):
+                    fix_probe = False
                 else:
-                    fix_probe       = global_iteration_i < self._reconstruction_parameters['pre_probe_correction_update_steps']
+                    fix_probe = (
+                        global_iteration_i
+                        < self._reconstruction_parameters[
+                            "pre_probe_correction_update_steps"
+                        ]
+                    )
 
-                _overlap_projection,_fourier_projection,_update_function,_position_correction = update_step
-            
-                self._probes, exit_wave                                = _overlap_projection(self._objects,
-                                                                                             self._probes,
-                                                                                             position,
-                                                                                             old_position,
-                                                                                             propagator = propagator,
-                                                                                             slice_thicknesses = self._slice_thicknesses,
-                                                                                             sampling = self.sampling,
-                                                                                             wavelength = wavelength,
-                                                                                             fft2_convolve = fft2_convolve,
-                                                                                             xp=xp)
-                
-                modified_exit_wave, self._sse                          = _fourier_projection(exit_wave,
-                                                                                             diffraction_pattern,
-                                                                                             self._sse,
-                                                                                             xp=xp)
+                (
+                    _overlap_projection,
+                    _fourier_projection,
+                    _update_function,
+                    _position_correction,
+                ) = update_step
 
-                self._objects, self._probes, self._positions_px[index] = _update_function(self._objects,
-                                                                                          self._probes,
-                                                                                          position,
-                                                                                          exit_wave,
-                                                                                          modified_exit_wave,
-                                                                                          diffraction_pattern,
-                                                                                          fix_probe = fix_probe,
-                                                                                          position_correction = _position_correction,
-                                                                                          sobel = sobel,
-                                                                                          reconstruction_parameters = self._reconstruction_parameters,
-                                                                                          propagator = propagator,
-                                                                                          slice_thicknesses = self._slice_thicknesses,
-                                                                                          sampling = self.sampling,
-                                                                                          wavelength = wavelength,
-                                                                                          fft2_convolve = fft2_convolve,
-                                                                                          xp = xp)
-                    
-                old_position    = position
+                self._probes, exit_wave = _overlap_projection(
+                    self._objects,
+                    self._probes,
+                    position,
+                    old_position,
+                    propagator=propagator,
+                    slice_thicknesses=self._slice_thicknesses,
+                    sampling=self.sampling,
+                    wavelength=wavelength,
+                    fft2_convolve=fft2_convolve,
+                    xp=xp,
+                )
+
+                modified_exit_wave, self._sse = _fourier_projection(
+                    exit_wave, diffraction_pattern, self._sse, xp=xp
+                )
+
+                (
+                    self._objects,
+                    self._probes,
+                    self._positions_px[index],
+                ) = _update_function(
+                    self._objects,
+                    self._probes,
+                    position,
+                    exit_wave,
+                    modified_exit_wave,
+                    diffraction_pattern,
+                    fix_probe=fix_probe,
+                    position_correction=_position_correction,
+                    sobel=sobel,
+                    reconstruction_parameters=self._reconstruction_parameters,
+                    propagator=propagator,
+                    slice_thicknesses=self._slice_thicknesses,
+                    sampling=self.sampling,
+                    wavelength=wavelength,
+                    fft2_convolve=fft2_convolve,
+                    xp=xp,
+                )
+
+                old_position = position
                 inner_pbar.update(1)
-              
+
             # Shift probe back to origin
-            self._probes     = fft_shift(self._probes,xp.round(position) - position)
-            
+            self._probes = fft_shift(self._probes, xp.round(position) - position)
+
             # Probe CoM
             if fix_com:
-                self._probes = self._fix_probe_center_of_mass(self._probes,center_of_mass,xp=xp)
-                 
+                self._probes = self._fix_probe_center_of_mass(
+                    self._probes, center_of_mass, xp=xp
+                )
+
             # Positions CoM
             if _position_correction is not None:
-                self._positions_px -= (xp.mean(self._positions_px,axis=0) - self._positions_px_com)
-                self._reconstruction_parameters['position_step_size']  *= self._reconstruction_parameters['step_size_damping_rate']
-            
+                self._positions_px -= (
+                    xp.mean(self._positions_px, axis=0) - self._positions_px_com
+                )
+                self._reconstruction_parameters[
+                    "position_step_size"
+                ] *= self._reconstruction_parameters["step_size_damping_rate"]
+
             # Update Parameters
-            self._reconstruction_parameters['object_step_size'] *= self._reconstruction_parameters['step_size_damping_rate']
-            self._reconstruction_parameters['probe_step_size']  *= self._reconstruction_parameters['step_size_damping_rate']
-            self._sse                                           /= self._num_diffraction_patterns
-            
+            self._reconstruction_parameters[
+                "object_step_size"
+            ] *= self._reconstruction_parameters["step_size_damping_rate"]
+            self._reconstruction_parameters[
+                "probe_step_size"
+            ] *= self._reconstruction_parameters["step_size_damping_rate"]
+            self._sse /= self._num_diffraction_patterns
+
             if return_iterations:
                 objects_iterations.append(self._objects.copy())
                 probes_iterations.append(self._probes.copy())
-                positions_iterations.append(self._positions_px.copy() * xp.array(self.sampling))
+                positions_iterations.append(
+                    self._positions_px.copy() * xp.array(self.sampling)
+                )
                 sse_iterations.append(self._sse)
-            
+
             if verbose:
-                print(f'----Iteration {iteration_index:<{len(str(max_iterations))}}, SSE = {float(self._sse):.3e}')
-            
+                print(
+                    f"----Iteration {iteration_index:<{len(str(max_iterations))}}, SSE = {float(self._sse):.3e}"
+                )
+
             outer_pbar.update(1)
-        
+
         inner_pbar.close()
         outer_pbar.close()
-        
+
         #  Return Results
         if return_iterations:
-            mapfunc = partial(self._prepare_measurement_outputs, slice_thicknesses = self._slice_thicknesses)
-            results = map(mapfunc,
-                          objects_iterations,
-                          probes_iterations,
-                          positions_iterations,
-                          sse_iterations)
-            
+            mapfunc = partial(
+                self._prepare_measurement_outputs,
+                slice_thicknesses=self._slice_thicknesses,
+            )
+            results = map(
+                mapfunc,
+                objects_iterations,
+                probes_iterations,
+                positions_iterations,
+                sse_iterations,
+            )
+
             return tuple(map(list, zip(*results)))
         else:
-            results = self._prepare_measurement_outputs(self._objects,
-                                                        self._probes,
-                                                        self._positions_px * xp.array(self.sampling),
-                                                        self._sse,
-                                                        slice_thicknesses = self._slice_thicknesses)
+            results = self._prepare_measurement_outputs(
+                self._objects,
+                self._probes,
+                self._positions_px * xp.array(self.sampling),
+                self._sse,
+                slice_thicknesses=self._slice_thicknesses,
+            )
             return results
-        
-        
-    def _prepare_measurement_outputs(self,
-                                     objects:np.ndarray,
-                                     probes: np.ndarray,
-                                     positions: np.ndarray,
-                                     sse: np.ndarray,
-                                     slice_thicknesses: Sequence[float] = None):
+
+    def _prepare_measurement_outputs(
+        self,
+        objects: np.ndarray,
+        probes: np.ndarray,
+        positions: np.ndarray,
+        sse: np.ndarray,
+        slice_thicknesses: Sequence[float] = None,
+    ):
         """
         Method to format the reconstruction outputs as Measurement objects.
 
@@ -3977,11 +4967,16 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
         sse: float
             Reconstruction error
         """
-        
-        calibrations  = tuple(Calibration(0, s, units='Å', name = n, endpoint=False) for s,n in zip(self.sampling,('x','y')))
-        calibrations  = (Calibration(0,slice_thicknesses[0],units='Å', name = 'z', endpoint=False),) + calibrations
-        
-        measurement_objects = Measurement(asnumpy(objects),calibrations)
-        measurement_probes  = Measurement(asnumpy(probes),calibrations)
-        
+
+        calibrations = tuple(
+            Calibration(0, s, units="Å", name=n, endpoint=False)
+            for s, n in zip(self.sampling, ("x", "y"))
+        )
+        calibrations = (
+            Calibration(0, slice_thicknesses[0], units="Å", name="z", endpoint=False),
+        ) + calibrations
+
+        measurement_objects = Measurement(asnumpy(objects), calibrations)
+        measurement_probes = Measurement(asnumpy(probes), calibrations)
+
         return measurement_objects, measurement_probes, asnumpy(positions), sse
