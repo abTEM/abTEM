@@ -820,7 +820,7 @@ class RegularizedPtychographicOperator(AbstractPtychographicOperator):
                                   xp = np,
                                   **kwargs):
         """
-        Regularized-PIE probe position correction method.
+        Regularized-PIE probe center correction method.
 
 
         Parameters
@@ -1908,7 +1908,7 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                                   xp = np,
                                   **kwargs):
         """
-        Simultaneous-PIE probe position correction method.
+        Simultaneous-PIE probe center correction method.
 
 
         Parameters
@@ -2038,9 +2038,9 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
                     **kwargs):
         """
         Main reconstruction loop method to do the following:
-        - Precompute the order of function calls using the RegularizedPtychographicOperator._prepare_functions_queue method
+        - Precompute the order of function calls using the SimultaneousPtychographicOperator._prepare_functions_queue method
         - Iterate through function calls in queue
-        - Pass reconstruction outputs to the RegularizedPtychographicOperator._prepare_measurement_outputs method
+        - Pass reconstruction outputs to the SimultaneousPtychographicOperator._prepare_measurement_outputs method
 
         Parameters
         ----------
@@ -2270,13 +2270,44 @@ class SimultaneousPtychographicOperator(AbstractPtychographicOperator):
         return measurement_objects, measurement_probes, asnumpy(positions), sse
 
 class MixedStatePtychographicOperator(AbstractPtychographicOperator):
-    '''
-    Mixed-State PIE Operator.
-    
-    diffraction_patterns dimensions   : (J,M,N)
-    objects dimensions                : (P,Q)
-    probes dimensions                 : (K,R,S)
-    '''
+    """
+    Mixed-State Ptychographic Iterative Engine (mix-PIE).
+    Used to reconstruct weak-phase objects with partial coherence of the illuminating probe using a set of measured far-field CBED patterns with the following array dimensions:
+
+    CBED pattern dimensions     : (J,M,N)
+    objects dimensions          : (P,Q)
+    probes dimensions           : (K,R,S)
+
+    Parameters
+    ----------
+    diffraction_patterns: np.ndarray or Measurement
+        Input 3D or 4D CBED pattern intensities with dimensions (M,N)
+    energy: float
+        Electron energy [eV]
+    num_probes: int
+        Number of mixed-state probes
+    region_of_interest_shape: (2,) Sequence[int], optional
+        Pixel dimensions (R,S) of the region of interest (ROI)
+        If None, the ROI dimensions are taken as the CBED dimensions (M,N)
+    objects: np.ndarray, optional
+        Initial objects guess with dimensions (P,Q) - Useful for restarting reconstructions
+        If None, an array with 1.0j is initialized
+    probes: np.ndarray or Probe, optional
+        Initial probes guess with dimensions/gpts (R,S) - Useful for restarting reconstructions
+        If None, a Probe with CTF given by the polar_parameters dictionary is initialized
+    positions: np.ndarray, optional
+        Initial positions guess [Å]
+        If None, a raster scan with step sizes given by the experimental_parameters dictionary is initialized
+    semiangle_cutoff: float, optional
+        Semiangle cutoff for the initial Probe guess
+    preprocess: bool, optional
+        If True, it runs the preprocess method after initialization
+    device: str, optional
+        Device to perform Fourier-based reconstructrions - Either 'cpu' or 'gpu'
+    parameters: dict, optional
+       Dictionary specifying any of the abtem.transfer.polar_symbols or abtem.reconstruct.experimental_symbols parameters
+       Additionally, these can also be specified using kwargs
+    """
     def __init__(self,
                  diffraction_patterns:Union[np.ndarray,Measurement],
                  energy: float,
@@ -2323,12 +2354,17 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
             
         
     def preprocess(self):
-        '''
-        Mixed PIE preprocessing method, to do the following:
-        - Pads CBED patterns (J,M,N) to ROI dimensions -> (J,R,S)
-        - Prepares scanning positions in real-space resolution pixels
-        - Initializes probes (K,R,S) & objects (P,Q)
-        '''
+        """
+        Preprocess method to do the following:
+        - Pads CBED patterns to region of interest dimensions
+        - Prepares initial guess for scanning positions
+        - Prepares initial guesses for the objects and probes arrays
+
+
+        Returns
+        -------
+        preprocessed_ptychographic_operator: MixedStatePtychographicOperator
+        """
         
         self._preprocessed = True
         
@@ -2418,10 +2454,33 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                                    old_position:np.ndarray,
                                    xp = np,
                                    **kwargs):
-        '''
-        r-PIE overlap projection:
-        \psi_{R_j}(r) = O_{R_j}(r) * P(r)
-        '''
+        """
+        Regularized-PIE overlap projection static method using a single probe:
+        .. math:: 
+            \psi^0_{R_j}(r) = O_{R_j}(r) * P^0(r)
+
+
+        Parameters
+        ----------
+        objects: np.ndarray
+            Object array to be illuminated
+        probes: np.ndarray
+            Probe window array to illuminate object with
+        position: np.ndarray
+            Center position of probe window
+        old_position: np.ndarray
+            Old center position of probe window
+            Used for fractionally shifting probe sequentially
+        xp
+            Numerical programming module to use - either np or cp
+
+        Returns
+        -------
+        probes: np.ndarray
+            Fractionally shifted probe window array
+        exit_wave: np.ndarray
+            Overlap projection of illuminated probe
+        """
         
         fractional_position      = position - xp.round(position)
         old_fractional_position  = old_position - xp.round(old_position)
@@ -2440,10 +2499,33 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                             old_position:np.ndarray,
                             xp = np,
                             **kwargs):
-        '''
-        mix-PIE overlap projection:
-        \psi^k_{R_j}(r) = O_{R_j}(r) * P^k(r)
-        '''
+        """
+        Mixed-State-PIE overlap projection static method:
+        .. math:: 
+            \psi^k_{R_j}(r) = O_{R_j}(r) * P^k(r)
+
+
+        Parameters
+        ----------
+        objects: np.ndarray
+            Object array to be illuminated
+        probes: np.ndarray
+            Probe window array to illuminate object with
+        position: np.ndarray
+            Center position of probe window
+        old_position: np.ndarray
+            Old center position of probe window
+            Used for fractionally shifting probe sequentially
+        xp
+            Numerical programming module to use - either np or cp
+
+        Returns
+        -------
+        probes: np.ndarray
+            Fractionally shifted probes window array
+        exit_waves: np.ndarray
+            Overlap projection of illuminated probes
+        """
         
         fractional_position      = position - xp.round(position)
         old_fractional_position  = old_position - xp.round(old_position)
@@ -2464,10 +2546,30 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                                    sse:float,
                                    xp = np,
                                    **kwargs):
-        '''
-        r-PIE Fourier-amplitude modification projection:
-        \psi'_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi_{R_j}(u)] / |F[\psi_{R_j}(u)]|]
-        '''
+        """
+        Regularized-PIE fourier projection static method using a single probe:
+        .. math:: 
+            \psi'^0_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi^0_{R_j}(u)] / |F[\psi^0_{R_j}(u)]|]
+
+
+        Parameters
+        ----------
+        exit_waves: np.ndarray
+            Exit waves array given by MixedStatePtychographicOperator._warmup_overlap_projection method
+        diffraction_patterns: np.ndarray
+            Square-root of CBED intensities array used to modify exit_waves amplitude
+        sse: float
+            Current sum of squares error estimate
+        xp
+            Numerical programming module to use - either np or cp
+
+        Returns
+        -------
+        modified_exit_wave: np.ndarray
+            Fourier projection of illuminated probe
+        sse: float
+            Updated sum of squares error estimate
+        """
         exit_wave_fft       = xp.fft.fft2(exit_waves)
         sse                += xp.mean(xp.abs(xp.abs(exit_wave_fft) - diffraction_patterns)**2)/xp.sum(diffraction_patterns**2)
         modified_exit_wave  = xp.fft.ifft2(diffraction_patterns * xp.exp(1j * xp.angle(exit_wave_fft)))
@@ -2480,10 +2582,30 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                             sse:float,
                             xp = np,
                             **kwargs):
-        '''
-        mix-PIE Fourier-amplitude modification projection:
-        \psi'^k_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi^k_{R_j}(u)] / \sqrt{\sum_k|F[\psi^k_{R_j}(u)]|^2}]
-        '''
+        """
+        Mixed-State-PIE fourier projection static method:
+        .. math:: 
+            \psi'^k_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi^k_{R_j}(u)] / \sqrt{\sum_k|F[\psi^k_{R_j}(u)]|^2}]
+
+
+        Parameters
+        ----------
+        exit_waves: np.ndarray
+            Exit waves array given by MixedStatePtychographicOperator._overlap_projection method
+        diffraction_patterns: np.ndarray
+            Square-root of CBED intensities array used to modify exit_waves amplitude
+        sse: float
+            Current sum of squares error estimate
+        xp
+            Numerical programming module to use - either np or cp
+
+        Returns
+        -------
+        modified_exit_wave: np.ndarray
+            Fourier projection of illuminated probe
+        sse: float
+            Updated sum of squares error estimate
+        """
         exit_waves_fft            = xp.fft.fft2(exit_waves,axes=(-2,-1))
         intensity_norm            = xp.sqrt(xp.sum(xp.abs(exit_waves_fft)**2,axis=0))
         amplitude_modification    = diffraction_patterns/intensity_norm
@@ -2506,10 +2628,47 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                                 reconstruction_parameters: Mapping[str,float] = None,
                                 xp = np,
                                 **kwargs):
-        '''
-        r-PIE objects and probes update function.
-        Optionally performs position correction too.
-        '''
+        """
+        Regularized-PIE objects and probes update static method using a single probe:
+        .. math::
+            O'_{R_j}(r)    &= O_{R_j}(r) + \frac{P^{0*}(r)}{\left(1-\alpha\right)|P^0(r)|^2 + \alpha|P^0(r)|_{\mathrm{max}}^2} \left(\psi'_{R_j}(r) - \psi_{R_j}(r)\right) \\
+            P^{0'}(r)          &= P^0(r) + \frac{O^*_{R_j}(r)}{\left(1-\beta\right)|O_{R_j}(r)|^2 + \beta|O_{R_j}(r)|_{\mathrm{max}}^2} \left(\psi'_{R_j}(r) - \psi_{R_j}(r)\right)
+
+
+        Parameters
+        ----------
+        objects: np.ndarray
+            Current objects array estimate
+        probes: np.ndarray
+            Current probes array estimate
+        position: np.ndarray
+            Current probe position estimate
+        exit_waves: np.ndarray
+            Exit waves array given by MixedStatePtychographicOperator._warmup_overlap_projection method
+        modified_exit_waves: np.ndarray
+            Modified exit waves array given by MixedStatePtychographicOperator._warmup_fourier_projection method
+        diffraction_patterns: np.ndarray
+            Square-root of CBED intensities array used to modify exit_waves amplitude
+        fix_probe: bool, optional
+            If True, the probe will not be updated by the algorithm. Default is False
+        position_correction: Callable, optional
+            If not None, the function used to update the current probe position
+        sobel: Callable, optional
+            The scipy.ndimage module used to compute the object gradients. Passed to the position correction function
+        reconstruction_parameters: dict, optional
+            Dictionary with common reconstruction parameters
+        xp
+            Numerical programming module to use - either np or cp
+
+        Returns
+        -------
+        objects: np.ndarray
+            Updated objects array estimate
+        probes: np.ndarray
+            Updated probes array estimate
+        position: np.ndarray
+            Updated probe position estimate
+        """
         
         object_indices           = _wrapped_indices_2D_window(position,probes.shape[-2:],objects.shape)
         object_roi               = objects[object_indices]
@@ -2553,10 +2712,47 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                          reconstruction_parameters: Mapping[str,float] = None,
                          xp = np,
                          **kwargs):
-        '''
-        mix-PIE objects and probes update function.
-        Optionally performs position correction too.
-        '''
+        """
+        Mixed-State-PIE objects and probes update static method:
+        .. math::
+            O'_{R_j}(r)    &= O_{R_j}(r) + \frac{1}{\left(1-\alpha\right)\sum_k|P^k(r)|^2 + \alpha\sum_k|P^k(r)|_{\mathrm{max}}^2} \left(\sum_k P^{k*}\psi^{k'}_{R_j}(r) - \psi^k_{R_j}(r)\right) \\
+            P^{k'}(r)          &= P^k(r) + \frac{O^*_{R_j}(r)}{\left(1-\beta\right)|O_{R_j}(r)|^2 + \beta|O_{R_j}(r)|_{\mathrm{max}}^2} \left(\psi^{k'}_{R_j}(r) - \psi^k_{R_j}(r)\right)
+
+
+        Parameters
+        ----------
+        objects: np.ndarray
+            Current objects array estimate
+        probes: np.ndarray
+            Current probes array estimate
+        position: np.ndarray
+            Current probe position estimate
+        exit_waves: np.ndarray
+            Exit waves array given by MixedStatePtychographicOperator._overlap_projection method
+        modified_exit_waves: np.ndarray
+            Modified exit waves array given by MixedStatePtychographicOperator._fourier_projection method
+        diffraction_patterns: np.ndarray
+            Square-root of CBED intensities array used to modify exit_waves amplitude
+        fix_probe: bool, optional
+            If True, the probe will not be updated by the algorithm. Default is False
+        position_correction: Callable, optional
+            If not None, the function used to update the current probe position
+        sobel: Callable, optional
+            The scipy.ndimage module used to compute the object gradients. Passed to the position correction function
+        reconstruction_parameters: dict, optional
+            Dictionary with common reconstruction parameters
+        xp
+            Numerical programming module to use - either np or cp
+
+        Returns
+        -------
+        objects: np.ndarray
+            Updated objects array estimate
+        probes: np.ndarray
+            Updated probes array estimate
+        position: np.ndarray
+            Updated probe position estimate
+        """
         
         object_indices           = _wrapped_indices_2D_window(position,probes.shape[-2:],objects.shape)
         object_roi               = objects[object_indices]
@@ -2601,9 +2797,36 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                              position_step_size: float = 1.0,
                              xp=np,
                              **kwargs):
-        '''
-        r-PIE position correction function.
-        '''
+        """
+        Regularized-PIE probe position correction method.
+
+
+        Parameters
+        ----------
+        objects: np.ndarray
+            Current objects array estimate
+        probes: np.ndarray
+            Current probes array estimate
+        position: np.ndarray
+            Current probe position estimate
+        exit_wave: np.ndarray
+            Exit wave array given by MixedStatePtychographicOperator._warmup_overlap_projection method
+        modified_exit_wave: np.ndarray
+            Modified exit wave array given by MixedStatePtychographicOperator._warmup_fourier_projection method
+        diffraction_patterns: np.ndarray
+            Square-root of CBED intensities array used to modify exit_waves amplitude
+        sobel: Callable, optional
+            The scipy.ndimage module used to compute the object gradients. Passed to the position correction function
+        position_step_size: float, optional
+            Gradient step size for position update step
+        xp
+            Numerical programming module to use - either np or cp
+
+        Returns
+        -------
+        position: np.ndarray
+            Updated probe position estimate
+        """
 
         object_dx       = sobel(objects,axis=0,mode='wrap')
         object_dy       = sobel(objects,axis=1,mode='wrap')
@@ -2624,9 +2847,24 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                                   center_of_mass:Callable,
                                   xp = np,
                                   **kwargs):
-        '''
-        Fix probes CoM to array center. 
-        '''
+        """
+        Mixed-State-PIE probe center correction method.
+
+
+        Parameters
+        ----------
+        probes: np.ndarray
+            Current probes array estimate
+        center_of_mass: Callable
+            The scipy.ndimage module used to compute the array center of mass
+        xp
+            Numerical programming module to use - either np or cp
+
+        Returns
+        -------
+        probes: np.ndarray
+            Center-of-mass corrected probes array
+        """
         
         probe_center = xp.array(probes.shape[-2:])/2
         for k in range(probes.shape[0]):
@@ -2641,10 +2879,28 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                                  pre_position_correction_update_steps: int = None,
                                  pre_probe_correction_update_steps: int = None,
                                  **kwargs):
-        '''
+        """
         Precomputes the order in which functions will be called in the reconstruction loop.
         Additionally, prepares a summary of steps to be printed for reporting. 
-        '''
+
+        Parameters
+        ----------
+        max_iterations: int
+            Maximum number of iterations to run reconstruction algorithm
+        warmup_update_steps: int, optional
+            Number of update steps (not iterations) to perform using _warmup_ functions
+        pre_position_correction_update_steps: int, optional
+            Number of update steps (not iterations) to perform before enabling position correction
+        pre_probe_correction_update_steps: int, optional
+            Number of update steps (not iterations) to perform before enabling probe correction
+
+        Returns
+        -------
+        functions_queue: (max_iterations,J) list
+            List of function calls
+        queue_summary: str
+            Summary of function calls the reconstruction loop will perform
+        """
         total_update_steps   = max_iterations*self._num_diffraction_patterns
         queue_summary        = "Ptychographic reconstruction will perform the following steps:"
     
@@ -2707,11 +2963,49 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                     random_seed = None,
                     verbose: bool = False,
                     parameters: Mapping[str,float] = None,
-                    measurement_output_view: str = 'padded',
                     functions_queue: Iterable = None,
                     **kwargs):
-        '''
-        '''
+        """
+        Main reconstruction loop method to do the following:
+        - Precompute the order of function calls using the MixedStatePtychographicOperator._prepare_functions_queue method
+        - Iterate through function calls in queue
+        - Pass reconstruction outputs to the MixedStatePtychographicOperator._prepare_measurement_outputs method
+
+        Parameters
+        ----------
+        max_iterations: int
+            Maximum number of iterations to run reconstruction algorithm
+        return_iterations: bool, optional
+            If True, method will return a list of current objects, probes, and positions estimates for each iteration
+        probe_orthogonalization_frequency: int, optional
+            If not None, the probes array will be orthogonalized after this many update steps
+        warmup_update_steps: int, optional
+            Number of warmup update steps to perform before simultaneous reconstruction begins
+        common_probe: bool, optional
+            If True, use a common probe for both sets of measurements
+        fix_com: bool, optional
+            If True, the center of mass of the probes array will be corrected at the end of the iteration
+        random_seed
+            If not None, used to seed the numpy random number generator
+        verbose: bool, optional
+            If True, prints functions queue and current iteration error
+        functions_queue: (max_iterations, J) Iterable, optional
+            If not None, the reconstruction algorithm will use the input functions queue instead
+        parameters: dict, optional
+            Dictionary specifying any of the abtem.reconstruct.recontruction_symbols parameters
+            Additionally, these can also be specified using kwargs
+
+        Returns
+        -------
+        reconstructed_object_measurement: Measurement or Sequence[Measurement]
+            If return_iterations, a list of Measurements for the objects estimate at each iteration is returned
+        reconstructed_probes_measurement: Measurement or Sequence[Measurement]
+            If return_iterations, a list of Measurements for the probes estimate at each iteration is returned
+        reconstructed_position_measurement: np.ndarray or Sequence[np.ndarray]
+            If return_iterations, a list of position estimates at each iteration is returned
+        reconstruction_error: float or Sequence[float]
+            If return_iterations, a list of the reconstruction error at each iteration is returned
+        """
         for key in kwargs.keys():
             if (key not in reconstruction_symbols.keys()):
                 raise ValueError('{} not a recognized parameter'.format(key))
@@ -2878,10 +3172,31 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
                                      probes: np.ndarray,
                                      positions: np.ndarray,
                                      sse: np.ndarray):
-        '''
-        Base measurement outputs function operating on a single iteration's outputs.
-        Called using map if more than one iteration required.
-        '''
+        """
+        Method to format the reconstruction outputs as Measurement objects.
+
+        Parameters
+        ----------
+        objects: np.ndarray
+            Reconstructed objects array
+        probes: np.ndarray
+            Reconstructed probes array
+        positions: np.ndarray
+            Reconstructed positions array
+        sse: float
+            Reconstruction error
+
+        Returns
+        -------
+        objects_measurement: Measurement
+            Reconstructed objects Measurement
+        probes_measurement: Measurement
+            Reconstructed probes Measurement
+        positions: np.ndarray
+            Reconstructed positions array
+        sse: float
+            Reconstruction error
+        """
         
         calibrations = tuple(Calibration(0, s, units='Å', name = n, endpoint=False) for s,n in zip(self.sampling,('x','y')))
         
@@ -2891,13 +3206,47 @@ class MixedStatePtychographicOperator(AbstractPtychographicOperator):
         return measurement_objects, measurement_probes, asnumpy(positions), sse
 
 class MultislicePtychographicOperator(AbstractPtychographicOperator):
-    '''
-    Multislice PIE Operator.
-    
-    diffraction_patterns dimensions   : (J,M,N)
-    objects dimensions                : (T,P,Q)
-    probes dimensions                 : (T,R,S)
-    '''
+    """
+    Multislice Ptychographic Iterative Engine (MS-PIE).
+    Used to reconstruct _thick_ weak-phase objects using a set of measured far-field CBED patterns with the following array dimensions:
+
+    CBED pattern dimensions     : (J,M,N)
+    objects dimensions          : (T,P,Q)
+    probes dimensions           : (T,R,S)
+
+    Parameters
+    ----------
+
+    diffraction_patterns: np.ndarray or Measurement
+        Input 3D or 4D CBED pattern intensities with dimensions (M,N)
+    energy: float
+        Electron energy [eV]
+    num_slices: int
+        Number of slices to use
+    slice_thicknesses: float or Sequence[float]
+        Slice thicknesses. If a float, all slices are assigned the same thickness
+    region_of_interest_shape: (2,) Sequence[int], optional
+        Pixel dimensions (R,S) of the region of interest (ROI)
+        If None, the ROI dimensions are taken as the CBED dimensions (M,N)
+    objects: np.ndarray, optional
+        Initial objects guess with dimensions (P,Q) - Useful for restarting reconstructions
+        If None, an array with 1.0j is initialized
+    probes: np.ndarray or Probe, optional
+        Initial probes guess with dimensions/gpts (R,S) - Useful for restarting reconstructions
+        If None, a Probe with CTF given by the polar_parameters dictionary is initialized
+    positions: np.ndarray, optional
+        Initial positions guess [Å]
+        If None, a raster scan with step sizes given by the experimental_parameters dictionary is initialized
+    semiangle_cutoff: float, optional
+        Semiangle cutoff for the initial Probe guess
+    preprocess: bool, optional
+        If True, it runs the preprocess method after initialization
+    device: str, optional
+        Device to perform Fourier-based reconstructrions - Either 'cpu' or 'gpu'
+    parameters: dict, optional
+       Dictionary specifying any of the abtem.transfer.polar_symbols or abtem.reconstruct.experimental_symbols parameters
+       Additionally, these can also be specified using kwargs
+    """
     def __init__(self,
                  diffraction_patterns:Union[np.ndarray,Measurement],
                  energy: float,
@@ -2950,12 +3299,17 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
             
         
     def preprocess(self):
-        '''
-        Multislice PIE preprocessing method, to do the following:
-        - Pads CBED patterns (J,M,N) to ROI dimensions -> (J,R,S)
-        - Prepares scanning positions in real-space resolution pixels
-        - Initializes probes (T,R,S) & objects (T,P,Q)
-        '''
+        """
+        Preprocess method to do the following:
+        - Pads CBED patterns to region of interest dimensions
+        - Prepares initial guess for scanning positions
+        - Prepares initial guesses for the objects and probes arrays
+
+
+        Returns
+        -------
+        preprocessed_ptychographic_operator: MultislicePtychographicOperator
+        """
         
         self._preprocessed = True
         
@@ -3049,10 +3403,33 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                             fft2_convolve: Callable = None,
                             xp = np,
                             **kwargs):
-        '''
-        MS-PIE overlap projection:
-        \psi^n_{R_j}(r) = O^n_{R_j}(r) * P^n(r)
-        '''
+        """
+        Multislice-PIE overlap projection static method:
+        .. math:: 
+            \psi^n_{R_j}(r) = O^n_{R_j}(r) * P^n(r)
+
+
+        Parameters
+        ----------
+        objects: np.ndarray
+            Object array to be illuminated
+        probes: np.ndarray
+            Probe window array to illuminate object with
+        position: np.ndarray
+            Center position of probe window
+        old_position: np.ndarray
+            Old center position of probe window
+            Used for fractionally shifting probe sequentially
+        xp
+            Numerical programming module to use - either np or cp
+
+        Returns
+        -------
+        probes: np.ndarray
+            Fractionally shifted probe window array
+        exit_wave: np.ndarray
+            Overlap projection of illuminated probe
+        """
         
         fractional_position      = position - xp.round(position)
         old_fractional_position  = old_position - xp.round(old_position)
@@ -3085,6 +3462,30 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                             sse:float,
                             xp = np,
                             **kwargs):
+        """
+        Multislice-PIE fourier projection static method:
+        .. math:: 
+            \psi^{N'}_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi^N_{R_j}(u)] / |F[\psi^N_{R_j}(u)]|]
+
+
+        Parameters
+        ----------
+        exit_waves: np.ndarray
+            Exit waves array given by MultislicePtychographicOperator._overlap_projection method
+        diffraction_patterns: np.ndarray
+            Square-root of CBED intensities array used to modify exit_waves amplitude
+        sse: float
+            Current sum of squares error estimate
+        xp
+            Numerical programming module to use - either np or cp
+
+        Returns
+        -------
+        modified_exit_wave: np.ndarray
+            Fourier projection of illuminated probe
+        sse: float
+            Updated sum of squares error estimate
+        """
         '''
         MS-PIE Fourier-amplitude modification projection:
         \psi'^N_{R_j}(r) = F^{-1}[\sqrt{I_j(u)} F[\psi^N_{R_j}(u)] / |F[\psi^N_{R_j}(u)]|]
@@ -3115,10 +3516,43 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                          fft2_convolve: Callable = None,
                          xp = np,
                          **kwargs):
-        '''
-        MS-PIE objects and probes update function.
-        Optionally performs position correction too.
-        '''
+        """
+        Multislice-PIE objects and probes update static method:
+
+        Parameters
+        ----------
+        objects: np.ndarray
+            Current objects array estimate
+        probes: np.ndarray
+            Current probes array estimate
+        position: np.ndarray
+            Current probe position estimate
+        exit_waves: np.ndarray
+            Exit waves array given by MultislicePtychographicOperator._overlap_projection method
+        modified_exit_waves: np.ndarray
+            Modified exit waves array given by MultislicePtychographicOperator._fourier_projection method
+        diffraction_patterns: np.ndarray
+            Square-root of CBED intensities array used to modify exit_waves amplitude
+        fix_probe: bool, optional
+            If True, the probe will not be updated by the algorithm. Default is False
+        position_correction: Callable, optional
+            If not None, the function used to update the current probe position
+        sobel: Callable, optional
+            The scipy.ndimage module used to compute the object gradients. Passed to the position correction function
+        reconstruction_parameters: dict, optional
+            Dictionary with common reconstruction parameters
+        xp
+            Numerical programming module to use - either np or cp
+
+        Returns
+        -------
+        objects: np.ndarray
+            Updated objects array estimate
+        probes: np.ndarray
+            Updated probes array estimate
+        position: np.ndarray
+            Updated probe position estimate
+        """
         
         object_indices           = _wrapped_indices_2D_window(position,probes.shape[-2:],objects.shape[-2:])
         num_slices               = slice_thicknesses.shape[0]
@@ -3172,9 +3606,36 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                              position_step_size: float = 1.0,
                              xp=np,
                              **kwargs):
-        '''
-        r-PIE position correction function.
-        '''
+        """
+        Multislice-PIE probe position correction method using the last slice.
+
+
+        Parameters
+        ----------
+        objects: np.ndarray
+            Current objects array estimate
+        probes: np.ndarray
+            Current probes array estimate
+        position: np.ndarray
+            Current probe position estimate
+        exit_wave: np.ndarray
+            Exit wave array given by MultislicePtychographicOperator._overlap_projection method
+        modified_exit_wave: np.ndarray
+            Modified exit wave array given by MultislicePtychographicOperator._fourier_projection method
+        diffraction_patterns: np.ndarray
+            Square-root of CBED intensities array used to modify exit_waves amplitude
+        sobel: Callable, optional
+            The scipy.ndimage module used to compute the object gradients. Passed to the position correction function
+        position_step_size: float, optional
+            Gradient step size for position update step
+        xp
+            Numerical programming module to use - either np or cp
+
+        Returns
+        -------
+        position: np.ndarray
+            Updated probe position estimate
+        """
 
         object_dx       = sobel(objects[-1],axis=0,mode='wrap')
         object_dy       = sobel(objects[-1],axis=1,mode='wrap')
@@ -3194,9 +3655,24 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                                   center_of_mass:Callable,
                                   xp = np,
                                   **kwargs):
-        '''
-        Fix probes CoM to array center. 
-        '''
+        """
+        Multislice-PIE probe center correction method.
+
+
+        Parameters
+        ----------
+        probes: np.ndarray
+            Current probes array estimate
+        center_of_mass: Callable
+            The scipy.ndimage module used to compute the array center of mass
+        xp
+            Numerical programming module to use - either np or cp
+
+        Returns
+        -------
+        probes: np.ndarray
+            Center-of-mass corrected probes array
+        """
         
         probe_center = xp.array(probes.shape[-2:])/2
         com          = center_of_mass(xp.abs(probes[0]) ** 2)
@@ -3209,10 +3685,26 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                                  pre_position_correction_update_steps: int = None,
                                  pre_probe_correction_update_steps: int = None,
                                  **kwargs):
-        '''
+        """
         Precomputes the order in which functions will be called in the reconstruction loop.
         Additionally, prepares a summary of steps to be printed for reporting. 
-        '''
+
+        Parameters
+        ----------
+        max_iterations: int
+            Maximum number of iterations to run reconstruction algorithm
+        pre_position_correction_update_steps: int, optional
+            Number of update steps (not iterations) to perform before enabling position correction
+        pre_probe_correction_update_steps: int, optional
+            Number of update steps (not iterations) to perform before enabling probe correction
+
+        Returns
+        -------
+        functions_queue: (max_iterations,J) list
+            List of function calls
+        queue_summary: str
+            Summary of function calls the reconstruction loop will perform
+        """
         total_update_steps   = max_iterations*self._num_diffraction_patterns
         queue_summary        = "Ptychographic reconstruction will perform the following steps:"
     
@@ -3252,8 +3744,41 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                     measurement_output_view: str = 'padded',
                     functions_queue: Iterable = None,
                     **kwargs):
-        '''
-        '''
+        """
+        Main reconstruction loop method to do the following:
+        - Precompute the order of function calls using the MultislicePtychographicOperator._prepare_functions_queue method
+        - Iterate through function calls in queue
+        - Pass reconstruction outputs to the MultislicePtychographicOperator._prepare_measurement_outputs method
+
+        Parameters
+        ----------
+        max_iterations: int
+            Maximum number of iterations to run reconstruction algorithm
+        return_iterations: bool, optional
+            If True, method will return a list of current objects, probes, and positions estimates for each iteration
+        fix_com: bool, optional
+            If True, the center of mass of the probes array will be corrected at the end of the iteration
+        random_seed
+            If not None, used to seed the numpy random number generator
+        verbose: bool, optional
+            If True, prints functions queue and current iteration error
+        functions_queue: (max_iterations, J) Iterable, optional
+            If not None, the reconstruction algorithm will use the input functions queue instead
+        parameters: dict, optional
+            Dictionary specifying any of the abtem.reconstruct.recontruction_symbols parameters
+            Additionally, these can also be specified using kwargs
+
+        Returns
+        -------
+        reconstructed_object_measurement: Measurement or Sequence[Measurement]
+            If return_iterations, a list of Measurements for the objects estimate at each iteration is returned
+        reconstructed_probes_measurement: Measurement or Sequence[Measurement]
+            If return_iterations, a list of Measurements for the probes estimate at each iteration is returned
+        reconstructed_position_measurement: np.ndarray or Sequence[np.ndarray]
+            If return_iterations, a list of position estimates at each iteration is returned
+        reconstruction_error: float or Sequence[float]
+            If return_iterations, a list of the reconstruction error at each iteration is returned
+        """
         for key in kwargs.keys():
             if (key not in reconstruction_symbols.keys()):
                 raise ValueError('{} not a recognized parameter'.format(key))
@@ -3425,10 +3950,33 @@ class MultislicePtychographicOperator(AbstractPtychographicOperator):
                                      positions: np.ndarray,
                                      sse: np.ndarray,
                                      slice_thicknesses: Sequence[float] = None):
-        '''
-        Base measurement outputs function operating on a single iteration's outputs.
-        Called using map if more than one iteration required.
-        '''
+        """
+        Method to format the reconstruction outputs as Measurement objects.
+
+        Parameters
+        ----------
+        objects: np.ndarray
+            Reconstructed objects array
+        probes: np.ndarray
+            Reconstructed probes array
+        positions: np.ndarray
+            Reconstructed positions array
+        sse: float
+            Reconstruction error
+        slice_thicknesses: Sequence[float]
+            Slice thicknesses
+
+        Returns
+        -------
+        objects_measurement: Measurement
+            Reconstructed objects Measurement
+        probes_measurement: Measurement
+            Reconstructed probes Measurement
+        positions: np.ndarray
+            Reconstructed positions array
+        sse: float
+            Reconstruction error
+        """
         
         calibrations  = tuple(Calibration(0, s, units='Å', name = n, endpoint=False) for s,n in zip(self.sampling,('x','y')))
         calibrations  = (Calibration(0,slice_thicknesses[0],units='Å', name = 'z', endpoint=False),) + calibrations
